@@ -1,0 +1,11 @@
+[package]
+name = "jcode-wasmtime-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "jcode_wasm"
+crate-type = ["cdylib"]
+
+[dependencies]
+wasmtime = { version = "27", features = ["component-model"] }

@@ -1,0 +1,154 @@
+import com.android.build.api.dsl.ApplicationExtension
+import com.android.build.api.dsl.LibraryExtension
+import org.gradle.api.JavaVersion
+import org.gradle.api.tasks.compile.JavaCompile
+import org.gradle.kotlin.dsl.configure
+import org.gradle.kotlin.dsl.withType
+import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
+import java.io.File
+
+plugins {
+    alias(libs.plugins.android.application) apply false
+    alias(libs.plugins.android.library) apply false
+    alias(libs.plugins.kotlin.android) apply false
+    alias(libs.plugins.kotlin.compose) apply false
+    alias(libs.plugins.hilt) apply false
+    alias(libs.plugins.ksp) apply false
+}
+
+tasks.register("detekt") {
+    group = "verification"
+    description = "Bootstrap placeholder detekt task."
+}
+
+private val duplicateManifestResource = "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+private val desiredCmakeVersion = "3.28.3"
+private val configuredCmakeVersion = System.getenv("ANDROID_HOME")
+    ?.let(::File)
+    ?.resolve("cmake")
+    ?.takeIf(File::exists)
+    ?.listFiles()
+    ?.map(File::getName)
+    ?.sorted()
+    ?.let { versions ->
+        when {
+            desiredCmakeVersion in versions -> desiredCmakeVersion
+            versions.isNotEmpty() -> versions.last()
+            else -> desiredCmakeVersion
+        }
+    }
+    ?: desiredCmakeVersion
+private val nativeModuleIds = mapOf(
+    ":native:buffer" to "buffer",
+    ":native:editor-render" to "editor-render",
+    ":native:tree-sitter" to "tree-sitter",
+    ":native:libgit2" to "libgit2",
+    ":native:ripgrep-ffi" to "ripgrep-ffi",
+    ":native:pty" to "pty",
+    ":native:vt" to "vt",
+    ":native:wasmtime-ffi" to "wasmtime-ffi"
+)
+
+subprojects {
+    tasks.matching { it.name.startsWith("hiltJavaCompile") }.withType<JavaCompile>().configureEach {
+        sourceCompatibility = JavaVersion.VERSION_17.toString()
+        targetCompatibility = JavaVersion.VERSION_17.toString()
+        options.release.set(17)
+    }
+
+    plugins.withId("com.android.application") {
+        extensions.configure<ApplicationExtension> {
+            compileOptions {
+                sourceCompatibility = JavaVersion.VERSION_21
+                targetCompatibility = JavaVersion.VERSION_21
+            }
+
+            packaging {
+                resources {
+                    excludes += duplicateManifestResource
+                }
+            }
+        }
+    }
+
+    plugins.withId("com.android.library") {
+        extensions.configure<LibraryExtension> {
+            nativeModuleIds[path]?.let { nativeModuleId ->
+                val jniOutputRoot = layout.buildDirectory.dir("generated/jniLibs").get().asFile.absolutePath.replace("\\", "/")
+
+                compileSdk = 36
+
+                defaultConfig {
+                    minSdk = 33
+
+                    externalNativeBuild {
+                        cmake {
+                            arguments.addAll(
+                                listOf(
+                                    "-DANDROID_STL=c++_static",
+                                    "-DJCODE_NATIVE_MODULE=$nativeModuleId",
+                                    "-DJCODE_JNI_OUTPUT_DIR=$jniOutputRoot"
+                                )
+                            )
+                        }
+                    }
+                }
+
+                buildTypes {
+                    getByName("debug") {
+                        ndk {
+                            abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
+                        }
+
+                        externalNativeBuild {
+                            cmake {
+                                arguments.add("-DJCODE_VARIANT_DIR=debug")
+                            }
+                        }
+                    }
+
+                    getByName("release") {
+                        ndk {
+                            abiFilters.add("arm64-v8a")
+                        }
+
+                        externalNativeBuild {
+                            cmake {
+                                arguments.add("-DJCODE_VARIANT_DIR=release")
+                            }
+                        }
+                    }
+                }
+
+                externalNativeBuild {
+                    cmake {
+                        path = rootProject.file("native/CMakeLists.txt")
+                        version = configuredCmakeVersion
+                    }
+                }
+
+                sourceSets.getByName("debug").jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs/debug"))
+                sourceSets.getByName("release").jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs/release"))
+
+                ndkVersion = "27.2.12479018"
+            }
+
+            compileOptions {
+                sourceCompatibility = JavaVersion.VERSION_21
+                targetCompatibility = JavaVersion.VERSION_21
+            }
+
+            packaging {
+                resources {
+                    excludes += duplicateManifestResource
+                }
+            }
+        }
+    }
+
+    plugins.withId("org.jetbrains.kotlin.android") {
+        extensions.configure<KotlinAndroidProjectExtension> {
+            jvmToolchain(21)
+        }
+    }
+}

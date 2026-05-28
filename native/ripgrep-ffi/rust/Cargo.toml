@@ -1,0 +1,13 @@
+[package]
+name = "jcode-ripgrep-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ripgrep_ffi"
+crate-type = ["cdylib"]
+
+[dependencies]
+grep = "0.3"
+ignore = "0.4"
+regex = "1"
