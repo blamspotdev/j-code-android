@@ -466,7 +466,7 @@ private fun JCodeShell(
     }
     val isPersistentLeftSidebarVisible = !usesModalWorkspace && leftSidebarExpanded
     var rightSidebarVisible by rememberSaveable(isLandscape, windowInfo.widthClass) {
-        mutableStateOf(isLandscape)
+        mutableStateOf(false)
     }
     var rightPanelTab by rememberSaveable {
         mutableStateOf(RightPanelTab.Terminal)
