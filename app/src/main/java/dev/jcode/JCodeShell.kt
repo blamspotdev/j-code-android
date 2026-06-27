@@ -1,5 +1,6 @@
 package dev.jcode
 import androidx.compose.foundation.isSystemInDarkTheme
+import dev.jcode.core.editor.EditorLanguageAction
 import dev.jcode.core.editor.decor.Layer
 import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.JCodeIcon
@@ -987,6 +988,17 @@ private fun JCodeShell(
                                 scope.launch { compactDrawerState.open() }
                             } else {
                                 leftSidebarExpanded = true
+                            }
+                        },
+                        languageActionsEnabled = run {
+                            val name = editorGroup.activeTab?.filePath?.name
+                            name != null && installedExtensions.any { it.language?.matchesFile(name) == true }
+                        },
+                        onEditorLanguageAction = { action, word ->
+                            // Semantic actions need a language server (deferred); surface intent.
+                            scope.launch {
+                                val target = if (word.isNotBlank()) " \"$word\"" else ""
+                                snackbarHostState.showSnackbar("${action.label}$target — needs a language server (coming soon)")
                             }
                         },
                         editorPageContent = { tab ->
@@ -2042,6 +2054,8 @@ private fun EditorWorkspace(
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
     onOpenFileRequest: () -> Unit,
+    languageActionsEnabled: Boolean,
+    onEditorLanguageAction: (EditorLanguageAction, String) -> Unit,
     editorPageContent: @Composable (EditorTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -2080,6 +2094,8 @@ private fun EditorWorkspace(
                     onTabSelected = onSelectEditorTab,
                     onTabClosed = onCloseEditorTab,
                     onOpenFile = onOpenFileRequest,
+                    languageActionsEnabled = languageActionsEnabled,
+                    onLanguageAction = onEditorLanguageAction,
                     pageContent = editorPageContent,
                 )
             }

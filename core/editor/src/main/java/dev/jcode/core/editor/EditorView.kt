@@ -1,9 +1,13 @@
 package dev.jcode.core.editor
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Typeface
 import android.util.AttributeSet
+import android.view.GestureDetector
+import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -20,6 +24,17 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlin.math.max
 import kotlin.math.min
+
+/** A long-press context request: pixel position and the selected word (empty if none). */
+data class EditorContextRequest(val xPx: Float, val yPx: Float, val word: String)
+
+/** Language-aware context actions (resolved by the host; semantic ones need a language server). */
+enum class EditorLanguageAction(val label: String) {
+    GoToDefinition("Go to Definition"),
+    FindReferences("Find References"),
+    RenameSymbol("Rename Symbol"),
+    FormatSelection("Format Selection"),
+}
 
 /**
  * Custom Android View that renders a code editor.
@@ -41,6 +56,25 @@ class EditorView @JvmOverloads constructor(
 
     // sp→px factor; RenderConfig.fontSizeSp is in sp but Paint.textSize / layout math need px.
     private val density: Float get() = resources.displayMetrics.density
+
+    /** Invoked on long-press after the word under the finger is selected, so the host can show a
+     *  context menu. [EditorContextRequest.word] is empty when the press wasn't on a word. */
+    var onContextRequest: ((EditorContextRequest) -> Unit)? = null
+
+    private val gestureDetector = GestureDetector(
+        context,
+        object : GestureDetector.SimpleOnGestureListener() {
+            override fun onLongPress(e: MotionEvent) {
+                val offset = offsetAt(e.x, e.y) ?: return
+                val word = wordAt(offset)
+                if (word != null) {
+                    runBlocking { editorState?.setSelection(listOf(Caret(word.first, word.second))) }
+                }
+                performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                onContextRequest?.invoke(EditorContextRequest(e.x, e.y, word?.third ?: ""))
+            }
+        },
+    )
 
     init {
         isFocusable = true
@@ -128,42 +162,120 @@ class EditorView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        gestureDetector.onTouchEvent(event)
         if (event.action == MotionEvent.ACTION_DOWN) {
             requestFocus()
-            // Simple tap-to-place-caret
-            val state = editorState ?: return false
-            val snapshot = state.snapshot.value
-            val config = state.renderConfig.value
-            val lineHeightPx = (config.fontSizeSp * density * config.lineHeightMultiplier).toInt().coerceAtLeast(1)
-            val gutterWidth = computeGutterWidth(snapshot, config)
-
-            val lineIndex = state.viewport.value.visibleLineTop +
-                ((event.y - state.viewport.value.scrollY % lineHeightPx) / lineHeightPx).toInt()
-
-            if (lineIndex >= 0 && lineIndex < snapshot.lineCount) {
-                val (lineStart, lineEnd) = snapshot.lineAt(lineIndex)
-                val lineText = snapshot.readRangeAsUtf16(lineStart, lineEnd)
-                val xInText = event.x - gutterWidth - 8f
-                var col = 0
-                var measured = 0f
-                val paint = android.text.TextPaint().apply {
-                    textSize = config.fontSizeSp * density
-                    typeface = this@EditorView.typeface
-                }
-                for (i in lineText.indices) {
-                    val charWidth = paint.measureText(lineText[i].toString())
-                    if (measured + charWidth > xInText) break
-                    measured += charWidth
-                    col++
-                }
-                val offset = snapshot.lineColumnToOffset(lineIndex, col)
-                runBlocking {
-                    state.setSelection(listOf(Caret(offset, offset)))
-                }
+            val offset = offsetAt(event.x, event.y)
+            if (offset != null) {
+                runBlocking { editorState?.setSelection(listOf(Caret(offset, offset))) }
             }
             return true
         }
         return super.onTouchEvent(event)
+    }
+
+    /** Buffer offset at a pixel position, or null if outside the text. */
+    private fun offsetAt(x: Float, y: Float): Int? {
+        val state = editorState ?: return null
+        val snapshot = state.snapshot.value
+        val config = state.renderConfig.value
+        val lineHeightPx = (config.fontSizeSp * density * config.lineHeightMultiplier).toInt().coerceAtLeast(1)
+        val gutterWidth = computeGutterWidth(snapshot, config)
+        val lineIndex = state.viewport.value.visibleLineTop +
+            ((y - state.viewport.value.scrollY % lineHeightPx) / lineHeightPx).toInt()
+        if (lineIndex < 0 || lineIndex >= snapshot.lineCount) return null
+        val (lineStart, lineEnd) = snapshot.lineAt(lineIndex)
+        val lineText = snapshot.readRangeAsUtf16(lineStart, lineEnd)
+        val xInText = x - gutterWidth - 8f
+        var col = 0
+        var measured = 0f
+        val paint = android.text.TextPaint().apply {
+            textSize = config.fontSizeSp * density
+            typeface = this@EditorView.typeface
+        }
+        for (i in lineText.indices) {
+            val charWidth = paint.measureText(lineText[i].toString())
+            if (measured + charWidth > xInText) break
+            measured += charWidth
+            col++
+        }
+        return snapshot.lineColumnToOffset(lineIndex, col)
+    }
+
+    /** The identifier word at an offset: (startOffset, endOffset, text), or null. */
+    private fun wordAt(offset: Int): Triple<Int, Int, String>? {
+        val state = editorState ?: return null
+        val snapshot = state.snapshot.value
+        val (line, col) = snapshot.offsetToLineColumn(offset)
+        val (lineStart, lineEnd) = snapshot.lineAt(line)
+        val lineText = snapshot.readRangeAsUtf16(lineStart, lineEnd)
+        if (lineText.isEmpty()) return null
+        fun isWord(c: Char) = c.isLetterOrDigit() || c == '_'
+        var start = col.coerceIn(0, lineText.length)
+        if (start >= lineText.length || !isWord(lineText[start])) {
+            if (start > 0 && isWord(lineText[start - 1])) start -= 1 else return null
+        }
+        var end = start
+        while (start > 0 && isWord(lineText[start - 1])) start--
+        while (end < lineText.length && isWord(lineText[end])) end++
+        if (end <= start) return null
+        return Triple(
+            snapshot.lineColumnToOffset(line, start),
+            snapshot.lineColumnToOffset(line, end),
+            lineText.substring(start, end),
+        )
+    }
+
+    // --- clipboard / selection actions (used by the context menu) -------------------------------
+
+    private fun selectionRange(): Pair<Int, Int>? {
+        val caret = editorState?.carets?.value?.firstOrNull() ?: return null
+        val s = min(caret.anchor, caret.head)
+        val e = max(caret.anchor, caret.head)
+        return if (e > s) s to e else null
+    }
+
+    private fun clipboard(): ClipboardManager? =
+        context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+
+    fun selectAll() {
+        val state = editorState ?: return
+        runBlocking { state.setSelection(listOf(Caret(0, state.snapshot.value.byteLength))) }
+    }
+
+    fun copySelection() {
+        val state = editorState ?: return
+        val (s, e) = selectionRange() ?: return
+        val text = state.snapshot.value.readRangeAsUtf16(s, e)
+        clipboard()?.setPrimaryClip(ClipData.newPlainText("text", text))
+    }
+
+    fun cutSelection() {
+        val state = editorState ?: return
+        val (s, e) = selectionRange() ?: return
+        copySelection()
+        runBlocking {
+            state.applyEdit(EditTx.delete(s, e))
+            state.setSelection(listOf(Caret(s, s)))
+        }
+    }
+
+    fun pasteClipboard() {
+        val state = editorState ?: return
+        val text = clipboard()?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
+            ?: return
+        val range = selectionRange()
+        runBlocking {
+            val insertAt = if (range != null) {
+                state.applyEdit(EditTx.delete(range.first, range.second))
+                range.first
+            } else {
+                state.carets.value.firstOrNull()?.head ?: 0
+            }
+            state.applyEdit(EditTx.insert(insertAt, text))
+            val after = insertAt + text.toByteArray(Charsets.UTF_8).size
+            state.setSelection(listOf(Caret(after, after)))
+        }
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

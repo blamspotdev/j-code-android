@@ -14,6 +14,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -30,8 +33,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import dev.jcode.core.editor.EditorContextRequest
+import dev.jcode.core.editor.EditorLanguageAction
 import dev.jcode.core.editor.EditorView
 
 /**
@@ -44,6 +50,8 @@ fun EditorPane(
     onTabSelected: (String) -> Unit = {},
     onTabClosed: (String) -> Unit = {},
     onOpenFile: () -> Unit = {},
+    languageActionsEnabled: Boolean = false,
+    onLanguageAction: (EditorLanguageAction, String) -> Unit = { _, _ -> },
     pageContent: @Composable (EditorTab) -> Unit = {},
 ) {
     Column(modifier = modifier.clipToBounds()) {
@@ -67,6 +75,8 @@ fun EditorPane(
                 if (editorState != null) {
                     EditorViewHost(
                         editorState = editorState,
+                        languageActionsEnabled = languageActionsEnabled,
+                        onLanguageAction = onLanguageAction,
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
@@ -200,28 +210,56 @@ private fun TabItem(
 fun EditorViewHost(
     editorState: dev.jcode.core.editor.EditorState,
     modifier: Modifier = Modifier,
+    languageActionsEnabled: Boolean = false,
+    onLanguageAction: (EditorLanguageAction, String) -> Unit = { _, _ -> },
 ) {
     val density = LocalDensity.current
+    var view by remember { mutableStateOf<EditorView?>(null) }
+    var menu by remember { mutableStateOf<EditorContextRequest?>(null) }
 
-    AndroidView(
-        factory = { context ->
-            EditorView(context).apply {
-                attach(editorState)
+    Box(modifier = modifier.clipToBounds()) {
+        AndroidView(
+            factory = { context ->
+                EditorView(context).apply {
+                    attach(editorState)
+                    onContextRequest = { menu = it }
+                    view = this
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+            update = { v ->
+                v.attach(editorState)
+                v.onContextRequest = { menu = it }
+                view = v
+            },
+            onRelease = { it.detach() },
+        )
+
+        menu?.let { req ->
+            val offset = with(density) { DpOffset(req.xPx.toDp(), req.yPx.toDp()) }
+            DropdownMenu(
+                expanded = true,
+                onDismissRequest = { menu = null },
+                offset = offset,
+            ) {
+                DropdownMenuItem(text = { Text("Copy") }, onClick = { view?.copySelection(); menu = null })
+                DropdownMenuItem(text = { Text("Cut") }, onClick = { view?.cutSelection(); menu = null })
+                DropdownMenuItem(text = { Text("Paste") }, onClick = { view?.pasteClipboard(); menu = null })
+                DropdownMenuItem(text = { Text("Select all") }, onClick = { view?.selectAll(); menu = null })
+                if (languageActionsEnabled) {
+                    HorizontalDivider()
+                    EditorLanguageAction.entries.forEach { action ->
+                        DropdownMenuItem(
+                            text = { Text(action.label) },
+                            onClick = { onLanguageAction(action, req.word); menu = null },
+                        )
+                    }
+                }
             }
-        },
-        modifier = modifier.clipToBounds(),
-        update = { view ->
-            // Ensure the view is attached to the current state
-            view.attach(editorState)
-        },
-        onRelease = { view ->
-            view.detach()
-        },
-    )
+        }
+    }
 
     DisposableEffect(editorState) {
-        onDispose {
-            // EditorState lifecycle managed by EditorTab
-        }
+        onDispose { /* EditorState lifecycle managed by EditorTab */ }
     }
 }
