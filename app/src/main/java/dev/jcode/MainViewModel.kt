@@ -620,7 +620,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
             return
         }
-        val tab = EditorTab.page(SETTINGS_TAB_ID, "Settings", EditorPageKind.Settings)
+        val tab = EditorTab.page(SETTINGS_TAB_ID, "App Settings", EditorPageKind.Settings)
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
     }
 

@@ -213,7 +213,7 @@ private enum class WorkbenchTool(
     RunDebug("Run/Debug", Icons.Rounded.PlayArrow, "Run"),
     Extensions("Extensions", Icons.Rounded.Extension, "Ext"),
     SdkManager("SDK Manager", Icons.Rounded.BuildCircle, "SDK"),
-    Settings("Settings", Icons.Rounded.Settings, "Prefs"),
+    Settings("App Settings", Icons.Rounded.Settings, "App Settings"),
 }
 
 private enum class RightPanelTab(
