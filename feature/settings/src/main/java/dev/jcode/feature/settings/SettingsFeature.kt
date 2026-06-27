@@ -1,17 +1,25 @@
 package dev.jcode.feature.settings
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
@@ -28,6 +36,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -35,6 +45,10 @@ import dev.jcode.core.config.ConfigScope
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.config.ProjectConfig
 import dev.jcode.core.config.WorkspaceConfig
+import dev.jcode.design.IconBundle
+import dev.jcode.design.IconBundleRegistry
+import dev.jcode.design.JCodeIcon
+import dev.jcode.design.ThemeBundleRegistry
 import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.design.ThemeMode
 
@@ -61,6 +75,10 @@ object SettingsFeature {
         onUpdateExplorerViewMode: (ConfigScope, String) -> Unit,
         themeMode: ThemeMode,
         onUpdateThemeMode: (ThemeMode) -> Unit,
+        themeBundleId: String,
+        onUpdateThemeBundle: (String) -> Unit,
+        iconBundleId: String,
+        onUpdateIconBundle: (String) -> Unit,
         terminalDoubleTapToFocus: Boolean,
         onUpdateTerminalDoubleTapToFocus: (Boolean) -> Unit,
         modifier: Modifier = Modifier,
@@ -112,7 +130,7 @@ object SettingsFeature {
 
             SettingsCard(
                 title = "Appearance",
-                description = "Choose the app theme. System follows your device's light/dark setting.",
+                description = "System follows your device's light/dark setting.",
             ) {
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                     ThemeMode.entries.forEachIndexed { index, mode ->
@@ -123,6 +141,41 @@ object SettingsFeature {
                             label = { Text(mode.name) },
                         )
                     }
+                }
+            }
+
+            SettingsCard(
+                title = "Theme bundle",
+                description = "Color palette applied across the app.",
+            ) {
+                val activeBundle = themeBundleId.ifEmpty { ThemeBundleRegistry.default.id }
+                ThemeBundleRegistry.builtIns.forEach { bundle ->
+                    BundleRow(
+                        name = bundle.name,
+                        description = bundle.description,
+                        selected = activeBundle == bundle.id,
+                        swatch = listOf(
+                            bundle.dark.primary,
+                            bundle.dark.secondary,
+                            bundle.dark.tertiary,
+                            bundle.dark.surface,
+                        ),
+                        onClick = { onUpdateThemeBundle(bundle.id) },
+                    )
+                }
+            }
+
+            SettingsCard(
+                title = "Icon bundle",
+                description = "Icon set used across the app.",
+            ) {
+                val activeIcons = iconBundleId.ifEmpty { IconBundleRegistry.default.id }
+                IconBundleRegistry.builtIns.forEach { bundle ->
+                    IconBundleRow(
+                        bundle = bundle,
+                        selected = activeIcons == bundle.id,
+                        onClick = { onUpdateIconBundle(bundle.id) },
+                    )
                 }
             }
 
@@ -395,6 +448,101 @@ private fun WarningCard(
                 text = message,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+        }
+    }
+}
+
+@Composable
+private fun BundleRow(
+    name: String,
+    description: String,
+    selected: Boolean,
+    swatch: List<Color>,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            swatch.take(4).forEach { color ->
+                Box(
+                    modifier = Modifier
+                        .size(14.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(color),
+                )
+            }
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (selected) {
+            Icon(
+                imageVector = Icons.Rounded.Check,
+                contentDescription = "Selected",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun IconBundleRow(
+    bundle: IconBundle,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val sample = listOf(JCodeIcon.Files, JCodeIcon.Run, JCodeIcon.Terminal, JCodeIcon.Search, JCodeIcon.Settings)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            sample.forEach { slot ->
+                Icon(
+                    imageVector = bundle[slot],
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(bundle.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Text(
+                text = bundle.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (selected) {
+            Icon(
+                imageVector = Icons.Rounded.Check,
+                contentDescription = "Selected",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
             )
         }
     }

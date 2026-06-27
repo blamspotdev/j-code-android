@@ -1,4 +1,6 @@
 package dev.jcode
+import dev.jcode.design.JCodeIcon
+import dev.jcode.design.jcIcon
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -10,9 +12,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -57,7 +56,7 @@ internal fun RunDebugPanel(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Icon(
-                imageVector = Icons.Rounded.PlayArrow,
+                imageVector = jcIcon(JCodeIcon.Run),
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
             )
@@ -101,7 +100,7 @@ internal fun RunDebugPanel(
                                 contentColor = MaterialTheme.colorScheme.onErrorContainer,
                             ),
                         ) {
-                            Icon(Icons.Rounded.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(jcIcon(JCodeIcon.Stop), contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Stop")
                         }
@@ -110,7 +109,7 @@ internal fun RunDebugPanel(
                             enabled = !runInProgress,
                             modifier = Modifier.weight(1f),
                         ) {
-                            Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(jcIcon(JCodeIcon.Run), contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(if (runInProgress) "Building…" else "Re-run")
                         }
@@ -122,7 +121,7 @@ internal fun RunDebugPanel(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Icon(
-                            imageVector = Icons.Rounded.PlayArrow,
+                            imageVector = jcIcon(JCodeIcon.Run),
                             contentDescription = null,
                             modifier = Modifier.size(18.dp),
                         )

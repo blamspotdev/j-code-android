@@ -1,4 +1,6 @@
 package dev.jcode.feature.explorer
+import dev.jcode.design.JCodeIcon
+import dev.jcode.design.jcIcon
 
 import android.content.Context
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -24,18 +26,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.CreateNewFolder
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.NoteAdd
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.UnfoldLess
-import androidx.compose.material.icons.outlined.ContentPaste
-import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -340,7 +330,7 @@ private fun RowOverflowMenu(
             modifier = Modifier.size(28.dp),
         ) {
             Icon(
-                imageVector = Icons.Default.MoreVert,
+                imageVector = jcIcon(JCodeIcon.MoreVert),
                 contentDescription = "More actions",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(18.dp),
@@ -385,7 +375,7 @@ private fun ExplorerBreadcrumb(
         if (entries.size > 1) {
             IconButton(onClick = onNavigateUp, modifier = Modifier.size(28.dp)) {
                 Icon(
-                    imageVector = Icons.Default.ArrowUpward,
+                    imageVector = jcIcon(JCodeIcon.ArrowUp),
                     contentDescription = "Up one level",
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(18.dp),
@@ -526,14 +516,14 @@ private fun TreeRowItem(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            imageVector = if (row.isExpanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            imageVector = if (row.isExpanded) jcIcon(JCodeIcon.ChevronDown) else jcIcon(JCodeIcon.ChevronRight),
                             contentDescription = if (row.isExpanded) "Collapse" else "Expand",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(iconSize),
                         )
                     }
                     Icon(
-                        imageVector = Icons.Default.Folder,
+                        imageVector = jcIcon(JCodeIcon.Folder),
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(iconSize),
@@ -541,7 +531,7 @@ private fun TreeRowItem(
                 } else {
                     Spacer(modifier = Modifier.width(ChevronSlot))
                     Icon(
-                        imageVector = Icons.Outlined.Description,
+                        imageVector = jcIcon(JCodeIcon.Output),
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(iconSize),
@@ -616,7 +606,7 @@ private fun ListViewContent(
                     ),
                 leading = {
                     Icon(
-                        imageVector = if (row.node.kind == FsKind.Directory) Icons.Default.Folder else Icons.Outlined.Description,
+                        imageVector = if (row.node.kind == FsKind.Directory) jcIcon(JCodeIcon.Folder) else jcIcon(JCodeIcon.Output),
                         contentDescription = null,
                         tint = if (row.node.kind == FsKind.Directory) {
                             MaterialTheme.colorScheme.primary
@@ -693,12 +683,12 @@ private fun ExplorerToolbar(
             .padding(horizontal = 4.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ToolbarIcon(Icons.Default.NoteAdd, "New File", onCreateFile)
-        ToolbarIcon(Icons.Default.CreateNewFolder, "New Folder", onCreateFolder)
-        ToolbarIcon(Icons.Outlined.ContentPaste, "Paste", onPaste, enabled = canPaste)
-        ToolbarIcon(Icons.Default.Refresh, "Refresh", onRefresh)
+        ToolbarIcon(jcIcon(JCodeIcon.NewFile), "New File", onCreateFile)
+        ToolbarIcon(jcIcon(JCodeIcon.NewFolder), "New Folder", onCreateFolder)
+        ToolbarIcon(jcIcon(JCodeIcon.Paste), "Paste", onPaste, enabled = canPaste)
+        ToolbarIcon(jcIcon(JCodeIcon.Refresh), "Refresh", onRefresh)
         if (viewMode == ExplorerViewMode.Tree) {
-            ToolbarIcon(Icons.Default.UnfoldLess, "Collapse all", onCollapseAll)
+            ToolbarIcon(jcIcon(JCodeIcon.Collapse), "Collapse all", onCollapseAll)
         }
     }
 }

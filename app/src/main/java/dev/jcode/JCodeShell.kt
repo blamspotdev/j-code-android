@@ -1,4 +1,6 @@
 package dev.jcode
+import dev.jcode.design.JCodeIcon
+import dev.jcode.design.jcIcon
 
 import android.content.Context
 import android.content.res.Configuration
@@ -43,26 +45,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Article
-import androidx.compose.material.icons.automirrored.rounded.HelpOutline
-import androidx.compose.material.icons.automirrored.rounded.MenuOpen
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.ArrowDropDown
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.BuildCircle
-import androidx.compose.material.icons.rounded.Code
-import androidx.compose.material.icons.rounded.DatasetLinked
-import androidx.compose.material.icons.rounded.Extension
-import androidx.compose.material.icons.rounded.FolderOpen
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Radar
-import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.Source
-import androidx.compose.material.icons.rounded.SyncProblem
-import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -202,29 +184,29 @@ private val LocalTerminalTapConfig = compositionLocalOf { TerminalTapConfig() }
 
 private enum class WorkbenchTool(
     val label: String,
-    val icon: ImageVector,
+    val icon: JCodeIcon,
     val compactLabel: String = label,
     /** Hidden from the activity bar until it has a working UI (kept in the enum for `when` exhaustiveness). */
     val available: Boolean = true,
 ) {
-    Explorer("Explorer", Icons.Rounded.FolderOpen, "Files"),
-    Search("Search", Icons.Rounded.Search, "Find", available = false),
-    Scm("SCM", Icons.Rounded.Source, "SCM", available = false),
-    RunDebug("Run/Debug", Icons.Rounded.PlayArrow, "Run"),
-    Extensions("Extensions", Icons.Rounded.Extension, "Ext"),
-    SdkManager("SDK Manager", Icons.Rounded.BuildCircle, "SDK"),
-    Settings("App Settings", Icons.Rounded.Settings, "App Settings"),
+    Explorer("Explorer", JCodeIcon.Files, "Files"),
+    Search("Search", JCodeIcon.Search, "Find", available = false),
+    Scm("SCM", JCodeIcon.Scm, "SCM", available = false),
+    RunDebug("Run/Debug", JCodeIcon.Run, "Run"),
+    Extensions("Extensions", JCodeIcon.Extensions, "Ext"),
+    SdkManager("SDK Manager", JCodeIcon.Sdk, "SDK"),
+    Settings("App Settings", JCodeIcon.Settings, "App Settings"),
 }
 
 private enum class RightPanelTab(
     val label: String,
-    val icon: ImageVector,
+    val icon: JCodeIcon,
     val enabled: Boolean = true,
 ) {
-    Terminal("Terminal", Icons.Rounded.Terminal, enabled = true),
-    Output("Output", Icons.AutoMirrored.Rounded.Article, enabled = true),
-    Problems("Problems", Icons.Rounded.SyncProblem, enabled = false),
-    DebugConsole("Debug Console", Icons.Rounded.Radar, enabled = false),
+    Terminal("Terminal", JCodeIcon.Terminal, enabled = true),
+    Output("Output", JCodeIcon.Logs, enabled = true),
+    Problems("Problems", JCodeIcon.Problems, enabled = false),
+    DebugConsole("Debug Console", JCodeIcon.Radar, enabled = false),
 }
 
 @Composable
@@ -249,6 +231,8 @@ fun JCodeApp(
     val sdkCatalogState by viewModel.sdkCatalogState.collectAsStateWithLifecycle()
     val autoSetupProgress by viewModel.autoSetupProgress.collectAsStateWithLifecycle(initialValue = DistroWizardProgress.Idle)
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val themeBundleId by viewModel.themeBundleId.collectAsStateWithLifecycle()
+    val iconBundleId by viewModel.iconBundleId.collectAsStateWithLifecycle()
     val railToolOrder by viewModel.railToolOrder.collectAsStateWithLifecycle()
     val terminalDoubleTapToFocus by viewModel.terminalDoubleTapToFocus.collectAsStateWithLifecycle()
     val tapContext = LocalContext.current
@@ -322,6 +306,10 @@ fun JCodeApp(
         onUpdateExplorerViewMode = viewModel::updateExplorerViewMode,
         themeMode = themeMode,
         onUpdateThemeMode = { viewModel.setThemeMode(it) },
+        themeBundleId = themeBundleId,
+        onUpdateThemeBundle = viewModel::setThemeBundle,
+        iconBundleId = iconBundleId,
+        onUpdateIconBundle = viewModel::setIconBundle,
         onOpenWorkspaceConfig = viewModel::openWorkspaceConfigFile,
         onOpenProjectConfig = viewModel::openProjectConfigFile,
         onRefreshEnvironment = viewModel::refreshEnvironment,
@@ -419,6 +407,10 @@ private fun JCodeShell(
     onUpdateExplorerViewMode: (ConfigScope, String) -> Unit,
     themeMode: ThemeMode,
     onUpdateThemeMode: (ThemeMode) -> Unit,
+    themeBundleId: String,
+    onUpdateThemeBundle: (String) -> Unit,
+    iconBundleId: String,
+    onUpdateIconBundle: (String) -> Unit,
     onOpenWorkspaceConfig: () -> Unit,
     onOpenProjectConfig: () -> Unit,
     onRefreshEnvironment: () -> Unit,
@@ -954,6 +946,10 @@ private fun JCodeShell(
                                     onUpdateExplorerViewMode = onUpdateExplorerViewMode,
                                     themeMode = themeMode,
                                     onUpdateThemeMode = onUpdateThemeMode,
+                                    themeBundleId = themeBundleId,
+                                    onUpdateThemeBundle = onUpdateThemeBundle,
+                                    iconBundleId = iconBundleId,
+                                    onUpdateIconBundle = onUpdateIconBundle,
                                     terminalDoubleTapToFocus = terminalDoubleTapToFocus,
                                     onUpdateTerminalDoubleTapToFocus = onUpdateTerminalDoubleTapToFocus,
                                     modifier = Modifier.fillMaxSize(),
@@ -1283,7 +1279,7 @@ private fun RailButton(
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
-                    imageVector = tool.icon,
+                    imageVector = jcIcon(tool.icon),
                     contentDescription = tool.label,
                     tint = content,
                 )
@@ -1486,7 +1482,7 @@ private fun WorkspacePanel(
 
                     WorkbenchTool.Search -> ToolPanelPlaceholder(
                         title = "Search",
-                        icon = Icons.Rounded.Search,
+                        icon = jcIcon(JCodeIcon.Search),
                         lines = listOf(
                             "Quick file search, symbol search, and ripgrep results live here.",
                             "Suggested UI: recent queries, include/exclude globs, and pinned result groups.",
@@ -1496,7 +1492,7 @@ private fun WorkspacePanel(
 
                     WorkbenchTool.Scm -> ToolPanelPlaceholder(
                         title = "Source Control",
-                        icon = Icons.Rounded.Source,
+                        icon = jcIcon(JCodeIcon.Scm),
                         lines = listOf(
                             "Show branch, dirty files, staged changes, and last sync status.",
                             "A better tablet/desktop layout is a split staged/unstaged list with inline diff preview.",
@@ -1598,7 +1594,7 @@ private fun WorkspaceHeader(
                         )
                         if (hasCloseAction) {
                             Icon(
-                                imageVector = Icons.Rounded.ArrowDropDown,
+                                imageVector = jcIcon(JCodeIcon.DropDown),
                                 contentDescription = null,
                                 modifier = Modifier.size(16.dp),
                                 tint = MaterialTheme.colorScheme.primary,
@@ -1620,7 +1616,7 @@ private fun WorkspaceHeader(
                     DropdownMenuItem(
                         text = { Text(if (inUserWorkspace) "Close workspace" else "Close project") },
                         leadingIcon = {
-                            Icon(imageVector = Icons.Rounded.Close, contentDescription = null)
+                            Icon(imageVector = jcIcon(JCodeIcon.Close), contentDescription = null)
                         },
                         onClick = {
                             menuExpanded = false
@@ -1631,12 +1627,12 @@ private fun WorkspaceHeader(
             }
 
             WorkbenchIconActionButton(
-                icon = Icons.Rounded.Add,
+                icon = jcIcon(JCodeIcon.Add),
                 contentDescription = "Add project",
                 onClick = onCreateProject,
             )
             WorkbenchIconActionButton(
-                icon = Icons.Rounded.DatasetLinked,
+                icon = jcIcon(JCodeIcon.Destinations),
                 contentDescription = "Open external folder",
                 onClick = onOpenExternalFolder,
             )
@@ -1682,7 +1678,7 @@ private fun SidebarToolButton(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Icon(
-                imageVector = tool.icon,
+                imageVector = jcIcon(tool.icon),
                 contentDescription = tool.label,
                 modifier = Modifier.size(14.dp),
                 tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1717,7 +1713,7 @@ private fun WorkspaceEmptyState(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = Icons.Rounded.FolderOpen,
+                imageVector = jcIcon(JCodeIcon.Files),
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
             )
@@ -1770,7 +1766,7 @@ private fun ProjectRoster(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             WorkbenchIconActionButton(
-                icon = Icons.Rounded.Add,
+                icon = jcIcon(JCodeIcon.Add),
                 contentDescription = "New project in this workspace",
                 onClick = onCreateProject,
             )
@@ -1809,7 +1805,7 @@ private fun ProjectRoster(
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
-                                    imageVector = if (isWorkspace) Icons.Rounded.FolderOpen else Icons.Rounded.Code,
+                                    imageVector = if (isWorkspace) jcIcon(JCodeIcon.Files) else jcIcon(JCodeIcon.Code),
                                     contentDescription = null,
                                     modifier = Modifier.size(15.dp),
                                     tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1834,7 +1830,7 @@ private fun ProjectRoster(
                         Box {
                             IconButton(onClick = { openMenuId = project.id }, modifier = Modifier.size(32.dp)) {
                                 Icon(
-                                    imageVector = Icons.Rounded.MoreVert,
+                                    imageVector = jcIcon(JCodeIcon.MoreVert),
                                     contentDescription = "Project actions",
                                     modifier = Modifier.size(18.dp),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2030,7 +2026,7 @@ private fun WorkbenchTopBar(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             WorkbenchIconActionButton(
-                icon = Icons.AutoMirrored.Rounded.MenuOpen,
+                icon = jcIcon(JCodeIcon.MenuToggle),
                 contentDescription = if (leftSidebarExpanded) "Hide left sidebar" else "Show left sidebar",
                 onClick = onToggleLeftSidebar,
                 active = leftSidebarExpanded,
@@ -2060,17 +2056,17 @@ private fun WorkbenchTopBar(
             }
 
             WorkbenchIconActionButton(
-                icon = Icons.Rounded.Terminal,
+                icon = jcIcon(JCodeIcon.Terminal),
                 contentDescription = "Terminal",
                 onClick = onShowTerminal,
             )
             WorkbenchIconActionButton(
-                icon = Icons.Rounded.PlayArrow,
+                icon = jcIcon(JCodeIcon.Run),
                 contentDescription = "Run",
                 onClick = onRun,
             )
             WorkbenchIconActionButton(
-                icon = Icons.AutoMirrored.Rounded.Article,
+                icon = jcIcon(JCodeIcon.Logs),
                 contentDescription = "Toggle right sidebar",
                 onClick = onToggleRightSidebar,
                 active = canShowRightSidebar && rightSidebarVisible,
@@ -2163,7 +2159,7 @@ private fun WorkbenchRightSidebar(
                                 MaterialTheme.colorScheme.onSurfaceVariant
                             }
                             Icon(
-                                imageVector = tab.icon,
+                                imageVector = jcIcon(tab.icon),
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp),
                                 tint = tint,
@@ -2423,7 +2419,7 @@ private fun TerminalSidebarContent(
                 verticalArrangement = Arrangement.Center,
             ) {
                 Icon(
-                    imageVector = Icons.Rounded.BuildCircle,
+                    imageVector = jcIcon(JCodeIcon.Sdk),
                     contentDescription = null,
                     modifier = Modifier.size(48.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
@@ -2491,7 +2487,7 @@ private fun TerminalSidebarContent(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.Terminal,
+                        imageVector = jcIcon(JCodeIcon.Terminal),
                         contentDescription = null,
                         modifier = Modifier.size(48.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
@@ -2533,7 +2529,7 @@ private fun DisabledTabContent(
         verticalArrangement = Arrangement.Center,
     ) {
         Icon(
-            imageVector = Icons.Rounded.BuildCircle,
+            imageVector = jcIcon(JCodeIcon.Sdk),
             contentDescription = null,
             modifier = Modifier.size(48.dp),
             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
@@ -2658,7 +2654,7 @@ private fun InspectorSidebar(
             item {
                 WelcomeCard(
                     title = "Workspace snapshot",
-                    icon = Icons.Rounded.Code,
+                    icon = jcIcon(JCodeIcon.Code),
                     lines = listOf(
                         "Mode: ${deviceModeLabel(windowInfo)}",
                         "Tool: ${selectedTool.label}",
@@ -2669,7 +2665,7 @@ private fun InspectorSidebar(
             item {
                 WelcomeCard(
                     title = "Editor defaults",
-                    icon = Icons.Rounded.Settings,
+                    icon = jcIcon(JCodeIcon.Settings),
                     lines = listOf(
                         "Font: ${effectiveConfig.editor.fontSize.toInt()} sp",
                         "Tabs: ${effectiveConfig.editor.tabSize} spaces",
@@ -2680,7 +2676,7 @@ private fun InspectorSidebar(
             item {
                 WelcomeCard(
                     title = "Active context",
-                    icon = Icons.Rounded.DatasetLinked,
+                    icon = jcIcon(JCodeIcon.Destinations),
                     lines = listOf(
                         "Project: ${selectedProject?.name ?: "None"}",
                         "Bind target: ${selectedProject?.distroBindTarget ?: "--"}",
@@ -2700,7 +2696,7 @@ private fun InspectorSidebar(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Icon(Icons.AutoMirrored.Rounded.HelpOutline, contentDescription = null)
+                        Icon(jcIcon(JCodeIcon.Help), contentDescription = null)
                         Text("Quick actions", fontWeight = FontWeight.SemiBold)
                     }
                     WorkbenchActionButton(text = "Command Palette", onClick = onShowCommandPalette, active = true)
@@ -2737,7 +2733,7 @@ private fun ExtensionsPanel(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                imageVector = Icons.Rounded.Extension,
+                imageVector = jcIcon(JCodeIcon.Extensions),
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
             )

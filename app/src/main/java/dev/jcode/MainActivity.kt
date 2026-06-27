@@ -15,7 +15,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jcode.adaptive.rememberJCodeWindowInfo
 import dev.jcode.design.DensityMode
+import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.M3Theme
+import dev.jcode.design.ThemeBundleRegistry
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by lazy {
@@ -64,8 +66,17 @@ private fun JCodeRoot(viewModel: MainViewModel) {
     val windowInfo by rememberJCodeWindowInfo()
     val densityMode = if (windowInfo.hasPhysicalKeyboard) DensityMode.Compact else DensityMode.Comfortable
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val themeBundleId by viewModel.themeBundleId.collectAsStateWithLifecycle()
+    val themeBundle = ThemeBundleRegistry.byId(themeBundleId)
+    val iconBundleId by viewModel.iconBundleId.collectAsStateWithLifecycle()
+    val iconBundle = IconBundleRegistry.byId(iconBundleId)
 
-    M3Theme(themeMode = themeMode, densityMode = densityMode) {
+    M3Theme(
+        themeMode = themeMode,
+        densityMode = densityMode,
+        themeBundle = themeBundle,
+        iconBundle = iconBundle,
+    ) {
         JCodeApp(viewModel = viewModel, modifier = Modifier)
     }
 }

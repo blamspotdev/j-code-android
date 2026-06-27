@@ -9,8 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -49,41 +47,6 @@ val LocalIconSize = compositionLocalOf { 18.dp }
 val JetBrainsMonoFontFamily: FontFamily
     @Composable get() = FontFamily.Monospace
 
-private val JCodeDarkColorScheme = darkColorScheme(
-    primary = androidx.compose.ui.graphics.Color(0xFF89B4FA),
-    onPrimary = androidx.compose.ui.graphics.Color(0xFF1E1E2E),
-    primaryContainer = androidx.compose.ui.graphics.Color(0xFF313244),
-    onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFFCDD6F4),
-    secondary = androidx.compose.ui.graphics.Color(0xFFCBA6F7),
-    onSecondary = androidx.compose.ui.graphics.Color(0xFF1E1E2E),
-    tertiary = androidx.compose.ui.graphics.Color(0xFFA6E3A1),
-    onTertiary = androidx.compose.ui.graphics.Color(0xFF1E1E2E),
-    background = androidx.compose.ui.graphics.Color(0xFF1E1E2E),
-    onBackground = androidx.compose.ui.graphics.Color(0xFFCDD6F4),
-    surface = androidx.compose.ui.graphics.Color(0xFF181825),
-    onSurface = androidx.compose.ui.graphics.Color(0xFFCDD6F4),
-    surfaceVariant = androidx.compose.ui.graphics.Color(0xFF313244),
-    onSurfaceVariant = androidx.compose.ui.graphics.Color(0xFFBAC2DE),
-)
-
-// Catppuccin Latte — the light counterpart to the Mocha dark scheme above.
-private val JCodeLightColorScheme = lightColorScheme(
-    primary = androidx.compose.ui.graphics.Color(0xFF1E66F5), // blue
-    onPrimary = androidx.compose.ui.graphics.Color(0xFFEFF1F5),
-    primaryContainer = androidx.compose.ui.graphics.Color(0xFFCCD0DA), // surface0
-    onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFF4C4F69), // text
-    secondary = androidx.compose.ui.graphics.Color(0xFF8839EF), // mauve
-    onSecondary = androidx.compose.ui.graphics.Color(0xFFEFF1F5),
-    tertiary = androidx.compose.ui.graphics.Color(0xFF40A02B), // green
-    onTertiary = androidx.compose.ui.graphics.Color(0xFFEFF1F5),
-    background = androidx.compose.ui.graphics.Color(0xFFEFF1F5), // base
-    onBackground = androidx.compose.ui.graphics.Color(0xFF4C4F69), // text
-    surface = androidx.compose.ui.graphics.Color(0xFFE6E9EF), // mantle
-    onSurface = androidx.compose.ui.graphics.Color(0xFF4C4F69), // text
-    surfaceVariant = androidx.compose.ui.graphics.Color(0xFFCCD0DA), // surface0
-    onSurfaceVariant = androidx.compose.ui.graphics.Color(0xFF5C5F77), // subtext1
-)
-
 private val JCodeTypography = Typography(
     bodyMedium = TextStyle(
         fontSize = 13.sp,
@@ -99,10 +62,20 @@ private val JCodeTypography = Typography(
     ),
 )
 
+/** Convenience accessors for J Code design tokens that sit alongside [MaterialTheme]. */
+object JCodeTheme {
+    val semanticColors: JCodeSemanticColors
+        @Composable get() = LocalSemanticColors.current
+    val spacing: JCodeSpacing
+        @Composable get() = LocalSpacing.current
+}
+
 @Composable
 fun M3Theme(
     themeMode: ThemeMode = ThemeMode.System,
     densityMode: DensityMode = DensityMode.Comfortable,
+    themeBundle: ThemeBundle = ThemeBundleRegistry.default,
+    iconBundle: IconBundle = IconBundleRegistry.default,
     content: @Composable () -> Unit,
 ) {
     val darkTheme = when (themeMode) {
@@ -113,9 +86,12 @@ fun M3Theme(
     CompositionLocalProvider(
         LocalDensityMode provides densityMode,
         LocalIconSize provides 18.dp,
+        LocalSpacing provides JCodeSpacing(),
+        LocalSemanticColors provides themeBundle.semanticColors(darkTheme),
+        LocalIconBundle provides iconBundle,
     ) {
         MaterialTheme(
-            colorScheme = if (darkTheme) JCodeDarkColorScheme else JCodeLightColorScheme,
+            colorScheme = themeBundle.colorScheme(darkTheme),
             typography = JCodeTypography,
             content = content,
         )

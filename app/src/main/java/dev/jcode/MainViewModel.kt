@@ -141,6 +141,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val themeBundleKey = stringPreferencesKey("theme_bundle_id")
+
+    /** App-wide selected theme bundle id; empty resolves to the default bundle. */
+    val themeBundleId: StateFlow<String> = uiPreferences.data
+        .map { prefs -> prefs[themeBundleKey].orEmpty() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
+
+    fun setThemeBundle(id: String) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[themeBundleKey] = id }
+        }
+    }
+
+    private val iconBundleKey = stringPreferencesKey("icon_bundle_id")
+
+    /** App-wide selected icon bundle id; empty resolves to the default (Material) bundle. */
+    val iconBundleId: StateFlow<String> = uiPreferences.data
+        .map { prefs -> prefs[iconBundleKey].orEmpty() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
+
+    fun setIconBundle(id: String) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[iconBundleKey] = id }
+        }
+    }
+
     val workspaceConfig = configService.workspaceConfig
     val projectConfig = configService.projectConfig
     val workspaceConfigError = configService.workspaceError
