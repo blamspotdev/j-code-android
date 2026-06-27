@@ -39,6 +39,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import dev.jcode.design.JCodeTheme
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -206,7 +207,7 @@ private fun StepperScreen(
                                     modifier = Modifier.size(18.dp),
                                     strokeWidth = 2.dp,
                                 )
-                                completed -> Text("✓", color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold)
+                                completed -> Text("✓", color = JCodeTheme.semanticColors.success, fontWeight = FontWeight.Bold)
                                 autoSetupProgress is DistroWizardProgress.Failed -> Text("✕", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
                                 else -> Text("2", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                             }
@@ -376,7 +377,7 @@ private fun LogLine(text: String) {
         style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
         color = when {
             text.contains("failed", ignoreCase = true) || text.contains("error", ignoreCase = true) -> MaterialTheme.colorScheme.error
-            text.contains("done", ignoreCase = true) || text.contains("ok", ignoreCase = true) || text.contains("success", ignoreCase = true) -> Color(0xFF4CAF50)
+            text.contains("done", ignoreCase = true) || text.contains("ok", ignoreCase = true) || text.contains("success", ignoreCase = true) -> JCodeTheme.semanticColors.success
             else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.88f)
         },
         maxLines = 4,

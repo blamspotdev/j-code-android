@@ -1,5 +1,7 @@
 package dev.jcode
+import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.JCodeIcon
+import dev.jcode.design.ThemeBundleRegistry
 import dev.jcode.design.jcIcon
 
 import android.content.Context
@@ -820,6 +822,10 @@ private fun JCodeShell(
                 onSnackbar = { message ->
                     scope.launch { snackbarHostState.showSnackbar(message) }
                 },
+                themeBundleId = themeBundleId,
+                onUpdateThemeBundle = onUpdateThemeBundle,
+                iconBundleId = iconBundleId,
+                onUpdateIconBundle = onUpdateIconBundle,
             )
         }
     }
@@ -1002,6 +1008,10 @@ private fun JCodeShell(
                             onSnackbar = { message ->
                                 scope.launch { snackbarHostState.showSnackbar(message) }
                             },
+                            themeBundleId = themeBundleId,
+                            onUpdateThemeBundle = onUpdateThemeBundle,
+                            iconBundleId = iconBundleId,
+                            onUpdateIconBundle = onUpdateIconBundle,
                         )
                     }
                 }
@@ -1401,6 +1411,10 @@ private fun WorkspacePanel(
     runInProgress: Boolean,
     onOpenRunInBrowser: () -> Unit,
     onSnackbar: (String) -> Unit,
+    themeBundleId: String,
+    onUpdateThemeBundle: (String) -> Unit,
+    iconBundleId: String,
+    onUpdateIconBundle: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -1517,6 +1531,10 @@ private fun WorkspacePanel(
                         }
                         ExtensionsPanel(
                             extension = templateExtension,
+                            themeBundleId = themeBundleId,
+                            onSelectTheme = onUpdateThemeBundle,
+                            iconBundleId = iconBundleId,
+                            onSelectIcon = onUpdateIconBundle,
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
@@ -2723,6 +2741,10 @@ private fun explorerViewModeOf(value: String): ExplorerViewMode =
 @Composable
 private fun ExtensionsPanel(
     extension: TemplateExtension,
+    themeBundleId: String,
+    onSelectTheme: (String) -> Unit,
+    iconBundleId: String,
+    onSelectIcon: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -2785,6 +2807,92 @@ private fun ExtensionsPanel(
                     )
                 }
             }
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+        Text("Theme bundles (${ThemeBundleRegistry.builtIns.size})", style = MaterialTheme.typography.labelLarge)
+        val activeTheme = themeBundleId.ifEmpty { ThemeBundleRegistry.default.id }
+        ThemeBundleRegistry.builtIns.forEach { bundle ->
+            BundleGalleryRow(
+                name = bundle.name,
+                description = bundle.description,
+                selected = activeTheme == bundle.id,
+                onApply = { onSelectTheme(bundle.id) },
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    listOf(bundle.dark.primary, bundle.dark.secondary, bundle.dark.tertiary, bundle.dark.surface).forEach { color ->
+                        Box(
+                            modifier = Modifier
+                                .size(14.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(color),
+                        )
+                    }
+                }
+            }
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+        Text("Icon bundles (${IconBundleRegistry.builtIns.size})", style = MaterialTheme.typography.labelLarge)
+        val activeIcon = iconBundleId.ifEmpty { IconBundleRegistry.default.id }
+        IconBundleRegistry.builtIns.forEach { bundle ->
+            BundleGalleryRow(
+                name = bundle.name,
+                description = bundle.description,
+                selected = activeIcon == bundle.id,
+                onApply = { onSelectIcon(bundle.id) },
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(JCodeIcon.Files, JCodeIcon.Run, JCodeIcon.Terminal, JCodeIcon.Search, JCodeIcon.Settings).forEach { slot ->
+                        Icon(
+                            imageVector = bundle[slot],
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BundleGalleryRow(
+    name: String,
+    description: String,
+    selected: Boolean,
+    onApply: () -> Unit,
+    preview: @Composable () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onApply)
+            .padding(vertical = 6.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        preview()
+        Column(modifier = Modifier.weight(1f)) {
+            Text(name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (selected) {
+            Text(
+                text = "Active",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
         }
     }
 }
