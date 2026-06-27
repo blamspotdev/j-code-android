@@ -130,6 +130,9 @@ object ProjectRunner {
             appendLine("clear")
             appendLine("bash <<'JCRUN'")
             appendLine("set -e")
+            // npm's animated progress bar (redrawn with carriage returns) renders as a wall of garbage
+            // on the VT terminal; disable it and the fund/audit chatter for clean line-by-line output.
+            appendLine("export npm_config_progress=false npm_config_fund=false npm_config_audit=false")
             appendLine("PROJ=\"$projectDir\"")
             appendLine("STAGE=\"\$HOME/.jcode-run/$stageName\"")
             appendLine("echo '== J Code: Build & Run (ASP.NET Core + Vite React) =='")
@@ -192,6 +195,8 @@ object ProjectRunner {
             appendLine("clear")
             appendLine("bash <<'JCRUN'")
             appendLine("set -e")
+            // Disable npm's animated progress bar (renders as garbage on the VT terminal) + chatter.
+            appendLine("export npm_config_progress=false npm_config_fund=false npm_config_audit=false")
             appendLine("PROJ=\"$projectDir\"")
             appendLine("STAGE=\"\$HOME/.jcode-run/$stageName\"")
             appendLine("echo '== J Code: Run (Vite dev server) =='")
