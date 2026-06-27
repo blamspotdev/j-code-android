@@ -15,36 +15,41 @@ import kotlinx.coroutines.withContext
 /**
  * Project-type-aware build & run recipes executed inside the embedded Linux runtime.
  *
- * A [RunPlan] is a single bash command sequence written into a visible terminal session (the right
- * drawer) so the user watches the compile/run stream live. Recipes are **self-healing**: if the
- * project is only partially scaffolded (e.g. an ASP.NET server with no React client), the run
- * (re)creates and builds the missing pieces in that same terminal instead of failing. Front-end
- * builds happen in the runtime's ext4 home (`$HOME/.jcode-run/<name>`) because the FUSE-backed
- * `/workspace` mount has no symlinks, so `node_modules` cannot live there — only the build output is
- * published back into the project.
+ * A [RunPlan] describes one or more [RunTerminal]s, each a self-contained bash script run in its own
+ * right-drawer terminal (so e.g. an ASP.NET backend and a Vite frontend run side by side in dev).
+ * Recipes are **self-healing**: a partially-scaffolded project (server but no client) is repaired in
+ * the run terminal rather than failing. Front-end installs/builds happen in the runtime's ext4 home
+ * (`$HOME/.jcode-run/<name>`) because the FUSE `/workspace` mount has no symlinks, so `node_modules`
+ * cannot live there. The .NET build output likewise goes to ext4 because `/workspace` is noexec.
  *
  * proot shares the app process's network stack, so a server bound to `0.0.0.0:<port>` in the guest
  * is reachable from the device browser at `http://localhost:<port>`.
  */
 object ProjectRunner {
 
-    /** A runnable recipe for a detected project type. */
-    data class RunPlan(
-        /** Short human label, e.g. "ASP.NET Core + Vite React". */
-        val kindLabel: String,
-        /** Localhost port the server listens on once started. */
-        val port: Int,
-        /** The full bash command sequence to send into the run terminal. */
+    /** One terminal of a run: a label (its tab name) and the bash script to execute in it. */
+    data class RunTerminal(
+        val label: String,
         val command: String,
+    )
+
+    /** A runnable recipe for a detected project type, across one or more terminals. */
+    data class RunPlan(
+        /** Short human label, e.g. "ASP.NET Core + Vite React (dev)". */
+        val kindLabel: String,
+        /** Localhost port to poll for readiness and open in the browser (the dev frontend). */
+        val readyPort: Int,
+        /** The terminals to spawn, in start order. */
+        val terminals: List<RunTerminal>,
     ) {
-        val url: String get() = "http://localhost:$port"
+        val url: String get() = "http://localhost:$readyPort"
     }
 
     /**
      * Detect how to build & run [project], or null if no recipe matches. Detection prefers the
-     * project's scaffold [Project.templateId] (authoritative, and cheap — no disk access), then falls
-     * back to a filesystem probe for projects opened without a J Code template. Because the recipes
-     * self-heal, detection deliberately does NOT require a complete on-disk layout.
+     * project's scaffold [Project.templateId] (authoritative, cheap), then falls back to a filesystem
+     * probe for projects opened without a J Code template. Recipes self-heal, so detection does NOT
+     * require a complete on-disk layout.
      */
     fun detectRunPlan(project: Project): RunPlan? {
         val root = (project.fsPath as? FsPath.Local)?.file ?: return null
@@ -54,8 +59,6 @@ object ProjectRunner {
         when (project.templateId) {
             "aspnet-vite-react-ts" -> return aspnetVitePlan(guestDir, stageName)
             "react-app" -> return vitePlan(guestDir, stageName)
-            // Angular/empty have no one-tap recipe this round; fall back to the filesystem probe only
-            // when the project was opened without a recognized J Code template.
             "angular-aspnet", "empty" -> return null
             null -> Unit
             else -> {
@@ -75,17 +78,48 @@ object ProjectRunner {
         return null
     }
 
+    // ASP.NET Core + Vite React, dev: the backend (Development, :5080) and the Vite dev server
+    // (:5173) run in their own terminals, started server-first. The browser opens the Vite frontend.
     private fun aspnetVitePlan(guestDir: String, stageName: String) = RunPlan(
-        kindLabel = "ASP.NET Core + Vite React",
-        port = ASPNET_PORT,
-        command = aspnetViteCommand(guestDir, stageName, ASPNET_PORT),
+        kindLabel = "ASP.NET Core + Vite React (dev)",
+        readyPort = VITE_PORT,
+        terminals = listOf(
+            RunTerminal("Server", aspnetServerCommand(guestDir, stageName, ASPNET_PORT)),
+            RunTerminal("Client", viteClientCommand(guestDir, stageName, VITE_PORT, "$guestDir/client")),
+        ),
     )
 
+    // Standalone Vite/React app (the project root is the app).
     private fun vitePlan(guestDir: String, stageName: String) = RunPlan(
         kindLabel = "Vite / React dev server",
-        port = VITE_PORT,
-        command = viteDevCommand(guestDir, stageName, VITE_PORT),
+        readyPort = VITE_PORT,
+        terminals = listOf(
+            RunTerminal("Client", viteClientCommand(guestDir, stageName, VITE_PORT, guestDir)),
+        ),
     )
+
+    /**
+     * Prepare the terminal command that runs [terminal]. Its script body is written to the project's
+     * `.jcode/run-<label>.sh` and invoked with a single `bash <path>` line, so the interactive shell
+     * doesn't echo the whole script back with `>` continuation prompts. The script is read, not
+     * executed, so the noexec `/workspace` mount is fine. Falls back to an inline heredoc if the
+     * script can't be written.
+     */
+    fun runInvocation(project: Project, terminal: RunTerminal): String {
+        val hostDir = (project.fsPath as? FsPath.Local)?.file
+        val scriptName = "run-${sanitizeStageName(terminal.label)}.sh"
+        if (hostDir != null) {
+            val written = runCatching {
+                val dir = File(hostDir, ".jcode").apply { if (!exists()) mkdirs() }
+                File(dir, scriptName).writeText(terminal.command)
+            }.isSuccess
+            if (written) {
+                val guestDir = project.distroBindTarget.trimEnd('/')
+                return "bash \"$guestDir/.jcode/$scriptName\""
+            }
+        }
+        return "bash <<'JCRUN'\n${terminal.command}\nJCRUN"
+    }
 
     /**
      * Poll [port] on localhost until the server accepts a connection or [timeoutMs] elapses.
@@ -114,126 +148,69 @@ object ProjectRunner {
         runCatching { context.startActivity(intent) }
     }
 
-    /**
-     * Prepare the terminal command that runs [plan]. The recipe body is written to the project's
-     * `.jcode/run.sh` and invoked with `bash <path>` — a single short line — so the interactive shell
-     * does NOT echo the whole script back with `>` continuation prompts (which it would if the recipe
-     * were fed as an inline heredoc). The script is read, not executed, so the noexec `/workspace`
-     * mount is fine. Falls back to an inline heredoc if the script can't be written.
-     */
-    fun runInvocation(project: Project, plan: RunPlan): String {
-        val hostDir = (project.fsPath as? FsPath.Local)?.file
-        if (hostDir != null) {
-            val written = runCatching {
-                val dir = File(hostDir, ".jcode").apply { if (!exists()) mkdirs() }
-                File(dir, "run.sh").writeText(plan.command)
-            }.isSuccess
-            if (written) {
-                val guestDir = project.distroBindTarget.trimEnd('/')
-                return "bash \"$guestDir/.jcode/run.sh\""
-            }
-        }
-        return "bash <<'JCRUN'\n${plan.command}\nJCRUN"
-    }
-
     // --- command builders -------------------------------------------------
 
-    // Each recipe is a self-contained bash script (run via `bash .jcode/run.sh`, see runInvocation).
-    // `set -e` aborts on the first failing step. $PROJ/$STAGE/$TFM are expanded by the guest bash at
-    // run time.
+    // Each recipe is a self-contained bash script (run via `bash .jcode/run-<label>.sh`). `set -e`
+    // aborts on the first failing step. $PROJ/$STAGE/$TFM are expanded by the guest bash at run time.
 
     /** Pick the newest installed .NET SDK's major version → e.g. `net10.0`, falling back to net8.0. */
     private const val SELECT_TFM =
         "TFM=\$(dotnet --list-sdks 2>/dev/null | awk '{print \$1}' | sort -V | tail -1 | cut -d. -f1); " +
             "[ -n \"\$TFM\" ] && TFM=\"net\${TFM}.0\" || TFM=net8.0"
 
-    private fun aspnetViteCommand(projectDir: String, stageName: String, port: Int): String =
+    // ASP.NET Core server, Development env. /workspace is noexec, so build to ext4 and launch the
+    // managed DLL via the dotnet host (a .dll needs no exec bit, unlike the apphost `dotnet run` spawns).
+    private fun aspnetServerCommand(projectDir: String, stageName: String, port: Int): String =
         buildString {
             appendLine("clear")
             appendLine("set -e")
-            // Keep npm's progress bar (the terminal now renders the CHA/erase-line redraws in place);
-            // just silence the fund/audit chatter.
-            appendLine("export npm_config_fund=false npm_config_audit=false")
             appendLine("PROJ=\"$projectDir\"")
-            appendLine("STAGE=\"\$HOME/.jcode-run/$stageName\"")
-            appendLine("echo '== J Code: Build & Run (ASP.NET Core + Vite React) =='")
+            appendLine("SRV=\"\$HOME/.jcode-run/$stageName-server\"")
+            appendLine("echo '== J Code: Server (ASP.NET Core - Development) =='")
             appendLine(SELECT_TFM)
             appendLine("echo \"[setup] Target framework: \$TFM\"")
-            // 1. Ensure the ASP.NET server exists (self-heal a project with no Server/).
             appendLine("if ! ls \"\$PROJ/Server\"/*.csproj >/dev/null 2>&1; then")
             appendLine("  echo '[setup] Creating ASP.NET Core server...'")
             appendLine("  dotnet new web -o \"\$PROJ/Server\"")
             appendLine("fi")
-            // Retarget the server's TFM to the newest installed SDK (safe single-line rewrite).
             appendLine("for cs in \"\$PROJ/Server\"/*.csproj; do")
             appendLine("  sed -i \"s#<TargetFramework>[^<]*</TargetFramework>#<TargetFramework>\$TFM</TargetFramework>#\" \"\$cs\" 2>/dev/null || true")
             appendLine("done")
-            // 2. Ensure Program.cs serves the built SPA (never clobbers an already-configured server).
-            appendLine("if ! grep -q UseStaticFiles \"\$PROJ/Server/Program.cs\" 2>/dev/null; then")
-            appendLine("  echo '[setup] Configuring the server to serve the built client...'")
-            appendLine("  cat > \"\$PROJ/Server/Program.cs\" <<'PROG'")
-            appendLine("var builder = WebApplication.CreateBuilder(args);")
-            appendLine("var app = builder.Build();")
-            appendLine("app.UseDefaultFiles();")
-            appendLine("app.UseStaticFiles();")
-            appendLine("app.MapGet(\"/api/hello\", () => \"Hello from ASP.NET Core\");")
-            appendLine("app.MapFallbackToFile(\"index.html\");")
-            appendLine("app.Run();")
-            appendLine("PROG")
-            appendLine("fi")
-            // 3. Ensure the React client exists; scaffold it into the project if the partial project has none.
-            appendLine("if [ ! -f \"\$PROJ/client/package.json\" ]; then")
-            appendLine("  echo '[1/5] No client found — scaffolding Vite React (TypeScript)...'")
-            appendLine("  TMP=\"\$HOME/.jcode-run/.new-$stageName\"")
-            appendLine("  rm -rf \"\$TMP\" && mkdir -p \"\$TMP\" && cd \"\$TMP\"")
-            appendLine("  CI=1 npm create vite@latest client -- --template react-ts </dev/null")
-            // Persist the scaffolded source into the project (minus node_modules/dist) so it is editable.
-            appendLine("  ( cd \"\$TMP/client\" && tar --exclude=node_modules --exclude=dist -cf - . ) | ( mkdir -p \"\$PROJ/client\" && cd \"\$PROJ/client\" && tar -xf - )")
-            appendLine("  rm -rf \"\$TMP\"")
-            appendLine("fi")
-            appendLine("echo '[2/5] Staging client for build...'")
-            appendLine("rm -rf \"\$STAGE\" && mkdir -p \"\$STAGE\" && cp -a \"\$PROJ/client/.\" \"\$STAGE/\"")
-            appendLine("cd \"\$STAGE\"")
-            appendLine("echo '[3/5] Building frontend (npm install + build)...'")
-            appendLine("npm install")
-            appendLine("npm run build")
-            appendLine("echo '[4/5] Publishing client into Server/wwwroot...'")
-            appendLine("rm -rf \"\$PROJ/Server/wwwroot\" && mkdir -p \"\$PROJ/Server/wwwroot\" && cp -a \"\$STAGE/dist/.\" \"\$PROJ/Server/wwwroot/\"")
-            appendLine("echo '[5/5] Publishing & starting backend on http://localhost:$port ...'")
-            // /workspace is a noexec FUSE mount, so the compiled apphost can't be executed there.
-            // Publish to the ext4 home and launch the framework-dependent DLL via the dotnet host
-            // (running a managed .dll needs no exec bit, unlike the native apphost `dotnet run` spawns).
             appendLine("CSPROJ=\$(ls \"\$PROJ/Server\"/*.csproj | head -1)")
-            appendLine("SRV=\"\$STAGE-server\" && rm -rf \"\$SRV\"")
-            appendLine("dotnet publish \"\$CSPROJ\" -c Release -o \"\$SRV\" --nologo")
+            appendLine("echo '[1/2] Building server (dotnet build, Debug)...'")
+            appendLine("rm -rf \"\$SRV\"")
+            appendLine("dotnet build \"\$CSPROJ\" -c Debug -o \"\$SRV\" --nologo")
+            appendLine("echo '[2/2] Starting server on http://localhost:$port (Development)...'")
             appendLine("cd \"\$SRV\"")
-            appendLine("ASPNETCORE_URLS='http://0.0.0.0:$port' dotnet \"\$(basename \"\$CSPROJ\" .csproj).dll\"")
+            appendLine("ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS='http://0.0.0.0:$port' dotnet \"\$(basename \"\$CSPROJ\" .csproj).dll\"")
         }
 
-    private fun viteDevCommand(projectDir: String, stageName: String, port: Int): String =
+    // Vite dev server (HMR). [clientDir] is the guest dir holding package.json (the project root for a
+    // standalone app, or <project>/client for the ASP.NET + client layout). Staged to ext4 because the
+    // FUSE /workspace can't host node_modules.
+    private fun viteClientCommand(projectDir: String, stageName: String, port: Int, clientDir: String): String =
         buildString {
             appendLine("clear")
             appendLine("set -e")
-            // Keep npm's progress bar (the terminal renders it correctly now); silence fund/audit chatter.
-            appendLine("export npm_config_fund=false npm_config_audit=false")
             appendLine("PROJ=\"$projectDir\"")
-            appendLine("STAGE=\"\$HOME/.jcode-run/$stageName\"")
-            appendLine("echo '== J Code: Run (Vite dev server) =='")
-            // Self-heal: scaffold a Vite React app in place if the project has no package.json yet.
-            appendLine("if [ ! -f \"\$PROJ/package.json\" ]; then")
-            appendLine("  echo '[setup] No package.json — scaffolding Vite React (TypeScript)...'")
+            appendLine("CLIENT=\"$clientDir\"")
+            appendLine("STAGE=\"\$HOME/.jcode-run/$stageName-client\"")
+            appendLine("echo '== J Code: Client (Vite dev server) =='")
+            appendLine("export npm_config_fund=false npm_config_audit=false")
+            // Self-heal: scaffold a Vite React app if the client has no package.json yet.
+            appendLine("if [ ! -f \"\$CLIENT/package.json\" ]; then")
+            appendLine("  echo '[setup] No client found - scaffolding Vite React (TypeScript)...'")
             appendLine("  TMP=\"\$HOME/.jcode-run/.new-$stageName\"")
             appendLine("  rm -rf \"\$TMP\" && mkdir -p \"\$TMP\" && cd \"\$TMP\"")
             appendLine("  CI=1 npm create vite@latest app -- --template react-ts </dev/null")
-            appendLine("  ( cd \"\$TMP/app\" && tar --exclude=node_modules --exclude=dist -cf - . ) | ( cd \"\$PROJ\" && tar -xf - )")
+            appendLine("  ( cd \"\$TMP/app\" && tar --exclude=node_modules --exclude=dist -cf - . ) | ( mkdir -p \"\$CLIENT\" && cd \"\$CLIENT\" && tar -xf - )")
             appendLine("  rm -rf \"\$TMP\"")
             appendLine("fi")
-            appendLine("echo '[1/3] Preparing build area...'")
-            appendLine("rm -rf \"\$STAGE\" && mkdir -p \"\$STAGE\" && cp -a \"\$PROJ/.\" \"\$STAGE/\"")
+            appendLine("echo '[1/2] Staging client + installing deps (npm install)...'")
+            appendLine("rm -rf \"\$STAGE\" && mkdir -p \"\$STAGE\" && cp -a \"\$CLIENT/.\" \"\$STAGE/\"")
             appendLine("cd \"\$STAGE\"")
-            appendLine("echo '[2/3] Installing dependencies (npm install)...'")
             appendLine("npm install")
-            appendLine("echo '[3/3] Starting Vite dev server on http://localhost:$port ...'")
+            appendLine("echo '[2/2] Starting Vite dev server on http://localhost:$port ...'")
             appendLine("npm run dev -- --host 0.0.0.0 --port $port")
         }
 

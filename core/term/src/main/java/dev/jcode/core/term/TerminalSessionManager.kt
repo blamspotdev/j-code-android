@@ -88,6 +88,7 @@ class TerminalSessionManager(
         user: String,
         shellCommand: String = "/bin/bash --login",
         rootfsArch: Arch = Arch.ARM64,
+        label: String? = null,
     ): Session? {
         if (sessionCount >= maxSessions) return null
         if (!prootManager.isProotInstalled) return null
@@ -119,7 +120,7 @@ class TerminalSessionManager(
         }
 
         val sessionId = "terminal-${UUID.randomUUID().toString().take(8)}"
-        val label = "bash ${sessionCount + 1}"
+        val sessionLabel = label ?: "bash ${sessionCount + 1}"
 
         val home = if (user == "root") "/root" else "/home/$user"
         val envVars = mapOf(
@@ -156,7 +157,7 @@ class TerminalSessionManager(
                 cols = 80,
                 rows = 24,
             )
-            val session = Session(sessionId, label, pty)
+            val session = Session(sessionId, sessionLabel, pty)
             synchronized(sessionsLock) { _sessions[sessionId] = session }
             activeSessionId = sessionId
             startReader(session)

@@ -450,7 +450,7 @@ private fun JCodeShell(
 
     // Core session spawner shared by the manual "+" terminal and the Run pipeline. Returns the new
     // session (already tracked + foregrounded) or null if it could not start (snackbar shown).
-    fun spawnTerminalSession(): dev.jcode.core.term.TerminalSessionManager.Session? {
+    fun spawnTerminalSession(label: String? = null): dev.jcode.core.term.TerminalSessionManager.Session? {
         if (!terminalReady) {
             scope.launch {
                 snackbarHostState.showSnackbar("Finish environment setup before opening the terminal.")
@@ -484,6 +484,7 @@ private fun JCodeShell(
             user = "root", // Use root since jcode user may not exist in minimal rootfs
             shellCommand = terminalShellCommand,
             rootfsArch = environmentState.runtime.selectedDistro.arch,
+            label = label,
         )
         if (session == null) {
             scope.launch {
@@ -516,10 +517,11 @@ private fun JCodeShell(
     }
 
     // Run state: the URL of the most recent run (for "Open in browser") and whether we're still
-    // waiting for its server to come up. [runSessionId] lets repeated runs reuse one terminal.
+    // waiting for the dev frontend to come up. [runSessionIds] are the run's terminals (e.g. Server +
+    // Client), torn down and respawned on each run and stopped together by handleStopRun.
     var runUrl by rememberSaveable { mutableStateOf<String?>(null) }
     var runInProgress by remember { mutableStateOf(false) }
-    var runSessionId by rememberSaveable { mutableStateOf<String?>(null) }
+    var runSessionIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var runPollJob by remember { mutableStateOf<Job?>(null) }
 
     // Drop a terminal tab when its shell exits on its own (e.g. `exit`, or a finished one-shot command).
@@ -532,10 +534,12 @@ private fun JCodeShell(
                 selectedTerminalSessionId.takeIf { it.isNotEmpty() }
                     ?.let { terminalSessionManager.switchSession(it) }
             }
-            if (runSessionId == exitedId) {
-                runSessionId = null
-                runInProgress = false
-                runUrl = null
+            if (exitedId in runSessionIds) {
+                runSessionIds = runSessionIds.filterNot { it == exitedId }
+                if (runSessionIds.isEmpty()) {
+                    runInProgress = false
+                    runUrl = null
+                }
             }
         }
         onDispose { TerminalSessionHost.setUiExitListener(null) }
@@ -562,32 +566,37 @@ private fun JCodeShell(
         }
         rightPanelTab = RightPanelTab.Terminal
         rightSidebarVisible = true
-        // Reuse the previous run terminal if it's still alive; otherwise spawn a fresh one. Reusing
-        // sends Ctrl-C first to stop a still-running server before rebuilding.
-        val reusableId = runSessionId
-            ?.takeIf { it in terminalSessionIds && terminalSessionManager.getSession(it) != null }
-        val sessionId: String
-        if (reusableId != null) {
-            sessionId = reusableId
-            selectTerminalSession(reusableId)
-            terminalSessionManager.sendInput(reusableId, "\u0003") // Ctrl-C: stop prior run
-        } else {
-            val session = spawnTerminalSession() ?: return
-            sessionId = session.id
-            runSessionId = session.id
+        // Tear down any previous run terminals (frees the dev ports, avoids tab accumulation), then
+        // spawn one fresh terminal per plan step in order - e.g. "Server" then "Client" - each running
+        // its own script. They run side by side; the browser opens the dev frontend once it is up.
+        val previous = runSessionIds
+        previous.forEach { id ->
+            terminalSessionManager.closeSession(id)
+            TerminalSessionHost.onSessionStopped(id)
         }
-        terminalSessionManager.sendInput(sessionId, ProjectRunner.runInvocation(project, plan) + "\n")
+        if (previous.isNotEmpty()) {
+            terminalSessionIds = terminalSessionIds.filterNot { it in previous }
+        }
+        val startedIds = mutableListOf<String>()
+        for (terminal in plan.terminals) {
+            val session = spawnTerminalSession(label = terminal.label) ?: break
+            terminalSessionManager.sendInput(session.id, ProjectRunner.runInvocation(project, terminal) + "\n")
+            startedIds += session.id
+        }
+        if (startedIds.isEmpty()) return
+        runSessionIds = startedIds
+        selectTerminalSession(startedIds.last()) // focus the frontend terminal
         runUrl = plan.url
         runInProgress = true
         // Cancel any in-flight poll from a previous run so the browser only opens once.
         runPollJob?.cancel()
         runPollJob = scope.launch {
-            val up = ProjectRunner.awaitServer(plan.port)
+            val up = ProjectRunner.awaitServer(plan.readyPort)
             runInProgress = false
             if (up) {
                 ProjectRunner.openInBrowser(appContext, plan.url)
             } else {
-                snackbarHostState.showSnackbar("Server didn't start in time; check the run terminal.")
+                snackbarHostState.showSnackbar("Dev server didn't start in time; check the run terminals.")
             }
         }
     }
@@ -596,12 +605,11 @@ private fun JCodeShell(
     // state. The terminal session is kept so its output stays visible and a re-run can reuse it.
     fun handleStopRun() {
         runPollJob?.cancel()
-        runSessionId
-            ?.takeIf { it in terminalSessionIds && terminalSessionManager.getSession(it) != null }
-            ?.let { id ->
-                selectTerminalSession(id)
+        runSessionIds.forEach { id ->
+            if (id in terminalSessionIds && terminalSessionManager.getSession(id) != null) {
                 terminalSessionManager.sendInput(id, byteArrayOf(0x03)) // Ctrl-C / SIGINT
             }
+        }
         runInProgress = false
         runUrl = null
     }
@@ -2249,7 +2257,7 @@ private fun TerminalSidebarContent(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         Text(
-                            text = "bash ${index + 1}",
+                            text = terminalSessionFor(sessionId)?.label ?: "bash ${index + 1}",
                             style = MaterialTheme.typography.labelMedium,
                             color = if (sessionId == selectedTerminalSessionId) {
                                 MaterialTheme.colorScheme.primary
