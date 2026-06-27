@@ -22,6 +22,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -29,6 +30,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -109,6 +112,8 @@ object SettingsFeature {
         }
         val explorerViewMode = scopedExplorer?.viewMode ?: effectiveConfig.explorer.viewMode
 
+        var query by rememberSaveable { mutableStateOf("") }
+        CompositionLocalProvider(LocalSettingsQuery provides query) {
         Column(
             modifier = modifier
                 .fillMaxSize()
@@ -116,6 +121,14 @@ object SettingsFeature {
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                singleLine = true,
+                label = { Text("Search settings") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            SettingsSectionHeader("Overview")
             SettingsCard(
                 title = "Effective config",
                 description = "Project values override workspace values. Invalid YAML keeps the last working config active.",
@@ -128,6 +141,7 @@ object SettingsFeature {
                 SummaryRow("Distro", effectiveConfig.distro.id)
             }
 
+            SettingsSectionHeader("Appearance")
             SettingsCard(
                 title = "Appearance",
                 description = "System follows your device's light/dark setting.",
@@ -179,6 +193,7 @@ object SettingsFeature {
                 }
             }
 
+            SettingsSectionHeader("Environment")
             SettingsCard(
                 title = "Environment",
                 description = "Environment setup: proot, distro bootstrap, and the final smoke test.",
@@ -239,6 +254,7 @@ object SettingsFeature {
                 }
             }
 
+            SettingsSectionHeader("Editor")
             SettingsCard(
                 title = "Edit scope",
                 description = if (projectOverridesAvailable) {
@@ -373,6 +389,7 @@ object SettingsFeature {
                 }
             }
 
+            SettingsSectionHeader("Terminal")
             SettingsCard(
                 title = "Terminal",
                 description = "How tapping the terminal behaves. Applies app-wide.",
@@ -385,6 +402,7 @@ object SettingsFeature {
                 )
             }
 
+            SettingsSectionHeader("Files")
             SettingsCard(
                 title = "YAML files",
                 description = "Open the backing config files directly when you want full control.",
@@ -401,15 +419,41 @@ object SettingsFeature {
                 }
             }
         }
+        }
     }
+}
+
+/** Current Settings search query; cards/headers self-filter on it. */
+val LocalSettingsQuery = compositionLocalOf { "" }
+
+@Composable
+private fun SettingsSectionHeader(title: String) {
+    // Hidden while searching, so results read as a flat filtered list.
+    if (LocalSettingsQuery.current.isNotBlank()) return
+    Text(
+        text = title,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(top = 6.dp, start = 2.dp),
+    )
 }
 
 @Composable
 private fun SettingsCard(
     title: String,
     description: String,
+    keywords: String = "",
     content: @Composable () -> Unit,
 ) {
+    val query = LocalSettingsQuery.current.trim()
+    if (query.isNotEmpty() &&
+        !title.contains(query, ignoreCase = true) &&
+        !description.contains(query, ignoreCase = true) &&
+        !keywords.contains(query, ignoreCase = true)
+    ) {
+        return
+    }
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f),
     ) {
