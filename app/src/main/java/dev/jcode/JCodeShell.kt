@@ -13,6 +13,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -94,6 +95,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -2231,6 +2233,10 @@ private fun TerminalSidebarContent(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxSize()) {
+        var menuForId by remember { mutableStateOf<String?>(null) }
+        var renameForId by remember { mutableStateOf<String?>(null) }
+        // Renamed labels, kept observable so the tab recomposes (mutating Session.label alone wouldn't).
+        val labelOverrides = remember { mutableStateMapOf<String, String>() }
         // Session tab bar
         Row(
             modifier = Modifier
@@ -2240,49 +2246,90 @@ private fun TerminalSidebarContent(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             terminalSessionIds.forEachIndexed { index, sessionId ->
-                Surface(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { onSelectTerminalSession(sessionId) },
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (sessionId == selectedTerminalSessionId) {
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-                    } else {
-                        MaterialTheme.colorScheme.surface.copy(alpha = 0.75f)
-                    },
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                Box {
+                    Surface(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .combinedClickable(
+                                onClick = { onSelectTerminalSession(sessionId) },
+                                onLongClick = { menuForId = sessionId },
+                            ),
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (sessionId == selectedTerminalSessionId) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                        } else {
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.75f)
+                        },
                     ) {
-                        Text(
-                            text = terminalSessionFor(sessionId)?.label ?: "bash ${index + 1}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (sessionId == selectedTerminalSessionId) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                        )
-                        // Close button
-                        Surface(
-                            modifier = Modifier
-                                .size(18.dp)
-                                .clip(CircleShape)
-                                .clickable { onRemoveTerminalSession(sessionId) },
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = "×",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(top = 1.dp),
-                                )
+                            Text(
+                                text = labelOverrides[sessionId]
+                                    ?: terminalSessionFor(sessionId)?.label
+                                    ?: "bash ${index + 1}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (sessionId == selectedTerminalSessionId) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                            // Close button
+                            Surface(
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .clip(CircleShape)
+                                    .clickable { onRemoveTerminalSession(sessionId) },
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = "×",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(top = 1.dp),
+                                    )
+                                }
                             }
                         }
+                    }
+                    DropdownMenu(
+                        expanded = menuForId == sessionId,
+                        onDismissRequest = { menuForId = null },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Rename") },
+                            onClick = { menuForId = null; renameForId = sessionId },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Clear") },
+                            onClick = {
+                                terminalSessionFor(sessionId)?.pty?.write(byteArrayOf(0x0C))
+                                menuForId = null
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Close") },
+                            onClick = { menuForId = null; onRemoveTerminalSession(sessionId) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Close others") },
+                            onClick = {
+                                menuForId = null
+                                terminalSessionIds.filter { it != sessionId }.forEach(onRemoveTerminalSession)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Close all") },
+                            onClick = {
+                                menuForId = null
+                                terminalSessionIds.toList().forEach(onRemoveTerminalSession)
+                            },
+                        )
                     }
                 }
             }
@@ -2300,6 +2347,36 @@ private fun TerminalSidebarContent(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+
+        renameForId?.let { id ->
+            var name by remember(id) {
+                mutableStateOf(labelOverrides[id] ?: terminalSessionFor(id)?.label.orEmpty())
+            }
+            AlertDialog(
+                onDismissRequest = { renameForId = null },
+                title = { Text("Rename terminal") },
+                text = {
+                    TextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        singleLine = true,
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val trimmed = name.trim()
+                        if (trimmed.isNotEmpty()) {
+                            terminalSessionFor(id)?.label = trimmed
+                            labelOverrides[id] = trimmed
+                        }
+                        renameForId = null
+                    }) { Text("Rename") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { renameForId = null }) { Text("Cancel") }
+                },
+            )
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))

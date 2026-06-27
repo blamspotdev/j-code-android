@@ -50,6 +50,8 @@ class TerminalView @JvmOverloads constructor(
 
     // Selection state
     private var isSelecting = false
+    // Set by the "Select text" menu action so the next touch-drag begins a selection.
+    private var selectionArmed = false
     private var selectionStartRow = 0
     private var selectionStartCol = 0
     private var selectionEndRow = 0
@@ -63,7 +65,10 @@ class TerminalView @JvmOverloads constructor(
     // Gesture detector: long-press selection, vertical pan to scroll history, tap to focus.
     private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onLongPress(e: MotionEvent) {
-            startSelection(e.x, e.y)
+            // Show the action menu. "Select text" arms drag-selection for the next touch; while armed
+            // or already selecting, a long-press shouldn't re-open the menu.
+            if (isSelecting || selectionArmed) return
+            showTerminalMenu()
         }
 
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
@@ -189,7 +194,11 @@ class TerminalView @JvmOverloads constructor(
         setOnTouchListener { _, event ->
             val gestureHandled = gestureDetector.onTouchEvent(event)
             when (event.action) {
-                MotionEvent.ACTION_DOWN -> true
+                MotionEvent.ACTION_DOWN -> {
+                    // After "Select text" from the menu, the next touch-drag selects.
+                    if (selectionArmed) startSelection(event.x, event.y)
+                    true
+                }
                 MotionEvent.ACTION_MOVE -> {
                     if (isSelecting) {
                         updateSelectionEnd(event.x, event.y)
@@ -203,9 +212,11 @@ class TerminalView @JvmOverloads constructor(
                     if (isSelecting) {
                         copySelectionToClipboard()
                         isSelecting = false
+                        selectionArmed = false
                         invalidate()
                         true
                     } else {
+                        selectionArmed = false
                         gestureHandled
                     }
                 }
@@ -253,6 +264,57 @@ class TerminalView @JvmOverloads constructor(
             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             clipboard.setPrimaryClip(ClipData.newPlainText("Terminal Selection", text))
         }
+    }
+
+    /** Long-press action menu for the terminal content. */
+    private fun showTerminalMenu() {
+        val menu = android.widget.PopupMenu(context, this)
+        menu.menu.add(0, 1, 0, "Select text")
+        menu.menu.add(0, 2, 1, "Select all")
+        menu.menu.add(0, 3, 2, "Paste")
+        menu.menu.add(0, 4, 3, "Clear")
+        menu.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                1 -> { selectionArmed = true; toast("Drag to select text"); true }
+                2 -> { selectAllAndCopy(); true }
+                3 -> { pasteFromClipboard(); true }
+                4 -> { clearScreen(); true }
+                else -> false
+            }
+        }
+        menu.show()
+    }
+
+    /** Paste clipboard text into the terminal (written to the PTY as keyboard input). */
+    private fun pasteFromClipboard() {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        val text = clipboard?.primaryClip
+            ?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)
+            ?.coerceToText(context)
+            ?.toString()
+        if (!text.isNullOrEmpty()) sendInput(text)
+    }
+
+    /** Select the whole visible screen and copy it to the clipboard. */
+    private fun selectAllAndCopy() {
+        val parser = vtParser ?: return
+        if (!parser.isOpen) return
+        selectionStartRow = 0
+        selectionStartCol = 0
+        selectionEndRow = (rows - 1).coerceAtLeast(0)
+        selectionEndCol = (cols - 1).coerceAtLeast(0)
+        copySelectionToClipboard()
+        toast("Copied")
+    }
+
+    /** Clear the screen via Ctrl-L (the shell/readline redraws a fresh prompt). */
+    private fun clearScreen() {
+        sendInput(byteArrayOf(0x0C))
+    }
+
+    private fun toast(message: String) {
+        android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
     }
 
     private fun getSelectedText(): String {

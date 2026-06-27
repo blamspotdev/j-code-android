@@ -25,7 +25,7 @@ class TerminalSessionManager(
 ) {
     class Session(
         val id: String,
-        val label: String,
+        var label: String,
         val pty: PtyProcess,
         var cols: Int = 80,
         var rows: Int = 24,
