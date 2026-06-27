@@ -190,10 +190,12 @@ private enum class WorkbenchTool(
     val label: String,
     val icon: ImageVector,
     val compactLabel: String = label,
+    /** Hidden from the activity bar until it has a working UI (kept in the enum for `when` exhaustiveness). */
+    val available: Boolean = true,
 ) {
     Explorer("Explorer", Icons.Rounded.FolderOpen, "Files"),
-    Search("Search", Icons.Rounded.Search, "Find"),
-    Scm("SCM", Icons.Rounded.Source, "SCM"),
+    Search("Search", Icons.Rounded.Search, "Find", available = false),
+    Scm("SCM", Icons.Rounded.Source, "SCM", available = false),
     RunDebug("Run/Debug", Icons.Rounded.PlayArrow, "Run"),
     Extensions("Extensions", Icons.Rounded.Extension, "Ext"),
     SdkManager("SDK Manager", Icons.Rounded.BuildCircle, "SDK"),
@@ -416,9 +418,11 @@ private fun JCodeShell(
     val activeTab = editorGroup.activeTab
     val metrics = rememberEditorMetrics(activeTab)
     val showPersistentRail = !isPortraitMobileMode
-    val portraitRightSidebarTabs = remember { RightPanelTab.entries.toSet() }
+    val portraitRightSidebarTabs = remember { RightPanelTab.entries.filter { it.enabled }.toSet() }
 
     var selectedTool by rememberSaveable { mutableStateOf(WorkbenchTool.Explorer) }
+    // A previously-persisted selection may point at a now-hidden destination; fall back to Explorer.
+    LaunchedEffect(Unit) { if (!selectedTool.available) selectedTool = WorkbenchTool.Explorer }
     val railTools = remember(railToolOrder) { orderedRailTools(railToolOrder) }
     // Settings opens as an in-editor page; every other tool drives the side panel.
     val onSelectWorkbenchTool: (WorkbenchTool) -> Unit = { tool ->
@@ -1032,10 +1036,11 @@ private fun JCodeShell(
  * any tool missing from the saved order (e.g. a newly added one) is appended, unknown names dropped.
  */
 private fun orderedRailTools(order: List<String>): List<WorkbenchTool> {
-    val byName = WorkbenchTool.entries.associateBy { it.name }
+    val available = WorkbenchTool.entries.filter { it.available }
+    val byName = available.associateBy { it.name }
     val result = LinkedHashSet<WorkbenchTool>()
     order.forEach { name -> byName[name]?.let(result::add) }
-    result.addAll(WorkbenchTool.entries)
+    result.addAll(available)
     return result.toList()
 }
 
@@ -1581,7 +1586,7 @@ private fun WorkspaceHeader(
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            WorkbenchTool.entries.forEach { tool ->
+            WorkbenchTool.entries.filter { it.available }.forEach { tool ->
                 SidebarToolButton(
                     tool = tool,
                     selected = selectedTool == tool,
@@ -2072,47 +2077,39 @@ private fun WorkbenchRightSidebar(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                RightPanelTab.entries.forEach { tab ->
+                RightPanelTab.entries.filter { it.enabled }.forEach { tab ->
+                    val selected = tab == selectedTab
                     Surface(
                         shape = RoundedCornerShape(10.dp),
-                        color = if (tab == selectedTab) {
+                        color = if (selected) {
                             MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-                        } else if (!tab.enabled) {
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f)
                         } else {
                             MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)
                         },
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))
-                            .clickable(enabled = tab.enabled) { onTabSelected(tab) },
+                            .clickable { onTabSelected(tab) },
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(5.dp),
                         ) {
+                            val tint = if (selected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
                             Icon(
                                 imageVector = tab.icon,
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp),
-                                tint = if (tab == selectedTab) {
-                                    MaterialTheme.colorScheme.primary
-                                } else if (!tab.enabled) {
-                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
+                                tint = tint,
                             )
                             Text(
                                 text = tab.label,
                                 style = MaterialTheme.typography.labelMedium,
-                                color = if (tab == selectedTab) {
-                                    MaterialTheme.colorScheme.primary
-                                } else if (!tab.enabled) {
-                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
+                                color = tint,
                             )
                         }
                     }
@@ -2427,14 +2424,9 @@ private fun OutputSidebarContent(
     ) {
         Text("Output", fontWeight = FontWeight.SemiBold)
         Text(
-            text = "Build logs, LSP messages, and extension host output will appear here.",
+            text = "Build logs and tool output will appear here.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            text = "Logs are path-redacted and contain no PII.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
         )
     }
 }
