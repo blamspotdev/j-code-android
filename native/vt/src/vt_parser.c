@@ -323,6 +323,21 @@ static void handle_csi(VtParser* parser, char final_char) {
             }
             break;
         }
+        case 'G': { // Cursor Horizontal Absolute (column; 1-based). Used by progress bars/spinners
+                    // (Node readline.cursorTo) to return to col 0 before redrawing in place.
+            int col = parser->param_count > 0 && parser->params[0] > 0 ? parser->params[0] - 1 : 0;
+            screen->cursor_col = col;
+            if (screen->cursor_col < 0) screen->cursor_col = 0;
+            if (screen->cursor_col >= screen->cols) screen->cursor_col = screen->cols - 1;
+            break;
+        }
+        case 'd': { // Line Position Absolute (row; 1-based)
+            int row = parser->param_count > 0 && parser->params[0] > 0 ? parser->params[0] - 1 : 0;
+            screen->cursor_row = row;
+            if (screen->cursor_row < 0) screen->cursor_row = 0;
+            if (screen->cursor_row >= screen->rows) screen->cursor_row = screen->rows - 1;
+            break;
+        }
         case 'H': // Cursor Position
         case 'f': {
             int row = parser->param_count > 0 && parser->params[0] > 0 ? parser->params[0] - 1 : 0;
