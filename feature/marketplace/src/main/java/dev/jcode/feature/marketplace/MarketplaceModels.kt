@@ -6,14 +6,29 @@ import java.io.File
 enum class ExtensionType {
     Templates,
     Language,
+    Formatter,
     Unknown;
 
     companion object {
         fun from(raw: String?): ExtensionType = when (raw?.lowercase()) {
             "templates" -> Templates
             "language" -> Language
+            "formatter" -> Formatter
             else -> Unknown
         }
+    }
+}
+
+/** Things an extension requires or suggests be installed (ids). */
+data class ExtensionDeps(
+    val sdks: List<String> = emptyList(),
+    val lsps: List<String> = emptyList(),
+    val extensions: List<String> = emptyList(),
+) {
+    val isEmpty: Boolean get() = sdks.isEmpty() && lsps.isEmpty() && extensions.isEmpty()
+
+    companion object {
+        val EMPTY = ExtensionDeps()
     }
 }
 
@@ -22,10 +37,14 @@ data class MarketplaceEntry(
     val id: String,
     val name: String,
     val type: ExtensionType,
+    val category: String?,
+    val subcategory: String?,
     /** Latest published version, used to detect updates against an installed copy. */
     val version: String?,
     /** The extension's git repo (https .git URL); the installer derives a codeload zip URL from it. */
     val repo: String,
+    val requires: ExtensionDeps = ExtensionDeps.EMPTY,
+    val suggests: ExtensionDeps = ExtensionDeps.EMPTY,
 )
 
 /** Compare dotted versions ("0.2.0" vs "0.1.3"); missing parts count as 0. */

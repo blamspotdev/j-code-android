@@ -2841,6 +2841,7 @@ private fun ExtensionsPanel(
 ) {
     LaunchedEffect(Unit) { if (available.isEmpty()) onRefreshMarketplace() }
     val installedIds = remember(installed) { installed.map { it.id }.toSet() }
+    var depPrompt by remember { mutableStateOf<MarketplaceEntry?>(null) }
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
@@ -2880,13 +2881,19 @@ private fun ExtensionsPanel(
         available.forEach { entry ->
             val sub = buildString {
                 append(entry.type.name.lowercase())
+                entry.category?.let { append(" · $it") }
+                entry.subcategory?.let { append("/$it") }
                 entry.version?.let { append(" · v$it") }
             }
             ExtensionRow(name = entry.name, subtitle = sub) {
                 val inst = installedById[entry.id]
+                val hasDeps = !entry.requires.isEmpty || !entry.suggests.isEmpty
                 when {
                     inst == null ->
-                        TextButton(onClick = { onInstall(entry) }, enabled = !busy) { Text("Install") }
+                        TextButton(
+                            onClick = { if (hasDeps) depPrompt = entry else onInstall(entry) },
+                            enabled = !busy,
+                        ) { Text("Install") }
                     isUpdateAvailable(entry.version, inst.version) ->
                         TextButton(onClick = { onInstall(entry) }, enabled = !busy) { Text("Update") }
                     else -> Text(
@@ -2977,6 +2984,95 @@ private fun ExtensionsPanel(
                 }
             }
         }
+
+        depPrompt?.let { pending ->
+            DependencyDialog(
+                entry = pending,
+                available = available,
+                installedIds = installedIds,
+                busy = busy,
+                onInstall = onInstall,
+                onProceed = { onInstall(pending); depPrompt = null },
+                onDismiss = { depPrompt = null },
+            )
+        }
+    }
+}
+
+@Composable
+private fun DependencyDialog(
+    entry: MarketplaceEntry,
+    available: List<MarketplaceEntry>,
+    installedIds: Set<String>,
+    busy: Boolean,
+    onInstall: (MarketplaceEntry) -> Unit,
+    onProceed: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Install ${entry.name}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Works best with these installed:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                DependencyGroup("Required", entry.requires, available, installedIds, busy, onInstall)
+                DependencyGroup("Suggested", entry.suggests, available, installedIds, busy, onInstall)
+            }
+        },
+        confirmButton = { TextButton(onClick = onProceed, enabled = !busy) { Text("Install ${entry.name}") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun DependencyGroup(
+    label: String,
+    deps: dev.jcode.feature.marketplace.ExtensionDeps,
+    available: List<MarketplaceEntry>,
+    installedIds: Set<String>,
+    busy: Boolean,
+    onInstall: (MarketplaceEntry) -> Unit,
+) {
+    if (deps.isEmpty) return
+    Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+    deps.extensions.forEach { id ->
+        val depEntry = available.firstOrNull { it.id == id }
+        DependencyRow(name = depEntry?.name ?: id, kind = "extension") {
+            when {
+                id in installedIds -> Text(
+                    "Installed",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                depEntry != null -> TextButton(onClick = { onInstall(depEntry) }, enabled = !busy) { Text("Install") }
+                else -> Text(
+                    "unavailable",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+    deps.sdks.forEach { id -> DependencyRow(name = id, kind = "SDK · install via SDK Manager") {} }
+    deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server") {} }
+}
+
+@Composable
+private fun DependencyRow(name: String, kind: String, trailing: @Composable () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(name, style = MaterialTheme.typography.bodyMedium)
+            Text(kind, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        trailing()
     }
 }
 

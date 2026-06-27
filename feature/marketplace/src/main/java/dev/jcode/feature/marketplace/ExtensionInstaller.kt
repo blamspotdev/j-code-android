@@ -37,8 +37,12 @@ class ExtensionInstaller internal constructor(context: Context) {
                     id = id,
                     name = entry.str("name") ?: id,
                     type = ExtensionType.from(entry.str("type")),
+                    category = entry.str("category"),
+                    subcategory = entry.str("subcategory"),
                     version = entry.str("version"),
                     repo = repo,
+                    requires = parseDeps(entry["requires"]),
+                    suggests = parseDeps(entry["suggests"]),
                 )
             }
             MarketplaceIndex(map.str("name") ?: "JCode Marketplace", map.str("version"), entries)
@@ -122,6 +126,13 @@ class ExtensionInstaller internal constructor(context: Context) {
             requires = map.listOfAny("requires").mapNotNull { it?.toString()?.takeIf(String::isNotBlank) },
             recipe = recipe,
         )
+    }
+
+    private fun parseDeps(raw: Any?): ExtensionDeps {
+        val map = (raw as? Map<*, *>)?.toStringKeyMap() ?: return ExtensionDeps.EMPTY
+        fun ids(key: String): List<String> =
+            map.listOfAny(key).mapNotNull { it?.toString()?.takeIf(String::isNotBlank) }
+        return ExtensionDeps(sdks = ids("sdks"), lsps = ids("lsps"), extensions = ids("extensions"))
     }
 
     private fun parseLanguage(map: Map<String, Any?>): LanguagePack? {
