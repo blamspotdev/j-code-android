@@ -2,8 +2,10 @@ package dev.jcode.feature.sdkmanager
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -53,12 +55,12 @@ object SdkManagerFeature {
             modifier = modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             SdkCard(
                 title = "Distro SDK manager",
-                description = "Install curated toolchains into the active distro as the jcode user. The catalog is YAML-backed and tracked per distro.",
+                description = "Toolchains for the active distro, tracked per distro.",
             ) {
                 SummaryRow("Selected distro", environmentState.runtime.selectedDistro.label)
                 SummaryRow(
@@ -74,12 +76,8 @@ object SdkManagerFeature {
                     environmentState.runtime.binds.firstOrNull()?.let { "${it.host} -> ${it.target}" } ?: "--",
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(onClick = onRefresh, modifier = Modifier.weight(1f)) {
-                        Text("Refresh catalog")
-                    }
-                    OutlinedButton(onClick = onOpenEnvironmentWizard, modifier = Modifier.weight(1f)) {
-                        Text("Environment setup")
-                    }
+                    CompactFilledButton("Refresh catalog", onClick = onRefresh, modifier = Modifier.weight(1f))
+                    CompactOutlinedButton("Environment setup", onClick = onOpenEnvironmentWizard, modifier = Modifier.weight(1f))
                 }
             }
 
@@ -126,7 +124,7 @@ object SdkManagerFeature {
             if (state.executionLabel != null || state.logLines.isNotEmpty()) {
                 SdkCard(
                     title = state.executionLabel ?: "Latest command output",
-                    description = "RUN_COMMAND output is captured after each action and kept as a rolling log for the active distro.",
+                    description = "Rolling output from the last action.",
                 ) {
                     if (state.logLines.isEmpty()) {
                         Text(
@@ -160,11 +158,15 @@ private fun SdkCard(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f),
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(text = title, fontWeight = FontWeight.SemiBold)
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
                 Text(
                     text = description,
                     style = MaterialTheme.typography.bodySmall,
@@ -174,6 +176,40 @@ private fun SdkCard(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
             content()
         }
+    }
+}
+
+@Composable
+private fun CompactFilledButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    FilledTonalButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.defaultMinSize(minHeight = 32.dp),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+    ) {
+        Text(text, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+@Composable
+private fun CompactOutlinedButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.defaultMinSize(minHeight = 32.dp),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+    ) {
+        Text(text, style = MaterialTheme.typography.labelMedium)
     }
 }
 
@@ -193,15 +229,19 @@ private fun EntryRow(
 
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(entry.name, fontWeight = FontWeight.Medium)
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = entry.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
                 Text(
                     text = entry.description,
                     style = MaterialTheme.typography.bodySmall,
@@ -220,27 +260,24 @@ private fun EntryRow(
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilledTonalButton(
+            CompactFilledButton(
+                text = if (installed) "Reinstall" else "Install",
                 onClick = onInstall,
                 enabled = actionsEnabled,
                 modifier = Modifier.weight(1f),
-            ) {
-                Text(if (installed) "Reinstall" else "Install")
-            }
-            OutlinedButton(
+            )
+            CompactOutlinedButton(
+                text = "Verify",
                 onClick = onVerify,
                 enabled = actionsEnabled,
                 modifier = Modifier.weight(1f),
-            ) {
-                Text("Verify")
-            }
-            OutlinedButton(
+            )
+            CompactOutlinedButton(
+                text = "Remove",
                 onClick = onUninstall,
                 enabled = installed && actionsEnabled,
                 modifier = Modifier.weight(1f),
-            ) {
-                Text("Remove")
-            }
+            )
         }
 
         if (terminalCommand != null) {
@@ -254,12 +291,10 @@ private fun EntryRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                OutlinedButton(
+                CompactOutlinedButton(
+                    text = if (showTerminalCommand) "Hide" else "Show",
                     onClick = { showTerminalCommand = !showTerminalCommand },
-                    modifier = Modifier.padding(0.dp),
-                ) {
-                    Text(if (showTerminalCommand) "Hide" else "Show", style = MaterialTheme.typography.bodySmall)
-                }
+                )
             }
             if (showTerminalCommand) {
                 Surface(
@@ -351,6 +386,7 @@ private fun SummaryRow(
         Spacer(modifier = Modifier.width(12.dp))
         Text(
             text = value,
+            style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -367,11 +403,12 @@ private fun NoticeCard(
         color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f),
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(
                 text = title,
+                style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onErrorContainer,
             )
@@ -386,11 +423,11 @@ private fun NoticeCard(
 
 private fun categoryDescription(category: SdkCatalogCategory): String {
     return when (category) {
-        SdkCatalogCategory.Languages -> "Language runtimes, compilers, and language-server-friendly packages."
-        SdkCatalogCategory.BuildTools -> "General build-system tools that J Code and native projects rely on."
-        SdkCatalogCategory.Android -> "Android-facing prerequisites that belong in the distro rather than the APK."
-        SdkCatalogCategory.DotNet -> "Managed runtime tooling installed in the jcode user's home directory."
-        SdkCatalogCategory.Embedded -> "Cross-compilers and device-facing tools for embedded workflows."
-        SdkCatalogCategory.Databases -> "Database servers and data stores. Most run as the jcode user without systemd."
+        SdkCatalogCategory.Languages -> "Runtimes, compilers, and LSP packages."
+        SdkCatalogCategory.BuildTools -> "Build tools for J Code and native projects."
+        SdkCatalogCategory.Android -> "Android prerequisites for the distro."
+        SdkCatalogCategory.DotNet -> "Managed runtime tooling."
+        SdkCatalogCategory.Embedded -> "Cross-compilers and device tooling."
+        SdkCatalogCategory.Databases -> "Database servers and data stores."
     }
 }
