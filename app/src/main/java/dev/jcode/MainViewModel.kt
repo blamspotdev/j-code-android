@@ -2,6 +2,8 @@ package dev.jcode
 
 import android.app.Application
 import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -55,6 +57,23 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+/**
+ * Process-singleton holder for the app-level UI-preferences DataStore. A DataStore must be created
+ * exactly once per file per process; constructing a second one (e.g. when MainViewModel is rebuilt
+ * after the Activity is recreated) throws "multiple DataStores active for the same file".
+ */
+private object UiPreferencesStore {
+    @Volatile
+    private var instance: DataStore<Preferences>? = null
+
+    fun get(context: Context): DataStore<Preferences> =
+        instance ?: synchronized(this) {
+            instance ?: PreferenceDataStoreFactory.create {
+                context.applicationContext.preferencesDataStoreFile("ui-preferences.preferences_pb")
+            }.also { instance = it }
+        }
+}
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     val workspaceManager: WorkspaceManager = WorkspaceServiceLocator.workspaceManager(application)
     val configService: ConfigService = ConfigServiceLocator.configService()
@@ -90,10 +109,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val editorGroup: StateFlow<EditorGroup> = _editorGroup.asStateFlow()
 
     // App-level (non-workspace) UI preferences. Durable across restarts, mirroring how the fs and
-    // distro modules persist their own preference stores.
-    private val uiPreferences = PreferenceDataStoreFactory.create {
-        appContext.preferencesDataStoreFile("ui-preferences.preferences_pb")
-    }
+    // distro modules persist their own preference stores. Uses a process singleton: creating a second
+    // DataStore for the same file (e.g. when a new MainViewModel is built after Activity recreation)
+    // crashes with "multiple DataStores active for the same file".
+    private val uiPreferences = UiPreferencesStore.get(appContext)
     private val railToolOrderKey = stringPreferencesKey("rail_tool_order")
 
     /** Persisted left-rail icon order as tool names; empty until the user reorders. */
