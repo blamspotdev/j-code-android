@@ -576,7 +576,7 @@ private fun JCodeShell(
             sessionId = session.id
             runSessionId = session.id
         }
-        terminalSessionManager.sendInput(sessionId, plan.command)
+        terminalSessionManager.sendInput(sessionId, ProjectRunner.runInvocation(project, plan) + "\n")
         runUrl = plan.url
         runInProgress = true
         // Cancel any in-flight poll from a previous run so the browser only opens once.

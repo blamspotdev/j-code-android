@@ -114,11 +114,33 @@ object ProjectRunner {
         runCatching { context.startActivity(intent) }
     }
 
+    /**
+     * Prepare the terminal command that runs [plan]. The recipe body is written to the project's
+     * `.jcode/run.sh` and invoked with `bash <path>` — a single short line — so the interactive shell
+     * does NOT echo the whole script back with `>` continuation prompts (which it would if the recipe
+     * were fed as an inline heredoc). The script is read, not executed, so the noexec `/workspace`
+     * mount is fine. Falls back to an inline heredoc if the script can't be written.
+     */
+    fun runInvocation(project: Project, plan: RunPlan): String {
+        val hostDir = (project.fsPath as? FsPath.Local)?.file
+        if (hostDir != null) {
+            val written = runCatching {
+                val dir = File(hostDir, ".jcode").apply { if (!exists()) mkdirs() }
+                File(dir, "run.sh").writeText(plan.command)
+            }.isSuccess
+            if (written) {
+                val guestDir = project.distroBindTarget.trimEnd('/')
+                return "bash \"$guestDir/.jcode/run.sh\""
+            }
+        }
+        return "bash <<'JCRUN'\n${plan.command}\nJCRUN"
+    }
+
     // --- command builders -------------------------------------------------
 
-    // Recipes run as a single `bash <<'JCRUN'` heredoc so `set -e` aborts on the first failing step
-    // and multi-line file writes stay clean. $PROJ/$STAGE/$TFM are expanded by the guest bash at
-    // runtime (the heredoc is quoted, so they stay literal here).
+    // Each recipe is a self-contained bash script (run via `bash .jcode/run.sh`, see runInvocation).
+    // `set -e` aborts on the first failing step. $PROJ/$STAGE/$TFM are expanded by the guest bash at
+    // run time.
 
     /** Pick the newest installed .NET SDK's major version → e.g. `net10.0`, falling back to net8.0. */
     private const val SELECT_TFM =
@@ -128,7 +150,6 @@ object ProjectRunner {
     private fun aspnetViteCommand(projectDir: String, stageName: String, port: Int): String =
         buildString {
             appendLine("clear")
-            appendLine("bash <<'JCRUN'")
             appendLine("set -e")
             // npm's animated progress bar (redrawn with carriage returns) renders as a wall of garbage
             // on the VT terminal; disable it and the fund/audit chatter for clean line-by-line output.
@@ -187,13 +208,11 @@ object ProjectRunner {
             appendLine("dotnet publish \"\$CSPROJ\" -c Release -o \"\$SRV\" --nologo")
             appendLine("cd \"\$SRV\"")
             appendLine("ASPNETCORE_URLS='http://0.0.0.0:$port' dotnet \"\$(basename \"\$CSPROJ\" .csproj).dll\"")
-            appendLine("JCRUN")
         }
 
     private fun viteDevCommand(projectDir: String, stageName: String, port: Int): String =
         buildString {
             appendLine("clear")
-            appendLine("bash <<'JCRUN'")
             appendLine("set -e")
             // Disable npm's animated progress bar (renders as garbage on the VT terminal) + chatter.
             appendLine("export npm_config_progress=false npm_config_fund=false npm_config_audit=false")
@@ -216,7 +235,6 @@ object ProjectRunner {
             appendLine("npm install")
             appendLine("echo '[3/3] Starting Vite dev server on http://localhost:$port ...'")
             appendLine("npm run dev -- --host 0.0.0.0 --port $port")
-            appendLine("JCRUN")
         }
 
     private fun sanitizeStageName(name: String): String {
