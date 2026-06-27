@@ -29,6 +29,9 @@ import dev.jcode.design.ThemeMode
 import dev.jcode.feature.editor.pane.EditorGroup
 import dev.jcode.feature.editor.pane.EditorPageKind
 import dev.jcode.feature.editor.pane.EditorTab
+import dev.jcode.feature.marketplace.ExtensionType
+import dev.jcode.feature.marketplace.InstalledExtension
+import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.MarketplaceServiceLocator
 import dev.jcode.feature.marketplace.ProjectTemplate
 import dev.jcode.feature.marketplace.TemplateCatalog
@@ -87,10 +90,63 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val appContext: Context = application.applicationContext
     val templateCatalog: TemplateCatalog = MarketplaceServiceLocator.templateCatalog(application)
     private val templateScaffolder: TemplateScaffolder = MarketplaceServiceLocator.templateScaffolder(application)
+    private val extensionInstaller = MarketplaceServiceLocator.extensionInstaller(application)
     val scaffoldState = templateScaffolder.state
 
     private val _templates = MutableStateFlow<List<ProjectTemplate>>(emptyList())
     val templates: StateFlow<List<ProjectTemplate>> = _templates.asStateFlow()
+
+    /** Extensions currently installed under the app's install root (templates + language packs). */
+    private val _installedExtensions = MutableStateFlow<List<InstalledExtension>>(emptyList())
+    val installedExtensions: StateFlow<List<InstalledExtension>> = _installedExtensions.asStateFlow()
+
+    /** Extensions available in the remote marketplace index (populated on demand). */
+    private val _marketplaceEntries = MutableStateFlow<List<MarketplaceEntry>>(emptyList())
+    val marketplaceEntries: StateFlow<List<MarketplaceEntry>> = _marketplaceEntries.asStateFlow()
+
+    /** True while a marketplace fetch / install is in flight. */
+    private val _marketplaceBusy = MutableStateFlow(false)
+    val marketplaceBusy: StateFlow<Boolean> = _marketplaceBusy.asStateFlow()
+
+    /** Re-scan installed extensions and refresh the available templates. */
+    fun refreshInstalledExtensions() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val installed = runCatching { extensionInstaller.installed() }.getOrDefault(emptyList())
+            _installedExtensions.value = installed
+            _templates.value = installed
+                .filter { it.type == ExtensionType.Templates }
+                .flatMap { it.templates }
+        }
+    }
+
+    /** Fetch the remote marketplace index (extensions available to install). */
+    fun refreshMarketplace() {
+        viewModelScope.launch {
+            _marketplaceBusy.value = true
+            extensionInstaller.fetchIndex()
+                .onSuccess { _marketplaceEntries.value = it.entries }
+                .onFailure { _messages.tryEmit("Marketplace: ${it.message ?: "failed to load"}") }
+            _marketplaceBusy.value = false
+        }
+    }
+
+    fun installExtension(entry: MarketplaceEntry) {
+        viewModelScope.launch {
+            _marketplaceBusy.value = true
+            extensionInstaller.install(entry)
+                .onSuccess { _messages.tryEmit("Installed ${it.name}") }
+                .onFailure { _messages.tryEmit("Install failed: ${it.message ?: "error"}") }
+            _marketplaceBusy.value = false
+            refreshInstalledExtensions()
+        }
+    }
+
+    fun uninstallExtension(id: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            extensionInstaller.uninstall(id)
+            refreshInstalledExtensions()
+        }
+    }
 
     private val _showNewItemDialog = MutableStateFlow(false)
     val showNewItemDialog: StateFlow<Boolean> = _showNewItemDialog.asStateFlow()
@@ -188,9 +244,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val messages = _messages.asSharedFlow()
 
     init {
-        viewModelScope.launch(Dispatchers.IO) {
-            _templates.value = runCatching { templateCatalog.templates() }.getOrDefault(emptyList())
-        }
+        refreshInstalledExtensions()
 
         viewModelScope.launch {
             currentWorkspace.collectLatest { workspace ->

@@ -48,6 +48,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
@@ -151,10 +152,11 @@ import dev.jcode.feature.editor.pane.EditorPane
 import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.feature.explorer.ExplorerFeature
 import dev.jcode.feature.explorer.ExplorerViewMode
-import dev.jcode.feature.marketplace.MarketplaceServiceLocator
+import dev.jcode.feature.marketplace.ExtensionType
+import dev.jcode.feature.marketplace.InstalledExtension
+import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.ProjectTemplate
 import dev.jcode.feature.marketplace.ScaffoldState
-import dev.jcode.feature.marketplace.TemplateExtension
 import dev.jcode.feature.onboarding.OnboardingFeature
 import dev.jcode.feature.sdkmanager.SdkManagerFeature
 import dev.jcode.feature.settings.SettingsFeature
@@ -232,6 +234,9 @@ fun JCodeApp(
     val environmentState by viewModel.environmentState.collectAsStateWithLifecycle()
     val sdkCatalogState by viewModel.sdkCatalogState.collectAsStateWithLifecycle()
     val autoSetupProgress by viewModel.autoSetupProgress.collectAsStateWithLifecycle(initialValue = DistroWizardProgress.Idle)
+    val installedExtensions by viewModel.installedExtensions.collectAsStateWithLifecycle()
+    val marketplaceEntries by viewModel.marketplaceEntries.collectAsStateWithLifecycle()
+    val marketplaceBusy by viewModel.marketplaceBusy.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val themeBundleId by viewModel.themeBundleId.collectAsStateWithLifecycle()
     val iconBundleId by viewModel.iconBundleId.collectAsStateWithLifecycle()
@@ -312,6 +317,12 @@ fun JCodeApp(
         onUpdateThemeBundle = viewModel::setThemeBundle,
         iconBundleId = iconBundleId,
         onUpdateIconBundle = viewModel::setIconBundle,
+        installedExtensions = installedExtensions,
+        marketplaceEntries = marketplaceEntries,
+        marketplaceBusy = marketplaceBusy,
+        onRefreshMarketplace = viewModel::refreshMarketplace,
+        onInstallExtension = viewModel::installExtension,
+        onUninstallExtension = viewModel::uninstallExtension,
         onOpenWorkspaceConfig = viewModel::openWorkspaceConfigFile,
         onOpenProjectConfig = viewModel::openProjectConfigFile,
         onRefreshEnvironment = viewModel::refreshEnvironment,
@@ -413,6 +424,12 @@ private fun JCodeShell(
     onUpdateThemeBundle: (String) -> Unit,
     iconBundleId: String,
     onUpdateIconBundle: (String) -> Unit,
+    installedExtensions: List<InstalledExtension>,
+    marketplaceEntries: List<MarketplaceEntry>,
+    marketplaceBusy: Boolean,
+    onRefreshMarketplace: () -> Unit,
+    onInstallExtension: (MarketplaceEntry) -> Unit,
+    onUninstallExtension: (String) -> Unit,
     onOpenWorkspaceConfig: () -> Unit,
     onOpenProjectConfig: () -> Unit,
     onRefreshEnvironment: () -> Unit,
@@ -826,6 +843,12 @@ private fun JCodeShell(
                 onUpdateThemeBundle = onUpdateThemeBundle,
                 iconBundleId = iconBundleId,
                 onUpdateIconBundle = onUpdateIconBundle,
+                installedExtensions = installedExtensions,
+                marketplaceEntries = marketplaceEntries,
+                marketplaceBusy = marketplaceBusy,
+                onRefreshMarketplace = onRefreshMarketplace,
+                onInstallExtension = onInstallExtension,
+                onUninstallExtension = onUninstallExtension,
             )
         }
     }
@@ -1012,6 +1035,12 @@ private fun JCodeShell(
                             onUpdateThemeBundle = onUpdateThemeBundle,
                             iconBundleId = iconBundleId,
                             onUpdateIconBundle = onUpdateIconBundle,
+                            installedExtensions = installedExtensions,
+                            marketplaceEntries = marketplaceEntries,
+                            marketplaceBusy = marketplaceBusy,
+                            onRefreshMarketplace = onRefreshMarketplace,
+                            onInstallExtension = onInstallExtension,
+                            onUninstallExtension = onUninstallExtension,
                         )
                     }
                 }
@@ -1415,6 +1444,12 @@ private fun WorkspacePanel(
     onUpdateThemeBundle: (String) -> Unit,
     iconBundleId: String,
     onUpdateIconBundle: (String) -> Unit,
+    installedExtensions: List<InstalledExtension>,
+    marketplaceEntries: List<MarketplaceEntry>,
+    marketplaceBusy: Boolean,
+    onRefreshMarketplace: () -> Unit,
+    onInstallExtension: (MarketplaceEntry) -> Unit,
+    onUninstallExtension: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -1524,20 +1559,19 @@ private fun WorkspacePanel(
                         modifier = Modifier.fillMaxSize(),
                     )
 
-                    WorkbenchTool.Extensions -> {
-                        val extensionContext = LocalContext.current
-                        val templateExtension = remember(extensionContext) {
-                            MarketplaceServiceLocator.templateCatalog(extensionContext).extension()
-                        }
-                        ExtensionsPanel(
-                            extension = templateExtension,
-                            themeBundleId = themeBundleId,
-                            onSelectTheme = onUpdateThemeBundle,
-                            iconBundleId = iconBundleId,
-                            onSelectIcon = onUpdateIconBundle,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
+                    WorkbenchTool.Extensions -> ExtensionsPanel(
+                        installed = installedExtensions,
+                        available = marketplaceEntries,
+                        busy = marketplaceBusy,
+                        onRefreshMarketplace = onRefreshMarketplace,
+                        onInstall = onInstallExtension,
+                        onUninstall = onUninstallExtension,
+                        themeBundleId = themeBundleId,
+                        onSelectTheme = onUpdateThemeBundle,
+                        iconBundleId = iconBundleId,
+                        onSelectIcon = onUpdateIconBundle,
+                        modifier = Modifier.fillMaxSize(),
+                    )
 
                     WorkbenchTool.SdkManager -> SdkManagerFeature.Content(
                         state = sdkCatalogState,
@@ -2740,13 +2774,20 @@ private fun explorerViewModeOf(value: String): ExplorerViewMode =
 
 @Composable
 private fun ExtensionsPanel(
-    extension: TemplateExtension,
+    installed: List<InstalledExtension>,
+    available: List<MarketplaceEntry>,
+    busy: Boolean,
+    onRefreshMarketplace: () -> Unit,
+    onInstall: (MarketplaceEntry) -> Unit,
+    onUninstall: (String) -> Unit,
     themeBundleId: String,
     onSelectTheme: (String) -> Unit,
     iconBundleId: String,
     onSelectIcon: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    LaunchedEffect(Unit) { if (available.isEmpty()) onRefreshMarketplace() }
+    val installedIds = remember(installed) { installed.map { it.id }.toSet() }
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
@@ -2760,52 +2801,63 @@ private fun ExtensionsPanel(
                 tint = MaterialTheme.colorScheme.primary,
             )
             Spacer(modifier = Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(extension.name, style = MaterialTheme.typography.titleMedium)
-                val meta = listOfNotNull(
-                    extension.publisher,
-                    extension.version?.let { "v$it" },
-                    "Preloaded",
-                ).joinToString(" · ")
-                Text(
-                    meta,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Text(
+                "Extensions",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            if (busy) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            } else {
+                IconButton(onClick = onRefreshMarketplace) {
+                    Icon(jcIcon(JCodeIcon.Refresh), contentDescription = "Refresh marketplace")
+                }
             }
         }
 
-        if (extension.description.isNotBlank()) {
+        Text("Marketplace (${available.size})", style = MaterialTheme.typography.labelLarge)
+        if (available.isEmpty() && !busy) {
             Text(
-                extension.description,
+                "Refresh to load installable extensions from the marketplace.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        available.forEach { entry ->
+            ExtensionRow(name = entry.name, subtitle = entry.type.name.lowercase()) {
+                if (entry.id in installedIds) {
+                    Text(
+                        "Installed",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                } else {
+                    TextButton(onClick = { onInstall(entry) }, enabled = !busy) { Text("Install") }
+                }
+            }
+        }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
-        Text(
-            "Project templates (${extension.templates.size})",
-            style = MaterialTheme.typography.labelLarge,
-        )
-        extension.templates.forEach { template ->
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(template.name, style = MaterialTheme.typography.bodyMedium)
-                if (template.description.isNotBlank()) {
-                    Text(
-                        template.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+        Text("Installed (${installed.size})", style = MaterialTheme.typography.labelLarge)
+        if (installed.isEmpty()) {
+            Text(
+                "No extensions installed yet.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        installed.forEach { ext ->
+            val detail = buildString {
+                append(ext.type.name.lowercase())
+                ext.version?.let { append(" · v$it") }
+                if (ext.type == ExtensionType.Templates && ext.templates.isNotEmpty()) {
+                    append(" · ${ext.templates.size} templates")
                 }
-                if (template.requires.isNotEmpty()) {
-                    Text(
-                        "Requires: ${template.requires.joinToString(", ")}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                ext.language?.let { append(" · ${it.completions.size} snippets") }
+            }
+            ExtensionRow(name = ext.name, subtitle = detail) {
+                TextButton(onClick = { onUninstall(ext.id) }) { Text("Remove") }
             }
         }
 
@@ -2856,6 +2908,29 @@ private fun ExtensionsPanel(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ExtensionRow(
+    name: String,
+    subtitle: String,
+    trailing: @Composable () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        trailing()
     }
 }
 

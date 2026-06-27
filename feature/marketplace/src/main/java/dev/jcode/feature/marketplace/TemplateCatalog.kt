@@ -1,23 +1,17 @@
 package dev.jcode.feature.marketplace
 
-import android.content.Context
-
-/** Reads the bundled template extension once and caches it for the app session. */
+/**
+ * Project templates aggregated from all installed `type: templates` extensions
+ * (downloaded under the app's install root by [ExtensionInstaller]). Templates are
+ * no longer bundled with the app — they are installed at runtime from the marketplace.
+ */
 class TemplateCatalog internal constructor(
-    context: Context,
+    private val installer: ExtensionInstaller,
 ) {
-    private val loader = TemplateCatalogLoader(context)
-
-    @Volatile
-    private var cached: TemplateExtension? = null
-
-    fun extension(): TemplateExtension {
-        return cached ?: synchronized(this) {
-            cached ?: loader.load().also { cached = it }
-        }
-    }
-
-    fun templates(): List<ProjectTemplate> = extension().templates
+    fun templates(): List<ProjectTemplate> =
+        installer.installed()
+            .filter { it.type == ExtensionType.Templates }
+            .flatMap { it.templates }
 
     fun template(id: String): ProjectTemplate? = templates().firstOrNull { it.id == id }
 }

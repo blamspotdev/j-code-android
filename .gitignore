@@ -33,3 +33,6 @@ google-services.json
 # Android Profiling
 *.hprof
 AGENTS.md
+
+# Local scratch (screenshots, junk)
+temp/

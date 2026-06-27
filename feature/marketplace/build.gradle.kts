@@ -11,14 +11,6 @@ android {
         minSdk = 28
     }
 
-    sourceSets {
-        getByName("main").assets.srcDir("../../marketplace")
-    }
-
-    androidResources {
-        ignoreAssetsPattern = "!README.md"
-    }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
