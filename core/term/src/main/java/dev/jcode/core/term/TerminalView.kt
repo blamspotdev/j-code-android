@@ -52,6 +52,13 @@ class TerminalView @JvmOverloads constructor(
     private var isSelecting = false
     // Set by the "Select text" menu action so the next touch-drag begins a selection.
     private var selectionArmed = false
+
+    // When true (default): single tap opens a link/path under the finger; double tap focuses + shows
+    // the keyboard. When false: single tap focuses + shows the keyboard (legacy). Driven by app settings.
+    var doubleTapToFocus = true
+    // Invoked on the main thread with the contiguous token under a confirmed single tap, so the host
+    // can open it as a URL (browser) or file path (editor).
+    var onTapToken: ((String) -> Unit)? = null
     private var selectionStartRow = 0
     private var selectionStartCol = 0
     private var selectionEndRow = 0
@@ -84,9 +91,32 @@ class TerminalView @JvmOverloads constructor(
         }
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            requestFocus()
-            showSoftKeyboard()
-            return true
+            // Legacy mode: a single tap focuses + raises the keyboard immediately.
+            if (!doubleTapToFocus) {
+                requestFocus()
+                showSoftKeyboard()
+                return true
+            }
+            return false // new mode: wait for onSingleTapConfirmed (link) / onDoubleTap (keyboard)
+        }
+
+        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+            // New mode: a confirmed single tap opens a link/path under the finger (never the keyboard).
+            if (doubleTapToFocus) {
+                handleTokenTap(e.x, e.y)
+                return true
+            }
+            return false
+        }
+
+        override fun onDoubleTap(e: MotionEvent): Boolean {
+            // New mode: double tap is the deliberate "interact" gesture that focuses + shows the keyboard.
+            if (doubleTapToFocus) {
+                requestFocus()
+                showSoftKeyboard()
+                return true
+            }
+            return false
         }
     })
 
@@ -317,6 +347,31 @@ class TerminalView @JvmOverloads constructor(
         android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
     }
 
+    /** Extract the contiguous non-space token under a tap and hand it to [onTapToken] (URL/path open). */
+    private fun handleTokenTap(x: Float, y: Float) {
+        val parser = vtParser ?: return
+        if (!parser.isOpen || cellWidth <= 0f || cellHeight <= 0f) return
+        val viewRow = (y / cellHeight).toInt()
+        val col = (x / cellWidth).toInt()
+        if (viewRow < 0 || col < 0) return
+        val logicalRow = viewRow - scrollOffset
+        val maxCol = min(cols, parser.cols)
+        if (col >= maxCol) return
+        val sb = StringBuilder(maxCol)
+        for (c in 0 until maxCol) {
+            val cp = parser.getCellCodePoint(logicalRow, c)
+            sb.append(if (cp == 0 || cp == ' '.code) ' ' else cp.toChar())
+        }
+        val line = sb.toString()
+        if (col >= line.length || line[col] == ' ') return
+        var start = col
+        while (start > 0 && line[start - 1] != ' ') start--
+        var end = col
+        while (end < line.length && line[end] != ' ') end++
+        val token = line.substring(start, end).trim()
+        if (token.isNotBlank()) onTapToken?.invoke(token)
+    }
+
     private fun getSelectedText(): String {
         val parser = vtParser ?: return ""
         
@@ -406,10 +461,12 @@ class TerminalView @JvmOverloads constructor(
         if (active) {
             // Post so focus is requested after this view is laid out/attached — requesting it
             // synchronously right after creation (new session tab) is too early and silently fails,
-            // which would leave input going to whatever held focus before.
+            // which would leave input going to whatever held focus before. In double-tap mode we only
+            // take focus (so output/scroll work); the keyboard waits for a deliberate double tap so it
+            // never pops up just from opening/switching a terminal.
             post {
                 requestFocus()
-                showSoftKeyboard()
+                if (!doubleTapToFocus) showSoftKeyboard()
             }
         } else {
             clearFocus()
@@ -418,11 +475,13 @@ class TerminalView @JvmOverloads constructor(
     }
 
     /**
-     * Show the soft keyboard for terminal input.
+     * Show the soft keyboard for terminal input. Uses an explicit (non-implicit) request so a
+     * deliberate double tap re-raises it even after the user dismissed it with the Back button
+     * (which suppresses SHOW_IMPLICIT until the next explicit show).
      */
     private fun showSoftKeyboard() {
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
-        imm?.showSoftInput(this, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+        imm?.showSoftInput(this, 0)
     }
 
     /**

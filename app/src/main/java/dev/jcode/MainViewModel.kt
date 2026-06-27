@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
@@ -32,6 +33,7 @@ import dev.jcode.feature.marketplace.MarketplaceServiceLocator
 import dev.jcode.feature.marketplace.ProjectTemplate
 import dev.jcode.feature.marketplace.TemplateCatalog
 import dev.jcode.feature.marketplace.TemplateScaffolder
+import dev.jcode.fs.DEFAULT_SHARED_PROJECTS_ROOT
 import dev.jcode.fs.FsKind
 import dev.jcode.fs.FsNode
 import dev.jcode.fs.FsPath
@@ -123,6 +125,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setRailToolOrder(order: List<String>) {
         viewModelScope.launch {
             uiPreferences.edit { prefs -> prefs[railToolOrderKey] = order.joinToString(",") }
+        }
+    }
+
+    private val terminalDoubleTapKey = booleanPreferencesKey("terminal_double_tap_focus")
+
+    /** When true (default), a single terminal tap opens links/paths and a double tap shows the keyboard. */
+    val terminalDoubleTapToFocus: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[terminalDoubleTapKey] ?: true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    fun setTerminalDoubleTapToFocus(enabled: Boolean) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[terminalDoubleTapKey] = enabled }
         }
     }
 
@@ -567,6 +582,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             when (val path = node.path) {
                 is FsPath.Local -> openLocalFile(path.file)
                 is FsPath.Saf -> openSafFile(node)
+            }
+        }
+    }
+
+    /**
+     * Open a file referenced by a single tap in a terminal: a guest `/workspace/...` path, an absolute
+     * host path, or a path relative to the open project. A trailing `:line`/`:line:col` is stripped.
+     * No-op if the token doesn't resolve to an existing file.
+     */
+    fun openFileByGuestPath(token: String) {
+        val raw = token.trim().trimEnd('.', ',', ')', ']', '}', ';', '"', '\'')
+        if (raw.isEmpty()) return
+        val pathPart = raw.replace(Regex(":\\d+(:\\d+)?$"), "")
+        val file = resolveHostFile(pathPart) ?: return
+        if (!file.isFile) return
+        viewModelScope.launch { openLocalFile(file) }
+    }
+
+    private fun resolveHostFile(path: String): File? {
+        val projectsRoot = DEFAULT_SHARED_PROJECTS_ROOT.trimEnd('/')
+        return when {
+            path == "/workspace" -> null
+            path.startsWith("/workspace/") -> File(projectsRoot + path.removePrefix("/workspace"))
+            path.startsWith("/") -> File(path) // absolute host path
+            else -> {
+                val base = (selectedProject.value?.fsPath as? FsPath.Local)?.file ?: return null
+                File(base, path) // relative to the open project
             }
         }
     }

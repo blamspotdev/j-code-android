@@ -61,6 +61,8 @@ object SettingsFeature {
         onUpdateExplorerViewMode: (ConfigScope, String) -> Unit,
         themeMode: ThemeMode,
         onUpdateThemeMode: (ThemeMode) -> Unit,
+        terminalDoubleTapToFocus: Boolean,
+        onUpdateTerminalDoubleTapToFocus: (Boolean) -> Unit,
         modifier: Modifier = Modifier,
     ) {
         var selectedScope by rememberSaveable(projectOverridesAvailable) {
@@ -316,6 +318,18 @@ object SettingsFeature {
                         }
                     }
                 }
+            }
+
+            SettingsCard(
+                title = "Terminal",
+                description = "How tapping the terminal behaves. Applies app-wide.",
+            ) {
+                ToggleRow(
+                    label = "Double-tap to type",
+                    supporting = "Double-tap focuses the terminal and shows the keyboard; a single tap opens URLs and file paths. Turn off to focus with a single tap (links disabled).",
+                    checked = terminalDoubleTapToFocus,
+                    onCheckedChange = onUpdateTerminalDoubleTapToFocus,
+                )
             }
 
             SettingsCard(

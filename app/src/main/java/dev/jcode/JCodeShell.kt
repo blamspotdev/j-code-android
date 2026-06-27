@@ -90,8 +90,10 @@ import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -188,6 +190,16 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
+/** Terminal tap behavior, provided to the deeply-nested terminal view without prop-drilling. */
+private data class TerminalTapConfig(
+    /** True: single tap opens a link/path, double tap shows the keyboard. False: single tap = keyboard. */
+    val doubleTapToFocus: Boolean = true,
+    /** Invoked with the tapped token (a URL is opened in the browser; a path in the editor). */
+    val onToken: (String) -> Unit = {},
+)
+
+private val LocalTerminalTapConfig = compositionLocalOf { TerminalTapConfig() }
+
 private enum class WorkbenchTool(
     val label: String,
     val icon: ImageVector,
@@ -238,6 +250,19 @@ fun JCodeApp(
     val autoSetupProgress by viewModel.autoSetupProgress.collectAsStateWithLifecycle(initialValue = DistroWizardProgress.Idle)
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val railToolOrder by viewModel.railToolOrder.collectAsStateWithLifecycle()
+    val terminalDoubleTapToFocus by viewModel.terminalDoubleTapToFocus.collectAsStateWithLifecycle()
+    val tapContext = LocalContext.current
+    val terminalTapConfig = TerminalTapConfig(
+        doubleTapToFocus = terminalDoubleTapToFocus,
+        onToken = { token ->
+            val trimmed = token.trim().trimEnd('.', ',', ')', ']', '}', ';')
+            if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+                ProjectRunner.openInBrowser(tapContext, trimmed)
+            } else {
+                viewModel.openFileByGuestPath(token)
+            }
+        },
+    )
     val snackbarHostState = remember { SnackbarHostState() }
     val openFolderLauncher = rememberOpenFolderLauncher(
         onFolderPicked = viewModel::openExternalFolder,
@@ -260,6 +285,7 @@ fun JCodeApp(
         }
     }
 
+    CompositionLocalProvider(LocalTerminalTapConfig provides terminalTapConfig) {
     JCodeShell(
         modifier = modifier,
         windowInfo = windowInfo,
@@ -308,7 +334,10 @@ fun JCodeApp(
         railToolOrder = railToolOrder,
         onReorderRail = viewModel::setRailToolOrder,
         onOpenSettingsPage = viewModel::openSettingsPage,
+        terminalDoubleTapToFocus = terminalDoubleTapToFocus,
+        onUpdateTerminalDoubleTapToFocus = viewModel::setTerminalDoubleTapToFocus,
     )
+    }
 
     if (showNewItemDialog) {
         NewItemDialog(
@@ -402,6 +431,8 @@ private fun JCodeShell(
     railToolOrder: List<String>,
     onReorderRail: (List<String>) -> Unit,
     onOpenSettingsPage: () -> Unit,
+    terminalDoubleTapToFocus: Boolean,
+    onUpdateTerminalDoubleTapToFocus: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -923,6 +954,8 @@ private fun JCodeShell(
                                     onUpdateExplorerViewMode = onUpdateExplorerViewMode,
                                     themeMode = themeMode,
                                     onUpdateThemeMode = onUpdateThemeMode,
+                                    terminalDoubleTapToFocus = terminalDoubleTapToFocus,
+                                    onUpdateTerminalDoubleTapToFocus = onUpdateTerminalDoubleTapToFocus,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                                 EditorPageKind.None -> Unit
@@ -2418,6 +2451,7 @@ private fun TerminalSidebarContent(
             // parser, read loop and scrollback. Only the active session is visible + focused; the rest
             // stay attached (still reading their output) but transparent and behind it. Switching tabs
             // is instant and every session keeps its own independent content.
+            val tapConfig = LocalTerminalTapConfig.current
             Box(modifier = Modifier.fillMaxSize()) {
                 terminalSessionIds.forEach { sessionId ->
                     val session = terminalSessionFor(sessionId) ?: return@forEach
@@ -2427,10 +2461,14 @@ private fun TerminalSidebarContent(
                             factory = { ctx ->
                                 TerminalView(ctx).apply {
                                     setFontSize(30f)
+                                    doubleTapToFocus = tapConfig.doubleTapToFocus
+                                    onTapToken = tapConfig.onToken
                                     bind(session)
                                 }
                             },
                             update = { view ->
+                                view.doubleTapToFocus = tapConfig.doubleTapToFocus
+                                view.onTapToken = tapConfig.onToken
                                 view.bind(session) // no-op if already bound to this session
                                 view.setActive(isActive)
                             },
