@@ -60,10 +60,28 @@ class EditorView @JvmOverloads constructor(
         val scope = MainScope()
         observationScope = scope
 
+        // Seed the new state's viewport with the current view size. onSizeChanged won't fire when a
+        // new EditorState is attached to an already-laid-out view (tab switch), so without this the
+        // viewport keeps heightPx=0 and only ~1-2 lines are considered visible.
+        if (width > 0 && height > 0) {
+            editorState.updateViewport { it.copy(widthPx = width, heightPx = height) }
+        }
+
         // Observe state changes
         editorState.snapshot.onEach { invalidate() }.launchIn(scope)
         editorState.viewport.onEach { invalidate() }.launchIn(scope)
-        editorState.renderConfig.onEach { invalidate() }.launchIn(scope)
+        // Keep the viewport's line height in sync with the render config so the visible-line range
+        // (and scroll/caret math) matches what the renderer actually draws; otherwise the default
+        // 20px is used and only a couple lines are considered "visible".
+        editorState.renderConfig.onEach { cfg ->
+            val lh = (cfg.fontSizeSp * density * cfg.lineHeightMultiplier).toInt().coerceAtLeast(1)
+            if (editorState.viewport.value.lineHeightPx != lh) {
+                editorState.updateViewport { it.copy(lineHeightPx = lh) }
+            }
+            invalidate()
+        }.launchIn(scope)
+        editorState.decorations.onEach { invalidate() }.launchIn(scope)
+        editorState.carets.onEach { invalidate() }.launchIn(scope)
     }
 
     /** Detach the current EditorState. */
@@ -101,11 +119,12 @@ class EditorView @JvmOverloads constructor(
         val config = state.renderConfig.value
         val carets = state.carets.value
         val theme = state.theme.value
+        val decorations = state.decorations.value
 
         // Draw background
         canvas.drawColor(theme.background.toInt())
 
-        renderer.draw(canvas, snapshot, viewport, config, carets, theme = theme)
+        renderer.draw(canvas, snapshot, viewport, config, carets, decorations = decorations, theme = theme)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {

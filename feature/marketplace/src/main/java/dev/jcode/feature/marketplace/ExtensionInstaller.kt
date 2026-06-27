@@ -125,6 +125,7 @@ class ExtensionInstaller internal constructor(context: Context) {
 
     private fun parseLanguage(map: Map<String, Any?>): LanguagePack? {
         val lang = (map["language"] as? Map<*, *>)?.toStringKeyMap() ?: return null
+        val comment = (lang["comment"] as? Map<*, *>)?.toStringKeyMap()
         val formatter = (lang["formatter"] as? Map<*, *>)?.toStringKeyMap()
         val completions = lang.listOfAny("completions").mapNotNull { raw ->
             val c = (raw as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
@@ -136,11 +137,21 @@ class ExtensionInstaller internal constructor(context: Context) {
             val title = h.str("title") ?: return@mapNotNull null
             HelperSnippet(title, h.str("snippet") ?: "")
         }
+        fun wordSet(key: String): Set<String> =
+            lang.listOfAny(key).mapNotNull { it?.toString()?.takeIf(String::isNotBlank) }.toSet()
         return LanguagePack(
             languageId = lang.str("id") ?: return null,
             fileExtensions = lang.listOfAny("extensions").mapNotNull { it?.toString()?.takeIf(String::isNotBlank) },
-            formatterCommand = formatter?.str("command"),
+            lineComment = comment?.str("line"),
+            blockCommentStart = comment?.str("blockStart"),
+            blockCommentEnd = comment?.str("blockEnd"),
+            stringDelimiters = lang.listOfAny("strings").mapNotNull { it?.toString()?.takeIf(String::isNotEmpty) },
+            keywords = wordSet("keywords"),
+            types = wordSet("types"),
             indent = (formatter?.get("indent") as? Number)?.toInt(),
+            trimTrailingWhitespace = (formatter?.get("trimTrailingWhitespace") as? Boolean) ?: true,
+            insertFinalNewline = (formatter?.get("insertFinalNewline") as? Boolean) ?: true,
+            formatterCommand = formatter?.str("command"),
             completions = completions,
             helpers = helpers,
         )

@@ -50,12 +50,27 @@ data class HelperSnippet(
 data class LanguagePack(
     val languageId: String,
     val fileExtensions: List<String>,
-    /** Best-effort runtime formatter command; `{{file}}` is the guest path. */
-    val formatterCommand: String?,
+    // Syntax (for highlighting):
+    val lineComment: String?,
+    val blockCommentStart: String?,
+    val blockCommentEnd: String?,
+    val stringDelimiters: List<String>,
+    val keywords: Set<String>,
+    val types: Set<String>,
+    // Formatting (the "basic formatting definitions" the built-in formatter consumes):
     val indent: Int?,
+    val trimTrailingWhitespace: Boolean,
+    val insertFinalNewline: Boolean,
+    /** Best-effort external formatter command; `{{file}}` is the guest path. */
+    val formatterCommand: String?,
     val completions: List<CompletionItem>,
     val helpers: List<HelperSnippet>,
-)
+) {
+    fun matchesFile(name: String): Boolean {
+        val lower = name.lowercase()
+        return fileExtensions.any { lower.endsWith(it.lowercase()) }
+    }
+}
 
 /** An extension that has been downloaded and unpacked under the app's install root. */
 data class InstalledExtension(

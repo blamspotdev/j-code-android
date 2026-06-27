@@ -1,6 +1,12 @@
 package dev.jcode
+import androidx.compose.foundation.isSystemInDarkTheme
+import dev.jcode.core.editor.decor.Layer
 import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.JCodeIcon
+import dev.jcode.editor.SyntaxHighlighter
+import dev.jcode.editor.TokenPalette
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import dev.jcode.design.ThemeBundleRegistry
 import dev.jcode.design.jcIcon
 
@@ -467,6 +473,36 @@ private fun JCodeShell(
     var selectedTool by rememberSaveable { mutableStateOf(WorkbenchTool.Explorer) }
     // A previously-persisted selection may point at a now-hidden destination; fall back to Explorer.
     LaunchedEffect(Unit) { if (!selectedTool.available) selectedTool = WorkbenchTool.Explorer }
+
+    // Syntax highlighting for the active file, driven by the installed language pack (pack-driven:
+    // no matching pack => plain text). Re-tokenizes on every edit; spans are pushed as a GLYPH_COLOR
+    // decoration layer that the editor renderer consumes.
+    val systemDark = isSystemInDarkTheme()
+    val editorDark = when (themeMode) {
+        ThemeMode.Dark -> true
+        ThemeMode.Light -> false
+        ThemeMode.System -> systemDark
+    }
+    val highlightTab = editorGroup.activeTab
+    LaunchedEffect(highlightTab?.id, installedExtensions, editorDark) {
+        val state = highlightTab?.editorState ?: return@LaunchedEffect
+        val fileName = highlightTab.filePath.name
+        val lang = installedExtensions.firstNotNullOfOrNull { ext ->
+            ext.language?.takeIf { it.matchesFile(fileName) }
+        }
+        if (lang == null) {
+            state.updateDecorations { it.replaceLayer(Layer.GLYPH_COLOR, emptyList()) }
+            return@LaunchedEffect
+        }
+        val palette = if (editorDark) TokenPalette.DARK else TokenPalette.LIGHT
+        state.snapshot.collectLatest { snap ->
+            val spans = withContext(Dispatchers.Default) {
+                val text = runCatching { snap.readRangeAsUtf16(0, snap.byteLength) }.getOrDefault("")
+                SyntaxHighlighter.highlight(text, lang, palette)
+            }
+            state.updateDecorations { it.replaceLayer(Layer.GLYPH_COLOR, spans) }
+        }
+    }
     val railTools = remember(railToolOrder) { orderedRailTools(railToolOrder) }
     // Settings opens as an in-editor page; every other tool drives the side panel.
     val onSelectWorkbenchTool: (WorkbenchTool) -> Unit = { tool ->
