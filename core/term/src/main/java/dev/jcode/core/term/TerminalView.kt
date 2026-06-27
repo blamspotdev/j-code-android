@@ -168,6 +168,13 @@ class TerminalView @JvmOverloads constructor(
         }
     }
 
+    // Reused scratch buffer for drawing a single glyph (BMP = 1 char, supplementary pair = 2) — avoids
+    // allocating a String per non-blank cell per frame in onDraw.
+    private val glyphBuf = CharArray(2)
+
+    // Coalesces a burst of parser updates (e.g. fast build output) into at most one repaint per frame.
+    private val repaintPending = java.util.concurrent.atomic.AtomicBoolean(false)
+
     init {
         setWillNotDraw(false)
         isFocusable = true
@@ -298,15 +305,20 @@ class TerminalView @JvmOverloads constructor(
         // reader, so hop to main; only the visible session repaints, and a scrolled-back view stays
         // anchored as new lines push into scrollback.
         session.onUpdate = {
-            if (isActiveSession) post {
-                if (boundSession === session) {
-                    val sb = session.parser.scrollbackSize
-                    if (scrollOffset > 0 && sb > lastScrollbackSize) {
-                        scrollOffset = (scrollOffset + (sb - lastScrollbackSize)).coerceAtMost(sb)
+            // Called off the main thread by the session reader. Coalesce to at most one repaint per
+            // frame so a process emitting many small writes doesn't flood the main looper with post()s.
+            if (isActiveSession && repaintPending.compareAndSet(false, true)) {
+                postOnAnimation {
+                    repaintPending.set(false)
+                    if (boundSession === session && session.parser.isOpen) {
+                        val sb = session.parser.scrollbackSize
+                        if (scrollOffset > 0 && sb > lastScrollbackSize) {
+                            scrollOffset = (scrollOffset + (sb - lastScrollbackSize)).coerceAtMost(sb)
+                        }
+                        lastScrollbackSize = sb
+                        invalidate()
+                        resetBlink()
                     }
-                    lastScrollbackSize = sb
-                    invalidate()
-                    resetBlink()
                 }
             }
         }
@@ -559,9 +571,12 @@ class TerminalView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        
+
         val parser = vtParser ?: return
-        
+        // The bound session may have been reaped/closed (its parser freed on the main thread) between a
+        // queued invalidate and this draw — bail rather than touch a destroyed native parser.
+        if (!parser.isOpen) return
+
         // Draw background
         bgPaint.color = Color.BLACK
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
@@ -621,8 +636,8 @@ class TerminalView @JvmOverloads constructor(
                     textPaint.isFakeBoldText = (attrs and VtParser.ATTR_BOLD) != 0
                     textPaint.textSkewX = if ((attrs and VtParser.ATTR_ITALIC) != 0) -0.25f else 0f
 
-                    val charStr = if (cp <= 0xFFFF) cp.toChar().toString() else String(Character.toChars(cp))
-                    canvas.drawText(charStr, x, y + cellHeight * 0.8f, textPaint)
+                    val glyphLen = Character.toChars(cp, glyphBuf, 0)
+                    canvas.drawText(glyphBuf, 0, glyphLen, x, y + cellHeight * 0.8f, textPaint)
                     
                     // Draw underline
                     if ((attrs and VtParser.ATTR_UNDERLINE) != 0) {
@@ -663,8 +678,8 @@ class TerminalView @JvmOverloads constructor(
                         textPaint.color = Color.BLACK
                         textPaint.isFakeBoldText = false
                         textPaint.textSkewX = 0f
-                        val s = if (cp <= 0xFFFF) cp.toChar().toString() else String(Character.toChars(cp))
-                        canvas.drawText(s, x, y + cellHeight * 0.8f, textPaint)
+                        val glyphLen = Character.toChars(cp, glyphBuf, 0)
+                        canvas.drawText(glyphBuf, 0, glyphLen, x, y + cellHeight * 0.8f, textPaint)
                         textPaint.color = saved
                         textPaint.isFakeBoldText = savedBold
                         textPaint.textSkewX = savedSkew

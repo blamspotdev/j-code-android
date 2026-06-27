@@ -15,22 +15,10 @@ static PieceTreeBuffer* getBuffer(JNIEnv* env, jobject thiz) {
     return reinterpret_cast<PieceTreeBuffer*>(env->GetLongField(thiz, fid));
 }
 
-static void setBuffer(JNIEnv* env, jobject thiz, PieceTreeBuffer* buffer) {
-    jclass clazz = env->GetObjectClass(thiz);
-    jfieldID fid = env->GetFieldID(clazz, "nativeHandle", "J");
-    env->SetLongField(thiz, fid, reinterpret_cast<jlong>(buffer));
-}
-
 static Snapshot* getSnapshot(JNIEnv* env, jobject thiz) {
     jclass clazz = env->GetObjectClass(thiz);
     jfieldID fid = env->GetFieldID(clazz, "nativeHandle", "J");
     return reinterpret_cast<Snapshot*>(env->GetLongField(thiz, fid));
-}
-
-static void setSnapshot(JNIEnv* env, jobject thiz, Snapshot* snapshot) {
-    jclass clazz = env->GetObjectClass(thiz);
-    jfieldID fid = env->GetFieldID(clazz, "nativeHandle", "J");
-    env->SetLongField(thiz, fid, reinterpret_cast<jlong>(snapshot));
 }
 
 extern "C" {
@@ -65,14 +53,14 @@ Java_dev_jcode_core_buffer_Buffer_nativeOpenFromFd(JNIEnv* env, jobject thiz, ji
     return reinterpret_cast<jlong>(buffer);
 }
 
+// Static close-by-handle: invoked by the Kotlin Cleaner with only the primitive handle, so the
+// cleanup never needs (and never retains) the Buffer object. Mirrors PtyProcess.nativeCloseByHandle.
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_buffer_Buffer_nativeClose(JNIEnv* env, jobject thiz) {
-    PieceTreeBuffer* buffer = getBuffer(env, thiz);
-    if (buffer) {
-        buffer->close();
-        delete buffer;
-        setBuffer(env, thiz, nullptr);
-    }
+Java_dev_jcode_core_buffer_Buffer_nativeCloseByHandle(JNIEnv* env, jclass clazz, jlong handle) {
+    if (handle == 0) return;
+    PieceTreeBuffer* buffer = reinterpret_cast<PieceTreeBuffer*>(handle);
+    buffer->close();
+    delete buffer;
 }
 
 JNIEXPORT jlong JNICALL
@@ -127,13 +115,12 @@ Java_dev_jcode_core_buffer_Buffer_nativeApplyEdits(JNIEnv* env, jobject thiz,
 
 // Snapshot JNI methods
 
+// Static decRef-by-handle for the Kotlin Cleaner (see Buffer.nativeCloseByHandle).
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_buffer_Snapshot_nativeClose(JNIEnv* env, jobject thiz) {
-    Snapshot* snapshot = getSnapshot(env, thiz);
-    if (snapshot) {
-        snapshot->decRef();
-        setSnapshot(env, thiz, nullptr);
-    }
+Java_dev_jcode_core_buffer_Snapshot_nativeCloseByHandle(JNIEnv* env, jclass clazz, jlong handle) {
+    if (handle == 0) return;
+    Snapshot* snapshot = reinterpret_cast<Snapshot*>(handle);
+    snapshot->decRef();
 }
 
 JNIEXPORT jlong JNICALL

@@ -10,6 +10,24 @@ requires:
 recipe:
   - label: Create ASP.NET Core server
     run: dotnet new web -o "{{projectDir}}/Server"
+  - label: Serve the built client from the server
+    run: |
+      cat > "{{projectDir}}/Server/Program.cs" <<'EOF'
+      var builder = WebApplication.CreateBuilder(args);
+      var app = builder.Build();
+
+      // Serve the Vite-built React client published into wwwroot.
+      app.UseDefaultFiles();
+      app.UseStaticFiles();
+
+      // Example API endpoint the client can call.
+      app.MapGet("/api/hello", () => "Hello from ASP.NET Core");
+
+      // SPA fallback: any non-file route returns index.html so client routing works.
+      app.MapFallbackToFile("index.html");
+
+      app.Run();
+      EOF
   - label: Scaffold Vite React (TypeScript) client
     workdir: "{{hostStaging}}"
     run: CI=1 npm create vite@latest client -- --template react-ts </dev/null

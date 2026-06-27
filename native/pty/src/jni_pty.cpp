@@ -16,12 +16,6 @@ static Pty* getPty(JNIEnv* env, jobject thiz) {
     return reinterpret_cast<Pty*>(env->GetLongField(thiz, fid));
 }
 
-static void setPty(JNIEnv* env, jobject thiz, Pty* pty) {
-    jclass clazz = env->GetObjectClass(thiz);
-    jfieldID fid = env->GetFieldID(clazz, "nativeHandle", "J");
-    env->SetLongField(thiz, fid, reinterpret_cast<jlong>(pty));
-}
-
 extern "C" {
 
 JNIEXPORT jlong JNICALL
@@ -68,16 +62,6 @@ Java_dev_jcode_core_term_PtyProcess_nativeCreate(JNIEnv* env, jobject thiz,
 
     LOGI("PTY created: master_fd=%d, child_pid=%d", pty->masterFd(), pty->childPid());
     return reinterpret_cast<jlong>(pty);
-}
-
-JNIEXPORT void JNICALL
-Java_dev_jcode_core_term_PtyProcess_nativeClose(JNIEnv* env, jobject thiz) {
-    Pty* pty = getPty(env, thiz);
-    if (pty) {
-        pty->close();
-        delete pty;
-        setPty(env, thiz, nullptr);
-    }
 }
 
 JNIEXPORT jint JNICALL

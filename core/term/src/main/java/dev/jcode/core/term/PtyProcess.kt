@@ -12,11 +12,17 @@ class PtyProcess private constructor(
     private var nativeHandle: Long
 ) : Closeable {
 
+    private val cleanable: Cleaner.Cleanable
+
     init {
-        if (nativeHandle != 0L) {
-            cleaner.register(this) {
-                nativeCloseByHandle(nativeHandle)
-            }
+        // Capture the handle in a local val so the cleanup action does not reference `this` (reading
+        // the mutable field would implicitly capture the instance). Store the Cleanable so close() can
+        // free immediately and deregister it — no later GC-triggered double free of a reused handle.
+        val handle = nativeHandle
+        cleanable = if (handle != 0L) {
+            cleaner.register(this) { nativeCloseByHandle(handle) }
+        } else {
+            cleaner.register(this) {}
         }
     }
 
@@ -71,13 +77,13 @@ class PtyProcess private constructor(
     @Synchronized
     override fun close() {
         if (nativeHandle != 0L) {
-            nativeClose()
             nativeHandle = 0L
+            // Runs nativeCloseByHandle(handle) exactly once and deregisters the Cleaner.
+            cleanable.clean()
         }
     }
 
     // Native methods
-    private external fun nativeClose()
     private external fun nativeRead(buffer: ByteArray, offset: Int, length: Int): Int
     private external fun nativeWrite(data: ByteArray, offset: Int, length: Int): Int
     private external fun nativeResize(cols: Int, rows: Int): Boolean

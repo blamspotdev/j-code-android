@@ -44,6 +44,7 @@ fun EditorPane(
     onTabSelected: (String) -> Unit = {},
     onTabClosed: (String) -> Unit = {},
     onOpenFile: () -> Unit = {},
+    pageContent: @Composable (EditorTab) -> Unit = {},
 ) {
     Column(modifier = modifier.clipToBounds()) {
         // Tab strip — explicit fixed height so it's never compressed
@@ -54,7 +55,7 @@ fun EditorPane(
             onOpenFile = onOpenFile,
         )
 
-        // Active editor view
+        // Active tab body: a file tab hosts the editor view; a page tab renders host content.
         val activeTab = group.activeTab
         if (activeTab != null) {
             Box(
@@ -62,10 +63,15 @@ fun EditorPane(
                     .weight(1f, fill = true)
                     .clipToBounds(),
             ) {
-                EditorViewHost(
-                    editorState = activeTab.editorState,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                val editorState = activeTab.editorState
+                if (editorState != null) {
+                    EditorViewHost(
+                        editorState = editorState,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    pageContent(activeTab)
+                }
             }
         } else {
             // Empty state

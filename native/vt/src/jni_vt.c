@@ -14,13 +14,6 @@ static VtParser* get_parser(JNIEnv* env, jobject thiz) {
     return (VtParser*)(*env)->GetLongField(env, thiz, fid);
 }
 
-// Helper to set native pointer in Java object
-static void set_parser(JNIEnv* env, jobject thiz, VtParser* parser) {
-    jclass clazz = (*env)->GetObjectClass(env, thiz);
-    jfieldID fid = (*env)->GetFieldID(env, clazz, "nativeHandle", "J");
-    (*env)->SetLongField(env, thiz, fid, (jlong)parser);
-}
-
 JNIEXPORT jlong JNICALL
 Java_dev_jcode_core_term_VtParser_nativeCreate(JNIEnv* env, jobject thiz, jint rows, jint cols) {
     VtParser* parser = vt_parser_create(rows, cols);
@@ -32,14 +25,13 @@ Java_dev_jcode_core_term_VtParser_nativeCreate(JNIEnv* env, jobject thiz, jint r
     return (jlong)parser;
 }
 
+// Static destroy-by-handle: invoked by the Kotlin Cleaner with only the primitive handle, so cleanup
+// never needs (or retains) the VtParser object. Replaces the previous instance-based nativeDestroy.
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_term_VtParser_nativeDestroy(JNIEnv* env, jobject thiz) {
-    VtParser* parser = get_parser(env, thiz);
-    if (parser) {
-        vt_parser_destroy(parser);
-        set_parser(env, thiz, NULL);
-        LOGI("VT parser destroyed");
-    }
+Java_dev_jcode_core_term_VtParser_nativeCloseByHandle(JNIEnv* env, jclass clazz, jlong handle) {
+    if (handle == 0) return;
+    vt_parser_destroy((VtParser*)handle);
+    LOGI("VT parser destroyed");
 }
 
 JNIEXPORT void JNICALL

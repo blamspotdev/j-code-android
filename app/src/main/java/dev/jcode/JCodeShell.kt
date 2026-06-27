@@ -14,12 +14,14 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -35,12 +37,10 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Article
@@ -73,9 +73,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -84,15 +84,20 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -102,6 +107,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -111,8 +117,19 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -120,10 +137,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.jcode.adaptive.JCodePosture
 import dev.jcode.adaptive.JCodeWindowInfo
 import dev.jcode.adaptive.JCodeWindowWidthClass
 import dev.jcode.adaptive.rememberJCodeWindowInfo
@@ -141,9 +156,9 @@ import dev.jcode.core.distro.SdkCatalogState
 import dev.jcode.core.term.TerminalSessionManager
 import dev.jcode.core.term.TerminalView
 import dev.jcode.design.CommandRegistry
-import dev.jcode.design.CommandSpec
 import dev.jcode.design.ThemeMode
 import dev.jcode.feature.editor.pane.EditorGroup
+import dev.jcode.feature.editor.pane.EditorPageKind
 import dev.jcode.feature.editor.pane.EditorPane
 import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.feature.explorer.ExplorerFeature
@@ -158,14 +173,18 @@ import dev.jcode.feature.settings.SettingsFeature
 import dev.jcode.fs.DEFAULT_SHARED_PROJECTS_ROOT
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
+import dev.jcode.run.ProjectRunner
 import dev.jcode.fs.Workspace
 import dev.jcode.fs.WorkspaceCrumb
 import dev.jcode.fs.WorkspaceManager
 import dev.jcode.fs.WorkspaceNodeType
 import dev.jcode.fs.rememberOpenFolderLauncher
 import java.io.File
+import kotlin.math.roundToInt
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private enum class WorkbenchTool(
     val label: String,
@@ -192,13 +211,6 @@ private enum class RightPanelTab(
     DebugConsole("Debug Console", Icons.Rounded.Radar, enabled = false),
 }
 
-private data class EditorMetrics(
-    val line: Int = 1,
-    val column: Int = 1,
-    val language: String = "Plain Text",
-    val encoding: String = "UTF-8",
-)
-
 @Composable
 fun JCodeApp(
     viewModel: MainViewModel,
@@ -221,6 +233,7 @@ fun JCodeApp(
     val sdkCatalogState by viewModel.sdkCatalogState.collectAsStateWithLifecycle()
     val autoSetupProgress by viewModel.autoSetupProgress.collectAsStateWithLifecycle(initialValue = DistroWizardProgress.Idle)
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val railToolOrder by viewModel.railToolOrder.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val openFolderLauncher = rememberOpenFolderLauncher(
         onFolderPicked = viewModel::openExternalFolder,
@@ -236,8 +249,9 @@ fun JCodeApp(
         }
     }
 
-    LaunchedEffect(selectedProject?.id, editorGroup.tabs.size) {
-        if (selectedProject != null && editorGroup.tabs.isEmpty()) {
+    LaunchedEffect(selectedProject?.id, editorGroup.tabs.count { !it.isPage }) {
+        // Page tabs (e.g. Settings) don't count as project content, so the bootstrap file still opens.
+        if (selectedProject != null && editorGroup.tabs.none { !it.isPage }) {
             viewModel.ensureProjectBootstrapTab()
         }
     }
@@ -287,6 +301,9 @@ fun JCodeApp(
         onInstallSdkCatalogEntry = viewModel::installSdkCatalogEntry,
         onVerifySdkCatalogEntry = viewModel::verifySdkCatalogEntry,
         onUninstallSdkCatalogEntry = viewModel::uninstallSdkCatalogEntry,
+        railToolOrder = railToolOrder,
+        onReorderRail = viewModel::setRailToolOrder,
+        onOpenSettingsPage = viewModel::openSettingsPage,
     )
 
     if (showNewItemDialog) {
@@ -378,6 +395,9 @@ private fun JCodeShell(
     onInstallSdkCatalogEntry: (String) -> Unit,
     onVerifySdkCatalogEntry: (String) -> Unit,
     onUninstallSdkCatalogEntry: (String) -> Unit,
+    railToolOrder: List<String>,
+    onReorderRail: (List<String>) -> Unit,
+    onOpenSettingsPage: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -399,6 +419,11 @@ private fun JCodeShell(
     val portraitRightSidebarTabs = remember { RightPanelTab.entries.toSet() }
 
     var selectedTool by rememberSaveable { mutableStateOf(WorkbenchTool.Explorer) }
+    val railTools = remember(railToolOrder) { orderedRailTools(railToolOrder) }
+    // Settings opens as an in-editor page; every other tool drives the side panel.
+    val onSelectWorkbenchTool: (WorkbenchTool) -> Unit = { tool ->
+        if (tool == WorkbenchTool.Settings) onOpenSettingsPage() else selectedTool = tool
+    }
     var leftSidebarExpanded by rememberSaveable(isLandscape, windowInfo.widthClass) {
         mutableStateOf(isLandscape && windowInfo.widthClass != JCodeWindowWidthClass.Compact)
     }
@@ -419,12 +444,14 @@ private fun JCodeShell(
     val terminalShellCommand = effectiveConfig.terminal.shellLinux?.takeIf { it.isNotBlank() } ?: "/bin/bash --login"
     val terminalReady = environmentState.prootInstalled && environmentState.distroInstalled == true
 
-    fun createTerminalSession() {
+    // Core session spawner shared by the manual "+" terminal and the Run pipeline. Returns the new
+    // session (already tracked + foregrounded) or null if it could not start (snackbar shown).
+    fun spawnTerminalSession(): dev.jcode.core.term.TerminalSessionManager.Session? {
         if (!terminalReady) {
             scope.launch {
                 snackbarHostState.showSnackbar("Finish environment setup before opening the terminal.")
             }
-            return
+            return null
         }
         // Mount the whole projects tree at /workspace so the shell can navigate the full
         // Workspace/Project hierarchy, and start in the open Project (or the open User Workspace when
@@ -463,7 +490,7 @@ private fun JCodeShell(
                 }
                 snackbarHostState.showSnackbar(message)
             }
-            return
+            return null
         }
         terminalSessionIds = terminalSessionIds + session.id
         selectedTerminalSessionId = session.id
@@ -471,11 +498,93 @@ private fun JCodeShell(
         // Hold the foreground service while this terminal is alive (keeps the process from being
         // killed/frozen in the background so the shell keeps running).
         TerminalSessionHost.onSessionStarted(appContext, session.id)
+        return session
+    }
+
+    // Manual "+" terminal: spawn a plain interactive shell (result intentionally ignored).
+    fun createTerminalSession() {
+        spawnTerminalSession()
     }
 
     fun selectTerminalSession(sessionId: String) {
         selectedTerminalSessionId = sessionId
         terminalSessionManager.switchSession(sessionId)
+    }
+
+    // Run state: the URL of the most recent run (for "Open in browser") and whether we're still
+    // waiting for its server to come up. [runSessionId] lets repeated runs reuse one terminal.
+    var runUrl by rememberSaveable { mutableStateOf<String?>(null) }
+    var runInProgress by remember { mutableStateOf(false) }
+    var runSessionId by rememberSaveable { mutableStateOf<String?>(null) }
+    var runPollJob by remember { mutableStateOf<Job?>(null) }
+
+    // Drop a terminal tab when its shell exits on its own (e.g. `exit`, or a finished one-shot command).
+    // The manager has already reaped the PTY + released the foreground hold; here we just sync the UI.
+    DisposableEffect(Unit) {
+        TerminalSessionHost.setUiExitListener { exitedId ->
+            terminalSessionIds = terminalSessionIds.filterNot { it == exitedId }
+            if (selectedTerminalSessionId == exitedId) {
+                selectedTerminalSessionId = terminalSessionIds.lastOrNull().orEmpty()
+                selectedTerminalSessionId.takeIf { it.isNotEmpty() }
+                    ?.let { terminalSessionManager.switchSession(it) }
+            }
+            if (runSessionId == exitedId) {
+                runSessionId = null
+                runInProgress = false
+            }
+        }
+        onDispose { TerminalSessionHost.setUiExitListener(null) }
+    }
+
+    // Build & Run the selected project: spawn a dedicated terminal in the right drawer, stream the
+    // compile/run output into it, then open the device browser once the server is reachable.
+    fun handleRun() {
+        val project = selectedProject
+        if (!terminalReady) {
+            scope.launch { snackbarHostState.showSnackbar("Finish environment setup before running.") }
+            return
+        }
+        if (project == null) {
+            scope.launch { snackbarHostState.showSnackbar("Open a project to build & run.") }
+            return
+        }
+        val plan = ProjectRunner.detectRunPlan(project)
+        if (plan == null) {
+            scope.launch {
+                snackbarHostState.showSnackbar("No run configuration detected for this project.")
+            }
+            return
+        }
+        rightPanelTab = RightPanelTab.Terminal
+        rightSidebarVisible = true
+        // Reuse the previous run terminal if it's still alive; otherwise spawn a fresh one. Reusing
+        // sends Ctrl-C first to stop a still-running server before rebuilding.
+        val reusableId = runSessionId
+            ?.takeIf { it in terminalSessionIds && terminalSessionManager.getSession(it) != null }
+        val sessionId: String
+        if (reusableId != null) {
+            sessionId = reusableId
+            selectTerminalSession(reusableId)
+            terminalSessionManager.sendInput(reusableId, "\u0003") // Ctrl-C: stop prior run
+        } else {
+            val session = spawnTerminalSession() ?: return
+            sessionId = session.id
+            runSessionId = session.id
+        }
+        terminalSessionManager.sendInput(sessionId, plan.command)
+        runUrl = plan.url
+        runInProgress = true
+        // Cancel any in-flight poll from a previous run so the browser only opens once.
+        runPollJob?.cancel()
+        runPollJob = scope.launch {
+            val up = ProjectRunner.awaitServer(plan.port)
+            runInProgress = false
+            if (up) {
+                ProjectRunner.openInBrowser(appContext, plan.url)
+            } else {
+                snackbarHostState.showSnackbar("Server didn't start in time; check the run terminal.")
+            }
+        }
     }
 
     fun closeTerminalSession(sessionId: String) {
@@ -583,10 +692,10 @@ private fun JCodeShell(
             action = { selectedTool = WorkbenchTool.Search },
         )
         CommandRegistry.register(
-            id = "help.about",
-            title = "Show About Placeholder",
-            group = "Help",
-            action = { selectedTool = WorkbenchTool.Settings },
+            id = "settings.openPage",
+            title = "Open Settings",
+            group = "Settings",
+            action = onOpenSettingsPage,
         )
         CommandRegistry.register(
             id = "settings.openWorkspaceYaml",
@@ -626,11 +735,7 @@ private fun JCodeShell(
                 workspace = workspace,
                 selectedProject = selectedProject,
                 editorGroup = editorGroup,
-                workspaceConfig = workspaceConfig,
-                projectConfig = projectConfig,
                 effectiveConfig = effectiveConfig,
-                workspaceConfigError = workspaceConfigError,
-                projectConfigError = projectConfigError,
                 environmentState = environmentState,
                 autoSetupProgress = autoSetupProgress,
                 sdkCatalogState = sdkCatalogState,
@@ -645,26 +750,20 @@ private fun JCodeShell(
                 onSelectProject = onSelectProject,
                 onOpenProject = onOpenProject,
                 onRenameProject = onRenameProject,
-                onSelectTool = { selectedTool = it },
+                onSelectTool = onSelectWorkbenchTool,
                 onOpenExternalFolder = { openFolderLauncher.launch(null) },
                 onOpenFile = onOpenFile,
-                onUpdateEditorFontSize = onUpdateEditorFontSize,
-                onUpdateEditorTabSize = onUpdateEditorTabSize,
-                onUpdateEditorWordWrap = onUpdateEditorWordWrap,
-                onUpdateEditorMinimap = onUpdateEditorMinimap,
-                onUpdateEditorLigatures = onUpdateEditorLigatures,
-                onUpdateExplorerViewMode = onUpdateExplorerViewMode,
-                themeMode = themeMode,
-                onUpdateThemeMode = onUpdateThemeMode,
-                onOpenWorkspaceConfig = onOpenWorkspaceConfig,
                 onOpenProjectConfig = onOpenProjectConfig,
-                onRefreshEnvironment = onRefreshEnvironment,
                 onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                 onAutoSetup = onAutoSetup,
                 onRefreshSdkCatalog = onRefreshSdkCatalog,
                 onInstallSdkCatalogEntry = onInstallSdkCatalogEntry,
                 onVerifySdkCatalogEntry = onVerifySdkCatalogEntry,
                 onUninstallSdkCatalogEntry = onUninstallSdkCatalogEntry,
+                onRun = ::handleRun,
+                runUrl = runUrl,
+                runInProgress = runInProgress,
+                onOpenRunInBrowser = { runUrl?.let { ProjectRunner.openInBrowser(appContext, it) } },
                 onSnackbar = { message ->
                     scope.launch { snackbarHostState.showSnackbar(message) }
                 },
@@ -694,6 +793,7 @@ private fun JCodeShell(
             bottomBar = {
                 WorkbenchStatusBar(
                     metrics = metrics,
+                    activeTab = activeTab,
                     selectedProject = selectedProject,
                     workspace = workspace,
                     effectiveConfig = effectiveConfig,
@@ -709,16 +809,21 @@ private fun JCodeShell(
             ) {
                 if (showPersistentRail) {
                     DockRail(
+                        tools = railTools,
                         selectedTool = selectedTool,
-                        onToolSelected = {
-                            selectedTool = it
-                            if (usesModalWorkspace) {
-                                scope.launch { compactDrawerState.open() }
+                        onToolSelected = { tool ->
+                            if (tool == WorkbenchTool.Settings) {
+                                onOpenSettingsPage()
                             } else {
-                                leftSidebarExpanded = true
+                                selectedTool = tool
+                                if (usesModalWorkspace) {
+                                    scope.launch { compactDrawerState.open() }
+                                } else {
+                                    leftSidebarExpanded = true
+                                }
                             }
                         },
-                        compact = true,
+                        onReorder = onReorderRail,
                         modifier = Modifier.fillMaxHeight(),
                     )
                 }
@@ -733,9 +838,6 @@ private fun JCodeShell(
                         selectedProject = selectedProject,
                         editorGroup = editorGroup,
                         activeTab = activeTab,
-                        metrics = metrics,
-                        effectiveConfig = effectiveConfig,
-                        isLandscape = isLandscape,
                         leftSidebarExpanded = isPersistentLeftSidebarVisible,
                         canShowRightSidebar = canShowRightSidebar,
                         rightSidebarVisible = rightSidebarVisible,
@@ -754,7 +856,7 @@ private fun JCodeShell(
                                 rightSidebarVisible = !rightSidebarVisible
                             }
                         },
-                        onToolSelected = { selectedTool = it },
+                        onRun = ::handleRun,
                         onShowTerminal = {
                             rightPanelTab = RightPanelTab.Terminal
                             rightSidebarVisible = true
@@ -769,6 +871,33 @@ private fun JCodeShell(
                                 leftSidebarExpanded = true
                             }
                         },
+                        editorPageContent = { tab ->
+                            when (tab.pageKind) {
+                                EditorPageKind.Settings -> SettingsFeature.Content(
+                                    effectiveConfig = effectiveConfig,
+                                    workspaceConfig = workspaceConfig,
+                                    projectConfig = projectConfig,
+                                    workspaceError = workspaceConfigError,
+                                    projectError = projectConfigError,
+                                    projectOverridesAvailable = selectedProject?.fsPath is FsPath.Local,
+                                    environmentState = environmentState,
+                                    onOpenWorkspaceConfig = onOpenWorkspaceConfig,
+                                    onOpenProjectConfig = onOpenProjectConfig,
+                                    onOpenEnvironmentWizard = onOpenEnvironmentWizard,
+                                    onRefreshEnvironment = onRefreshEnvironment,
+                                    onUpdateFontSize = onUpdateEditorFontSize,
+                                    onUpdateTabSize = onUpdateEditorTabSize,
+                                    onUpdateWordWrap = onUpdateEditorWordWrap,
+                                    onUpdateMinimap = onUpdateEditorMinimap,
+                                    onUpdateLigatures = onUpdateEditorLigatures,
+                                    onUpdateExplorerViewMode = onUpdateExplorerViewMode,
+                                    themeMode = themeMode,
+                                    onUpdateThemeMode = onUpdateThemeMode,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                                EditorPageKind.None -> Unit
+                            }
+                        },
                     )
 
                     if (isPersistentLeftSidebarVisible) {
@@ -777,11 +906,7 @@ private fun JCodeShell(
                             workspace = workspace,
                             selectedProject = selectedProject,
                             editorGroup = editorGroup,
-                            workspaceConfig = workspaceConfig,
-                            projectConfig = projectConfig,
                             effectiveConfig = effectiveConfig,
-                            workspaceConfigError = workspaceConfigError,
-                            projectConfigError = projectConfigError,
                             environmentState = environmentState,
                             autoSetupProgress = autoSetupProgress,
                             sdkCatalogState = sdkCatalogState,
@@ -800,26 +925,20 @@ private fun JCodeShell(
                             onSelectProject = onSelectProject,
                             onOpenProject = onOpenProject,
                             onRenameProject = onRenameProject,
-                            onSelectTool = { selectedTool = it },
+                            onSelectTool = onSelectWorkbenchTool,
                             onOpenExternalFolder = { openFolderLauncher.launch(null) },
                             onOpenFile = onOpenFile,
-                            onUpdateEditorFontSize = onUpdateEditorFontSize,
-                            onUpdateEditorTabSize = onUpdateEditorTabSize,
-                            onUpdateEditorWordWrap = onUpdateEditorWordWrap,
-                            onUpdateEditorMinimap = onUpdateEditorMinimap,
-                            onUpdateEditorLigatures = onUpdateEditorLigatures,
-                            onUpdateExplorerViewMode = onUpdateExplorerViewMode,
-                            themeMode = themeMode,
-                            onUpdateThemeMode = onUpdateThemeMode,
-                            onOpenWorkspaceConfig = onOpenWorkspaceConfig,
                             onOpenProjectConfig = onOpenProjectConfig,
-                            onRefreshEnvironment = onRefreshEnvironment,
                             onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                             onAutoSetup = onAutoSetup,
                             onRefreshSdkCatalog = onRefreshSdkCatalog,
                             onInstallSdkCatalogEntry = onInstallSdkCatalogEntry,
                             onVerifySdkCatalogEntry = onVerifySdkCatalogEntry,
                             onUninstallSdkCatalogEntry = onUninstallSdkCatalogEntry,
+                            onRun = ::handleRun,
+                            runUrl = runUrl,
+                            runInProgress = runInProgress,
+                            onOpenRunInBrowser = { runUrl?.let { ProjectRunner.openInBrowser(appContext, it) } },
                             onSnackbar = { message ->
                                 scope.launch { snackbarHostState.showSnackbar(message) }
                             },
@@ -908,71 +1027,192 @@ private fun JCodeShell(
     }
 }
 
+/**
+ * Merge the persisted rail order (tool names) with the full tool set: saved tools keep their order,
+ * any tool missing from the saved order (e.g. a newly added one) is appended, unknown names dropped.
+ */
+private fun orderedRailTools(order: List<String>): List<WorkbenchTool> {
+    val byName = WorkbenchTool.entries.associateBy { it.name }
+    val result = LinkedHashSet<WorkbenchTool>()
+    order.forEach { name -> byName[name]?.let(result::add) }
+    result.addAll(WorkbenchTool.entries)
+    return result.toList()
+}
+
+/**
+ * Minified left rail: icon-only buttons (titles shown as long-press tooltips), vertically
+ * scrollable, with long-press-and-drag reordering that persists via [onReorder].
+ */
 @Composable
 private fun DockRail(
+    tools: List<WorkbenchTool>,
     selectedTool: WorkbenchTool,
     onToolSelected: (WorkbenchTool) -> Unit,
-    compact: Boolean,
+    onReorder: (List<String>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val spacing = 8.dp
+    val spacingPx = with(LocalDensity.current) { spacing.toPx() }
+    val scrollState = rememberScrollState()
+
+    // Local working order so a drag reorders instantly; it re-seeds when the persisted order changes.
+    var items by remember(tools) { mutableStateOf(tools) }
+    var draggingTool by remember { mutableStateOf<WorkbenchTool?>(null) }
+    // Tooltip shows on the picked-up icon only until the drag actually moves (keeps the title popup
+    // from lingering at the now-stale anchor while the icon follows the finger).
+    var tooltipTool by remember { mutableStateOf<WorkbenchTool?>(null) }
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    var itemHeightPx by remember { mutableFloatStateOf(0f) }
+    // The long-lived pointerInput captures these once per gesture start; keep them fresh so a tap
+    // after a config change (e.g. rotation flipping modal vs. persistent layout) routes correctly.
+    val currentOnToolSelected by rememberUpdatedState(onToolSelected)
+    val currentOnReorder by rememberUpdatedState(onReorder)
+
+    fun moveTool(from: Int, to: Int) {
+        if (to < 0 || to >= items.size || from == to) return
+        items = items.toMutableList().also { it.add(to, it.removeAt(from)) }
+        currentOnReorder(items.map { it.name })
+    }
+
     Surface(
-        modifier = modifier.width(if (compact) 60.dp else 68.dp),
+        modifier = modifier.width(60.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxHeight()
+                .verticalScroll(scrollState)
                 .padding(vertical = 10.dp, horizontal = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(spacing),
         ) {
-            WorkbenchTool.entries.forEach { tool ->
-                RailButton(
-                    tool = tool,
-                    selected = selectedTool == tool,
-                    onClick = { onToolSelected(tool) },
-                )
+            items.forEachIndexed { index, tool ->
+                key(tool) {
+                    val isDragging = draggingTool == tool
+                    RailButton(
+                        tool = tool,
+                        selected = selectedTool == tool,
+                        dragging = isDragging,
+                        showTooltip = tooltipTool == tool,
+                        onActivate = { currentOnToolSelected(tool) },
+                        onMoveUp = if (index > 0) ({ moveTool(index, index - 1) }) else null,
+                        onMoveDown = if (index < items.size - 1) ({ moveTool(index, index + 1) }) else null,
+                        modifier = Modifier
+                            .onSizeChanged { size -> if (size.height > 0) itemHeightPx = size.height.toFloat() }
+                            .zIndex(if (isDragging) 1f else 0f)
+                            .graphicsLayer { translationY = if (isDragging) dragOffsetY else 0f }
+                            .pointerInput(tools) {
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    var up: PointerInputChange? = null
+                                    val timedOut = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                                        up = waitForUpOrCancellation()
+                                    } == null
+                                    if (!timedOut) {
+                                        // Released/cancelled before the long-press fired: a plain tap selects
+                                        // (ignored while another icon is mid-drag).
+                                        if (up != null && draggingTool == null) currentOnToolSelected(tool)
+                                        return@awaitEachGesture
+                                    }
+                                    // Only one icon may own the drag at a time (guards multi-touch).
+                                    if (draggingTool != null) return@awaitEachGesture
+                                    // Long press: pick the icon up and let it follow the finger.
+                                    draggingTool = tool
+                                    tooltipTool = tool
+                                    dragOffsetY = 0f
+                                    val startItems = items
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id }
+                                        if (change == null || !change.pressed) {
+                                            change?.consume()
+                                            break
+                                        }
+                                        val dy = change.positionChange().y
+                                        if (dy != 0f) {
+                                            change.consume()
+                                            tooltipTool = null
+                                            dragOffsetY += dy
+                                            val pitch = itemHeightPx + spacingPx
+                                            if (pitch > 0f) {
+                                                val curIndex = items.indexOf(tool)
+                                                if (curIndex >= 0) {
+                                                    val target = (curIndex + (dragOffsetY / pitch).roundToInt())
+                                                        .coerceIn(0, items.size - 1)
+                                                    if (target != curIndex) {
+                                                        items = items.toMutableList().also { list ->
+                                                            list.add(target, list.removeAt(curIndex))
+                                                        }
+                                                        dragOffsetY -= (target - curIndex) * pitch
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    draggingTool = null
+                                    tooltipTool = null
+                                    dragOffsetY = 0f
+                                    // Persist only when the order actually changed (avoids a disk write
+                                    // on an accidental long-press that never moved).
+                                    if (items != startItems) currentOnReorder(items.map { it.name })
+                                }
+                            },
+                    )
+                }
             }
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            Text(
-                text = "API 36",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RailButton(
     tool: WorkbenchTool,
     selected: Boolean,
-    onClick: () -> Unit,
+    dragging: Boolean,
+    showTooltip: Boolean,
+    onActivate: () -> Unit,
+    onMoveUp: (() -> Unit)?,
+    onMoveDown: (() -> Unit)?,
+    modifier: Modifier = Modifier,
 ) {
-    val container = if (selected) {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
-    } else {
-        Color.Transparent
+    val tooltipState = rememberTooltipState(isPersistent = true)
+    LaunchedEffect(showTooltip) {
+        if (showTooltip) tooltipState.show() else tooltipState.dismiss()
     }
-    val content = if (selected) {
+    val container = when {
+        dragging -> MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
+        selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+        else -> Color.Transparent
+    }
+    val content = if (selected || dragging) {
         MaterialTheme.colorScheme.primary
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
 
-    Column(
-        modifier = Modifier
-            .width(48.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 4.dp, horizontal = 2.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+    // Keep the rail operable for accessibility services: the pointer gesture handles sighted touch,
+    // while these semantics expose activation and keyboard/TalkBack reordering.
+    val moveActions = remember(onMoveUp, onMoveDown) {
+        buildList {
+            onMoveUp?.let { add(CustomAccessibilityAction("Move up") { it(); true }) }
+            onMoveDown?.let { add(CustomAccessibilityAction("Move down") { it(); true }) }
+        }
+    }
+
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(tool.label) } },
+        state = tooltipState,
+        enableUserInput = false,
+        modifier = modifier.semantics(mergeDescendants = true) {
+            role = Role.Button
+            onClick(label = "Open ${tool.label}") { onActivate(); true }
+            if (moveActions.isNotEmpty()) customActions = moveActions
+        },
     ) {
         Surface(
-            modifier = Modifier.size(34.dp),
+            modifier = Modifier.size(40.dp),
             shape = CircleShape,
             color = container,
         ) {
@@ -984,12 +1224,6 @@ private fun RailButton(
                 )
             }
         }
-        Text(
-            text = tool.compactLabel,
-            style = MaterialTheme.typography.bodySmall,
-            color = content,
-            maxLines = 1,
-        )
     }
 }
 
@@ -1076,11 +1310,7 @@ private fun WorkspacePanel(
     workspace: Workspace?,
     selectedProject: Project?,
     editorGroup: EditorGroup,
-    workspaceConfig: WorkspaceConfig?,
-    projectConfig: ProjectConfig?,
     effectiveConfig: EffectiveConfig,
-    workspaceConfigError: String?,
-    projectConfigError: String?,
     environmentState: DistroEnvironmentState,
     autoSetupProgress: DistroWizardProgress,
     sdkCatalogState: SdkCatalogState,
@@ -1097,23 +1327,17 @@ private fun WorkspacePanel(
     onSelectTool: (WorkbenchTool) -> Unit,
     onOpenExternalFolder: () -> Unit,
     onOpenFile: (dev.jcode.fs.FsNode) -> Unit,
-    onUpdateEditorFontSize: (ConfigScope, Float) -> Unit,
-    onUpdateEditorTabSize: (ConfigScope, Int) -> Unit,
-    onUpdateEditorWordWrap: (ConfigScope, Boolean) -> Unit,
-    onUpdateEditorMinimap: (ConfigScope, Boolean) -> Unit,
-    onUpdateEditorLigatures: (ConfigScope, Boolean) -> Unit,
-    onUpdateExplorerViewMode: (ConfigScope, String) -> Unit,
-    themeMode: ThemeMode,
-    onUpdateThemeMode: (ThemeMode) -> Unit,
-    onOpenWorkspaceConfig: () -> Unit,
     onOpenProjectConfig: () -> Unit,
-    onRefreshEnvironment: () -> Unit,
     onOpenEnvironmentWizard: () -> Unit,
     onAutoSetup: () -> Unit,
     onRefreshSdkCatalog: () -> Unit,
     onInstallSdkCatalogEntry: (String) -> Unit,
     onVerifySdkCatalogEntry: (String) -> Unit,
     onUninstallSdkCatalogEntry: (String) -> Unit,
+    onRun: () -> Unit,
+    runUrl: String?,
+    runInProgress: Boolean,
+    onOpenRunInBrowser: () -> Unit,
     onSnackbar: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1214,14 +1438,13 @@ private fun WorkspacePanel(
                         ),
                     )
 
-                    WorkbenchTool.RunDebug -> ToolPanelPlaceholder(
-                        title = "Run & Debug",
-                        icon = Icons.Rounded.PlayArrow,
-                        lines = listOf(
-                            "Show recent tasks, launch targets, and the active distro session.",
-                            "Useful additions: one-tap Gradle assemble, npm dev, cargo test, and adb install.",
-                            "Desktop mode should expose a pinned debug controls row above the bottom terminal.",
-                        ),
+                    WorkbenchTool.RunDebug -> RunDebugPanel(
+                        selectedProject = selectedProject,
+                        runUrl = runUrl,
+                        runInProgress = runInProgress,
+                        onRun = onRun,
+                        onOpenInBrowser = onOpenRunInBrowser,
+                        modifier = Modifier.fillMaxSize(),
                     )
 
                     WorkbenchTool.Extensions -> {
@@ -1246,28 +1469,9 @@ private fun WorkspacePanel(
                         modifier = Modifier.fillMaxSize(),
                     )
 
-                    WorkbenchTool.Settings -> SettingsFeature.Content(
-                        effectiveConfig = effectiveConfig,
-                        workspaceConfig = workspaceConfig,
-                        projectConfig = projectConfig,
-                        workspaceError = workspaceConfigError,
-                        projectError = projectConfigError,
-                        projectOverridesAvailable = selectedProject?.fsPath is FsPath.Local,
-                        environmentState = environmentState,
-                        onOpenWorkspaceConfig = onOpenWorkspaceConfig,
-                        onOpenProjectConfig = onOpenProjectConfig,
-                        onOpenEnvironmentWizard = onOpenEnvironmentWizard,
-                        onRefreshEnvironment = onRefreshEnvironment,
-                        onUpdateFontSize = onUpdateEditorFontSize,
-                        onUpdateTabSize = onUpdateEditorTabSize,
-                        onUpdateWordWrap = onUpdateEditorWordWrap,
-                        onUpdateMinimap = onUpdateEditorMinimap,
-                        onUpdateLigatures = onUpdateEditorLigatures,
-                        onUpdateExplorerViewMode = onUpdateExplorerViewMode,
-                        themeMode = themeMode,
-                        onUpdateThemeMode = onUpdateThemeMode,
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    // Settings opens as an in-editor page (see EditorWorkspace); it is never the
+                    // selected side-panel tool, so this branch renders nothing.
+                    WorkbenchTool.Settings -> Unit
                 }
             }
         }
@@ -1677,19 +1881,17 @@ private fun EditorWorkspace(
     selectedProject: Project?,
     editorGroup: EditorGroup,
     activeTab: EditorTab?,
-    metrics: EditorMetrics,
-    effectiveConfig: EffectiveConfig,
-    isLandscape: Boolean,
     leftSidebarExpanded: Boolean,
     canShowRightSidebar: Boolean,
     rightSidebarVisible: Boolean,
     onToggleLeftSidebar: () -> Unit,
     onToggleRightSidebar: () -> Unit,
-    onToolSelected: (WorkbenchTool) -> Unit,
+    onRun: () -> Unit,
     onShowTerminal: () -> Unit,
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
     onOpenFileRequest: () -> Unit,
+    editorPageContent: @Composable (EditorTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -1701,16 +1903,13 @@ private fun EditorWorkspace(
                 workspace = workspace,
                 selectedProject = selectedProject,
                 activeTab = activeTab,
-                metrics = metrics,
-                effectiveConfig = effectiveConfig,
-                isLandscape = isLandscape,
                 leftSidebarExpanded = leftSidebarExpanded,
                 canShowRightSidebar = canShowRightSidebar,
                 rightSidebarVisible = rightSidebarVisible,
                 onToggleLeftSidebar = onToggleLeftSidebar,
                 onToggleRightSidebar = onToggleRightSidebar,
                 onShowTerminal = onShowTerminal,
-                onToolSelected = onToolSelected,
+                onRun = onRun,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
 
@@ -1730,6 +1929,7 @@ private fun EditorWorkspace(
                     onTabSelected = onSelectEditorTab,
                     onTabClosed = onCloseEditorTab,
                     onOpenFile = onOpenFileRequest,
+                    pageContent = editorPageContent,
                 )
             }
         }
@@ -1741,146 +1941,72 @@ private fun WorkbenchTopBar(
     workspace: Workspace?,
     selectedProject: Project?,
     activeTab: EditorTab?,
-    metrics: EditorMetrics,
-    effectiveConfig: EffectiveConfig,
-    isLandscape: Boolean,
     leftSidebarExpanded: Boolean,
     canShowRightSidebar: Boolean,
     rightSidebarVisible: Boolean,
     onToggleLeftSidebar: () -> Unit,
     onToggleRightSidebar: () -> Unit,
     onShowTerminal: () -> Unit,
-    onToolSelected: (WorkbenchTool) -> Unit,
+    onRun: () -> Unit,
 ) {
-    val compactCursorLabel = "L${metrics.line}:C${metrics.column}"
-
+    // Single row: navigation + title + quick actions. Per-file metrics (cursor, language, distro)
+    // live in the bottom status bar, so this header no longer carries a redundant second chip row.
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceVariant,
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                WorkbenchIconActionButton(
-                    icon = Icons.AutoMirrored.Rounded.MenuOpen,
-                    contentDescription = if (isLandscape && leftSidebarExpanded) {
-                        "Hide left sidebar"
-                    } else {
-                        "Show left sidebar"
-                    },
-                    onClick = onToggleLeftSidebar,
-                    active = isLandscape && leftSidebarExpanded,
-                )
-
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(1.dp),
-                ) {
-                    Text(
-                        text = activeTab?.title ?: selectedProject?.name ?: "J Code",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = listOfNotNull(
-                            workspace?.name,
-                            selectedProject?.name,
-                            activeTab?.title,
-                        ).joinToString(" / ").ifBlank { "Editor workspace" },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-
-                WorkbenchIconActionButton(
-                    icon = Icons.Rounded.Terminal,
-                    contentDescription = "Terminal",
-                    onClick = onShowTerminal,
-                )
-                WorkbenchIconActionButton(
-                    icon = Icons.Rounded.PlayArrow,
-                    contentDescription = "Run",
-                    onClick = { onToolSelected(WorkbenchTool.RunDebug) },
-                )
-                WorkbenchIconActionButton(
-                    icon = Icons.AutoMirrored.Rounded.Article,
-                    contentDescription = "Toggle right sidebar",
-                    onClick = onToggleRightSidebar,
-                    active = canShowRightSidebar && rightSidebarVisible,
-                )
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                MetricChip(
-                    icon = Icons.Rounded.Code,
-                    text = activeTab?.languageDescriptor?.name ?: metrics.language,
-                )
-                MetricChip(
-                    icon = Icons.Rounded.DatasetLinked,
-                    text = selectedProject?.distroBindTarget ?: "/workspace/default",
-                )
-                MetricChip(
-                    icon = Icons.Rounded.Search,
-                    text = "${effectiveConfig.distro.id} / ${effectiveConfig.editor.fontSize.toInt()}sp / tab ${effectiveConfig.editor.tabSize}",
-                )
-                if (!isLandscape) {
-                    MetricChip(
-                        icon = Icons.AutoMirrored.Rounded.Article,
-                        text = compactCursorLabel,
-                    )
-                } else {
-                    MetricChip(
-                        icon = Icons.AutoMirrored.Rounded.Article,
-                        text = "Line ${metrics.line}, Col ${metrics.column}",
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun MetricChip(
-    icon: ImageVector,
-    text: String,
-) {
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(11.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            WorkbenchIconActionButton(
+                icon = Icons.AutoMirrored.Rounded.MenuOpen,
+                contentDescription = if (leftSidebarExpanded) "Hide left sidebar" else "Show left sidebar",
+                onClick = onToggleLeftSidebar,
+                active = leftSidebarExpanded,
             )
-            Text(
-                text = text,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(1.dp),
+            ) {
+                Text(
+                    text = activeTab?.title ?: selectedProject?.name ?: "J Code",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = listOfNotNull(
+                        workspace?.name,
+                        selectedProject?.name,
+                        activeTab?.title,
+                    ).joinToString(" / ").ifBlank { "Editor workspace" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            WorkbenchIconActionButton(
+                icon = Icons.Rounded.Terminal,
+                contentDescription = "Terminal",
+                onClick = onShowTerminal,
+            )
+            WorkbenchIconActionButton(
+                icon = Icons.Rounded.PlayArrow,
+                contentDescription = "Run",
+                onClick = onRun,
+            )
+            WorkbenchIconActionButton(
+                icon = Icons.AutoMirrored.Rounded.Article,
+                contentDescription = "Toggle right sidebar",
+                onClick = onToggleRightSidebar,
+                active = canShowRightSidebar && rightSidebarVisible,
             )
         }
     }
@@ -2452,77 +2578,6 @@ private fun InspectorSidebar(
     }
 }
 
-@Composable
-private fun WorkbenchStatusBar(
-    metrics: EditorMetrics,
-    selectedProject: Project?,
-    workspace: Workspace?,
-    effectiveConfig: EffectiveConfig,
-    windowInfo: JCodeWindowInfo,
-) {
-    Surface(
-        modifier = Modifier.navigationBarsPadding(),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(20.dp)
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            StatusCell("branch: --")
-            StatusCell("problems: 0")
-            StatusCell("cursor: ${metrics.line}:${metrics.column}")
-            StatusCell("lang: ${metrics.language}")
-            StatusCell("enc: ${metrics.encoding}")
-            StatusCell("distro: ${if (selectedProject != null) effectiveConfig.distro.id else "--"}")
-            Spacer(modifier = Modifier.weight(1f))
-            StatusCell(workspace?.name ?: "Workspace")
-            StatusCell("posture: ${windowInfo.posture.shortLabel()}")
-        }
-    }
-}
-
-@Composable
-private fun RowScope.StatusCell(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodySmall,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
-}
-
-@Composable
-private fun rememberEditorMetrics(activeTab: EditorTab?): EditorMetrics {
-    if (activeTab == null) {
-        return EditorMetrics()
-    }
-
-    val carets by activeTab.editorState.carets.collectAsStateWithLifecycle()
-    val snapshot by activeTab.editorState.snapshot.collectAsStateWithLifecycle()
-    val caret = carets.firstOrNull()
-    val offset = caret?.head ?: 0
-    val (line, column) = remember(snapshot, offset) {
-        snapshot.offsetToLineColumn(offset)
-    }
-
-    return EditorMetrics(
-        line = line + 1,
-        column = column + 1,
-        language = activeTab.languageDescriptor?.name ?: "Plain Text",
-        encoding = "UTF-8",
-    )
-}
-
-private fun JCodePosture.shortLabel(): String = when (this) {
-    JCodePosture.Flat -> "flat"
-    JCodePosture.TableTop -> "tabletop"
-    JCodePosture.Book -> "book"
-}
-
 private fun deviceModeLabel(windowInfo: JCodeWindowInfo): String = buildString {
     append(windowInfo.widthClass.name.lowercase())
     append(" / ")
@@ -2530,104 +2585,6 @@ private fun deviceModeLabel(windowInfo: JCodeWindowInfo): String = buildString {
     if (windowInfo.hasPhysicalKeyboard) {
         append(" / keyboard")
     }
-}
-
-@Composable
-@OptIn(ExperimentalMaterial3Api::class)
-private fun CommandPalette(
-    visible: Boolean,
-    compact: Boolean,
-    onDismiss: () -> Unit,
-) {
-    if (!visible) return
-
-    var query by rememberSaveable { mutableStateOf("") }
-    val commands = remember(query) {
-        CommandRegistry.all().filter { command ->
-            command.isEnabled() && fuzzyMatches(query, "${command.group} ${command.title}")
-        }
-    }
-    val focusRequester = remember { FocusRequester() }
-
-    val content: @Composable () -> Unit = {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            TextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(focusRequester),
-                placeholder = { Text("Type a command") },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = {
-                    commands.firstOrNull()?.action?.invoke()
-                    onDismiss()
-                }),
-                singleLine = true,
-            )
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(commands, key = CommandSpec::id) { command ->
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(18.dp))
-                            .clickable {
-                                command.action()
-                                onDismiss()
-                            },
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f),
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Text(command.title, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                text = command.group,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (compact) {
-        ModalBottomSheet(onDismissRequest = onDismiss) {
-            content()
-        }
-    } else {
-        Dialog(onDismissRequest = onDismiss) {
-            Surface(
-                modifier = Modifier.widthIn(max = 560.dp),
-                shape = RoundedCornerShape(28.dp),
-                color = MaterialTheme.colorScheme.surface,
-            ) {
-                content()
-            }
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
-    }
-}
-
-private fun fuzzyMatches(query: String, candidate: String): Boolean {
-    if (query.isBlank()) return true
-    val needle = query.lowercase()
-    val haystack = candidate.lowercase()
-    var index = 0
-    needle.forEach { ch ->
-        index = haystack.indexOf(ch, startIndex = index)
-        if (index < 0) return false
-        index += 1
-    }
-    return true
 }
 
 private fun explorerViewModeOf(value: String): ExplorerViewMode =

@@ -60,6 +60,7 @@ dependencies {
     implementation(libs.lifecycle.runtime.ktx)
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.activity.compose)
+    implementation(libs.datastore.preferences)
 
     // Core modules
     implementation(project(":core:design"))

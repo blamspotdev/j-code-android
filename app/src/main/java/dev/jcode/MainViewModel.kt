@@ -2,6 +2,10 @@ package dev.jcode
 
 import android.app.Application
 import android.content.Context
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStoreFile
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.jcode.backend.BackendSessionKind
@@ -20,6 +24,7 @@ import dev.jcode.core.resource.ResourceManager
 import dev.jcode.core.resource.ResourceManagerLocator
 import dev.jcode.design.ThemeMode
 import dev.jcode.feature.editor.pane.EditorGroup
+import dev.jcode.feature.editor.pane.EditorPageKind
 import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.feature.marketplace.MarketplaceServiceLocator
 import dev.jcode.feature.marketplace.ProjectTemplate
@@ -83,6 +88,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _editorGroup = MutableStateFlow(EditorGroup.create())
     val editorGroup: StateFlow<EditorGroup> = _editorGroup.asStateFlow()
+
+    // App-level (non-workspace) UI preferences. Durable across restarts, mirroring how the fs and
+    // distro modules persist their own preference stores.
+    private val uiPreferences = PreferenceDataStoreFactory.create {
+        appContext.preferencesDataStoreFile("ui-preferences.preferences_pb")
+    }
+    private val railToolOrderKey = stringPreferencesKey("rail_tool_order")
+
+    /** Persisted left-rail icon order as tool names; empty until the user reorders. */
+    val railToolOrder: StateFlow<List<String>> = uiPreferences.data
+        .map { prefs -> prefs[railToolOrderKey]?.split(',')?.filter { it.isNotBlank() }.orEmpty() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun setRailToolOrder(order: List<String>) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[railToolOrderKey] = order.joinToString(",") }
+        }
+    }
 
     val workspaceConfig = configService.workspaceConfig
     val projectConfig = configService.projectConfig
@@ -302,8 +325,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun clearEditorTabs() {
-        _editorGroup.value.tabs.forEach { it.editorState?.close() }
-        _editorGroup.value = EditorGroup.create()
+        val tabs = _editorGroup.value.tabs
+        tabs.filterNot { it.isPage }.forEach { it.editorState?.close() }
+        // Page tabs (e.g. Settings) are app-level, not project content: keep them across project switches.
+        _editorGroup.value = tabs.filter { it.isPage }
+            .fold(EditorGroup.create()) { group, tab -> group.withTabAdded(tab) }
     }
 
     /** The Default Workspace holds a single open project; unregister whatever it currently has. */
@@ -504,7 +530,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var lastBootstrappedProjectId: Long? = null
 
     fun ensureProjectBootstrapTab() {
-        if (_editorGroup.value.tabs.isNotEmpty()) return
+        // Ignore page tabs (e.g. Settings): only an open file tab should suppress the bootstrap file.
+        if (_editorGroup.value.tabs.any { !it.isPage }) return
         val project = selectedProject.value ?: return
         // Bootstrap a project's file at most once: after the tabs are cleared (e.g. Close Project),
         // the selection may briefly still point at it — don't re-open what the user just closed.
@@ -523,6 +550,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 is FsPath.Saf -> openSafFile(node)
             }
         }
+    }
+
+    /** Open (or focus) the in-editor Settings page as an editor tab. */
+    fun openSettingsPage() {
+        val existing = _editorGroup.value.tabs.firstOrNull { it.pageKind == EditorPageKind.Settings }
+        if (existing != null) {
+            _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
+            return
+        }
+        val tab = EditorTab.page(SETTINGS_TAB_ID, "Settings", EditorPageKind.Settings)
+        _editorGroup.value = _editorGroup.value.withTabAdded(tab)
     }
 
     fun selectEditorTab(tabId: String) {
@@ -667,7 +705,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun applyConfigToTab(tab: EditorTab, config: EffectiveConfig) {
-        tab.editorState.updateRenderConfig { current ->
+        val editorState = tab.editorState ?: return
+        editorState.updateRenderConfig { current ->
             current.copy(
                 fontSizeSp = config.editor.fontSize,
                 tabWidth = config.editor.tabSize,
@@ -697,5 +736,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun stepNeedsForegroundService(stepId: WizardStepId): Boolean {
         return stepId == WizardStepId.DistroInstalled ||
             stepId == WizardStepId.ToolchainBootstrapped
+    }
+
+    private companion object {
+        const val SETTINGS_TAB_ID = "jcode://settings"
     }
 }

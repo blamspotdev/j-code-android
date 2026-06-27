@@ -16,7 +16,7 @@ class Buffer internal constructor(
     useNative: Boolean = nativeAvailable,
 ) : AutoCloseable {
 
-    private val cleanerHandle: Cleaner.Cleanable
+    private val cleanable: Cleaner.Cleanable
     private var closed = false
     private val useNativeImpl: Boolean = useNative
 
@@ -28,14 +28,16 @@ class Buffer internal constructor(
         if (useNativeImpl) {
             nativeHandle = nativeOpenFromBytes(content)
         }
-        val ref = CleanerHandle(this)
-        cleanerHandle = cleaner.register(this, ref)
+        // The cleanup action must capture ONLY the primitive handle, never `this` — capturing the
+        // tracked object keeps it strongly reachable and permanently defeats the Cleaner.
+        val handle = nativeHandle
+        cleanable = cleaner.register(this) { if (handle != 0L) nativeCloseByHandle(handle) }
     }
 
     /** Total byte length of the buffer (UTF-8). */
     val byteLength: Int
         get() = if (useNativeImpl && nativeHandle != 0L) {
-            snapshot().byteLength
+            snapshot().use { it.byteLength }
         } else {
             synchronized(this) { content.size }
         }
@@ -43,7 +45,7 @@ class Buffer internal constructor(
     /** Number of lines (at least 1 for empty buffer). */
     val lineCount: Int
         get() = if (useNativeImpl && nativeHandle != 0L) {
-            snapshot().lineCount
+            snapshot().use { it.lineCount }
         } else {
             synchronized(this) { countLines(content) + 1 }
         }
@@ -116,7 +118,7 @@ class Buffer internal constructor(
     fun readRange(start: Int, end: Int): ByteArray {
         checkNotClosed()
         return if (useNativeImpl && nativeHandle != 0L) {
-            snapshot().readRange(start, end)
+            snapshot().use { it.readRange(start, end) }
         } else {
             synchronized(this) {
                 content.copyOfRange(
@@ -137,7 +139,7 @@ class Buffer internal constructor(
     fun offsetToLineColumn(offset: Int): Pair<Int, Int> {
         checkNotClosed()
         return if (useNativeImpl && nativeHandle != 0L) {
-            snapshot().offsetToLineColumn(offset)
+            snapshot().use { it.offsetToLineColumn(offset) }
         } else {
             synchronized(this) {
                 offsetToLineColumnLocked(content, offset)
@@ -149,7 +151,7 @@ class Buffer internal constructor(
     fun lineColumnToOffset(line: Int, column: Int): Int {
         checkNotClosed()
         return if (useNativeImpl && nativeHandle != 0L) {
-            snapshot().lineColumnToOffset(line, column)
+            snapshot().use { it.lineColumnToOffset(line, column) }
         } else {
             synchronized(this) {
                 lineColumnToOffsetLocked(content, line, column)
@@ -161,7 +163,7 @@ class Buffer internal constructor(
     fun lineAt(line: Int): Pair<Int, Int> {
         checkNotClosed()
         return if (useNativeImpl && nativeHandle != 0L) {
-            snapshot().lineAt(line)
+            snapshot().use { it.lineAt(line) }
         } else {
             synchronized(this) {
                 lineRangeLocked(content, line)
@@ -172,11 +174,10 @@ class Buffer internal constructor(
     override fun close() {
         if (!closed) {
             closed = true
-            if (useNativeImpl && nativeHandle != 0L) {
-                nativeClose()
-                nativeHandle = 0L
-            }
-            // Cleaner will handle the actual cleanup; we just mark closed.
+            // clean() runs the (capture-free) cleanup action exactly once and deregisters it from the
+            // Cleaner, so the native handle is freed deterministically here and never double-freed.
+            cleanable.clean()
+            nativeHandle = 0L
         }
     }
 
@@ -184,25 +185,17 @@ class Buffer internal constructor(
         check(!closed) { "Buffer is closed" }
     }
 
-    private class CleanerHandle(private val buffer: Buffer) : Runnable {
-        override fun run() {
-            if (buffer.useNativeImpl && buffer.nativeHandle != 0L) {
-                buffer.nativeClose()
-                buffer.nativeHandle = 0L
-            }
-            buffer.closed = true
-        }
-    }
-
     // Native methods
     private external fun nativeOpenFromBytes(data: ByteArray): Long
     private external fun nativeOpenFromFd(fd: Int): Long
-    private external fun nativeClose()
     private external fun nativeSnapshot(): Long
     private external fun nativeApplyEdits(ops: Array<NativeEditOp>): Long
 
     companion object {
         private val cleaner = Cleaner.create()
+
+        @JvmStatic
+        private external fun nativeCloseByHandle(handle: Long)
 
         // Check if native library is available
         @Volatile
@@ -298,13 +291,14 @@ class Snapshot internal constructor(
     private var nativeHandle: Long = 0L,
 ) : AutoCloseable {
 
-    private val cleanerHandle: Cleaner.Cleanable
+    private val cleanable: Cleaner.Cleanable
     private var closed = false
     private val useNativeImpl: Boolean = nativeHandle != 0L
 
     init {
-        val ref = CleanerHandle(this)
-        cleanerHandle = cleaner.register(this, ref)
+        // Capture only the primitive handle so the Cleaner can actually fire (see Buffer.init).
+        val handle = nativeHandle
+        cleanable = cleaner.register(this) { if (handle != 0L) nativeCloseByHandle(handle) }
     }
 
     val byteLength: Int 
@@ -379,24 +373,12 @@ class Snapshot internal constructor(
     override fun close() {
         if (!closed) {
             closed = true
-            if (useNativeImpl) {
-                nativeClose()
-            }
-            // Cleaner will handle the actual cleanup; we just mark closed.
-        }
-    }
-
-    private class CleanerHandle(private val snapshot: Snapshot) : Runnable {
-        override fun run() {
-            if (snapshot.useNativeImpl) {
-                snapshot.nativeClose()
-            }
-            snapshot.closed = true
+            cleanable.clean()
+            nativeHandle = 0L
         }
     }
 
     // Native methods
-    private external fun nativeClose()
     private external fun nativeByteLength(): Long
     private external fun nativeLineCount(): Long
     private external fun nativeReadRange(start: Long, end: Long, out: ByteArray): Int
@@ -408,6 +390,9 @@ class Snapshot internal constructor(
 
     companion object {
         private val cleaner = Cleaner.create()
+
+        @JvmStatic
+        private external fun nativeCloseByHandle(handle: Long)
     }
 }
 

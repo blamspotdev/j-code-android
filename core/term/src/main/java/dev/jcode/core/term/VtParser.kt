@@ -1,5 +1,6 @@
 package dev.jcode.core.term
 
+import java.lang.ref.Cleaner
 import java.nio.ByteBuffer
 
 /**
@@ -7,14 +8,20 @@ import java.nio.ByteBuffer
  * Wraps the native C implementation for high-performance terminal emulation.
  */
 class VtParser(rows: Int, cols: Int) : AutoCloseable {
-    
+
     @Volatile
     private var nativeHandle: Long = nativeCreate(rows, cols)
-    
+
+    private val cleanable: Cleaner.Cleanable
+
     init {
         if (nativeHandle == 0L) {
             throw IllegalStateException("Failed to create VT parser")
         }
+        // Capture-free Cleaner safety net (no finalizer — banned by repo rules). Captures only the
+        // primitive handle so the parser can be reclaimed if a caller forgets close().
+        val handle = nativeHandle
+        cleanable = cleaner.register(this) { if (handle != 0L) nativeCloseByHandle(handle) }
     }
     
     /**
@@ -205,20 +212,21 @@ class VtParser(rows: Int, cols: Int) : AutoCloseable {
             return nativeNeedsFullRefresh()
         }
     
+    /** Whether the native parser is still alive (false after [close]). Never throws — safe to poll
+     *  from a renderer before reading cells, to avoid racing a close. */
+    val isOpen: Boolean
+        get() = nativeHandle != 0L
+
     override fun close() {
         if (nativeHandle != 0L) {
-            nativeDestroy()
             nativeHandle = 0L
+            // Runs nativeCloseByHandle(handle) exactly once and deregisters the Cleaner.
+            cleanable.clean()
         }
     }
-    
-    protected fun finalize() {
-        close()
-    }
-    
+
     // Native methods
     private external fun nativeCreate(rows: Int, cols: Int): Long
-    private external fun nativeDestroy()
     private external fun nativeFeed(data: ByteArray)
     private external fun nativeResize(rows: Int, cols: Int)
     private external fun nativeReset()
@@ -240,10 +248,15 @@ class VtParser(rows: Int, cols: Int) : AutoCloseable {
     private external fun nativeNeedsFullRefresh(): Boolean
     
     companion object {
+        private val cleaner = Cleaner.create()
+
         init {
             System.loadLibrary("jcode_vt")
         }
-        
+
+        @JvmStatic
+        private external fun nativeCloseByHandle(handle: Long)
+
         // Cell attribute flags
         const val ATTR_BOLD = 1 shl 0
         const val ATTR_DIM = 1 shl 1

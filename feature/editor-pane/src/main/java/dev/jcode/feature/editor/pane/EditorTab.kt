@@ -6,17 +6,35 @@ import dev.jcode.core.editor.LanguageDescriptor
 import java.io.File
 
 /**
- * Represents a single open file tab in the editor.
+ * Identifies a non-file "page" tab (e.g. the in-editor Settings page). [None] is an ordinary
+ * file-backed tab.
+ */
+enum class EditorPageKind { None, Settings }
+
+/**
+ * Represents a single open tab in the editor. A file tab carries an [editorState]; a page tab
+ * (see [pageKind]) has a null [editorState] and renders host-provided Compose content instead.
  */
 data class EditorTab(
     val id: String,
     val title: String,
     val filePath: File,
-    val editorState: EditorState,
+    val editorState: EditorState?,
     val isDirty: Boolean = false,
     val languageDescriptor: LanguageDescriptor? = null,
+    val pageKind: EditorPageKind = EditorPageKind.None,
 ) {
+    val isPage: Boolean get() = pageKind != EditorPageKind.None
+
     companion object {
+        fun page(id: String, title: String, kind: EditorPageKind): EditorTab = EditorTab(
+            id = id,
+            title = title,
+            filePath = File(""),
+            editorState = null,
+            pageKind = kind,
+        )
+
         fun create(file: File, id: String = file.path): EditorTab {
             val buffer = Buffer.fromText(
                 if (file.exists()) file.readText() else ""
@@ -138,7 +156,7 @@ class EditorGroupManager {
         }
         // Close editor states for removed group
         val removed = _groups.find { it.id == groupId }
-        removed?.tabs?.forEach { it.editorState.close() }
+        removed?.tabs?.forEach { it.editorState?.close() }
     }
 
     fun setActiveGroup(groupId: String) {
@@ -171,7 +189,7 @@ class EditorGroupManager {
 
     fun closeAll() {
         _groups.forEach { group ->
-            group.tabs.forEach { it.editorState.close() }
+            group.tabs.forEach { it.editorState?.close() }
         }
         _groups = listOf(EditorGroup.create())
         _activeGroupId = _groups.first().id

@@ -153,7 +153,10 @@ int Pty::read(uint8_t* buffer, int maxLen) {
         return -1;  // Error
     }
     if (n == 0) {
-        return 0;  // EOF
+        // ::read() == 0 on the master fd means EOF: the child closed the slave / exited. This is
+        // distinct from "no data yet" (EAGAIN), which is handled above and returns 0. Returning -1
+        // here lets the Kotlin reader loop break and reap the session instead of spinning forever.
+        return -1;  // EOF
     }
     return static_cast<int>(n);
 }

@@ -1,6 +1,8 @@
 package dev.jcode
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import dev.jcode.backend.BackendSessionHandle
 import dev.jcode.backend.BackendSessionKind
 import dev.jcode.backend.SessionRegistry
@@ -28,6 +30,17 @@ object TerminalSessionHost {
     private var manager: TerminalSessionManager? = null
     private val fgsHandles = HashMap<String, BackendSessionHandle>()
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Optional UI hook so the active screen can drop a tab when its shell exits on its own. Set via a
+    // DisposableEffect and cleared on dispose, so it never outlives the composition that owns it.
+    @Volatile
+    private var uiExitListener: ((String) -> Unit)? = null
+
+    fun setUiExitListener(listener: ((String) -> Unit)?) {
+        uiExitListener = listener
+    }
+
     fun manager(context: Context): TerminalSessionManager {
         manager?.let { return it }
         return synchronized(this) {
@@ -38,7 +51,16 @@ object TerminalSessionHost {
                     RootfsDownloader(tmpDir = File(context.applicationContext.filesDir, "tmp")),
                 ),
                 maxSessions = 4,
-            ).also { manager = it }
+            ).also { mgr ->
+                manager = mgr
+                // When a shell exits on its own (e.g. a finished build, or `exit`), the manager reaps
+                // the session off-thread: release its foreground-service hold, then notify the UI (on
+                // the main thread) so it can drop the tab and free the parser.
+                mgr.onSessionExit = { sessionId ->
+                    onSessionStopped(sessionId)
+                    uiExitListener?.let { listener -> mainHandler.post { listener(sessionId) } }
+                }
+            }
         }
     }
 

@@ -55,10 +55,17 @@ class TerminalSessionManager(
     // Process-lifetime scope that keeps every session's PTY drained and parsed regardless of the UI.
     private val readerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    // Guards _sessions: the reader/reaper runs on the IO scope while create/close run on the UI thread.
+    private val sessionsLock = Any()
     private val _sessions = mutableMapOf<String, Session>()
     val sessions: Map<String, Session>
-        get() = _sessions.toMap()
+        get() = synchronized(sessionsLock) { _sessions.toMap() }
 
+    /** Invoked (off the main thread) when a session's shell exits on its own and it is auto-reaped,
+     *  so the host can release the session's foreground-service hold and the UI can drop its tab. */
+    var onSessionExit: ((String) -> Unit)? = null
+
+    @Volatile
     var activeSessionId: String? = null
         private set
 
@@ -68,7 +75,7 @@ class TerminalSessionManager(
         }
 
     val sessionCount: Int
-        get() = _sessions.size
+        get() = synchronized(sessionsLock) { _sessions.size }
 
     /**
      * Create a new terminal session spawning the configured shell via proot as the distro user.
@@ -82,7 +89,7 @@ class TerminalSessionManager(
         shellCommand: String = "/bin/bash --login",
         rootfsArch: Arch = Arch.ARM64,
     ): Session? {
-        if (_sessions.size >= maxSessions) return null
+        if (sessionCount >= maxSessions) return null
         if (!prootManager.isProotInstalled) return null
 
         val rootfsPath = rootfsManager.getRootfsPath(distroId)
@@ -112,7 +119,7 @@ class TerminalSessionManager(
         }
 
         val sessionId = "terminal-${UUID.randomUUID().toString().take(8)}"
-        val label = "bash ${_sessions.size + 1}"
+        val label = "bash ${sessionCount + 1}"
 
         val home = if (user == "root") "/root" else "/home/$user"
         val envVars = mapOf(
@@ -150,7 +157,7 @@ class TerminalSessionManager(
                 rows = 24,
             )
             val session = Session(sessionId, label, pty)
-            _sessions[sessionId] = session
+            synchronized(sessionsLock) { _sessions[sessionId] = session }
             activeSessionId = sessionId
             startReader(session)
             session
@@ -166,6 +173,7 @@ class TerminalSessionManager(
         session.readerJob?.cancel()
         session.readerJob = readerScope.launch {
             val buffer = ByteArray(8192)
+            var exited = false
             while (isActive) {
                 val n = try {
                     session.pty.read(buffer)
@@ -177,24 +185,43 @@ class TerminalSessionManager(
                         synchronized(session) { session.parser.feed(buffer.copyOf(n)) }
                         session.onUpdate?.invoke()
                     }
-                    n < 0 -> break          // EOF: the shell/process exited
-                    else -> delay(8)        // no data available yet
+                    n < 0 -> { exited = true; break }   // EOF: the shell/process exited
+                    else -> delay(8)                    // no data available yet
                 }
             }
+            // Reap a session that ended on its own (EOF) so its PTY fd + parser are freed and the
+            // foreground hold released. A manual closeSession() cancels this job before EOF, so the
+            // CancellationException unwinds past here and reapExitedSession only runs for real exits.
+            if (exited) reapExitedSession(session.id)
         }
+    }
+
+    /** Tear down a session whose shell exited by itself (see [startReader]). Idempotent. */
+    private fun reapExitedSession(id: String) {
+        val session = synchronized(sessionsLock) { _sessions.remove(id) } ?: return
+        session.onUpdate = null
+        // Close only the PTY (already at EOF). Do NOT close the VtParser here: a bound TerminalView may
+        // still be drawing it on the main thread, and closing native parser state from this IO thread
+        // would race onDraw. The parser is freed on the main thread by closeSession(), or by its
+        // Cleaner once the view unbinds and the Session becomes unreachable.
+        runCatching { session.pty.close() }
+        if (activeSessionId == id) {
+            activeSessionId = synchronized(sessionsLock) { _sessions.keys.firstOrNull() }
+        }
+        onSessionExit?.invoke(id)
     }
 
     /**
      * Close a terminal session, killing the PTY process and its reader.
      */
     fun closeSession(id: String) {
-        val session = _sessions.remove(id)
+        val session = synchronized(sessionsLock) { _sessions.remove(id) }
         session?.readerJob?.cancel()
         session?.onUpdate = null
         session?.parser?.close()
         session?.pty?.close()
         if (activeSessionId == id) {
-            activeSessionId = _sessions.keys.firstOrNull()
+            activeSessionId = synchronized(sessionsLock) { _sessions.keys.firstOrNull() }
         }
     }
 
@@ -202,7 +229,7 @@ class TerminalSessionManager(
      * Switch the active session.
      */
     fun switchSession(id: String) {
-        if (_sessions.containsKey(id)) {
+        if (synchronized(sessionsLock) { _sessions.containsKey(id) }) {
             activeSessionId = id
         }
     }
@@ -211,44 +238,48 @@ class TerminalSessionManager(
      * Resize a terminal session.
      */
     fun resizeSession(id: String, cols: Int, rows: Int) {
-        _sessions[id]?.resize(cols, rows)
+        getSession(id)?.resize(cols, rows)
     }
 
     /**
      * Send input to a specific session.
      */
     fun sendInput(id: String, text: String) {
-        _sessions[id]?.pty?.write(text)
+        getSession(id)?.pty?.write(text)
     }
 
     /**
      * Send input bytes to a specific session.
      */
     fun sendInput(id: String, data: ByteArray) {
-        _sessions[id]?.pty?.write(data)
+        getSession(id)?.pty?.write(data)
     }
 
     /**
      * Get a session by ID.
      */
-    fun getSession(id: String): Session? = _sessions[id]
+    fun getSession(id: String): Session? = synchronized(sessionsLock) { _sessions[id] }
 
     /**
      * Get the active session.
      */
-    fun getActiveSession(): Session? = activeSessionId?.let { _sessions[it] }
+    fun getActiveSession(): Session? = activeSessionId?.let { getSession(it) }
 
     /**
      * Close all sessions.
      */
     fun closeAll() {
-        _sessions.values.forEach {
+        val all = synchronized(sessionsLock) {
+            val copy = _sessions.values.toList()
+            _sessions.clear()
+            copy
+        }
+        all.forEach {
             it.readerJob?.cancel()
             it.onUpdate = null
             it.parser.close()
             it.pty.close()
         }
-        _sessions.clear()
         activeSessionId = null
     }
 }
