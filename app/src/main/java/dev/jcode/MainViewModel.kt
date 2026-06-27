@@ -223,6 +223,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val formatterKey = stringPreferencesKey("formatter_id")
+
+    /** App-wide formatter selection; "builtin" is the built-in formatter. Formatter extensions
+     *  (type: formatter) appear as options once installed. */
+    val formatterId: StateFlow<String> = uiPreferences.data
+        .map { prefs -> prefs[formatterKey]?.takeIf { it.isNotBlank() } ?: "builtin" }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "builtin")
+
+    fun setFormatter(id: String) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[formatterKey] = id }
+        }
+    }
+
     val workspaceConfig = configService.workspaceConfig
     val projectConfig = configService.projectConfig
     val workspaceConfigError = configService.workspaceError

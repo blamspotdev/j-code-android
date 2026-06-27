@@ -248,6 +248,7 @@ fun JCodeApp(
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val themeBundleId by viewModel.themeBundleId.collectAsStateWithLifecycle()
     val iconBundleId by viewModel.iconBundleId.collectAsStateWithLifecycle()
+    val formatterId by viewModel.formatterId.collectAsStateWithLifecycle()
     val railToolOrder by viewModel.railToolOrder.collectAsStateWithLifecycle()
     val terminalDoubleTapToFocus by viewModel.terminalDoubleTapToFocus.collectAsStateWithLifecycle()
     val tapContext = LocalContext.current
@@ -325,6 +326,8 @@ fun JCodeApp(
         onUpdateThemeBundle = viewModel::setThemeBundle,
         iconBundleId = iconBundleId,
         onUpdateIconBundle = viewModel::setIconBundle,
+        formatterId = formatterId,
+        onSelectFormatter = viewModel::setFormatter,
         installedExtensions = installedExtensions,
         marketplaceEntries = marketplaceEntries,
         marketplaceBusy = marketplaceBusy,
@@ -438,6 +441,8 @@ private fun JCodeShell(
     onRefreshMarketplace: () -> Unit,
     onInstallExtension: (MarketplaceEntry) -> Unit,
     onUninstallExtension: (String) -> Unit,
+    formatterId: String,
+    onSelectFormatter: (String) -> Unit,
     onOpenWorkspaceConfig: () -> Unit,
     onOpenProjectConfig: () -> Unit,
     onRefreshEnvironment: () -> Unit,
@@ -1028,6 +1033,12 @@ private fun JCodeShell(
                                     onUpdateThemeBundle = onUpdateThemeBundle,
                                     iconBundleId = iconBundleId,
                                     onUpdateIconBundle = onUpdateIconBundle,
+                                    formatterId = formatterId,
+                                    formatterOptions = listOf("builtin" to "Built-in") +
+                                        installedExtensions
+                                            .filter { it.type == ExtensionType.Formatter }
+                                            .map { it.id to it.name },
+                                    onSelectFormatter = onSelectFormatter,
                                     terminalDoubleTapToFocus = terminalDoubleTapToFocus,
                                     onUpdateTerminalDoubleTapToFocus = onUpdateTerminalDoubleTapToFocus,
                                     modifier = Modifier.fillMaxSize(),

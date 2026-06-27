@@ -82,6 +82,9 @@ object SettingsFeature {
         onUpdateThemeBundle: (String) -> Unit,
         iconBundleId: String,
         onUpdateIconBundle: (String) -> Unit,
+        formatterId: String,
+        formatterOptions: List<Pair<String, String>>,
+        onSelectFormatter: (String) -> Unit,
         terminalDoubleTapToFocus: Boolean,
         onUpdateTerminalDoubleTapToFocus: (Boolean) -> Unit,
         modifier: Modifier = Modifier,
@@ -386,6 +389,22 @@ object SettingsFeature {
                             }
                         }
                     }
+                }
+            }
+
+            SettingsCard(
+                title = "Formatter",
+                description = "Which formatter the editor uses. Built-in is rule-based; formatter extensions appear here once installed.",
+                keywords = "format prettier indent on-save whitespace",
+            ) {
+                formatterOptions.forEach { (id, label) ->
+                    BundleRow(
+                        name = label,
+                        description = if (id == "builtin") "Built-in rule-based formatter" else "Formatter extension",
+                        selected = formatterId == id,
+                        swatch = emptyList(),
+                        onClick = { onSelectFormatter(id) },
+                    )
                 }
             }
 
