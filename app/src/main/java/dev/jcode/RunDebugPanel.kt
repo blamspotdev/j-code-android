@@ -12,6 +12,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -36,6 +38,7 @@ internal fun RunDebugPanel(
     runUrl: String?,
     runInProgress: Boolean,
     onRun: () -> Unit,
+    onStop: () -> Unit,
     onOpenInBrowser: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -85,22 +88,51 @@ internal fun RunDebugPanel(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                FilledTonalButton(
-                    onClick = onRun,
-                    enabled = !runInProgress,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.PlayArrow,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(if (runInProgress) "Building…" else "Build & Run")
+                val isActive = runInProgress || runUrl != null
+                if (isActive) {
+                    // A run is in flight or its server is up: offer Stop (Ctrl-C the run terminal) and
+                    // Re-run side by side.
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(
+                            onClick = onStop,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                            ),
+                        ) {
+                            Icon(Icons.Rounded.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Stop")
+                        }
+                        FilledTonalButton(
+                            onClick = onRun,
+                            enabled = !runInProgress,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (runInProgress) "Building…" else "Re-run")
+                        }
+                    }
+                } else {
+                    FilledTonalButton(
+                        onClick = onRun,
+                        enabled = !runInProgress,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Build & Run")
+                    }
                 }
                 if (runInProgress) {
                     Text(
-                        text = "Compiling in the run terminal — the browser opens automatically once the server is up.",
+                        text = "Building… the browser opens when the server is up.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

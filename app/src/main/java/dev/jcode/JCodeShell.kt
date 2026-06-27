@@ -535,6 +535,7 @@ private fun JCodeShell(
             if (runSessionId == exitedId) {
                 runSessionId = null
                 runInProgress = false
+                runUrl = null
             }
         }
         onDispose { TerminalSessionHost.setUiExitListener(null) }
@@ -589,6 +590,20 @@ private fun JCodeShell(
                 snackbarHostState.showSnackbar("Server didn't start in time; check the run terminal.")
             }
         }
+    }
+
+    // Stop the current run: Ctrl-C the run terminal (graceful server/build shutdown) and reset run
+    // state. The terminal session is kept so its output stays visible and a re-run can reuse it.
+    fun handleStopRun() {
+        runPollJob?.cancel()
+        runSessionId
+            ?.takeIf { it in terminalSessionIds && terminalSessionManager.getSession(it) != null }
+            ?.let { id ->
+                selectTerminalSession(id)
+                terminalSessionManager.sendInput(id, byteArrayOf(0x03)) // Ctrl-C / SIGINT
+            }
+        runInProgress = false
+        runUrl = null
     }
 
     fun closeTerminalSession(sessionId: String) {
@@ -765,6 +780,7 @@ private fun JCodeShell(
                 onVerifySdkCatalogEntry = onVerifySdkCatalogEntry,
                 onUninstallSdkCatalogEntry = onUninstallSdkCatalogEntry,
                 onRun = ::handleRun,
+                onStopRun = ::handleStopRun,
                 runUrl = runUrl,
                 runInProgress = runInProgress,
                 onOpenRunInBrowser = { runUrl?.let { ProjectRunner.openInBrowser(appContext, it) } },
@@ -940,6 +956,7 @@ private fun JCodeShell(
                             onVerifySdkCatalogEntry = onVerifySdkCatalogEntry,
                             onUninstallSdkCatalogEntry = onUninstallSdkCatalogEntry,
                             onRun = ::handleRun,
+                            onStopRun = ::handleStopRun,
                             runUrl = runUrl,
                             runInProgress = runInProgress,
                             onOpenRunInBrowser = { runUrl?.let { ProjectRunner.openInBrowser(appContext, it) } },
@@ -1340,6 +1357,7 @@ private fun WorkspacePanel(
     onVerifySdkCatalogEntry: (String) -> Unit,
     onUninstallSdkCatalogEntry: (String) -> Unit,
     onRun: () -> Unit,
+    onStopRun: () -> Unit,
     runUrl: String?,
     runInProgress: Boolean,
     onOpenRunInBrowser: () -> Unit,
@@ -1448,6 +1466,7 @@ private fun WorkspacePanel(
                         runUrl = runUrl,
                         runInProgress = runInProgress,
                         onRun = onRun,
+                        onStop = onStopRun,
                         onOpenInBrowser = onOpenRunInBrowser,
                         modifier = Modifier.fillMaxSize(),
                     )
