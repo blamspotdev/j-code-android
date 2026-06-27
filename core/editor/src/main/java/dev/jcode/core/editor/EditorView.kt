@@ -39,6 +39,9 @@ class EditorView @JvmOverloads constructor(
 
     private var typeface: Typeface = Typeface.MONOSPACE
 
+    // sp→px factor; RenderConfig.fontSizeSp is in sp but Paint.textSize / layout math need px.
+    private val density: Float get() = resources.displayMetrics.density
+
     init {
         isFocusable = true
         isFocusableInTouchMode = true
@@ -53,7 +56,7 @@ class EditorView @JvmOverloads constructor(
         observationScope?.cancel()
         this.editorState = editorState
         val resourceManager = runCatching { ResourceManagerLocator.resourceManager(context) }.getOrNull()
-        this.renderer = Renderer(typeface, resourceManager)
+        this.renderer = Renderer(typeface, density, resourceManager)
         val scope = MainScope()
         observationScope = scope
 
@@ -112,7 +115,7 @@ class EditorView @JvmOverloads constructor(
             val state = editorState ?: return false
             val snapshot = state.snapshot.value
             val config = state.renderConfig.value
-            val lineHeightPx = (config.fontSizeSp * config.lineHeightMultiplier).toInt().coerceAtLeast(1)
+            val lineHeightPx = (config.fontSizeSp * density * config.lineHeightMultiplier).toInt().coerceAtLeast(1)
             val gutterWidth = computeGutterWidth(snapshot, config)
 
             val lineIndex = state.viewport.value.visibleLineTop +
@@ -125,7 +128,7 @@ class EditorView @JvmOverloads constructor(
                 var col = 0
                 var measured = 0f
                 val paint = android.text.TextPaint().apply {
-                    textSize = config.fontSizeSp
+                    textSize = config.fontSizeSp * density
                     typeface = this@EditorView.typeface
                 }
                 for (i in lineText.indices) {
@@ -188,7 +191,7 @@ class EditorView @JvmOverloads constructor(
         val digits = lineCount.toString().length.coerceAtLeast(3)
         val sample = "9".repeat(digits)
         val paint = android.text.TextPaint().apply {
-            textSize = config.fontSizeSp
+            textSize = config.fontSizeSp * density
             typeface = this@EditorView.typeface
         }
         return (paint.measureText(sample) + 24).toInt()

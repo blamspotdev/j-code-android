@@ -36,6 +36,9 @@ private data class ShapedLine(
  */
 class Renderer(
     private val typeface: Typeface,
+    // Display density (px per dp). fontSizeSp (sp) must be multiplied by this to get the px that
+    // Paint.textSize expects; without it, text renders ~density× too small on high-DPI screens.
+    private val density: Float = 1f,
     resourceManager: ResourceManager? = null,
 ) {
     private val lineShapeCache = LruManagedCache<LineShapeKey, ShapedLine>(
@@ -66,17 +69,18 @@ class Renderer(
     }
 
     fun draw(canvas: Canvas, snapshot: Snapshot, viewport: Viewport, config: RenderConfig, carets: List<Caret>, decorations: DecorationSet = DecorationSet.EMPTY, theme: EditorTheme = EditorTheme.DARK) {
-        // Configure paint for current config
-        textPaint.textSize = config.fontSizeSp
+        // Configure paint for current config. fontSizeSp is in sp; Paint.textSize is in px, so convert
+        // via the display density (a missing conversion renders text ~density× too small).
+        val fontSizePx = config.fontSizeSp * density
+        textPaint.textSize = fontSizePx
         textPaint.color = theme.foreground.toInt()
-        lineNumberPaint.textSize = config.fontSizeSp * 0.85f
+        lineNumberPaint.textSize = fontSizePx * 0.85f
         lineNumberPaint.color = theme.lineNumber.toInt()
         selectionPaint.color = theme.selection.toInt()
         cursorPaint.color = theme.cursor.toInt()
         gutterBgPaint.color = theme.gutterBackground.toInt()
         gutterLinePaint.color = theme.gutterBorder.toInt()
-        lineNumberPaint.textSize = config.fontSizeSp * 0.85f
-        val lineHeightPx = (config.fontSizeSp * config.lineHeightMultiplier).toInt().coerceAtLeast(1)
+        val lineHeightPx = (fontSizePx * config.lineHeightMultiplier).toInt().coerceAtLeast(1)
 
         val visibleTop = viewport.visibleLineTop
         val visibleBottom = snapshot.lineCount.coerceAtMost(viewport.visibleLineBottom + 1)
