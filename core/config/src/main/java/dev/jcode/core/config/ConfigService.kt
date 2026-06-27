@@ -23,7 +23,12 @@ import org.snakeyaml.engine.v2.api.LoadSettings
 import org.snakeyaml.engine.v2.common.FlowStyle
 
 const val WORKSPACE_CONFIG_FILE_NAME = ".jcode-workspace.yaml"
-const val PROJECT_CONFIG_RELATIVE_PATH = ".jcode/project.yaml"
+
+/**
+ * Returns the relative path to the project config file for a given folder name.
+ * Format: `.jcode/{folder_name}.yaml`
+ */
+fun projectConfigRelativePath(folderName: String): String = ".jcode/$folderName.yaml"
 
 /**
  * YAML-backed config service with live file watching for workspace and project config files.
@@ -75,7 +80,7 @@ class ConfigService {
         projectWatcher?.cancel()
 
         workspaceConfigFile = workspaceRoot?.let { File(it, WORKSPACE_CONFIG_FILE_NAME) }
-        projectConfigFile = projectRoot?.let { File(it, PROJECT_CONFIG_RELATIVE_PATH) }
+        projectConfigFile = projectRoot?.let { File(it, projectConfigRelativePath(it.name)) }
 
         reloadWorkspaceConfig()
         reloadProjectConfig()
@@ -99,7 +104,9 @@ class ConfigService {
                         val seed = LinkedHashMap<String, Any?>()
                         seed.putAll(projectDocument)
                         if (!seed.containsKey("name")) {
-                            seed["name"] = file.parentFile?.parentFile?.name ?: "Project"
+                            // Derive folder name from the config file path: .jcode/{folder_name}.yaml
+                            val folderName = file.nameWithoutExtension
+                            seed["name"] = folderName
                         }
                         serializeToYaml(seed)
                     }
@@ -123,6 +130,40 @@ class ConfigService {
             ConfigScope.Project -> {
                 val current = _projectConfig.value ?: defaultProjectConfig()
                 saveProjectConfig(current.copy(editor = normalizeEditorConfig(update(current.editor ?: EditorConfig()))))
+            }
+        }
+    }
+
+    suspend fun updateThemeConfig(
+        scope: ConfigScope,
+        update: (ThemeConfig) -> ThemeConfig,
+    ) {
+        when (scope) {
+            ConfigScope.Workspace -> {
+                val current = _workspaceConfig.value ?: defaultWorkspaceConfig()
+                saveWorkspaceConfig(current.copy(theme = update(current.theme)))
+            }
+
+            ConfigScope.Project -> {
+                val current = _projectConfig.value ?: defaultProjectConfig()
+                saveProjectConfig(current.copy(theme = update(current.theme ?: ThemeConfig())))
+            }
+        }
+    }
+
+    suspend fun updateExplorerConfig(
+        scope: ConfigScope,
+        update: (ExplorerConfig) -> ExplorerConfig,
+    ) {
+        when (scope) {
+            ConfigScope.Workspace -> {
+                val current = _workspaceConfig.value ?: defaultWorkspaceConfig()
+                saveWorkspaceConfig(current.copy(explorer = update(current.explorer)))
+            }
+
+            ConfigScope.Project -> {
+                val current = _projectConfig.value ?: defaultProjectConfig()
+                saveProjectConfig(current.copy(explorer = update(current.explorer ?: ExplorerConfig())))
             }
         }
     }
@@ -226,6 +267,7 @@ class ConfigService {
             config = WorkspaceConfig(
                 editor = parseEditorConfig(document.map("editor")),
                 files = parseFilesConfig(document.map("files")),
+                explorer = parseExplorerConfig(document.map("explorer")),
                 search = parseSearchConfig(document.map("search")),
                 git = parseGitConfig(document.map("git")),
                 terminal = parseTerminalConfig(document.map("terminal")),
@@ -242,8 +284,12 @@ class ConfigService {
         val document = loadDocument(yaml)
         return ParsedConfig(
             config = ProjectConfig(
+                name = document.string("name"),
+                type = document.string("type"),
+                template = document.string("template"),
                 editor = parseEditorConfig(document.map("editor")).nullIfEmpty(),
                 files = parseFilesConfig(document.map("files")).nullIfEmpty(),
+                explorer = parseExplorerConfig(document.map("explorer")).nullIfEmpty(),
                 search = parseSearchConfig(document.map("search")).nullIfEmpty(),
                 git = parseGitConfig(document.map("git")).nullIfEmpty(),
                 terminal = parseTerminalConfig(document.map("terminal")).nullIfEmpty(),
@@ -283,6 +329,10 @@ class ConfigService {
     private fun parseFilesConfig(map: Map<String, Any?>): FilesConfig = FilesConfig(
         exclude = map.stringList("exclude"),
         watcherExclude = map.stringList("watcherExclude"),
+    )
+
+    private fun parseExplorerConfig(map: Map<String, Any?>): ExplorerConfig = ExplorerConfig(
+        viewMode = map.string("viewMode"),
     )
 
     private fun parseSearchConfig(map: Map<String, Any?>): SearchConfig = SearchConfig(
@@ -334,6 +384,7 @@ class ConfigService {
         root.putAll(workspaceDocument)
         root.mergeSection("editor", config.editor.toYamlMap())
         root.mergeSection("files", config.files.toYamlMap())
+        root.mergeSection("explorer", config.explorer.toYamlMap())
         root.mergeSection("search", config.search.toYamlMap())
         root.mergeSection("git", config.git.toYamlMap())
         root.mergeSection("terminal", config.terminal.toYamlMap())
@@ -347,8 +398,12 @@ class ConfigService {
     private fun mergeProjectDocument(config: ProjectConfig): Map<String, Any?> {
         val root = LinkedHashMap<String, Any?>()
         root.putAll(projectDocument)
+        config.name?.let { root["name"] = it }
+        config.type?.let { root["type"] = it }
+        config.template?.let { root["template"] = it }
         root.mergeSection("editor", config.editor?.toYamlMap().orEmpty())
         root.mergeSection("files", config.files?.toYamlMap().orEmpty())
+        root.mergeSection("explorer", config.explorer?.toYamlMap().orEmpty())
         root.mergeSection("search", config.search?.toYamlMap().orEmpty())
         root.mergeSection("git", config.git?.toYamlMap().orEmpty())
         root.mergeSection("terminal", config.terminal?.toYamlMap().orEmpty())
@@ -400,6 +455,12 @@ class ConfigService {
             watcherExclude = prjFiles?.watcherExclude ?: wsFiles?.watcherExclude ?: defaults.files.watcherExclude,
         )
 
+        val wsExplorer = workspace?.explorer
+        val prjExplorer = project?.explorer
+        val explorer = EffectiveExplorerConfig(
+            viewMode = prjExplorer?.viewMode ?: wsExplorer?.viewMode ?: defaults.explorer.viewMode ?: "Tree",
+        )
+
         val wsSearch = workspace?.search
         val prjSearch = project?.search
         val search = EffectiveSearchConfig(
@@ -446,6 +507,7 @@ class ConfigService {
         return EffectiveConfig(
             editor = editor,
             files = files,
+            explorer = explorer,
             search = search,
             git = git,
             terminal = terminal,
@@ -465,7 +527,7 @@ class ConfigService {
         val targetName = file.name
         return scope.launch {
             callbackFlow {
-                val observer = object : FileObserver(parent.absolutePath, CREATE or DELETE or MOVED_TO or MOVED_FROM or CLOSE_WRITE) {
+                val observer = object : FileObserver(parent, CREATE or DELETE or MOVED_TO or MOVED_FROM or CLOSE_WRITE) {
                     override fun onEvent(event: Int, path: String?) {
                         if (path == targetName) {
                             trySend(Unit)
@@ -567,6 +629,10 @@ private fun FilesConfig.nullIfEmpty(): FilesConfig? {
     return if (exclude.isEmpty() && watcherExclude.isEmpty()) null else this
 }
 
+private fun ExplorerConfig.nullIfEmpty(): ExplorerConfig? {
+    return if (viewMode == null) null else this
+}
+
 private fun SearchConfig.nullIfEmpty(): SearchConfig? {
     return if (exclude.isEmpty()) null else this
 }
@@ -605,6 +671,10 @@ private fun EditorConfig.toYamlMap(): Map<String, Any?> = linkedMapOf<String, An
 private fun FilesConfig.toYamlMap(): Map<String, Any?> = linkedMapOf<String, Any?>().apply {
     if (exclude.isNotEmpty()) this["exclude"] = exclude
     if (watcherExclude.isNotEmpty()) this["watcherExclude"] = watcherExclude
+}
+
+private fun ExplorerConfig.toYamlMap(): Map<String, Any?> = linkedMapOf<String, Any?>().apply {
+    viewMode?.let { this["viewMode"] = it }
 }
 
 private fun SearchConfig.toYamlMap(): Map<String, Any?> = linkedMapOf<String, Any?>().apply {

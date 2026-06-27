@@ -10,7 +10,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        minSdk = 33
+        minSdk = 28
     }
 
     compileOptions {
@@ -26,6 +26,8 @@ android {
 dependencies {
     implementation(libs.coroutines.android)
     implementation(libs.datastore.preferences)
+    implementation(libs.snakeyaml.engine)
+    implementation(libs.xz)
     implementation(project(":core:config"))
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)

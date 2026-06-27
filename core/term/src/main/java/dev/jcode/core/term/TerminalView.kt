@@ -1,0 +1,753 @@
+package dev.jcode.core.term
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.RectF
+import android.graphics.Typeface
+import android.os.Handler
+import android.os.Looper
+import android.util.AttributeSet
+import android.view.GestureDetector
+import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.View
+import android.view.ViewTreeObserver
+import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import kotlinx.coroutines.*
+import kotlin.math.max
+import kotlin.math.min
+
+/**
+ * Terminal view with full VT100/xterm emulation support.
+ * Uses native VT parser for high-performance terminal rendering.
+ */
+class TerminalView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = 0
+) : View(context, attrs, defStyleAttr) {
+
+    // The session this view renders. The session owns the PTY, the VT parser, and a background reader;
+    // this view is a pure renderer + input surface bound to it. It does NOT own/close the parser.
+    private var boundSession: TerminalSessionManager.Session? = null
+    private var pty: PtyProcess? = null
+    private var vtParser: VtParser? = null
+
+    // Terminal dimensions
+    private var cols = 80
+    private var rows = 24
+
+    // Cell dimensions (calculated from font metrics)
+    private var cellWidth = 0f
+    private var cellHeight = 0f
+
+    // Selection state
+    private var isSelecting = false
+    private var selectionStartRow = 0
+    private var selectionStartCol = 0
+    private var selectionEndRow = 0
+    private var selectionEndCol = 0
+
+    // Scrollback view state
+    private var scrollOffset = 0        // lines scrolled up from the live bottom (0 = follow output)
+    private var scrollAccumY = 0f       // sub-cell scroll accumulator for smooth panning
+    private var lastScrollbackSize = 0  // keeps the scrolled-up view stable as history grows
+
+    // Gesture detector: long-press selection, vertical pan to scroll history, tap to focus.
+    private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+        override fun onLongPress(e: MotionEvent) {
+            startSelection(e.x, e.y)
+        }
+
+        override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
+            if (isSelecting || cellHeight <= 0f) return false
+            // Dragging down (distanceY < 0) scrolls back into history; up returns toward the bottom.
+            scrollAccumY -= distanceY
+            val lines = (scrollAccumY / cellHeight).toInt()
+            if (lines != 0) {
+                scrollAccumY -= lines * cellHeight
+                setScrollOffset(scrollOffset + lines)
+            }
+            return true
+        }
+
+        override fun onSingleTapUp(e: MotionEvent): Boolean {
+            requestFocus()
+            showSoftKeyboard()
+            return true
+        }
+    })
+
+    // Rendering
+    private val textPaint = Paint().apply {
+        color = Color.WHITE
+        textSize = 30f
+        typeface = Typeface.MONOSPACE
+        isAntiAlias = true
+        isSubpixelText = true
+    }
+
+    private val bgPaint = Paint().apply {
+        color = Color.BLACK
+    }
+
+    private val cursorPaint = Paint().apply {
+        color = Color.WHITE
+        style = Paint.Style.FILL
+    }
+
+    // Hollow cursor drawn when the view is NOT focused (like a real terminal).
+    private val cursorOutlinePaint = Paint().apply {
+        color = Color.WHITE
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        isAntiAlias = true
+    }
+
+    // Blinking-cursor state. The block toggles on/off while focused; any input or output resets it to
+    // "on" so the cursor is solid while you type and resumes blinking when idle.
+    private val blinkHandler = Handler(Looper.getMainLooper())
+    private var cursorBlinkOn = true
+    // Whether this view is the visible/active session (vs a background session still reading its PTY).
+    private var isActiveSession = false
+    private val cursorBlinkIntervalMs = 530L
+    private val blinkRunnable = object : Runnable {
+        override fun run() {
+            cursorBlinkOn = !cursorBlinkOn
+            invalidate()
+            blinkHandler.postDelayed(this, cursorBlinkIntervalMs)
+        }
+    }
+
+    private val selectionBgPaint = Paint().apply {
+        color = Color.argb(100, 59, 130, 246) // Blue selection highlight
+        style = Paint.Style.FILL
+    }
+
+    // 256-color palette (standard xterm colors)
+    private val colorPalette = IntArray(256).apply {
+        // Standard colors (0-7)
+        this[0] = Color.BLACK
+        this[1] = Color.RED
+        this[2] = Color.GREEN
+        this[3] = Color.YELLOW
+        this[4] = Color.BLUE
+        this[5] = Color.MAGENTA
+        this[6] = Color.CYAN
+        this[7] = Color.WHITE
+        
+        // Bright colors (8-15)
+        this[8] = Color.rgb(128, 128, 128)
+        this[9] = Color.rgb(255, 0, 0)
+        this[10] = Color.rgb(0, 255, 0)
+        this[11] = Color.rgb(255, 255, 0)
+        this[12] = Color.rgb(0, 0, 255)
+        this[13] = Color.rgb(255, 0, 255)
+        this[14] = Color.rgb(0, 255, 255)
+        this[15] = Color.WHITE
+        
+        // 216 color cube (16-231)
+        for (i in 0 until 216) {
+            val r = (i / 36) % 6
+            val g = (i / 6) % 6
+            val b = i % 6
+            this[16 + i] = Color.rgb(r * 51, g * 51, b * 51)
+        }
+        
+        // Grayscale (232-255)
+        for (i in 0 until 24) {
+            val gray = 8 + i * 10
+            this[232 + i] = Color.rgb(gray, gray, gray)
+        }
+    }
+
+    init {
+        setWillNotDraw(false)
+        isFocusable = true
+        isFocusableInTouchMode = true
+        isLongClickable = true
+        
+        // Calculate cell dimensions
+        cellWidth = textPaint.measureText("M")
+        cellHeight = textPaint.fontSpacing
+        
+        // Handle touch events for selection, history scrolling, and keyboard.
+        setOnTouchListener { _, event ->
+            val gestureHandled = gestureDetector.onTouchEvent(event)
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> true
+                MotionEvent.ACTION_MOVE -> {
+                    if (isSelecting) {
+                        updateSelectionEnd(event.x, event.y)
+                        invalidate()
+                        true
+                    } else {
+                        gestureHandled
+                    }
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (isSelecting) {
+                        copySelectionToClipboard()
+                        isSelecting = false
+                        invalidate()
+                        true
+                    } else {
+                        gestureHandled
+                    }
+                }
+                else -> gestureHandled
+            }
+        }
+
+        // Calculate terminal size on first layout
+        viewTreeObserver.addOnGlobalLayoutListener(object : ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                if (width > 0 && height > 0) {
+                    val newCols = (width / cellWidth).toInt().coerceAtLeast(1)
+                    val newRows = (height / cellHeight).toInt().coerceAtLeast(1)
+                    if (newCols != cols || newRows != rows) {
+                        resizeTerminal(newCols, newRows)
+                    }
+                    viewTreeObserver.removeOnGlobalLayoutListener(this)
+                }
+            }
+        })
+    }
+
+    private fun startSelection(x: Float, y: Float) {
+        val row = (y / cellHeight).toInt().coerceIn(0, rows - 1)
+        val col = (x / cellWidth).toInt().coerceIn(0, cols - 1)
+        isSelecting = true
+        selectionStartRow = row
+        selectionStartCol = col
+        selectionEndRow = row
+        selectionEndCol = col
+        invalidate()
+    }
+
+    private fun updateSelectionEnd(x: Float, y: Float) {
+        val row = (y / cellHeight).toInt().coerceIn(0, rows - 1)
+        val col = (x / cellWidth).toInt().coerceIn(0, cols - 1)
+        selectionEndRow = row
+        selectionEndCol = col
+        invalidate()
+    }
+
+    private fun copySelectionToClipboard() {
+        val text = getSelectedText()
+        if (text.isNotBlank()) {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("Terminal Selection", text))
+        }
+    }
+
+    private fun getSelectedText(): String {
+        val parser = vtParser ?: return ""
+        
+        val startRow = min(selectionStartRow, selectionEndRow)
+        val endRow = max(selectionStartRow, selectionEndRow)
+        val startCol = if (selectionStartRow <= selectionEndRow) selectionStartCol else selectionEndCol
+        val endCol = if (selectionStartRow <= selectionEndRow) selectionEndCol else selectionStartCol
+        
+        val sb = StringBuilder()
+        
+        for (row in startRow..endRow) {
+            val rowStartCol = if (row == startRow) startCol else 0
+            val rowEndCol = if (row == endRow) endCol else cols - 1
+            
+            for (col in rowStartCol..rowEndCol.coerceAtMost(parser.cols - 1)) {
+                val cp = parser.getCellCodePoint(row, col)
+                if (cp != 0) {
+                    sb.appendCodePoint(cp)
+                }
+            }
+            if (row < endRow) {
+                sb.append('\n')
+            }
+        }
+        
+        return sb.toString()
+    }
+
+    /**
+     * Bind this view to a terminal session. The view renders the session's parser and writes input to
+     * its PTY; the session's own background reader (in TerminalSessionManager) keeps feeding the parser
+     * whether or not this view is attached, so content survives the panel being hidden.
+     *
+     * NOTE: focus/keyboard are NOT taken here — only the active session should, via [setActive].
+     */
+    fun bind(session: TerminalSessionManager.Session) {
+        if (boundSession === session) return
+        unbind()
+        boundSession = session
+        pty = session.pty
+        vtParser = session.parser
+        cols = session.cols
+        rows = session.rows
+        scrollOffset = 0
+        scrollAccumY = 0f
+        lastScrollbackSize = session.parser.scrollbackSize
+        // Repaint whenever the session parses new output. Called off the main thread by the session
+        // reader, so hop to main; only the visible session repaints, and a scrolled-back view stays
+        // anchored as new lines push into scrollback.
+        session.onUpdate = {
+            if (isActiveSession) post {
+                if (boundSession === session) {
+                    val sb = session.parser.scrollbackSize
+                    if (scrollOffset > 0 && sb > lastScrollbackSize) {
+                        scrollOffset = (scrollOffset + (sb - lastScrollbackSize)).coerceAtMost(sb)
+                    }
+                    lastScrollbackSize = sb
+                    invalidate()
+                    resetBlink()
+                }
+            }
+        }
+        invalidate()
+    }
+
+    /** Stop rendering the bound session (without killing it — the session keeps running). */
+    fun unbind() {
+        boundSession?.let { if (it.onUpdate != null) it.onUpdate = null }
+        boundSession = null
+        pty = null
+        vtParser = null
+    }
+
+    /**
+     * Mark this view as the visible/active session. Only the active session takes input focus (and
+     * raises the keyboard); inactive sessions keep reading their PTY in the background but must not
+     * hold focus, or keystrokes would go to the wrong terminal.
+     */
+    fun setActive(active: Boolean) {
+        if (active == isActiveSession) return
+        isActiveSession = active
+        if (active) {
+            // Post so focus is requested after this view is laid out/attached — requesting it
+            // synchronously right after creation (new session tab) is too early and silently fails,
+            // which would leave input going to whatever held focus before.
+            post {
+                requestFocus()
+                showSoftKeyboard()
+            }
+        } else {
+            clearFocus()
+        }
+        invalidate()
+    }
+
+    /**
+     * Show the soft keyboard for terminal input.
+     */
+    private fun showSoftKeyboard() {
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+        imm?.showSoftInput(this, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    /**
+     * Detach from the current session. The session (PTY + parser + reader) keeps running; this view
+     * just stops rendering it.
+     */
+    fun detach() {
+        isSelecting = false
+        unbind()
+    }
+
+    /**
+     * Send input to the terminal.
+     */
+    fun sendInput(text: String) {
+        val p = pty
+        if (p?.isOpen == true) {
+            scrollToBottom()
+            p.write(text)
+            resetBlink()
+        }
+    }
+
+    /**
+     * Send input bytes to the terminal.
+     */
+    fun sendInput(data: ByteArray) {
+        val p = pty
+        if (p?.isOpen == true) {
+            scrollToBottom()
+            p.write(data)
+            resetBlink()
+        }
+    }
+
+    /** Clamp and apply a new scrollback offset (lines scrolled up from the live bottom). */
+    private fun setScrollOffset(offset: Int) {
+        val parser = vtParser ?: return
+        val clamped = offset.coerceIn(0, parser.scrollbackSize)
+        if (clamped != scrollOffset) {
+            scrollOffset = clamped
+            invalidate()
+        }
+    }
+
+    /** Jump back to the live bottom of the terminal (following new output). */
+    fun scrollToBottom() {
+        if (scrollOffset != 0) {
+            scrollOffset = 0
+            scrollAccumY = 0f
+            invalidate()
+        }
+    }
+
+    /**
+     * Send a key event to the terminal.
+     * Supports TUI apps (vim, htop, nano, mc) with special key combinations.
+     */
+    fun sendKey(keyCode: Int, event: KeyEvent?): Boolean {
+        val isCtrl = event?.isCtrlPressed == true
+        val isAlt = event?.isAltPressed == true
+
+        val bytes = when {
+            // Ctrl+C → SIGINT (interrupt)
+            isCtrl && keyCode == KeyEvent.KEYCODE_C -> byteArrayOf(0x03)
+            // Ctrl+Z → SIGTSTP (suspend)
+            isCtrl && keyCode == KeyEvent.KEYCODE_Z -> byteArrayOf(0x1A)
+            // Ctrl+D → EOF
+            isCtrl && keyCode == KeyEvent.KEYCODE_D -> byteArrayOf(0x04)
+            // Ctrl+L → Clear screen (VT sequence)
+            isCtrl && keyCode == KeyEvent.KEYCODE_L -> "\u001B[H\u001B[2J".toByteArray()
+            // Ctrl+U → Clear line
+            isCtrl && keyCode == KeyEvent.KEYCODE_U -> byteArrayOf(0x15)
+            // Ctrl+W → Delete word
+            isCtrl && keyCode == KeyEvent.KEYCODE_W -> byteArrayOf(0x17)
+            // Ctrl+A → Home
+            isCtrl && keyCode == KeyEvent.KEYCODE_A -> byteArrayOf(0x01)
+            // Ctrl+E → End
+            isCtrl && keyCode == KeyEvent.KEYCODE_E -> byteArrayOf(0x05)
+            // Alt+arrow keys (TUI navigation in vim, mc, etc.)
+            isAlt && keyCode == KeyEvent.KEYCODE_DPAD_UP -> "\u001B\u001B[A".toByteArray()
+            isAlt && keyCode == KeyEvent.KEYCODE_DPAD_DOWN -> "\u001B\u001B[B".toByteArray()
+            isAlt && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT -> "\u001B\u001B[C".toByteArray()
+            isAlt && keyCode == KeyEvent.KEYCODE_DPAD_LEFT -> "\u001B\u001B[D".toByteArray()
+            // Alt+F1-F12 (function keys with Alt modifier)
+            isAlt && keyCode == KeyEvent.KEYCODE_F1 -> "\u001B\u001BOP".toByteArray()
+            isAlt && keyCode == KeyEvent.KEYCODE_F2 -> "\u001B\u001BOQ".toByteArray()
+            // Standard keys
+            keyCode == KeyEvent.KEYCODE_ENTER -> byteArrayOf(0x0D)
+            keyCode == KeyEvent.KEYCODE_DEL -> byteArrayOf(0x7F)
+            keyCode == KeyEvent.KEYCODE_DPAD_UP -> "\u001B[A".toByteArray()
+            keyCode == KeyEvent.KEYCODE_DPAD_DOWN -> "\u001B[B".toByteArray()
+            keyCode == KeyEvent.KEYCODE_DPAD_RIGHT -> "\u001B[C".toByteArray()
+            keyCode == KeyEvent.KEYCODE_DPAD_LEFT -> "\u001B[D".toByteArray()
+            keyCode == KeyEvent.KEYCODE_TAB -> byteArrayOf(0x09)
+            keyCode == KeyEvent.KEYCODE_ESCAPE -> byteArrayOf(0x1B)
+            // Function keys (F1-F12)
+            keyCode == KeyEvent.KEYCODE_F1 -> "\u001BOP".toByteArray()
+            keyCode == KeyEvent.KEYCODE_F2 -> "\u001BOQ".toByteArray()
+            keyCode == KeyEvent.KEYCODE_F3 -> "\u001BOR".toByteArray()
+            keyCode == KeyEvent.KEYCODE_F4 -> "\u001BOS".toByteArray()
+            keyCode == KeyEvent.KEYCODE_F5 -> "\u001B[15~".toByteArray()
+            keyCode == KeyEvent.KEYCODE_F6 -> "\u001B[17~".toByteArray()
+            keyCode == KeyEvent.KEYCODE_F7 -> "\u001B[18~".toByteArray()
+            keyCode == KeyEvent.KEYCODE_F8 -> "\u001B[19~".toByteArray()
+            keyCode == KeyEvent.KEYCODE_F9 -> "\u001B[20~".toByteArray()
+            keyCode == KeyEvent.KEYCODE_F10 -> "\u001B[21~".toByteArray()
+            keyCode == KeyEvent.KEYCODE_F11 -> "\u001B[23~".toByteArray()
+            keyCode == KeyEvent.KEYCODE_F12 -> "\u001B[24~".toByteArray()
+            // Home/End/PageUp/PageDown
+            keyCode == KeyEvent.KEYCODE_MOVE_HOME -> "\u001B[H".toByteArray()
+            keyCode == KeyEvent.KEYCODE_MOVE_END -> "\u001B[F".toByteArray()
+            keyCode == KeyEvent.KEYCODE_PAGE_UP -> "\u001B[5~".toByteArray()
+            keyCode == KeyEvent.KEYCODE_PAGE_DOWN -> "\u001B[6~".toByteArray()
+            // Insert/Delete
+            keyCode == KeyEvent.KEYCODE_INSERT -> "\u001B[2~".toByteArray()
+            keyCode == KeyEvent.KEYCODE_FORWARD_DEL -> "\u001B[3~".toByteArray()
+            else -> return false
+        }
+        sendInput(bytes)
+        return true
+    }
+
+    /**
+     * Handle hardware/physical keyboard input (and `adb input`) directly. Soft-keyboard input is
+     * handled separately via [onCreateInputConnection]. Printable characters are sent as UTF-8;
+     * control/navigation keys go through [sendKey].
+     */
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (pty?.isOpen != true) return super.onKeyDown(keyCode, event)
+        if (!event.isCtrlPressed && !event.isAltPressed) {
+            val uch = event.unicodeChar
+            if (uch != 0) {
+                sendInput(uch.toChar().toString())
+                return true
+            }
+        }
+        if (sendKey(keyCode, event)) return true
+        return super.onKeyDown(keyCode, event)
+    }
+
+    /**
+     * Set the terminal font size.
+     */
+    fun setFontSize(size: Float) {
+        textPaint.textSize = size
+        cellWidth = textPaint.measureText("M")
+        cellHeight = textPaint.fontSpacing
+        if (width > 0 && height > 0) {
+            val newCols = (width / cellWidth).toInt().coerceAtLeast(1)
+            val newRows = (height / cellHeight).toInt().coerceAtLeast(1)
+            resizeTerminal(newCols, newRows)
+        } else {
+            invalidate()
+        }
+    }
+
+    /**
+     * Get the current font size.
+     */
+    fun getFontSize(): Float = textPaint.textSize
+
+    /**
+     * Resize the terminal.
+     */
+    fun resizeTerminal(cols: Int, rows: Int) {
+        if (cols == this.cols && rows == this.rows) return
+
+        this.cols = cols
+        this.rows = rows
+
+        // Resize the bound session's PTY + parser together (reflows content through scrollback,
+        // anchored to the bottom). The session owns these so background sessions stay sized too.
+        boundSession?.resize(cols, rows)
+
+        // Snap to the live bottom: after a resize (e.g. the keyboard opening/closing) the scrollback
+        // size changed under us, so any prior scroll offset would point at the wrong content.
+        scrollOffset = 0
+        scrollAccumY = 0f
+        lastScrollbackSize = vtParser?.scrollbackSize ?: 0
+
+        invalidate()
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (w > 0 && h > 0 && cellWidth > 0f && cellHeight > 0f) {
+            val newCols = (w / cellWidth).toInt().coerceAtLeast(1)
+            val newRows = (h / cellHeight).toInt().coerceAtLeast(1)
+            scheduleResize(newCols, newRows)
+        }
+    }
+
+    // The soft keyboard animates open/closed over many frames, firing a flurry of onSizeChanged calls.
+    // Resizing on each one sends a SIGWINCH storm to the shell (bash redraws its prompt every time),
+    // leaving a stack of duplicate prompts. Debounce so a keyboard toggle applies a single final resize.
+    private var pendingResize: Runnable? = null
+    private fun scheduleResize(cols: Int, rows: Int) {
+        if (cols == this.cols && rows == this.rows) return
+        pendingResize?.let { blinkHandler.removeCallbacks(it) }
+        val r = Runnable {
+            pendingResize = null
+            resizeTerminal(cols, rows)
+        }
+        pendingResize = r
+        blinkHandler.postDelayed(r, 80)
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        
+        val parser = vtParser ?: return
+        
+        // Draw background
+        bgPaint.color = Color.BLACK
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
+
+        // Calculate selection bounds
+        val selStartRow = min(selectionStartRow, selectionEndRow)
+        val selEndRow = max(selectionStartRow, selectionEndRow)
+        val selStartCol = if (selectionStartRow <= selectionEndRow) selectionStartCol else selectionEndCol
+        val selEndCol = if (selectionStartRow <= selectionEndRow) selectionEndCol else selectionStartCol
+
+        // Draw cells. When scrolled back, view row N shows logical row (N - scrollOffset);
+        // negative logical rows come from the scrollback buffer.
+        for (row in 0 until min(rows, parser.rows)) {
+            val logicalRow = row - scrollOffset
+            for (col in 0 until min(cols, parser.cols)) {
+                val x = col * cellWidth
+                val y = row * cellHeight
+
+                // Check if cell is in selection (only meaningful at the live bottom)
+                val isInSelection = scrollOffset == 0 && isSelecting && row in selStartRow..selEndRow &&
+                    (row != selStartRow || col >= selStartCol) &&
+                    (row != selEndRow || col <= selEndCol)
+
+                // Draw selection highlight
+                if (isInSelection) {
+                    canvas.drawRect(x, y, x + cellWidth, y + cellHeight, selectionBgPaint)
+                }
+
+                // Get cell attributes
+                val cp = parser.getCellCodePoint(logicalRow, col)
+                val fgColor = parser.getCellFgColor(logicalRow, col)
+                val bgColor = parser.getCellBgColor(logicalRow, col)
+                val fgMode = parser.getCellFgMode(logicalRow, col)
+                val bgMode = parser.getCellBgMode(logicalRow, col)
+                val attrs = parser.getCellAttrs(logicalRow, col)
+                
+                // Draw background if not default and not selected
+                if (bgMode != 0 && !isInSelection) {
+                    val bg = when (bgMode) {
+                        1 -> if (bgColor in 0..255) colorPalette[bgColor] else Color.BLACK
+                        2 -> Color.rgb((bgColor shr 16) and 0xFF, (bgColor shr 8) and 0xFF, bgColor and 0xFF)
+                        else -> Color.BLACK
+                    }
+                    bgPaint.color = bg
+                    canvas.drawRect(x, y, x + cellWidth, y + cellHeight, bgPaint)
+                }
+                
+                // Draw character
+                if (cp != ' '.code && cp != 0) {
+                    textPaint.color = when (fgMode) {
+                        1 -> if (fgColor in 0..255) colorPalette[fgColor] else Color.WHITE
+                        2 -> Color.rgb((fgColor shr 16) and 0xFF, (fgColor shr 8) and 0xFF, fgColor and 0xFF)
+                        else -> Color.WHITE
+                    }
+
+                    // Apply attributes
+                    textPaint.isFakeBoldText = (attrs and VtParser.ATTR_BOLD) != 0
+                    textPaint.textSkewX = if ((attrs and VtParser.ATTR_ITALIC) != 0) -0.25f else 0f
+
+                    val charStr = if (cp <= 0xFFFF) cp.toChar().toString() else String(Character.toChars(cp))
+                    canvas.drawText(charStr, x, y + cellHeight * 0.8f, textPaint)
+                    
+                    // Draw underline
+                    if ((attrs and VtParser.ATTR_UNDERLINE) != 0) {
+                        canvas.drawLine(x, y + cellHeight * 0.9f, x + cellWidth, y + cellHeight * 0.9f, textPaint)
+                    }
+                    
+                    // Draw strikethrough
+                    if ((attrs and VtParser.ATTR_STRIKETHROUGH) != 0) {
+                        canvas.drawLine(x, y + cellHeight * 0.5f, x + cellWidth, y + cellHeight * 0.5f, textPaint)
+                    }
+                }
+            }
+        }
+        
+        // Draw cursor (only at the live bottom; hidden while scrolled back into history).
+        // Focused: a solid block that blinks (with the glyph under it inverted so it stays readable).
+        // Unfocused: a hollow outline, like a real terminal.
+        if (parser.isCursorVisible && !isSelecting && scrollOffset == 0) {
+            val cursorRow = parser.cursorRow
+            val cursorCol = parser.cursorCol
+            if (cursorRow in 0 until rows && cursorCol in 0 until cols) {
+                val x = cursorCol * cellWidth
+                val y = cursorRow * cellHeight
+                if (!hasFocus()) {
+                    // Unfocused: hollow rectangle.
+                    canvas.drawRect(
+                        x + 1f, y + 1f, x + cellWidth - 1f, y + cellHeight - 1f, cursorOutlinePaint,
+                    )
+                } else if (cursorBlinkOn) {
+                    // Focused + blink "on": solid block, then redraw the underlying glyph in the
+                    // background colour so a character beneath the cursor remains visible.
+                    canvas.drawRect(x, y, x + cellWidth, y + cellHeight, cursorPaint)
+                    val cp = parser.getCellCodePoint(cursorRow, cursorCol)
+                    if (cp != ' '.code && cp != 0) {
+                        val saved = textPaint.color
+                        val savedBold = textPaint.isFakeBoldText
+                        val savedSkew = textPaint.textSkewX
+                        textPaint.color = Color.BLACK
+                        textPaint.isFakeBoldText = false
+                        textPaint.textSkewX = 0f
+                        val s = if (cp <= 0xFFFF) cp.toChar().toString() else String(Character.toChars(cp))
+                        canvas.drawText(s, x, y + cellHeight * 0.8f, textPaint)
+                        textPaint.color = saved
+                        textPaint.isFakeBoldText = savedBold
+                        textPaint.textSkewX = savedSkew
+                    }
+                }
+                // Focused + blink "off": draw nothing so the cell shows through.
+            }
+        }
+    }
+
+    override fun onCheckIsTextEditor(): Boolean = true
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
+        outAttrs.inputType = EditorInfo.TYPE_NULL
+        outAttrs.imeOptions = EditorInfo.IME_ACTION_NONE
+        
+        return object : BaseInputConnection(this, false) {
+            override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                text?.toString()?.let { sendInput(it) }
+                return true
+            }
+            
+            override fun sendKeyEvent(event: KeyEvent): Boolean {
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    if (event.keyCode == KeyEvent.KEYCODE_DEL) {
+                        sendInput(byteArrayOf(0x7F))
+                    } else if (event.unicodeChar != 0) {
+                        val ch = event.unicodeChar.toChar()
+                        sendInput(ch.toString())
+                    }
+                }
+                return true
+            }
+            
+            override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                for (i in 0 until beforeLength) {
+                    sendInput(byteArrayOf(0x7F))
+                }
+                return true
+            }
+        }
+    }
+
+    // --- Cursor blink ---
+
+    /** Begin (or restart) blinking with the cursor solid. No-op unless the view is focused. */
+    private fun startBlink() {
+        blinkHandler.removeCallbacks(blinkRunnable)
+        cursorBlinkOn = true
+        invalidate()
+        if (hasFocus()) {
+            blinkHandler.postDelayed(blinkRunnable, cursorBlinkIntervalMs)
+        }
+    }
+
+    /** Stop blinking (used when focus is lost / the view detaches). */
+    private fun stopBlink() {
+        blinkHandler.removeCallbacks(blinkRunnable)
+        invalidate()
+    }
+
+    /** Reset the blink phase to "on" on any activity (typing or output) so the cursor stays solid. */
+    private fun resetBlink() {
+        if (hasFocus()) startBlink()
+    }
+
+    override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
+        super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
+        if (gainFocus) startBlink() else stopBlink()
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        if (hasFocus()) startBlink()
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        blinkHandler.removeCallbacks(blinkRunnable)
+        pendingResize?.let { blinkHandler.removeCallbacks(it) }
+        pendingResize = null
+        // Stop rendering but DO NOT close the parser/PTY — the session keeps running in the background
+        // (e.g. the terminal panel was hidden). The session is only torn down via closeSession().
+        unbind()
+    }
+}

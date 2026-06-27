@@ -25,6 +25,7 @@ lifecycle = "2.8.7"
 activity-compose = "1.10.0"
 documentfile = "1.0.1"
 window = "1.4.0"
+xz = "1.10"
 
 [libraries]
 # Compose BOM
@@ -77,6 +78,7 @@ lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-ru
 activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity-compose" }
 documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
 window = { group = "androidx.window", name = "window", version.ref = "window" }
+xz = { group = "org.tukaani", name = "xz", version.ref = "xz" }
 
 # Test libraries
 androidx-test-core = { group = "androidx.test", name = "core", version.ref = "androidx-test-core" }

@@ -8,12 +8,18 @@ import kotlinx.coroutines.flow.Flow
 sealed interface FsPath {
     val displayName: String
 
+    /** Globally-unique, stable identity for this path — safe as a map/set key or list key.
+     *  Unlike [displayName] (a bare label), two distinct paths never share a [stableId]. */
+    val stableId: String
+
     data class Local(val file: File) : FsPath {
         override val displayName: String = file.name.ifBlank { file.path }
+        override val stableId: String = file.absolutePath
     }
 
     data class Saf(val uri: Uri) : FsPath {
         override val displayName: String = uri.lastPathSegment ?: uri.toString()
+        override val stableId: String = uri.toString()
     }
 }
 

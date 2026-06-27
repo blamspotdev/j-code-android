@@ -1,0 +1,5 @@
+id: empty
+name: Empty
+description: An empty project folder with no scaffolding.
+requires: []
+recipe: []

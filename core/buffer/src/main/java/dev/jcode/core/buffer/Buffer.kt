@@ -7,73 +7,123 @@ import kotlin.math.min
 
 /**
  * In-memory piece-tree buffer backing store.
- * Shaped for future JNI replacement — all mutable state lives behind a single
- * writer thread concept (EditorDispatcher) at the editor layer.
+ * Uses C++ JNI implementation when available for optimal performance,
+ * falls back to pure Kotlin implementation otherwise.
+ * All mutable state lives behind a single writer thread concept (EditorDispatcher) at the editor layer.
  */
 class Buffer internal constructor(
     private var content: ByteArray,
+    useNative: Boolean = nativeAvailable,
 ) : AutoCloseable {
 
     private val cleanerHandle: Cleaner.Cleanable
     private var closed = false
+    private val useNativeImpl: Boolean = useNative
+
+    // Native handle for JNI implementation (0 = using Kotlin impl)
+    @Volatile
+    internal var nativeHandle: Long = 0L
 
     init {
+        if (useNativeImpl) {
+            nativeHandle = nativeOpenFromBytes(content)
+        }
         val ref = CleanerHandle(this)
         cleanerHandle = cleaner.register(this, ref)
     }
 
     /** Total byte length of the buffer (UTF-8). */
     val byteLength: Int
-        get() = synchronized(this) { content.size }
+        get() = if (useNativeImpl && nativeHandle != 0L) {
+            snapshot().byteLength
+        } else {
+            synchronized(this) { content.size }
+        }
 
     /** Number of lines (at least 1 for empty buffer). */
     val lineCount: Int
-        get() = synchronized(this) { countLines(content) + 1 }
+        get() = if (useNativeImpl && nativeHandle != 0L) {
+            snapshot().lineCount
+        } else {
+            synchronized(this) { countLines(content) + 1 }
+        }
 
     /** Take an immutable snapshot of current buffer state. */
     fun snapshot(): Snapshot {
         checkNotClosed()
-        val copy = synchronized(this) { content.copyOf() }
-        return Snapshot(copy)
+        return if (useNativeImpl && nativeHandle != 0L) {
+            val nativeSnapshotHandle = nativeSnapshot()
+            Snapshot(nativeHandle = nativeSnapshotHandle)
+        } else {
+            val copy = synchronized(this) { content.copyOf() }
+            Snapshot(content = copy)
+        }
     }
 
     /** Apply an edit transaction and return the new snapshot. */
     fun applyEdit(tx: EditTx): Snapshot {
         checkNotClosed()
-        synchronized(this) {
-            var current = content
-            for (op in tx.ops) {
-                current = when (op) {
-                    is EditOp.Insert -> {
-                        val bytes = op.text.toByteArray(StandardCharsets.UTF_8)
-                        val before = current.copyOfRange(0, min(op.offset, current.size))
-                        val after = current.copyOfRange(min(op.offset, current.size), current.size)
-                        before + bytes + after
-                    }
-                    is EditOp.Delete -> {
-                        val start = min(op.start, current.size)
-                        val end = min(op.end, current.size)
-                        if (start >= end) current else {
-                            val before = current.copyOfRange(0, start)
-                            val after = current.copyOfRange(end, current.size)
-                            before + after
+        return if (useNativeImpl && nativeHandle != 0L) {
+            // Convert EditTx to native format
+            val nativeOps = tx.ops.map { op ->
+                when (op) {
+                    is EditOp.Insert -> NativeEditOp(
+                        type = 0, // INSERT
+                        offset = op.offset.toLong(),
+                        length = 0,
+                        data = op.text.toByteArray(StandardCharsets.UTF_8)
+                    )
+                    is EditOp.Delete -> NativeEditOp(
+                        type = 1, // DELETE
+                        offset = op.start.toLong(),
+                        length = (op.end - op.start).toLong(),
+                        data = ByteArray(0)
+                    )
+                }
+            }.toTypedArray()
+            
+            val nativeSnapshotHandle = nativeApplyEdits(nativeOps)
+            Snapshot(nativeHandle = nativeSnapshotHandle)
+        } else {
+            synchronized(this) {
+                var current = content
+                for (op in tx.ops) {
+                    current = when (op) {
+                        is EditOp.Insert -> {
+                            val bytes = op.text.toByteArray(StandardCharsets.UTF_8)
+                            val before = current.copyOfRange(0, min(op.offset, current.size))
+                            val after = current.copyOfRange(min(op.offset, current.size), current.size)
+                            before + bytes + after
+                        }
+                        is EditOp.Delete -> {
+                            val start = min(op.start, current.size)
+                            val end = min(op.end, current.size)
+                            if (start >= end) current else {
+                                val before = current.copyOfRange(0, start)
+                                val after = current.copyOfRange(end, current.size)
+                                before + after
+                            }
                         }
                     }
                 }
+                content = current
             }
-            content = current
+            snapshot()
         }
-        return snapshot()
     }
 
     /** Read a byte range from the current buffer. */
     fun readRange(start: Int, end: Int): ByteArray {
         checkNotClosed()
-        return synchronized(this) {
-            content.copyOfRange(
-                max(0, min(start, content.size)),
-                max(0, min(end, content.size)),
-            )
+        return if (useNativeImpl && nativeHandle != 0L) {
+            snapshot().readRange(start, end)
+        } else {
+            synchronized(this) {
+                content.copyOfRange(
+                    max(0, min(start, content.size)),
+                    max(0, min(end, content.size)),
+                )
+            }
         }
     }
 
@@ -86,30 +136,46 @@ class Buffer internal constructor(
     /** Convert a byte offset to (line, column) — both 0-based. */
     fun offsetToLineColumn(offset: Int): Pair<Int, Int> {
         checkNotClosed()
-        return synchronized(this) {
-            offsetToLineColumnLocked(content, offset)
+        return if (useNativeImpl && nativeHandle != 0L) {
+            snapshot().offsetToLineColumn(offset)
+        } else {
+            synchronized(this) {
+                offsetToLineColumnLocked(content, offset)
+            }
         }
     }
 
     /** Convert (line, column) to byte offset. */
     fun lineColumnToOffset(line: Int, column: Int): Int {
         checkNotClosed()
-        return synchronized(this) {
-            lineColumnToOffsetLocked(content, line, column)
+        return if (useNativeImpl && nativeHandle != 0L) {
+            snapshot().lineColumnToOffset(line, column)
+        } else {
+            synchronized(this) {
+                lineColumnToOffsetLocked(content, line, column)
+            }
         }
     }
 
     /** Get the byte range [start, end) for a 0-based line index. */
     fun lineAt(line: Int): Pair<Int, Int> {
         checkNotClosed()
-        return synchronized(this) {
-            lineRangeLocked(content, line)
+        return if (useNativeImpl && nativeHandle != 0L) {
+            snapshot().lineAt(line)
+        } else {
+            synchronized(this) {
+                lineRangeLocked(content, line)
+            }
         }
     }
 
     override fun close() {
         if (!closed) {
             closed = true
+            if (useNativeImpl && nativeHandle != 0L) {
+                nativeClose()
+                nativeHandle = 0L
+            }
             // Cleaner will handle the actual cleanup; we just mark closed.
         }
     }
@@ -120,19 +186,46 @@ class Buffer internal constructor(
 
     private class CleanerHandle(private val buffer: Buffer) : Runnable {
         override fun run() {
+            if (buffer.useNativeImpl && buffer.nativeHandle != 0L) {
+                buffer.nativeClose()
+                buffer.nativeHandle = 0L
+            }
             buffer.closed = true
         }
     }
 
+    // Native methods
+    private external fun nativeOpenFromBytes(data: ByteArray): Long
+    private external fun nativeOpenFromFd(fd: Int): Long
+    private external fun nativeClose()
+    private external fun nativeSnapshot(): Long
+    private external fun nativeApplyEdits(ops: Array<NativeEditOp>): Long
+
     companion object {
         private val cleaner = Cleaner.create()
 
+        // Check if native library is available
+        @Volatile
+        private var nativeAvailable = false
+
+        init {
+            try {
+                System.loadLibrary("jcodebuffer")
+                nativeAvailable = true
+            } catch (e: UnsatisfiedLinkError) {
+                nativeAvailable = false
+            }
+        }
+
+        /** Check if native C++ implementation is available. */
+        fun isNativeAvailable(): Boolean = nativeAvailable
+
         /** Create an empty buffer. */
-        fun create(): Buffer = Buffer(byteArrayOf())
+        fun create(): Buffer = Buffer(byteArrayOf(), useNative = nativeAvailable)
 
         /** Create a buffer from initial text. */
         fun fromText(text: String): Buffer =
-            Buffer(text.toByteArray(StandardCharsets.UTF_8))
+            Buffer(text.toByteArray(StandardCharsets.UTF_8), useNative = nativeAvailable)
 
         private fun countLines(bytes: ByteArray): Int {
             var count = 0
@@ -198,44 +291,84 @@ class Buffer internal constructor(
 
 /** Immutable snapshot of buffer content at a point in time. */
 class Snapshot internal constructor(
-    internal val content: ByteArray,
+    internal val content: ByteArray? = null,
+    // Must be named `nativeHandle`: the native JNI (jni_buffer.cpp getSnapshot/setSnapshot) looks up
+    // the field "nativeHandle" on this class and writes it on close. A name mismatch aborts the VM
+    // with NoSuchFieldError the moment any native Snapshot method runs (e.g. opening a file).
+    private var nativeHandle: Long = 0L,
 ) : AutoCloseable {
 
     private val cleanerHandle: Cleaner.Cleanable
     private var closed = false
+    private val useNativeImpl: Boolean = nativeHandle != 0L
 
     init {
         val ref = CleanerHandle(this)
         cleanerHandle = cleaner.register(this, ref)
     }
 
-    val byteLength: Int get() = content.size
-
-    val lineCount: Int
-        get() {
-            var count = 1
-            for (b in content) {
-                if (b == '\n'.code.toByte()) count++
-            }
-            return count
+    val byteLength: Int 
+        get() = if (useNativeImpl) {
+            nativeByteLength().toInt()
+        } else {
+            content?.size ?: 0
         }
 
-    fun readRange(start: Int, end: Int): ByteArray =
-        content.copyOfRange(
-            max(0, min(start, content.size)),
-            max(0, min(end, content.size)),
-        )
+    val lineCount: Int
+        get() = if (useNativeImpl) {
+            nativeLineCount().toInt()
+        } else {
+            var count = 1
+            content?.forEach { b ->
+                if (b == '\n'.code.toByte()) count++
+            }
+            count
+        }
+
+    fun readRange(start: Int, end: Int): ByteArray {
+        return if (useNativeImpl) {
+            val size = end - start
+            val out = ByteArray(size)
+            val read = nativeReadRange(start.toLong(), end.toLong(), out)
+            if (read < size) out.copyOf(read) else out
+        } else {
+            content?.copyOfRange(
+                max(0, min(start, content.size)),
+                max(0, min(end, content.size)),
+            ) ?: ByteArray(0)
+        }
+    }
 
     fun readRangeAsUtf16(start: Int, end: Int): String =
         String(readRange(start, end), StandardCharsets.UTF_8)
 
-    fun lineAt(line: Int): Pair<Int, Int> = Buffer.lineRangeLocked(content, line)
+    fun lineAt(line: Int): Pair<Int, Int> {
+        return if (useNativeImpl) {
+            val start = nativeLineStart(line.toLong()).toInt()
+            val end = nativeLineEnd(line.toLong()).toInt()
+            start to end
+        } else {
+            content?.let { Buffer.lineRangeLocked(it, line) } ?: (0 to 0)
+        }
+    }
 
-    fun offsetToLineColumn(offset: Int): Pair<Int, Int> =
-        Buffer.offsetToLineColumnLocked(content, offset)
+    fun offsetToLineColumn(offset: Int): Pair<Int, Int> {
+        return if (useNativeImpl) {
+            val line = nativeOffsetToLine(offset.toLong()).toInt()
+            val col = nativeOffsetToColumn(offset.toLong()).toInt()
+            line to col
+        } else {
+            content?.let { Buffer.offsetToLineColumnLocked(it, offset) } ?: (0 to 0)
+        }
+    }
 
-    fun lineColumnToOffset(line: Int, column: Int): Int =
-        Buffer.lineColumnToOffsetLocked(content, line, column)
+    fun lineColumnToOffset(line: Int, column: Int): Int {
+        return if (useNativeImpl) {
+            nativeLineColumnToOffset(line.toLong(), column.toLong()).toInt()
+        } else {
+            content?.let { Buffer.lineColumnToOffsetLocked(it, line, column) } ?: 0
+        }
+    }
 
     /** Get the text of a specific line (without line ending). */
     fun lineText(line: Int): String {
@@ -246,20 +379,45 @@ class Snapshot internal constructor(
     override fun close() {
         if (!closed) {
             closed = true
+            if (useNativeImpl) {
+                nativeClose()
+            }
             // Cleaner will handle the actual cleanup; we just mark closed.
         }
     }
 
     private class CleanerHandle(private val snapshot: Snapshot) : Runnable {
         override fun run() {
+            if (snapshot.useNativeImpl) {
+                snapshot.nativeClose()
+            }
             snapshot.closed = true
         }
     }
+
+    // Native methods
+    private external fun nativeClose()
+    private external fun nativeByteLength(): Long
+    private external fun nativeLineCount(): Long
+    private external fun nativeReadRange(start: Long, end: Long, out: ByteArray): Int
+    private external fun nativeOffsetToLine(offset: Long): Long
+    private external fun nativeOffsetToColumn(offset: Long): Long
+    private external fun nativeLineColumnToOffset(line: Long, column: Long): Long
+    private external fun nativeLineStart(line: Long): Long
+    private external fun nativeLineEnd(line: Long): Long
 
     companion object {
         private val cleaner = Cleaner.create()
     }
 }
+
+/** Native edit operation for JNI bridge. */
+internal data class NativeEditOp(
+    val type: Int, // 0 = INSERT, 1 = DELETE
+    val offset: Long,
+    val length: Long,
+    val data: ByteArray,
+)
 
 /** A reference to a line in a snapshot, holding its text and range. */
 data class LineRef(

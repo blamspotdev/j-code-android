@@ -2,6 +2,7 @@ package dev.jcode.feature.explorer
 
 import androidx.compose.runtime.Immutable
 import dev.jcode.fs.Fs
+import dev.jcode.fs.FsKind
 import dev.jcode.fs.FsNode
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
@@ -20,6 +21,8 @@ data class TreeRow(
     val isExpanded: Boolean,
     val isSelected: Boolean,
     val badge: ExplorerBadge? = null,
+    /** A non-interactive "(empty)" marker shown under an expanded, childless directory. */
+    val isPlaceholder: Boolean = false,
 )
 
 /** Placeholder badge for VCS status, error counts, etc. */
@@ -57,24 +60,36 @@ class ExplorerSelectionState {
 }
 
 /**
- * ViewModel for the file explorer tree/list.
+ * ViewModel for the file explorer.
  *
- * Manages expansion state, selection, and lazy loading of directory contents.
- * Badges for VCS status and problem counts are placeholder-safe — they accept
- * data from later phases (:core:vcs, :feature:problems) but render nothing
- * when those phases are absent.
+ * Tree and List are two structurally different shapes, so each gets its OWN row flow:
+ *  - [treeRows]: the hierarchical project tree (root + expanded descendants, indented by depth).
+ *  - [listRows]: a flat listing of the immediate children of [currentPath] (a file-manager view).
+ *
+ * The active [viewMode] lives here (not in the composable) so the toolbar toggle reloads the right
+ * shape, and so [refresh] can repaint the correct flow after a file operation. Because each content
+ * composable binds its own flow, a List view can never accidentally render tree rows.
+ *
+ * Identity is always derived from [FsPath.stableId] (absolute path / URI), never the bare
+ * display name, so same-named folders in different locations never share expansion or selection.
  */
 class TreeViewModel(
     private val workspace: Workspace?,
     private val fs: Fs,
+    initialViewMode: ExplorerViewMode = ExplorerViewMode.Tree,
     private val scmStatus: Map<String, String> = emptyMap(),
     private val problems: Map<String, Pair<Int, Int>> = emptyMap(),
 ) {
-    private val _rows = MutableStateFlow<List<TreeRow>>(emptyList())
-    val rows: StateFlow<List<TreeRow>> = _rows.asStateFlow()
+    private val _viewMode = MutableStateFlow(initialViewMode)
+    val viewMode: StateFlow<ExplorerViewMode> = _viewMode.asStateFlow()
 
-    private val _expandedPaths = MutableStateFlow<Set<String>>(emptySet())
-    val expandedPaths: StateFlow<Set<String>> = _expandedPaths.asStateFlow()
+    private val _treeRows = MutableStateFlow<List<TreeRow>>(emptyList())
+    val treeRows: StateFlow<List<TreeRow>> = _treeRows.asStateFlow()
+
+    private val _listRows = MutableStateFlow<List<TreeRow>>(emptyList())
+    val listRows: StateFlow<List<TreeRow>> = _listRows.asStateFlow()
+
+    private val _expandedIds = MutableStateFlow<Set<String>>(emptySet())
 
     val selectionState = ExplorerSelectionState()
 
@@ -85,6 +100,10 @@ class TreeViewModel(
     val breadcrumb: StateFlow<List<BreadcrumbEntry>> = _breadcrumb.asStateFlow()
 
     private var projectRootPath: FsPath? = null
+    private var rootNode: FsNode? = null
+
+    /** The directory List mode is currently showing (independent of Tree's expansion state). */
+    private var listPath: FsPath? = null
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -94,73 +113,144 @@ class TreeViewModel(
         val path: FsPath,
     )
 
-    /** Load the root of a project into tree view. */
+    /** Load the root of a project. */
     suspend fun loadProjectRoot(project: Project) {
         _isLoading.value = true
         try {
             val rootPath = project.fsPath
             projectRootPath = rootPath
-            _currentPath.value = rootPath
-            updateBreadcrumb(rootPath, project.name)
+            rootNode = FsNode(
+                path = rootPath,
+                name = project.name,
+                kind = FsKind.Directory,
+                sizeBytes = 0L,
+                modifiedAtMillis = 0L,
+            )
+            listPath = rootPath
+            _expandedIds.value = setOf(rootPath.stableId)
+            selectionState.clear()
+            applyMode()
+        } finally {
+            _isLoading.value = false
+        }
+    }
 
-            val children = fs.list(rootPath)
-            val rootRow = TreeRow(
-                id = rootPath.displayName,
-                node = FsNode(
-                    path = rootPath,
-                    name = project.name,
-                    kind = dev.jcode.fs.FsKind.Directory,
-                    sizeBytes = 0L,
-                    modifiedAtMillis = 0L,
-                ),
+    /** Switch between Tree and List, materializing the correct flow for the new mode. */
+    suspend fun setViewMode(mode: ExplorerViewMode) {
+        if (_viewMode.value == mode) return
+        _viewMode.value = mode
+        selectionState.clear()
+        applyMode()
+    }
+
+    private suspend fun applyMode() {
+        when (_viewMode.value) {
+            ExplorerViewMode.Tree -> rebuildRows()
+            ExplorerViewMode.List -> {
+                val target = listPath ?: projectRootPath ?: return
+                navigateTo(target, rootNode?.name ?: target.displayName)
+            }
+        }
+    }
+
+    // --- Tree mode ---
+
+    /** Toggle expansion of a directory row (Tree mode only). */
+    suspend fun toggleExpand(row: TreeRow) {
+        if (row.node.kind != FsKind.Directory || row.isPlaceholder) return
+        val key = row.node.path.stableId
+        if (_expandedIds.value.contains(key)) {
+            _expandedIds.update { it - key }
+        } else {
+            _expandedIds.update { it + key }
+        }
+        rebuildRows()
+    }
+
+    /** Collapse every directory except the project root. */
+    suspend fun collapseAll() {
+        val root = projectRootPath ?: return
+        _expandedIds.value = setOf(root.stableId)
+        rebuildRows()
+    }
+
+    /** Rebuild the flattened tree from the project root + the set of expanded ids. Deterministic:
+     *  every path maps to exactly one row id, so it can never produce duplicate LazyColumn keys. */
+    private suspend fun rebuildRows() {
+        val root = rootNode ?: return
+        val rootPath = projectRootPath ?: return
+        val result = mutableListOf<TreeRow>()
+        result.add(
+            TreeRow(
+                id = rootPath.stableId,
+                node = root,
                 depth = 0,
                 isExpanded = true,
                 isSelected = false,
+            ),
+        )
+        addExpandedChildren(rootPath, depth = 1, out = result)
+        _treeRows.value = result
+    }
+
+    private suspend fun addExpandedChildren(
+        parentPath: FsPath,
+        depth: Int,
+        out: MutableList<TreeRow>,
+    ) {
+        if (depth > 64) return // safety against pathological/cyclic structures
+        val children = runCatching { fs.list(parentPath) }.getOrElse { emptyList() }
+        if (children.isEmpty()) {
+            out.add(placeholderRow(parentPath, depth))
+            return
+        }
+        for (child in children) {
+            val isDir = child.kind == FsKind.Directory
+            val expanded = isDir && _expandedIds.value.contains(child.path.stableId)
+            out.add(
+                TreeRow(
+                    id = child.path.stableId,
+                    node = child,
+                    depth = depth,
+                    isExpanded = expanded,
+                    isSelected = false,
+                    badge = buildBadge(child.path.stableId),
+                ),
             )
-            _expandedPaths.value = setOf(rootPath.displayName)
-
-            val childRows = children.mapIndexed { index, child ->
-                buildRow(child, depth = 1, parentId = rootPath.displayName, index = index)
+            if (expanded) {
+                addExpandedChildren(child.path, depth + 1, out)
             }
-            _rows.value = listOf(rootRow) + childRows
-        } finally {
-            _isLoading.value = false
         }
     }
 
-    /** Toggle expansion of a directory row. */
-    suspend fun toggleExpand(row: TreeRow) {
-        val pathKey = row.node.path.displayName
-        val isCurrentlyExpanded = _expandedPaths.value.contains(pathKey)
+    private fun placeholderRow(parentPath: FsPath, depth: Int): TreeRow = TreeRow(
+        id = parentPath.stableId + "::empty",
+        node = FsNode(parentPath, "(empty)", FsKind.File, 0L, 0L),
+        depth = depth,
+        isExpanded = false,
+        isSelected = false,
+        isPlaceholder = true,
+    )
 
-        if (isCurrentlyExpanded) {
-            // Collapse: remove this node's children from rows
-            _expandedPaths.update { it - pathKey }
-            collapseNode(pathKey)
-        } else {
-            // Expand: load children and insert after this row
-            _expandedPaths.update { it + pathKey }
-            expandNode(row)
-        }
-    }
+    // --- List mode ---
 
-    /** Navigate into a directory (for list mode or tree double-click). */
+    /** Navigate into a directory (List mode); replaces [listRows] with that dir's flat children. */
     suspend fun navigateTo(path: FsPath, label: String) {
         _isLoading.value = true
         try {
+            listPath = path
             _currentPath.value = path
             updateBreadcrumb(path, label)
+            selectionState.clear()
 
             val children = fs.list(path)
-            _rows.value = children.mapIndexed { index, child ->
-                buildRow(child, depth = 0, parentId = path.displayName, index = index)
-            }
+            _listRows.value = children.map { child -> buildRow(child, depth = 0) }
         } finally {
             _isLoading.value = false
         }
     }
 
-    /** Navigate up one level in the breadcrumb. */
+    /** Navigate up one level in the breadcrumb (List mode). */
     suspend fun navigateUp() {
         val bc = _breadcrumb.value
         if (bc.size <= 1) return
@@ -168,11 +258,16 @@ class TreeViewModel(
         navigateTo(parent.path, parent.label)
     }
 
-    /** Refresh the current directory listing. */
+    /** Repaint the current view in-place (mode-aware) after a file operation. */
     suspend fun refresh() {
-        val path = _currentPath.value ?: return
-        val label = _breadcrumb.value.lastOrNull()?.label ?: return
-        navigateTo(path, label)
+        when (_viewMode.value) {
+            ExplorerViewMode.Tree -> rebuildRows()
+            ExplorerViewMode.List -> {
+                val path = listPath ?: _currentPath.value ?: return
+                val label = _breadcrumb.value.lastOrNull()?.label ?: path.displayName
+                navigateTo(path, label)
+            }
+        }
     }
 
     // --- Internal ---
@@ -183,24 +278,18 @@ class TreeViewModel(
 
         when {
             root is FsPath.Local && path is FsPath.Local -> {
-                // Build breadcrumb relative to project root
+                // Always start the trail at the project root so there is a tappable crumb (and the
+                // up button) the moment you descend even a single level.
+                entries.add(BreadcrumbEntry(rootNode?.name ?: root.file.name, root))
+
+                // Then append each segment below the root.
                 val rootSegments = getRelativeSegments(root.file)
                 val pathSegments = getRelativeSegments(path.file)
-
-                // Find common prefix and build from there
                 val relativeSegments = pathSegments.drop(rootSegments.size)
                 var accumulated = root.file
-                for ((i, segment) in relativeSegments.withIndex()) {
+                for (segment in relativeSegments) {
                     accumulated = java.io.File(accumulated, segment)
-                    entries.add(
-                        BreadcrumbEntry(
-                            label = if (i == 0 && relativeSegments.isNotEmpty()) relativeSegments[0] else segment,
-                            path = FsPath.Local(accumulated),
-                        )
-                    )
-                }
-                if (entries.isEmpty()) {
-                    entries.add(BreadcrumbEntry(label, root))
+                    entries.add(BreadcrumbEntry(segment, FsPath.Local(accumulated)))
                 }
             }
 
@@ -226,55 +315,16 @@ class TreeViewModel(
         return segments.reversed()
     }
 
-    private suspend fun expandNode(row: TreeRow) {
-        if (row.node.kind != dev.jcode.fs.FsKind.Directory) return
-
-        val children = fs.list(row.node.path)
-        val newRows = _rows.value.toMutableList()
-        val insertIndex = newRows.indexOfFirst { it.id == row.id } + 1
-
-        val childRows = children.mapIndexed { index, child ->
-            buildRow(child, depth = row.depth + 1, parentId = row.id, index = index)
-        }
-        newRows.addAll(insertIndex, childRows)
-        _rows.value = newRows
-    }
-
-    private fun collapseNode(pathKey: String) {
-        val rowsToRemove = mutableSetOf<String>()
-        // Find all rows that are descendants of this path
-        fun isDescendant(row: TreeRow): Boolean {
-            // A row is a descendant if its id starts with the pathKey + "/"
-            return row.id.startsWith("$pathKey/") || row.id == pathKey && row.depth > 0
-        }
-
-        val newRows = _rows.value.filter { row ->
-            if (row.id == pathKey) return@filter true
-            !isDescendantInSubtree(row, pathKey)
-        }
-        _rows.value = newRows
-    }
-
-    private fun isDescendantInSubtree(row: TreeRow, ancestorId: String): Boolean {
-        // Check if this row's id path contains the ancestor id as a prefix
-        return row.id.startsWith("$ancestorId/")
-    }
-
-    private fun buildRow(node: FsNode, depth: Int, parentId: String, index: Int): TreeRow {
-        val id = "$parentId/${node.name}"
-        val badge = buildBadge(node.path.displayName)
-        return TreeRow(
-            id = id,
-            node = node,
-            depth = depth,
-            isExpanded = false,
-            isSelected = false,
-            badge = badge,
-        )
-    }
+    private fun buildRow(node: FsNode, depth: Int): TreeRow = TreeRow(
+        id = node.path.stableId,
+        node = node,
+        depth = depth,
+        isExpanded = false,
+        isSelected = false,
+        badge = buildBadge(node.path.stableId),
+    )
 
     private fun buildBadge(pathKey: String): ExplorerBadge? {
-        // Placeholder: check scmStatus and problems maps
         scmStatus[pathKey]?.let { status ->
             return ExplorerBadge.VcsStatus(status)
         }

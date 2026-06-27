@@ -1,5 +1,6 @@
 package dev.jcode.design
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -27,6 +28,21 @@ enum class DensityMode {
     Comfortable,
 }
 
+/** User-selectable theme preference. [System] follows the OS dark-mode setting. */
+enum class ThemeMode(val configId: String) {
+    System("system"),
+    Light("light"),
+    Dark("dark");
+
+    companion object {
+        fun fromConfigId(id: String?): ThemeMode = when (id?.lowercase()) {
+            "light" -> Light
+            "system", "auto" -> System
+            else -> Dark
+        }
+    }
+}
+
 val LocalDensityMode = compositionLocalOf { DensityMode.Comfortable }
 val LocalIconSize = compositionLocalOf { 18.dp }
 
@@ -50,21 +66,22 @@ private val JCodeDarkColorScheme = darkColorScheme(
     onSurfaceVariant = androidx.compose.ui.graphics.Color(0xFFBAC2DE),
 )
 
+// Catppuccin Latte — the light counterpart to the Mocha dark scheme above.
 private val JCodeLightColorScheme = lightColorScheme(
-    primary = androidx.compose.ui.graphics.Color(0xFF6750A4),
-    onPrimary = androidx.compose.ui.graphics.Color(0xFFFFFFFF),
-    primaryContainer = androidx.compose.ui.graphics.Color(0xFFEADDFF),
-    onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFF21005D),
-    secondary = androidx.compose.ui.graphics.Color(0xFF625B71),
-    onSecondary = androidx.compose.ui.graphics.Color(0xFFFFFFFF),
-    tertiary = androidx.compose.ui.graphics.Color(0xFF7D5260),
-    onTertiary = androidx.compose.ui.graphics.Color(0xFFFFFFFF),
-    background = androidx.compose.ui.graphics.Color(0xFFFAFAFA),
-    onBackground = androidx.compose.ui.graphics.Color(0xFF1C1B1F),
-    surface = androidx.compose.ui.graphics.Color(0xFFFFFFFF),
-    onSurface = androidx.compose.ui.graphics.Color(0xFF1C1B1F),
-    surfaceVariant = androidx.compose.ui.graphics.Color(0xFFE7E0EC),
-    onSurfaceVariant = androidx.compose.ui.graphics.Color(0xFF49454F),
+    primary = androidx.compose.ui.graphics.Color(0xFF1E66F5), // blue
+    onPrimary = androidx.compose.ui.graphics.Color(0xFFEFF1F5),
+    primaryContainer = androidx.compose.ui.graphics.Color(0xFFCCD0DA), // surface0
+    onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFF4C4F69), // text
+    secondary = androidx.compose.ui.graphics.Color(0xFF8839EF), // mauve
+    onSecondary = androidx.compose.ui.graphics.Color(0xFFEFF1F5),
+    tertiary = androidx.compose.ui.graphics.Color(0xFF40A02B), // green
+    onTertiary = androidx.compose.ui.graphics.Color(0xFFEFF1F5),
+    background = androidx.compose.ui.graphics.Color(0xFFEFF1F5), // base
+    onBackground = androidx.compose.ui.graphics.Color(0xFF4C4F69), // text
+    surface = androidx.compose.ui.graphics.Color(0xFFE6E9EF), // mantle
+    onSurface = androidx.compose.ui.graphics.Color(0xFF4C4F69), // text
+    surfaceVariant = androidx.compose.ui.graphics.Color(0xFFCCD0DA), // surface0
+    onSurfaceVariant = androidx.compose.ui.graphics.Color(0xFF5C5F77), // subtext1
 )
 
 private val JCodeTypography = Typography(
@@ -84,10 +101,15 @@ private val JCodeTypography = Typography(
 
 @Composable
 fun M3Theme(
-    darkTheme: Boolean = true,
+    themeMode: ThemeMode = ThemeMode.System,
     densityMode: DensityMode = DensityMode.Comfortable,
     content: @Composable () -> Unit,
 ) {
+    val darkTheme = when (themeMode) {
+        ThemeMode.Dark -> true
+        ThemeMode.Light -> false
+        ThemeMode.System -> isSystemInDarkTheme()
+    }
     CompositionLocalProvider(
         LocalDensityMode provides densityMode,
         LocalIconSize provides 18.dp,

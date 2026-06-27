@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.28.3)
+cmake_minimum_required(VERSION 3.22.1)
 
 project(jcode_native_superbuild LANGUAGES C CXX)
 
@@ -127,17 +127,51 @@ function(jcode_fetch_libgit2)
     FetchContent_MakeAvailable(libgit2_upstream)
 endfunction()
 
+function(jcode_fetch_yaml_cpp)
+    set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_INSTALL OFF CACHE BOOL "" FORCE)
+    set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
+    FetchContent_Declare(yaml_cpp_upstream
+        GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+        GIT_TAG 0.8.0
+    )
+
+    FetchContent_MakeAvailable(yaml_cpp_upstream)
+endfunction()
+
 if(JCODE_NATIVE_MODULE STREQUAL "buffer")
-    jcode_add_stub_library(jcode_native_buffer jcodebuffer)
+    add_library(jcode_native_buffer SHARED
+        "${CMAKE_CURRENT_LIST_DIR}/buffer/src/piece_tree.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/buffer/src/jni_buffer.cpp"
+        "${JCODE_STUB_SOURCE}"
+    )
+    target_include_directories(jcode_native_buffer PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/buffer/src"
+    )
+    target_link_libraries(jcode_native_buffer PRIVATE log)
+    jcode_configure_target(jcode_native_buffer jcodebuffer)
 elseif(JCODE_NATIVE_MODULE STREQUAL "editor-render")
     jcode_add_stub_library(jcode_native_editor_render jcodernd)
 elseif(JCODE_NATIVE_MODULE STREQUAL "tree-sitter")
     jcode_fetch_tree_sitter()
     FetchContent_GetProperties(tree_sitter_upstream)
     jcode_add_stub_library(jcode_native_tree_sitter treesitter)
-    target_sources(jcode_native_tree_sitter PRIVATE "${CMAKE_CURRENT_LIST_DIR}/common/jcode_tree_sitter_anchor.c")
-    target_include_directories(jcode_native_tree_sitter PRIVATE "${tree_sitter_upstream_SOURCE_DIR}/lib/include")
-    target_link_libraries(jcode_native_tree_sitter PRIVATE "$<TARGET_FILE:tree-sitter>")
+    target_sources(jcode_native_tree_sitter PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/common/jcode_tree_sitter_anchor.c"
+        "${CMAKE_CURRENT_LIST_DIR}/tree-sitter/src/jni_treesitter.c"
+    )
+    target_include_directories(jcode_native_tree_sitter PRIVATE
+        "${tree_sitter_upstream_SOURCE_DIR}/lib/include"
+        "${CMAKE_CURRENT_LIST_DIR}/tree-sitter/src"
+    )
+    target_link_libraries(jcode_native_tree_sitter PRIVATE
+        "$<TARGET_FILE:tree-sitter>"
+        log
+        dl
+    )
 elseif(JCODE_NATIVE_MODULE STREQUAL "libgit2")
     jcode_fetch_mbedtls()
     jcode_fetch_libssh2()
@@ -154,11 +188,55 @@ elseif(JCODE_NATIVE_MODULE STREQUAL "libgit2")
 elseif(JCODE_NATIVE_MODULE STREQUAL "ripgrep-ffi")
     jcode_add_stub_library(jcode_native_ripgrep ripgrep_ffi)
 elseif(JCODE_NATIVE_MODULE STREQUAL "pty")
-    jcode_add_stub_library(jcode_native_pty pty)
+    add_library(jcode_native_pty SHARED
+        "${CMAKE_CURRENT_LIST_DIR}/pty/src/pty.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/pty/src/jni_pty.cpp"
+        "${JCODE_STUB_SOURCE}"
+    )
+    target_include_directories(jcode_native_pty PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/pty/src"
+    )
+    target_link_libraries(jcode_native_pty PRIVATE log)
+    jcode_configure_target(jcode_native_pty pty)
 elseif(JCODE_NATIVE_MODULE STREQUAL "vt")
-    jcode_add_stub_library(jcode_native_vt vtparser)
+    add_library(jcode_native_vt SHARED
+        "${CMAKE_CURRENT_LIST_DIR}/vt/src/vt_parser.c"
+        "${CMAKE_CURRENT_LIST_DIR}/vt/src/jni_vt.c"
+        "${JCODE_STUB_SOURCE}"
+    )
+    target_include_directories(jcode_native_vt PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/vt/src"
+    )
+    target_link_libraries(jcode_native_vt PRIVATE log)
+    jcode_configure_target(jcode_native_vt jcode_vt)
 elseif(JCODE_NATIVE_MODULE STREQUAL "wasmtime-ffi")
     jcode_add_stub_library(jcode_native_wasmtime jcode_wasm)
+elseif(JCODE_NATIVE_MODULE STREQUAL "core")
+    jcode_fetch_yaml_cpp()
+    FetchContent_GetProperties(yaml_cpp_upstream)
+    
+    add_library(jcode_native_core SHARED
+        "${CMAKE_CURRENT_LIST_DIR}/core/src/main/cpp/jni_core.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/core/src/main/cpp/jni_bridge.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/core/src/main/cpp/event_loop.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/core/src/main/cpp/resource_manager.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/core/src/main/cpp/logger.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/core/src/main/cpp/config_service.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/core/src/main/cpp/jni_config.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/core/src/main/cpp/editor_state.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/core/src/main/cpp/undo_manager.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/core/src/main/cpp/jni_editor_state.cpp"
+        "${JCODE_STUB_SOURCE}"
+    )
+    target_include_directories(jcode_native_core PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/core/src/main/cpp"
+        "${yaml_cpp_upstream_SOURCE_DIR}/include"
+    )
+    target_link_libraries(jcode_native_core PRIVATE 
+        log
+        yaml-cpp
+    )
+    jcode_configure_target(jcode_native_core jcode_core)
 else()
     message(FATAL_ERROR "Unknown JCODE_NATIVE_MODULE='${JCODE_NATIVE_MODULE}'")
 endif()

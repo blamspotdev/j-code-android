@@ -1,0 +1,13 @@
+id: jcode.templates
+name: JCode Project Templates
+publisher: jcode
+version: 0.1.0
+description: >-
+  First-party project templates scaffolded on-device by the embedded runtime.
+  Each template under templates/<id>/ is self-contained so it can later be split
+  into its own submodule with no path churn.
+templates:
+  - empty
+  - aspnet-vite-react-ts
+  - react-app
+  - angular-aspnet

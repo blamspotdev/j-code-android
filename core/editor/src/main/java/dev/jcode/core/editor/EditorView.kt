@@ -11,6 +11,7 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import dev.jcode.core.buffer.EditTx
+import dev.jcode.core.resource.ResourceManagerLocator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.launchIn
@@ -51,7 +52,8 @@ class EditorView @JvmOverloads constructor(
         }
         observationScope?.cancel()
         this.editorState = editorState
-        this.renderer = Renderer(typeface)
+        val resourceManager = runCatching { ResourceManagerLocator.resourceManager(context) }.getOrNull()
+        this.renderer = Renderer(typeface, resourceManager)
         val scope = MainScope()
         observationScope = scope
 
@@ -95,11 +97,12 @@ class EditorView @JvmOverloads constructor(
         val viewport = state.viewport.value
         val config = state.renderConfig.value
         val carets = state.carets.value
+        val theme = state.theme.value
 
         // Draw background
-        canvas.drawColor(state.theme.value.background.toInt())
+        canvas.drawColor(theme.background.toInt())
 
-        renderer.draw(canvas, snapshot, viewport, config, carets)
+        renderer.draw(canvas, snapshot, viewport, config, carets, theme = theme)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {

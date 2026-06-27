@@ -29,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.jcode.core.editor.EditorView
@@ -44,8 +45,8 @@ fun EditorPane(
     onTabClosed: (String) -> Unit = {},
     onOpenFile: () -> Unit = {},
 ) {
-    Column(modifier = modifier.fillMaxSize()) {
-        // Tab strip
+    Column(modifier = modifier.clipToBounds()) {
+        // Tab strip — explicit fixed height so it's never compressed
         TabStrip(
             group = group,
             onTabSelected = onTabSelected,
@@ -58,8 +59,8 @@ fun EditorPane(
         if (activeTab != null) {
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
+                    .weight(1f, fill = true)
+                    .clipToBounds(),
             ) {
                 EditorViewHost(
                     editorState = activeTab.editorState,
@@ -69,9 +70,7 @@ fun EditorPane(
         } else {
             // Empty state
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
+                modifier = Modifier.weight(1f, fill = true),
                 contentAlignment = Alignment.Center,
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -102,8 +101,8 @@ private fun TabStrip(
     onOpenFile: () -> Unit,
 ) {
     Surface(
-        tonalElevation = 1.dp,
         modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
     ) {
         Row(
             modifier = Modifier
@@ -204,7 +203,7 @@ fun EditorViewHost(
                 attach(editorState)
             }
         },
-        modifier = modifier,
+        modifier = modifier.clipToBounds(),
         update = { view ->
             // Ensure the view is attached to the current state
             view.attach(editorState)

@@ -42,6 +42,18 @@ interface WorkspaceDao {
     @Query("SELECT * FROM workspaces ORDER BY lastOpened DESC LIMIT 1")
     suspend fun getMostRecentWorkspace(): WorkspaceEntity?
 
+    @Query("SELECT * FROM workspaces WHERE rootPath = :rootPath LIMIT 1")
+    suspend fun getWorkspaceByRootPath(rootPath: String): WorkspaceEntity?
+
+    @Query("SELECT * FROM projects WHERE id = :id LIMIT 1")
+    suspend fun getProject(id: Long): ProjectEntity?
+
+    @Query("SELECT location FROM projects WHERE workspaceId = :workspaceId")
+    suspend fun getProjectLocations(workspaceId: Long): List<String>
+
+    @Query("UPDATE projects SET name = :name, location = :location WHERE id = :id")
+    suspend fun updateProject(id: Long, name: String, location: String)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertWorkspace(workspace: WorkspaceEntity): Long
 

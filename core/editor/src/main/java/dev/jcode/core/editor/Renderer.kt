@@ -5,8 +5,11 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.TextPaint
-import android.util.LruCache
 import dev.jcode.core.buffer.Snapshot
+import dev.jcode.core.editor.decor.ColoredSpan
+import dev.jcode.core.editor.decor.DecorationSet
+import dev.jcode.core.resource.LruManagedCache
+import dev.jcode.core.resource.ResourceManager
 import java.nio.charset.StandardCharsets
 
 /**
@@ -33,44 +36,45 @@ private data class ShapedLine(
  */
 class Renderer(
     private val typeface: Typeface,
+    resourceManager: ResourceManager? = null,
 ) {
-    private val lineShapeCache = LruCache<LineShapeKey, ShapedLine>(5000)
+    private val lineShapeCache = LruManagedCache<LineShapeKey, ShapedLine>(
+        name = "EditorLineShapeCache",
+        maxSize = 5000,
+    ).also { resourceManager?.registerCache(it) }
 
     private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         isSubpixelText = true
         this.typeface = this@Renderer.typeface
-        color = 0xFFCDD6F4.toInt()
     }
 
     private val lineNumberPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         isSubpixelText = true
         this.typeface = this@Renderer.typeface
-        textSize = textPaint.textSize * 0.85f
         textAlign = Paint.Align.RIGHT
-        color = 0xFF6C7086.toInt()
     }
 
-    private val selectionPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0x40585B76.toInt()
-    }
+    private val selectionPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
     private val cursorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFFF5E0DC.toInt()
         strokeWidth = 2f
     }
 
-    private val gutterBgPaint = Paint().apply {
-        color = 0xFF181825.toInt()
-    }
-
+    private val gutterBgPaint = Paint()
     private val gutterLinePaint = Paint().apply {
-        color = 0xFF313244.toInt()
         strokeWidth = 1f
     }
 
-    fun draw(canvas: Canvas, snapshot: Snapshot, viewport: Viewport, config: RenderConfig, carets: List<Caret>) {
+    fun draw(canvas: Canvas, snapshot: Snapshot, viewport: Viewport, config: RenderConfig, carets: List<Caret>, decorations: DecorationSet = DecorationSet.EMPTY, theme: EditorTheme = EditorTheme.DARK) {
         // Configure paint for current config
         textPaint.textSize = config.fontSizeSp
+        textPaint.color = theme.foreground.toInt()
+        lineNumberPaint.textSize = config.fontSizeSp * 0.85f
+        lineNumberPaint.color = theme.lineNumber.toInt()
+        selectionPaint.color = theme.selection.toInt()
+        cursorPaint.color = theme.cursor.toInt()
+        gutterBgPaint.color = theme.gutterBackground.toInt()
+        gutterLinePaint.color = theme.gutterBorder.toInt()
         lineNumberPaint.textSize = config.fontSizeSp * 0.85f
         val lineHeightPx = (config.fontSizeSp * config.lineHeightMultiplier).toInt().coerceAtLeast(1)
 
@@ -78,6 +82,10 @@ class Renderer(
         val visibleBottom = snapshot.lineCount.coerceAtMost(viewport.visibleLineBottom + 1)
 
         val gutterWidth = computeGutterWidth(snapshot, config)
+
+        // Get colored spans for syntax highlighting
+        val coloredSpans = decorations.atLayer(dev.jcode.core.editor.decor.Layer.GLYPH_COLOR)
+            .filterIsInstance<ColoredSpan>()
 
         // Draw gutter background
         canvas.drawRect(0f, 0f, gutterWidth.toFloat(), viewport.heightPx.toFloat(), gutterBgPaint)
@@ -114,9 +122,9 @@ class Renderer(
 
             // Draw line number
             lineNumberPaint.color = if (carets.any { snapshot.offsetToLineColumn(it.head).first == line }) {
-                0xFFCDD6F4.toInt()
+                theme.lineNumberActive.toInt()
             } else {
-                0xFF6C7086.toInt()
+                theme.lineNumber.toInt()
             }
             canvas.drawText(
                 "${line + 1}",
@@ -125,15 +133,13 @@ class Renderer(
                 lineNumberPaint,
             )
 
-            // Draw line text
-            val shaped = getShapedLine(lineText, config)
-            textPaint.color = 0xFFCDD6F4.toInt()
-            canvas.drawText(
-                shaped.text,
-                gutterWidth + 8f,
-                y + lineHeightPx * 0.7f,
-                textPaint,
-            )
+            // Draw line text with syntax highlighting
+            if (coloredSpans.isNotEmpty()) {
+                drawLineWithSpans(canvas, lineText, lineStart, lineEnd, coloredSpans, gutterWidth + 8f, y + lineHeightPx * 0.7f, config)
+            } else {
+                textPaint.color = theme.foreground.toInt()
+                canvas.drawText(lineText, gutterWidth + 8f, y + lineHeightPx * 0.7f, textPaint)
+            }
         }
 
         // Draw cursors
@@ -147,6 +153,43 @@ class Renderer(
                 val y = (line - visibleTop) * lineHeightPx + viewport.scrollY % lineHeightPx
                 canvas.drawLine(x, y.toFloat(), x, (y + lineHeightPx).toFloat(), cursorPaint)
             }
+        }
+    }
+
+    private fun drawLineWithSpans(
+        canvas: Canvas,
+        lineText: String,
+        lineStartByte: Int,
+        lineEndByte: Int,
+        spans: List<ColoredSpan>,
+        x: Float,
+        y: Float,
+        config: RenderConfig,
+    ) {
+        var currentX = x
+        var charIndex = 0
+
+        while (charIndex < lineText.length) {
+            val byteOffset = lineStartByte + charIndex
+
+            // Find the color for this position
+            val color = ColoredSpan.colorAt(spans, byteOffset) ?: 0xFFCDD6F4.toInt()
+
+            // Find how far this color extends
+            var endChar = charIndex + 1
+            while (endChar < lineText.length) {
+                val nextByteOffset = lineStartByte + endChar
+                val nextColor = ColoredSpan.colorAt(spans, nextByteOffset) ?: 0xFFCDD6F4.toInt()
+                if (nextColor != color) break
+                endChar++
+            }
+
+            // Draw this segment
+            val segment = lineText.substring(charIndex, endChar)
+            textPaint.color = color
+            canvas.drawText(segment, currentX, y, textPaint)
+            currentX += measureTextWidth(segment, config)
+            charIndex = endChar
         }
     }
 

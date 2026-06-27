@@ -9,7 +9,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        minSdk = 33
+        minSdk = 28
     }
 
     compileOptions {
@@ -30,6 +30,7 @@ dependencies {
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(project(":core:buffer"))
+    implementation(project(":core:resource"))
     implementation(libs.coroutines.android)
     implementation(libs.coroutines.core)
 }

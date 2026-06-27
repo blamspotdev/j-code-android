@@ -1,15 +1,15 @@
 package dev.jcode
 
-import android.content.ActivityNotFoundException
 import android.content.Context
-import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
-import android.provider.Settings
 import androidx.activity.result.ActivityResultLauncher
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -23,15 +23,21 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -41,6 +47,9 @@ import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.automirrored.rounded.MenuOpen
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowDropDown
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.BuildCircle
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.DatasetLinked
@@ -54,14 +63,20 @@ import androidx.compose.material.icons.rounded.Source
 import androidx.compose.material.icons.rounded.SyncProblem
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -74,6 +89,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -81,6 +97,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -98,9 +115,13 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jcode.adaptive.JCodePosture
 import dev.jcode.adaptive.JCodeWindowInfo
@@ -110,20 +131,39 @@ import dev.jcode.core.config.ConfigScope
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.config.ProjectConfig
 import dev.jcode.core.config.WorkspaceConfig
+import dev.jcode.core.distro.DistroBind
 import dev.jcode.core.distro.DistroEnvironmentState
+import dev.jcode.core.distro.DistroWizardProgress
+import dev.jcode.core.distro.ProotManager
+import dev.jcode.core.distro.RootfsDownloader
+import dev.jcode.core.distro.RootfsManager
+import dev.jcode.core.distro.SdkCatalogState
+import dev.jcode.core.term.TerminalSessionManager
+import dev.jcode.core.term.TerminalView
 import dev.jcode.design.CommandRegistry
 import dev.jcode.design.CommandSpec
+import dev.jcode.design.ThemeMode
 import dev.jcode.feature.editor.pane.EditorGroup
 import dev.jcode.feature.editor.pane.EditorPane
 import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.feature.explorer.ExplorerFeature
+import dev.jcode.feature.explorer.ExplorerViewMode
+import dev.jcode.feature.marketplace.MarketplaceServiceLocator
+import dev.jcode.feature.marketplace.ProjectTemplate
+import dev.jcode.feature.marketplace.ScaffoldState
+import dev.jcode.feature.marketplace.TemplateExtension
 import dev.jcode.feature.onboarding.OnboardingFeature
+import dev.jcode.feature.sdkmanager.SdkManagerFeature
 import dev.jcode.feature.settings.SettingsFeature
+import dev.jcode.fs.DEFAULT_SHARED_PROJECTS_ROOT
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
 import dev.jcode.fs.Workspace
+import dev.jcode.fs.WorkspaceCrumb
 import dev.jcode.fs.WorkspaceManager
+import dev.jcode.fs.WorkspaceNodeType
 import dev.jcode.fs.rememberOpenFolderLauncher
+import java.io.File
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -133,22 +173,23 @@ private enum class WorkbenchTool(
     val compactLabel: String = label,
 ) {
     Explorer("Explorer", Icons.Rounded.FolderOpen, "Files"),
-    Search("Search", Icons.Rounded.Search),
-    Scm("SCM", Icons.Rounded.Source, "Source"),
+    Search("Search", Icons.Rounded.Search, "Find"),
+    Scm("SCM", Icons.Rounded.Source, "SCM"),
     RunDebug("Run/Debug", Icons.Rounded.PlayArrow, "Run"),
     Extensions("Extensions", Icons.Rounded.Extension, "Ext"),
     SdkManager("SDK Manager", Icons.Rounded.BuildCircle, "SDK"),
-    Settings("Settings", Icons.Rounded.Settings),
+    Settings("Settings", Icons.Rounded.Settings, "Prefs"),
 }
 
-private enum class BottomPanelTab(
+private enum class RightPanelTab(
     val label: String,
     val icon: ImageVector,
+    val enabled: Boolean = true,
 ) {
-    Terminal("Terminal", Icons.Rounded.Terminal),
-    Problems("Problems", Icons.Rounded.SyncProblem),
-    Output("Output", Icons.AutoMirrored.Rounded.Article),
-    Tasks("Tasks", Icons.Rounded.Radar),
+    Terminal("Terminal", Icons.Rounded.Terminal, enabled = true),
+    Output("Output", Icons.AutoMirrored.Rounded.Article, enabled = true),
+    Problems("Problems", Icons.Rounded.SyncProblem, enabled = false),
+    DebugConsole("Debug Console", Icons.Rounded.Radar, enabled = false),
 }
 
 private data class EditorMetrics(
@@ -165,25 +206,29 @@ fun JCodeApp(
 ) {
     val windowInfo by rememberJCodeWindowInfo()
     val workspace by viewModel.currentWorkspace.collectAsStateWithLifecycle()
+    val breadcrumb by viewModel.breadcrumb.collectAsStateWithLifecycle()
     val selectedProject by viewModel.selectedProject.collectAsStateWithLifecycle()
     val editorGroup by viewModel.editorGroup.collectAsStateWithLifecycle()
-    val showCreateDialog by viewModel.showCreateProjectDialog.collectAsStateWithLifecycle()
+    val showNewItemDialog by viewModel.showNewItemDialog.collectAsStateWithLifecycle()
+    val scaffoldState by viewModel.scaffoldState.collectAsStateWithLifecycle()
+    val templates by viewModel.templates.collectAsStateWithLifecycle()
     val workspaceConfig by viewModel.workspaceConfig.collectAsStateWithLifecycle()
     val projectConfig by viewModel.projectConfig.collectAsStateWithLifecycle()
     val effectiveConfig by viewModel.effectiveConfig.collectAsStateWithLifecycle()
     val workspaceConfigError by viewModel.workspaceConfigError.collectAsStateWithLifecycle()
     val projectConfigError by viewModel.projectConfigError.collectAsStateWithLifecycle()
     val environmentState by viewModel.environmentState.collectAsStateWithLifecycle()
+    val sdkCatalogState by viewModel.sdkCatalogState.collectAsStateWithLifecycle()
+    val autoSetupProgress by viewModel.autoSetupProgress.collectAsStateWithLifecycle(initialValue = DistroWizardProgress.Idle)
+    val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
-    val context = LocalContext.current
     val openFolderLauncher = rememberOpenFolderLauncher(
-        workspaceManager = viewModel.workspaceManager,
-        onSafWarning = { warning ->
-            scope.launch { snackbarHostState.showSnackbar(warning) }
-        },
+        onFolderPicked = viewModel::openExternalFolder,
     )
+    val openFolderTypePrompt by viewModel.openFolderTypePrompt.collectAsStateWithLifecycle()
     var environmentWizardVisible by rememberSaveable { mutableStateOf(false) }
+    val environmentNotConfigured = environmentState.smokeTestPassed != true
+    val showFirstRunEnvironmentScreen = environmentNotConfigured && !environmentState.firstRunSetupDeferred
 
     LaunchedEffect(viewModel) {
         viewModel.messages.collectLatest { message ->
@@ -209,12 +254,19 @@ fun JCodeApp(
         workspaceConfigError = workspaceConfigError,
         projectConfigError = projectConfigError,
         environmentState = environmentState,
+        autoSetupProgress = autoSetupProgress,
+        sdkCatalogState = sdkCatalogState,
         workspaceManager = viewModel.workspaceManager,
         snackbarHostState = snackbarHostState,
         openFolderLauncher = openFolderLauncher,
-        onCreateProject = viewModel::requestCreateProject,
+        breadcrumb = breadcrumb,
+        onCloseWorkspace = viewModel::closeWorkspace,
+        onCloseProject = viewModel::closeProject,
+        onCreateProject = viewModel::requestNew,
         onRemoveProject = viewModel::removeProject,
         onSelectProject = viewModel::selectProject,
+        onOpenProject = viewModel::openProject,
+        onRenameProject = viewModel::renameProject,
         onOpenFile = viewModel::openFile,
         onSelectEditorTab = viewModel::selectEditorTab,
         onCloseEditorTab = viewModel::closeEditorTab,
@@ -223,38 +275,60 @@ fun JCodeApp(
         onUpdateEditorWordWrap = viewModel::updateEditorWordWrap,
         onUpdateEditorMinimap = viewModel::updateEditorMinimap,
         onUpdateEditorLigatures = viewModel::updateEditorLigatures,
+        onUpdateExplorerViewMode = viewModel::updateExplorerViewMode,
+        themeMode = themeMode,
+        onUpdateThemeMode = { viewModel.setThemeMode(it) },
         onOpenWorkspaceConfig = viewModel::openWorkspaceConfigFile,
         onOpenProjectConfig = viewModel::openProjectConfigFile,
         onRefreshEnvironment = viewModel::refreshEnvironment,
         onOpenEnvironmentWizard = { environmentWizardVisible = true },
+        onAutoSetup = viewModel::runAutoSetup,
+        onRefreshSdkCatalog = viewModel::refreshSdkCatalog,
+        onInstallSdkCatalogEntry = viewModel::installSdkCatalogEntry,
+        onVerifySdkCatalogEntry = viewModel::verifySdkCatalogEntry,
+        onUninstallSdkCatalogEntry = viewModel::uninstallSdkCatalogEntry,
     )
 
-    if (showCreateDialog) {
-        CreateProjectDialog(
-            onDismiss = viewModel::dismissCreateProjectDialog,
-            onConfirm = viewModel::createProject,
+    if (showNewItemDialog) {
+        NewItemDialog(
+            templates = templates,
+            scaffoldState = scaffoldState,
+            installedToolchains = sdkCatalogState.installedEntryIds,
+            onDismiss = viewModel::dismissNewDialog,
+            onConfirm = viewModel::createNewItem,
+        )
+    }
+
+    openFolderTypePrompt?.let { path ->
+        OpenFolderTypeDialog(
+            folderName = path.displayName,
+            onDismiss = viewModel::dismissOpenFolderPrompt,
+            onConfirm = viewModel::resolveOpenFolderType,
+        )
+    }
+
+    if (showFirstRunEnvironmentScreen) {
+        OnboardingFeature.FirstRunEnvironmentScreen(
+            environmentState = environmentState,
+            autoSetupProgress = autoSetupProgress,
+            onRefresh = { viewModel.refreshEnvironment() },
+            onSelectDistro = { viewModel.selectWizardDistro(it) },
+            onRunStep = { stepId -> viewModel.runEnvironmentStep(stepId) },
+            onAutoSetup = { viewModel.runAutoSetup() },
+            onSetupManualLater = { viewModel.deferFirstRunEnvironmentSetup() },
+            onDismiss = { viewModel.deferFirstRunEnvironmentSetup() },
         )
     }
 
     if (environmentWizardVisible) {
         OnboardingFeature.TermuxDistroWizard(
             environmentState = environmentState,
+            autoSetupProgress = autoSetupProgress,
             onDismiss = { environmentWizardVisible = false },
-            onRefresh = viewModel::refreshEnvironment,
-            onSelectDistro = viewModel::selectWizardDistro,
-            onRunStep = viewModel::runEnvironmentStep,
-            onInstallTermuxFromFdroid = {
-                context.openExternalUrl("https://f-droid.org/en/packages/com.termux/")
-            },
-            onOpenTermuxGitHubReleases = {
-                context.openExternalUrl("https://github.com/termux/termux-app/releases")
-            },
-            onInstallTermuxApi = {
-                context.openExternalUrl("https://f-droid.org/en/packages/com.termux.api/")
-            },
-            onGrantRunCommandPermission = {
-                context.openAppDetailsSettings()
-            },
+            onRefresh = { viewModel.refreshEnvironment() },
+            onSelectDistro = { viewModel.selectWizardDistro(it) },
+            onRunStep = { stepId -> viewModel.runEnvironmentStep(stepId) },
+            onAutoSetup = { viewModel.runAutoSetup() },
         )
     }
 }
@@ -271,12 +345,19 @@ private fun JCodeShell(
     workspaceConfigError: String?,
     projectConfigError: String?,
     environmentState: DistroEnvironmentState,
+    autoSetupProgress: DistroWizardProgress,
+    sdkCatalogState: SdkCatalogState,
     workspaceManager: WorkspaceManager,
     snackbarHostState: SnackbarHostState,
     openFolderLauncher: ActivityResultLauncher<Uri?>,
+    breadcrumb: List<WorkspaceCrumb>,
+    onCloseWorkspace: () -> Unit,
+    onCloseProject: () -> Unit,
     onCreateProject: () -> Unit,
     onRemoveProject: (Long) -> Unit,
     onSelectProject: (Long) -> Unit,
+    onOpenProject: (Project) -> Unit,
+    onRenameProject: (Long, String) -> Unit,
     onOpenFile: (dev.jcode.fs.FsNode) -> Unit,
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
@@ -285,50 +366,209 @@ private fun JCodeShell(
     onUpdateEditorWordWrap: (ConfigScope, Boolean) -> Unit,
     onUpdateEditorMinimap: (ConfigScope, Boolean) -> Unit,
     onUpdateEditorLigatures: (ConfigScope, Boolean) -> Unit,
+    onUpdateExplorerViewMode: (ConfigScope, String) -> Unit,
+    themeMode: ThemeMode,
+    onUpdateThemeMode: (ThemeMode) -> Unit,
     onOpenWorkspaceConfig: () -> Unit,
     onOpenProjectConfig: () -> Unit,
     onRefreshEnvironment: () -> Unit,
     onOpenEnvironmentWizard: () -> Unit,
+    onAutoSetup: () -> Unit,
+    onRefreshSdkCatalog: () -> Unit,
+    onInstallSdkCatalogEntry: (String) -> Unit,
+    onVerifySdkCatalogEntry: (String) -> Unit,
+    onUninstallSdkCatalogEntry: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    val appContext = LocalContext.current.applicationContext
     val configuration = LocalConfiguration.current
     val focusRequester = remember { FocusRequester() }
     val compactDrawerState = rememberDrawerState(DrawerValue.Closed)
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val usesModalWorkspace = !isLandscape
-    val canShowRightSidebar = isLandscape
+    val isMobileLandscapeMode = isLandscape && windowInfo.widthClass != JCodeWindowWidthClass.Expanded
+    val usesModalWorkspace = !isLandscape || isMobileLandscapeMode
+    val isPortraitMobileMode = usesModalWorkspace && windowInfo.widthClass == JCodeWindowWidthClass.Compact
+    val hasLandscapeInspectorSidebar = isLandscape
+    val canShowRightSidebar = true
     val leftSidebarWidth = if (windowInfo.widthClass == JCodeWindowWidthClass.Expanded) 284.dp else 236.dp
-    val rightSidebarWidth = if (windowInfo.widthClass == JCodeWindowWidthClass.Expanded) 216.dp else 188.dp
+    val rightSidebarWidth = (configuration.screenWidthDp * 0.75f).dp
     val activeTab = editorGroup.activeTab
     val metrics = rememberEditorMetrics(activeTab)
+    val showPersistentRail = !isPortraitMobileMode
+    val portraitRightSidebarTabs = remember { RightPanelTab.entries.toSet() }
 
     var selectedTool by rememberSaveable { mutableStateOf(WorkbenchTool.Explorer) }
     var leftSidebarExpanded by rememberSaveable(isLandscape, windowInfo.widthClass) {
-        mutableStateOf(isLandscape && windowInfo.widthClass == JCodeWindowWidthClass.Expanded)
+        mutableStateOf(isLandscape && windowInfo.widthClass != JCodeWindowWidthClass.Compact)
     }
-    var rightSidebarVisible by rememberSaveable(canShowRightSidebar, windowInfo.widthClass) {
-        mutableStateOf(canShowRightSidebar)
+    val isPersistentLeftSidebarVisible = !usesModalWorkspace && leftSidebarExpanded
+    var rightSidebarVisible by rememberSaveable(isLandscape, windowInfo.widthClass) {
+        mutableStateOf(isLandscape)
     }
-    var bottomPanelTab by rememberSaveable { mutableStateOf(BottomPanelTab.Terminal) }
-    var bottomPanelExpanded by rememberSaveable(usesModalWorkspace, windowInfo.hasPhysicalKeyboard) {
-        mutableStateOf(!usesModalWorkspace || windowInfo.hasPhysicalKeyboard)
+    var rightPanelTab by rememberSaveable {
+        mutableStateOf(RightPanelTab.Terminal)
     }
     var commandPaletteVisible by rememberSaveable { mutableStateOf(false) }
+    var terminalSessionIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var selectedTerminalSessionId by rememberSaveable { mutableStateOf("") }
 
-    DisposableEffect(onCreateProject, openFolderLauncher, onOpenWorkspaceConfig, onOpenProjectConfig, selectedProject?.id) {
+    // Process-lifetime manager so terminal sessions (native PTY processes) survive Activity
+    // recreation/backgrounding instead of being orphaned with the composition.
+    val terminalSessionManager = remember(appContext) { TerminalSessionHost.manager(appContext) }
+    val terminalShellCommand = effectiveConfig.terminal.shellLinux?.takeIf { it.isNotBlank() } ?: "/bin/bash --login"
+    val terminalReady = environmentState.prootInstalled && environmentState.distroInstalled == true
+
+    fun createTerminalSession() {
+        if (!terminalReady) {
+            scope.launch {
+                snackbarHostState.showSnackbar("Finish environment setup before opening the terminal.")
+            }
+            return
+        }
+        // Mount the whole projects tree at /workspace so the shell can navigate the full
+        // Workspace/Project hierarchy, and start in the open Project (or the open User Workspace when
+        // no project is selected), mapped to its path under /workspace:
+        //   /workspace                            (Default, nothing open)
+        //   /workspace/{project}                  (Default, project open)
+        //   /workspace/{workspace}                (User Workspace, no project)
+        //   /workspace/{workspace}/{project}      (User Workspace, project open)
+        // A SAF project lives outside the projects root, so it falls back to /workspace.
+        val projectsRoot = DEFAULT_SHARED_PROJECTS_ROOT.trimEnd('/')
+        fun guestPathFor(hostPath: String?): String? = when {
+            hostPath.isNullOrBlank() -> null
+            hostPath == projectsRoot -> "/workspace"
+            hostPath.startsWith("$projectsRoot/") -> "/workspace" + hostPath.removePrefix(projectsRoot)
+            else -> null
+        }
+        val projectHost = (selectedProject?.fsPath as? FsPath.Local)?.file?.absolutePath
+        val workspaceHost = workspace?.takeIf { breadcrumb.size > 1 }?.rootPath
+        val terminalWorkdir = guestPathFor(projectHost)
+            ?: guestPathFor(workspaceHost)
+            ?: "/workspace"
+        val session = terminalSessionManager.createSession(
+            distroId = environmentState.runtime.selectedDistro.id,
+            binds = listOf(DistroBind(host = DEFAULT_SHARED_PROJECTS_ROOT, target = "/workspace")),
+            workdir = terminalWorkdir,
+            user = "root", // Use root since jcode user may not exist in minimal rootfs
+            shellCommand = terminalShellCommand,
+            rootfsArch = environmentState.runtime.selectedDistro.arch,
+        )
+        if (session == null) {
+            scope.launch {
+                val message = if (terminalSessionManager.sessionCount >= terminalSessionManager.maxSessions) {
+                    "Maximum terminal sessions reached (${terminalSessionManager.maxSessions})."
+                } else {
+                    "Failed to start terminal session."
+                }
+                snackbarHostState.showSnackbar(message)
+            }
+            return
+        }
+        terminalSessionIds = terminalSessionIds + session.id
+        selectedTerminalSessionId = session.id
+        terminalSessionManager.switchSession(session.id)
+        // Hold the foreground service while this terminal is alive (keeps the process from being
+        // killed/frozen in the background so the shell keeps running).
+        TerminalSessionHost.onSessionStarted(appContext, session.id)
+    }
+
+    fun selectTerminalSession(sessionId: String) {
+        selectedTerminalSessionId = sessionId
+        terminalSessionManager.switchSession(sessionId)
+    }
+
+    fun closeTerminalSession(sessionId: String) {
+        val remaining = terminalSessionIds.filterNot { it == sessionId }
+        terminalSessionManager.closeSession(sessionId)
+        TerminalSessionHost.onSessionStopped(sessionId)
+        terminalSessionIds = remaining
+        if (selectedTerminalSessionId == sessionId) {
+            if (remaining.isNotEmpty()) {
+                selectedTerminalSessionId = remaining.last()
+                terminalSessionManager.switchSession(selectedTerminalSessionId)
+            } else {
+                selectedTerminalSessionId = ""
+            }
+        }
+    }
+
+    fun closeAllTerminalSessions() {
+        // Kill every live PTY (the tracked ids may drift from the manager's sessions), then clear state.
+        val ids = (terminalSessionIds + terminalSessionManager.sessions.keys).distinct()
+        ids.forEach { id ->
+            terminalSessionManager.closeSession(id)
+            TerminalSessionHost.onSessionStopped(id)
+        }
+        terminalSessionIds = emptyList()
+        selectedTerminalSessionId = ""
+    }
+
+    // Set when the user explicitly closes the project: suppresses the convenience auto-start so the
+    // terminal stays empty (a clean slate). Reset once a project/workspace is opened again.
+    var terminalAutoStartSuppressed by rememberSaveable { mutableStateOf(false) }
+
+    // Closing a project tears down its working context: kill its terminal sessions (the VM clears the
+    // editor + unregisters the project), leaving a clean slate.
+    val handleCloseProject: () -> Unit = {
+        closeAllTerminalSessions()
+        terminalAutoStartSuppressed = true
+        onCloseProject()
+    }
+
+    LaunchedEffect(selectedProject?.id, breadcrumb.size) {
+        if (selectedProject != null || breadcrumb.size > 1) terminalAutoStartSuppressed = false
+    }
+
+    var terminalAutoStarted by rememberSaveable { mutableStateOf(false) }
+
+    // Reconcile restored session ids with the process-lifetime manager's live sessions. Covers:
+    //  - Activity recreation: the manager survived, so adopt its live sessions (and their scrollback).
+    //  - Process restart: ids may be restored from saved state but the PTYs are gone -> clear stale
+    //    ids and allow auto-start to spawn a fresh shell.
+    LaunchedEffect(Unit) {
+        val live = terminalSessionManager.sessions.keys.toList()
+        if (live.isNotEmpty()) {
+            terminalSessionIds = live
+            if (selectedTerminalSessionId !in live) selectedTerminalSessionId = live.last()
+            terminalSessionManager.switchSession(selectedTerminalSessionId)
+            terminalAutoStarted = true
+        } else {
+            if (terminalSessionIds.isNotEmpty()) {
+                terminalSessionIds = emptyList()
+                selectedTerminalSessionId = ""
+            }
+            terminalAutoStarted = false
+        }
+    }
+
+    // Auto-start terminal session on launch if environment is ready
+    LaunchedEffect(terminalReady, terminalAutoStarted) {
+        if (terminalReady && !terminalAutoStarted && !terminalAutoStartSuppressed && terminalSessionIds.isEmpty()) {
+            terminalAutoStarted = true
+            createTerminalSession()
+        }
+    }
+
+    DisposableEffect(onCreateProject, openFolderLauncher, onOpenWorkspaceConfig, onOpenProjectConfig, onAutoSetup, selectedProject?.id) {
         CommandRegistry.clear()
         CommandRegistry.register(
-            id = "workspace.addProject",
-            title = "Add Project",
+            id = "workspace.newFolder",
+            title = "New Folder",
             group = "Workspace",
             action = onCreateProject,
         )
         CommandRegistry.register(
-            id = "workspace.openExternalFolder",
-            title = "Open External Folder",
+            id = "workspace.openFolder",
+            title = "Open Folder",
             group = "Workspace",
             action = { openFolderLauncher.launch(null) },
+        )
+        CommandRegistry.register(
+            id = "workspace.autoSetupEnvironment",
+            title = "Auto-Setup Environment",
+            group = "Workspace",
+            action = onAutoSetup,
         )
         CommandRegistry.register(
             id = "workbench.focusExplorer",
@@ -368,59 +608,67 @@ private fun JCodeShell(
         focusRequester.requestFocus()
     }
 
+    LaunchedEffect(rightSidebarVisible, rightPanelTab, terminalReady) {
+        if (rightSidebarVisible && rightPanelTab == RightPanelTab.Terminal && terminalReady &&
+            !terminalAutoStartSuppressed && terminalSessionIds.isEmpty()
+        ) {
+            createTerminalSession()
+        }
+    }
+
     val drawerContent: @Composable () -> Unit = {
         ModalDrawerSheet(
-            modifier = Modifier.width(384.dp),
+            modifier = Modifier.width(332.dp),
             drawerContainerColor = MaterialTheme.colorScheme.surface,
         ) {
-            Row(modifier = Modifier.fillMaxHeight()) {
-                DockRail(
-                    selectedTool = selectedTool,
-                    onToolSelected = {
-                        selectedTool = it
-                        if (isLandscape) {
-                            leftSidebarExpanded = true
-                        }
-                        scope.launch { compactDrawerState.close() }
-                    },
-                    compact = true,
-                    modifier = Modifier.fillMaxHeight(),
-                )
-                WorkspacePanel(
-                    selectedTool = selectedTool,
-                    workspace = workspace,
-                    selectedProject = selectedProject,
-                    editorGroup = editorGroup,
-                    workspaceConfig = workspaceConfig,
-                    projectConfig = projectConfig,
-                    effectiveConfig = effectiveConfig,
-                    workspaceConfigError = workspaceConfigError,
-                    projectConfigError = projectConfigError,
-                    environmentState = environmentState,
-                    workspaceManager = workspaceManager,
-                    windowInfo = windowInfo,
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .weight(1f),
-                    onCreateProject = onCreateProject,
-                    onRemoveProject = onRemoveProject,
-                    onSelectProject = onSelectProject,
-                    onOpenExternalFolder = { openFolderLauncher.launch(null) },
-                    onOpenFile = onOpenFile,
-                    onUpdateEditorFontSize = onUpdateEditorFontSize,
-                    onUpdateEditorTabSize = onUpdateEditorTabSize,
-                    onUpdateEditorWordWrap = onUpdateEditorWordWrap,
-                    onUpdateEditorMinimap = onUpdateEditorMinimap,
-                    onUpdateEditorLigatures = onUpdateEditorLigatures,
-                    onOpenWorkspaceConfig = onOpenWorkspaceConfig,
-                    onOpenProjectConfig = onOpenProjectConfig,
-                    onRefreshEnvironment = onRefreshEnvironment,
-                    onOpenEnvironmentWizard = onOpenEnvironmentWizard,
-                    onSnackbar = { message ->
-                        scope.launch { snackbarHostState.showSnackbar(message) }
-                    },
-                )
-            }
+            WorkspacePanel(
+                selectedTool = selectedTool,
+                workspace = workspace,
+                selectedProject = selectedProject,
+                editorGroup = editorGroup,
+                workspaceConfig = workspaceConfig,
+                projectConfig = projectConfig,
+                effectiveConfig = effectiveConfig,
+                workspaceConfigError = workspaceConfigError,
+                projectConfigError = projectConfigError,
+                environmentState = environmentState,
+                autoSetupProgress = autoSetupProgress,
+                sdkCatalogState = sdkCatalogState,
+                workspaceManager = workspaceManager,
+                windowInfo = windowInfo,
+                modifier = Modifier.fillMaxHeight(),
+                breadcrumb = breadcrumb,
+                onCloseWorkspace = onCloseWorkspace,
+                onCloseProject = handleCloseProject,
+                onCreateProject = onCreateProject,
+                onRemoveProject = onRemoveProject,
+                onSelectProject = onSelectProject,
+                onOpenProject = onOpenProject,
+                onRenameProject = onRenameProject,
+                onSelectTool = { selectedTool = it },
+                onOpenExternalFolder = { openFolderLauncher.launch(null) },
+                onOpenFile = onOpenFile,
+                onUpdateEditorFontSize = onUpdateEditorFontSize,
+                onUpdateEditorTabSize = onUpdateEditorTabSize,
+                onUpdateEditorWordWrap = onUpdateEditorWordWrap,
+                onUpdateEditorMinimap = onUpdateEditorMinimap,
+                onUpdateEditorLigatures = onUpdateEditorLigatures,
+                onUpdateExplorerViewMode = onUpdateExplorerViewMode,
+                themeMode = themeMode,
+                onUpdateThemeMode = onUpdateThemeMode,
+                onOpenWorkspaceConfig = onOpenWorkspaceConfig,
+                onOpenProjectConfig = onOpenProjectConfig,
+                onRefreshEnvironment = onRefreshEnvironment,
+                onOpenEnvironmentWizard = onOpenEnvironmentWizard,
+                onAutoSetup = onAutoSetup,
+                onRefreshSdkCatalog = onRefreshSdkCatalog,
+                onInstallSdkCatalogEntry = onInstallSdkCatalogEntry,
+                onVerifySdkCatalogEntry = onVerifySdkCatalogEntry,
+                onUninstallSdkCatalogEntry = onUninstallSdkCatalogEntry,
+                onSnackbar = { message ->
+                    scope.launch { snackbarHostState.showSnackbar(message) }
+                },
+            )
         }
     }
 
@@ -459,17 +707,71 @@ private fun JCodeShell(
                     .fillMaxSize()
                     .padding(innerPadding),
             ) {
-                if (!usesModalWorkspace) {
+                if (showPersistentRail) {
                     DockRail(
                         selectedTool = selectedTool,
                         onToolSelected = {
                             selectedTool = it
-                            leftSidebarExpanded = true
+                            if (usesModalWorkspace) {
+                                scope.launch { compactDrawerState.open() }
+                            } else {
+                                leftSidebarExpanded = true
+                            }
                         },
                         compact = true,
                         modifier = Modifier.fillMaxHeight(),
                     )
-                    if (leftSidebarExpanded) {
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                ) {
+                    EditorWorkspace(
+                        windowInfo = windowInfo,
+                        workspace = workspace,
+                        selectedProject = selectedProject,
+                        editorGroup = editorGroup,
+                        activeTab = activeTab,
+                        metrics = metrics,
+                        effectiveConfig = effectiveConfig,
+                        isLandscape = isLandscape,
+                        leftSidebarExpanded = isPersistentLeftSidebarVisible,
+                        canShowRightSidebar = canShowRightSidebar,
+                        rightSidebarVisible = rightSidebarVisible,
+                        modifier = Modifier.fillMaxSize(),
+                        onToggleLeftSidebar = {
+                            if (usesModalWorkspace) {
+                                scope.launch { compactDrawerState.open() }
+                            } else {
+                                leftSidebarExpanded = !leftSidebarExpanded
+                            }
+                        },
+                        onToggleRightSidebar = {
+                            if (usesModalWorkspace) {
+                                rightSidebarVisible = !rightSidebarVisible
+                            } else if (canShowRightSidebar) {
+                                rightSidebarVisible = !rightSidebarVisible
+                            }
+                        },
+                        onToolSelected = { selectedTool = it },
+                        onShowTerminal = {
+                            rightPanelTab = RightPanelTab.Terminal
+                            rightSidebarVisible = true
+                        },
+                        onSelectEditorTab = onSelectEditorTab,
+                        onCloseEditorTab = onCloseEditorTab,
+                        onOpenFileRequest = {
+                            selectedTool = WorkbenchTool.Explorer
+                            if (usesModalWorkspace) {
+                                scope.launch { compactDrawerState.open() }
+                            } else {
+                                leftSidebarExpanded = true
+                            }
+                        },
+                    )
+
+                    if (isPersistentLeftSidebarVisible) {
                         WorkspacePanel(
                             selectedTool = selectedTool,
                             workspace = workspace,
@@ -481,14 +783,24 @@ private fun JCodeShell(
                             workspaceConfigError = workspaceConfigError,
                             projectConfigError = projectConfigError,
                             environmentState = environmentState,
+                            autoSetupProgress = autoSetupProgress,
+                            sdkCatalogState = sdkCatalogState,
                             workspaceManager = workspaceManager,
                             windowInfo = windowInfo,
                             modifier = Modifier
+                                .align(Alignment.CenterStart)
                                 .fillMaxHeight()
-                                .width(leftSidebarWidth),
+                                .width(leftSidebarWidth)
+                                .zIndex(1f),
+                            breadcrumb = breadcrumb,
+                            onCloseWorkspace = onCloseWorkspace,
+                            onCloseProject = handleCloseProject,
                             onCreateProject = onCreateProject,
                             onRemoveProject = onRemoveProject,
                             onSelectProject = onSelectProject,
+                            onOpenProject = onOpenProject,
+                            onRenameProject = onRenameProject,
+                            onSelectTool = { selectedTool = it },
                             onOpenExternalFolder = { openFolderLauncher.launch(null) },
                             onOpenFile = onOpenFile,
                             onUpdateEditorFontSize = onUpdateEditorFontSize,
@@ -496,10 +808,18 @@ private fun JCodeShell(
                             onUpdateEditorWordWrap = onUpdateEditorWordWrap,
                             onUpdateEditorMinimap = onUpdateEditorMinimap,
                             onUpdateEditorLigatures = onUpdateEditorLigatures,
+                            onUpdateExplorerViewMode = onUpdateExplorerViewMode,
+                            themeMode = themeMode,
+                            onUpdateThemeMode = onUpdateThemeMode,
                             onOpenWorkspaceConfig = onOpenWorkspaceConfig,
                             onOpenProjectConfig = onOpenProjectConfig,
                             onRefreshEnvironment = onRefreshEnvironment,
                             onOpenEnvironmentWizard = onOpenEnvironmentWizard,
+                            onAutoSetup = onAutoSetup,
+                            onRefreshSdkCatalog = onRefreshSdkCatalog,
+                            onInstallSdkCatalogEntry = onInstallSdkCatalogEntry,
+                            onVerifySdkCatalogEntry = onVerifySdkCatalogEntry,
+                            onUninstallSdkCatalogEntry = onUninstallSdkCatalogEntry,
                             onSnackbar = { message ->
                                 scope.launch { snackbarHostState.showSnackbar(message) }
                             },
@@ -507,76 +827,31 @@ private fun JCodeShell(
                     }
                 }
 
-                EditorWorkspace(
-                    windowInfo = windowInfo,
-                    workspace = workspace,
-                    selectedProject = selectedProject,
-                    editorGroup = editorGroup,
-                    activeTab = activeTab,
-                    metrics = metrics,
-                    effectiveConfig = effectiveConfig,
-                    isLandscape = isLandscape,
-                    leftSidebarExpanded = leftSidebarExpanded,
-                    canShowRightSidebar = canShowRightSidebar,
-                    rightSidebarVisible = rightSidebarVisible,
-                    modifier = Modifier.weight(1f),
-                    onToggleLeftSidebar = {
-                        if (usesModalWorkspace) {
-                            scope.launch { compactDrawerState.open() }
-                        } else {
-                            leftSidebarExpanded = !leftSidebarExpanded
-                        }
-                    },
-                    onToggleRightSidebar = {
-                        if (canShowRightSidebar) {
-                            rightSidebarVisible = !rightSidebarVisible
-                        }
-                    },
-                    onToolSelected = { selectedTool = it },
-                    onCreateProject = onCreateProject,
-                    onOpenExternalFolder = { openFolderLauncher.launch(null) },
-                    onShowCommandPalette = { commandPaletteVisible = true },
-                    onShowProblems = {
-                        bottomPanelTab = BottomPanelTab.Problems
-                        bottomPanelExpanded = true
-                    },
-                    onToggleBottomPanel = { bottomPanelExpanded = !bottomPanelExpanded },
-                    onSelectEditorTab = onSelectEditorTab,
-                    onCloseEditorTab = onCloseEditorTab,
-                    onOpenFileRequest = {
-                        selectedTool = WorkbenchTool.Explorer
-                        if (usesModalWorkspace) {
-                            scope.launch { compactDrawerState.open() }
-                        } else {
-                            leftSidebarExpanded = true
-                        }
-                    },
-                    selectedBottomPanelTab = bottomPanelTab,
-                    onBottomPanelTabSelected = { bottomPanelTab = it },
-                    showBottomPanel = bottomPanelExpanded,
-                )
-
-                if (canShowRightSidebar && rightSidebarVisible) {
-                    InspectorSidebar(
+                if (hasLandscapeInspectorSidebar && !usesModalWorkspace && rightSidebarVisible) {
+                    WorkbenchRightSidebar(
+                        selectedTab = rightPanelTab,
                         selectedProject = selectedProject,
-                        activeTab = activeTab,
-                        editorGroup = editorGroup,
-                        effectiveConfig = effectiveConfig,
-                        windowInfo = windowInfo,
-                        selectedTool = selectedTool,
+                        terminalSessionIds = terminalSessionIds,
+                        selectedTerminalSessionId = selectedTerminalSessionId,
+                        activeTerminalPty = terminalSessionManager.getSession(selectedTerminalSessionId)?.pty,
+                        terminalSessionFor = { id -> terminalSessionManager.getSession(id) },
+                        terminalReady = terminalReady,
+                        onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                         modifier = Modifier
                             .fillMaxHeight()
                             .width(rightSidebarWidth),
-                        onShowCommandPalette = { commandPaletteVisible = true },
-                        onCreateProject = onCreateProject,
-                        onOpenExternalFolder = { openFolderLauncher.launch(null) },
+                        onTabSelected = { rightPanelTab = it },
+                        onSelectTerminalSession = ::selectTerminalSession,
+                        onAddTerminalSession = ::createTerminalSession,
+                        onRemoveTerminalSession = ::closeTerminalSession,
+                        onHide = { rightSidebarVisible = false },
                     )
                 }
             }
         }
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(modifier = modifier.fillMaxSize().imePadding()) {
         if (usesModalWorkspace) {
             ModalNavigationDrawer(
                 drawerState = compactDrawerState,
@@ -585,6 +860,44 @@ private fun JCodeShell(
             )
         } else {
             content()
+        }
+
+        if (usesModalWorkspace) {
+            AnimatedVisibility(
+                visible = rightSidebarVisible,
+                enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
+                exit = fadeOut() + slideOutHorizontally(targetOffsetX = { it }),
+            ) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.36f))
+                            .clickable { rightSidebarVisible = false },
+                    )
+                    WorkbenchRightSidebar(
+                        selectedTab = rightPanelTab.takeIf { it in portraitRightSidebarTabs } ?: RightPanelTab.Terminal,
+                        selectedProject = selectedProject,
+                        terminalSessionIds = terminalSessionIds,
+                        selectedTerminalSessionId = selectedTerminalSessionId,
+                        activeTerminalPty = terminalSessionManager.getSession(selectedTerminalSessionId)?.pty,
+                        terminalSessionFor = { id -> terminalSessionManager.getSession(id) },
+                        terminalReady = terminalReady,
+                        onOpenEnvironmentWizard = onOpenEnvironmentWizard,
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .fillMaxHeight()
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .navigationBarsPadding(),
+                        onTabSelected = { rightPanelTab = it },
+                        onSelectTerminalSession = ::selectTerminalSession,
+                        onAddTerminalSession = ::createTerminalSession,
+                        onRemoveTerminalSession = ::closeTerminalSession,
+                        onHide = { rightSidebarVisible = false },
+                    )
+                }
+            }
         }
 
         CommandPalette(
@@ -613,21 +926,6 @@ private fun DockRail(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Surface(
-                modifier = Modifier.size(38.dp),
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = "JC",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            }
-
             WorkbenchTool.entries.forEach { tool ->
                 RailButton(
                     tool = tool,
@@ -784,11 +1082,19 @@ private fun WorkspacePanel(
     workspaceConfigError: String?,
     projectConfigError: String?,
     environmentState: DistroEnvironmentState,
+    autoSetupProgress: DistroWizardProgress,
+    sdkCatalogState: SdkCatalogState,
     workspaceManager: WorkspaceManager,
     windowInfo: JCodeWindowInfo,
+    breadcrumb: List<WorkspaceCrumb>,
+    onCloseWorkspace: () -> Unit,
+    onCloseProject: () -> Unit,
     onCreateProject: () -> Unit,
     onRemoveProject: (Long) -> Unit,
     onSelectProject: (Long) -> Unit,
+    onOpenProject: (Project) -> Unit,
+    onRenameProject: (Long, String) -> Unit,
+    onSelectTool: (WorkbenchTool) -> Unit,
     onOpenExternalFolder: () -> Unit,
     onOpenFile: (dev.jcode.fs.FsNode) -> Unit,
     onUpdateEditorFontSize: (ConfigScope, Float) -> Unit,
@@ -796,10 +1102,18 @@ private fun WorkspacePanel(
     onUpdateEditorWordWrap: (ConfigScope, Boolean) -> Unit,
     onUpdateEditorMinimap: (ConfigScope, Boolean) -> Unit,
     onUpdateEditorLigatures: (ConfigScope, Boolean) -> Unit,
+    onUpdateExplorerViewMode: (ConfigScope, String) -> Unit,
+    themeMode: ThemeMode,
+    onUpdateThemeMode: (ThemeMode) -> Unit,
     onOpenWorkspaceConfig: () -> Unit,
     onOpenProjectConfig: () -> Unit,
     onRefreshEnvironment: () -> Unit,
     onOpenEnvironmentWizard: () -> Unit,
+    onAutoSetup: () -> Unit,
+    onRefreshSdkCatalog: () -> Unit,
+    onInstallSdkCatalogEntry: (String) -> Unit,
+    onVerifySdkCatalogEntry: (String) -> Unit,
+    onUninstallSdkCatalogEntry: (String) -> Unit,
     onSnackbar: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -810,12 +1124,19 @@ private fun WorkspacePanel(
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
+            // breadcrumb depth tells us whether we're inside a User Workspace (a container of
+            // projects) vs the Default Workspace (single open project, no roster).
+            val inUserWorkspace = breadcrumb.size > 1
             WorkspaceHeader(
                 selectedTool = selectedTool,
                 workspace = workspace,
                 selectedProject = selectedProject,
+                inUserWorkspace = inUserWorkspace,
+                onSelectTool = onSelectTool,
                 onCreateProject = onCreateProject,
                 onOpenExternalFolder = onOpenExternalFolder,
+                onCloseWorkspace = onCloseWorkspace,
+                onCloseProject = onCloseProject,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
@@ -826,33 +1147,47 @@ private fun WorkspacePanel(
             ) { tool ->
                 when (tool) {
                     WorkbenchTool.Explorer -> {
-                        if (selectedProject == null) {
-                            WorkspaceEmptyState(
-                                workspace = workspace,
-                                onCreateProject = onCreateProject,
-                                onOpenExternalFolder = onOpenExternalFolder,
-                            )
-                        } else {
-                            Column(modifier = Modifier.fillMaxSize()) {
+                        val rosterProjects = workspace?.projects.orEmpty()
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            if (inUserWorkspace) {
                                 ProjectRoster(
-                                    projects = workspace?.projects.orEmpty(),
-                                    selectedProjectId = selectedProject.id,
-                                    editorGroup = editorGroup,
-                                    onSelectProject = onSelectProject,
+                                    projects = rosterProjects,
+                                    selectedProjectId = selectedProject?.id ?: -1L,
+                                    onOpenProject = onOpenProject,
+                                    onRenameProject = onRenameProject,
                                     onRemoveProject = onRemoveProject,
+                                    onOpenProjectSettings = { id -> onSelectProject(id); onOpenProjectConfig() },
+                                    onCreateProject = onCreateProject,
                                 )
-                                HorizontalDivider(
-                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
-                                )
-                                Box(modifier = Modifier.weight(1f)) {
-                                    ExplorerFeature.Content(
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            }
+
+                            when {
+                                selectedProject != null -> {
+                                    // Key on the project id so roster mutations never remount/reload the tree.
+                                    key(selectedProject.id) {
+                                        Box(modifier = Modifier.weight(1f)) {
+                                            ExplorerFeature.Content(
+                                                workspace = workspace,
+                                                project = selectedProject,
+                                                fs = workspaceManager.fsFor(selectedProject.fsPath),
+                                                context = context,
+                                                modifier = Modifier.fillMaxSize(),
+                                                viewMode = explorerViewModeOf(effectiveConfig.explorer.viewMode),
+                                                onFileSelected = onOpenFile,
+                                                onSnackbar = onSnackbar,
+                                            )
+                                        }
+                                    }
+                                }
+                                // User Workspace with nothing selected: roster only, tree hidden.
+                                inUserWorkspace -> Spacer(modifier = Modifier.weight(1f))
+                                // Default Workspace with nothing open: New/Open actions.
+                                else -> Box(modifier = Modifier.weight(1f)) {
+                                    WorkspaceEmptyState(
                                         workspace = workspace,
-                                        project = selectedProject,
-                                        fs = workspaceManager.fsFor(selectedProject.fsPath),
-                                        context = context,
-                                        modifier = Modifier.fillMaxSize(),
-                                        onFileSelected = onOpenFile,
-                                        onSnackbar = onSnackbar,
+                                        onCreateProject = onCreateProject,
+                                        onOpenExternalFolder = onOpenExternalFolder,
                                     )
                                 }
                             }
@@ -889,24 +1224,26 @@ private fun WorkspacePanel(
                         ),
                     )
 
-                    WorkbenchTool.Extensions -> ToolPanelPlaceholder(
-                        title = "Extensions",
-                        icon = Icons.Rounded.Extension,
-                        lines = listOf(
-                            "Surface marketplace, sideload status, and extension permissions here.",
-                            "Better UI: separate installed, recommended, and blocked-by-policy sections.",
-                            "WASM runtime health and storage usage belong in a footer card.",
-                        ),
-                    )
+                    WorkbenchTool.Extensions -> {
+                        val extensionContext = LocalContext.current
+                        val templateExtension = remember(extensionContext) {
+                            MarketplaceServiceLocator.templateCatalog(extensionContext).extension()
+                        }
+                        ExtensionsPanel(
+                            extension = templateExtension,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
 
-                    WorkbenchTool.SdkManager -> ToolPanelPlaceholder(
-                        title = "SDK Manager",
-                        icon = Icons.Rounded.BuildCircle,
-                        lines = listOf(
-                            "Track Android SDK, NDK, CMake, and distro toolchain readiness.",
-                            "Useful quick info: missing packages, last sync, free space, and target ABI matrix.",
-                            "On desktop mode, show a denser two-column package table with filter chips.",
-                        ),
+                    WorkbenchTool.SdkManager -> SdkManagerFeature.Content(
+                        state = sdkCatalogState,
+                        environmentState = environmentState,
+                        onRefresh = onRefreshSdkCatalog,
+                        onOpenEnvironmentWizard = onOpenEnvironmentWizard,
+                        onInstallEntry = onInstallSdkCatalogEntry,
+                        onVerifyEntry = onVerifySdkCatalogEntry,
+                        onUninstallEntry = onUninstallSdkCatalogEntry,
+                        modifier = Modifier.fillMaxSize(),
                     )
 
                     WorkbenchTool.Settings -> SettingsFeature.Content(
@@ -926,6 +1263,9 @@ private fun WorkspacePanel(
                         onUpdateWordWrap = onUpdateEditorWordWrap,
                         onUpdateMinimap = onUpdateEditorMinimap,
                         onUpdateLigatures = onUpdateEditorLigatures,
+                        onUpdateExplorerViewMode = onUpdateExplorerViewMode,
+                        themeMode = themeMode,
+                        onUpdateThemeMode = onUpdateThemeMode,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -939,40 +1279,84 @@ private fun WorkspaceHeader(
     selectedTool: WorkbenchTool,
     workspace: Workspace?,
     selectedProject: Project?,
+    inUserWorkspace: Boolean,
+    onSelectTool: (WorkbenchTool) -> Unit,
     onCreateProject: () -> Unit,
     onOpenExternalFolder: () -> Unit,
+    onCloseWorkspace: () -> Unit,
+    onCloseProject: () -> Unit,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = selectedTool.label,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                    text = workspace?.name ?: "Default Workspace",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = selectedProject?.distroBindTarget ?: "No bind target yet",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            // The title doubles as a menu anchor: a User Workspace can be closed (Close workspace),
+            // and the Default Workspace can close its open project (Close project). With nothing open
+            // in the Default Workspace there is nothing to close, so it stays a plain label.
+            val canCloseProject = !inUserWorkspace && selectedProject != null
+            val hasCloseAction = inUserWorkspace || canCloseProject
+            Box(modifier = Modifier.weight(1f)) {
+                var menuExpanded by remember { mutableStateOf(false) }
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .then(
+                            if (hasCloseAction) Modifier.clickable { menuExpanded = true } else Modifier,
+                        )
+                        .padding(vertical = 2.dp),
+                    verticalArrangement = Arrangement.spacedBy(1.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            text = workspace?.name ?: "Default Workspace",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (hasCloseAction) {
+                            Icon(
+                                imageVector = Icons.Rounded.ArrowDropDown,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                    Text(
+                        text = selectedProject?.distroBindTarget ?: "No bind target yet",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(if (inUserWorkspace) "Close workspace" else "Close project") },
+                        leadingIcon = {
+                            Icon(imageVector = Icons.Rounded.Close, contentDescription = null)
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            if (inUserWorkspace) onCloseWorkspace() else onCloseProject()
+                        },
+                    )
+                }
             }
 
             WorkbenchIconActionButton(
@@ -984,6 +1368,59 @@ private fun WorkspaceHeader(
                 icon = Icons.Rounded.DatasetLinked,
                 contentDescription = "Open external folder",
                 onClick = onOpenExternalFolder,
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            WorkbenchTool.entries.forEach { tool ->
+                SidebarToolButton(
+                    tool = tool,
+                    selected = selectedTool == tool,
+                    onClick = { onSelectTool(tool) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SidebarToolButton(
+    tool: WorkbenchTool,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(10.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f)
+        },
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = tool.icon,
+                contentDescription = tool.label,
+                modifier = Modifier.size(14.dp),
+                tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = tool.compactLabel,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
             )
         }
     }
@@ -1020,13 +1457,13 @@ private fun WorkspaceEmptyState(
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = "Start with a local project or a SAF-backed external folder.",
+                text = "Start with a new folder or open an existing one.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            WorkbenchActionButton(text = "Add Project", onClick = onCreateProject, active = true)
+            WorkbenchActionButton(text = "New Folder", onClick = onCreateProject, active = true)
             WorkbenchActionButton(text = "Open Folder", onClick = onOpenExternalFolder)
         }
     }
@@ -1036,15 +1473,20 @@ private fun WorkspaceEmptyState(
 private fun ProjectRoster(
     projects: List<Project>,
     selectedProjectId: Long,
-    editorGroup: EditorGroup,
-    onSelectProject: (Long) -> Unit,
+    onOpenProject: (Project) -> Unit,
+    onRenameProject: (Long, String) -> Unit,
     onRemoveProject: (Long) -> Unit,
+    onOpenProjectSettings: (Long) -> Unit,
+    onCreateProject: () -> Unit,
 ) {
+    var renameTarget by remember { mutableStateOf<Project?>(null) }
+    var openMenuId by remember { mutableStateOf<Long?>(null) }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+            .padding(horizontal = 10.dp, vertical = 3.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1052,25 +1494,26 @@ private fun ProjectRoster(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = "Projects",
-                style = MaterialTheme.typography.labelMedium,
+                text = "PROJECTS",
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Text(
-                text = "${editorGroup.tabs.size} open tabs",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            WorkbenchIconActionButton(
+                icon = Icons.Rounded.Add,
+                contentDescription = "New project in this workspace",
+                onClick = onCreateProject,
             )
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             projects.forEach { project ->
                 val selected = project.id == selectedProjectId
+                val isWorkspace = project.nodeType == WorkspaceNodeType.Workspace
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable { onSelectProject(project.id) },
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onOpenProject(project) },
                     color = if (selected) {
                         MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
                     } else {
@@ -1080,13 +1523,13 @@ private fun ProjectRoster(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                            .padding(start = 8.dp, top = 4.dp, bottom = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Surface(
-                            modifier = Modifier.size(30.dp),
-                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.size(24.dp),
+                            shape = RoundedCornerShape(8.dp),
                             color = if (selected) {
                                 MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
                             } else {
@@ -1095,8 +1538,9 @@ private fun ProjectRoster(
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
-                                    imageVector = Icons.Rounded.Code,
+                                    imageVector = if (isWorkspace) Icons.Rounded.FolderOpen else Icons.Rounded.Code,
                                     contentDescription = null,
+                                    modifier = Modifier.size(15.dp),
                                     tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
@@ -1116,11 +1560,68 @@ private fun ProjectRoster(
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        WorkbenchActionButton(text = "Remove", onClick = { onRemoveProject(project.id) })
+                        Box {
+                            IconButton(onClick = { openMenuId = project.id }, modifier = Modifier.size(32.dp)) {
+                                Icon(
+                                    imageVector = Icons.Rounded.MoreVert,
+                                    contentDescription = "Project actions",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = openMenuId == project.id,
+                                onDismissRequest = { openMenuId = null },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text(if (isWorkspace) "Open workspace" else "Open") },
+                                    onClick = { openMenuId = null; onOpenProject(project) },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Rename") },
+                                    onClick = { openMenuId = null; renameTarget = project },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Remove") },
+                                    onClick = { openMenuId = null; onRemoveProject(project.id) },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Project settings") },
+                                    onClick = { openMenuId = null; onOpenProjectSettings(project.id) },
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    renameTarget?.let { target ->
+        var newName by remember(target.id) { mutableStateOf(target.name) }
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("Rename") },
+            text = {
+                TextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Name") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { onRenameProject(target.id, newName); renameTarget = null },
+                    enabled = newName.isNotBlank() && newName.trim() != target.name,
+                ) { Text("Rename") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameTarget = null }) { Text("Cancel") }
+            },
+        )
     }
 }
 
@@ -1185,17 +1686,10 @@ private fun EditorWorkspace(
     onToggleLeftSidebar: () -> Unit,
     onToggleRightSidebar: () -> Unit,
     onToolSelected: (WorkbenchTool) -> Unit,
-    onCreateProject: () -> Unit,
-    onOpenExternalFolder: () -> Unit,
-    onShowCommandPalette: () -> Unit,
-    onShowProblems: () -> Unit,
-    onToggleBottomPanel: () -> Unit,
+    onShowTerminal: () -> Unit,
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
     onOpenFileRequest: () -> Unit,
-    selectedBottomPanelTab: BottomPanelTab,
-    onBottomPanelTabSelected: (BottomPanelTab) -> Unit,
-    showBottomPanel: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -1213,48 +1707,29 @@ private fun EditorWorkspace(
                 leftSidebarExpanded = leftSidebarExpanded,
                 canShowRightSidebar = canShowRightSidebar,
                 rightSidebarVisible = rightSidebarVisible,
-                showBottomPanel = showBottomPanel,
                 onToggleLeftSidebar = onToggleLeftSidebar,
                 onToggleRightSidebar = onToggleRightSidebar,
-                onShowCommandPalette = onShowCommandPalette,
-                onShowProblems = onShowProblems,
-                onToggleBottomPanel = onToggleBottomPanel,
+                onShowTerminal = onShowTerminal,
                 onToolSelected = onToolSelected,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
 
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)),
-            ) {
-                if (editorGroup.tabs.isEmpty()) {
-                    WorkbenchWelcomePane(
-                        selectedProject = selectedProject,
-                        onCreateProject = onCreateProject,
-                        onOpenExternalFolder = onOpenExternalFolder,
-                        onShowCommandPalette = onShowCommandPalette,
-                    )
-                } else {
-                    EditorPane(
-                        group = editorGroup,
-                        modifier = Modifier.fillMaxSize(),
-                        onTabSelected = onSelectEditorTab,
-                        onTabClosed = onCloseEditorTab,
-                        onOpenFile = onOpenFileRequest,
-                    )
-                }
-            }
-
-            if (showBottomPanel) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
-                BottomWorkbenchPanel(
-                    selectedTab = selectedBottomPanelTab,
-                    selectedProject = selectedProject,
-                    compact = windowInfo.widthClass == JCodeWindowWidthClass.Compact,
-                    onTabSelected = onBottomPanelTabSelected,
-                    onHide = onToggleBottomPanel,
+            if (editorGroup.tabs.isEmpty()) {
+                // No open file: a clean, empty editor surface (no startup page).
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                )
+            } else {
+                EditorPane(
+                    group = editorGroup,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    onTabSelected = onSelectEditorTab,
+                    onTabClosed = onCloseEditorTab,
+                    onOpenFile = onOpenFileRequest,
                 )
             }
         }
@@ -1272,19 +1747,16 @@ private fun WorkbenchTopBar(
     leftSidebarExpanded: Boolean,
     canShowRightSidebar: Boolean,
     rightSidebarVisible: Boolean,
-    showBottomPanel: Boolean,
     onToggleLeftSidebar: () -> Unit,
     onToggleRightSidebar: () -> Unit,
-    onShowCommandPalette: () -> Unit,
-    onShowProblems: () -> Unit,
-    onToggleBottomPanel: () -> Unit,
+    onShowTerminal: () -> Unit,
     onToolSelected: (WorkbenchTool) -> Unit,
 ) {
     val compactCursorLabel = "L${metrics.line}:C${metrics.column}"
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface,
+        color = MaterialTheme.colorScheme.surfaceVariant,
     ) {
         Column(
             modifier = Modifier
@@ -1331,29 +1803,22 @@ private fun WorkbenchTopBar(
                     )
                 }
 
-                WorkbenchActionButton(
-                    text = "Panel",
-                    onClick = onToggleBottomPanel,
-                    active = showBottomPanel,
-                )
-                if (canShowRightSidebar) {
-                    WorkbenchActionButton(
-                        text = "Right",
-                        onClick = onToggleRightSidebar,
-                        active = rightSidebarVisible,
-                    )
-                }
                 WorkbenchIconActionButton(
-                    icon = Icons.Rounded.SyncProblem,
-                    contentDescription = "Problems",
-                    onClick = onShowProblems,
+                    icon = Icons.Rounded.Terminal,
+                    contentDescription = "Terminal",
+                    onClick = onShowTerminal,
                 )
                 WorkbenchIconActionButton(
                     icon = Icons.Rounded.PlayArrow,
                     contentDescription = "Run",
                     onClick = { onToolSelected(WorkbenchTool.RunDebug) },
                 )
-                WorkbenchActionButton(text = "Cmd", onClick = onShowCommandPalette)
+                WorkbenchIconActionButton(
+                    icon = Icons.AutoMirrored.Rounded.Article,
+                    contentDescription = "Toggle right sidebar",
+                    onClick = onToggleRightSidebar,
+                    active = canShowRightSidebar && rightSidebarVisible,
+                )
             }
 
             Row(
@@ -1422,75 +1887,6 @@ private fun MetricChip(
 }
 
 @Composable
-private fun WorkbenchWelcomePane(
-    selectedProject: Project?,
-    onCreateProject: () -> Unit,
-    onOpenExternalFolder: () -> Unit,
-    onShowCommandPalette: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = "Workspace shell",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary,
-            )
-            Text(
-                text = selectedProject?.name ?: "No editor tab is open for the selected project.",
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = "Next useful actions are file open, environment setup, and recent task history.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                WorkbenchActionButton(text = "Add Project", onClick = onCreateProject, active = true)
-                WorkbenchActionButton(text = "Open Folder", onClick = onOpenExternalFolder)
-                WorkbenchActionButton(text = "Cmd", onClick = onShowCommandPalette)
-            }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            WelcomeCard(
-                modifier = Modifier.weight(1f),
-                title = "Useful next",
-                icon = Icons.Rounded.Terminal,
-                lines = listOf(
-                    "Open a file from Explorer",
-                    "Run environment setup from Settings",
-                    "Wire command history into this pane",
-                ),
-            )
-            WelcomeCard(
-                modifier = Modifier.weight(1f),
-                title = "Planned shell",
-                icon = Icons.Rounded.Code,
-                lines = listOf(
-                    "Editor-first on phone widths",
-                    "Persistent rail + side pane on larger widths",
-                    "Bottom panel reserved for terminal and logs",
-                ),
-            )
-        }
-    }
-}
-
-@Composable
 private fun WelcomeCard(
     title: String,
     icon: ImageVector,
@@ -1521,54 +1917,76 @@ private fun WelcomeCard(
 }
 
 @Composable
-private fun BottomWorkbenchPanel(
-    selectedTab: BottomPanelTab,
+private fun WorkbenchRightSidebar(
+    selectedTab: RightPanelTab,
     selectedProject: Project?,
-    compact: Boolean,
-    onTabSelected: (BottomPanelTab) -> Unit,
+    terminalSessionIds: List<String>,
+    selectedTerminalSessionId: String,
+    activeTerminalPty: dev.jcode.core.term.PtyProcess?,
+    terminalSessionFor: (String) -> dev.jcode.core.term.TerminalSessionManager.Session?,
+    terminalReady: Boolean,
+    onOpenEnvironmentWizard: () -> Unit,
+    onTabSelected: (RightPanelTab) -> Unit,
+    onSelectTerminalSession: (String) -> Unit,
+    onAddTerminalSession: () -> Unit,
+    onRemoveTerminalSession: (String) -> Unit,
     onHide: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(if (compact) 132.dp else 140.dp),
-        color = MaterialTheme.colorScheme.surface,
+        modifier = modifier,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                BottomPanelTab.entries.forEach { tab ->
+                RightPanelTab.entries.forEach { tab ->
                     Surface(
                         shape = RoundedCornerShape(10.dp),
                         color = if (tab == selectedTab) {
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                        } else if (!tab.enabled) {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f)
                         } else {
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f)
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)
                         },
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))
-                            .clickable { onTabSelected(tab) },
+                            .clickable(enabled = tab.enabled) { onTabSelected(tab) },
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(5.dp),
                         ) {
                             Icon(
                                 imageVector = tab.icon,
                                 contentDescription = null,
-                                modifier = Modifier.size(13.dp),
-                                tint = if (tab == selectedTab) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp),
+                                tint = if (tab == selectedTab) {
+                                    MaterialTheme.colorScheme.primary
+                                } else if (!tab.enabled) {
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
                             )
                             Text(
                                 text = tab.label,
                                 style = MaterialTheme.typography.labelMedium,
-                                color = if (tab == selectedTab) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = if (tab == selectedTab) {
+                                    MaterialTheme.colorScheme.primary
+                                } else if (!tab.enabled) {
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
                             )
                         }
                     }
@@ -1576,81 +1994,384 @@ private fun BottomWorkbenchPanel(
                 Spacer(modifier = Modifier.weight(1f))
                 WorkbenchActionButton(text = "Hide", onClick = onHide)
             }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
+            WorkbenchRightSidebarBody(
+                tab = selectedTab,
+                selectedProject = selectedProject,
+                terminalSessionIds = terminalSessionIds,
+                selectedTerminalSessionId = selectedTerminalSessionId,
+                activeTerminalPty = activeTerminalPty,
+                terminalSessionFor = terminalSessionFor,
+                terminalReady = terminalReady,
+                onOpenEnvironmentWizard = onOpenEnvironmentWizard,
+                onSelectTerminalSession = onSelectTerminalSession,
+                onAddTerminalSession = onAddTerminalSession,
+                onRemoveTerminalSession = onRemoveTerminalSession,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+}
 
-            AnimatedContent(
-                targetState = selectedTab,
-                transitionSpec = { fadeIn() togetherWith fadeOut() },
-                label = "bottom-panel",
-            ) { tab ->
-                Column(
+@Composable
+private fun WorkbenchRightSidebarBody(
+    tab: RightPanelTab,
+    selectedProject: Project?,
+    terminalSessionIds: List<String>,
+    selectedTerminalSessionId: String,
+    activeTerminalPty: dev.jcode.core.term.PtyProcess?,
+    terminalSessionFor: (String) -> dev.jcode.core.term.TerminalSessionManager.Session?,
+    terminalReady: Boolean,
+    onOpenEnvironmentWizard: () -> Unit,
+    onSelectTerminalSession: (String) -> Unit,
+    onAddTerminalSession: () -> Unit,
+    onRemoveTerminalSession: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    when (tab) {
+        RightPanelTab.Terminal -> {
+            TerminalSidebarContent(
+                selectedProject = selectedProject,
+                terminalSessionIds = terminalSessionIds,
+                selectedTerminalSessionId = selectedTerminalSessionId,
+                activeTerminalPty = activeTerminalPty,
+                terminalSessionFor = terminalSessionFor,
+                terminalReady = terminalReady,
+                onOpenEnvironmentWizard = onOpenEnvironmentWizard,
+                onSelectTerminalSession = onSelectTerminalSession,
+                onAddTerminalSession = onAddTerminalSession,
+                onRemoveTerminalSession = onRemoveTerminalSession,
+                modifier = modifier,
+            )
+        }
+        RightPanelTab.Output -> {
+            OutputSidebarContent(
+                modifier = modifier,
+            )
+        }
+        RightPanelTab.Problems -> {
+            DisabledTabContent(
+                title = "Problems",
+                message = "Project problem detection coming in a future update.",
+                modifier = modifier,
+            )
+        }
+        RightPanelTab.DebugConsole -> {
+            DisabledTabContent(
+                title = "Debug Console",
+                message = "Debug console coming in a future update.",
+                modifier = modifier,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TerminalSidebarContent(
+    selectedProject: Project?,
+    terminalSessionIds: List<String>,
+    selectedTerminalSessionId: String,
+    activeTerminalPty: dev.jcode.core.term.PtyProcess?,
+    terminalSessionFor: (String) -> dev.jcode.core.term.TerminalSessionManager.Session?,
+    terminalReady: Boolean,
+    onOpenEnvironmentWizard: () -> Unit,
+    onSelectTerminalSession: (String) -> Unit,
+    onAddTerminalSession: () -> Unit,
+    onRemoveTerminalSession: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxSize()) {
+        // Session tab bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            terminalSessionIds.forEachIndexed { index, sessionId ->
+                Surface(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 12.dp, vertical = 2.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onSelectTerminalSession(sessionId) },
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (sessionId == selectedTerminalSessionId) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                    } else {
+                        MaterialTheme.colorScheme.surface.copy(alpha = 0.75f)
+                    },
                 ) {
-                    when (tab) {
-                        BottomPanelTab.Terminal -> {
-                            Text("Terminal pane", fontWeight = FontWeight.SemiBold)
-                            Text(
-                                text = selectedProject?.distroBindTarget?.let { "Target bind: $it" }
-                                    ?: "Select a project to attach the future distro shell.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                text = "Next Phase 7 step: replace this placeholder with a real PTY session and terminal tabs.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = "bash ${index + 1}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (sessionId == selectedTerminalSessionId) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                        // Close button
+                        Surface(
+                            modifier = Modifier
+                                .size(18.dp)
+                                .clip(CircleShape)
+                                .clickable { onRemoveTerminalSession(sessionId) },
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = "×",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(top = 1.dp),
+                                )
+                            }
                         }
+                    }
+                }
+            }
+            Surface(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onAddTerminalSession),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+            ) {
+                Text(
+                    text = "+",
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
 
-                        BottomPanelTab.Problems -> {
-                            Text("Problems pane", fontWeight = FontWeight.SemiBold)
-                            Text(
-                                text = "Show diagnostics, task failures, and quick jump-to-line actions here.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                text = "Preferred desktop shape: dense filterable table with source, severity, and file columns.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
 
-                        BottomPanelTab.Output -> {
-                            Text("Output stream", fontWeight = FontWeight.SemiBold)
-                            Text(
-                                text = "Reserve this for Gradle, native build, LSP, and extension host logs.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                text = "Keep logs path-redacted and mirror long-running state into the status bar.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-
-                        BottomPanelTab.Tasks -> {
-                            Text("Task runner", fontWeight = FontWeight.SemiBold)
-                            Text(
-                                text = "Good first actions: assembleDebug, npm dev, cargo test, and open config YAML.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                text = "For larger windows, a dense queue with last result and duration beats large cards.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+        if (!terminalReady) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.BuildCircle,
+                    contentDescription = null,
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Terminal unavailable",
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Finish distro setup first, then open the terminal again.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                FilledTonalButton(onClick = onOpenEnvironmentWizard) {
+                    Text("Open setup")
+                }
+            }
+        } else if (terminalSessionIds.isNotEmpty() && activeTerminalPty != null) {
+            // One TerminalView per session, each kept alive in the composition with its OWN PTY, VT
+            // parser, read loop and scrollback. Only the active session is visible + focused; the rest
+            // stay attached (still reading their output) but transparent and behind it. Switching tabs
+            // is instant and every session keeps its own independent content.
+            Box(modifier = Modifier.fillMaxSize()) {
+                terminalSessionIds.forEach { sessionId ->
+                    val session = terminalSessionFor(sessionId) ?: return@forEach
+                    val isActive = sessionId == selectedTerminalSessionId
+                    key(sessionId) {
+                        AndroidView(
+                            factory = { ctx ->
+                                TerminalView(ctx).apply {
+                                    setFontSize(30f)
+                                    bind(session)
+                                }
+                            },
+                            update = { view ->
+                                view.bind(session) // no-op if already bound to this session
+                                view.setActive(isActive)
+                            },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .zIndex(if (isActive) 1f else 0f)
+                                .alpha(if (isActive) 1f else 0f),
+                        )
+                    }
+                }
+            }
+        } else {
+            // No sessions - show placeholder
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Terminal,
+                        contentDescription = null,
+                        modifier = Modifier.size(48.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    )
+                    Text(
+                        text = "No terminal sessions",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    )
+                    Text(
+                        text = "Tap + to start a new terminal",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    )
+                    selectedProject?.distroBindTarget?.let { target ->
+                        Text(
+                            text = "Workspace target: $target",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                        )
                     }
                 }
             }
         }
     }
 }
+
+@Composable
+private fun DisabledTabContent(
+    title: String,
+    message: String,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.BuildCircle,
+            contentDescription = null,
+            modifier = Modifier.size(48.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = title,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun OutputSidebarContent(
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Output", fontWeight = FontWeight.SemiBold)
+        Text(
+            text = "Build logs, LSP messages, and extension host output will appear here.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = "Logs are path-redacted and contain no PII.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+        )
+    }
+}
+
+@Composable
+private fun SidebarSessionChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(10.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+        } else {
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.75f)
+        },
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun SidebarSectionCard(
+    title: String,
+    lines: List<String>,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            lines.forEach { line ->
+                Text(
+                    text = line,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+private data class SidebarSectionSpec(
+    val title: String,
+    val lines: List<String>,
+)
 
 @Composable
 private fun InspectorSidebar(
@@ -1723,8 +2444,8 @@ private fun InspectorSidebar(
                         Text("Quick actions", fontWeight = FontWeight.SemiBold)
                     }
                     WorkbenchActionButton(text = "Command Palette", onClick = onShowCommandPalette, active = true)
-                    WorkbenchActionButton(text = "Create Project", onClick = onCreateProject)
-                    WorkbenchActionButton(text = "Attach Folder", onClick = onOpenExternalFolder)
+                    WorkbenchActionButton(text = "New Folder", onClick = onCreateProject)
+                    WorkbenchActionButton(text = "Open Folder", onClick = onOpenExternalFolder)
                 }
             }
         }
@@ -1739,7 +2460,10 @@ private fun WorkbenchStatusBar(
     effectiveConfig: EffectiveConfig,
     windowInfo: JCodeWindowInfo,
 ) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f)) {
+    Surface(
+        modifier = Modifier.navigationBarsPadding(),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1906,53 +2630,240 @@ private fun fuzzyMatches(query: String, candidate: String): Boolean {
     return true
 }
 
-private fun Context.openExternalUrl(url: String) {
-    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    runCatching { startActivity(intent) }
-}
+private fun explorerViewModeOf(value: String): ExplorerViewMode =
+    ExplorerViewMode.entries.firstOrNull { it.name.equals(value, ignoreCase = true) } ?: ExplorerViewMode.Tree
 
-private fun Context.openAppDetailsSettings() {
-    val intent = Intent(
-        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-        Uri.fromParts("package", packageName, null),
-    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    runCatching { startActivity(intent) }
-        .onFailure {
-            if (it is ActivityNotFoundException) return
+@Composable
+private fun ExtensionsPanel(
+    extension: TemplateExtension,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Rounded.Extension,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(extension.name, style = MaterialTheme.typography.titleMedium)
+                val meta = listOfNotNull(
+                    extension.publisher,
+                    extension.version?.let { "v$it" },
+                    "Preloaded",
+                ).joinToString(" · ")
+                Text(
+                    meta,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
+
+        if (extension.description.isNotBlank()) {
+            Text(
+                extension.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+        Text(
+            "Project templates (${extension.templates.size})",
+            style = MaterialTheme.typography.labelLarge,
+        )
+        extension.templates.forEach { template ->
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(template.name, style = MaterialTheme.typography.bodyMedium)
+                if (template.description.isNotBlank()) {
+                    Text(
+                        template.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (template.requires.isNotEmpty()) {
+                    Text(
+                        "Requires: ${template.requires.joinToString(", ")}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable
-private fun CreateProjectDialog(
+private fun OpenFolderTypeDialog(
+    folderName: String,
     onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
+    onConfirm: (isWorkspace: Boolean) -> Unit,
 ) {
-    var name by rememberSaveable { mutableStateOf("") }
-    val focusRequester = remember { FocusRequester() }
+    var isWorkspace by rememberSaveable { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("New Project") },
+        title = { Text("Set folder type") },
         text = {
-            TextField(
-                value = name,
-                onValueChange = { name = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(focusRequester),
-                placeholder = { Text("Project name") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(
-                    onDone = {
-                        if (name.isNotBlank()) onConfirm(name)
-                    },
-                ),
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "\"$folderName\" has no .jcode config yet. Is it a Project or a Workspace?",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TypeOption(
+                        label = "Project",
+                        selected = !isWorkspace,
+                        onSelect = { isWorkspace = false },
+                        modifier = Modifier.weight(1f),
+                    )
+                    TypeOption(
+                        label = "Workspace",
+                        selected = isWorkspace,
+                        onSelect = { isWorkspace = true },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(isWorkspace) }) {
+                Text("Open")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
+}
+
+@Composable
+private fun NewItemDialog(
+    templates: List<ProjectTemplate>,
+    scaffoldState: ScaffoldState,
+    installedToolchains: Set<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (MainViewModel.NewItemRequest) -> Unit,
+) {
+    if (scaffoldState.templateId != null) {
+        ScaffoldProgressDialog(state = scaffoldState, onDismiss = onDismiss)
+        return
+    }
+
+    var isWorkspace by rememberSaveable { mutableStateOf(false) }
+    var name by rememberSaveable { mutableStateOf("") }
+    var selectedTemplateId by rememberSaveable(templates) {
+        mutableStateOf(templates.firstOrNull()?.id)
+    }
+
+    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    // Left column: folder type + name. Right column (Project): template list; (Workspace): a hint.
+    val primarySection: @Composable () -> Unit = {
+        Text("Folder type", style = MaterialTheme.typography.labelLarge)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TypeOption(
+                label = "Project",
+                selected = !isWorkspace,
+                onSelect = { isWorkspace = false },
+                modifier = Modifier.weight(1f),
             )
+            TypeOption(
+                label = "Workspace",
+                selected = isWorkspace,
+                onSelect = { isWorkspace = true },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        TextField(
+            value = name,
+            onValueChange = { name = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text(if (isWorkspace) "Workspace name" else "Project name") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        )
+    }
+    val detailSection: @Composable () -> Unit = {
+        if (isWorkspace) {
+            Text("Workspace", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "A workspace is a container folder that holds multiple projects.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Text("Template", style = MaterialTheme.typography.labelLarge)
+            templates.forEach { template ->
+                TemplateOption(
+                    template = template,
+                    selected = template.id == selectedTemplateId,
+                    installedToolchains = installedToolchains,
+                    onSelect = { selectedTemplateId = template.id },
+                )
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = if (isLandscape) Modifier.fillMaxWidth(0.82f).widthIn(max = 760.dp) else Modifier,
+        properties = DialogProperties(usePlatformDefaultWidth = !isLandscape),
+        title = { Text("New") },
+        text = {
+            if (isLandscape) {
+                // Two columns side by side so the (tall) template list doesn't overflow the short
+                // landscape dialog height.
+                Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        primarySection()
+                    }
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(max = 260.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        detailSection()
+                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    primarySection()
+                    detailSection()
+                }
+            }
         },
         confirmButton = {
             TextButton(
-                onClick = { if (name.isNotBlank()) onConfirm(name) },
+                onClick = {
+                    onConfirm(
+                        MainViewModel.NewItemRequest(
+                            name = name,
+                            isWorkspace = isWorkspace,
+                            templateId = if (isWorkspace) null else selectedTemplateId,
+                        ),
+                    )
+                },
                 enabled = name.isNotBlank(),
             ) {
                 Text("Create")
@@ -1964,8 +2875,129 @@ private fun CreateProjectDialog(
             }
         },
     )
+}
 
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
+@Composable
+private fun TypeOption(
+    label: String,
+    selected: Boolean,
+    onSelect: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onSelect),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onSelect)
+        Text(label)
     }
+}
+
+@Composable
+private fun TemplateOption(
+    template: ProjectTemplate,
+    selected: Boolean,
+    installedToolchains: Set<String>,
+    onSelect: () -> Unit,
+) {
+    val missing = template.requires.filter { it !in installedToolchains }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onSelect)
+            .padding(end = 4.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        RadioButton(selected = selected, onClick = onSelect)
+        Column(modifier = Modifier.padding(top = 12.dp)) {
+            Text(template.name, style = MaterialTheme.typography.bodyLarge)
+            if (template.description.isNotBlank()) {
+                Text(
+                    template.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (template.requires.isNotEmpty()) {
+                val requires = "Requires: ${template.requires.joinToString(", ")}"
+                Text(
+                    if (missing.isEmpty()) requires
+                    else "$requires — install ${missing.joinToString(", ")} via SDK Manager",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (missing.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScaffoldProgressDialog(
+    state: ScaffoldState,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (state.finished) onDismiss() },
+        title = {
+            Text(
+                when {
+                    state.errorMessage != null -> "Scaffold failed"
+                    state.finished -> "Project ready"
+                    else -> "Scaffolding…"
+                },
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (state.running) {
+                    if (state.totalSteps > 0) {
+                        LinearProgressIndicator(
+                            progress = { state.currentStep.toFloat() / state.totalSteps.toFloat() },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    val counter = if (state.totalSteps > 0) " (${state.currentStep}/${state.totalSteps})" else ""
+                    Text(
+                        "${state.currentLabel ?: "Working…"}$counter",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                state.errorMessage?.let { message ->
+                    Text(
+                        message,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                if (state.logLines.isNotEmpty()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = state.logLines.takeLast(120).joinToString("\n"),
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier
+                                .heightIn(max = 220.dp)
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState())
+                                .padding(8.dp),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(if (state.finished) "Close" else "Hide")
+            }
+        },
+    )
 }

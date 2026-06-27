@@ -1,0 +1,25 @@
+id: aspnet-vite-react-ts
+name: C# ASP.NET Core with Vite + React TypeScript
+description: >-
+  An ASP.NET Core minimal-API server with a Vite + React (TypeScript) client.
+  The client is built into the server's wwwroot; its editable source is copied
+  into the project.
+requires:
+  - dotnet
+  - nodejs
+recipe:
+  - label: Create ASP.NET Core server
+    run: dotnet new web -o "{{projectDir}}/Server"
+  - label: Scaffold Vite React (TypeScript) client
+    workdir: "{{hostStaging}}"
+    run: CI=1 npm create vite@latest client -- --template react-ts </dev/null
+  - label: Install client dependencies
+    workdir: "{{hostStaging}}/client"
+    run: npm install
+  - label: Build client
+    workdir: "{{hostStaging}}/client"
+    run: npm run build
+  - label: Publish client into server wwwroot
+    run: mkdir -p "{{projectDir}}/Server/wwwroot" && cp -r "{{hostStaging}}/client/dist/." "{{projectDir}}/Server/wwwroot/"
+  - label: Copy client source into project
+    run: cd "{{hostStaging}}/client" && tar --exclude=node_modules --exclude=dist -cf - . | (mkdir -p "{{projectDir}}/client" && cd "{{projectDir}}/client" && tar -xf -)

@@ -17,6 +17,16 @@ enum class ProjectKind {
     Saf,
 }
 
+/**
+ * Role of a top-level folder, derived from its `.jcode/<name>.yaml` `type:` field (not persisted in
+ * the DB). A [Project] is a buildable folder (optionally scaffolded from a template); a [Workspace]
+ * is a plain container folder that holds projects.
+ */
+enum class WorkspaceNodeType {
+    Project,
+    Workspace,
+}
+
 @Entity(tableName = "workspaces")
 data class WorkspaceEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
@@ -69,6 +79,10 @@ data class Project(
     val name: String,
     val distroBindTarget: String,
     val order: Int,
+    /** Derived from `.jcode/<name>.yaml` on load; not stored in the DB. */
+    val nodeType: WorkspaceNodeType = WorkspaceNodeType.Project,
+    /** Template id this project was scaffolded from (project nodes only). */
+    val templateId: String? = null,
 ) {
     val fsPath: FsPath
         get() = when (kind) {
@@ -84,6 +98,13 @@ data class Workspace(
     val rootPath: String,
     val lastOpened: Long,
     val projects: List<Project>,
+)
+
+/** One level in the workspace navigation trail (Default Workspace › … › current). */
+@Immutable
+data class WorkspaceCrumb(
+    val id: Long,
+    val name: String,
 )
 
 internal fun WorkspaceWithProjects.toDomain(): Workspace = Workspace(

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,7 +25,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.NoteAdd
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.UnfoldLess
+import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -32,11 +42,9 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -46,7 +54,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +61,7 @@ import androidx.compose.ui.draganddrop.DragAndDropEvent
 import androidx.compose.ui.draganddrop.DragAndDropTarget
 import androidx.compose.ui.draganddrop.mimeTypes
 import androidx.compose.ui.draganddrop.toAndroidDragEvent
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
@@ -97,23 +105,29 @@ fun ExplorerView(
     fs: Fs,
     context: Context,
     modifier: Modifier = Modifier,
+    viewMode: ExplorerViewMode = ExplorerViewMode.Tree,
     onFileSelected: ((FsNode) -> Unit)? = null,
     onSnackbar: ((String) -> Unit)? = null,
 ) {
-    val viewModel = remember(workspace, project, fs) {
-        TreeViewModel(workspace, fs)
+    // Key only on project + fs (not the workspace object, which gets a new identity on every
+    // roster mutation). Otherwise the view model is rebuilt but LaunchedEffect(project) — keyed on
+    // the data-equal project — doesn't re-fire, leaving the tree stuck on "No files yet".
+    val viewModel = remember(project, fs) {
+        TreeViewModel(workspace, fs, initialViewMode = viewMode)
     }
     val scope = rememberCoroutineScope()
 
-    val rows by viewModel.rows.collectAsStateWithLifecycle()
+    val treeRows by viewModel.treeRows.collectAsStateWithLifecycle()
+    val listRows by viewModel.listRows.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val breadcrumb by viewModel.breadcrumb.collectAsStateWithLifecycle()
     val currentPath by viewModel.currentPath.collectAsStateWithLifecycle()
+    // The configured [viewMode] is pushed into the view model below; [activeViewMode] reflects the
+    // shape the view model has actually materialized, so the UI never renders an empty mismatched flow.
+    val activeViewMode by viewModel.viewMode.collectAsStateWithLifecycle()
     val selectionState = viewModel.selectionState
     val selectedIds by selectionState.selected.collectAsStateWithLifecycle()
 
-    var viewMode by rememberSaveable { mutableStateOf(ExplorerViewMode.Tree) }
-    var contextMenuTarget by remember { mutableStateOf<TreeRow?>(null) }
     var showCreateDialog by remember { mutableStateOf<CreateTarget?>(null) }
     var showRenameDialog by remember { mutableStateOf<RenameTarget?>(null) }
 
@@ -125,137 +139,123 @@ fun ExplorerView(
         viewModel.loadProjectRoot(project)
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
-        // View mode toggle
-        ExplorerModeToggle(
-            currentMode = viewMode,
-            onModeChanged = { viewMode = it },
-        )
+    // The view mode is an app preference (Settings); react when it changes.
+    LaunchedEffect(viewMode) {
+        viewModel.setViewMode(viewMode)
+    }
 
-        // Breadcrumb
-        ExplorerBreadcrumb(
-            entries = breadcrumb,
-            onNavigate = { entry ->
-                scope.launch {
-                    viewModel.navigateTo(entry.path, entry.label)
-                }
-            },
-            onNavigateUp = {
-                scope.launch { viewModel.navigateUp() }
-            },
-        )
-
-        // Content
-        when (viewMode) {
-            ExplorerViewMode.Tree -> TreeViewContent(
-                rows = rows,
-                isLoading = isLoading,
-                selectedIds = selectedIds,
-                selectionState = selectionState,
-                onToggleExpand = { row ->
-                    scope.launch { viewModel.toggleExpand(row) }
-                },
-                onRowClick = { row ->
-                    if (row.node.kind == FsKind.Directory) {
-                        scope.launch { viewModel.toggleExpand(row) }
-                    } else {
-                        onFileSelected?.invoke(row.node)
-                    }
-                },
-                onRowDoubleClick = { row ->
-                    if (row.node.kind == FsKind.Directory) {
-                        scope.launch { viewModel.navigateTo(row.node.path, row.node.name) }
-                    } else {
-                        onFileSelected?.invoke(row.node)
-                    }
-                },
-                onContextMenu = { contextMenuTarget = it },
-            )
-
-            ExplorerViewMode.List -> ListViewContent(
-                rows = rows,
-                isLoading = isLoading,
-                selectedIds = selectedIds,
-                selectionState = selectionState,
-                onRowClick = { row ->
-                    if (row.node.kind == FsKind.Directory) {
-                        scope.launch { viewModel.navigateTo(row.node.path, row.node.name) }
-                    } else {
-                        onFileSelected?.invoke(row.node)
-                    }
-                },
-                onContextMenu = { contextMenuTarget = it },
-            )
+    // Where toolbar create/paste should land: the viewed dir in List mode; the selected dir (or the
+    // selected file's parent) in Tree mode, falling back to the project root.
+    fun resolveCreateParent(): FsPath {
+        if (activeViewMode == ExplorerViewMode.List) return currentPath ?: project.fsPath
+        val selected = treeRows.firstOrNull { it.id in selectedIds && !it.isPlaceholder }
+            ?: return project.fsPath
+        return when (selected.node.kind) {
+            FsKind.Directory -> selected.node.path
+            else -> parentPathOf(selected.node.path) ?: project.fsPath
         }
+    }
 
-        // Toolbar
+    fun runRowAction(row: TreeRow, action: RowAction) {
+        when (action) {
+            RowAction.Open -> onFileSelected?.invoke(row.node)
+            RowAction.NewFile -> showCreateDialog = CreateTarget(row.node.path, isDirectory = false)
+            RowAction.NewFolder -> showCreateDialog = CreateTarget(row.node.path, isDirectory = true)
+            RowAction.Rename -> showRenameDialog = RenameTarget(row.node.path, row.node.name)
+            RowAction.Copy -> {
+                clipboard = ClipboardEntry(row.node.path, row.node.name, isCut = false)
+                onSnackbar?.invoke("Copied '${row.node.name}'")
+            }
+            RowAction.Cut -> {
+                clipboard = ClipboardEntry(row.node.path, row.node.name, isCut = true)
+                onSnackbar?.invoke("Cut '${row.node.name}'")
+            }
+            RowAction.Delete -> scope.launch {
+                runCatching {
+                    deleteToTrash(fs, context, row.node.path, project.fsPath)
+                    viewModel.refresh()
+                    onSnackbar?.invoke("Moved '${row.node.name}' to trash")
+                }.onFailure { onSnackbar?.invoke("Delete failed: ${it.message}") }
+            }
+        }
+    }
+
+    Column(modifier = modifier.fillMaxSize()) {
+        // Compact action toolbar (always visible) with create/refresh/paste. The Tree|List view mode
+        // is set in App Preferences (Settings), not here.
         ExplorerToolbar(
-            onCreateFile = {
-                showCreateDialog = CreateTarget(currentPath ?: project.fsPath, isDirectory = false)
-            },
-            onCreateFolder = {
-                showCreateDialog = CreateTarget(currentPath ?: project.fsPath, isDirectory = true)
-            },
-            onRefresh = {
-                scope.launch { viewModel.refresh() }
-            },
+            viewMode = activeViewMode,
+            onCreateFile = { showCreateDialog = CreateTarget(resolveCreateParent(), isDirectory = false) },
+            onCreateFolder = { showCreateDialog = CreateTarget(resolveCreateParent(), isDirectory = true) },
+            onCollapseAll = { scope.launch { viewModel.collapseAll() } },
+            onRefresh = { scope.launch { viewModel.refresh() } },
             onPaste = {
                 clipboard?.let { entry ->
                     scope.launch {
                         runCatching {
-                            val targetParent = currentPath ?: project.fsPath
+                            val targetParent = resolveCreateParent()
                             copyFileOrDir(fs, context, entry.sourcePath, targetParent)
                             viewModel.refresh()
                             onSnackbar?.invoke("Pasted '${entry.name}'")
-
-                            // If it was a cut operation, remove the original
                             if (entry.isCut) {
                                 deleteToTrash(fs, context, entry.sourcePath, project.fsPath)
                                 viewModel.refresh()
                             }
                             clipboard = null
-                        }.onFailure {
-                            onSnackbar?.invoke("Paste failed: ${it.message}")
-                        }
+                        }.onFailure { onSnackbar?.invoke("Paste failed: ${it.message}") }
                     }
                 }
             },
             canPaste = clipboard != null,
         )
-    }
 
-    // Context menu
-    contextMenuTarget?.let { target ->
-        ExplorerContextMenu(
-            row = target,
-            onDismiss = { contextMenuTarget = null },
-            onRename = {
-                showRenameDialog = RenameTarget(target.node.path, target.node.name)
-                contextMenuTarget = null
-            },
-            onDelete = {
-                scope.launch {
-                    runCatching {
-                        deleteToTrash(fs, context, target.node.path, project.fsPath)
-                        viewModel.refresh()
-                        onSnackbar?.invoke("Moved '${target.node.name}' to trash")
-                    }.onFailure {
-                        onSnackbar?.invoke("Delete failed: ${it.message}")
-                    }
+        // Content. Tree shows the hierarchy from the root (no breadcrumb); List is a flat
+        // file-manager for one directory, navigated via the breadcrumb + up button. The scrollable
+        // body must take the *remaining* height (weight) so its LazyColumn is bounded and scrolls;
+        // a bare fillMaxSize would overflow under the toolbar and hide the last rows.
+        when (activeViewMode) {
+            ExplorerViewMode.Tree -> Box(modifier = Modifier.weight(1f)) {
+                TreeViewContent(
+                    rows = treeRows,
+                    isLoading = isLoading,
+                    selectedIds = selectedIds,
+                    selectionState = selectionState,
+                    onToggleExpand = { row -> scope.launch { viewModel.toggleExpand(row) } },
+                    onRowClick = { row ->
+                        if (row.node.kind == FsKind.Directory) {
+                            scope.launch { viewModel.toggleExpand(row) }
+                        } else {
+                            onFileSelected?.invoke(row.node)
+                        }
+                    },
+                    onAction = { row, action -> runRowAction(row, action) },
+                )
+            }
+
+            ExplorerViewMode.List -> {
+                ExplorerBreadcrumb(
+                    entries = breadcrumb,
+                    onNavigate = { entry -> scope.launch { viewModel.navigateTo(entry.path, entry.label) } },
+                    onNavigateUp = { scope.launch { viewModel.navigateUp() } },
+                )
+                Box(modifier = Modifier.weight(1f)) {
+                    ListViewContent(
+                        rows = listRows,
+                        isLoading = isLoading,
+                        selectedIds = selectedIds,
+                        selectionState = selectionState,
+                        onRowClick = { row ->
+                            if (row.node.kind == FsKind.Directory) {
+                                scope.launch { viewModel.navigateTo(row.node.path, row.node.name) }
+                            } else {
+                                onFileSelected?.invoke(row.node)
+                            }
+                        },
+                        onAction = { row, action -> runRowAction(row, action) },
+                    )
                 }
-                contextMenuTarget = null
-            },
-            onCopy = {
-                clipboard = ClipboardEntry(target.node.path, target.node.name, isCut = false)
-                onSnackbar?.invoke("Copied '${target.node.name}' to clipboard")
-                contextMenuTarget = null
-            },
-            onCut = {
-                clipboard = ClipboardEntry(target.node.path, target.node.name, isCut = true)
-                onSnackbar?.invoke("Cut '${target.node.name}' to clipboard")
-                contextMenuTarget = null
-            },
-        )
+            }
+        }
     }
 
     // Create dialog
@@ -315,26 +315,53 @@ data class ClipboardEntry(
     val isCut: Boolean, // true if cut, false if copy
 )
 
-// --- Mode Toggle ---
+/** Per-row actions surfaced via the visible overflow (⋮) menu. */
+enum class RowAction { Open, NewFile, NewFolder, Rename, Copy, Cut, Delete }
+
+/** Parent of a path, or null when there is no addressable parent (SAF tree URIs). */
+private fun parentPathOf(path: FsPath): FsPath? = when (path) {
+    is FsPath.Local -> path.file.parentFile?.let { FsPath.Local(it) }
+    is FsPath.Saf -> null
+}
+
+// --- Row overflow menu (visible ⋮ on every row) ---
 
 @Composable
-private fun ExplorerModeToggle(
-    currentMode: ExplorerViewMode,
-    onModeChanged: (ExplorerViewMode) -> Unit,
+private fun RowOverflowMenu(
+    row: TreeRow,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onAction: (TreeRow, RowAction) -> Unit,
 ) {
-    val modes = ExplorerViewMode.entries.toTypedArray()
-    SingleChoiceSegmentedButtonRow(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-    ) {
-        modes.forEachIndexed { index, mode ->
-            SegmentedButton(
-                shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
-                onClick = { onModeChanged(mode) },
-                selected = mode == currentMode,
-                label = { Text(mode.name, style = MaterialTheme.typography.labelMedium) },
+    val isDir = row.node.kind == FsKind.Directory
+    Box {
+        IconButton(
+            onClick = { onExpandedChange(true) },
+            modifier = Modifier.size(28.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Default.MoreVert,
+                contentDescription = "More actions",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
             )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
+            fun act(a: RowAction) {
+                onExpandedChange(false)
+                onAction(row, a)
+            }
+            if (!isDir) {
+                DropdownMenuItem(text = { Text("Open") }, onClick = { act(RowAction.Open) })
+            }
+            if (isDir) {
+                DropdownMenuItem(text = { Text("New File…") }, onClick = { act(RowAction.NewFile) })
+                DropdownMenuItem(text = { Text("New Folder…") }, onClick = { act(RowAction.NewFolder) })
+            }
+            DropdownMenuItem(text = { Text("Rename…") }, onClick = { act(RowAction.Rename) })
+            DropdownMenuItem(text = { Text("Copy") }, onClick = { act(RowAction.Copy) })
+            DropdownMenuItem(text = { Text("Cut") }, onClick = { act(RowAction.Cut) })
+            DropdownMenuItem(text = { Text("Delete") }, onClick = { act(RowAction.Delete) })
         }
     }
 }
@@ -356,9 +383,15 @@ private fun ExplorerBreadcrumb(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (entries.size > 1) {
-            TextButton(onClick = onNavigateUp, modifier = Modifier.padding(end = 4.dp)) {
-                Text("↑", style = MaterialTheme.typography.labelSmall)
+            IconButton(onClick = onNavigateUp, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    imageVector = Icons.Default.ArrowUpward,
+                    contentDescription = "Up one level",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                )
             }
+            Spacer(modifier = Modifier.width(4.dp))
         }
         entries.forEachIndexed { index, entry ->
             if (index > 0) {
@@ -397,13 +430,16 @@ private fun TreeViewContent(
     selectionState: ExplorerSelectionState,
     onToggleExpand: (TreeRow) -> Unit,
     onRowClick: (TreeRow) -> Unit,
-    onRowDoubleClick: (TreeRow) -> Unit,
-    onContextMenu: (TreeRow) -> Unit,
+    onAction: (TreeRow, RowAction) -> Unit,
 ) {
     if (isLoading && rows.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(modifier = Modifier.padding(16.dp))
         }
+        return
+    }
+    if (rows.isEmpty()) {
+        EmptyExplorerHint()
         return
     }
 
@@ -417,12 +453,25 @@ private fun TreeViewContent(
                     selectionState.selectSingle(row.id)
                     onRowClick(row)
                 },
-                onDoubleClick = { onRowDoubleClick(row) },
-                onContextMenu = { onContextMenu(row) },
+                onAction = onAction,
             )
         }
     }
 }
+
+@Composable
+private fun EmptyExplorerHint() {
+    Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Text(
+            text = "No files yet.\nUse the New File / New Folder buttons above.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** Width reserved for the disclosure chevron so files (no chevron) align under folders. */
+private val ChevronSlot = 28.dp
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -431,17 +480,33 @@ private fun TreeRowItem(
     isSelected: Boolean,
     onToggleExpand: (TreeRow) -> Unit,
     onClick: () -> Unit,
-    onDoubleClick: () -> Unit,
-    onContextMenu: () -> Unit,
+    onAction: (TreeRow, RowAction) -> Unit,
 ) {
     val iconSize = LocalIconSize.current
     val indent = (row.depth * 16).dp
+
+    if (row.isPlaceholder) {
+        DenseRow(
+            leading = { Spacer(modifier = Modifier.width(indent + ChevronSlot + iconSize)) },
+            content = {
+                Text(
+                    text = row.node.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                )
+            },
+        )
+        return
+    }
+
+    var menuExpanded by remember { mutableStateOf(false) }
+    val isDir = row.node.kind == FsKind.Directory
 
     DenseRow(
         modifier = Modifier
             .combinedClickable(
                 onClick = onClick,
-                onLongClick = onContextMenu,
+                onLongClick = { menuExpanded = true },
             )
             .then(
                 if (isSelected) {
@@ -451,31 +516,35 @@ private fun TreeRowItem(
                 }
             ),
         leading = {
-            if (row.node.kind == FsKind.Directory) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Spacer(modifier = Modifier.width(indent))
-                    Text(
-                        text = if (row.isExpanded) "▼" else "▶",
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Spacer(modifier = Modifier.width(indent))
+                if (isDir) {
+                    Box(
                         modifier = Modifier
-                            .clickable { onToggleExpand(row) }
-                            .padding(end = 2.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                    )
+                            .size(ChevronSlot)
+                            .clickable { onToggleExpand(row) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = if (row.isExpanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = if (row.isExpanded) "Collapse" else "Expand",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(iconSize),
+                        )
+                    }
                     Icon(
                         imageVector = Icons.Default.Folder,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.width(iconSize).height(iconSize),
+                        modifier = Modifier.size(iconSize),
                     )
-                }
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Spacer(modifier = Modifier.width(indent + 16.dp))
+                } else {
+                    Spacer(modifier = Modifier.width(ChevronSlot))
                     Icon(
                         imageVector = Icons.Outlined.Description,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(iconSize).height(iconSize),
+                        modifier = Modifier.size(iconSize),
                     )
                 }
             }
@@ -489,8 +558,14 @@ private fun TreeRowItem(
             )
         },
         trailing = {
-            row.badge?.let { badge ->
-                BadgeContent(badge)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                row.badge?.let { badge -> BadgeContent(badge) }
+                RowOverflowMenu(
+                    row = row,
+                    expanded = menuExpanded,
+                    onExpandedChange = { menuExpanded = it },
+                    onAction = onAction,
+                )
             }
         },
     )
@@ -498,6 +573,7 @@ private fun TreeRowItem(
 
 // --- List View ---
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ListViewContent(
     rows: List<TreeRow>,
@@ -505,88 +581,82 @@ private fun ListViewContent(
     selectedIds: Set<String>,
     selectionState: ExplorerSelectionState,
     onRowClick: (TreeRow) -> Unit,
-    onContextMenu: (TreeRow) -> Unit,
+    onAction: (TreeRow, RowAction) -> Unit,
 ) {
-    val dateFormat = remember { SimpleDateFormat("MMM dd HH:mm", Locale.getDefault()) }
-
     if (isLoading && rows.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(modifier = Modifier.padding(16.dp))
         }
         return
     }
+    if (rows.isEmpty()) {
+        EmptyExplorerHint()
+        return
+    }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Column headers
-        DenseRow(
-            modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-            content = {
-                Text("Name", style = MaterialTheme.typography.labelMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
-            },
-            trailing = {
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Text("Size", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(70.dp))
-                    Text("Modified", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(100.dp))
-                }
-            },
-        )
-
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(rows, key = { it.id }) { row ->
-                DenseRow(
-                    modifier = Modifier
-                        .clickable {
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        items(rows, key = { it.id }) { row ->
+            var menuExpanded by remember { mutableStateOf(false) }
+            val iconSize = LocalIconSize.current
+            DenseRow(
+                modifier = Modifier
+                    .combinedClickable(
+                        onClick = {
                             selectionState.selectSingle(row.id)
                             onRowClick(row)
+                        },
+                        onLongClick = { menuExpanded = true },
+                    )
+                    .then(
+                        if (row.id in selectedIds) {
+                            Modifier.background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f))
+                        } else {
+                            Modifier
                         }
-                        .then(
-                            if (row.id in selectedIds) {
-                                Modifier.background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f))
-                            } else {
-                                Modifier
-                            }
-                        ),
-                    leading = {
-                        val iconSize = LocalIconSize.current
-                        Icon(
-                            imageVector = if (row.node.kind == FsKind.Directory) Icons.Default.Folder else Icons.Outlined.Description,
-                            contentDescription = null,
-                            tint = if (row.node.kind == FsKind.Directory) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                            modifier = Modifier.width(iconSize).height(iconSize),
-                        )
-                    },
-                    content = {
+                    ),
+                leading = {
+                    Icon(
+                        imageVector = if (row.node.kind == FsKind.Directory) Icons.Default.Folder else Icons.Outlined.Description,
+                        contentDescription = null,
+                        tint = if (row.node.kind == FsKind.Directory) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.width(iconSize).height(iconSize),
+                    )
+                },
+                content = {
+                    Column {
                         Text(
                             text = row.node.name,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.bodyMedium,
                         )
-                    },
-                    trailing = {
-                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        if (row.node.kind == FsKind.File) {
                             Text(
-                                text = if (row.node.kind == FsKind.Directory) {
-                                    "--"
-                                } else {
-                                    formatSize(row.node.sizeBytes)
-                                },
+                                text = "${formatSize(row.node.sizeBytes)} · ${formatModified(row.node.modifiedAtMillis)}",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.width(70.dp),
-                            )
-                            Text(
-                                text = dateFormat.format(Date(row.node.modifiedAtMillis)),
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.width(100.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                             )
                         }
-                    },
-                )
-            }
+                    }
+                },
+                trailing = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        row.badge?.let { badge -> BadgeContent(badge) }
+                        RowOverflowMenu(
+                            row = row,
+                            expanded = menuExpanded,
+                            onExpandedChange = { menuExpanded = it },
+                            onAction = onAction,
+                        )
+                    }
+                },
+            )
         }
     }
 }
@@ -600,12 +670,19 @@ private fun formatSize(bytes: Long): String {
     }
 }
 
+private val listDateFormat = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault())
+
+private fun formatModified(millis: Long): String =
+    if (millis <= 0L) "—" else listDateFormat.format(Date(millis))
+
 // --- Toolbar ---
 
 @Composable
 private fun ExplorerToolbar(
+    viewMode: ExplorerViewMode,
     onCreateFile: () -> Unit,
     onCreateFolder: () -> Unit,
+    onCollapseAll: () -> Unit,
     onRefresh: () -> Unit,
     onPaste: () -> Unit,
     canPaste: Boolean,
@@ -613,58 +690,32 @@ private fun ExplorerToolbar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = 4.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(onClick = onCreateFile) {
-            Text("New File", style = MaterialTheme.typography.labelMedium)
-        }
-        TextButton(onClick = onCreateFolder) {
-            Text("New Folder", style = MaterialTheme.typography.labelMedium)
-        }
-        Spacer(modifier = Modifier.weight(1f))
-        TextButton(
-            onClick = onPaste,
-            enabled = canPaste,
-        ) {
-            Text("Paste", style = MaterialTheme.typography.labelMedium)
-        }
-        TextButton(onClick = onRefresh) {
-            Text("Refresh", style = MaterialTheme.typography.labelMedium)
+        ToolbarIcon(Icons.Default.NoteAdd, "New File", onCreateFile)
+        ToolbarIcon(Icons.Default.CreateNewFolder, "New Folder", onCreateFolder)
+        ToolbarIcon(Icons.Outlined.ContentPaste, "Paste", onPaste, enabled = canPaste)
+        ToolbarIcon(Icons.Default.Refresh, "Refresh", onRefresh)
+        if (viewMode == ExplorerViewMode.Tree) {
+            ToolbarIcon(Icons.Default.UnfoldLess, "Collapse all", onCollapseAll)
         }
     }
 }
 
-// --- Context Menu ---
-
 @Composable
-private fun ExplorerContextMenu(
-    row: TreeRow,
-    onDismiss: () -> Unit,
-    onRename: () -> Unit,
-    onDelete: () -> Unit,
-    onCopy: () -> Unit,
-    onCut: () -> Unit,
+private fun ToolbarIcon(
+    icon: ImageVector,
+    description: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
 ) {
-    DropdownMenu(
-        expanded = true,
-        onDismissRequest = onDismiss,
-    ) {
-        DropdownMenuItem(
-            text = { Text("Copy") },
-            onClick = onCopy,
-        )
-        DropdownMenuItem(
-            text = { Text("Cut") },
-            onClick = onCut,
-        )
-        DropdownMenuItem(
-            text = { Text("Rename") },
-            onClick = onRename,
-        )
-        DropdownMenuItem(
-            text = { Text("Delete") },
-            onClick = onDelete,
+    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(34.dp)) {
+        Icon(
+            imageVector = icon,
+            contentDescription = description,
+            modifier = Modifier.size(18.dp),
+            tint = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
         )
     }
 }

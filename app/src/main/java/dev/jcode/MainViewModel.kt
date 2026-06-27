@@ -1,6 +1,7 @@
 package dev.jcode
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.jcode.backend.BackendSessionKind
@@ -10,17 +11,28 @@ import dev.jcode.core.config.ConfigService
 import dev.jcode.core.config.ConfigServiceLocator
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.distro.DistroProfile
+import dev.jcode.core.distro.DistroWizardProgress
+import dev.jcode.core.distro.SdkCatalogAction
 import dev.jcode.core.distro.DistroService
 import dev.jcode.core.distro.DistroServiceLocator
 import dev.jcode.core.distro.WizardStepId
+import dev.jcode.core.resource.ResourceManager
+import dev.jcode.core.resource.ResourceManagerLocator
+import dev.jcode.design.ThemeMode
 import dev.jcode.feature.editor.pane.EditorGroup
 import dev.jcode.feature.editor.pane.EditorTab
+import dev.jcode.feature.marketplace.MarketplaceServiceLocator
+import dev.jcode.feature.marketplace.ProjectTemplate
+import dev.jcode.feature.marketplace.TemplateCatalog
+import dev.jcode.feature.marketplace.TemplateScaffolder
 import dev.jcode.fs.FsKind
 import dev.jcode.fs.FsNode
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
 import dev.jcode.fs.Workspace
+import dev.jcode.fs.WorkspaceCrumb
 import dev.jcode.fs.WorkspaceManager
+import dev.jcode.fs.WorkspaceNodeType
 import dev.jcode.fs.WorkspaceServiceLocator
 import java.io.File
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -35,15 +47,31 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     val workspaceManager: WorkspaceManager = WorkspaceServiceLocator.workspaceManager(application)
     val configService: ConfigService = ConfigServiceLocator.configService()
     val distroService: DistroService = DistroServiceLocator.distroService(application)
+    val resourceManager: ResourceManager = ResourceManagerLocator.resourceManager(application)
     val currentWorkspace: StateFlow<Workspace?> = workspaceManager.currentWorkspace
+    val breadcrumb: StateFlow<List<WorkspaceCrumb>> = workspaceManager.breadcrumb
 
-    private val _showCreateProjectDialog = MutableStateFlow(false)
-    val showCreateProjectDialog: StateFlow<Boolean> = _showCreateProjectDialog.asStateFlow()
+    private val appContext: Context = application.applicationContext
+    val templateCatalog: TemplateCatalog = MarketplaceServiceLocator.templateCatalog(application)
+    private val templateScaffolder: TemplateScaffolder = MarketplaceServiceLocator.templateScaffolder(application)
+    val scaffoldState = templateScaffolder.state
+
+    private val _templates = MutableStateFlow<List<ProjectTemplate>>(emptyList())
+    val templates: StateFlow<List<ProjectTemplate>> = _templates.asStateFlow()
+
+    private val _showNewItemDialog = MutableStateFlow(false)
+    val showNewItemDialog: StateFlow<Boolean> = _showNewItemDialog.asStateFlow()
+
+    /** An opened folder awaiting a Project/Workspace choice (it has no `.jcode` type yet). */
+    private val _openFolderTypePrompt = MutableStateFlow<FsPath?>(null)
+    val openFolderTypePrompt: StateFlow<FsPath?> = _openFolderTypePrompt.asStateFlow()
 
     private val _selectedProjectId = MutableStateFlow<Long?>(null)
     val selectedProject: StateFlow<Project?> = currentWorkspace
@@ -61,12 +89,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val workspaceConfigError = configService.workspaceError
     val projectConfigError = configService.projectError
     val effectiveConfig: StateFlow<EffectiveConfig> = configService.effectiveConfig
+    val themeMode: StateFlow<ThemeMode> = effectiveConfig
+        .map { ThemeMode.fromConfigId(it.theme.id) }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            ThemeMode.fromConfigId(effectiveConfig.value.theme.id),
+        )
     val environmentState = distroService.environmentState
+    val environments = distroService.environments
+    val sdkCatalogState = distroService.sdkCatalogState
+    val autoSetupProgress = distroService.autoSetupProgress
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages = _messages.asSharedFlow()
 
     init {
+        viewModelScope.launch(Dispatchers.IO) {
+            _templates.value = runCatching { templateCatalog.templates() }.getOrDefault(emptyList())
+        }
+
         viewModelScope.launch {
             currentWorkspace.collectLatest { workspace ->
                 val currentSelection = _selectedProjectId.value
@@ -99,44 +141,189 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ) { project, distro ->
                 project to distro
             }.collectLatest { (project, distro) ->
-                val projectHostPath = (project?.fsPath as? FsPath.Local)?.file?.absolutePath
-                distroService.updateRuntimeConfig(
-                    distroConfig = distro,
-                    projectHostPath = projectHostPath,
-                    projectTargetPath = project?.distroBindTarget,
+                withContext(Dispatchers.IO) {
+                    val projectHostPath = (project?.fsPath as? FsPath.Local)?.file?.absolutePath
+                    distroService.updateRuntimeConfig(
+                        distroConfig = distro,
+                        projectHostPath = projectHostPath,
+                        projectTargetPath = project?.distroBindTarget,
+                    )
+                    distroService.refreshEnvironment()
+                }
+            }
+        }
+
+    }
+
+    data class NewItemRequest(
+        val name: String,
+        val isWorkspace: Boolean,
+        val templateId: String?,
+    )
+
+    fun requestNew() {
+        templateScaffolder.reset()
+        _showNewItemDialog.value = true
+    }
+
+    fun dismissNewDialog() {
+        _showNewItemDialog.value = false
+        templateScaffolder.reset()
+    }
+
+    fun createNewItem(request: NewItemRequest) {
+        viewModelScope.launch {
+            val fallback = if (request.isWorkspace) "untitled-workspace" else "untitled-project"
+            val name = request.name.trim().ifBlank { fallback }
+            val nodeType = if (request.isWorkspace) WorkspaceNodeType.Workspace else WorkspaceNodeType.Project
+            val template = if (request.isWorkspace) null else request.templateId?.let(templateCatalog::template)
+
+            if (request.isWorkspace) {
+                // Open the new workspace (enter it) so its (empty) project list shows.
+                val workspaceNode = workspaceManager.createNode(name, nodeType, null)
+                workspaceManager.enterWorkspaceFolder(workspaceNode)
+                _showNewItemDialog.value = false
+                emitMessage("Workspace '${workspaceNode.name}' created.")
+                return@launch
+            }
+
+            // Single-slot Default: clear the currently open project before creating the new one.
+            resetDefaultWorkspaceProject()
+            val project = workspaceManager.createNode(name, nodeType, template?.id)
+            _selectedProjectId.value = project.id
+
+            if (template == null || template.isEmpty) {
+                _showNewItemDialog.value = false
+                emitMessage("Project '${project.name}' created.")
+                return@launch
+            }
+
+            // Keep the dialog open to stream scaffold progress. Hold a JOB session so Android
+            // does not kill the long-running npm/dotnet steps while the panel is backgrounded.
+            SessionRegistry.registerSession(
+                appContext,
+                BackendSessionKind.JOB,
+                "scaffold:${template.id}:${project.name}",
+            ).use {
+                val ok = templateScaffolder.scaffold(
+                    TemplateScaffolder.Request(
+                        template = template,
+                        projectName = project.name,
+                        projectDir = project.distroBindTarget,
+                    ),
                 )
-                distroService.refreshEnvironment()
+                emitMessage(
+                    if (ok) "Project '${project.name}' ready."
+                    else "Project '${project.name}' created with errors; see the scaffold log.",
+                )
             }
         }
     }
 
-    fun requestCreateProject() {
-        _showCreateProjectDialog.value = true
-    }
-
-    fun dismissCreateProjectDialog() {
-        _showCreateProjectDialog.value = false
-    }
-
-    fun createProject(name: String) {
+    /**
+     * Open a folder the user picked. A tagged Workspace is entered as a container; an untyped folder
+     * prompts Project vs Workspace first; a plain folder opens as the single project.
+     */
+    fun openExternalFolder(path: FsPath) {
         viewModelScope.launch {
-            val sanitizedName = name.trim().ifBlank { "untitled-project" }
-            val project = workspaceManager.createProjectInDefaultLocation(sanitizedName)
-            _selectedProjectId.value = project.id
-            _showCreateProjectDialog.value = false
-            emitMessage("Project '${project.name}' created.")
+            val resolved = workspaceManager.resolveManageable(path)
+            when {
+                workspaceManager.isWorkspaceFolder(resolved) &&
+                    workspaceManager.enterFolderAsWorkspace(resolved) != null -> Unit
+
+                workspaceManager.folderNeedsType(resolved) -> _openFolderTypePrompt.value = resolved
+
+                else -> {
+                    resetDefaultWorkspaceProject()
+                    val project = workspaceManager.addFolder(resolved)
+                    _selectedProjectId.value = project.id
+                    emitMessage("Opened '${project.name}'.")
+                }
+            }
         }
+    }
+
+    fun resolveOpenFolderType(isWorkspace: Boolean) {
+        val path = _openFolderTypePrompt.value ?: return
+        _openFolderTypePrompt.value = null
+        viewModelScope.launch {
+            if (isWorkspace && workspaceManager.enterFolderAsWorkspace(path) != null) {
+                return@launch
+            }
+            resetDefaultWorkspaceProject()
+            val nodeType = if (isWorkspace) WorkspaceNodeType.Workspace else WorkspaceNodeType.Project
+            val project = workspaceManager.addFolderWithType(path, nodeType)
+            _selectedProjectId.value = project.id
+            emitMessage("Opened ${if (isWorkspace) "Workspace" else "Project"} '${project.name}'.")
+        }
+    }
+
+    fun dismissOpenFolderPrompt() {
+        _openFolderTypePrompt.value = null
     }
 
     fun removeProject(projectId: Long) {
         viewModelScope.launch {
             workspaceManager.removeProject(projectId)
-            emitMessage("Project removed.")
+            emitMessage("Removed from workspace.")
         }
     }
 
     fun selectProject(projectId: Long) {
         _selectedProjectId.value = projectId
+    }
+
+    /** Roster tap / "Open": a Workspace is entered (its projects show); a Project is selected. */
+    fun openProject(project: Project) {
+        if (project.nodeType == WorkspaceNodeType.Workspace) {
+            viewModelScope.launch { workspaceManager.enterWorkspaceFolder(project) }
+        } else {
+            _selectedProjectId.value = project.id
+        }
+    }
+
+    /** Leave the current User Workspace and return to the Default Workspace (the first crumb). */
+    fun closeWorkspace() {
+        val defaultId = breadcrumb.value.firstOrNull()?.id ?: return
+        viewModelScope.launch { workspaceManager.navigateToWorkspace(defaultId) }
+    }
+
+    /**
+     * Close the project open in the Default Workspace: clear the editor and unregister the Default
+     * Workspace's project(s) (folders kept) → clean welcome screen. Terminal sessions are torn down
+     * by the UI layer (it owns their lifecycle).
+     */
+    fun closeProject() {
+        viewModelScope.launch {
+            clearEditorTabs()
+            clearDefaultWorkspaceProjects()
+            emitMessage("Project closed.")
+        }
+    }
+
+    private fun clearEditorTabs() {
+        _editorGroup.value.tabs.forEach { it.editorState?.close() }
+        _editorGroup.value = EditorGroup.create()
+    }
+
+    /** The Default Workspace holds a single open project; unregister whatever it currently has. */
+    private suspend fun clearDefaultWorkspaceProjects() {
+        if (breadcrumb.value.size > 1) return
+        currentWorkspace.value?.projects.orEmpty().forEach { workspaceManager.removeProject(it.id) }
+    }
+
+    /** Single-slot Default: before opening/creating a project there, clear the current one. */
+    private suspend fun resetDefaultWorkspaceProject() {
+        if (breadcrumb.value.size > 1) return
+        clearEditorTabs()
+        clearDefaultWorkspaceProjects()
+    }
+
+    fun renameProject(projectId: Long, newName: String) {
+        viewModelScope.launch {
+            val ok = workspaceManager.renameProject(projectId, newName)
+            emitMessage(if (ok) "Renamed to '${newName.trim()}'." else "Rename failed.")
+        }
     }
 
     fun updateEditorFontSize(scope: ConfigScope, fontSize: Float) {
@@ -174,6 +361,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setThemeMode(mode: ThemeMode, scope: ConfigScope = ConfigScope.Workspace) {
+        viewModelScope.launch {
+            if (!ensureScopeAvailable(scope)) return@launch
+            configService.updateThemeConfig(scope) { it.copy(id = mode.configId) }
+        }
+    }
+
+    fun updateExplorerViewMode(scope: ConfigScope, viewMode: String) {
+        viewModelScope.launch {
+            if (!ensureScopeAvailable(scope)) return@launch
+            configService.updateExplorerConfig(scope) { it.copy(viewMode = viewMode) }
+        }
+    }
+
+    // --- Multi-environment ("docker-style") management ---
+
+    fun setActiveEnvironment(environmentId: String) {
+        distroService.setActiveEnvironment(environmentId)
+    }
+
+    fun deleteEnvironment(environmentId: String) {
+        viewModelScope.launch {
+            val label = environmentId
+            val removed = distroService.deleteEnvironment(environmentId)
+            emitMessage(if (removed) "Removed environment '$label'." else "Could not remove '$label'.")
+        }
+    }
+
+    fun createEnvironment(profile: DistroProfile) {
+        viewModelScope.launch(Dispatchers.IO) {
+            // Hold a foreground session so Android won't kill the app during the long download/extract.
+            val session = SessionRegistry.registerSession(
+                context = getApplication(),
+                kind = BackendSessionKind.JOB,
+                name = "environment:create:${profile.id}",
+            )
+            try {
+                distroService.createEnvironment(profile).collect { /* progress surfaced via environmentState */ }
+            } finally {
+                session.close()
+            }
+        }
+    }
+
     fun openWorkspaceConfigFile() {
         viewModelScope.launch {
             val file = configService.ensureConfigFile(ConfigScope.Workspace)
@@ -197,22 +428,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshEnvironment() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             distroService.refreshEnvironment()
         }
     }
 
-    fun runEnvironmentStep(stepId: WizardStepId) {
-        viewModelScope.launch {
-            val session = SessionRegistry.registerSession(
-                context = getApplication(),
-                kind = BackendSessionKind.JOB,
-                name = "environment:${stepId.key}",
-            )
-            try {
+    fun runEnvironmentStep(
+        @Suppress("UNUSED_PARAMETER")
+        stepId: WizardStepId,
+        @Suppress("UNUSED_PARAMETER")
+        callerContext: Context? = null,
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (stepNeedsForegroundService(stepId)) {
+                val session = SessionRegistry.registerSession(
+                    context = getApplication(),
+                    kind = BackendSessionKind.JOB,
+                    name = "environment:${stepId.key}",
+                )
+                try {
+                    distroService.runWizardStep(stepId)
+                } finally {
+                    session.close()
+                }
+            } else {
                 distroService.runWizardStep(stepId)
-            } finally {
-                session.close()
             }
         }
     }
@@ -221,9 +461,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         distroService.setSelectedDistro(profile)
     }
 
+    fun deferFirstRunEnvironmentSetup() {
+        viewModelScope.launch {
+            distroService.setFirstRunSetupDeferred(true)
+        }
+    }
+
+    fun runAutoSetup() {
+        viewModelScope.launch(Dispatchers.IO) {
+            // Register a foreground session so Android won't kill the app during long bootstrap
+            val session = SessionRegistry.registerSession(
+                context = getApplication(),
+                kind = BackendSessionKind.JOB,
+                name = "environment:auto-setup",
+            )
+            try {
+                distroService.runAllPendingSteps()
+            } finally {
+                session.close()
+            }
+        }
+    }
+
+    fun refreshSdkCatalog() {
+        viewModelScope.launch {
+            distroService.refreshSdkCatalog()
+        }
+    }
+
+    fun installSdkCatalogEntry(entryId: String) {
+        runSdkCatalogAction(entryId, SdkCatalogAction.Install)
+    }
+
+    fun verifySdkCatalogEntry(entryId: String) {
+        runSdkCatalogAction(entryId, SdkCatalogAction.Verify)
+    }
+
+    fun uninstallSdkCatalogEntry(entryId: String) {
+        runSdkCatalogAction(entryId, SdkCatalogAction.Uninstall)
+    }
+
+    private var lastBootstrappedProjectId: Long? = null
+
     fun ensureProjectBootstrapTab() {
         if (_editorGroup.value.tabs.isNotEmpty()) return
         val project = selectedProject.value ?: return
+        // Bootstrap a project's file at most once: after the tabs are cleared (e.g. Close Project),
+        // the selection may briefly still point at it — don't re-open what the user just closed.
+        if (project.id == lastBootstrappedProjectId) return
+        lastBootstrappedProjectId = project.id
         viewModelScope.launch {
             openBootstrapFile(project)
         }
@@ -388,5 +674,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 ligatures = config.editor.ligatures,
             )
         }
+    }
+
+    private fun runSdkCatalogAction(
+        entryId: String,
+        action: SdkCatalogAction,
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = SessionRegistry.registerSession(
+                context = getApplication(),
+                kind = BackendSessionKind.JOB,
+                name = "sdk:${action.name.lowercase()}:$entryId",
+            )
+            try {
+                distroService.runSdkCatalogAction(entryId, action)
+            } finally {
+                session.close()
+            }
+        }
+    }
+
+    private fun stepNeedsForegroundService(stepId: WizardStepId): Boolean {
+        return stepId == WizardStepId.DistroInstalled ||
+            stepId == WizardStepId.ToolchainBootstrapped
     }
 }

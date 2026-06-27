@@ -1,9 +1,16 @@
 package dev.jcode.core.distro
 
+import java.io.File
+
+/**
+ * State of the embedded Linux environment.
+ * Replaces the old Termux-dependent DistroEnvironmentState.
+ */
 data class DistroEnvironmentState(
-    val termux: TermuxStatus = TermuxStatus(),
+    val prootInstalled: Boolean = false,
+    val availableDistros: List<DistroProfile> = DistroProfile.defaults(),
     val runtime: DistroRuntimeConfig = DistroRuntimeConfig(),
-    val prootDistroInstalled: Boolean? = null,
+    val firstRunSetupDeferred: Boolean = false,
     val distroInstalled: Boolean? = null,
     val workspaceReady: Boolean = false,
     val toolchainReady: Boolean? = null,
@@ -15,17 +22,8 @@ data class DistroEnvironmentState(
     val errorMessage: String? = null,
 )
 
-data class TermuxStatus(
-    val installed: Boolean = false,
-    val versionName: String? = null,
-    val meetsMinimumVersion: Boolean = false,
-    val apiInstalled: Boolean = false,
-    val runCommandGranted: Boolean = false,
-    val allowExternalAppsEnabled: Boolean? = null,
-)
-
 data class DistroRuntimeConfig(
-    val selectedDistro: DistroProfile = DistroProfile.Ubuntu,
+    val selectedDistro: DistroProfile = DistroProfile.defaultProfile(),
     val user: String = DEFAULT_DISTRO_USER,
     val binds: List<DistroBind> = listOf(DistroBind(DEFAULT_PROJECTS_HOST_PATH, DEFAULT_DISTRO_WORKDIR)),
     val workdir: String = DEFAULT_DISTRO_WORKDIR,
@@ -36,7 +34,11 @@ data class DistroBind(
     val target: String,
 )
 
-data class TermuxRunResult(
+/**
+ * Result of executing a command inside the distro or on the host.
+ * Replaces the old TermuxRunResult.
+ */
+data class ExecResult(
     val stdout: String = "",
     val stderr: String = "",
     val exitCode: Int? = null,
@@ -47,23 +49,48 @@ data class TermuxRunResult(
         get() = internalError == null && exitCode == 0
 }
 
+/** Backward-compatible alias for code that still references TermuxRunResult. */
+typealias TermuxRunResult = ExecResult
+
 data class DistroEvent(
     val stage: String,
     val message: String,
-    val result: TermuxRunResult? = null,
+    val result: ExecResult? = null,
 )
 
+/** Progress emitted by the auto-setup orchestrator. */
+sealed interface DistroWizardProgress {
+    data object Idle : DistroWizardProgress
+    data class Running(val step: WizardStepId, val label: String) : DistroWizardProgress
+    data class Completed(val step: WizardStepId, val detail: String) : DistroWizardProgress
+    data class Failed(val step: WizardStepId, val error: String) : DistroWizardProgress
+    data class AllDone(
+        val totalSteps: Int,
+        val completedSteps: Int,
+        val summary: String,
+    ) : DistroWizardProgress
+}
+
+/**
+ * Wizard steps for the embedded environment setup.
+ * Simplified from the Termux-dependent version.
+ */
 enum class WizardStepId(val key: String) {
-    TermuxInstalled("termux-installed"),
-    TermuxApiInstalled("termux-api-installed"),
-    RunCommandPermission("run-command-permission"),
-    AllowExternalApps("allow-external-apps"),
-    ProotDistroInstalled("proot-distro-installed"),
+    /** Check available storage space (need ~2GB free). */
+    CheckStorage("check-storage"),
+    /** proot binary extracted from assets. */
+    ProotReady("proot-ready"),
+    /** User picked a distro (Ubuntu or Debian). */
     DistroSelected("distro-selected"),
+    /** Rootfs downloaded and extracted. */
     DistroInstalled("distro-installed"),
+    /** Workspace host directory created. */
     WorkspaceReady("workspace-ready"),
+    /** Base toolchain packages installed via apt. */
     ToolchainBootstrapped("toolchain-bootstrapped"),
+    /** Non-root jcode user created inside the distro. */
     JcodeUserCreated("jcode-user-created"),
+    /** Final smoke test passed. */
     SmokeTest("smoke-test");
 
     companion object {
@@ -71,36 +98,59 @@ enum class WizardStepId(val key: String) {
     }
 }
 
-enum class DistroProfile(
+data class DistroProfile(
     val id: String,
     val label: String,
     val installRecipe: String,
     val approxFootprint: String,
+    val arch: Arch = Arch.ARM64,
 ) {
-    Ubuntu(
-        id = "ubuntu",
-        label = "Ubuntu 24.04 LTS",
-        installRecipe = "ubuntu:24.04",
-        approxFootprint = "~2.5 GB",
-    ),
-    Debian(
-        id = "debian",
-        label = "Debian 12 Bookworm",
-        installRecipe = "debian:bookworm",
-        approxFootprint = "~2.0 GB",
-    );
-
     companion object {
-        fun fromId(raw: String?): DistroProfile = entries.firstOrNull { profile ->
-            raw != null && (profile.id == raw || profile.installRecipe == raw)
-        } ?: Ubuntu
+        private val defaultProfiles = listOf(
+            DistroProfile(
+                id = "ubuntu-24.04",
+                label = "Ubuntu 24.04 LTS",
+                installRecipe = "ubuntu:24.04",
+                approxFootprint = "~2.5 GB",
+                arch = Arch.ARM64,
+            ),
+            DistroProfile(
+                id = "debian-12",
+                label = "Debian 12 Bookworm",
+                installRecipe = "debian:bookworm",
+                approxFootprint = "~2.0 GB",
+                arch = Arch.ARM64,
+            ),
+        )
+
+        fun defaults(): List<DistroProfile> = defaultProfiles
+
+        fun defaultProfile(): DistroProfile = defaultProfiles.first()
+
+        fun fromId(
+            raw: String?,
+            available: List<DistroProfile> = defaults(),
+        ): DistroProfile = available.firstOrNull { profile ->
+            raw != null && (
+                profile.id == raw ||
+                    profile.installRecipe == raw ||
+                    legacyMatches(profile, raw)
+                )
+        } ?: available.firstOrNull() ?: defaultProfile()
+
+        private fun legacyMatches(profile: DistroProfile, raw: String): Boolean {
+            return when (raw) {
+                "ubuntu" -> profile.installRecipe == "ubuntu:24.04"
+                "debian" -> profile.installRecipe == "debian:bookworm"
+                else -> false
+            }
+        }
     }
 }
 
 internal const val DEFAULT_PROJECTS_HOST_PATH: String = "/storage/emulated/0/JCode/projects"
 internal const val DEFAULT_DISTRO_WORKDIR: String = "/workspace"
 internal const val DEFAULT_DISTRO_USER: String = "jcode"
-internal const val MIN_SUPPORTED_TERMUX_VERSION: String = "0.118"
 
 internal val DEFAULT_BOOTSTRAP_PACKAGES: List<String> = listOf(
     "build-essential",

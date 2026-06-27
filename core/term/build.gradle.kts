@@ -9,16 +9,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        minSdk = 33
-    }
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_21
-        targetCompatibility = JavaVersion.VERSION_21
-    }
-
-    kotlinOptions {
-        jvmTarget = "21"
+        minSdk = 28
     }
 
     buildFeatures {
@@ -29,5 +20,7 @@ android {
 dependencies {
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
+    implementation(libs.core.ktx)
     implementation(libs.coroutines.android)
+    implementation(project(":core:distro"))
 }

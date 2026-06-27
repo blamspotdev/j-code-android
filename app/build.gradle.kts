@@ -10,8 +10,8 @@ android {
 
     defaultConfig {
         applicationId = "dev.jcode"
-        minSdk = 33
-        targetSdk = 36
+        minSdk = 28
+        targetSdk = 28
         versionCode = 1
         versionName = "1.0"
 
@@ -64,6 +64,7 @@ dependencies {
     // Core modules
     implementation(project(":core:design"))
     implementation(project(":core:adaptive"))
+    implementation(project(":core:resource"))
     implementation(project(":core:fs"))
     implementation(project(":core:buffer"))
     implementation(project(":core:editor"))
@@ -91,9 +92,11 @@ dependencies {
     implementation(project(":feature:debug"))
     implementation(project(":feature:settings"))
     implementation(project(":feature:sdk-manager"))
+    implementation(project(":feature:marketplace"))
     implementation(project(":feature:onboarding"))
 
     // Native modules
+    implementation(project(":native:core"))
     implementation(project(":native:buffer"))
     implementation(project(":native:editor-render"))
     implementation(project(":native:tree-sitter"))
@@ -102,6 +105,8 @@ dependencies {
     implementation(project(":native:pty"))
     implementation(project(":native:vt"))
     implementation(project(":native:wasmtime-ffi"))
+    implementation(project(":native:grammars"))
+    implementation(project(":native:proot"))
 
     // Debug
     debugImplementation(libs.compose.ui.tooling)

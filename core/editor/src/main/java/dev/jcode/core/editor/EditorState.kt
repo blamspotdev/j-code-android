@@ -3,6 +3,7 @@ package dev.jcode.core.editor
 import dev.jcode.core.buffer.Buffer
 import dev.jcode.core.buffer.EditTx
 import dev.jcode.core.buffer.Snapshot
+import dev.jcode.core.editor.decor.DecorationSet
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -82,7 +83,35 @@ data class EditorTheme(
     val lineNumberActive: Long = 0xFFCDD6F4,
     val selection: Long = 0x40585B76,
     val cursor: Long = 0xFFF5E0DC,
-)
+    val gutterBackground: Long = 0xFF181825,
+    val gutterBorder: Long = 0xFF313244,
+) {
+    companion object {
+        /** Dark theme (Catppuccin Mocha) */
+        val DARK = EditorTheme(
+            background = 0xFF1E1E2E,
+            foreground = 0xFFCDD6F4,
+            lineNumber = 0xFF6C7086,
+            lineNumberActive = 0xFFCDD6F4,
+            selection = 0x40585B76,
+            cursor = 0xFFF5E0DC,
+            gutterBackground = 0xFF181825,
+            gutterBorder = 0xFF313244,
+        )
+
+        /** Light theme */
+        val LIGHT = EditorTheme(
+            background = 0xFFFAFAFA,
+            foreground = 0xFF1C1B1F,
+            lineNumber = 0xFF9E9E9E,
+            lineNumberActive = 0xFF424242,
+            selection = 0x40BDBDBD,
+            cursor = 0xFF6750A4,
+            gutterBackground = 0xFFF5F5F5,
+            gutterBorder = 0xFFE0E0E0,
+        )
+    }
+}
 
 /**
  * EditorState holds the current buffer snapshot, carets, viewport, folds,
@@ -110,6 +139,9 @@ class EditorState(
 
     private val _folds = MutableStateFlow(emptyList<FoldRange>())
     val folds: StateFlow<List<FoldRange>> = _folds.asStateFlow()
+
+    private val _decorations = MutableStateFlow(DecorationSet.EMPTY)
+    val decorations: StateFlow<DecorationSet> = _decorations.asStateFlow()
 
     private val _language = MutableStateFlow<LanguageDescriptor?>(null)
     val language: StateFlow<LanguageDescriptor?> = _language.asStateFlow()
@@ -234,6 +266,12 @@ class EditorState(
     /** Update theme. */
     fun updateTheme(update: (EditorTheme) -> EditorTheme) {
         _theme.value = update(_theme.value)
+    }
+
+    /** Update decorations. */
+    fun updateDecorations(update: (DecorationSet) -> DecorationSet) {
+        _decorations.value = update(_decorations.value)
+        scope.launch { _events.emit(EditorEvent.DecorationsChanged) }
     }
 
     override fun close() {

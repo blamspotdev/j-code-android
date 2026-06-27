@@ -132,7 +132,6 @@ class HighlightSpanProducer @Inject constructor() {
         val spans = mutableListOf<ColoredSpan>()
         val cursor = tree.rootNode.walk()
         try {
-            cursor.reset()
             // Stub walk - in production would use query cursor
         } finally {
             cursor.close()

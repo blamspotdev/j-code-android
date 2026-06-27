@@ -8,7 +8,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        minSdk = 33
+        minSdk = 28
     }
 
     compileOptions {
@@ -25,4 +25,5 @@ dependencies {
     implementation(libs.lsp4j)
     implementation(libs.coroutines.android)
     implementation(project(":core:editor-decor"))
+    implementation(project(":core:term"))
 }

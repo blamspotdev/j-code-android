@@ -6,26 +6,23 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
-import kotlinx.coroutines.launch
 
+/**
+ * Launches Android's SAF folder picker and hands the granted folder to [onFolderPicked]. The caller
+ * decides what to do next (e.g. detect a missing `.jcode` type and prompt Project vs Workspace).
+ */
 @Composable
 fun rememberOpenFolderLauncher(
-    workspaceManager: WorkspaceManager,
-    onSafWarning: (String) -> Unit = {},
+    onFolderPicked: (FsPath) -> Unit,
 ): ActivityResultLauncher<Uri?> {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
 
     return rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             context.contentResolver.takePersistableUriPermission(uri, flags)
-            scope.launch {
-                workspaceManager.addProject(FsPath.Saf(uri))
-                onSafWarning("SAF projects can't be bind-mounted into the distro; use manual sync for toolchain access.")
-            }
+            onFolderPicked(FsPath.Saf(uri))
         }
     }
 }

@@ -15,6 +15,9 @@ data class WorkspaceConfig(
     @SerialName("files")
     val files: FilesConfig = FilesConfig(),
 
+    @SerialName("explorer")
+    val explorer: ExplorerConfig = ExplorerConfig(),
+
     @SerialName("search")
     val search: SearchConfig = SearchConfig(),
 
@@ -43,11 +46,25 @@ data class WorkspaceConfig(
  */
 @Serializable
 data class ProjectConfig(
+    @SerialName("name")
+    val name: String? = null,
+
+    /** Folder role: "project" (a buildable project) or "workspace" (a container of projects). */
+    @SerialName("type")
+    val type: String? = null,
+
+    /** Template id this project was scaffolded from (project folders only). */
+    @SerialName("template")
+    val template: String? = null,
+
     @SerialName("editor")
     val editor: EditorConfig? = null,
 
     @SerialName("files")
     val files: FilesConfig? = null,
+
+    @SerialName("explorer")
+    val explorer: ExplorerConfig? = null,
 
     @SerialName("search")
     val search: SearchConfig? = null,
@@ -105,6 +122,13 @@ data class FilesConfig(
 
     @SerialName("watcherExclude")
     val watcherExclude: List<String> = emptyList(),
+)
+
+@Serializable
+data class ExplorerConfig(
+    /** Explorer file-browser layout: "Tree" or "List". */
+    @SerialName("viewMode")
+    val viewMode: String? = null,
 )
 
 @Serializable
@@ -179,6 +203,7 @@ data class BindMount(
 data class EffectiveConfig(
     val editor: EffectiveEditorConfig,
     val files: EffectiveFilesConfig,
+    val explorer: EffectiveExplorerConfig,
     val search: EffectiveSearchConfig,
     val git: EffectiveGitConfig,
     val terminal: EffectiveTerminalConfig,
@@ -202,6 +227,10 @@ data class EffectiveEditorConfig(
 data class EffectiveFilesConfig(
     val exclude: List<String> = listOf("**/node_modules/**", "**/.git/**", "**/build/**"),
     val watcherExclude: List<String> = listOf("**/.git/objects/**", "**/.git/subtree-cache/**"),
+)
+
+data class EffectiveExplorerConfig(
+    val viewMode: String = "Tree",
 )
 
 data class EffectiveSearchConfig(

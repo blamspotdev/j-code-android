@@ -33,6 +33,7 @@ object ExplorerFeature {
         fs: Fs,
         context: Context,
         modifier: Modifier = Modifier,
+        viewMode: ExplorerViewMode = ExplorerViewMode.Tree,
         onFileSelected: ((dev.jcode.fs.FsNode) -> Unit)? = null,
         onSnackbar: ((String) -> Unit)? = null,
     ) {
@@ -42,6 +43,7 @@ object ExplorerFeature {
             fs = fs,
             context = context,
             modifier = modifier,
+            viewMode = viewMode,
             onFileSelected = onFileSelected,
             onSnackbar = onSnackbar,
         )

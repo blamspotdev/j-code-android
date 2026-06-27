@@ -36,6 +36,7 @@ import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.config.ProjectConfig
 import dev.jcode.core.config.WorkspaceConfig
 import dev.jcode.core.distro.DistroEnvironmentState
+import dev.jcode.design.ThemeMode
 
 object SettingsFeature {
 
@@ -57,6 +58,9 @@ object SettingsFeature {
         onUpdateWordWrap: (ConfigScope, Boolean) -> Unit,
         onUpdateMinimap: (ConfigScope, Boolean) -> Unit,
         onUpdateLigatures: (ConfigScope, Boolean) -> Unit,
+        onUpdateExplorerViewMode: (ConfigScope, String) -> Unit,
+        themeMode: ThemeMode,
+        onUpdateThemeMode: (ThemeMode) -> Unit,
         modifier: Modifier = Modifier,
     ) {
         var selectedScope by rememberSaveable(projectOverridesAvailable) {
@@ -79,6 +83,12 @@ object SettingsFeature {
         val minimap = scopedEditor?.minimap ?: effectiveConfig.editor.minimap
         val ligatures = scopedEditor?.ligatures ?: effectiveConfig.editor.ligatures
 
+        val scopedExplorer = when (selectedScope) {
+            ConfigScope.Workspace -> workspaceConfig?.explorer
+            ConfigScope.Project -> projectConfig?.explorer
+        }
+        val explorerViewMode = scopedExplorer?.viewMode ?: effectiveConfig.explorer.viewMode
+
         Column(
             modifier = modifier
                 .fillMaxSize()
@@ -99,30 +109,53 @@ object SettingsFeature {
             }
 
             SettingsCard(
+                title = "Appearance",
+                description = "Choose the app theme. System follows your device's light/dark setting.",
+            ) {
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    ThemeMode.entries.forEachIndexed { index, mode ->
+                        SegmentedButton(
+                            shape = SegmentedButtonDefaults.itemShape(index = index, count = ThemeMode.entries.size),
+                            onClick = { onUpdateThemeMode(mode) },
+                            selected = themeMode == mode,
+                            label = { Text(mode.name) },
+                        )
+                    }
+                }
+            }
+
+            SettingsCard(
                 title = "Environment",
-                description = "Phase 7 setup lives here: Termux checks, distro bootstrap, and the final smoke test.",
+                description = "Environment setup: proot, distro bootstrap, and the final smoke test.",
             ) {
                 SummaryRow(
-                    "Termux",
-                    when {
-                        environmentState.termux.meetsMinimumVersion -> environmentState.termux.versionName ?: "Ready"
-                        environmentState.termux.installed -> "Update required (${environmentState.termux.versionName})"
-                        else -> "Missing"
+                    label = "proot",
+                    value = if (environmentState.prootInstalled) "Ready" else "Not installed",
+                )
+                SummaryRow(
+                    label = "Distro",
+                    value = when (environmentState.distroInstalled) {
+                        true -> environmentState.runtime.selectedDistro.label
+                        false -> "Not installed"
+                        null -> "Unknown"
                     },
                 )
                 SummaryRow(
-                    "RUN_COMMAND",
-                    if (environmentState.termux.runCommandGranted) "Granted" else "Missing",
-                )
-                SummaryRow(
-                    "allow-external-apps",
-                    when (environmentState.termux.allowExternalAppsEnabled) {
-                        true -> "Enabled"
-                        false -> "Disabled"
-                        null -> "Unchecked"
+                    label = "Toolchain",
+                    value = when (environmentState.toolchainReady) {
+                        true -> "Ready"
+                        false -> "Not ready"
+                        null -> "Unknown"
                     },
                 )
-                SummaryRow("Distro", environmentState.runtime.selectedDistro.label)
+                SummaryRow(
+                    label = "Smoke test",
+                    value = when (environmentState.smokeTestPassed) {
+                        true -> "Passed"
+                        false -> "Failed"
+                        null -> "Not run"
+                    },
+                )
                 SummaryRow(
                     "Primary bind",
                     environmentState.runtime.binds.firstOrNull()?.target ?: "/workspace",
@@ -252,6 +285,37 @@ object SettingsFeature {
                     checked = ligatures,
                     onCheckedChange = { onUpdateLigatures(selectedScope, it) },
                 )
+            }
+
+            SettingsCard(
+                title = "Explorer",
+                description = "Choose how the file explorer is laid out. Applies to the current edit scope.",
+            ) {
+                OptionRow(
+                    label = "View mode",
+                    supporting = "Tree shows the whole project hierarchy; List is a one-folder file manager with breadcrumbs.",
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("Tree", "List").forEach { option ->
+                            val selected = explorerViewMode == option
+                            if (selected) {
+                                FilledTonalButton(
+                                    onClick = { onUpdateExplorerViewMode(selectedScope, option) },
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text(option)
+                                }
+                            } else {
+                                OutlinedButton(
+                                    onClick = { onUpdateExplorerViewMode(selectedScope, option) },
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text(option)
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             SettingsCard(

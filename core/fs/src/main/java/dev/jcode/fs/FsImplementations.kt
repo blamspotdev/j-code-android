@@ -49,7 +49,7 @@ class PosixFs @Inject constructor() : Fs {
     override fun watch(path: FsPath): Flow<FsWatchEvent> = callbackFlow {
         val root = path.requireLocal()
         val observed = if (root.isDirectory) root else root.parentFile ?: root
-        val observer = object : FileObserver(observed.absolutePath, ALL_EVENTS) {
+        val observer = object : FileObserver(observed, ALL_EVENTS) {
             override fun onEvent(event: Int, relativePath: String?) {
                 val type = when {
                     event and (CREATE or MOVED_TO) != 0 -> FsWatchEventType.Created
