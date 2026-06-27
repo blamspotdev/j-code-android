@@ -37,6 +37,7 @@ class ExtensionInstaller internal constructor(context: Context) {
                     id = id,
                     name = entry.str("name") ?: id,
                     type = ExtensionType.from(entry.str("type")),
+                    version = entry.str("version"),
                     repo = repo,
                 )
             }

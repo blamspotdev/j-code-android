@@ -22,9 +22,30 @@ data class MarketplaceEntry(
     val id: String,
     val name: String,
     val type: ExtensionType,
+    /** Latest published version, used to detect updates against an installed copy. */
+    val version: String?,
     /** The extension's git repo (https .git URL); the installer derives a codeload zip URL from it. */
     val repo: String,
 )
+
+/** Compare dotted versions ("0.2.0" vs "0.1.3"); missing parts count as 0. */
+fun compareVersions(a: String, b: String): Int {
+    val pa = a.trim().split('.')
+    val pb = b.trim().split('.')
+    for (i in 0 until maxOf(pa.size, pb.size)) {
+        val na = pa.getOrNull(i)?.toIntOrNull() ?: 0
+        val nb = pb.getOrNull(i)?.toIntOrNull() ?: 0
+        if (na != nb) return na - nb
+    }
+    return 0
+}
+
+/** True when [latest] is a strictly newer version than [installed]. */
+fun isUpdateAvailable(latest: String?, installed: String?): Boolean {
+    if (latest.isNullOrBlank()) return false
+    if (installed.isNullOrBlank()) return false
+    return compareVersions(latest, installed) > 0
+}
 
 /** The remote marketplace index. */
 data class MarketplaceIndex(

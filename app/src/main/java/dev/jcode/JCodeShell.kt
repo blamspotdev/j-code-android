@@ -162,6 +162,7 @@ import dev.jcode.feature.explorer.ExplorerViewMode
 import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.MarketplaceEntry
+import dev.jcode.feature.marketplace.isUpdateAvailable
 import dev.jcode.feature.marketplace.ProjectTemplate
 import dev.jcode.feature.marketplace.ScaffoldState
 import dev.jcode.feature.onboarding.OnboardingFeature
@@ -2875,16 +2876,24 @@ private fun ExtensionsPanel(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        val installedById = remember(installed) { installed.associateBy { it.id } }
         available.forEach { entry ->
-            ExtensionRow(name = entry.name, subtitle = entry.type.name.lowercase()) {
-                if (entry.id in installedIds) {
-                    Text(
+            val sub = buildString {
+                append(entry.type.name.lowercase())
+                entry.version?.let { append(" · v$it") }
+            }
+            ExtensionRow(name = entry.name, subtitle = sub) {
+                val inst = installedById[entry.id]
+                when {
+                    inst == null ->
+                        TextButton(onClick = { onInstall(entry) }, enabled = !busy) { Text("Install") }
+                    isUpdateAvailable(entry.version, inst.version) ->
+                        TextButton(onClick = { onInstall(entry) }, enabled = !busy) { Text("Update") }
+                    else -> Text(
                         "Installed",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                     )
-                } else {
-                    TextButton(onClick = { onInstall(entry) }, enabled = !busy) { Text("Install") }
                 }
             }
         }
@@ -2899,16 +2908,24 @@ private fun ExtensionsPanel(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        val availableById = remember(available) { available.associateBy { it.id } }
         installed.forEach { ext ->
+            val latest = availableById[ext.id]?.version
+            val updatable = isUpdateAvailable(latest, ext.version)
             val detail = buildString {
                 append(ext.type.name.lowercase())
-                ext.version?.let { append(" · v$it") }
+                if (updatable) append(" · v${ext.version} → v$latest") else ext.version?.let { append(" · v$it") }
                 if (ext.type == ExtensionType.Templates && ext.templates.isNotEmpty()) {
                     append(" · ${ext.templates.size} templates")
                 }
                 ext.language?.let { append(" · ${it.completions.size} snippets") }
             }
             ExtensionRow(name = ext.name, subtitle = detail) {
+                if (updatable) {
+                    availableById[ext.id]?.let { entry ->
+                        TextButton(onClick = { onInstall(entry) }, enabled = !busy) { Text("Update") }
+                    }
+                }
                 TextButton(onClick = { onUninstall(ext.id) }) { Text("Remove") }
             }
         }
