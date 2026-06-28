@@ -127,6 +127,28 @@ class EditorView @JvmOverloads constructor(
         }.launchIn(scope)
         editorState.decorations.onEach { invalidate() }.launchIn(scope)
         editorState.carets.onEach { invalidate() }.launchIn(scope)
+        // A pending "reveal (line,col)" request (e.g. opening a file at a location tapped in the
+        // terminal): place the caret there and scroll it into view.
+        editorState.revealRequest.onEach { req -> if (req != null) revealLineColumn(req.line, req.column) }
+            .launchIn(scope)
+    }
+
+    /** Move the caret to a 0-based (line, column), scroll it into view, and focus the editor. */
+    private fun revealLineColumn(line: Int, column: Int) {
+        val state = editorState ?: return
+        val snapshot = state.snapshot.value
+        val targetLine = line.coerceIn(0, max(0, snapshot.lineCount - 1))
+        val offset = snapshot.lineColumnToOffset(targetLine, column.coerceAtLeast(0))
+        // Compute line height from the render config (the viewport's may not be set yet on a fresh tab).
+        val cfg = state.renderConfig.value
+        val lineHeight = (cfg.fontSizeSp * density * cfg.lineHeightMultiplier).toInt().coerceAtLeast(1)
+        runBlocking { state.setSelection(listOf(Caret(offset, offset))) }
+        // Park the target a couple of lines below the top so there's context above it.
+        val targetScrollY = (targetLine * lineHeight - lineHeight * 2).coerceAtLeast(0)
+        state.updateViewport { it.copy(scrollY = targetScrollY) }
+        state.clearReveal()
+        requestFocus()
+        invalidate()
     }
 
     /** Detach the current EditorState. */

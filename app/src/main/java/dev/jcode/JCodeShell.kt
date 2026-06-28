@@ -193,6 +193,7 @@ import dev.jcode.fs.rememberOpenFolderLauncher
 import java.io.File
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -342,6 +343,7 @@ fun JCodeApp(
         onUpdateTerminalDoubleTapToFocus = viewModel::setTerminalDoubleTapToFocus,
         hideStatusBarWithKeyboard = hideStatusBarWithKeyboard,
         onUpdateHideStatusBarWithKeyboard = viewModel::setHideStatusBarWithKeyboard,
+        bringEditorToFront = viewModel.bringEditorToFront,
     )
     }
 
@@ -440,6 +442,7 @@ private fun JCodeShell(
     onUpdateTerminalDoubleTapToFocus: (Boolean) -> Unit,
     hideStatusBarWithKeyboard: Boolean,
     onUpdateHideStatusBarWithKeyboard: (Boolean) -> Unit,
+    bringEditorToFront: SharedFlow<Unit>,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -510,6 +513,13 @@ private fun JCodeShell(
     val isPersistentLeftSidebarVisible = !usesModalWorkspace && leftSidebarExpanded
     var rightSidebarVisible by rememberSaveable(isLandscape, windowInfo.widthClass) {
         mutableStateOf(false)
+    }
+    // Opening a file from the terminal should surface the editor; in modal layouts the terminal
+    // sits in a drawer over the editor, so close it.
+    LaunchedEffect(bringEditorToFront, usesModalWorkspace) {
+        bringEditorToFront.collect {
+            if (usesModalWorkspace) rightSidebarVisible = false
+        }
     }
     var rightPanelTab by rememberSaveable {
         mutableStateOf(RightPanelTab.Terminal)

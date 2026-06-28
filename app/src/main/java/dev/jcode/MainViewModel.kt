@@ -262,6 +262,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages = _messages.asSharedFlow()
 
+    /** Emitted when a file is opened from the terminal, so the shell can surface the editor. */
+    private val _bringEditorToFront = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val bringEditorToFront = _bringEditorToFront.asSharedFlow()
+
     init {
         refreshInstalledExtensions()
 
@@ -702,10 +706,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun openFileByGuestPath(token: String) {
         val raw = token.trim().trimEnd('.', ',', ')', ']', '}', ';', '"', '\'')
         if (raw.isEmpty()) return
-        val pathPart = raw.replace(Regex(":\\d+(:\\d+)?$"), "")
+        // A trailing `:line` or `:line:col` (1-based, as compilers/grep emit) becomes the focus target.
+        var pathPart = raw
+        var line: Int? = null
+        var column: Int? = null
+        Regex("""^(.*?):(\d+)(?::(\d+))?$""").find(raw)?.let { m ->
+            pathPart = m.groupValues[1]
+            line = m.groupValues[2].toIntOrNull()
+            column = m.groupValues[3].toIntOrNull()
+        }
         val file = resolveHostFile(pathPart) ?: return
         if (!file.isFile) return
-        viewModelScope.launch { openLocalFile(file) }
+        _bringEditorToFront.tryEmit(Unit)
+        viewModelScope.launch { openLocalFile(file, line, column) }
     }
 
     private fun resolveHostFile(path: String): File? {
@@ -882,11 +895,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun openLocalFile(file: File) {
+    private suspend fun openLocalFile(file: File, line: Int? = null, column: Int? = null) {
         val stableId = file.absolutePath
         val existing = _editorGroup.value.tabs.firstOrNull { it.id == stableId }
         if (existing != null) {
             _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
+            existing.editorState?.requestRevealAt(line, column)
             return
         }
 
@@ -902,8 +916,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val tab = EditorTab.create(file, stableId)
         applyConfigToTab(tab, effectiveConfig.value)
+        // Set the reveal before the tab is shown so the view applies it as soon as it attaches.
+        tab.editorState?.requestRevealAt(line, column)
         trackDirty(tab)
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
+    }
+
+    /** Convert a 1-based (line, optional column) to the editor's 0-based reveal request. */
+    private fun dev.jcode.core.editor.EditorState.requestRevealAt(line: Int?, column: Int?) {
+        if (line == null) return
+        requestReveal((line - 1).coerceAtLeast(0), ((column ?: 1) - 1).coerceAtLeast(0))
     }
 
     private suspend fun openSafFile(node: FsNode) {

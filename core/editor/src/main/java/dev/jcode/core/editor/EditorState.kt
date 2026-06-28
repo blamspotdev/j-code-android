@@ -43,6 +43,9 @@ data class Viewport(
     val visibleLineBottom: Int get() = if (lineHeightPx > 0) (scrollY + heightPx) / lineHeightPx + 1 else 0
 }
 
+/** A request to reveal (caret + scroll into view) a 0-based (line, column). */
+data class RevealRequest(val line: Int, val column: Int)
+
 /** Fold range [startLine, endLine] inclusive. */
 data class FoldRange(
     val startLine: Int,
@@ -154,6 +157,19 @@ class EditorState(
 
     private val _events = MutableSharedFlow<EditorEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<EditorEvent> = _events.asSharedFlow()
+
+    /** A pending request to move the caret to (line, column) — both 0-based — and scroll it into
+     *  view. The view consumes it once it's laid out with correct metrics, then calls [clearReveal]. */
+    private val _revealRequest = MutableStateFlow<RevealRequest?>(null)
+    val revealRequest: StateFlow<RevealRequest?> = _revealRequest.asStateFlow()
+
+    fun requestReveal(line: Int, column: Int) {
+        _revealRequest.value = RevealRequest(line, column)
+    }
+
+    fun clearReveal() {
+        _revealRequest.value = null
+    }
 
     private val _dirty = MutableStateFlow(false)
     /** True when the buffer has unsaved edits since it was opened or last saved. */
