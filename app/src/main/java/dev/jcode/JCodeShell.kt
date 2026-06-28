@@ -144,6 +144,7 @@ import dev.jcode.core.config.ProjectConfig
 import dev.jcode.core.config.WorkspaceConfig
 import dev.jcode.core.distro.DistroBind
 import dev.jcode.core.distro.DistroEnvironmentState
+import dev.jcode.core.distro.DistroProfile
 import dev.jcode.core.distro.DistroWizardProgress
 import dev.jcode.core.distro.ProotManager
 import dev.jcode.core.distro.RootfsDownloader
@@ -239,7 +240,6 @@ fun JCodeApp(
         onFolderPicked = viewModel::openExternalFolder,
     )
     val openFolderTypePrompt by viewModel.openFolderTypePrompt.collectAsStateWithLifecycle()
-    var environmentWizardVisible by rememberSaveable { mutableStateOf(false) }
     val environmentNotConfigured = environmentState.smokeTestPassed != true
     val showFirstRunEnvironmentScreen = environmentNotConfigured && !environmentState.firstRunSetupDeferred
 
@@ -308,7 +308,8 @@ fun JCodeApp(
         onOpenWorkspaceConfig = viewModel::openWorkspaceConfigFile,
         onOpenProjectConfig = viewModel::openProjectConfigFile,
         onRefreshEnvironment = viewModel::refreshEnvironment,
-        onOpenEnvironmentWizard = { environmentWizardVisible = true },
+        onOpenEnvironmentWizard = { viewModel.openEnvironmentPage() },
+        onSelectDistro = { viewModel.selectWizardDistro(it) },
         onAutoSetup = viewModel::runAutoSetup,
         onRefreshSdkCatalog = viewModel::refreshSdkCatalog,
         onInstallSdkCatalogEntry = viewModel::installSdkCatalogEntry,
@@ -353,17 +354,6 @@ fun JCodeApp(
         )
     }
 
-    if (environmentWizardVisible) {
-        OnboardingFeature.TermuxDistroWizard(
-            environmentState = environmentState,
-            autoSetupProgress = autoSetupProgress,
-            onDismiss = { environmentWizardVisible = false },
-            onRefresh = { viewModel.refreshEnvironment() },
-            onSelectDistro = { viewModel.selectWizardDistro(it) },
-            onRunStep = { stepId -> viewModel.runEnvironmentStep(stepId) },
-            onAutoSetup = { viewModel.runAutoSetup() },
-        )
-    }
 }
 
 @Composable
@@ -419,6 +409,7 @@ private fun JCodeShell(
     onRefreshEnvironment: () -> Unit,
     onOpenEnvironmentWizard: () -> Unit,
     onAutoSetup: () -> Unit,
+    onSelectDistro: (DistroProfile) -> Unit,
     onRefreshSdkCatalog: () -> Unit,
     onInstallSdkCatalogEntry: (String) -> Unit,
     onVerifySdkCatalogEntry: (String) -> Unit,
@@ -1013,6 +1004,13 @@ private fun JCodeShell(
                                     terminalDoubleTapToFocus = terminalDoubleTapToFocus,
                                     onUpdateTerminalDoubleTapToFocus = onUpdateTerminalDoubleTapToFocus,
                                     modifier = Modifier.fillMaxSize(),
+                                )
+                                EditorPageKind.Environment -> OnboardingFeature.EnvironmentSetupPage(
+                                    environmentState = environmentState,
+                                    autoSetupProgress = autoSetupProgress,
+                                    onRefresh = onRefreshEnvironment,
+                                    onSelectDistro = onSelectDistro,
+                                    onAutoSetup = onAutoSetup,
                                 )
                                 EditorPageKind.None -> Unit
                             }

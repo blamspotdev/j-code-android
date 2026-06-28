@@ -718,6 +718,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
     }
 
+    fun openEnvironmentPage() {
+        val existing = _editorGroup.value.tabs.firstOrNull { it.pageKind == EditorPageKind.Environment }
+        if (existing != null) {
+            _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
+            return
+        }
+        val tab = EditorTab.page(ENVIRONMENT_TAB_ID, "Environment", EditorPageKind.Environment)
+        _editorGroup.value = _editorGroup.value.withTabAdded(tab)
+    }
+
     fun selectEditorTab(tabId: String) {
         _editorGroup.value = _editorGroup.value.withActiveTabChanged(tabId)
     }
@@ -895,5 +905,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private companion object {
         const val SETTINGS_TAB_ID = "jcode://settings"
+        const val ENVIRONMENT_TAB_ID = "jcode://environment"
     }
 }

@@ -1,5 +1,6 @@
 package dev.jcode.feature.onboarding
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,7 +15,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -24,9 +24,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -38,13 +36,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import dev.jcode.design.JCodeTheme
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.core.distro.DistroProfile
 import dev.jcode.core.distro.DistroWizardProgress
@@ -79,31 +77,26 @@ object OnboardingFeature {
         )
     }
 
+    /** Full-width environment setup, rendered as an in-editor page tab (replaces the cramped dialog). */
     @Composable
-    fun TermuxDistroWizard(
+    fun EnvironmentSetupPage(
         environmentState: DistroEnvironmentState,
         autoSetupProgress: DistroWizardProgress,
-        onDismiss: () -> Unit,
         onRefresh: () -> Unit,
         onSelectDistro: (DistroProfile) -> Unit,
-        onRunStep: (WizardStepId) -> Unit,
         onAutoSetup: () -> Unit,
     ) {
-        Dialog(onDismissRequest = onDismiss) {
-            StepperScreen(
-                environmentState = environmentState,
-                autoSetupProgress = autoSetupProgress,
-                onSelectDistro = onSelectDistro,
-                onAutoSetup = onAutoSetup,
-                onRefresh = onRefresh,
-                onSetupManualLater = null,
-                onDismiss = onDismiss,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .widthIn(max = 760.dp),
-                shape = RoundedCornerShape(28.dp),
-            )
-        }
+        StepperScreen(
+            environmentState = environmentState,
+            autoSetupProgress = autoSetupProgress,
+            onSelectDistro = onSelectDistro,
+            onAutoSetup = onAutoSetup,
+            onRefresh = onRefresh,
+            onSetupManualLater = null,
+            onDismiss = null,
+            modifier = Modifier.fillMaxSize(),
+            shape = RoundedCornerShape(0.dp),
+        )
     }
 }
 
@@ -157,15 +150,24 @@ private fun StepperScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         val availableDistros = environmentState.availableDistros.ifEmpty { DistroProfile.defaults() }
-                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                            availableDistros.forEachIndexed { index, profile ->
-                                SegmentedButton(
-                                    shape = SegmentedButtonDefaults.itemShape(index, availableDistros.size),
-                                    selected = environmentState.runtime.selectedDistro == profile,
-                                    onClick = { onSelectDistro(profile) },
-                                    enabled = !running,
-                                    label = { Text(profile.label) },
-                                )
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            availableDistros.forEach { profile ->
+                                val selected = environmentState.runtime.selectedDistro == profile
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable(enabled = !running) { onSelectDistro(profile) }
+                                        .padding(vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    RadioButton(
+                                        selected = selected,
+                                        onClick = { onSelectDistro(profile) },
+                                        enabled = !running,
+                                    )
+                                    Text(profile.label, style = MaterialTheme.typography.bodyMedium)
+                                }
                             }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
