@@ -11,9 +11,12 @@ import kotlinx.coroutines.withContext
 import dev.jcode.design.ThemeBundleRegistry
 import dev.jcode.design.jcIcon
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.res.Configuration
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.ActivityResultLauncher
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -177,6 +180,7 @@ import dev.jcode.workbench.marketplace.ExtensionDetailPage
 import dev.jcode.workbench.marketplace.ExtensionsPanel
 import dev.jcode.workbench.LocalTerminalTapConfig
 import dev.jcode.workbench.RightPanelTab
+import dev.jcode.workbench.WorkbenchManagerActions
 import dev.jcode.workbench.TerminalTapConfig
 import dev.jcode.workbench.WorkbenchTool
 import dev.jcode.fs.DEFAULT_SHARED_PROJECTS_ROOT
@@ -307,26 +311,28 @@ fun JCodeApp(
         installedExtensions = installedExtensions,
         marketplaceEntries = marketplaceEntries,
         marketplaceBusy = marketplaceBusy,
-        onRefreshMarketplace = viewModel::refreshMarketplace,
-        onInstallExtension = viewModel::installExtension,
-        onUninstallExtension = viewModel::uninstallExtension,
-        onOpenExtensionDetail = viewModel::openExtensionDetailPage,
         onOpenWorkspaceConfig = viewModel::openWorkspaceConfigFile,
         onOpenProjectConfig = viewModel::openProjectConfigFile,
         onRefreshEnvironment = viewModel::refreshEnvironment,
         onOpenEnvironmentWizard = { viewModel.openEnvironmentPage() },
         onSelectDistro = { viewModel.selectWizardDistro(it) },
         onAutoSetup = viewModel::runAutoSetup,
-        onCheckSdkStatuses = viewModel::checkSdkStatuses,
-        onInstallSdkCatalogEntry = viewModel::installSdkCatalogEntry,
-        onVerifySdkCatalogEntry = viewModel::verifySdkCatalogEntry,
-        onUninstallSdkCatalogEntry = viewModel::uninstallSdkCatalogEntry,
-        onOpenSdkDetail = viewModel::openSdkDetailPage,
-        onCheckLspStatuses = viewModel::checkLspStatuses,
-        onInstallLspCatalogEntry = viewModel::installLspCatalogEntry,
-        onVerifyLspCatalogEntry = viewModel::verifyLspCatalogEntry,
-        onUninstallLspCatalogEntry = viewModel::uninstallLspCatalogEntry,
-        onOpenLspDetail = viewModel::openLspDetailPage,
+        managerActions = WorkbenchManagerActions(
+            onCheckSdkStatuses = viewModel::checkSdkStatuses,
+            onInstallSdkCatalogEntry = viewModel::installSdkCatalogEntry,
+            onVerifySdkCatalogEntry = viewModel::verifySdkCatalogEntry,
+            onUninstallSdkCatalogEntry = viewModel::uninstallSdkCatalogEntry,
+            onOpenSdkDetail = viewModel::openSdkDetailPage,
+            onCheckLspStatuses = viewModel::checkLspStatuses,
+            onInstallLspCatalogEntry = viewModel::installLspCatalogEntry,
+            onVerifyLspCatalogEntry = viewModel::verifyLspCatalogEntry,
+            onUninstallLspCatalogEntry = viewModel::uninstallLspCatalogEntry,
+            onOpenLspDetail = viewModel::openLspDetailPage,
+            onRefreshMarketplace = viewModel::refreshMarketplace,
+            onInstallExtension = viewModel::installExtension,
+            onUninstallExtension = viewModel::uninstallExtension,
+            onOpenExtensionDetail = viewModel::openExtensionDetailPage,
+        ),
         railToolOrder = railToolOrder,
         onReorderRail = viewModel::setRailToolOrder,
         onOpenSettingsPage = viewModel::openSettingsPage,
@@ -412,10 +418,7 @@ private fun JCodeShell(
     installedExtensions: List<InstalledExtension>,
     marketplaceEntries: List<MarketplaceEntry>,
     marketplaceBusy: Boolean,
-    onRefreshMarketplace: () -> Unit,
-    onInstallExtension: (MarketplaceEntry) -> Unit,
-    onUninstallExtension: (String) -> Unit,
-    onOpenExtensionDetail: (String) -> Unit,
+    managerActions: WorkbenchManagerActions,
     formatterId: String,
     onSelectFormatter: (String) -> Unit,
     onOpenWorkspaceConfig: () -> Unit,
@@ -424,16 +427,6 @@ private fun JCodeShell(
     onOpenEnvironmentWizard: () -> Unit,
     onAutoSetup: () -> Unit,
     onSelectDistro: (DistroProfile) -> Unit,
-    onCheckSdkStatuses: () -> Unit,
-    onInstallSdkCatalogEntry: (String) -> Unit,
-    onVerifySdkCatalogEntry: (String) -> Unit,
-    onUninstallSdkCatalogEntry: (String) -> Unit,
-    onOpenSdkDetail: (String) -> Unit,
-    onCheckLspStatuses: () -> Unit,
-    onInstallLspCatalogEntry: (String) -> Unit,
-    onVerifyLspCatalogEntry: (String) -> Unit,
-    onUninstallLspCatalogEntry: (String) -> Unit,
-    onOpenLspDetail: (String) -> Unit,
     railToolOrder: List<String>,
     onReorderRail: (List<String>) -> Unit,
     onOpenSettingsPage: () -> Unit,
@@ -500,8 +493,8 @@ private fun JCodeShell(
     // Refresh installed/update-available status when a manager panel comes into view (async, guarded).
     LaunchedEffect(selectedTool) {
         when (selectedTool) {
-            WorkbenchTool.SdkManager -> onCheckSdkStatuses()
-            WorkbenchTool.LspManager -> onCheckLspStatuses()
+            WorkbenchTool.SdkManager -> managerActions.onCheckSdkStatuses()
+            WorkbenchTool.LspManager -> managerActions.onCheckLspStatuses()
             else -> Unit
         }
     }
@@ -600,6 +593,22 @@ private fun JCodeShell(
     var runInProgress by remember { mutableStateOf(false) }
     var runSessionIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var runPollJob by remember { mutableStateOf<Job?>(null) }
+
+    // System back: navigate back one step (close the active page tab, then any open drawer). With
+    // nothing left to go back to, the second back within 2s exits — but if a run is in progress or a
+    // terminal is live, it backgrounds the app instead so the work keeps running. Extracted into its
+    // own composable so its locals stay out of JCodeShell's (already huge) generated method.
+    WorkbenchBackHandler(
+        activeTabIsPage = editorGroup.activeTab?.isPage == true,
+        activeTabId = editorGroup.activeTab?.id,
+        onCloseActiveTab = onCloseEditorTab,
+        drawerOpen = compactDrawerState.isOpen,
+        onCloseDrawer = { scope.launch { compactDrawerState.close() } },
+        rightSidebarVisible = rightSidebarVisible,
+        onCloseRightSidebar = { rightSidebarVisible = false },
+        isBusy = { runInProgress || terminalSessionManager.sessions.isNotEmpty() },
+        snackbarHostState = snackbarHostState,
+    )
 
     // Drop a terminal tab when its shell exits on its own (e.g. `exit`, or a finished one-shot command).
     // The manager has already reaped the PTY + released the foreground hold; here we just sync the UI.
@@ -861,10 +870,7 @@ private fun JCodeShell(
                 onOpenProjectConfig = onOpenProjectConfig,
                 onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                 onAutoSetup = onAutoSetup,
-                onCheckSdkStatuses = onCheckSdkStatuses,
-                onOpenSdkDetail = onOpenSdkDetail,
-                onCheckLspStatuses = onCheckLspStatuses,
-                onOpenLspDetail = onOpenLspDetail,
+                managerActions = managerActions,
                 onRun = ::handleRun,
                 onStopRun = ::handleStopRun,
                 runUrl = runUrl,
@@ -880,8 +886,6 @@ private fun JCodeShell(
                 installedExtensions = installedExtensions,
                 marketplaceEntries = marketplaceEntries,
                 marketplaceBusy = marketplaceBusy,
-                onRefreshMarketplace = onRefreshMarketplace,
-                onOpenExtensionDetail = onOpenExtensionDetail,
             )
         }
     }
@@ -1047,10 +1051,10 @@ private fun JCodeShell(
                                             entry = entry,
                                             state = sdkCatalogState,
                                             environmentState = environmentState,
-                                            onInstall = onInstallSdkCatalogEntry,
-                                            onUpdate = onInstallSdkCatalogEntry,
-                                            onUninstall = onUninstallSdkCatalogEntry,
-                                            onVerify = onVerifySdkCatalogEntry,
+                                            onInstall = managerActions.onInstallSdkCatalogEntry,
+                                            onUpdate = managerActions.onInstallSdkCatalogEntry,
+                                            onUninstall = managerActions.onUninstallSdkCatalogEntry,
+                                            onVerify = managerActions.onVerifySdkCatalogEntry,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
@@ -1062,10 +1066,10 @@ private fun JCodeShell(
                                             entry = entry,
                                             state = lspCatalogState,
                                             environmentState = environmentState,
-                                            onInstall = onInstallLspCatalogEntry,
-                                            onUpdate = onInstallLspCatalogEntry,
-                                            onUninstall = onUninstallLspCatalogEntry,
-                                            onVerify = onVerifyLspCatalogEntry,
+                                            onInstall = managerActions.onInstallLspCatalogEntry,
+                                            onUpdate = managerActions.onInstallLspCatalogEntry,
+                                            onUninstall = managerActions.onUninstallLspCatalogEntry,
+                                            onVerify = managerActions.onVerifyLspCatalogEntry,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
@@ -1081,8 +1085,8 @@ private fun JCodeShell(
                                             available = marketplaceEntries,
                                             installedIds = installedExtensions.map { it.id }.toSet(),
                                             busy = marketplaceBusy,
-                                            onInstall = onInstallExtension,
-                                            onUninstall = onUninstallExtension,
+                                            onInstall = managerActions.onInstallExtension,
+                                            onUninstall = managerActions.onUninstallExtension,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
@@ -1124,10 +1128,7 @@ private fun JCodeShell(
                             onOpenProjectConfig = onOpenProjectConfig,
                             onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                             onAutoSetup = onAutoSetup,
-                            onCheckSdkStatuses = onCheckSdkStatuses,
-                            onOpenSdkDetail = onOpenSdkDetail,
-                            onCheckLspStatuses = onCheckLspStatuses,
-                            onOpenLspDetail = onOpenLspDetail,
+                            managerActions = managerActions,
                             onRun = ::handleRun,
                             onStopRun = ::handleStopRun,
                             runUrl = runUrl,
@@ -1143,8 +1144,6 @@ private fun JCodeShell(
                             installedExtensions = installedExtensions,
                             marketplaceEntries = marketplaceEntries,
                             marketplaceBusy = marketplaceBusy,
-                            onRefreshMarketplace = onRefreshMarketplace,
-                            onOpenExtensionDetail = onOpenExtensionDetail,
                         )
                     }
                 }
@@ -1535,10 +1534,7 @@ private fun WorkspacePanel(
     onOpenProjectConfig: () -> Unit,
     onOpenEnvironmentWizard: () -> Unit,
     onAutoSetup: () -> Unit,
-    onCheckSdkStatuses: () -> Unit,
-    onOpenSdkDetail: (String) -> Unit,
-    onCheckLspStatuses: () -> Unit,
-    onOpenLspDetail: (String) -> Unit,
+    managerActions: WorkbenchManagerActions,
     onRun: () -> Unit,
     onStopRun: () -> Unit,
     runUrl: String?,
@@ -1552,8 +1548,6 @@ private fun WorkspacePanel(
     installedExtensions: List<InstalledExtension>,
     marketplaceEntries: List<MarketplaceEntry>,
     marketplaceBusy: Boolean,
-    onRefreshMarketplace: () -> Unit,
-    onOpenExtensionDetail: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -1667,8 +1661,8 @@ private fun WorkspacePanel(
                         installed = installedExtensions,
                         available = marketplaceEntries,
                         busy = marketplaceBusy,
-                        onRefreshMarketplace = onRefreshMarketplace,
-                        onOpenDetail = onOpenExtensionDetail,
+                        onRefreshMarketplace = managerActions.onRefreshMarketplace,
+                        onOpenDetail = managerActions.onOpenExtensionDetail,
                         themeBundleId = themeBundleId,
                         onSelectTheme = onUpdateThemeBundle,
                         iconBundleId = iconBundleId,
@@ -1679,18 +1673,16 @@ private fun WorkspacePanel(
                     WorkbenchTool.SdkManager -> SdkManagerFeature.Content(
                         state = sdkCatalogState,
                         environmentState = environmentState,
-                        onRefresh = onCheckSdkStatuses,
-                        onOpenEnvironmentWizard = onOpenEnvironmentWizard,
-                        onOpenDetail = onOpenSdkDetail,
+                        onRefresh = managerActions.onCheckSdkStatuses,
+                        onOpenDetail = managerActions.onOpenSdkDetail,
                         modifier = Modifier.fillMaxSize(),
                     )
 
                     WorkbenchTool.LspManager -> LspManagerFeature.Content(
                         state = lspCatalogState,
                         environmentState = environmentState,
-                        onRefresh = onCheckLspStatuses,
-                        onOpenEnvironmentWizard = onOpenEnvironmentWizard,
-                        onOpenDetail = onOpenLspDetail,
+                        onRefresh = managerActions.onCheckLspStatuses,
+                        onOpenDetail = managerActions.onOpenLspDetail,
                         modifier = Modifier.fillMaxSize(),
                     )
 
@@ -2885,3 +2877,56 @@ private fun deviceModeLabel(windowInfo: JCodeWindowInfo): String = buildString {
 
 private fun explorerViewModeOf(value: String): ExplorerViewMode =
     ExplorerViewMode.entries.firstOrNull { it.name.equals(value, ignoreCase = true) } ?: ExplorerViewMode.Tree
+
+/** Unwrap the hosting [Activity] from a Compose [Context] (it may be a ContextWrapper). */
+private fun Context.findActivity(): Activity? {
+    var current: Context? = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return null
+}
+
+/**
+ * System-back handling for the workbench. One back navigates back a step (close the active page tab,
+ * then the modal drawer, then the right sidebar). With nothing left, a second back within 2s exits —
+ * unless [isBusy] (a run is going or a terminal is live), in which case it backgrounds the app.
+ */
+@Composable
+private fun WorkbenchBackHandler(
+    activeTabIsPage: Boolean,
+    activeTabId: String?,
+    onCloseActiveTab: (String) -> Unit,
+    drawerOpen: Boolean,
+    onCloseDrawer: () -> Unit,
+    rightSidebarVisible: Boolean,
+    onCloseRightSidebar: () -> Unit,
+    isBusy: () -> Boolean,
+    snackbarHostState: SnackbarHostState,
+) {
+    val activity = LocalContext.current.findActivity()
+    val scope = rememberCoroutineScope()
+    var lastBackAt by remember { mutableStateOf(0L) }
+    BackHandler(enabled = true) {
+        when {
+            activeTabIsPage && activeTabId != null -> onCloseActiveTab(activeTabId)
+            drawerOpen -> onCloseDrawer()
+            rightSidebarVisible -> onCloseRightSidebar()
+            else -> {
+                val busy = isBusy()
+                val now = System.currentTimeMillis()
+                if (now - lastBackAt < 2000L) {
+                    if (busy) activity?.moveTaskToBack(true) else activity?.finish()
+                } else {
+                    lastBackAt = now
+                    scope.launch {
+                        snackbarHostState.showSnackbar(
+                            if (busy) "Press back again to run in background" else "Press back again to exit",
+                        )
+                    }
+                }
+            }
+        }
+    }
+}

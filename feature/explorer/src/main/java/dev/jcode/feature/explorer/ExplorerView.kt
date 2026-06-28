@@ -172,7 +172,7 @@ fun ExplorerView(
 
     Column(modifier = modifier.fillMaxSize()) {
         // Compact action toolbar (always visible) with create/refresh/paste. The Tree|List view mode
-        // is set in App Settings, not here.
+        // is set in Settings, not here.
         ExplorerToolbar(
             viewMode = activeViewMode,
             onCreateFile = { showCreateDialog = CreateTarget(resolveCreateParent(), isDirectory = false) },

@@ -722,7 +722,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
             return
         }
-        val tab = EditorTab.page(SETTINGS_TAB_ID, "App Settings", EditorPageKind.Settings)
+        val tab = EditorTab.page(SETTINGS_TAB_ID, "Settings", EditorPageKind.Settings)
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
     }
 
@@ -736,28 +736,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
     }
 
-    /** Open (or focus) the detail page for a single SDK entry. */
+    /** Open the detail page for a single SDK entry. Reuses one SDK-detail tab (replaces any other). */
     fun openSdkDetailPage(entryId: String) {
-        val tabId = SDK_DETAIL_PREFIX + entryId
-        val existing = _editorGroup.value.tabs.firstOrNull { it.id == tabId }
-        if (existing != null) {
-            _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
-            return
+        openDetailPage(SDK_DETAIL_PREFIX + entryId, EditorPageKind.SdkDetail) {
+            distroService.sdkCatalogState.value.entries.firstOrNull { it.id == entryId }?.name ?: entryId
         }
-        val title = distroService.sdkCatalogState.value.entries.firstOrNull { it.id == entryId }?.name ?: entryId
-        _editorGroup.value = _editorGroup.value.withTabAdded(EditorTab.page(tabId, title, EditorPageKind.SdkDetail))
     }
 
-    /** Open (or focus) the detail page for a single language server. */
+    /** Open the detail page for a single language server. Reuses one LSP-detail tab (replaces any other). */
     fun openLspDetailPage(entryId: String) {
-        val tabId = LSP_DETAIL_PREFIX + entryId
-        val existing = _editorGroup.value.tabs.firstOrNull { it.id == tabId }
+        openDetailPage(LSP_DETAIL_PREFIX + entryId, EditorPageKind.LspDetail) {
+            distroService.lspCatalogState.value.entries.firstOrNull { it.id == entryId }?.name ?: entryId
+        }
+    }
+
+    /** Open/focus a per-type detail tab: focus if already open, else replace any other tab of [kind]. */
+    private fun openDetailPage(tabId: String, kind: EditorPageKind, title: () -> String) {
+        var group = _editorGroup.value
+        val existing = group.tabs.firstOrNull { it.id == tabId }
         if (existing != null) {
-            _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
+            _editorGroup.value = group.withActiveTabChanged(existing.id)
             return
         }
-        val title = distroService.lspCatalogState.value.entries.firstOrNull { it.id == entryId }?.name ?: entryId
-        _editorGroup.value = _editorGroup.value.withTabAdded(EditorTab.page(tabId, title, EditorPageKind.LspDetail))
+        group.tabs.filter { it.pageKind == kind }.forEach { group = group.withTabRemoved(it.id) }
+        _editorGroup.value = group.withTabAdded(EditorTab.page(tabId, title(), kind))
     }
 
     /** Full status re-check (installed + update-available) for the SDK catalog; runs async, no-op if already running. */
@@ -770,18 +772,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) { distroService.checkLspStatuses() }
     }
 
-    /** Open (or focus) the detail page for a single extension (installed or marketplace). */
+    /** Open the detail page for a single extension. Reuses one extension-detail tab (replaces any other). */
     fun openExtensionDetailPage(extensionId: String) {
-        val tabId = EXT_DETAIL_PREFIX + extensionId
-        val existing = _editorGroup.value.tabs.firstOrNull { it.id == tabId }
-        if (existing != null) {
-            _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
-            return
+        openDetailPage(EXT_DETAIL_PREFIX + extensionId, EditorPageKind.ExtensionDetail) {
+            _installedExtensions.value.firstOrNull { it.id == extensionId }?.name
+                ?: _marketplaceEntries.value.firstOrNull { it.id == extensionId }?.name
+                ?: extensionId
         }
-        val title = _installedExtensions.value.firstOrNull { it.id == extensionId }?.name
-            ?: _marketplaceEntries.value.firstOrNull { it.id == extensionId }?.name
-            ?: extensionId
-        _editorGroup.value = _editorGroup.value.withTabAdded(EditorTab.page(tabId, title, EditorPageKind.ExtensionDetail))
     }
 
     fun selectEditorTab(tabId: String) {

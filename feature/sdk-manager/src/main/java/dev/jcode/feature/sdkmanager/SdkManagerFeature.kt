@@ -2,8 +2,8 @@ package dev.jcode.feature.sdkmanager
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -17,7 +17,6 @@ import dev.jcode.core.distro.SdkCatalogCategory
 import dev.jcode.core.distro.SdkCatalogEntry
 import dev.jcode.core.distro.SdkCatalogState
 import dev.jcode.design.CompactFilledButton
-import dev.jcode.design.CompactOutlinedButton
 import dev.jcode.design.ManagerDetailScreen
 import dev.jcode.design.ManagerItemStatus
 import dev.jcode.design.ManagerListRow
@@ -32,7 +31,6 @@ object SdkManagerFeature {
         state: SdkCatalogState,
         environmentState: DistroEnvironmentState,
         onRefresh: () -> Unit,
-        onOpenEnvironmentWizard: () -> Unit,
         onOpenDetail: (String) -> Unit,
         modifier: Modifier = Modifier,
     ) {
@@ -50,25 +48,17 @@ object SdkManagerFeature {
                 title = "SDK manager",
                 description = "Toolchains for the active distro, tracked per distro.",
             ) {
-                ManagerSummaryRow("Selected distro", environmentState.runtime.selectedDistro.label)
-                ManagerSummaryRow(
-                    "Environment",
-                    if (environmentReady) "Ready for installs" else "Finish setup first",
-                )
                 ManagerSummaryRow(
                     "Installed",
                     if (state.checking) "Checking…" else "${state.installedEntryIds.size} / ${state.entries.size}",
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    CompactFilledButton("Refresh", onClick = onRefresh, modifier = Modifier.weight(1f))
-                    CompactOutlinedButton("Environment setup", onClick = onOpenEnvironmentWizard, modifier = Modifier.weight(1f))
-                }
+                CompactFilledButton("Refresh", onClick = onRefresh, modifier = Modifier.fillMaxWidth())
             }
 
             if (!environmentReady) {
                 ManagerNoticeCard(
                     title = "Environment required",
-                    message = "Run the distro setup first so the jcode user, sudo, and /workspace bind are ready before installs.",
+                    message = "Set up the Linux environment in Settings before installing.",
                 )
             }
 

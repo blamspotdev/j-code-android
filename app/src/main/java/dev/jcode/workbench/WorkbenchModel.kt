@@ -2,6 +2,7 @@ package dev.jcode.workbench
 
 import androidx.compose.runtime.compositionLocalOf
 import dev.jcode.design.JCodeIcon
+import dev.jcode.feature.marketplace.MarketplaceEntry
 
 /** Terminal tap behavior, provided to the deeply-nested terminal view without prop-drilling. */
 internal data class TerminalTapConfig(
@@ -12,6 +13,27 @@ internal data class TerminalTapConfig(
 )
 
 internal val LocalTerminalTapConfig = compositionLocalOf { TerminalTapConfig() }
+
+/**
+ * The SDK / LSP / Extension manager callbacks, bundled so the giant [dev.jcode.JCodeShell] composable
+ * stays under the ART verifier's per-method register limit (too many individual params overflow it).
+ */
+internal data class WorkbenchManagerActions(
+    val onCheckSdkStatuses: () -> Unit,
+    val onInstallSdkCatalogEntry: (String) -> Unit,
+    val onVerifySdkCatalogEntry: (String) -> Unit,
+    val onUninstallSdkCatalogEntry: (String) -> Unit,
+    val onOpenSdkDetail: (String) -> Unit,
+    val onCheckLspStatuses: () -> Unit,
+    val onInstallLspCatalogEntry: (String) -> Unit,
+    val onVerifyLspCatalogEntry: (String) -> Unit,
+    val onUninstallLspCatalogEntry: (String) -> Unit,
+    val onOpenLspDetail: (String) -> Unit,
+    val onRefreshMarketplace: () -> Unit,
+    val onInstallExtension: (MarketplaceEntry) -> Unit,
+    val onUninstallExtension: (String) -> Unit,
+    val onOpenExtensionDetail: (String) -> Unit,
+)
 
 internal enum class WorkbenchTool(
     val label: String,
@@ -27,7 +49,7 @@ internal enum class WorkbenchTool(
     Extensions("Extensions", JCodeIcon.Extensions, "Ext"),
     SdkManager("SDK Manager", JCodeIcon.Sdk, "SDK"),
     LspManager("LSP Manager", JCodeIcon.Lsp, "LSP"),
-    Settings("App Settings", JCodeIcon.Settings, "App Settings"),
+    Settings("Settings", JCodeIcon.Settings, "Settings"),
 }
 
 internal enum class RightPanelTab(
