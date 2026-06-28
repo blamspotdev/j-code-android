@@ -1,5 +1,6 @@
 package dev.jcode
 import dev.jcode.design.JCodeIcon
+import dev.jcode.design.JcTooltip
 import dev.jcode.design.jcIcon
 
 import androidx.compose.foundation.layout.Arrangement
@@ -143,41 +144,49 @@ private fun ProjectRunRow(
             }
 
             if (isRunning && runUrl != null) {
-                IconButton(onClick = onOpenInBrowser) {
+                JcTooltip("Open in browser") {
+                    IconButton(onClick = onOpenInBrowser) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                            contentDescription = "Open in browser",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+            }
+            if (isRunning) {
+                JcTooltip("Stop") {
+                    IconButton(onClick = onStop) {
+                        Icon(
+                            imageVector = jcIcon(JCodeIcon.Stop),
+                            contentDescription = "Stop",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                }
+            } else {
+                JcTooltip("Build & Run") {
+                    IconButton(onClick = { onRun(project) }, enabled = configured) {
+                        Icon(
+                            imageVector = jcIcon(JCodeIcon.Run),
+                            contentDescription = "Build & Run",
+                            tint = if (configured) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                }
+            }
+            JcTooltip("Configure") {
+                IconButton(onClick = { onConfigure(project) }) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
-                        contentDescription = "Open in browser",
+                        imageVector = jcIcon(JCodeIcon.Settings),
+                        contentDescription = "Configure",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp),
                     )
                 }
-            }
-            if (isRunning) {
-                IconButton(onClick = onStop) {
-                    Icon(
-                        imageVector = jcIcon(JCodeIcon.Stop),
-                        contentDescription = "Stop",
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(22.dp),
-                    )
-                }
-            } else {
-                IconButton(onClick = { onRun(project) }, enabled = configured) {
-                    Icon(
-                        imageVector = jcIcon(JCodeIcon.Run),
-                        contentDescription = "Build & Run",
-                        tint = if (configured) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                        modifier = Modifier.size(22.dp),
-                    )
-                }
-            }
-            IconButton(onClick = { onConfigure(project) }) {
-                Icon(
-                    imageVector = jcIcon(JCodeIcon.Settings),
-                    contentDescription = "Configure",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp),
-                )
             }
         }
     }

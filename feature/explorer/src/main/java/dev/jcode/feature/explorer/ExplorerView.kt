@@ -57,6 +57,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
+import dev.jcode.design.JcTooltip
 import dev.jcode.design.DenseRow
 import dev.jcode.design.LocalDensityMode
 import dev.jcode.design.LocalIconSize
@@ -325,16 +326,18 @@ private fun RowOverflowMenu(
 ) {
     val isDir = row.node.kind == FsKind.Directory
     Box {
-        IconButton(
-            onClick = { onExpandedChange(true) },
-            modifier = Modifier.size(28.dp),
-        ) {
-            Icon(
-                imageVector = jcIcon(JCodeIcon.MoreVert),
-                contentDescription = "More actions",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
+        JcTooltip("More actions") {
+            IconButton(
+                onClick = { onExpandedChange(true) },
+                modifier = Modifier.size(28.dp),
+            ) {
+                Icon(
+                    imageVector = jcIcon(JCodeIcon.MoreVert),
+                    contentDescription = "More actions",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
         CompactContextMenu(
             expanded = expanded,
@@ -373,13 +376,15 @@ private fun ExplorerBreadcrumb(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (entries.size > 1) {
-            IconButton(onClick = onNavigateUp, modifier = Modifier.size(28.dp)) {
-                Icon(
-                    imageVector = jcIcon(JCodeIcon.ArrowUp),
-                    contentDescription = "Up one level",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp),
-                )
+            JcTooltip("Up one level") {
+                IconButton(onClick = onNavigateUp, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        imageVector = jcIcon(JCodeIcon.ArrowUp),
+                        contentDescription = "Up one level",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
             Spacer(modifier = Modifier.width(4.dp))
         }
@@ -700,13 +705,15 @@ private fun ToolbarIcon(
     onClick: () -> Unit,
     enabled: Boolean = true,
 ) {
-    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(34.dp)) {
-        Icon(
-            imageVector = icon,
-            contentDescription = description,
-            modifier = Modifier.size(18.dp),
-            tint = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-        )
+    JcTooltip(description) {
+        IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(34.dp)) {
+            Icon(
+                imageVector = icon,
+                contentDescription = description,
+                modifier = Modifier.size(18.dp),
+                tint = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+            )
+        }
     }
 }
 

@@ -47,17 +47,19 @@ fun CompactContextMenu(
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 quickActions.forEach { action ->
-                    IconButton(
-                        onClick = { onDismissRequest(); action.onClick() },
-                        modifier = Modifier.size(38.dp),
-                    ) {
-                        Icon(
-                            imageVector = jcIcon(action.icon),
-                            contentDescription = action.label,
-                            tint = if (action.destructive) MaterialTheme.colorScheme.error
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp),
-                        )
+                    JcTooltip(action.label) {
+                        IconButton(
+                            onClick = { onDismissRequest(); action.onClick() },
+                            modifier = Modifier.size(38.dp),
+                        ) {
+                            Icon(
+                                imageVector = jcIcon(action.icon),
+                                contentDescription = action.label,
+                                tint = if (action.destructive) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
                     }
                 }
             }

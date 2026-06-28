@@ -6,6 +6,7 @@ import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
 import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.JCodeIcon
+import dev.jcode.design.JcTooltip
 import dev.jcode.editor.SyntaxHighlighter
 import dev.jcode.editor.TokenPalette
 import kotlinx.coroutines.Dispatchers
@@ -1291,21 +1292,23 @@ private fun WorkbenchIconActionButton(
         MaterialTheme.colorScheme.onSurfaceVariant
     }
 
-    Surface(
-        modifier = Modifier
-            .size(32.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(10.dp),
-        color = containerColor,
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                modifier = Modifier.size(16.dp),
-                tint = contentColor,
-            )
+    JcTooltip(contentDescription) {
+        Surface(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(onClick = onClick),
+            shape = RoundedCornerShape(10.dp),
+            color = containerColor,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = contentDescription,
+                    modifier = Modifier.size(16.dp),
+                    tint = contentColor,
+                )
+            }
         }
     }
 }
@@ -1832,13 +1835,15 @@ private fun ProjectRoster(
                             )
                         }
                         Box {
-                            IconButton(onClick = { openMenuId = project.id }, modifier = Modifier.size(32.dp)) {
-                                Icon(
-                                    imageVector = jcIcon(JCodeIcon.MoreVert),
-                                    contentDescription = "Project actions",
-                                    modifier = Modifier.size(18.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                            JcTooltip("Project actions") {
+                                IconButton(onClick = { openMenuId = project.id }, modifier = Modifier.size(32.dp)) {
+                                    Icon(
+                                        imageVector = jcIcon(JCodeIcon.MoreVert),
+                                        contentDescription = "Project actions",
+                                        modifier = Modifier.size(18.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
                             CompactContextMenu(
                                 expanded = openMenuId == project.id,
@@ -2185,7 +2190,11 @@ private fun WorkbenchRightSidebar(
                     }
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                WorkbenchActionButton(text = "Hide", onClick = onHide)
+                WorkbenchIconActionButton(
+                    icon = jcIcon(JCodeIcon.ChevronRight),
+                    contentDescription = "Hide",
+                    onClick = onHide,
+                )
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
             WorkbenchRightSidebarBody(
@@ -2320,21 +2329,23 @@ private fun TerminalSidebarContent(
                                 },
                             )
                             // Close button
-                            Surface(
-                                modifier = Modifier
-                                    .size(18.dp)
-                                    .clip(CircleShape)
-                                    .clickable { onRemoveTerminalSession(sessionId) },
-                                shape = CircleShape,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text(
-                                        text = "×",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(top = 1.dp),
-                                    )
+                            JcTooltip("Close terminal") {
+                                Surface(
+                                    modifier = Modifier
+                                        .size(18.dp)
+                                        .clip(CircleShape)
+                                        .clickable { onRemoveTerminalSession(sessionId) },
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = "×",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(top = 1.dp),
+                                        )
+                                    }
                                 }
                             }
                         }

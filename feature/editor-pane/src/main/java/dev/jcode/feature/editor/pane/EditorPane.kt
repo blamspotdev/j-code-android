@@ -38,6 +38,7 @@ import dev.jcode.core.editor.EditorView
 import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
 import dev.jcode.design.JCodeIcon
+import dev.jcode.design.JcTooltip
 /**
  * Editor pane composable that hosts a tab strip and the active EditorView.
  */
@@ -138,13 +139,15 @@ private fun TabStrip(
             }
 
             // Open file button
-            IconButton(
-                onClick = onOpenFile,
-                modifier = Modifier
-                    .width(36.dp)
-                    .height(36.dp),
-            ) {
-                Text("+", style = MaterialTheme.typography.labelMedium)
+            JcTooltip("Open file") {
+                IconButton(
+                    onClick = onOpenFile,
+                    modifier = Modifier
+                        .width(36.dp)
+                        .height(36.dp),
+                ) {
+                    Text("+", style = MaterialTheme.typography.labelMedium)
+                }
             }
         }
     }
@@ -188,17 +191,19 @@ private fun TabItem(
             maxLines = 1,
         )
 
-        IconButton(
-            onClick = onClosed,
-            modifier = Modifier
-                .width(20.dp)
-                .height(20.dp),
-        ) {
-            Text(
-                text = "×",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        JcTooltip("Close tab") {
+            IconButton(
+                onClick = onClosed,
+                modifier = Modifier
+                    .width(20.dp)
+                    .height(20.dp),
+            ) {
+                Text(
+                    text = "×",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
