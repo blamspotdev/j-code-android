@@ -14,6 +14,8 @@ import dev.jcode.design.TabCloseButtonSetting
 import dev.jcode.editor.SyntaxHighlighter
 import dev.jcode.editor.TokenPalette
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import dev.jcode.design.ThemeBundleRegistry
 import dev.jcode.design.jcIcon
@@ -139,7 +141,10 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import dev.jcode.adaptive.JCodeWindowInfo
 import dev.jcode.adaptive.JCodeWindowWidthClass
 import dev.jcode.adaptive.rememberJCodeWindowInfo
@@ -279,6 +284,18 @@ fun JCodeApp(
     LaunchedEffect(viewModel) {
         viewModel.messages.collectLatest { message ->
             snackbarHostState.showSnackbar(message)
+        }
+    }
+
+    // Keep clean editor tabs mirrored to disk: re-sync on every foreground regain and on a slow tick
+    // while foregrounded, so external writes (e.g. an agent in the terminal) show up in the editor.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner, viewModel) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (isActive) {
+                viewModel.requestSyncOpenFilesFromDisk()
+                delay(1500)
+            }
         }
     }
 

@@ -16,9 +16,7 @@ import dev.jcode.backend.SessionRegistry
 import dev.jcode.core.config.ConfigScope
 import dev.jcode.core.config.ConfigService
 import dev.jcode.core.config.ConfigServiceLocator
-import dev.jcode.core.buffer.EditTx
 import dev.jcode.core.config.EffectiveConfig
-import dev.jcode.core.editor.Caret
 import dev.jcode.core.distro.DistroProfile
 import dev.jcode.core.distro.DistroWizardProgress
 import dev.jcode.core.distro.LspCatalogAction
@@ -50,6 +48,7 @@ import dev.jcode.fs.WorkspaceManager
 import dev.jcode.fs.WorkspaceNodeType
 import dev.jcode.fs.WorkspaceServiceLocator
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -64,6 +63,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 
 /**
@@ -839,12 +839,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectEditorTab(tabId: String) {
         _editorGroup.value = _editorGroup.value.withActiveTabChanged(tabId)
+        requestSyncOpenFilesFromDisk()
     }
 
     fun closeEditorTab(tabId: String) {
         val existing = _editorGroup.value.tabs.firstOrNull { it.id == tabId }
         existing?.editorState?.close()
         untrackDirty(tabId)
+        diskSignatures.remove(tabId)
         _editorGroup.value = _editorGroup.value.withTabRemoved(tabId)
     }
 
@@ -867,6 +869,78 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun untrackDirty(tabId: String) {
         dirtyJobs.remove(tabId)?.cancel()
+    }
+
+    /**
+     * A clean tab mirrors the file on disk, so when an external writer (e.g. an agent in the terminal)
+     * changes the file we reload it. Detection is by a (lastModified, size) signature rather than
+     * FileObserver: proot/terminal writes happen in another mount namespace and don't fire the app's
+     * inotify, but [File.lastModified]/[File.length] still reflect the ext4 inode. The signature is
+     * captured at open and after every save/discard, so our own writes never trigger a reload.
+     */
+    private data class DiskSignature(val lastModified: Long, val size: Long)
+
+    private val diskSignatures = ConcurrentHashMap<String, DiskSignature>()
+    private val syncMutex = Mutex()
+    private var lastReloadNoticeAt = 0L
+
+    private fun File.diskSignatureOrNull(): DiskSignature? =
+        if (exists() && isFile) DiskSignature(lastModified(), length()) else null
+
+    /** Foreground re-sync trigger, driven by a RESUMED loop in JCodeApp and on tab switch. */
+    fun requestSyncOpenFilesFromDisk() {
+        viewModelScope.launch { syncOpenFilesFromDisk() }
+    }
+
+    /** Reload every clean, local, still-text tab whose file changed on disk since we last read it. */
+    private suspend fun syncOpenFilesFromDisk() {
+        if (!syncMutex.tryLock()) return // a sync is already running; the next tick re-sweeps everything
+        try {
+            val reloaded = mutableListOf<String>()
+            for (tab in _editorGroup.value.tabs) {
+                val state = tab.editorState ?: continue   // page tab
+                if (tab.isDirty) continue                 // fast skip; replaceAll re-checks atomically
+                val file = tab.filePath
+                if (file.path.isBlank()) continue         // SAF / non-file source
+                val signature = withContext(Dispatchers.IO) { file.diskSignatureOrNull() }
+                    ?: continue                           // deleted on disk: keep the open copy
+                val known = diskSignatures[tab.id]
+                if (known == null) {                      // first sight: establish a baseline
+                    diskSignatures[tab.id] = signature
+                    continue
+                }
+                if (known == signature) continue          // unchanged
+                val bytes = withContext(Dispatchers.IO) {
+                    runCatching { workspaceManager.fsFor(FsPath.Local(file)).read(FsPath.Local(file)) }.getOrNull()
+                } ?: continue
+                // If the file changed again while we were reading, defer: leave the known signature so the
+                // next tick re-detects and loads the stabilized content (stored signature stays == buffer).
+                val afterRead = withContext(Dispatchers.IO) { file.diskSignatureOrNull() }
+                if (afterRead != signature) continue
+                if (!bytes.isLikelyText()) {              // became binary/too large: keep the open copy
+                    diskSignatures[tab.id] = signature    // but mark this version seen
+                    continue
+                }
+                // replaceAll atomically re-checks dirty on the editor's single writer, so a keystroke that
+                // landed during our read aborts the reload (returns false) instead of being clobbered.
+                if (state.replaceAll(bytes.toString(Charsets.UTF_8), onlyIfClean = true)) {
+                    diskSignatures[tab.id] = signature
+                    reloaded += tab.title
+                }
+            }
+            if (reloaded.isNotEmpty()) {
+                val now = System.currentTimeMillis()
+                if (now - lastReloadNoticeAt > RELOAD_NOTICE_THROTTLE_MS) {
+                    lastReloadNoticeAt = now
+                    emitMessage(
+                        if (reloaded.size == 1) "Reloaded ${reloaded.first()} from disk"
+                        else "Reloaded ${reloaded.size} files from disk"
+                    )
+                }
+            }
+        } finally {
+            syncMutex.unlock()
+        }
     }
 
     /** Save the active editor tab's buffer to disk (Ctrl+S / top-bar Save). */
@@ -911,13 +985,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 emitMessage("Failed to discard ${tab.title}: ${it.message ?: "error"}")
                 return@launch
             }
-            val text = bytes.toString(Charsets.UTF_8)
-            val length = state.snapshot.value.byteLength
-            if (length > 0) state.applyEdit(EditTx.delete(0, length))
-            if (text.isNotEmpty()) state.applyEdit(EditTx.insert(0, text))
-            state.setSelection(listOf(Caret(0, 0)))
-            state.undoManager?.clear()
-            state.markClean()
+            state.replaceAll(bytes.toString(Charsets.UTF_8)) // force: discard intentionally drops edits
+            withContext(Dispatchers.IO) { file.diskSignatureOrNull() }?.let { diskSignatures[tab.id] = it }
             emitMessage("Discarded changes in ${tab.title}")
         }
     }
@@ -938,6 +1007,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 workspaceManager.fsFor(FsPath.Local(file)).write(FsPath.Local(file), bytes)
             }.onSuccess {
                 if (state.snapshot.value === snapshot) state.markClean()
+                file.diskSignatureOrNull()?.let { diskSignatures[tab.id] = it }
                 emitMessage("Saved ${tab.title}")
             }.onFailure {
                 emitMessage("Failed to save ${tab.title}: ${it.message ?: "error"}")
@@ -983,6 +1053,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Set the reveal before the tab is shown so the view applies it as soon as it attaches.
         tab.editorState?.requestRevealAt(line, column)
         trackDirty(tab)
+        file.diskSignatureOrNull()?.let { diskSignatures[stableId] = it }
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
     }
 
@@ -1140,6 +1211,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
+        private const val RELOAD_NOTICE_THROTTLE_MS = 4_000L
         const val SETTINGS_TAB_ID = "jcode://settings"
         const val ENVIRONMENT_TAB_ID = "jcode://environment"
         const val SDK_DETAIL_PREFIX = "jcode://sdk/"

@@ -219,6 +219,28 @@ class EditorState(
         undoManager?.recordEdit(tx, _carets.value, oldSnapshot)
     }
 
+    /**
+     * Atomically replace the entire buffer with [text] as a single transaction on the single-writer
+     * dispatcher, so a concurrent keystroke cannot interleave. When [onlyIfClean] is true the replace
+     * is skipped (returns false) if there are unsaved edits — used to mirror external on-disk changes
+     * without clobbering the user. On success the buffer is left clean, the undo history cleared, and
+     * the caret clamped to the new length. Runs without suspending so the check and edit are atomic.
+     */
+    suspend fun replaceAll(text: String, onlyIfClean: Boolean = false): Boolean = withContext(scope.coroutineContext) {
+        if (readOnly) return@withContext false
+        if (onlyIfClean && _dirty.value) return@withContext false
+        val oldLength = _snapshot.value.byteLength
+        val caretBefore = _carets.value.firstOrNull()?.head ?: 0
+        _snapshot.value = bufferRef.applyEdit(EditTx.replace(0, oldLength, text))
+        val caret = caretBefore.coerceIn(0, _snapshot.value.byteLength)
+        _carets.value = listOf(Caret(caret, caret))
+        undoManager?.clear()
+        _dirty.value = false
+        _events.tryEmit(EditorEvent.TextChanged(0, oldLength, text.length))
+        _events.tryEmit(EditorEvent.SelectionChanged)
+        true
+    }
+
     /** Set the caret selection. */
     suspend fun setSelection(carets: List<Caret>) = withContext(scope.coroutineContext) {
         _carets.value = carets.sortedBy { it.head }
