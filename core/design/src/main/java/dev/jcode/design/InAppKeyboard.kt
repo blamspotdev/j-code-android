@@ -22,11 +22,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -58,7 +60,7 @@ object KeyboardDefaults {
     )
 }
 
-/** An action emitted by the in-app keyboard; the host applies it to the focused editor. */
+/** An action emitted by the in-app keyboard; the host applies it to the focused input target. */
 sealed interface KeyAction {
     data class Text(val value: String) : KeyAction
     data object Backspace : KeyAction
@@ -71,6 +73,52 @@ sealed interface KeyAction {
     data object Down : KeyAction
     data object Hide : KeyAction
 }
+
+/** Receives key actions from the app-wide keyboard (e.g. the focused editor). */
+fun interface KeyActionSink {
+    fun onKey(action: KeyAction)
+}
+
+/**
+ * App-wide in-app-keyboard state. A single instance lives at the app root; an input target
+ * registers a [KeyActionSink] and calls [show] when focused, [hide]/[detach] when done. The root
+ * renders one [InAppKeyboard] bound to [dispatchKey]. Provided via [LocalInAppKeyboard] so any
+ * focused input — the editor today, terminals/fields later — can drive the same keyboard.
+ */
+@Stable
+class InAppKeyboardController {
+    var visible by mutableStateOf(false)
+        private set
+
+    private var sink: KeyActionSink? = null
+
+    fun show(sink: KeyActionSink) {
+        this.sink = sink
+        visible = true
+    }
+
+    fun hide() {
+        visible = false
+    }
+
+    /** Hide and clear, but only if [sink] is still the active one (avoids a stale detach racing a new show). */
+    fun detach(sink: KeyActionSink) {
+        if (this.sink === sink) {
+            this.sink = null
+            visible = false
+        }
+    }
+
+    fun dispatchKey(action: KeyAction) {
+        if (action == KeyAction.Hide) {
+            hide()
+            return
+        }
+        sink?.onKey(action)
+    }
+}
+
+val LocalInAppKeyboard = staticCompositionLocalOf<InAppKeyboardController?> { null }
 
 /**
  * A self-contained on-screen code keyboard. Owns its Shift + symbols-layer state internally and

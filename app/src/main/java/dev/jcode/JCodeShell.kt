@@ -159,6 +159,9 @@ import dev.jcode.core.term.TerminalSessionManager
 import dev.jcode.core.term.TerminalView
 import dev.jcode.design.CommandRegistry
 import dev.jcode.design.EditorKeyboardSettings
+import dev.jcode.design.InAppKeyboard
+import dev.jcode.design.InAppKeyboardController
+import dev.jcode.design.LocalInAppKeyboard
 import dev.jcode.design.ThemeMode
 import dev.jcode.feature.editor.pane.EditorGroup
 import dev.jcode.feature.editor.pane.EditorPageKind
@@ -457,6 +460,7 @@ private fun JCodeShell(
     val appContext = LocalContext.current.applicationContext
     val configuration = LocalConfiguration.current
     val focusRequester = remember { FocusRequester() }
+    val inAppKeyboard = remember { InAppKeyboardController() }
     val compactDrawerState = rememberDrawerState(DrawerValue.Closed)
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val isMobileLandscapeMode = isLandscape && windowInfo.widthClass != JCodeWindowWidthClass.Expanded
@@ -1218,7 +1222,17 @@ private fun JCodeShell(
         }
     }
 
-    Box(modifier = modifier.fillMaxSize().imePadding()) {
+    val showInAppKeyboard = editorKeyboard.useInAppKeyboard && inAppKeyboard.visible
+    var inAppKeyboardHeight by remember { mutableStateOf(0.dp) }
+    val rootDensity = LocalDensity.current
+    CompositionLocalProvider(LocalInAppKeyboard provides inAppKeyboard) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .imePadding()
+            .padding(bottom = if (showInAppKeyboard) inAppKeyboardHeight else 0.dp),
+    ) {
         if (usesModalWorkspace) {
             ModalNavigationDrawer(
                 drawerState = compactDrawerState,
@@ -1272,6 +1286,21 @@ private fun JCodeShell(
             compact = usesModalWorkspace,
             onDismiss = { commandPaletteVisible = false },
         )
+    }
+
+    // App-wide in-app keyboard: a full-width surface pinned to the very bottom that the focused
+    // editor drives. Its measured height pads the content above (so the caret stays visible).
+    if (showInAppKeyboard) {
+        InAppKeyboard(
+            codeKeys = editorKeyboard.codeKeys,
+            onAction = inAppKeyboard::dispatchKey,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .onSizeChanged { inAppKeyboardHeight = with(rootDensity) { it.height.toDp() } },
+        )
+    }
+    }
     }
 }
 

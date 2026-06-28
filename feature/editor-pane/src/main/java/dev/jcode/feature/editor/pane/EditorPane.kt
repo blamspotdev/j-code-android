@@ -40,8 +40,9 @@ import dev.jcode.core.editor.EditorContextRequest
 import dev.jcode.core.editor.EditorLanguageAction
 import dev.jcode.core.editor.EditorView
 import dev.jcode.design.EditorKeyboardSettings
-import dev.jcode.design.InAppKeyboard
 import dev.jcode.design.KeyAction
+import dev.jcode.design.KeyActionSink
+import dev.jcode.design.LocalInAppKeyboard
 
 /**
  * Editor pane composable that hosts a tab strip and the active EditorView.
@@ -58,12 +59,6 @@ fun EditorPane(
     editorKeyboard: EditorKeyboardSettings = EditorKeyboardSettings(),
     pageContent: @Composable (EditorTab) -> Unit = {},
 ) {
-    // The active editor view, lifted so the sibling in-app keyboard can drive it.
-    var activeEditorView by remember { mutableStateOf<EditorView?>(null) }
-    // The in-app keyboard has no system IME insets, so it tracks its own visibility: shown when the
-    // editor is tapped, hidden via its ⌄ key or when the active editor goes away.
-    var inAppKbVisible by remember { mutableStateOf(false) }
-
     Column(modifier = modifier.clipToBounds()) {
         // Tab strip — explicit fixed height so it's never compressed
         TabStrip(
@@ -88,11 +83,6 @@ fun EditorPane(
                         languageActionsEnabled = languageActionsEnabled,
                         onLanguageAction = onLanguageAction,
                         useInAppKeyboard = editorKeyboard.useInAppKeyboard,
-                        onEditorViewChanged = {
-                            activeEditorView = it
-                            if (it == null) inAppKbVisible = false
-                        },
-                        onKeyboardRequested = { inAppKbVisible = true },
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
@@ -119,32 +109,22 @@ fun EditorPane(
                 }
             }
         }
+    }
+}
 
-        // In-app keyboard: shown when enabled, the editor has been tapped, and a file is active.
-        val showKeyboard = editorKeyboard.useInAppKeyboard &&
-            inAppKbVisible &&
-            activeTab?.editorState != null &&
-            activeEditorView != null
-        if (showKeyboard) {
-            InAppKeyboard(
-                codeKeys = editorKeyboard.codeKeys,
-                onAction = { action ->
-                    val v = activeEditorView ?: return@InAppKeyboard
-                    when (action) {
-                        is KeyAction.Text -> v.insertTextAtCaret(action.value)
-                        KeyAction.Backspace -> v.backspace()
-                        KeyAction.Enter -> v.insertTextAtCaret("\n")
-                        KeyAction.Space -> v.insertTextAtCaret(" ")
-                        KeyAction.Tab -> v.insertIndent()
-                        KeyAction.Left -> v.moveCaretBy(-1)
-                        KeyAction.Right -> v.moveCaretBy(1)
-                        KeyAction.Up -> v.moveCaretLineBy(-1)
-                        KeyAction.Down -> v.moveCaretLineBy(1)
-                        KeyAction.Hide -> inAppKbVisible = false
-                    }
-                },
-            )
-        }
+/** Apply an app-wide-keyboard [action] to [view]. */
+private fun applyKeyAction(view: EditorView, action: KeyAction) {
+    when (action) {
+        is KeyAction.Text -> view.insertTextAtCaret(action.value)
+        KeyAction.Backspace -> view.backspace()
+        KeyAction.Enter -> view.insertTextAtCaret("\n")
+        KeyAction.Space -> view.insertTextAtCaret(" ")
+        KeyAction.Tab -> view.insertIndent()
+        KeyAction.Left -> view.moveCaretBy(-1)
+        KeyAction.Right -> view.moveCaretBy(1)
+        KeyAction.Up -> view.moveCaretLineBy(-1)
+        KeyAction.Down -> view.moveCaretLineBy(1)
+        KeyAction.Hide -> Unit // handled by the controller before reaching the sink
     }
 }
 
@@ -255,10 +235,9 @@ fun EditorViewHost(
     languageActionsEnabled: Boolean = false,
     onLanguageAction: (EditorLanguageAction, String) -> Unit = { _, _ -> },
     useInAppKeyboard: Boolean = false,
-    onEditorViewChanged: (EditorView?) -> Unit = {},
-    onKeyboardRequested: () -> Unit = {},
 ) {
     val density = LocalDensity.current
+    val keyboard = LocalInAppKeyboard.current
     var view by remember { mutableStateOf<EditorView?>(null) }
     var menu by remember { mutableStateOf<EditorContextRequest?>(null) }
 
@@ -269,9 +248,11 @@ fun EditorViewHost(
                     attach(editorState)
                     onContextRequest = { menu = it }
                     this.useInAppKeyboard = useInAppKeyboard
-                    onInAppKeyboardRequested = onKeyboardRequested
+                    // Register this editor as the app-wide keyboard's input target on tap.
+                    val self = this
+                    val sink = KeyActionSink { action -> applyKeyAction(self, action) }
+                    onInAppKeyboardRequested = { keyboard?.show(sink) }
                     view = this
-                    onEditorViewChanged(this)
                 }
             },
             modifier = Modifier.fillMaxSize(),
@@ -279,12 +260,10 @@ fun EditorViewHost(
                 v.attach(editorState)
                 v.onContextRequest = { menu = it }
                 v.useInAppKeyboard = useInAppKeyboard
-                v.onInAppKeyboardRequested = onKeyboardRequested
                 view = v
-                onEditorViewChanged(v)
             },
             onRelease = {
-                onEditorViewChanged(null)
+                keyboard?.hide()
                 it.onInAppKeyboardRequested = null
                 it.detach()
             },
