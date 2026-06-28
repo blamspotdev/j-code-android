@@ -323,6 +323,26 @@ static void handle_csi(VtParser* parser, char final_char) {
             }
             break;
         }
+        case 'E': { // Cursor Next Line (down n rows, column 0)
+            int n = parser->param_count > 0 && parser->params[0] > 0 ? parser->params[0] : 1;
+            screen->cursor_row += n;
+            if (screen->cursor_row > screen->scroll_bottom) {
+                screen->cursor_row = screen->scroll_bottom;
+            }
+            screen->cursor_col = 0;
+            break;
+        }
+        case 'F': { // Cursor Previous Line (up n rows, column 0). Used by the .NET build / MSBuild
+                    // terminal logger to return to the top of its live progress block before redrawing
+                    // in place — without this each tick's duration lands on a new line.
+            int n = parser->param_count > 0 && parser->params[0] > 0 ? parser->params[0] : 1;
+            screen->cursor_row -= n;
+            if (screen->cursor_row < screen->scroll_top) {
+                screen->cursor_row = screen->scroll_top;
+            }
+            screen->cursor_col = 0;
+            break;
+        }
         case 'G': { // Cursor Horizontal Absolute (column; 1-based). Used by progress bars/spinners
                     // (Node readline.cursorTo) to return to col 0 before redrawing in place.
             int col = parser->param_count > 0 && parser->params[0] > 0 ? parser->params[0] - 1 : 0;
