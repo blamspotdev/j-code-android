@@ -4,6 +4,23 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Auto-versioning (no CI): versionName is the semver in /VERSION.txt (start 1.0.0);
+// versionCode is the git commit count (monotonic, deterministic, offline). Both
+// degrade to safe fallbacks when VERSION.txt or git is unavailable.
+val jcodeVersionName: String = runCatching {
+    rootProject.file("VERSION.txt").readText().trim()
+}.getOrNull()?.takeIf { it.isNotBlank() } ?: "1.0.0"
+
+val jcodeVersionCode: Int = runCatching {
+    val p = ProcessBuilder("git", "rev-list", "--count", "HEAD")
+        .directory(rootProject.projectDir)
+        .redirectErrorStream(true)
+        .start()
+    val out = p.inputStream.bufferedReader().readText().trim()
+    p.waitFor()
+    out.toIntOrNull()
+}.getOrNull()?.takeIf { it > 0 } ?: 1
+
 android {
     namespace = "dev.jcode"
     compileSdk = 36
@@ -12,8 +29,8 @@ android {
         applicationId = "dev.jcode"
         minSdk = 28
         targetSdk = 28
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = jcodeVersionCode
+        versionName = jcodeVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -39,6 +56,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     ndkVersion = "27.2.12479018"
