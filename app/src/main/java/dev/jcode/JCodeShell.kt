@@ -171,6 +171,10 @@ import dev.jcode.feature.settings.SettingsFeature
 import dev.jcode.workbench.dialog.NewItemDialog
 import dev.jcode.workbench.dialog.OpenFolderTypeDialog
 import dev.jcode.workbench.marketplace.ExtensionsPanel
+import dev.jcode.workbench.LocalTerminalTapConfig
+import dev.jcode.workbench.RightPanelTab
+import dev.jcode.workbench.TerminalTapConfig
+import dev.jcode.workbench.WorkbenchTool
 import dev.jcode.fs.DEFAULT_SHARED_PROJECTS_ROOT
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
@@ -187,42 +191,6 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Terminal tap behavior, provided to the deeply-nested terminal view without prop-drilling. */
-private data class TerminalTapConfig(
-    /** True: single tap opens a link/path, double tap shows the keyboard. False: single tap = keyboard. */
-    val doubleTapToFocus: Boolean = true,
-    /** Invoked with the tapped token (a URL is opened in the browser; a path in the editor). */
-    val onToken: (String) -> Unit = {},
-)
-
-private val LocalTerminalTapConfig = compositionLocalOf { TerminalTapConfig() }
-
-private enum class WorkbenchTool(
-    val label: String,
-    val icon: JCodeIcon,
-    val compactLabel: String = label,
-    /** Hidden from the activity bar until it has a working UI (kept in the enum for `when` exhaustiveness). */
-    val available: Boolean = true,
-) {
-    Explorer("Explorer", JCodeIcon.Files, "Files"),
-    Search("Search", JCodeIcon.Search, "Find", available = false),
-    Scm("SCM", JCodeIcon.Scm, "SCM", available = false),
-    RunDebug("Run/Debug", JCodeIcon.Run, "Run"),
-    Extensions("Extensions", JCodeIcon.Extensions, "Ext"),
-    SdkManager("SDK Manager", JCodeIcon.Sdk, "SDK"),
-    Settings("App Settings", JCodeIcon.Settings, "App Settings"),
-}
-
-private enum class RightPanelTab(
-    val label: String,
-    val icon: JCodeIcon,
-    val enabled: Boolean = true,
-) {
-    Terminal("Terminal", JCodeIcon.Terminal, enabled = true),
-    Output("Output", JCodeIcon.Logs, enabled = true),
-    Problems("Problems", JCodeIcon.Problems, enabled = false),
-    DebugConsole("Debug Console", JCodeIcon.Radar, enabled = false),
-}
 
 @Composable
 fun JCodeApp(
