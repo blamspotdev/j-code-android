@@ -13,8 +13,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -29,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
@@ -182,35 +185,31 @@ private fun TabItem(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            // Dirty indicator
-            if (tab.isDirty) {
-                Box(
-                    modifier = Modifier
-                        .width(8.dp)
-                        .height(8.dp)
-                        .background(MaterialTheme.colorScheme.primary),
-                )
-            }
-
             Text(
                 text = tab.title,
                 style = MaterialTheme.typography.labelMedium,
                 maxLines = 1,
             )
 
-            if (!LocalTabCloseButtonSetting.current.hidden) {
-                JcTooltip("Close tab") {
-                    IconButton(
-                        onClick = onClosed,
-                        modifier = Modifier
-                            .width(20.dp)
-                            .height(20.dp),
-                    ) {
-                        Text(
-                            text = "×",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+            // Trailing slot: a round dot marks unsaved changes (taking the "×" spot, editor-style);
+            // a clean, closeable tab shows the "×". Closing is done from the tab's long-press menu.
+            when {
+                tab.isDirty -> {
+                    JcTooltip("Unsaved changes") {
+                        Box(modifier = Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+                            ModifiedDot()
+                        }
+                    }
+                }
+                !LocalTabCloseButtonSetting.current.hidden -> {
+                    JcTooltip("Close tab") {
+                        IconButton(onClick = onClosed, modifier = Modifier.size(20.dp)) {
+                            Text(
+                                text = "×",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }
@@ -223,6 +222,17 @@ private fun TabItem(
             ),
         )
     }
+}
+
+/** Small round dot marking a tab with unsaved changes. */
+@Composable
+private fun ModifiedDot() {
+    Box(
+        modifier = Modifier
+            .size(8.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primary),
+    )
 }
 
 /**
