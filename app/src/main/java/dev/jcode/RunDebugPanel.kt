@@ -16,6 +16,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -27,24 +29,24 @@ import dev.jcode.fs.Project
 import dev.jcode.run.ProjectRunner
 
 /**
- * The "Run & Debug" side-panel: detects how the selected project builds & runs and exposes a
- * one-tap "Build & Run" plus an "Open in browser" shortcut. The actual build/run terminal and the
- * server-ready browser launch are orchestrated by the workbench shell (see `handleRun`).
+ * The "Build & Run" side-panel. Lists the projects in scope — all of them inside a User Workspace,
+ * or just the single open project in the Default Workspace — and for each offers Build & Run and a
+ * Configure action (which opens the structured `.jcode/run.yaml` editor). The actual run + browser
+ * launch is orchestrated by the workbench shell (see `handleRun`).
  */
 @Composable
 internal fun RunDebugPanel(
-    selectedProject: Project?,
+    projects: List<Project>,
+    runningProjectId: Long?,
     runUrl: String?,
     runInProgress: Boolean,
-    onRun: () -> Unit,
+    runConfigVersion: Int,
+    onRun: (Project) -> Unit,
+    onConfigure: (Project) -> Unit,
     onStop: () -> Unit,
     onOpenInBrowser: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // Filesystem detection is cheap but does touch disk; key it to the project so it only re-runs
-    // when the selection changes, not on every recomposition.
-    val plan = remember(selectedProject?.id) { selectedProject?.let(ProjectRunner::detectRunPlan) }
-
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
@@ -63,70 +65,99 @@ internal fun RunDebugPanel(
             Text(text = "Build & Run", fontWeight = FontWeight.SemiBold)
         }
 
-        when {
-            selectedProject == null -> Text(
+        if (projects.isEmpty()) {
+            Text(
                 text = "Open a project to build & run.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        } else {
+            projects.forEach { project ->
+                ProjectRunRow(
+                    project = project,
+                    isRunning = runningProjectId == project.id,
+                    runUrl = runUrl,
+                    runInProgress = runInProgress,
+                    runConfigVersion = runConfigVersion,
+                    onRun = onRun,
+                    onConfigure = onConfigure,
+                    onStop = onStop,
+                    onOpenInBrowser = onOpenInBrowser,
+                )
+            }
+        }
+    }
+}
 
-            plan == null -> Text(
-                text = "No run configuration detected. Supported: ASP.NET Core + Vite React, or a Vite/React app.",
+@Composable
+private fun ProjectRunRow(
+    project: Project,
+    isRunning: Boolean,
+    runUrl: String?,
+    runInProgress: Boolean,
+    runConfigVersion: Int,
+    onRun: (Project) -> Unit,
+    onConfigure: (Project) -> Unit,
+    onStop: () -> Unit,
+    onOpenInBrowser: () -> Unit,
+) {
+    // Re-resolve when the project changes or a config is saved (runConfigVersion bumps).
+    val plan = remember(project.id, runConfigVersion) { ProjectRunner.effectivePlan(project) }
+    val configured = plan != null
+
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f)) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(project.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Text(
+                text = plan?.kindLabel ?: "Not configured",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-
-            else -> {
-                Text(
-                    text = plan.kindLabel,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                )
+            if (configured && plan!!.readyPort > 0) {
                 Text(
                     text = "Serves on ${plan.url}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                val isActive = runInProgress || runUrl != null
-                if (isActive) {
-                    // A run is in flight or its server is up: offer Stop (Ctrl-C the run terminal) and
-                    // Re-run side by side.
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilledTonalButton(
-                            onClick = onStop,
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer,
-                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                            ),
-                        ) {
-                            Icon(jcIcon(JCodeIcon.Stop), contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Stop")
-                        }
-                        FilledTonalButton(
-                            onClick = onRun,
-                            enabled = !runInProgress,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Icon(jcIcon(JCodeIcon.Run), contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(if (runInProgress) "Building…" else "Re-run")
-                        }
-                    }
-                } else {
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(
+                    onClick = { onRun(project) },
+                    enabled = configured && !(isRunning && runInProgress),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(jcIcon(JCodeIcon.Run), contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(if (isRunning) "Re-run" else "Build & Run")
+                }
+                OutlinedButton(
+                    onClick = { onConfigure(project) },
+                    modifier = Modifier.weight(1f),
+                ) { Text("Configure") }
+            }
+
+            if (isRunning) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilledTonalButton(
-                        onClick = onRun,
-                        enabled = !runInProgress,
-                        modifier = Modifier.fillMaxWidth(),
+                        onClick = onStop,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        ),
                     ) {
-                        Icon(
-                            imageVector = jcIcon(JCodeIcon.Run),
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
+                        Icon(jcIcon(JCodeIcon.Stop), contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Build & Run")
+                        Text("Stop")
+                    }
+                    if (runUrl != null) {
+                        FilledTonalButton(onClick = onOpenInBrowser, modifier = Modifier.weight(1f)) {
+                            Text("Open in browser")
+                        }
                     }
                 }
                 if (runInProgress) {
@@ -135,14 +166,6 @@ internal fun RunDebugPanel(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                }
-                if (runUrl != null) {
-                    FilledTonalButton(
-                        onClick = onOpenInBrowser,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Open in browser")
-                    }
                 }
             }
         }

@@ -781,6 +781,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val _runConfigVersion = MutableStateFlow(0)
+    /** Bumped when a run config is saved so the Run panel re-reads `.jcode/run.yaml`. */
+    val runConfigVersion: StateFlow<Int> = _runConfigVersion.asStateFlow()
+
+    /** Open the structured Build & Run configuration page for [project]. Reuses one config tab. */
+    fun openRunConfigPage(project: Project) {
+        openDetailPage(RUN_CONFIG_PREFIX + project.id, EditorPageKind.RunConfig) { "Run: ${project.name}" }
+    }
+
+    /** Persist a project's Build & Run config to its `.jcode/run.yaml`. */
+    fun saveRunConfig(project: Project, config: dev.jcode.core.config.RunConfig) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { dev.jcode.run.ProjectRunner.saveRunConfig(project, config) }
+                .onSuccess {
+                    _runConfigVersion.value++
+                    _messages.tryEmit("Saved run config for ${project.name}")
+                }
+                .onFailure { _messages.tryEmit("Failed to save run config: ${it.message ?: "error"}") }
+        }
+    }
+
     fun selectEditorTab(tabId: String) {
         _editorGroup.value = _editorGroup.value.withActiveTabChanged(tabId)
     }
@@ -980,5 +1001,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val SDK_DETAIL_PREFIX = "jcode://sdk/"
         const val LSP_DETAIL_PREFIX = "jcode://lsp/"
         const val EXT_DETAIL_PREFIX = "jcode://ext/"
+        const val RUN_CONFIG_PREFIX = "jcode://run-config/"
     }
 }

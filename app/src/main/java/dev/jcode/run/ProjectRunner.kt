@@ -3,6 +3,9 @@ package dev.jcode.run
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import dev.jcode.core.config.RunConfig
+import dev.jcode.core.config.RunConfigStore
+import dev.jcode.core.config.RunConfigTerminal
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
 import java.io.File
@@ -76,6 +79,46 @@ object ProjectRunner {
         if (hasCsproj) return aspnetVitePlan(guestDir, stageName)
         if (File(root, "package.json").isFile) return vitePlan(guestDir, stageName)
         return null
+    }
+
+    /**
+     * The run plan to actually use: a user-saved `.jcode/run.yaml` takes precedence; otherwise fall
+     * back to the template/filesystem-detected plan.
+     */
+    fun effectivePlan(project: Project): RunPlan? {
+        (project.fsPath as? FsPath.Local)?.file?.let { dir ->
+            RunConfigStore.load(dir)?.let { return it.toRunPlan() }
+        }
+        return detectRunPlan(project)
+    }
+
+    private fun RunConfig.toRunPlan(): RunPlan = RunPlan(
+        kindLabel = name,
+        readyPort = readyPort,
+        terminals = terminals.map { RunTerminal(it.label, it.command) },
+    )
+
+    /** The saved run config for [project], or null if none has been written yet. */
+    fun loadRunConfig(project: Project): RunConfig? =
+        (project.fsPath as? FsPath.Local)?.file?.let { RunConfigStore.load(it) }
+
+    /** Persist [config] to the project's `.jcode/run.yaml`. */
+    fun saveRunConfig(project: Project, config: RunConfig) {
+        (project.fsPath as? FsPath.Local)?.file?.let { RunConfigStore.save(it, config) }
+    }
+
+    /**
+     * The config the Configure page edits: the saved `run.yaml` if present, else a default derived
+     * from the detected plan, else a blank single-terminal starter for unrecognized projects.
+     */
+    fun editableRunConfig(project: Project): RunConfig {
+        loadRunConfig(project)?.let { return it }
+        val plan = detectRunPlan(project)
+        return if (plan != null) {
+            RunConfig(plan.kindLabel, plan.readyPort, plan.terminals.map { RunConfigTerminal(it.label, it.command) })
+        } else {
+            RunConfig(project.name, 0, listOf(RunConfigTerminal("Run", "")))
+        }
     }
 
     // ASP.NET Core + Vite React, dev: the backend (Development, :5080) and the Vite dev server

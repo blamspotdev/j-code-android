@@ -144,6 +144,7 @@ import dev.jcode.adaptive.rememberJCodeWindowInfo
 import dev.jcode.core.config.ConfigScope
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.config.ProjectConfig
+import dev.jcode.core.config.RunConfig
 import dev.jcode.core.config.WorkspaceConfig
 import dev.jcode.core.distro.DistroBind
 import dev.jcode.core.distro.DistroEnvironmentState
@@ -187,6 +188,7 @@ import dev.jcode.fs.DEFAULT_SHARED_PROJECTS_ROOT
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
 import dev.jcode.run.ProjectRunner
+import dev.jcode.run.RunConfigPage
 import dev.jcode.fs.Workspace
 import dev.jcode.fs.WorkspaceCrumb
 import dev.jcode.fs.WorkspaceManager
@@ -221,6 +223,7 @@ fun JCodeApp(
     val environmentState by viewModel.environmentState.collectAsStateWithLifecycle()
     val sdkCatalogState by viewModel.sdkCatalogState.collectAsStateWithLifecycle()
     val lspCatalogState by viewModel.lspCatalogState.collectAsStateWithLifecycle()
+    val runConfigVersion by viewModel.runConfigVersion.collectAsStateWithLifecycle()
     val autoSetupProgress by viewModel.autoSetupProgress.collectAsStateWithLifecycle(initialValue = DistroWizardProgress.Idle)
     val installedExtensions by viewModel.installedExtensions.collectAsStateWithLifecycle()
     val marketplaceEntries by viewModel.marketplaceEntries.collectAsStateWithLifecycle()
@@ -317,6 +320,9 @@ fun JCodeApp(
         onOpenEnvironmentWizard = { viewModel.openEnvironmentPage() },
         onSelectDistro = { viewModel.selectWizardDistro(it) },
         onAutoSetup = viewModel::runAutoSetup,
+        onConfigureRun = viewModel::openRunConfigPage,
+        onSaveRunConfig = viewModel::saveRunConfig,
+        runConfigVersion = runConfigVersion,
         managerActions = WorkbenchManagerActions(
             onCheckSdkStatuses = viewModel::checkSdkStatuses,
             onInstallSdkCatalogEntry = viewModel::installSdkCatalogEntry,
@@ -427,6 +433,9 @@ private fun JCodeShell(
     onOpenEnvironmentWizard: () -> Unit,
     onAutoSetup: () -> Unit,
     onSelectDistro: (DistroProfile) -> Unit,
+    onConfigureRun: (Project) -> Unit,
+    onSaveRunConfig: (Project, RunConfig) -> Unit,
+    runConfigVersion: Int,
     railToolOrder: List<String>,
     onReorderRail: (List<String>) -> Unit,
     onOpenSettingsPage: () -> Unit,
@@ -591,6 +600,7 @@ private fun JCodeShell(
     // Client), torn down and respawned on each run and stopped together by handleStopRun.
     var runUrl by rememberSaveable { mutableStateOf<String?>(null) }
     var runInProgress by remember { mutableStateOf(false) }
+    var runningProjectId by remember { mutableStateOf<Long?>(null) }
     var runSessionIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var runPollJob by remember { mutableStateOf<Job?>(null) }
 
@@ -633,20 +643,15 @@ private fun JCodeShell(
 
     // Build & Run the selected project: spawn a dedicated terminal in the right drawer, stream the
     // compile/run output into it, then open the device browser once the server is reachable.
-    fun handleRun() {
-        val project = selectedProject
+    fun handleRun(project: Project) {
         if (!terminalReady) {
             scope.launch { snackbarHostState.showSnackbar("Finish environment setup before running.") }
             return
         }
-        if (project == null) {
-            scope.launch { snackbarHostState.showSnackbar("Open a project to build & run.") }
-            return
-        }
-        val plan = ProjectRunner.detectRunPlan(project)
-        if (plan == null) {
+        val plan = ProjectRunner.effectivePlan(project)
+        if (plan == null || plan.terminals.isEmpty()) {
             scope.launch {
-                snackbarHostState.showSnackbar("No run configuration detected for this project.")
+                snackbarHostState.showSnackbar("No run config for ${project.name}. Tap Configure to set one up.")
             }
             return
         }
@@ -671,19 +676,26 @@ private fun JCodeShell(
         }
         if (startedIds.isEmpty()) return
         runSessionIds = startedIds
+        runningProjectId = project.id
         selectTerminalSession(startedIds.last()) // focus the frontend terminal
-        runUrl = plan.url
-        runInProgress = true
-        // Cancel any in-flight poll from a previous run so the browser only opens once.
         runPollJob?.cancel()
-        runPollJob = scope.launch {
-            val up = ProjectRunner.awaitServer(plan.readyPort)
-            runInProgress = false
-            if (up) {
-                ProjectRunner.openInBrowser(appContext, plan.url)
-            } else {
-                snackbarHostState.showSnackbar("Dev server didn't start in time; check the run terminals.")
+        if (plan.readyPort > 0) {
+            runUrl = plan.url
+            runInProgress = true
+            // Cancel any in-flight poll from a previous run so the browser only opens once.
+            runPollJob = scope.launch {
+                val up = ProjectRunner.awaitServer(plan.readyPort)
+                runInProgress = false
+                if (up) {
+                    ProjectRunner.openInBrowser(appContext, plan.url)
+                } else {
+                    snackbarHostState.showSnackbar("Dev server didn't start in time; check the run terminals.")
+                }
             }
+        } else {
+            // No server port to wait on (e.g. a build/script-only config): just run the terminals.
+            runUrl = null
+            runInProgress = false
         }
     }
 
@@ -698,6 +710,7 @@ private fun JCodeShell(
         }
         runInProgress = false
         runUrl = null
+        runningProjectId = null
     }
 
     fun closeTerminalSession(sessionId: String) {
@@ -872,6 +885,9 @@ private fun JCodeShell(
                 onAutoSetup = onAutoSetup,
                 managerActions = managerActions,
                 onRun = ::handleRun,
+                onConfigureRun = onConfigureRun,
+                runningProjectId = runningProjectId,
+                runConfigVersion = runConfigVersion,
                 onStopRun = ::handleStopRun,
                 runUrl = runUrl,
                 runInProgress = runInProgress,
@@ -975,7 +991,7 @@ private fun JCodeShell(
                                 rightSidebarVisible = !rightSidebarVisible
                             }
                         },
-                        onRun = ::handleRun,
+                        onRun = { selectedProject?.let(::handleRun) },
                         onShowTerminal = {
                             rightPanelTab = RightPanelTab.Terminal
                             rightSidebarVisible = true
@@ -1074,6 +1090,21 @@ private fun JCodeShell(
                                         )
                                     }
                                 }
+                                EditorPageKind.RunConfig -> {
+                                    val id = tab.id.substringAfter(MainViewModel.RUN_CONFIG_PREFIX).toLongOrNull()
+                                    val project = (workspace?.projects.orEmpty() + listOfNotNull(selectedProject))
+                                        .firstOrNull { it.id == id }
+                                    if (project != null) {
+                                        val initial = remember(project.id, runConfigVersion) {
+                                            ProjectRunner.editableRunConfig(project)
+                                        }
+                                        RunConfigPage(
+                                            initial = initial,
+                                            onSave = { onSaveRunConfig(project, it) },
+                                            modifier = Modifier.fillMaxSize(),
+                                        )
+                                    }
+                                }
                                 EditorPageKind.ExtensionDetail -> {
                                     val id = tab.id.substringAfter(MainViewModel.EXT_DETAIL_PREFIX)
                                     val entry = marketplaceEntries.firstOrNull { it.id == id }
@@ -1130,6 +1161,9 @@ private fun JCodeShell(
                             onAutoSetup = onAutoSetup,
                             managerActions = managerActions,
                             onRun = ::handleRun,
+                            onConfigureRun = onConfigureRun,
+                            runningProjectId = runningProjectId,
+                            runConfigVersion = runConfigVersion,
                             onStopRun = ::handleStopRun,
                             runUrl = runUrl,
                             runInProgress = runInProgress,
@@ -1535,7 +1569,10 @@ private fun WorkspacePanel(
     onOpenEnvironmentWizard: () -> Unit,
     onAutoSetup: () -> Unit,
     managerActions: WorkbenchManagerActions,
-    onRun: () -> Unit,
+    onRun: (Project) -> Unit,
+    onConfigureRun: (Project) -> Unit,
+    runningProjectId: Long?,
+    runConfigVersion: Int,
     onStopRun: () -> Unit,
     runUrl: String?,
     runInProgress: Boolean,
@@ -1648,10 +1685,19 @@ private fun WorkspacePanel(
                     )
 
                     WorkbenchTool.RunDebug -> RunDebugPanel(
-                        selectedProject = selectedProject,
+                        // A User Workspace lists every project; the Default Workspace shows just the
+                        // one open project.
+                        projects = if (inUserWorkspace) {
+                            workspace?.projects.orEmpty()
+                        } else {
+                            listOfNotNull(selectedProject)
+                        },
+                        runningProjectId = runningProjectId,
                         runUrl = runUrl,
                         runInProgress = runInProgress,
+                        runConfigVersion = runConfigVersion,
                         onRun = onRun,
+                        onConfigure = onConfigureRun,
                         onStop = onStopRun,
                         onOpenInBrowser = onOpenRunInBrowser,
                         modifier = Modifier.fillMaxSize(),
