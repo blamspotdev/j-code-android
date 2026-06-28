@@ -67,8 +67,6 @@ object ThemeBundleRegistry {
         catppuccinBundle,
         draculaBundle,
         nordBundle,
-        gruvboxBundle,
-        oneDarkBundle,
     )
 
     val default: ThemeBundle get() = catppuccinBundle
@@ -222,103 +220,5 @@ private val nordBundle = ThemeBundle(
         success = Color(0xFF5E8C3F), onSuccess = Color(0xFFECEFF4),
         warning = Color(0xFFB58900), onWarning = Color(0xFF2E3440),
         info = Color(0xFF4C8C8A), onInfo = Color(0xFFECEFF4),
-    ),
-)
-
-// Gruvbox — warm, retro palette.
-private val gruvboxBundle = ThemeBundle(
-    id = "gruvbox",
-    name = "Gruvbox",
-    description = "Warm retro palette with earthy tones.",
-    dark = darkColorScheme(
-        primary = Color(0xFF83A598),
-        onPrimary = Color(0xFF282828),
-        primaryContainer = Color(0xFF3C3836),
-        onPrimaryContainer = Color(0xFFEBDBB2),
-        secondary = Color(0xFFD3869B),
-        onSecondary = Color(0xFF282828),
-        tertiary = Color(0xFFB8BB26),
-        onTertiary = Color(0xFF282828),
-        background = Color(0xFF282828),
-        onBackground = Color(0xFFEBDBB2),
-        surface = Color(0xFF1D2021),
-        onSurface = Color(0xFFEBDBB2),
-        surfaceVariant = Color(0xFF3C3836),
-        onSurfaceVariant = Color(0xFFD5C4A1),
-    ),
-    light = lightColorScheme(
-        primary = Color(0xFF076678),
-        onPrimary = Color(0xFFFBF1C7),
-        primaryContainer = Color(0xFFEBDBB2),
-        onPrimaryContainer = Color(0xFF3C3836),
-        secondary = Color(0xFF8F3F71),
-        onSecondary = Color(0xFFFBF1C7),
-        tertiary = Color(0xFF79740E),
-        onTertiary = Color(0xFFFBF1C7),
-        background = Color(0xFFFBF1C7),
-        onBackground = Color(0xFF3C3836),
-        surface = Color(0xFFF2E5BC),
-        onSurface = Color(0xFF3C3836),
-        surfaceVariant = Color(0xFFEBDBB2),
-        onSurfaceVariant = Color(0xFF665C54),
-    ),
-    darkSemantic = JCodeSemanticColors(
-        success = Color(0xFFB8BB26), onSuccess = Color(0xFF282828),
-        warning = Color(0xFFFABD2F), onWarning = Color(0xFF282828),
-        info = Color(0xFF83A598), onInfo = Color(0xFF282828),
-    ),
-    lightSemantic = JCodeSemanticColors(
-        success = Color(0xFF79740E), onSuccess = Color(0xFFFBF1C7),
-        warning = Color(0xFFB57614), onWarning = Color(0xFFFBF1C7),
-        info = Color(0xFF076678), onInfo = Color(0xFFFBF1C7),
-    ),
-)
-
-// One Dark — Atom's signature palette; paired with One Light.
-private val oneDarkBundle = ThemeBundle(
-    id = "one-dark",
-    name = "One Dark",
-    description = "Balanced editor palette (One Dark / Light).",
-    dark = darkColorScheme(
-        primary = Color(0xFF61AFEF),
-        onPrimary = Color(0xFF282C34),
-        primaryContainer = Color(0xFF3B4048),
-        onPrimaryContainer = Color(0xFFABB2BF),
-        secondary = Color(0xFFC678DD),
-        onSecondary = Color(0xFF282C34),
-        tertiary = Color(0xFF98C379),
-        onTertiary = Color(0xFF282C34),
-        background = Color(0xFF282C34),
-        onBackground = Color(0xFFABB2BF),
-        surface = Color(0xFF21252B),
-        onSurface = Color(0xFFABB2BF),
-        surfaceVariant = Color(0xFF3B4048),
-        onSurfaceVariant = Color(0xFF9DA5B4),
-    ),
-    light = lightColorScheme(
-        primary = Color(0xFF4078F2),
-        onPrimary = Color(0xFFFAFAFA),
-        primaryContainer = Color(0xFFE5E5E6),
-        onPrimaryContainer = Color(0xFF383A42),
-        secondary = Color(0xFFA626A4),
-        onSecondary = Color(0xFFFAFAFA),
-        tertiary = Color(0xFF50A14F),
-        onTertiary = Color(0xFFFAFAFA),
-        background = Color(0xFFFAFAFA),
-        onBackground = Color(0xFF383A42),
-        surface = Color(0xFFEAEAEB),
-        onSurface = Color(0xFF383A42),
-        surfaceVariant = Color(0xFFE5E5E6),
-        onSurfaceVariant = Color(0xFF696C77),
-    ),
-    darkSemantic = JCodeSemanticColors(
-        success = Color(0xFF98C379), onSuccess = Color(0xFF282C34),
-        warning = Color(0xFFE5C07B), onWarning = Color(0xFF282C34),
-        info = Color(0xFF56B6C2), onInfo = Color(0xFF282C34),
-    ),
-    lightSemantic = JCodeSemanticColors(
-        success = Color(0xFF50A14F), onSuccess = Color(0xFFFAFAFA),
-        warning = Color(0xFFC18401), onWarning = Color(0xFFFAFAFA),
-        info = Color(0xFF0184BC), onInfo = Color(0xFFFAFAFA),
     ),
 )
