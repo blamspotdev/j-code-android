@@ -26,6 +26,7 @@ internal enum class WorkbenchTool(
     RunDebug("Run/Debug", JCodeIcon.Run, "Run"),
     Extensions("Extensions", JCodeIcon.Extensions, "Ext"),
     SdkManager("SDK Manager", JCodeIcon.Sdk, "SDK"),
+    LspManager("LSP Manager", JCodeIcon.Lsp, "LSP"),
     Settings("App Settings", JCodeIcon.Settings, "App Settings"),
 }
 

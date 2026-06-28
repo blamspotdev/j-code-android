@@ -1,10 +1,11 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
 }
 
 android {
-    namespace = "dev.jcode.core.lsp"
+    namespace = "dev.jcode.feature.lspmanager"
     compileSdk = 36
 
     defaultConfig {
@@ -19,12 +20,16 @@ android {
     kotlinOptions {
         jvmTarget = "21"
     }
+
+    buildFeatures {
+        compose = true
+    }
 }
 
 dependencies {
-    implementation(libs.lsp4j)
-    implementation(libs.coroutines.android)
-    implementation(project(":core:editor-decor"))
-    implementation(project(":core:term"))
+    implementation(platform(libs.compose.bom))
+    implementation(libs.compose.ui)
+    implementation(libs.compose.material3)
     implementation(project(":core:distro"))
+    implementation(project(":core:design"))
 }

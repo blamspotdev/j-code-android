@@ -53,6 +53,7 @@ include(":feature:search")
 include(":feature:debug")
 include(":feature:settings")
 include(":feature:sdk-manager")
+include(":feature:lsp-manager")
 include(":feature:marketplace")
 include(":feature:onboarding")
 

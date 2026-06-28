@@ -149,6 +149,7 @@ import dev.jcode.core.distro.DistroWizardProgress
 import dev.jcode.core.distro.ProotManager
 import dev.jcode.core.distro.RootfsDownloader
 import dev.jcode.core.distro.RootfsManager
+import dev.jcode.core.distro.LspCatalogState
 import dev.jcode.core.distro.SdkCatalogState
 import dev.jcode.core.term.TerminalSessionManager
 import dev.jcode.core.term.TerminalView
@@ -167,6 +168,7 @@ import dev.jcode.feature.marketplace.isUpdateAvailable
 import dev.jcode.feature.marketplace.ProjectTemplate
 import dev.jcode.feature.marketplace.ScaffoldState
 import dev.jcode.feature.onboarding.OnboardingFeature
+import dev.jcode.feature.lspmanager.LspManagerFeature
 import dev.jcode.feature.sdkmanager.SdkManagerFeature
 import dev.jcode.feature.settings.SettingsFeature
 import dev.jcode.workbench.dialog.NewItemDialog
@@ -213,6 +215,7 @@ fun JCodeApp(
     val projectConfigError by viewModel.projectConfigError.collectAsStateWithLifecycle()
     val environmentState by viewModel.environmentState.collectAsStateWithLifecycle()
     val sdkCatalogState by viewModel.sdkCatalogState.collectAsStateWithLifecycle()
+    val lspCatalogState by viewModel.lspCatalogState.collectAsStateWithLifecycle()
     val autoSetupProgress by viewModel.autoSetupProgress.collectAsStateWithLifecycle(initialValue = DistroWizardProgress.Idle)
     val installedExtensions by viewModel.installedExtensions.collectAsStateWithLifecycle()
     val marketplaceEntries by viewModel.marketplaceEntries.collectAsStateWithLifecycle()
@@ -271,6 +274,7 @@ fun JCodeApp(
         environmentState = environmentState,
         autoSetupProgress = autoSetupProgress,
         sdkCatalogState = sdkCatalogState,
+        lspCatalogState = lspCatalogState,
         workspaceManager = viewModel.workspaceManager,
         snackbarHostState = snackbarHostState,
         openFolderLauncher = openFolderLauncher,
@@ -315,6 +319,10 @@ fun JCodeApp(
         onInstallSdkCatalogEntry = viewModel::installSdkCatalogEntry,
         onVerifySdkCatalogEntry = viewModel::verifySdkCatalogEntry,
         onUninstallSdkCatalogEntry = viewModel::uninstallSdkCatalogEntry,
+        onRefreshLspCatalog = viewModel::refreshLspCatalog,
+        onInstallLspCatalogEntry = viewModel::installLspCatalogEntry,
+        onVerifyLspCatalogEntry = viewModel::verifyLspCatalogEntry,
+        onUninstallLspCatalogEntry = viewModel::uninstallLspCatalogEntry,
         railToolOrder = railToolOrder,
         onReorderRail = viewModel::setRailToolOrder,
         onOpenSettingsPage = viewModel::openSettingsPage,
@@ -370,6 +378,7 @@ private fun JCodeShell(
     environmentState: DistroEnvironmentState,
     autoSetupProgress: DistroWizardProgress,
     sdkCatalogState: SdkCatalogState,
+    lspCatalogState: LspCatalogState,
     workspaceManager: WorkspaceManager,
     snackbarHostState: SnackbarHostState,
     openFolderLauncher: ActivityResultLauncher<Uri?>,
@@ -414,6 +423,10 @@ private fun JCodeShell(
     onInstallSdkCatalogEntry: (String) -> Unit,
     onVerifySdkCatalogEntry: (String) -> Unit,
     onUninstallSdkCatalogEntry: (String) -> Unit,
+    onRefreshLspCatalog: () -> Unit,
+    onInstallLspCatalogEntry: (String) -> Unit,
+    onVerifyLspCatalogEntry: (String) -> Unit,
+    onUninstallLspCatalogEntry: (String) -> Unit,
     railToolOrder: List<String>,
     onReorderRail: (List<String>) -> Unit,
     onOpenSettingsPage: () -> Unit,
@@ -815,6 +828,7 @@ private fun JCodeShell(
                 environmentState = environmentState,
                 autoSetupProgress = autoSetupProgress,
                 sdkCatalogState = sdkCatalogState,
+                lspCatalogState = lspCatalogState,
                 workspaceManager = workspaceManager,
                 windowInfo = windowInfo,
                 modifier = Modifier.fillMaxHeight(),
@@ -836,6 +850,10 @@ private fun JCodeShell(
                 onInstallSdkCatalogEntry = onInstallSdkCatalogEntry,
                 onVerifySdkCatalogEntry = onVerifySdkCatalogEntry,
                 onUninstallSdkCatalogEntry = onUninstallSdkCatalogEntry,
+                onRefreshLspCatalog = onRefreshLspCatalog,
+                onInstallLspCatalogEntry = onInstallLspCatalogEntry,
+                onVerifyLspCatalogEntry = onVerifyLspCatalogEntry,
+                onUninstallLspCatalogEntry = onUninstallLspCatalogEntry,
                 onRun = ::handleRun,
                 onStopRun = ::handleStopRun,
                 runUrl = runUrl,
@@ -1027,6 +1045,7 @@ private fun JCodeShell(
                             environmentState = environmentState,
                             autoSetupProgress = autoSetupProgress,
                             sdkCatalogState = sdkCatalogState,
+                            lspCatalogState = lspCatalogState,
                             workspaceManager = workspaceManager,
                             windowInfo = windowInfo,
                             modifier = Modifier
@@ -1052,6 +1071,10 @@ private fun JCodeShell(
                             onInstallSdkCatalogEntry = onInstallSdkCatalogEntry,
                             onVerifySdkCatalogEntry = onVerifySdkCatalogEntry,
                             onUninstallSdkCatalogEntry = onUninstallSdkCatalogEntry,
+                            onRefreshLspCatalog = onRefreshLspCatalog,
+                            onInstallLspCatalogEntry = onInstallLspCatalogEntry,
+                            onVerifyLspCatalogEntry = onVerifyLspCatalogEntry,
+                            onUninstallLspCatalogEntry = onUninstallLspCatalogEntry,
                             onRun = ::handleRun,
                             onStopRun = ::handleStopRun,
                             runUrl = runUrl,
@@ -1443,6 +1466,7 @@ private fun WorkspacePanel(
     environmentState: DistroEnvironmentState,
     autoSetupProgress: DistroWizardProgress,
     sdkCatalogState: SdkCatalogState,
+    lspCatalogState: LspCatalogState,
     workspaceManager: WorkspaceManager,
     windowInfo: JCodeWindowInfo,
     breadcrumb: List<WorkspaceCrumb>,
@@ -1463,6 +1487,10 @@ private fun WorkspacePanel(
     onInstallSdkCatalogEntry: (String) -> Unit,
     onVerifySdkCatalogEntry: (String) -> Unit,
     onUninstallSdkCatalogEntry: (String) -> Unit,
+    onRefreshLspCatalog: () -> Unit,
+    onInstallLspCatalogEntry: (String) -> Unit,
+    onVerifyLspCatalogEntry: (String) -> Unit,
+    onUninstallLspCatalogEntry: (String) -> Unit,
     onRun: () -> Unit,
     onStopRun: () -> Unit,
     runUrl: String?,
@@ -1610,6 +1638,17 @@ private fun WorkspacePanel(
                         onInstallEntry = onInstallSdkCatalogEntry,
                         onVerifyEntry = onVerifySdkCatalogEntry,
                         onUninstallEntry = onUninstallSdkCatalogEntry,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+
+                    WorkbenchTool.LspManager -> LspManagerFeature.Content(
+                        state = lspCatalogState,
+                        environmentState = environmentState,
+                        onRefresh = onRefreshLspCatalog,
+                        onOpenEnvironmentWizard = onOpenEnvironmentWizard,
+                        onInstallEntry = onInstallLspCatalogEntry,
+                        onVerifyEntry = onVerifyLspCatalogEntry,
+                        onUninstallEntry = onUninstallLspCatalogEntry,
                         modifier = Modifier.fillMaxSize(),
                     )
 

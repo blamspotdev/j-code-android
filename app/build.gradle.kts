@@ -93,6 +93,7 @@ dependencies {
     implementation(project(":feature:debug"))
     implementation(project(":feature:settings"))
     implementation(project(":feature:sdk-manager"))
+    implementation(project(":feature:lsp-manager"))
     implementation(project(":feature:marketplace"))
     implementation(project(":feature:onboarding"))
 

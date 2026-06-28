@@ -56,6 +56,9 @@ class DistroService(
     private val _sdkCatalogState = MutableStateFlow(SdkCatalogState())
     val sdkCatalogState: StateFlow<SdkCatalogState> = _sdkCatalogState.asStateFlow()
 
+    private val _lspCatalogState = MutableStateFlow(LspCatalogState())
+    val lspCatalogState: StateFlow<LspCatalogState> = _lspCatalogState.asStateFlow()
+
     private val _autoSetupProgress = MutableSharedFlow<DistroWizardProgress>(extraBufferCapacity = 64)
     val autoSetupProgress: Flow<DistroWizardProgress> = _autoSetupProgress.asSharedFlow()
 
@@ -67,6 +70,7 @@ class DistroService(
         scope.launch {
             refreshEnvironment()
             refreshSdkCatalog()
+            refreshLspCatalog()
         }
     }
 
@@ -88,6 +92,7 @@ class DistroService(
         _environmentState.value = _environmentState.value.copy(runtime = runtime)
         scope.launch {
             syncSdkCatalogSelection(runtime.selectedDistro.id)
+            syncLspCatalogSelection(runtime.selectedDistro.id)
         }
     }
 
@@ -102,6 +107,7 @@ class DistroService(
             persistSelectedDistro(profile)
             persistCompletedSteps(_environmentState.value.completedSteps)
             syncSdkCatalogSelection(profile.id)
+            syncLspCatalogSelection(profile.id)
         }
     }
 
@@ -142,7 +148,10 @@ class DistroService(
      */
     suspend fun deleteEnvironment(environmentId: String): Boolean {
         val removed = rootfsManager.removeDistro(environmentId)
-        dataStore.edit { prefs -> prefs.remove(installedEntriesKey(environmentId)) }
+        dataStore.edit { prefs ->
+            prefs.remove(installedEntriesKey(environmentId))
+            prefs.remove(installedLspEntriesKey(environmentId))
+        }
         if (_environmentState.value.runtime.selectedDistro.id == environmentId) {
             val available = _environmentState.value.availableDistros
             val next = rootfsManager.getInstalledDistros()
@@ -212,7 +221,7 @@ class DistroService(
                 executionLabel = "${action.label} ${entry.name}",
                 selectedDistroId = distroId,
                 errorMessage = null,
-                logLines = appendSdkLogLines(
+                logLines = appendCatalogLogLines(
                     existing = _sdkCatalogState.value.logLines,
                     lines = buildList {
                         add("== ${action.label} ${entry.name} (${_environmentState.value.runtime.selectedDistro.label}) ==")
@@ -265,10 +274,119 @@ class DistroService(
                 executionLabel = "${action.label} ${entry.name}",
                 selectedDistroId = distroId,
                 errorMessage = errorMessage,
-                logLines = appendSdkLogLines(
+                logLines = appendCatalogLogLines(
                     existing = _sdkCatalogState.value.logLines,
                     lines = formatActionLogs(
                         entry = entry,
+                        action = action,
+                        actionResult = actionResult,
+                        verifyResult = verifyResult,
+                        installedNow = installedNow,
+                    ),
+                ),
+            )
+        }
+    }
+
+    suspend fun refreshLspCatalog() {
+        lock.withLock {
+            val distroId = _environmentState.value.runtime.selectedDistro.id
+            _lspCatalogState.value = _lspCatalogState.value.copy(
+                entries = lspCatalogEntries(),
+                installedEntryIds = readInstalledLspEntries(distroId),
+                runningEntryId = null,
+                runningAction = null,
+                selectedDistroId = distroId,
+                errorMessage = null,
+            )
+        }
+    }
+
+    suspend fun runLspCatalogAction(
+        entryId: String,
+        action: LspCatalogAction,
+    ) {
+        lock.withLock {
+            val entry = LspServerCatalog.findById(entryId)
+            if (entry == null) {
+                _lspCatalogState.value = _lspCatalogState.value.copy(
+                    errorMessage = "Unknown language server '$entryId'.",
+                )
+                return
+            }
+
+            if (_environmentState.value.distroInstalled != true || _environmentState.value.jcodeUserReady != true) {
+                _lspCatalogState.value = _lspCatalogState.value.copy(
+                    errorMessage = "Complete the environment setup before installing language servers.",
+                )
+                return
+            }
+
+            val distroId = _environmentState.value.runtime.selectedDistro.id
+            val name = entry.name
+            _lspCatalogState.value = _lspCatalogState.value.copy(
+                runningEntryId = entry.id,
+                runningAction = action,
+                executionLabel = "${action.label} $name",
+                selectedDistroId = distroId,
+                errorMessage = null,
+                logLines = appendCatalogLogLines(
+                    existing = _lspCatalogState.value.logLines,
+                    lines = buildList {
+                        add("== ${action.label} $name (${_environmentState.value.runtime.selectedDistro.label}) ==")
+                        addAll(entry.commandFor(action).lineSequence().map { line -> "$ $line" })
+                    },
+                ),
+            )
+
+            val actionResult = when (action) {
+                LspCatalogAction.Install -> execInDistro(entry.installCommand, timeoutMs = 1_800_000L)
+                LspCatalogAction.Verify -> execInDistro(entry.verifyCommand, timeoutMs = 120_000L)
+                LspCatalogAction.Uninstall -> execInDistro(entry.uninstallCommand, timeoutMs = 900_000L)
+            }
+            val verifyResult = when (action) {
+                LspCatalogAction.Verify -> actionResult
+                LspCatalogAction.Install,
+                LspCatalogAction.Uninstall,
+                -> execInDistro(entry.verifyCommand, timeoutMs = 120_000L)
+            }
+
+            val installedNow = verifyResult.succeeded
+            val updatedInstalledEntries = readInstalledLspEntries(distroId).toMutableSet().apply {
+                if (installedNow) {
+                    add(entry.id)
+                } else {
+                    remove(entry.id)
+                }
+            }.toSet()
+            persistInstalledLspEntries(distroId, updatedInstalledEntries)
+
+            val errorMessage = when {
+                !actionResult.succeeded -> actionResult.internalError
+                    ?: actionResult.stderr.lineSequence().firstOrNull { it.isNotBlank() }
+                    ?: actionResult.stdout.lineSequence().firstOrNull { it.isNotBlank() }
+                    ?: "${action.label} failed."
+
+                action == LspCatalogAction.Install && !installedNow ->
+                    "Install finished, but verification did not detect $name."
+
+                action == LspCatalogAction.Uninstall && installedNow ->
+                    "Removal finished, but verification still detects $name."
+
+                else -> null
+            }
+
+            _lspCatalogState.value = _lspCatalogState.value.copy(
+                installedEntryIds = updatedInstalledEntries,
+                runningEntryId = null,
+                runningAction = null,
+                executionLabel = "${action.label} $name",
+                selectedDistroId = distroId,
+                errorMessage = errorMessage,
+                logLines = appendCatalogLogLines(
+                    existing = _lspCatalogState.value.logLines,
+                    lines = formatLspActionLogs(
+                        name = name,
                         action = action,
                         actionResult = actionResult,
                         verifyResult = verifyResult,
@@ -379,6 +497,7 @@ class DistroService(
 
         persistCompletedSteps(completedSteps.toSet())
         syncSdkCatalogSelection(_environmentState.value.runtime.selectedDistro.id)
+        syncLspCatalogSelection(_environmentState.value.runtime.selectedDistro.id)
         recomputeEnvironments()
     }
 
@@ -986,7 +1105,7 @@ class DistroService(
             ?: "Command exited with ${result.exitCode ?: "unknown"}."
     }
 
-    private fun appendSdkLogLines(
+    private fun appendCatalogLogLines(
         existing: List<String>,
         lines: List<String>,
     ): List<String> {
@@ -1048,6 +1167,69 @@ class DistroService(
 
     private fun installedEntriesKey(distroId: String) =
         stringSetPreferencesKey("sdk_catalog_installed.$distroId")
+
+    private fun lspCatalogEntries(): List<LspCatalogEntry> = LspServerCatalog.BUILT_IN
+
+    private suspend fun syncLspCatalogSelection(distroId: String) {
+        _lspCatalogState.value = _lspCatalogState.value.copy(
+            entries = _lspCatalogState.value.entries.ifEmpty { lspCatalogEntries() },
+            installedEntryIds = readInstalledLspEntries(distroId),
+            selectedDistroId = distroId,
+        )
+    }
+
+    private suspend fun readInstalledLspEntries(distroId: String): Set<String> {
+        return dataStore.data.first()[installedLspEntriesKey(distroId)].orEmpty()
+    }
+
+    private suspend fun persistInstalledLspEntries(
+        distroId: String,
+        entryIds: Set<String>,
+    ) {
+        dataStore.edit { prefs ->
+            prefs[installedLspEntriesKey(distroId)] = entryIds
+        }
+    }
+
+    private fun formatLspActionLogs(
+        name: String,
+        action: LspCatalogAction,
+        actionResult: ExecResult,
+        verifyResult: ExecResult,
+        installedNow: Boolean,
+    ): List<String> {
+        return buildList {
+            add("[command] ${action.label} $name")
+            addAll(actionResult.toLogBlock())
+            if (action != LspCatalogAction.Verify) {
+                add("[verify] $name")
+                addAll(verifyResult.toLogBlock())
+            }
+            add(
+                when (action) {
+                    LspCatalogAction.Install ->
+                        if (installedNow) "[result] Installed." else "[result] Install completed but verification failed."
+
+                    LspCatalogAction.Verify ->
+                        if (installedNow) "[result] Installed." else "[result] Not installed."
+
+                    LspCatalogAction.Uninstall ->
+                        if (!installedNow) "[result] Removed." else "[result] Still detected after removal."
+                },
+            )
+        }
+    }
+
+    private fun LspCatalogEntry.commandFor(action: LspCatalogAction): String {
+        return when (action) {
+            LspCatalogAction.Install -> installCommand
+            LspCatalogAction.Verify -> verifyCommand
+            LspCatalogAction.Uninstall -> uninstallCommand
+        }
+    }
+
+    private fun installedLspEntriesKey(distroId: String) =
+        stringSetPreferencesKey("lsp_catalog_installed.$distroId")
 
     private data class PrimaryBind(
         val host: String,

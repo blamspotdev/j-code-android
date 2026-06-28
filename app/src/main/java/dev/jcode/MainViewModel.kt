@@ -19,6 +19,7 @@ import dev.jcode.core.config.ConfigServiceLocator
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.distro.DistroProfile
 import dev.jcode.core.distro.DistroWizardProgress
+import dev.jcode.core.distro.LspCatalogAction
 import dev.jcode.core.distro.SdkCatalogAction
 import dev.jcode.core.distro.DistroService
 import dev.jcode.core.distro.DistroServiceLocator
@@ -252,6 +253,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val environmentState = distroService.environmentState
     val environments = distroService.environments
     val sdkCatalogState = distroService.sdkCatalogState
+    val lspCatalogState = distroService.lspCatalogState
     val autoSetupProgress = distroService.autoSetupProgress
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
@@ -655,6 +657,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runSdkCatalogAction(entryId, SdkCatalogAction.Uninstall)
     }
 
+    fun refreshLspCatalog() {
+        viewModelScope.launch {
+            distroService.refreshLspCatalog()
+        }
+    }
+
+    fun installLspCatalogEntry(entryId: String) {
+        runLspCatalogAction(entryId, LspCatalogAction.Install)
+    }
+
+    fun verifyLspCatalogEntry(entryId: String) {
+        runLspCatalogAction(entryId, LspCatalogAction.Verify)
+    }
+
+    fun uninstallLspCatalogEntry(entryId: String) {
+        runLspCatalogAction(entryId, LspCatalogAction.Uninstall)
+    }
+
     private var lastBootstrappedProjectId: Long? = null
 
     fun ensureProjectBootstrapTab() {
@@ -892,6 +912,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
             try {
                 distroService.runSdkCatalogAction(entryId, action)
+            } finally {
+                session.close()
+            }
+        }
+    }
+
+    private fun runLspCatalogAction(
+        entryId: String,
+        action: LspCatalogAction,
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = SessionRegistry.registerSession(
+                context = getApplication(),
+                kind = BackendSessionKind.JOB,
+                name = "lsp:${action.name.lowercase()}:$entryId",
+            )
+            try {
+                distroService.runLspCatalogAction(entryId, action)
             } finally {
                 session.close()
             }

@@ -1,7 +1,11 @@
 package dev.jcode.core.lsp
 
+import dev.jcode.core.distro.LspServerCatalog
+
 /**
- * Describes a language server that can be launched inside the distro.
+ * Describes a language server that can be launched inside the distro. The set of known servers is
+ * defined once in `:core:distro` ([LspServerCatalog]); this is the runtime-facing view used by the
+ * LSP client, derived from that single source so the catalog never drifts.
  */
 data class LspServerDescriptor(
     /** Unique identifier for this language server */
@@ -20,63 +24,18 @@ data class LspServerDescriptor(
     val rootDetectors: List<String> = emptyList(),
 ) {
     companion object {
-        /** Built-in LSP descriptors for common language servers. */
-        val BUILT_IN: List<LspServerDescriptor> = listOf(
+        /** Built-in LSP descriptors, derived from the shared `:core:distro` catalog. */
+        val BUILT_IN: List<LspServerDescriptor> = LspServerCatalog.BUILT_IN.map { entry ->
             LspServerDescriptor(
-                id = "clangd",
-                languageIds = listOf("c", "cpp"),
-                verifyCommand = "clangd --version",
-                installCommand = "apt-get install -y clangd",
-                runCommand = "/usr/bin/clangd --background-index",
-                extensions = listOf(".c", ".h", ".cpp", ".hpp", ".cc", ".cxx"),
-                rootDetectors = listOf(".git", "compile_commands.json", "CMakeLists.txt"),
-            ),
-            LspServerDescriptor(
-                id = "typescript-language-server",
-                languageIds = listOf("typescript", "javascript", "typescriptreact", "javascriptreact"),
-                verifyCommand = "typescript-language-server --version",
-                installCommand = "npm i -g typescript typescript-language-server",
-                runCommand = "typescript-language-server --stdio",
-                extensions = listOf(".ts", ".tsx", ".js", ".jsx"),
-                rootDetectors = listOf("package.json", "tsconfig.json", ".git"),
-            ),
-            LspServerDescriptor(
-                id = "pyright",
-                languageIds = listOf("python"),
-                verifyCommand = "pyright-langserver --version",
-                installCommand = "npm i -g pyright",
-                runCommand = "pyright-langserver --stdio",
-                extensions = listOf(".py"),
-                rootDetectors = listOf("pyproject.toml", "setup.py", ".git"),
-            ),
-            LspServerDescriptor(
-                id = "gopls",
-                languageIds = listOf("go"),
-                verifyCommand = "gopls version",
-                installCommand = "go install golang.org/x/tools/gopls@latest",
-                runCommand = "gopls",
-                extensions = listOf(".go"),
-                rootDetectors = listOf("go.mod", ".git"),
-            ),
-            LspServerDescriptor(
-                id = "rust-analyzer",
-                languageIds = listOf("rust"),
-                verifyCommand = "rust-analyzer --version",
-                installCommand = "rustup component add rust-analyzer",
-                runCommand = "rust-analyzer",
-                extensions = listOf(".rs"),
-                rootDetectors = listOf("Cargo.toml", ".git"),
-            ),
-            LspServerDescriptor(
-                id = "kotlin-language-server",
-                languageIds = listOf("kotlin"),
-                verifyCommand = "kotlin-language-server --version",
-                installCommand = "echo 'kotlin-lsp install via SDKMAN'",
-                runCommand = "kotlin-language-server",
-                extensions = listOf(".kt", ".kts"),
-                rootDetectors = listOf("build.gradle.kts", "settings.gradle.kts", ".git"),
-            ),
-        )
+                id = entry.id,
+                languageIds = entry.languageIds,
+                verifyCommand = entry.verifyCommand,
+                installCommand = entry.installCommand,
+                runCommand = entry.runCommand,
+                extensions = entry.extensions,
+                rootDetectors = entry.rootDetectors,
+            )
+        }
 
         /** Find a descriptor for a given language ID. */
         fun findForLanguage(languageId: String): LspServerDescriptor? {
