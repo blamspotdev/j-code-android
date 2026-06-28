@@ -8,6 +8,7 @@ import androidx.compose.material.icons.automirrored.rounded.MenuOpen
 import androidx.compose.material.icons.automirrored.rounded.Redo
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.BuildCircle
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.rounded.NoteAdd
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SelectAll
@@ -62,6 +64,7 @@ enum class JCodeIcon {
     Files, Folder, NewFolder, NewFile,
     Sdk, Lsp, Scm, Settings, Search, Extensions, Destinations, Code,
     Add, Close, Refresh, Paste, Collapse, MoreVert, Save, Undo, Redo, Discard,
+    Continue, Rerun, StepInto, StepOver, StepOut,
     Output, Logs, Problems, Radar,
     DropDown, ChevronDown, ChevronRight, ArrowUp, MenuToggle, Help,
     Copy, Cut, Delete, Open, Rename, SelectAll, Clear, Definition, References, Format,
@@ -115,6 +118,11 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.Undo to Icons.AutoMirrored.Rounded.Undo,
         JCodeIcon.Redo to Icons.AutoMirrored.Rounded.Redo,
         JCodeIcon.Discard to Icons.Rounded.SettingsBackupRestore,
+        JCodeIcon.Continue to Icons.Rounded.PlayArrow,
+        JCodeIcon.Rerun to Icons.Rounded.RestartAlt,
+        JCodeIcon.StepInto to Icons.Rounded.ArrowDownward,
+        JCodeIcon.StepOver to Icons.AutoMirrored.Rounded.Redo,
+        JCodeIcon.StepOut to Icons.Rounded.ArrowUpward,
         JCodeIcon.Collapse to Icons.Rounded.UnfoldLess,
         JCodeIcon.MoreVert to Icons.Rounded.MoreVert,
         JCodeIcon.Output to Icons.Rounded.Description,

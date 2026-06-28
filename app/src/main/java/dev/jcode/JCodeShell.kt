@@ -34,6 +34,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -574,6 +579,13 @@ private fun JCodeShell(
     var selectedTerminalSessionId by rememberSaveable { mutableStateOf("") }
     // Live tab names keyed by session id, driven by the shell's OSC 7712 (the running program name).
     val terminalTitles = remember { mutableStateMapOf<String, String>() }
+    // Terminals the user has actually looked at; anything else is a "new background" instance (badge dot).
+    var seenTerminalIds by remember { mutableStateOf(emptySet<String>()) }
+    LaunchedEffect(rightSidebarVisible, rightPanelTab, terminalSessionIds) {
+        if (rightSidebarVisible && rightPanelTab == RightPanelTab.Terminal) {
+            seenTerminalIds = terminalSessionIds.toSet()
+        }
+    }
 
     // Process-lifetime manager so terminal sessions (native PTY processes) survive Activity
     // recreation/backgrounding instead of being orphaned with the composition.
@@ -1037,6 +1049,19 @@ private fun JCodeShell(
                             }
                         },
                         onRun = { selectedProject?.let(::handleRun) },
+                        onStop = ::handleStopRun,
+                        onRerun = { selectedProject?.let(::handleRun) },
+                        isRunning = runningProjectId != null,
+                        terminalBusy = terminalSessionIds.any { (terminalTitles[it] ?: "terminal") != "terminal" },
+                        terminalHasUnseen = terminalSessionIds.any { it !in seenTerminalIds },
+                        terminalSessions = terminalSessionIds.mapIndexed { index, id ->
+                            TerminalInstance(id, "${index + 1}. ${terminalTitles[id] ?: "terminal"}")
+                        },
+                        onOpenTerminalSession = { id ->
+                            rightPanelTab = RightPanelTab.Terminal
+                            rightSidebarVisible = true
+                            selectTerminalSession(id)
+                        },
                         onShowTerminal = {
                             rightPanelTab = RightPanelTab.Terminal
                             rightSidebarVisible = true
@@ -1320,6 +1345,8 @@ private fun WorkbenchIconActionButton(
     onClick: () -> Unit,
     active: Boolean = false,
     onLongClick: (() -> Unit)? = null,
+    shimmer: Boolean = false,
+    badge: Boolean = false,
 ) {
     val containerColor = if (active) {
         MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
@@ -1331,8 +1358,21 @@ private fun WorkbenchIconActionButton(
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
+    // Pulse the icon while a background terminal is busy (a foreground process is running).
+    val iconAlpha = if (shimmer) {
+        val transition = rememberInfiniteTransition(label = "shimmer")
+        transition.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+            label = "shimmerAlpha",
+        ).value
+    } else {
+        1f
+    }
 
     JcTooltip(contentDescription) {
+        Box {
         Surface(
             modifier = Modifier
                 .size(32.dp)
@@ -1351,8 +1391,18 @@ private fun WorkbenchIconActionButton(
                 Icon(
                     imageVector = icon,
                     contentDescription = contentDescription,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(16.dp).alpha(iconAlpha),
                     tint = contentColor,
+                )
+            }
+        }
+            if (badge) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary),
                 )
             }
         }
@@ -1996,6 +2046,13 @@ private fun EditorWorkspace(
     onToggleLeftSidebar: () -> Unit,
     onToggleRightSidebar: () -> Unit,
     onRun: () -> Unit,
+    onStop: () -> Unit,
+    onRerun: () -> Unit,
+    isRunning: Boolean,
+    terminalBusy: Boolean,
+    terminalHasUnseen: Boolean,
+    terminalSessions: List<TerminalInstance>,
+    onOpenTerminalSession: (String) -> Unit,
     onShowTerminal: () -> Unit,
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
@@ -2022,6 +2079,13 @@ private fun EditorWorkspace(
                 onToggleRightSidebar = onToggleRightSidebar,
                 onShowTerminal = onShowTerminal,
                 onRun = onRun,
+                onStop = onStop,
+                onRerun = onRerun,
+                isRunning = isRunning,
+                terminalBusy = terminalBusy,
+                terminalHasUnseen = terminalHasUnseen,
+                terminalSessions = terminalSessions,
+                onOpenTerminalSession = onOpenTerminalSession,
                 onSave = onSave,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
@@ -2052,6 +2116,9 @@ private fun EditorWorkspace(
     }
 }
 
+/** A live terminal instance shown in the Terminal-button long-press list. */
+private data class TerminalInstance(val id: String, val label: String)
+
 @Composable
 private fun WorkbenchTopBar(
     workspace: Workspace?,
@@ -2064,6 +2131,13 @@ private fun WorkbenchTopBar(
     onToggleRightSidebar: () -> Unit,
     onShowTerminal: () -> Unit,
     onRun: () -> Unit,
+    onStop: () -> Unit,
+    onRerun: () -> Unit,
+    isRunning: Boolean,
+    terminalBusy: Boolean,
+    terminalHasUnseen: Boolean,
+    terminalSessions: List<TerminalInstance>,
+    onOpenTerminalSession: (String) -> Unit,
     onSave: () -> Unit,
 ) {
     // Single row: navigation + title + quick actions. Per-file metrics (cursor, language, distro)
@@ -2132,16 +2206,49 @@ private fun WorkbenchTopBar(
                     )
                 }
             }
-            WorkbenchIconActionButton(
-                icon = jcIcon(JCodeIcon.Terminal),
-                contentDescription = "Terminal",
-                onClick = onShowTerminal,
-            )
-            WorkbenchIconActionButton(
-                icon = jcIcon(JCodeIcon.Run),
-                contentDescription = "Run",
-                onClick = onRun,
-            )
+            // Run toggles to Stop while a run is active; long-press opens the debug controls.
+            var runMenuOpen by remember { mutableStateOf(false) }
+            Box {
+                WorkbenchIconActionButton(
+                    icon = if (isRunning) jcIcon(JCodeIcon.Stop) else jcIcon(JCodeIcon.Run),
+                    contentDescription = if (isRunning) "Stop" else "Run",
+                    onClick = if (isRunning) onStop else onRun,
+                    active = isRunning,
+                    onLongClick = { runMenuOpen = true },
+                )
+                CompactContextMenu(
+                    expanded = runMenuOpen,
+                    onDismissRequest = { runMenuOpen = false },
+                    quickActions = listOf(
+                        // Step/continue need a debug engine (none yet); shown but disabled.
+                        ContextAction(JCodeIcon.Continue, "Continue", enabled = false) {},
+                        ContextAction(JCodeIcon.Rerun, "Rerun") { onRerun() },
+                        ContextAction(JCodeIcon.StepInto, "Step Into", enabled = false) {},
+                        ContextAction(JCodeIcon.StepOver, "Step Over", enabled = false) {},
+                        ContextAction(JCodeIcon.StepOut, "Step Out", enabled = false) {},
+                    ),
+                )
+            }
+            // Terminal shimmers while any session is busy; a dot badge flags new background instances;
+            // long-press lists the live instances and opens the right drawer on the chosen one.
+            var terminalMenuOpen by remember { mutableStateOf(false) }
+            Box {
+                WorkbenchIconActionButton(
+                    icon = jcIcon(JCodeIcon.Terminal),
+                    contentDescription = "Terminal",
+                    onClick = onShowTerminal,
+                    shimmer = terminalBusy,
+                    badge = terminalHasUnseen,
+                    onLongClick = { terminalMenuOpen = true },
+                )
+                CompactContextMenu(
+                    expanded = terminalMenuOpen && terminalSessions.isNotEmpty(),
+                    onDismissRequest = { terminalMenuOpen = false },
+                    listActions = terminalSessions.map { session ->
+                        ContextAction(JCodeIcon.Terminal, session.label) { onOpenTerminalSession(session.id) }
+                    },
+                )
+            }
             WorkbenchIconActionButton(
                 icon = jcIcon(JCodeIcon.Logs),
                 contentDescription = "Toggle right sidebar",

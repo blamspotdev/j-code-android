@@ -23,6 +23,7 @@ data class ContextAction(
     val icon: JCodeIcon,
     val label: String,
     val destructive: Boolean = false,
+    val enabled: Boolean = true,
     val onClick: () -> Unit,
 )
 
@@ -50,13 +51,17 @@ fun CompactContextMenu(
                     JcTooltip(action.label) {
                         IconButton(
                             onClick = { onDismissRequest(); action.onClick() },
+                            enabled = action.enabled,
                             modifier = Modifier.size(38.dp),
                         ) {
                             Icon(
                                 imageVector = jcIcon(action.icon),
                                 contentDescription = action.label,
-                                tint = if (action.destructive) MaterialTheme.colorScheme.error
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                tint = when {
+                                    !action.enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                    action.destructive -> MaterialTheme.colorScheme.error
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                },
                                 modifier = Modifier.size(18.dp),
                             )
                         }
@@ -71,10 +76,14 @@ fun CompactContextMenu(
             }
         }
         listActions.forEach { action ->
+            val disabledTint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onDismissRequest(); action.onClick() }
+                    .then(
+                        if (action.enabled) Modifier.clickable { onDismissRequest(); action.onClick() }
+                        else Modifier
+                    )
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -82,15 +91,21 @@ fun CompactContextMenu(
                 Icon(
                     imageVector = jcIcon(action.icon),
                     contentDescription = null,
-                    tint = if (action.destructive) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = when {
+                        !action.enabled -> disabledTint
+                        action.destructive -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                     modifier = Modifier.size(18.dp),
                 )
                 Text(
                     text = action.label,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (action.destructive) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onSurface,
+                    color = when {
+                        !action.enabled -> disabledTint
+                        action.destructive -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurface
+                    },
                 )
             }
         }
