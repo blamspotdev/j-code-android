@@ -6,14 +6,11 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -43,13 +40,12 @@ import dev.jcode.core.editor.EditorContextRequest
 import dev.jcode.core.editor.EditorLanguageAction
 import dev.jcode.core.editor.EditorView
 import dev.jcode.design.EditorKeyboardSettings
-import dev.jcode.design.SymbolBar
-import dev.jcode.design.SymbolBarAction
+import dev.jcode.design.InAppKeyboard
+import dev.jcode.design.KeyAction
 
 /**
  * Editor pane composable that hosts a tab strip and the active EditorView.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun EditorPane(
     group: EditorGroup,
@@ -62,8 +58,11 @@ fun EditorPane(
     editorKeyboard: EditorKeyboardSettings = EditorKeyboardSettings(),
     pageContent: @Composable (EditorTab) -> Unit = {},
 ) {
-    // The active editor view, lifted so the sibling symbol bar can drive it.
+    // The active editor view, lifted so the sibling in-app keyboard can drive it.
     var activeEditorView by remember { mutableStateOf<EditorView?>(null) }
+    // The in-app keyboard has no system IME insets, so it tracks its own visibility: shown when the
+    // editor is tapped, hidden via its ⌄ key or when the active editor goes away.
+    var inAppKbVisible by remember { mutableStateOf(false) }
 
     Column(modifier = modifier.clipToBounds()) {
         // Tab strip — explicit fixed height so it's never compressed
@@ -88,8 +87,12 @@ fun EditorPane(
                         editorState = editorState,
                         languageActionsEnabled = languageActionsEnabled,
                         onLanguageAction = onLanguageAction,
-                        suppressSuggestions = editorKeyboard.hideSuggestions,
-                        onEditorViewChanged = { activeEditorView = it },
+                        useInAppKeyboard = editorKeyboard.useInAppKeyboard,
+                        onEditorViewChanged = {
+                            activeEditorView = it
+                            if (it == null) inAppKbVisible = false
+                        },
+                        onKeyboardRequested = { inAppKbVisible = true },
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
@@ -117,22 +120,27 @@ fun EditorPane(
             }
         }
 
-        // Quick-insert symbol bar: shown whenever a file editor is open with the keyboard up.
-        val imeVisible = WindowInsets.isImeVisible
-        val showSymbolBar = editorKeyboard.showSymbolBar &&
-            imeVisible &&
+        // In-app keyboard: shown when enabled, the editor has been tapped, and a file is active.
+        val showKeyboard = editorKeyboard.useInAppKeyboard &&
+            inAppKbVisible &&
             activeTab?.editorState != null &&
             activeEditorView != null
-        if (showSymbolBar) {
-            SymbolBar(
-                symbols = editorKeyboard.symbolKeys,
+        if (showKeyboard) {
+            InAppKeyboard(
+                codeKeys = editorKeyboard.codeKeys,
                 onAction = { action ->
-                    val v = activeEditorView ?: return@SymbolBar
+                    val v = activeEditorView ?: return@InAppKeyboard
                     when (action) {
-                        is SymbolBarAction.Insert -> v.insertTextAtCaret(action.text)
-                        SymbolBarAction.Tab -> v.insertIndent()
-                        SymbolBarAction.Left -> v.moveCaretBy(-1)
-                        SymbolBarAction.Right -> v.moveCaretBy(1)
+                        is KeyAction.Text -> v.insertTextAtCaret(action.value)
+                        KeyAction.Backspace -> v.backspace()
+                        KeyAction.Enter -> v.insertTextAtCaret("\n")
+                        KeyAction.Space -> v.insertTextAtCaret(" ")
+                        KeyAction.Tab -> v.insertIndent()
+                        KeyAction.Left -> v.moveCaretBy(-1)
+                        KeyAction.Right -> v.moveCaretBy(1)
+                        KeyAction.Up -> v.moveCaretLineBy(-1)
+                        KeyAction.Down -> v.moveCaretLineBy(1)
+                        KeyAction.Hide -> inAppKbVisible = false
                     }
                 },
             )
@@ -246,8 +254,9 @@ fun EditorViewHost(
     modifier: Modifier = Modifier,
     languageActionsEnabled: Boolean = false,
     onLanguageAction: (EditorLanguageAction, String) -> Unit = { _, _ -> },
-    suppressSuggestions: Boolean = true,
+    useInAppKeyboard: Boolean = false,
     onEditorViewChanged: (EditorView?) -> Unit = {},
+    onKeyboardRequested: () -> Unit = {},
 ) {
     val density = LocalDensity.current
     var view by remember { mutableStateOf<EditorView?>(null) }
@@ -259,7 +268,8 @@ fun EditorViewHost(
                 EditorView(context).apply {
                     attach(editorState)
                     onContextRequest = { menu = it }
-                    this.suppressSuggestions = suppressSuggestions
+                    this.useInAppKeyboard = useInAppKeyboard
+                    onInAppKeyboardRequested = onKeyboardRequested
                     view = this
                     onEditorViewChanged(this)
                 }
@@ -268,12 +278,14 @@ fun EditorViewHost(
             update = { v ->
                 v.attach(editorState)
                 v.onContextRequest = { menu = it }
-                v.suppressSuggestions = suppressSuggestions
+                v.useInAppKeyboard = useInAppKeyboard
+                v.onInAppKeyboardRequested = onKeyboardRequested
                 view = v
                 onEditorViewChanged(v)
             },
             onRelease = {
                 onEditorViewChanged(null)
+                it.onInAppKeyboardRequested = null
                 it.detach()
             },
         )

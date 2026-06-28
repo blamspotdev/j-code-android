@@ -56,7 +56,7 @@ import dev.jcode.design.EditorKeyboardSettings
 import dev.jcode.design.IconBundle
 import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.JCodeIcon
-import dev.jcode.design.SymbolBarDefaults
+import dev.jcode.design.KeyboardDefaults
 import dev.jcode.design.ThemeBundleRegistry
 import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.design.ThemeMode
@@ -371,28 +371,22 @@ object SettingsFeature {
             SettingsCard(
                 title = "Soft keyboard",
                 description = "Tune the on-screen keyboard for coding. Applies app-wide.",
-                keywords = "suggestions autocorrect symbol bar keys tab arrows",
+                keywords = "keyboard ime gboard suggestions symbol code keys tab arrows in-app",
             ) {
                 ToggleRow(
-                    label = "Hide keyboard suggestions",
-                    supporting = "Drops the keyboard's autocorrect/suggestion strip in the editor (recommended for code).",
-                    checked = editorKeyboard.hideSuggestions,
-                    onCheckedChange = { editorKeyboard.onChange(editorKeyboard.copy(hideSuggestions = it)) },
+                    label = "Use in-app keyboard",
+                    supporting = "Type with the app's own code keyboard instead of the system keyboard — no autocorrect or suggestion strip, with code symbols and Tab/arrows built in. More layouts via extensions later.",
+                    checked = editorKeyboard.useInAppKeyboard,
+                    onCheckedChange = { editorKeyboard.onChange(editorKeyboard.copy(useInAppKeyboard = it)) },
                 )
-                ToggleRow(
-                    label = "Show symbol bar",
-                    supporting = "A quick-access row of code symbols (plus Tab and arrows) above the keyboard.",
-                    checked = editorKeyboard.showSymbolBar,
-                    onCheckedChange = { editorKeyboard.onChange(editorKeyboard.copy(showSymbolBar = it)) },
-                )
-                if (editorKeyboard.showSymbolBar) {
+                if (editorKeyboard.useInAppKeyboard) {
                     OptionRow(
-                        label = "Symbol bar keys",
-                        supporting = "Tap × to remove. Tab and arrow keys are always included.",
+                        label = "Code symbol row",
+                        supporting = "The customizable symbol row across the top of the keyboard. Tap × to remove. Tab and arrow keys are always included.",
                     ) {
                         SymbolKeysEditor(
-                            keys = editorKeyboard.symbolKeys,
-                            onChange = { editorKeyboard.onChange(editorKeyboard.copy(symbolKeys = it)) },
+                            keys = editorKeyboard.codeKeys,
+                            onChange = { editorKeyboard.onChange(editorKeyboard.copy(codeKeys = it)) },
                         )
                     }
                 }
@@ -749,7 +743,7 @@ private fun SymbolKeysEditor(
                 enabled = newKey.isNotBlank(),
             ) { Text("Add") }
         }
-        OutlinedButton(onClick = { onChange(SymbolBarDefaults.symbols) }) {
+        OutlinedButton(onClick = { onChange(KeyboardDefaults.codeKeys) }) {
             Text("Reset to defaults")
         }
     }

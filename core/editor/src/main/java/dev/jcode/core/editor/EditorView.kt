@@ -61,23 +61,32 @@ class EditorView @JvmOverloads constructor(
      *  context menu. [EditorContextRequest.word] is empty when the press wasn't on a word. */
     var onContextRequest: ((EditorContextRequest) -> Unit)? = null
 
-    /** When true, the IME is asked to drop its suggestion/autocorrect strip (code-editor mode).
-     *  Flipping it while focused rebuilds the input connection so the change takes effect at once. */
-    var suppressSuggestions: Boolean = true
+    /** When true, the system IME is suppressed and input comes from the app's own on-screen
+     *  keyboard instead (driven via the public insert/caret methods). Flipping it while focused
+     *  hides the system keyboard. */
+    var useInAppKeyboard: Boolean = false
         set(value) {
             if (field == value) return
             field = value
-            if (isFocused) imm().restartInput(this)
+            if (value && isFocused) imm().hideSoftInputFromWindow(windowToken, 0)
         }
+
+    /** Invoked when the editor is tapped while [useInAppKeyboard] is on, so the host can show the
+     *  in-app keyboard (the system keyboard is never raised in that mode). */
+    var onInAppKeyboardRequested: (() -> Unit)? = null
 
     private val gestureDetector = GestureDetector(
         context,
         object : GestureDetector.SimpleOnGestureListener() {
             override fun onSingleTapUp(e: MotionEvent): Boolean {
-                // Tapping the editor should focus it and raise the soft keyboard so the file is
-                // editable (placing the caret happens on ACTION_DOWN in onTouchEvent).
+                // Tapping the editor focuses it and raises a keyboard so the file is editable
+                // (placing the caret happens on ACTION_DOWN in onTouchEvent).
                 this@EditorView.requestFocus()
-                this@EditorView.showKeyboard()
+                if (useInAppKeyboard) {
+                    onInAppKeyboardRequested?.invoke()
+                } else {
+                    this@EditorView.showKeyboard()
+                }
                 return true
             }
 
@@ -188,7 +197,8 @@ class EditorView @JvmOverloads constructor(
                 // The caret moved out from under the IME; restart input so it re-reads the new
                 // cursor (via onCreateInputConnection's initialSel) and drops any stale composing
                 // region. Without this the IME edits against a stale model and corrupts the buffer.
-                imm().restartInput(this)
+                // (Only relevant when the system IME is in use — the in-app keyboard never composes.)
+                if (!useInAppKeyboard) imm().restartInput(this)
             }
             return true
         }
@@ -408,7 +418,7 @@ class EditorView @JvmOverloads constructor(
         updateImeCursor()
     }
 
-    /** Insert [text] at the caret. Used by the symbol bar (a sibling Compose view). */
+    /** Insert [text] at the caret. Used by the in-app keyboard (a sibling Compose view). */
     fun insertTextAtCaret(text: String) {
         val state = editorState ?: return
         insertAtCaret(state, text)
@@ -421,29 +431,37 @@ class EditorView @JvmOverloads constructor(
         insertAtCaret(state, " ".repeat(width))
     }
 
+    /** Delete one character before the caret (or the selection). Used by the in-app keyboard. */
+    fun backspace() {
+        val state = editorState ?: return
+        deleteAtCaret(state, forward = false)
+    }
+
     /** Move the caret one character left ([dir] < 0) or right ([dir] > 0). */
     fun moveCaretBy(dir: Int) {
         val state = editorState ?: return
         moveCaret(state, dir)
     }
 
+    /** Move the caret one line up ([dir] < 0) or down ([dir] > 0). */
+    fun moveCaretLineBy(dir: Int) {
+        val state = editorState ?: return
+        moveCaretLine(state, dir)
+    }
+
     // Without this the IME framework treats the view as non-editable and never opens an input
-    // connection, so the soft keyboard does nothing.
-    override fun onCheckIsTextEditor(): Boolean = true
+    // connection, so the system soft keyboard does nothing. Suppressed entirely when the in-app
+    // keyboard is active (input then comes through the public insert/caret methods).
+    override fun onCheckIsTextEditor(): Boolean = !useInAppKeyboard
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        // When suppressing suggestions, VISIBLE_PASSWORD makes the IME commit each keystroke
-        // directly (no autocorrect, no composing region) — essential for a code editor, since
-        // composing edits against the IME's own stale cursor model corrupt the buffer. When the user
-        // opts back into suggestions, fall back to a plain multi-line text field.
-        val baseInputType = EditorInfo.TYPE_CLASS_TEXT or EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE
-        outAttrs.inputType = if (suppressSuggestions) {
-            baseInputType or
-                EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
-                EditorInfo.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
-        } else {
-            baseInputType
-        }
+        // VISIBLE_PASSWORD makes the system IME commit each keystroke directly (no autocorrect, no
+        // composing region) — essential for a code editor, since composing edits against the IME's
+        // own stale cursor model corrupt the buffer. (Reached only when the in-app keyboard is off.)
+        outAttrs.inputType = EditorInfo.TYPE_CLASS_TEXT or
+            EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE or
+            EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
+            EditorInfo.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
         outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or
             EditorInfo.IME_FLAG_NO_FULLSCREEN or
             EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or

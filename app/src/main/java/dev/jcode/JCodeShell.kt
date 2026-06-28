@@ -235,14 +235,12 @@ fun JCodeApp(
     val formatterId by viewModel.formatterId.collectAsStateWithLifecycle()
     val railToolOrder by viewModel.railToolOrder.collectAsStateWithLifecycle()
     val terminalDoubleTapToFocus by viewModel.terminalDoubleTapToFocus.collectAsStateWithLifecycle()
-    val editorHideSuggestions by viewModel.editorHideSuggestions.collectAsStateWithLifecycle()
-    val editorShowSymbolBar by viewModel.editorShowSymbolBar.collectAsStateWithLifecycle()
-    val editorSymbolKeys by viewModel.editorSymbolKeys.collectAsStateWithLifecycle()
+    val editorUseInAppKeyboard by viewModel.editorUseInAppKeyboard.collectAsStateWithLifecycle()
+    val editorCodeKeys by viewModel.editorCodeKeys.collectAsStateWithLifecycle()
     val editorKeyboard = EditorKeyboardSettings(
-        hideSuggestions = editorHideSuggestions,
-        showSymbolBar = editorShowSymbolBar,
-        symbolKeys = editorSymbolKeys,
-        onChange = { viewModel.setEditorKeyboard(it.hideSuggestions, it.showSymbolBar, it.symbolKeys) },
+        useInAppKeyboard = editorUseInAppKeyboard,
+        codeKeys = editorCodeKeys,
+        onChange = { viewModel.setEditorKeyboard(it.useInAppKeyboard, it.codeKeys) },
     )
     val tapContext = LocalContext.current
     val terminalTapConfig = TerminalTapConfig(
