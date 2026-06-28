@@ -10,24 +10,34 @@ import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.BuildCircle
 import androidx.compose.material.icons.rounded.Circle
+import androidx.compose.material.icons.rounded.ClearAll
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.DatasetLinked
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.DriveFileRenameOutline
+import androidx.compose.material.icons.rounded.FileOpen
+import androidx.compose.material.icons.rounded.FormatAlignLeft
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.IntegrationInstructions
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.ManageSearch
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.NoteAdd
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Source
 import androidx.compose.material.icons.rounded.Stop
@@ -51,6 +61,7 @@ enum class JCodeIcon {
     Add, Close, Refresh, Paste, Collapse, MoreVert, Save,
     Output, Logs, Problems, Radar,
     DropDown, ChevronDown, ChevronRight, ArrowUp, MenuToggle, Help,
+    Copy, Cut, Delete, Open, Rename, SelectAll, Clear, Definition, References, Format,
 }
 
 /**
@@ -110,6 +121,16 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.ArrowUp to Icons.Rounded.ArrowUpward,
         JCodeIcon.MenuToggle to Icons.AutoMirrored.Rounded.MenuOpen,
         JCodeIcon.Help to Icons.AutoMirrored.Rounded.HelpOutline,
+        JCodeIcon.Copy to Icons.Rounded.ContentCopy,
+        JCodeIcon.Cut to Icons.Rounded.ContentCut,
+        JCodeIcon.Delete to Icons.Rounded.DeleteOutline,
+        JCodeIcon.Open to Icons.Rounded.FileOpen,
+        JCodeIcon.Rename to Icons.Rounded.DriveFileRenameOutline,
+        JCodeIcon.SelectAll to Icons.Rounded.SelectAll,
+        JCodeIcon.Clear to Icons.Rounded.ClearAll,
+        JCodeIcon.Definition to Icons.Rounded.MyLocation,
+        JCodeIcon.References to Icons.Rounded.ManageSearch,
+        JCodeIcon.Format to Icons.Rounded.FormatAlignLeft,
     ),
 )
 

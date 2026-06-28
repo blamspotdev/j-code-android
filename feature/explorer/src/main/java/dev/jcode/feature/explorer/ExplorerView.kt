@@ -29,8 +29,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -57,6 +55,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.jcode.design.CompactContextMenu
+import dev.jcode.design.ContextAction
 import dev.jcode.design.DenseRow
 import dev.jcode.design.LocalDensityMode
 import dev.jcode.design.LocalIconSize
@@ -336,23 +336,23 @@ private fun RowOverflowMenu(
                 modifier = Modifier.size(18.dp),
             )
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
-            fun act(a: RowAction) {
-                onExpandedChange(false)
-                onAction(row, a)
-            }
-            if (!isDir) {
-                DropdownMenuItem(text = { Text("Open") }, onClick = { act(RowAction.Open) })
-            }
-            if (isDir) {
-                DropdownMenuItem(text = { Text("New File…") }, onClick = { act(RowAction.NewFile) })
-                DropdownMenuItem(text = { Text("New Folder…") }, onClick = { act(RowAction.NewFolder) })
-            }
-            DropdownMenuItem(text = { Text("Rename…") }, onClick = { act(RowAction.Rename) })
-            DropdownMenuItem(text = { Text("Copy") }, onClick = { act(RowAction.Copy) })
-            DropdownMenuItem(text = { Text("Cut") }, onClick = { act(RowAction.Cut) })
-            DropdownMenuItem(text = { Text("Delete") }, onClick = { act(RowAction.Delete) })
-        }
+        CompactContextMenu(
+            expanded = expanded,
+            onDismissRequest = { onExpandedChange(false) },
+            quickActions = listOf(
+                ContextAction(JCodeIcon.Copy, "Copy") { onAction(row, RowAction.Copy) },
+                ContextAction(JCodeIcon.Cut, "Cut") { onAction(row, RowAction.Cut) },
+                ContextAction(JCodeIcon.Rename, "Rename") { onAction(row, RowAction.Rename) },
+                ContextAction(JCodeIcon.Delete, "Delete", destructive = true) { onAction(row, RowAction.Delete) },
+            ),
+            listActions = buildList {
+                if (!isDir) add(ContextAction(JCodeIcon.Open, "Open") { onAction(row, RowAction.Open) })
+                if (isDir) {
+                    add(ContextAction(JCodeIcon.NewFile, "New file") { onAction(row, RowAction.NewFile) })
+                    add(ContextAction(JCodeIcon.NewFolder, "New folder") { onAction(row, RowAction.NewFolder) })
+                }
+            },
+        )
     }
 }
 

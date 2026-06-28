@@ -2,6 +2,8 @@ package dev.jcode
 import androidx.compose.foundation.isSystemInDarkTheme
 import dev.jcode.core.editor.EditorLanguageAction
 import dev.jcode.core.editor.decor.Layer
+import dev.jcode.design.CompactContextMenu
+import dev.jcode.design.ContextAction
 import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.JCodeIcon
 import dev.jcode.editor.SyntaxHighlighter
@@ -62,8 +64,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -122,6 +122,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -1617,21 +1618,16 @@ private fun WorkspaceHeader(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                DropdownMenu(
+                CompactContextMenu(
                     expanded = menuExpanded,
                     onDismissRequest = { menuExpanded = false },
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(if (inUserWorkspace) "Close workspace" else "Close project") },
-                        leadingIcon = {
-                            Icon(imageVector = jcIcon(JCodeIcon.Close), contentDescription = null)
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            if (inUserWorkspace) onCloseWorkspace() else onCloseProject()
-                        },
-                    )
-                }
+                    listActions = listOf(
+                        ContextAction(
+                            JCodeIcon.Close,
+                            if (inUserWorkspace) "Close workspace" else "Close project",
+                        ) { if (inUserWorkspace) onCloseWorkspace() else onCloseProject() },
+                    ),
+                )
             }
 
             WorkbenchIconActionButton(
@@ -1844,27 +1840,18 @@ private fun ProjectRoster(
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            DropdownMenu(
+                            CompactContextMenu(
                                 expanded = openMenuId == project.id,
                                 onDismissRequest = { openMenuId = null },
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text(if (isWorkspace) "Open workspace" else "Open") },
-                                    onClick = { openMenuId = null; onOpenProject(project) },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Rename") },
-                                    onClick = { openMenuId = null; renameTarget = project },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Remove") },
-                                    onClick = { openMenuId = null; onRemoveProject(project.id) },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Project settings") },
-                                    onClick = { openMenuId = null; onOpenProjectSettings(project.id) },
-                                )
-                            }
+                                quickActions = listOf(
+                                    ContextAction(JCodeIcon.Rename, "Rename") { renameTarget = project },
+                                    ContextAction(JCodeIcon.Delete, "Remove", destructive = true) { onRemoveProject(project.id) },
+                                ),
+                                listActions = listOf(
+                                    ContextAction(JCodeIcon.Open, if (isWorkspace) "Open workspace" else "Open") { onOpenProject(project) },
+                                    ContextAction(JCodeIcon.Settings, "Project settings") { onOpenProjectSettings(project.id) },
+                                ),
+                            )
                         }
                     }
                 }
@@ -2352,36 +2339,24 @@ private fun TerminalSidebarContent(
                             }
                         }
                     }
-                    DropdownMenu(
+                    CompactContextMenu(
                         expanded = menuForId == sessionId,
                         onDismissRequest = { menuForId = null },
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Clear") },
-                            onClick = {
+                        quickActions = listOf(
+                            ContextAction(JCodeIcon.Close, "Close") { onRemoveTerminalSession(sessionId) },
+                        ),
+                        listActions = listOf(
+                            ContextAction(JCodeIcon.Clear, "Clear") {
                                 terminalSessionFor(sessionId)?.pty?.write(byteArrayOf(0x0C))
-                                menuForId = null
                             },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Close") },
-                            onClick = { menuForId = null; onRemoveTerminalSession(sessionId) },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Close others") },
-                            onClick = {
-                                menuForId = null
+                            ContextAction(JCodeIcon.Close, "Close others") {
                                 terminalSessionIds.filter { it != sessionId }.forEach(onRemoveTerminalSession)
                             },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Close all") },
-                            onClick = {
-                                menuForId = null
+                            ContextAction(JCodeIcon.Close, "Close all") {
                                 terminalSessionIds.toList().forEach(onRemoveTerminalSession)
                             },
-                        )
-                    }
+                        ),
+                    )
                 }
             }
             Surface(
@@ -2440,6 +2415,7 @@ private fun TerminalSidebarContent(
             // stay attached (still reading their output) but transparent and behind it. Switching tabs
             // is instant and every session keeps its own independent content.
             val tapConfig = LocalTerminalTapConfig.current
+            var termMenu by remember { mutableStateOf<TerminalMenuRequest?>(null) }
             Box(modifier = Modifier.fillMaxSize()) {
                 terminalSessionIds.forEach { sessionId ->
                     val session = terminalSessionFor(sessionId) ?: return@forEach
@@ -2451,12 +2427,14 @@ private fun TerminalSidebarContent(
                                     setFontSize(30f)
                                     doubleTapToFocus = tapConfig.doubleTapToFocus
                                     onTapToken = tapConfig.onToken
+                                    onContextMenu = { x, y -> termMenu = TerminalMenuRequest(x, y, this) }
                                     bind(session)
                                 }
                             },
                             update = { view ->
                                 view.doubleTapToFocus = tapConfig.doubleTapToFocus
                                 view.onTapToken = tapConfig.onToken
+                                view.onContextMenu = { x, y -> termMenu = TerminalMenuRequest(x, y, view) }
                                 view.bind(session) // no-op if already bound to this session
                                 view.setActive(isActive)
                             },
@@ -2466,6 +2444,22 @@ private fun TerminalSidebarContent(
                                 .alpha(if (isActive) 1f else 0f),
                         )
                     }
+                }
+                termMenu?.let { req ->
+                    val menuOffset = with(LocalDensity.current) { DpOffset(req.x.toDp(), req.y.toDp()) }
+                    CompactContextMenu(
+                        expanded = true,
+                        onDismissRequest = { termMenu = null },
+                        offset = menuOffset,
+                        quickActions = listOf(
+                            ContextAction(JCodeIcon.Paste, "Paste") { req.view.contextPaste() },
+                        ),
+                        listActions = listOf(
+                            ContextAction(JCodeIcon.SelectAll, "Select text") { req.view.contextArmSelection() },
+                            ContextAction(JCodeIcon.SelectAll, "Select all") { req.view.contextSelectAll() },
+                            ContextAction(JCodeIcon.Clear, "Clear") { req.view.contextClear() },
+                        ),
+                    )
                 }
             }
         } else {
@@ -2790,3 +2784,10 @@ private fun WorkbenchBackHandler(
         }
     }
 }
+
+/** Pending terminal long-press menu: the touch point (view px) and the view to act on. */
+private data class TerminalMenuRequest(
+    val x: Float,
+    val y: Float,
+    val view: dev.jcode.core.term.TerminalView,
+)

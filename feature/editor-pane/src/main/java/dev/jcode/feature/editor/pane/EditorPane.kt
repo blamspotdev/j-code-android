@@ -14,9 +14,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -30,7 +27,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.DpOffset
@@ -39,6 +35,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import dev.jcode.core.editor.EditorContextRequest
 import dev.jcode.core.editor.EditorLanguageAction
 import dev.jcode.core.editor.EditorView
+import dev.jcode.design.CompactContextMenu
+import dev.jcode.design.ContextAction
+import dev.jcode.design.JCodeIcon
 /**
  * Editor pane composable that hosts a tab strip and the active EditorView.
  */
@@ -241,29 +240,35 @@ fun EditorViewHost(
 
         menu?.let { req ->
             val offset = with(density) { DpOffset(req.xPx.toDp(), req.yPx.toDp()) }
-            DropdownMenu(
+            CompactContextMenu(
                 expanded = true,
                 onDismissRequest = { menu = null },
                 offset = offset,
-            ) {
-                DropdownMenuItem(text = { Text("Copy") }, onClick = { view?.copySelection(); menu = null })
-                DropdownMenuItem(text = { Text("Cut") }, onClick = { view?.cutSelection(); menu = null })
-                DropdownMenuItem(text = { Text("Paste") }, onClick = { view?.pasteClipboard(); menu = null })
-                DropdownMenuItem(text = { Text("Select all") }, onClick = { view?.selectAll(); menu = null })
-                if (languageActionsEnabled) {
-                    HorizontalDivider()
-                    EditorLanguageAction.entries.forEach { action ->
-                        DropdownMenuItem(
-                            text = { Text(action.label) },
-                            onClick = { onLanguageAction(action, req.word); menu = null },
-                        )
+                quickActions = listOf(
+                    ContextAction(JCodeIcon.Copy, "Copy") { view?.copySelection() },
+                    ContextAction(JCodeIcon.Cut, "Cut") { view?.cutSelection() },
+                    ContextAction(JCodeIcon.Paste, "Paste") { view?.pasteClipboard() },
+                ),
+                listActions = buildList {
+                    add(ContextAction(JCodeIcon.SelectAll, "Select all") { view?.selectAll() })
+                    if (languageActionsEnabled) {
+                        EditorLanguageAction.entries.forEach { action ->
+                            add(ContextAction(action.menuIcon(), action.label) { onLanguageAction(action, req.word) })
+                        }
                     }
-                }
-            }
+                },
+            )
         }
     }
 
     DisposableEffect(editorState) {
         onDispose { /* EditorState lifecycle managed by EditorTab */ }
     }
+}
+
+private fun EditorLanguageAction.menuIcon(): JCodeIcon = when (this) {
+    EditorLanguageAction.GoToDefinition -> JCodeIcon.Definition
+    EditorLanguageAction.FindReferences -> JCodeIcon.References
+    EditorLanguageAction.RenameSymbol -> JCodeIcon.Rename
+    EditorLanguageAction.FormatSelection -> JCodeIcon.Format
 }

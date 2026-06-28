@@ -59,6 +59,9 @@ class TerminalView @JvmOverloads constructor(
     // Invoked on the main thread with the contiguous token under a confirmed single tap, so the host
     // can open it as a URL (browser) or file path (editor).
     var onTapToken: ((String) -> Unit)? = null
+    // Invoked (with the touch point in view pixels) when a long-press requests the action menu, so the
+    // host can render the shared compact context menu instead of a native PopupMenu.
+    var onContextMenu: ((Float, Float) -> Unit)? = null
     private var selectionStartRow = 0
     private var selectionStartCol = 0
     private var selectionEndRow = 0
@@ -72,10 +75,10 @@ class TerminalView @JvmOverloads constructor(
     // Gesture detector: long-press selection, vertical pan to scroll history, tap to focus.
     private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onLongPress(e: MotionEvent) {
-            // Show the action menu. "Select text" arms drag-selection for the next touch; while armed
-            // or already selecting, a long-press shouldn't re-open the menu.
+            // Request the action menu. "Select text" arms drag-selection for the next touch; while
+            // armed or already selecting, a long-press shouldn't re-open the menu.
             if (isSelecting || selectionArmed) return
-            showTerminalMenu()
+            onContextMenu?.invoke(e.x, e.y)
         }
 
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
@@ -296,24 +299,17 @@ class TerminalView @JvmOverloads constructor(
         }
     }
 
-    /** Long-press action menu for the terminal content. */
-    private fun showTerminalMenu() {
-        val menu = android.widget.PopupMenu(context, this)
-        menu.menu.add(0, 1, 0, "Select text")
-        menu.menu.add(0, 2, 1, "Select all")
-        menu.menu.add(0, 3, 2, "Paste")
-        menu.menu.add(0, 4, 3, "Clear")
-        menu.setOnMenuItemClickListener { item ->
-            when (item.itemId) {
-                1 -> { selectionArmed = true; toast("Drag to select text"); true }
-                2 -> { selectAllAndCopy(); true }
-                3 -> { pasteFromClipboard(); true }
-                4 -> { clearScreen(); true }
-                else -> false
-            }
-        }
-        menu.show()
+    /** Actions for the host-rendered long-press menu (see [onContextMenu]). */
+    fun contextArmSelection() {
+        selectionArmed = true
+        toast("Drag to select text")
     }
+
+    fun contextSelectAll() = selectAllAndCopy()
+
+    fun contextPaste() = pasteFromClipboard()
+
+    fun contextClear() = clearScreen()
 
     /** Paste clipboard text into the terminal (written to the PTY as keyboard input). */
     private fun pasteFromClipboard() {
