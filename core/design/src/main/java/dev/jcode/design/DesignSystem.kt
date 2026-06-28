@@ -56,6 +56,20 @@ class TabCloseButtonSetting(
 
 val LocalTabCloseButtonSetting = compositionLocalOf { TabCloseButtonSetting() }
 
+/**
+ * Editor save-related actions, shared (via [LocalEditorSaveActions]) with the top bar's Save button so
+ * its long-press menu can offer them without threading callbacks as params (JCodeShell is at the ART
+ * verifier's register limit). Each defaults to a no-op.
+ */
+class EditorSaveActions(
+    val onUndo: () -> Unit = {},
+    val onRedo: () -> Unit = {},
+    val onDiscard: () -> Unit = {},
+    val onSaveAll: () -> Unit = {},
+)
+
+val LocalEditorSaveActions = compositionLocalOf { EditorSaveActions() }
+
 val JetBrainsMonoFontFamily: FontFamily
     @Composable get() = FontFamily.Monospace
 

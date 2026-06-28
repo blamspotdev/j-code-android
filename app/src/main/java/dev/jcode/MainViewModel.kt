@@ -16,7 +16,9 @@ import dev.jcode.backend.SessionRegistry
 import dev.jcode.core.config.ConfigScope
 import dev.jcode.core.config.ConfigService
 import dev.jcode.core.config.ConfigServiceLocator
+import dev.jcode.core.buffer.EditTx
 import dev.jcode.core.config.EffectiveConfig
+import dev.jcode.core.editor.Caret
 import dev.jcode.core.distro.DistroProfile
 import dev.jcode.core.distro.DistroWizardProgress
 import dev.jcode.core.distro.LspCatalogAction
@@ -870,6 +872,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Save the active editor tab's buffer to disk (Ctrl+S / top-bar Save). */
     fun saveActiveTab() {
         _editorGroup.value.activeTab?.let { saveTab(it) }
+    }
+
+    /** Save every open tab with unsaved changes (Save button long-press → Save all). */
+    fun saveAllTabs() {
+        val dirty = _editorGroup.value.tabs.filter { it.isDirty && it.editorState != null }
+        if (dirty.isEmpty()) {
+            viewModelScope.launch { emitMessage("No unsaved changes") }
+            return
+        }
+        dirty.forEach { saveTab(it) }
+    }
+
+    /** Undo the last edit in the active editor (Save button long-press → Undo). */
+    fun undoActiveTab() {
+        _editorGroup.value.activeTab?.editorState?.undoManager?.undo()
+    }
+
+    /** Redo the last undone edit in the active editor (Save button long-press → Redo). */
+    fun redoActiveTab() {
+        _editorGroup.value.activeTab?.editorState?.undoManager?.redo()
+    }
+
+    /** Reload the active tab from disk, throwing away its unsaved edits (Save long-press → Discard). */
+    fun discardActiveTab() {
+        val tab = _editorGroup.value.activeTab ?: return
+        val state = tab.editorState ?: return
+        if (!tab.isDirty) return
+        val file = tab.filePath
+        if (file.path.isBlank()) {
+            viewModelScope.launch { emitMessage("Can't discard \"${tab.title}\": unsupported file source") }
+            return
+        }
+        viewModelScope.launch {
+            val bytes = runCatching {
+                withContext(Dispatchers.IO) { workspaceManager.fsFor(FsPath.Local(file)).read(FsPath.Local(file)) }
+            }.getOrElse {
+                emitMessage("Failed to discard ${tab.title}: ${it.message ?: "error"}")
+                return@launch
+            }
+            val text = bytes.toString(Charsets.UTF_8)
+            val length = state.snapshot.value.byteLength
+            if (length > 0) state.applyEdit(EditTx.delete(0, length))
+            if (text.isNotEmpty()) state.applyEdit(EditTx.insert(0, text))
+            state.setSelection(listOf(Caret(0, 0)))
+            state.undoManager?.clear()
+            state.markClean()
+            emitMessage("Discarded changes in ${tab.title}")
+        }
     }
 
     private fun saveTab(tab: EditorTab) {

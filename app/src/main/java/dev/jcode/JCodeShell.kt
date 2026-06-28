@@ -4,7 +4,9 @@ import dev.jcode.core.editor.EditorLanguageAction
 import dev.jcode.core.editor.decor.Layer
 import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
+import dev.jcode.design.EditorSaveActions
 import dev.jcode.design.IconBundleRegistry
+import dev.jcode.design.LocalEditorSaveActions
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.JcTooltip
 import dev.jcode.design.LocalTabCloseButtonSetting
@@ -241,6 +243,14 @@ fun JCodeApp(
     val tabCloseSetting = remember(hideTabCloseButton) {
         TabCloseButtonSetting(hideTabCloseButton, viewModel::setHideTabCloseButton)
     }
+    val editorSaveActions = remember(viewModel) {
+        EditorSaveActions(
+            onUndo = viewModel::undoActiveTab,
+            onRedo = viewModel::redoActiveTab,
+            onDiscard = viewModel::discardActiveTab,
+            onSaveAll = viewModel::saveAllTabs,
+        )
+    }
     StatusBarKeyboardController(enabled = hideStatusBarWithKeyboard)
     val tapContext = LocalContext.current
     val terminalTapConfig = TerminalTapConfig(
@@ -282,6 +292,7 @@ fun JCodeApp(
     CompositionLocalProvider(
         LocalTerminalTapConfig provides terminalTapConfig,
         LocalTabCloseButtonSetting provides tabCloseSetting,
+        LocalEditorSaveActions provides editorSaveActions,
     ) {
     JCodeShell(
         modifier = modifier,
@@ -1291,6 +1302,7 @@ private fun WorkbenchIconActionButton(
     contentDescription: String,
     onClick: () -> Unit,
     active: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
 ) {
     val containerColor = if (active) {
         MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
@@ -1308,7 +1320,13 @@ private fun WorkbenchIconActionButton(
             modifier = Modifier
                 .size(32.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .clickable(onClick = onClick),
+                .then(
+                    if (onLongClick != null) {
+                        Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                    } else {
+                        Modifier.clickable(onClick = onClick)
+                    }
+                ),
             shape = RoundedCornerShape(10.dp),
             color = containerColor,
         ) {
@@ -2075,12 +2093,27 @@ private fun WorkbenchTopBar(
             }
 
             if (activeTab?.editorState != null) {
-                WorkbenchIconActionButton(
-                    icon = jcIcon(JCodeIcon.Save),
-                    contentDescription = if (activeTab.isDirty) "Save (unsaved changes)" else "Save",
-                    onClick = onSave,
-                    active = activeTab.isDirty,
-                )
+                val saveActions = LocalEditorSaveActions.current
+                var saveMenuOpen by remember { mutableStateOf(false) }
+                Box {
+                    WorkbenchIconActionButton(
+                        icon = jcIcon(JCodeIcon.Save),
+                        contentDescription = if (activeTab.isDirty) "Save (unsaved changes)" else "Save",
+                        onClick = onSave,
+                        active = activeTab.isDirty,
+                        onLongClick = { saveMenuOpen = true },
+                    )
+                    CompactContextMenu(
+                        expanded = saveMenuOpen,
+                        onDismissRequest = { saveMenuOpen = false },
+                        quickActions = listOf(
+                            ContextAction(JCodeIcon.Undo, "Undo") { saveActions.onUndo() },
+                            ContextAction(JCodeIcon.Redo, "Redo") { saveActions.onRedo() },
+                            ContextAction(JCodeIcon.Discard, "Discard", destructive = true) { saveActions.onDiscard() },
+                            ContextAction(JCodeIcon.Save, "Save all") { saveActions.onSaveAll() },
+                        ),
+                    )
+                }
             }
             WorkbenchIconActionButton(
                 icon = jcIcon(JCodeIcon.Terminal),
