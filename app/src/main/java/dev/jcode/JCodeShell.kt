@@ -1222,7 +1222,11 @@ private fun JCodeShell(
         }
     }
 
-    val showInAppKeyboard = editorKeyboard.useInAppKeyboard && inAppKeyboard.visible
+    // Suppress the on-screen keyboard when a real text keyboard is attached — hardware keys reach the
+    // editor through dispatchKeyEvent regardless (game controllers don't count: hasTextKeyboard).
+    val showInAppKeyboard = editorKeyboard.useInAppKeyboard &&
+        inAppKeyboard.visible &&
+        !windowInfo.hasTextKeyboard
     var inAppKeyboardHeight by remember { mutableStateOf(0.dp) }
     val rootDensity = LocalDensity.current
     CompositionLocalProvider(LocalInAppKeyboard provides inAppKeyboard) {
