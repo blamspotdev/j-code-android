@@ -155,6 +155,10 @@ class EditorState(
     private val _events = MutableSharedFlow<EditorEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<EditorEvent> = _events.asSharedFlow()
 
+    private val _dirty = MutableStateFlow(false)
+    /** True when the buffer has unsaved edits since it was opened or last saved. */
+    val dirty: StateFlow<Boolean> = _dirty.asStateFlow()
+
     /** Read-only flag for large files or explicit lock. */
     var readOnly: Boolean = false
 
@@ -172,6 +176,7 @@ class EditorState(
         val oldSnapshot = _snapshot.value
         val newSnapshot = bufferRef.applyEdit(tx)
         _snapshot.value = newSnapshot
+        _dirty.value = true
 
         // Compute changed range for events
         var rangeStart = Int.MAX_VALUE
@@ -256,6 +261,11 @@ class EditorState(
     /** Set the language descriptor. */
     fun setLanguage(descriptor: LanguageDescriptor?) {
         _language.value = descriptor
+    }
+
+    /** Mark the buffer as persisted (no unsaved edits). Call after a successful write to disk. */
+    fun markClean() {
+        _dirty.value = false
     }
 
     /** Update render config. */

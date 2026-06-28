@@ -61,6 +61,9 @@ class EditorView @JvmOverloads constructor(
      *  context menu. [EditorContextRequest.word] is empty when the press wasn't on a word. */
     var onContextRequest: ((EditorContextRequest) -> Unit)? = null
 
+    /** Invoked when the user requests a save (Ctrl+S); the host writes the buffer to disk. */
+    var onSaveRequest: (() -> Unit)? = null
+
     private val gestureDetector = GestureDetector(
         context,
         object : GestureDetector.SimpleOnGestureListener() {
@@ -298,6 +301,12 @@ class EditorView @JvmOverloads constructor(
             if (event.action == KeyEvent.ACTION_DOWN) {
                 if (event.isShiftPressed) state.undoManager?.redo() else state.undoManager?.undo()
             }
+            return true
+        }
+
+        // Ctrl+S to save the buffer to disk
+        if (event.isCtrlPressed && event.keyCode == KeyEvent.KEYCODE_S) {
+            if (event.action == KeyEvent.ACTION_DOWN) onSaveRequest?.invoke()
             return true
         }
 

@@ -286,6 +286,7 @@ fun JCodeApp(
         onOpenFile = viewModel::openFile,
         onSelectEditorTab = viewModel::selectEditorTab,
         onCloseEditorTab = viewModel::closeEditorTab,
+        onSaveActiveTab = viewModel::saveActiveTab,
         onUpdateEditorFontSize = viewModel::updateEditorFontSize,
         onUpdateEditorTabSize = viewModel::updateEditorTabSize,
         onUpdateEditorWordWrap = viewModel::updateEditorWordWrap,
@@ -396,6 +397,7 @@ private fun JCodeShell(
     onOpenFile: (dev.jcode.fs.FsNode) -> Unit,
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
+    onSaveActiveTab: () -> Unit,
     onUpdateEditorFontSize: (ConfigScope, Float) -> Unit,
     onUpdateEditorTabSize: (ConfigScope, Int) -> Unit,
     onUpdateEditorWordWrap: (ConfigScope, Boolean) -> Unit,
@@ -961,6 +963,7 @@ private fun JCodeShell(
                         },
                         onSelectEditorTab = onSelectEditorTab,
                         onCloseEditorTab = onCloseEditorTab,
+                        onSave = onSaveActiveTab,
                         onOpenFileRequest = {
                             selectedTool = WorkbenchTool.Explorer
                             if (usesModalWorkspace) {
@@ -1915,6 +1918,7 @@ private fun EditorWorkspace(
     onShowTerminal: () -> Unit,
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
+    onSave: () -> Unit,
     onOpenFileRequest: () -> Unit,
     languageActionsEnabled: Boolean,
     onEditorLanguageAction: (EditorLanguageAction, String) -> Unit,
@@ -1937,6 +1941,7 @@ private fun EditorWorkspace(
                 onToggleRightSidebar = onToggleRightSidebar,
                 onShowTerminal = onShowTerminal,
                 onRun = onRun,
+                onSave = onSave,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
 
@@ -1956,6 +1961,7 @@ private fun EditorWorkspace(
                     onTabSelected = onSelectEditorTab,
                     onTabClosed = onCloseEditorTab,
                     onOpenFile = onOpenFileRequest,
+                    onSave = onSave,
                     languageActionsEnabled = languageActionsEnabled,
                     onLanguageAction = onEditorLanguageAction,
                     pageContent = editorPageContent,
@@ -1977,6 +1983,7 @@ private fun WorkbenchTopBar(
     onToggleRightSidebar: () -> Unit,
     onShowTerminal: () -> Unit,
     onRun: () -> Unit,
+    onSave: () -> Unit,
 ) {
     // Single row: navigation + title + quick actions. Per-file metrics (cursor, language, distro)
     // live in the bottom status bar, so this header no longer carries a redundant second chip row.
@@ -2021,6 +2028,14 @@ private fun WorkbenchTopBar(
                 )
             }
 
+            if (activeTab?.editorState != null) {
+                WorkbenchIconActionButton(
+                    icon = jcIcon(JCodeIcon.Save),
+                    contentDescription = if (activeTab.isDirty) "Save (unsaved changes)" else "Save",
+                    onClick = onSave,
+                    active = activeTab.isDirty,
+                )
+            }
             WorkbenchIconActionButton(
                 icon = jcIcon(JCodeIcon.Terminal),
                 contentDescription = "Terminal",

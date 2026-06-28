@@ -49,6 +49,7 @@ fun EditorPane(
     onTabSelected: (String) -> Unit = {},
     onTabClosed: (String) -> Unit = {},
     onOpenFile: () -> Unit = {},
+    onSave: () -> Unit = {},
     languageActionsEnabled: Boolean = false,
     onLanguageAction: (EditorLanguageAction, String) -> Unit = { _, _ -> },
     pageContent: @Composable (EditorTab) -> Unit = {},
@@ -74,6 +75,7 @@ fun EditorPane(
                 if (editorState != null) {
                     EditorViewHost(
                         editorState = editorState,
+                        onSave = onSave,
                         languageActionsEnabled = languageActionsEnabled,
                         onLanguageAction = onLanguageAction,
                         modifier = Modifier.fillMaxSize(),
@@ -209,6 +211,7 @@ private fun TabItem(
 fun EditorViewHost(
     editorState: dev.jcode.core.editor.EditorState,
     modifier: Modifier = Modifier,
+    onSave: () -> Unit = {},
     languageActionsEnabled: Boolean = false,
     onLanguageAction: (EditorLanguageAction, String) -> Unit = { _, _ -> },
 ) {
@@ -222,6 +225,7 @@ fun EditorViewHost(
                 EditorView(context).apply {
                     attach(editorState)
                     onContextRequest = { menu = it }
+                    onSaveRequest = { onSave() }
                     view = this
                 }
             },
@@ -229,6 +233,7 @@ fun EditorViewHost(
             update = { v ->
                 v.attach(editorState)
                 v.onContextRequest = { menu = it }
+                v.onSaveRequest = { onSave() }
                 view = v
             },
             onRelease = { it.detach() },

@@ -26,6 +26,7 @@ import androidx.compose.material.icons.rounded.NoteAdd
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Source
@@ -47,7 +48,7 @@ enum class JCodeIcon {
     Run, Stop, Terminal,
     Files, Folder, NewFolder, NewFile,
     Sdk, Lsp, Scm, Settings, Search, Extensions, Destinations, Code,
-    Add, Close, Refresh, Paste, Collapse, MoreVert,
+    Add, Close, Refresh, Paste, Collapse, MoreVert, Save,
     Output, Logs, Problems, Radar,
     DropDown, ChevronDown, ChevronRight, ArrowUp, MenuToggle, Help,
 }
@@ -96,6 +97,7 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.Close to Icons.Rounded.Close,
         JCodeIcon.Refresh to Icons.Rounded.Refresh,
         JCodeIcon.Paste to Icons.Rounded.ContentPaste,
+        JCodeIcon.Save to Icons.Rounded.Save,
         JCodeIcon.Collapse to Icons.Rounded.UnfoldLess,
         JCodeIcon.MoreVert to Icons.Rounded.MoreVert,
         JCodeIcon.Output to Icons.Rounded.Description,

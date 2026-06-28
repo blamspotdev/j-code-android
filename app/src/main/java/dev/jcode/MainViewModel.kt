@@ -59,6 +59,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -445,7 +446,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun clearEditorTabs() {
         val tabs = _editorGroup.value.tabs
-        tabs.filterNot { it.isPage }.forEach { it.editorState?.close() }
+        tabs.filterNot { it.isPage }.forEach {
+            it.editorState?.close()
+            untrackDirty(it.id)
+        }
         // Page tabs (e.g. Settings) are app-level, not project content: keep them across project switches.
         _editorGroup.value = tabs.filter { it.isPage }
             .fold(EditorGroup.create()) { group, tab -> group.withTabAdded(tab) }
@@ -798,7 +802,57 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun closeEditorTab(tabId: String) {
         val existing = _editorGroup.value.tabs.firstOrNull { it.id == tabId }
         existing?.editorState?.close()
+        untrackDirty(tabId)
         _editorGroup.value = _editorGroup.value.withTabRemoved(tabId)
+    }
+
+    /** Per-tab collectors that mirror each editor's dirty flag onto its [EditorTab] for the tab dot. */
+    private val dirtyJobs = mutableMapOf<String, Job>()
+
+    private fun trackDirty(tab: EditorTab) {
+        val state = tab.editorState ?: return
+        val tabId = tab.id
+        dirtyJobs.remove(tabId)?.cancel()
+        dirtyJobs[tabId] = viewModelScope.launch {
+            state.dirty.collect { dirty ->
+                val current = _editorGroup.value.tabs.firstOrNull { it.id == tabId } ?: return@collect
+                if (current.isDirty != dirty) {
+                    _editorGroup.value = _editorGroup.value.withTabUpdated(current.copy(isDirty = dirty))
+                }
+            }
+        }
+    }
+
+    private fun untrackDirty(tabId: String) {
+        dirtyJobs.remove(tabId)?.cancel()
+    }
+
+    /** Save the active editor tab's buffer to disk (Ctrl+S / top-bar Save). */
+    fun saveActiveTab() {
+        _editorGroup.value.activeTab?.let { saveTab(it) }
+    }
+
+    private fun saveTab(tab: EditorTab) {
+        val state = tab.editorState ?: return // page tab: nothing to persist
+        val file = tab.filePath
+        if (file.path.isBlank()) {
+            viewModelScope.launch { emitMessage("Can't save \"${tab.title}\": unsupported file source") }
+            return
+        }
+        // Snapshots are immutable, so capturing the reference now lets us both write its bytes and
+        // detect whether newer edits landed during the async write (so we don't clear a stale dirty).
+        val snapshot = state.snapshot.value
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val bytes = snapshot.readRange(0, snapshot.byteLength)
+                workspaceManager.fsFor(FsPath.Local(file)).write(FsPath.Local(file), bytes)
+            }.onSuccess {
+                if (state.snapshot.value === snapshot) state.markClean()
+                emitMessage("Saved ${tab.title}")
+            }.onFailure {
+                emitMessage("Failed to save ${tab.title}: ${it.message ?: "error"}")
+            }
+        }
     }
 
     private suspend fun openBootstrapFile(project: Project) {
@@ -835,6 +889,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val tab = EditorTab.create(file, stableId)
         applyConfigToTab(tab, effectiveConfig.value)
+        trackDirty(tab)
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
     }
 
@@ -861,6 +916,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             id = stableId,
         )
         applyConfigToTab(tab, effectiveConfig.value)
+        trackDirty(tab)
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
     }
 
