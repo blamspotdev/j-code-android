@@ -14,6 +14,7 @@ import java.io.File
 import java.io.InputStreamReader
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -45,6 +46,8 @@ class DistroService(
     private val sdkCatalogLoader = SdkCatalogLoader(appContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Mutex()
+    private val sdkCheckInProgress = AtomicBoolean(false)
+    private val lspCheckInProgress = AtomicBoolean(false)
     private val activityLogLock = Any()
     private val dataStore = PreferenceDataStoreFactory.create {
         appContext.preferencesDataStoreFile("distro-environment.preferences_pb")
@@ -394,6 +397,93 @@ class DistroService(
                     ),
                 ),
             )
+        }
+    }
+
+    /** Re-check installed + update-available status for every SDK entry. Full check, run async; no-op if already running. */
+    suspend fun checkSdkStatuses() {
+        val ready = _environmentState.value.distroInstalled == true && _environmentState.value.jcodeUserReady == true
+        if (!ready) return
+        if (!sdkCheckInProgress.compareAndSet(false, true)) return
+        try {
+            lock.withLock {
+                val distroId = _environmentState.value.runtime.selectedDistro.id
+                val entries = _sdkCatalogState.value.entries.ifEmpty {
+                    runCatching { sdkCatalogLoader.load() }.getOrElse { emptyList() }
+                }
+                if (entries.isEmpty()) return
+                _sdkCatalogState.value = _sdkCatalogState.value.copy(
+                    entries = entries, checking = true, selectedDistroId = distroId, errorMessage = null,
+                )
+                val installed = linkedSetOf<String>()
+                val updatable = linkedSetOf<String>()
+                var aptUpdated = false
+                for (entry in entries) {
+                    if (execInDistro(entry.verifyScript, timeoutMs = 120_000L).succeeded) {
+                        installed.add(entry.id)
+                        if (entry.updateCheckScript.isNotBlank()) {
+                            if (!aptUpdated && entry.updateCheckScript.contains("apt list")) {
+                                execInDistro("sudo apt-get update", timeoutMs = 300_000L)
+                                aptUpdated = true
+                            }
+                            if (execInDistro(entry.updateCheckScript, timeoutMs = 120_000L).succeeded) updatable.add(entry.id)
+                        }
+                    }
+                    _sdkCatalogState.value = _sdkCatalogState.value.copy(
+                        installedEntryIds = installed.toSet(), updatableEntryIds = updatable.toSet(),
+                    )
+                }
+                persistInstalledCatalogEntries(distroId, installed.toSet())
+                _sdkCatalogState.value = _sdkCatalogState.value.copy(
+                    installedEntryIds = installed.toSet(), updatableEntryIds = updatable.toSet(),
+                    checking = false, selectedDistroId = distroId,
+                )
+            }
+        } finally {
+            _sdkCatalogState.value = _sdkCatalogState.value.copy(checking = false)
+            sdkCheckInProgress.set(false)
+        }
+    }
+
+    /** Re-check installed + update-available status for every LSP server. Full check, run async; no-op if already running. */
+    suspend fun checkLspStatuses() {
+        val ready = _environmentState.value.distroInstalled == true && _environmentState.value.jcodeUserReady == true
+        if (!ready) return
+        if (!lspCheckInProgress.compareAndSet(false, true)) return
+        try {
+            lock.withLock {
+                val distroId = _environmentState.value.runtime.selectedDistro.id
+                val entries = LspServerCatalog.BUILT_IN
+                _lspCatalogState.value = _lspCatalogState.value.copy(
+                    entries = entries, checking = true, selectedDistroId = distroId, errorMessage = null,
+                )
+                val installed = linkedSetOf<String>()
+                val updatable = linkedSetOf<String>()
+                var aptUpdated = false
+                for (entry in entries) {
+                    if (execInDistro(entry.verifyCommand, timeoutMs = 120_000L).succeeded) {
+                        installed.add(entry.id)
+                        if (entry.updateCheckCommand.isNotBlank()) {
+                            if (!aptUpdated && entry.updateCheckCommand.contains("apt list")) {
+                                execInDistro("sudo apt-get update", timeoutMs = 300_000L)
+                                aptUpdated = true
+                            }
+                            if (execInDistro(entry.updateCheckCommand, timeoutMs = 120_000L).succeeded) updatable.add(entry.id)
+                        }
+                    }
+                    _lspCatalogState.value = _lspCatalogState.value.copy(
+                        installedEntryIds = installed.toSet(), updatableEntryIds = updatable.toSet(),
+                    )
+                }
+                persistInstalledLspEntries(distroId, installed.toSet())
+                _lspCatalogState.value = _lspCatalogState.value.copy(
+                    installedEntryIds = installed.toSet(), updatableEntryIds = updatable.toSet(),
+                    checking = false, selectedDistroId = distroId,
+                )
+            }
+        } finally {
+            _lspCatalogState.value = _lspCatalogState.value.copy(checking = false)
+            lspCheckInProgress.set(false)
         }
     }
 

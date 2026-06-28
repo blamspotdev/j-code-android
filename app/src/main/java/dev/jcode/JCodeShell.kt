@@ -315,14 +315,16 @@ fun JCodeApp(
         onOpenEnvironmentWizard = { viewModel.openEnvironmentPage() },
         onSelectDistro = { viewModel.selectWizardDistro(it) },
         onAutoSetup = viewModel::runAutoSetup,
-        onRefreshSdkCatalog = viewModel::refreshSdkCatalog,
+        onCheckSdkStatuses = viewModel::checkSdkStatuses,
         onInstallSdkCatalogEntry = viewModel::installSdkCatalogEntry,
         onVerifySdkCatalogEntry = viewModel::verifySdkCatalogEntry,
         onUninstallSdkCatalogEntry = viewModel::uninstallSdkCatalogEntry,
-        onRefreshLspCatalog = viewModel::refreshLspCatalog,
+        onOpenSdkDetail = viewModel::openSdkDetailPage,
+        onCheckLspStatuses = viewModel::checkLspStatuses,
         onInstallLspCatalogEntry = viewModel::installLspCatalogEntry,
         onVerifyLspCatalogEntry = viewModel::verifyLspCatalogEntry,
         onUninstallLspCatalogEntry = viewModel::uninstallLspCatalogEntry,
+        onOpenLspDetail = viewModel::openLspDetailPage,
         railToolOrder = railToolOrder,
         onReorderRail = viewModel::setRailToolOrder,
         onOpenSettingsPage = viewModel::openSettingsPage,
@@ -419,14 +421,16 @@ private fun JCodeShell(
     onOpenEnvironmentWizard: () -> Unit,
     onAutoSetup: () -> Unit,
     onSelectDistro: (DistroProfile) -> Unit,
-    onRefreshSdkCatalog: () -> Unit,
+    onCheckSdkStatuses: () -> Unit,
     onInstallSdkCatalogEntry: (String) -> Unit,
     onVerifySdkCatalogEntry: (String) -> Unit,
     onUninstallSdkCatalogEntry: (String) -> Unit,
-    onRefreshLspCatalog: () -> Unit,
+    onOpenSdkDetail: (String) -> Unit,
+    onCheckLspStatuses: () -> Unit,
     onInstallLspCatalogEntry: (String) -> Unit,
     onVerifyLspCatalogEntry: (String) -> Unit,
     onUninstallLspCatalogEntry: (String) -> Unit,
+    onOpenLspDetail: (String) -> Unit,
     railToolOrder: List<String>,
     onReorderRail: (List<String>) -> Unit,
     onOpenSettingsPage: () -> Unit,
@@ -489,6 +493,14 @@ private fun JCodeShell(
     // Settings opens as an in-editor page; every other tool drives the side panel.
     val onSelectWorkbenchTool: (WorkbenchTool) -> Unit = { tool ->
         if (tool == WorkbenchTool.Settings) onOpenSettingsPage() else selectedTool = tool
+    }
+    // Refresh installed/update-available status when a manager panel comes into view (async, guarded).
+    LaunchedEffect(selectedTool) {
+        when (selectedTool) {
+            WorkbenchTool.SdkManager -> onCheckSdkStatuses()
+            WorkbenchTool.LspManager -> onCheckLspStatuses()
+            else -> Unit
+        }
     }
     var leftSidebarExpanded by rememberSaveable(isLandscape, windowInfo.widthClass) {
         mutableStateOf(isLandscape && windowInfo.widthClass != JCodeWindowWidthClass.Compact)
@@ -846,14 +858,10 @@ private fun JCodeShell(
                 onOpenProjectConfig = onOpenProjectConfig,
                 onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                 onAutoSetup = onAutoSetup,
-                onRefreshSdkCatalog = onRefreshSdkCatalog,
-                onInstallSdkCatalogEntry = onInstallSdkCatalogEntry,
-                onVerifySdkCatalogEntry = onVerifySdkCatalogEntry,
-                onUninstallSdkCatalogEntry = onUninstallSdkCatalogEntry,
-                onRefreshLspCatalog = onRefreshLspCatalog,
-                onInstallLspCatalogEntry = onInstallLspCatalogEntry,
-                onVerifyLspCatalogEntry = onVerifyLspCatalogEntry,
-                onUninstallLspCatalogEntry = onUninstallLspCatalogEntry,
+                onCheckSdkStatuses = onCheckSdkStatuses,
+                onOpenSdkDetail = onOpenSdkDetail,
+                onCheckLspStatuses = onCheckLspStatuses,
+                onOpenLspDetail = onOpenLspDetail,
                 onRun = ::handleRun,
                 onStopRun = ::handleStopRun,
                 runUrl = runUrl,
@@ -1030,6 +1038,37 @@ private fun JCodeShell(
                                     onSelectDistro = onSelectDistro,
                                     onAutoSetup = onAutoSetup,
                                 )
+                                EditorPageKind.SdkDetail -> {
+                                    val id = tab.id.substringAfter(MainViewModel.SDK_DETAIL_PREFIX)
+                                    sdkCatalogState.entries.firstOrNull { it.id == id }?.let { entry ->
+                                        SdkManagerFeature.DetailPage(
+                                            entry = entry,
+                                            state = sdkCatalogState,
+                                            environmentState = environmentState,
+                                            onInstall = onInstallSdkCatalogEntry,
+                                            onUpdate = onInstallSdkCatalogEntry,
+                                            onUninstall = onUninstallSdkCatalogEntry,
+                                            onVerify = onVerifySdkCatalogEntry,
+                                            modifier = Modifier.fillMaxSize(),
+                                        )
+                                    }
+                                }
+                                EditorPageKind.LspDetail -> {
+                                    val id = tab.id.substringAfter(MainViewModel.LSP_DETAIL_PREFIX)
+                                    lspCatalogState.entries.firstOrNull { it.id == id }?.let { entry ->
+                                        LspManagerFeature.DetailPage(
+                                            entry = entry,
+                                            state = lspCatalogState,
+                                            environmentState = environmentState,
+                                            onInstall = onInstallLspCatalogEntry,
+                                            onUpdate = onInstallLspCatalogEntry,
+                                            onUninstall = onUninstallLspCatalogEntry,
+                                            onVerify = onVerifyLspCatalogEntry,
+                                            modifier = Modifier.fillMaxSize(),
+                                        )
+                                    }
+                                }
+                                EditorPageKind.ExtensionDetail -> Unit
                                 EditorPageKind.None -> Unit
                             }
                         },
@@ -1067,14 +1106,10 @@ private fun JCodeShell(
                             onOpenProjectConfig = onOpenProjectConfig,
                             onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                             onAutoSetup = onAutoSetup,
-                            onRefreshSdkCatalog = onRefreshSdkCatalog,
-                            onInstallSdkCatalogEntry = onInstallSdkCatalogEntry,
-                            onVerifySdkCatalogEntry = onVerifySdkCatalogEntry,
-                            onUninstallSdkCatalogEntry = onUninstallSdkCatalogEntry,
-                            onRefreshLspCatalog = onRefreshLspCatalog,
-                            onInstallLspCatalogEntry = onInstallLspCatalogEntry,
-                            onVerifyLspCatalogEntry = onVerifyLspCatalogEntry,
-                            onUninstallLspCatalogEntry = onUninstallLspCatalogEntry,
+                            onCheckSdkStatuses = onCheckSdkStatuses,
+                            onOpenSdkDetail = onOpenSdkDetail,
+                            onCheckLspStatuses = onCheckLspStatuses,
+                            onOpenLspDetail = onOpenLspDetail,
                             onRun = ::handleRun,
                             onStopRun = ::handleStopRun,
                             runUrl = runUrl,
@@ -1483,14 +1518,10 @@ private fun WorkspacePanel(
     onOpenProjectConfig: () -> Unit,
     onOpenEnvironmentWizard: () -> Unit,
     onAutoSetup: () -> Unit,
-    onRefreshSdkCatalog: () -> Unit,
-    onInstallSdkCatalogEntry: (String) -> Unit,
-    onVerifySdkCatalogEntry: (String) -> Unit,
-    onUninstallSdkCatalogEntry: (String) -> Unit,
-    onRefreshLspCatalog: () -> Unit,
-    onInstallLspCatalogEntry: (String) -> Unit,
-    onVerifyLspCatalogEntry: (String) -> Unit,
-    onUninstallLspCatalogEntry: (String) -> Unit,
+    onCheckSdkStatuses: () -> Unit,
+    onOpenSdkDetail: (String) -> Unit,
+    onCheckLspStatuses: () -> Unit,
+    onOpenLspDetail: (String) -> Unit,
     onRun: () -> Unit,
     onStopRun: () -> Unit,
     runUrl: String?,
@@ -1633,22 +1664,18 @@ private fun WorkspacePanel(
                     WorkbenchTool.SdkManager -> SdkManagerFeature.Content(
                         state = sdkCatalogState,
                         environmentState = environmentState,
-                        onRefresh = onRefreshSdkCatalog,
+                        onRefresh = onCheckSdkStatuses,
                         onOpenEnvironmentWizard = onOpenEnvironmentWizard,
-                        onInstallEntry = onInstallSdkCatalogEntry,
-                        onVerifyEntry = onVerifySdkCatalogEntry,
-                        onUninstallEntry = onUninstallSdkCatalogEntry,
+                        onOpenDetail = onOpenSdkDetail,
                         modifier = Modifier.fillMaxSize(),
                     )
 
                     WorkbenchTool.LspManager -> LspManagerFeature.Content(
                         state = lspCatalogState,
                         environmentState = environmentState,
-                        onRefresh = onRefreshLspCatalog,
+                        onRefresh = onCheckLspStatuses,
                         onOpenEnvironmentWizard = onOpenEnvironmentWizard,
-                        onInstallEntry = onInstallLspCatalogEntry,
-                        onVerifyEntry = onVerifyLspCatalogEntry,
-                        onUninstallEntry = onUninstallLspCatalogEntry,
+                        onOpenDetail = onOpenLspDetail,
                         modifier = Modifier.fillMaxSize(),
                     )
 

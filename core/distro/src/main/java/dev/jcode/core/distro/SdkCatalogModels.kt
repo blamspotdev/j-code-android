@@ -8,6 +8,8 @@ data class SdkCatalogEntry(
     val installScript: String,
     val verifyScript: String,
     val uninstallScript: String,
+    /** Optional: exits 0 when a newer version is available. Empty = update detection skipped. */
+    val updateCheckScript: String = "",
 )
 
 enum class SdkCatalogCategory(val label: String) {
@@ -49,6 +51,8 @@ enum class SdkCatalogAction(val label: String) {
 data class SdkCatalogState(
     val entries: List<SdkCatalogEntry> = emptyList(),
     val installedEntryIds: Set<String> = emptySet(),
+    val updatableEntryIds: Set<String> = emptySet(),
+    val checking: Boolean = false,
     val runningEntryId: String? = null,
     val runningAction: SdkCatalogAction? = null,
     val executionLabel: String? = null,

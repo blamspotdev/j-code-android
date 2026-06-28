@@ -35,6 +35,7 @@ internal class SdkCatalogLoader(
             val installScript = entry.string("installScript") ?: error("Entry '$id' is missing installScript.")
             val verifyScript = entry.string("verifyScript") ?: error("Entry '$id' is missing verifyScript.")
             val uninstallScript = entry.string("uninstallScript") ?: error("Entry '$id' is missing uninstallScript.")
+            val updateCheckScript = entry.string("updateCheckScript")?.trim().orEmpty()
             SdkCatalogEntry(
                 id = id,
                 category = category,
@@ -43,6 +44,7 @@ internal class SdkCatalogLoader(
                 installScript = installScript.trim(),
                 verifyScript = verifyScript.trim(),
                 uninstallScript = uninstallScript.trim(),
+                updateCheckScript = updateCheckScript,
             )
         }
     }

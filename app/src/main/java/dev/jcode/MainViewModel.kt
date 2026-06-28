@@ -639,12 +639,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun refreshSdkCatalog() {
-        viewModelScope.launch {
-            distroService.refreshSdkCatalog()
-        }
-    }
-
     fun installSdkCatalogEntry(entryId: String) {
         runSdkCatalogAction(entryId, SdkCatalogAction.Install)
     }
@@ -655,12 +649,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun uninstallSdkCatalogEntry(entryId: String) {
         runSdkCatalogAction(entryId, SdkCatalogAction.Uninstall)
-    }
-
-    fun refreshLspCatalog() {
-        viewModelScope.launch {
-            distroService.refreshLspCatalog()
-        }
     }
 
     fun installLspCatalogEntry(entryId: String) {
@@ -746,6 +734,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val tab = EditorTab.page(ENVIRONMENT_TAB_ID, "Environment", EditorPageKind.Environment)
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
+    }
+
+    /** Open (or focus) the detail page for a single SDK entry. */
+    fun openSdkDetailPage(entryId: String) {
+        val tabId = SDK_DETAIL_PREFIX + entryId
+        val existing = _editorGroup.value.tabs.firstOrNull { it.id == tabId }
+        if (existing != null) {
+            _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
+            return
+        }
+        val title = distroService.sdkCatalogState.value.entries.firstOrNull { it.id == entryId }?.name ?: entryId
+        _editorGroup.value = _editorGroup.value.withTabAdded(EditorTab.page(tabId, title, EditorPageKind.SdkDetail))
+    }
+
+    /** Open (or focus) the detail page for a single language server. */
+    fun openLspDetailPage(entryId: String) {
+        val tabId = LSP_DETAIL_PREFIX + entryId
+        val existing = _editorGroup.value.tabs.firstOrNull { it.id == tabId }
+        if (existing != null) {
+            _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
+            return
+        }
+        val title = distroService.lspCatalogState.value.entries.firstOrNull { it.id == entryId }?.name ?: entryId
+        _editorGroup.value = _editorGroup.value.withTabAdded(EditorTab.page(tabId, title, EditorPageKind.LspDetail))
+    }
+
+    /** Full status re-check (installed + update-available) for the SDK catalog; runs async, no-op if already running. */
+    fun checkSdkStatuses() {
+        viewModelScope.launch(Dispatchers.IO) { distroService.checkSdkStatuses() }
+    }
+
+    /** Full status re-check (installed + update-available) for the LSP catalog; runs async, no-op if already running. */
+    fun checkLspStatuses() {
+        viewModelScope.launch(Dispatchers.IO) { distroService.checkLspStatuses() }
     }
 
     fun selectEditorTab(tabId: String) {
@@ -941,8 +963,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             stepId == WizardStepId.ToolchainBootstrapped
     }
 
-    private companion object {
+    companion object {
         const val SETTINGS_TAB_ID = "jcode://settings"
         const val ENVIRONMENT_TAB_ID = "jcode://environment"
+        const val SDK_DETAIL_PREFIX = "jcode://sdk/"
+        const val LSP_DETAIL_PREFIX = "jcode://lsp/"
+        const val EXT_DETAIL_PREFIX = "jcode://ext/"
     }
 }

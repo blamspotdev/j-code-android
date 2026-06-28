@@ -10,6 +10,7 @@ entries:
       command -v clang >/dev/null 2>&1 && command -v clangd >/dev/null 2>&1 && echo ready
     uninstallScript: |
       sudo apt-get remove -y clang clangd lldb gdb
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(clang|clangd|lldb|gdb)/'"
 
   - id: python
     category: languages
@@ -22,6 +23,7 @@ entries:
       command -v python3 >/dev/null 2>&1 && python3 -m venv --help >/dev/null 2>&1 && echo ready
     uninstallScript: |
       sudo apt-get remove -y python3 python3-venv python3-pip
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(python3|python3-venv|python3-pip)/'"
 
   - id: nodejs
     category: languages
@@ -34,6 +36,7 @@ entries:
       command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 && echo ready
     uninstallScript: |
       sudo apt-get remove -y nodejs npm
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(nodejs|npm)/'"
 
   - id: rust
     category: build-tools
@@ -59,6 +62,7 @@ entries:
       command -v cmake >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1 && echo ready
     uninstallScript: |
       sudo apt-get remove -y cmake ninja-build pkg-config
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(cmake|ninja-build|pkg-config)/'"
 
   - id: android-prereqs
     category: android
@@ -71,6 +75,7 @@ entries:
       command -v javac >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1 && command -v wget >/dev/null 2>&1 && echo ready
     uninstallScript: |
       sudo apt-get remove -y openjdk-21-jdk-headless unzip wget zip
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(openjdk-21-jdk-headless|unzip|wget|zip)/'"
 
   - id: dotnet
     category: dotnet
@@ -98,6 +103,7 @@ entries:
       command -v arm-none-eabi-gcc >/dev/null 2>&1 && command -v openocd >/dev/null 2>&1 && echo ready
     uninstallScript: |
       sudo apt-get remove -y gcc-arm-none-eabi gdb-multiarch openocd
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(gcc-arm-none-eabi|gdb-multiarch|openocd)/'"
 
   - id: postgresql
     category: databases
@@ -115,6 +121,7 @@ entries:
       sudo -u postgres pg_ctlcluster 16 main stop 2>/dev/null || true
       sudo apt-get remove -y postgresql postgresql-contrib
       sudo rm -rf /var/lib/postgresql/16/main
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(postgresql|postgresql-contrib)/'"
 
   - id: mariadb
     category: databases
@@ -131,6 +138,7 @@ entries:
       sudo service mariadb stop 2>/dev/null || true
       sudo apt-get remove -y mariadb-server mariadb-client
       sudo rm -rf /var/lib/mysql
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(mariadb-server|mariadb-client)/'"
 
   - id: redis
     category: databases
@@ -145,6 +153,7 @@ entries:
     uninstallScript: |
       redis-cli shutdown 2>/dev/null || true
       sudo apt-get remove -y redis-server
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(redis-server)/'"
 
   - id: git
     category: build-tools
@@ -157,6 +166,7 @@ entries:
       command -v git >/dev/null 2>&1 && echo ready
     uninstallScript: |
       sudo apt-get remove -y git
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^git/'"
 
   - id: docker-cli
     category: build-tools
@@ -170,3 +180,4 @@ entries:
       command -v docker >/dev/null 2>&1 && echo ready
     uninstallScript: |
       sudo apt-get remove -y docker.io
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^docker.io/'"
