@@ -7,6 +7,8 @@ import dev.jcode.design.ContextAction
 import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.JcTooltip
+import dev.jcode.design.LocalTabCloseButtonSetting
+import dev.jcode.design.TabCloseButtonSetting
 import dev.jcode.editor.SyntaxHighlighter
 import dev.jcode.editor.TokenPalette
 import kotlinx.coroutines.Dispatchers
@@ -233,6 +235,12 @@ fun JCodeApp(
     val formatterId by viewModel.formatterId.collectAsStateWithLifecycle()
     val terminalDoubleTapToFocus by viewModel.terminalDoubleTapToFocus.collectAsStateWithLifecycle()
     val hideStatusBarWithKeyboard by viewModel.hideStatusBarWithKeyboard.collectAsStateWithLifecycle()
+    val hideTabCloseButton by viewModel.hideTabCloseButton.collectAsStateWithLifecycle()
+    // Carried via CompositionLocal (not a JCodeShell param — that composable is at the ART verifier's
+    // register limit) so both the tab UIs and the settings toggle can read value + setter.
+    val tabCloseSetting = remember(hideTabCloseButton) {
+        TabCloseButtonSetting(hideTabCloseButton, viewModel::setHideTabCloseButton)
+    }
     StatusBarKeyboardController(enabled = hideStatusBarWithKeyboard)
     val tapContext = LocalContext.current
     val terminalTapConfig = TerminalTapConfig(
@@ -271,7 +279,10 @@ fun JCodeApp(
         }
     }
 
-    CompositionLocalProvider(LocalTerminalTapConfig provides terminalTapConfig) {
+    CompositionLocalProvider(
+        LocalTerminalTapConfig provides terminalTapConfig,
+        LocalTabCloseButtonSetting provides tabCloseSetting,
+    ) {
     JCodeShell(
         modifier = modifier,
         windowInfo = windowInfo,
@@ -2328,23 +2339,26 @@ private fun TerminalSidebarContent(
                                     MaterialTheme.colorScheme.onSurfaceVariant
                                 },
                             )
-                            // Close button
-                            JcTooltip("Close terminal") {
-                                Surface(
-                                    modifier = Modifier
-                                        .size(18.dp)
-                                        .clip(CircleShape)
-                                        .clickable { onRemoveTerminalSession(sessionId) },
-                                    shape = CircleShape,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Text(
-                                            text = "×",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.padding(top = 1.dp),
-                                        )
+                            // Close button (hidden via setting to avoid accidental closes; the tab's
+                            // long-press menu still closes it).
+                            if (!LocalTabCloseButtonSetting.current.hidden) {
+                                JcTooltip("Close terminal") {
+                                    Surface(
+                                        modifier = Modifier
+                                            .size(18.dp)
+                                            .clip(CircleShape)
+                                            .clickable { onRemoveTerminalSession(sessionId) },
+                                        shape = CircleShape,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Text(
+                                                text = "×",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(top = 1.dp),
+                                            )
+                                        }
                                     }
                                 }
                             }

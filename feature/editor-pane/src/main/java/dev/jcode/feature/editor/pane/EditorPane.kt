@@ -1,7 +1,8 @@
 package dev.jcode.feature.editor.pane
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,6 +40,7 @@ import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.JcTooltip
+import dev.jcode.design.LocalTabCloseButtonSetting
 /**
  * Editor pane composable that hosts a tab strip and the active EditorView.
  */
@@ -156,6 +158,7 @@ private fun TabStrip(
 /**
  * Individual tab item.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TabItem(
     tab: EditorTab,
@@ -163,48 +166,62 @@ private fun TabItem(
     onSelected: () -> Unit,
     onClosed: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier
-            .clickable(onClick = onSelected)
-            .background(
-                if (isActive) MaterialTheme.colorScheme.surfaceVariant
-                else MaterialTheme.colorScheme.surface
-            )
-            .height(36.dp)
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        // Dirty indicator
-        if (tab.isDirty) {
-            Box(
-                modifier = Modifier
-                    .width(8.dp)
-                    .height(8.dp)
-                    .background(MaterialTheme.colorScheme.primary),
-            )
-        }
-
-        Text(
-            text = tab.title,
-            style = MaterialTheme.typography.labelMedium,
-            maxLines = 1,
-        )
-
-        JcTooltip("Close tab") {
-            IconButton(
-                onClick = onClosed,
-                modifier = Modifier
-                    .width(20.dp)
-                    .height(20.dp),
-            ) {
-                Text(
-                    text = "×",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            modifier = Modifier
+                // Long-press always offers Close, so the tab stays closeable even when the "×" is
+                // hidden via the avoid-accidental-close setting.
+                .combinedClickable(onClick = onSelected, onLongClick = { menuOpen = true })
+                .background(
+                    if (isActive) MaterialTheme.colorScheme.surfaceVariant
+                    else MaterialTheme.colorScheme.surface
+                )
+                .height(36.dp)
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            // Dirty indicator
+            if (tab.isDirty) {
+                Box(
+                    modifier = Modifier
+                        .width(8.dp)
+                        .height(8.dp)
+                        .background(MaterialTheme.colorScheme.primary),
                 )
             }
+
+            Text(
+                text = tab.title,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+            )
+
+            if (!LocalTabCloseButtonSetting.current.hidden) {
+                JcTooltip("Close tab") {
+                    IconButton(
+                        onClick = onClosed,
+                        modifier = Modifier
+                            .width(20.dp)
+                            .height(20.dp),
+                    ) {
+                        Text(
+                            text = "×",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
         }
+        CompactContextMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false },
+            listActions = listOf(
+                ContextAction(JCodeIcon.Close, "Close") { onClosed() },
+            ),
+        )
     }
 }
 

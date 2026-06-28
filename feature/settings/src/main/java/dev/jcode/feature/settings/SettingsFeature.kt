@@ -55,6 +55,7 @@ import dev.jcode.core.config.WorkspaceConfig
 import dev.jcode.design.IconBundle
 import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.JCodeIcon
+import dev.jcode.design.LocalTabCloseButtonSetting
 import dev.jcode.design.ThemeBundleRegistry
 import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.design.ThemeMode
@@ -95,6 +96,7 @@ object SettingsFeature {
         onUpdateHideStatusBarWithKeyboard: (Boolean) -> Unit,
         modifier: Modifier = Modifier,
     ) {
+        val tabCloseSetting = LocalTabCloseButtonSetting.current
         var selectedScope by rememberSaveable(projectOverridesAvailable) {
             mutableStateOf(if (projectOverridesAvailable) ConfigScope.Project else ConfigScope.Workspace)
         }
@@ -358,6 +360,18 @@ object SettingsFeature {
                     supporting = "Keep enabled for the editor surface, but let users disable it for long coding sessions.",
                     checked = ligatures,
                     onCheckedChange = { onUpdateLigatures(selectedScope, it) },
+                )
+            }
+
+            SettingsCard(
+                title = "Tabs",
+                description = "How editor and terminal tabs behave. Applies app-wide.",
+            ) {
+                ToggleRow(
+                    label = "Hide tab close button",
+                    supporting = "Removes the × on editor and terminal tabs to avoid accidental closes. Close a tab from its long-press menu instead.",
+                    checked = tabCloseSetting.hidden,
+                    onCheckedChange = tabCloseSetting.onChange,
                 )
             }
 

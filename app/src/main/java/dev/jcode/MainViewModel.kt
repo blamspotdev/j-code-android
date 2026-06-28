@@ -200,6 +200,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val hideTabCloseButtonKey = booleanPreferencesKey("hide_tab_close_button")
+
+    /** When true, the "×" close button is hidden on editor + terminal tabs to avoid accidental
+     *  closes; a tab is then closed via its long-press menu. */
+    val hideTabCloseButton: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[hideTabCloseButtonKey] ?: false }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setHideTabCloseButton(enabled: Boolean) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[hideTabCloseButtonKey] = enabled }
+        }
+    }
+
     private val themeBundleKey = stringPreferencesKey("theme_bundle_id")
 
     /** App-wide selected theme bundle id; empty resolves to the default bundle. */
