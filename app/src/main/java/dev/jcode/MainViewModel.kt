@@ -26,7 +26,6 @@ import dev.jcode.core.distro.DistroServiceLocator
 import dev.jcode.core.distro.WizardStepId
 import dev.jcode.core.resource.ResourceManager
 import dev.jcode.core.resource.ResourceManagerLocator
-import dev.jcode.design.KeyboardDefaults
 import dev.jcode.design.ThemeMode
 import dev.jcode.feature.editor.pane.EditorGroup
 import dev.jcode.feature.editor.pane.EditorPageKind
@@ -225,30 +224,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private val editorUseInAppKeyboardKey = booleanPreferencesKey("editor_use_inapp_keyboard")
-    private val editorCodeKeysKey = stringPreferencesKey("editor_code_keys")
-
-    /** When true (default), the editor uses the app's own on-screen keyboard instead of the IME. */
-    val editorUseInAppKeyboard: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs -> prefs[editorUseInAppKeyboardKey] ?: true }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
-
-    /** Configurable code-symbol row of the in-app keyboard (newline-delimited; any single symbol is safe). */
-    val editorCodeKeys: StateFlow<List<String>> = uiPreferences.data
-        .map { prefs ->
-            prefs[editorCodeKeysKey]?.split('\n')?.filter { it.isNotEmpty() }
-                ?: KeyboardDefaults.codeKeys
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), KeyboardDefaults.codeKeys)
-
-    fun setEditorKeyboard(useInAppKeyboard: Boolean, codeKeys: List<String>) {
-        viewModelScope.launch {
-            uiPreferences.edit { prefs ->
-                prefs[editorUseInAppKeyboardKey] = useInAppKeyboard
-                prefs[editorCodeKeysKey] = codeKeys.joinToString("\n")
-            }
-        }
-    }
 
     private val formatterKey = stringPreferencesKey("formatter_id")
 

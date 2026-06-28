@@ -3,9 +3,7 @@ package dev.jcode.adaptive
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
-import android.content.res.Configuration.HARDKEYBOARDHIDDEN_YES
 import android.content.res.Configuration.KEYBOARD_NOKEYS
-import android.content.res.Configuration.KEYBOARD_QWERTY
 import android.hardware.input.InputManager
 import android.view.InputDevice
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
@@ -49,10 +47,7 @@ data class JCodeWindowInfo(
     val widthClass: JCodeWindowWidthClass,
     val heightClass: JCodeWindowHeightClass,
     val posture: JCodePosture,
-    /** Any non-virtual input device with keys — includes game controllers (e.g. the Odin2). */
     val hasPhysicalKeyboard: Boolean,
-    /** A real text-entry keyboard (alphabetic / QWERTY), excluding game controllers. */
-    val hasTextKeyboard: Boolean,
 )
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
@@ -75,40 +70,25 @@ fun rememberJCodeWindowInfo(): State<JCodeWindowInfo> {
         }
     }
 
-    // Stricter than computeKeyboardPresent: a real text keyboard, so game controllers (which report
-    // KEYBOARD_TYPE_NON_ALPHABETIC) don't count. Used to hide the on-screen keyboard.
-    fun computeTextKeyboardPresent(): Boolean {
-        val configHasText = configuration.keyboard == KEYBOARD_QWERTY &&
-            configuration.hardKeyboardHidden != HARDKEYBOARDHIDDEN_YES
-        if (configHasText) return true
-        val manager = inputManager ?: return false
-        return manager.inputDeviceIds.any { deviceId ->
-            val device = manager.getInputDevice(deviceId)
-            device != null && !device.isVirtual &&
-                device.keyboardType == InputDevice.KEYBOARD_TYPE_ALPHABETIC
-        }
-    }
-
     var hasPhysicalKeyboard by remember(hasConfigurationKeyboard, inputManager) {
         mutableStateOf(computeKeyboardPresent())
-    }
-    var hasTextKeyboard by remember(hasConfigurationKeyboard, inputManager) {
-        mutableStateOf(computeTextKeyboardPresent())
     }
 
     DisposableEffect(inputManager, hasConfigurationKeyboard) {
         val manager = inputManager ?: return@DisposableEffect onDispose { }
         hasPhysicalKeyboard = computeKeyboardPresent()
-        hasTextKeyboard = computeTextKeyboardPresent()
         val listener = object : InputManager.InputDeviceListener {
-            private fun refresh() {
+            override fun onInputDeviceAdded(deviceId: Int) {
                 hasPhysicalKeyboard = computeKeyboardPresent()
-                hasTextKeyboard = computeTextKeyboardPresent()
             }
 
-            override fun onInputDeviceAdded(deviceId: Int) = refresh()
-            override fun onInputDeviceRemoved(deviceId: Int) = refresh()
-            override fun onInputDeviceChanged(deviceId: Int) = refresh()
+            override fun onInputDeviceRemoved(deviceId: Int) {
+                hasPhysicalKeyboard = computeKeyboardPresent()
+            }
+
+            override fun onInputDeviceChanged(deviceId: Int) {
+                hasPhysicalKeyboard = computeKeyboardPresent()
+            }
         }
         manager.registerInputDeviceListener(listener, null)
         onDispose { manager.unregisterInputDeviceListener(listener) }
@@ -120,16 +100,14 @@ fun rememberJCodeWindowInfo(): State<JCodeWindowInfo> {
             heightClass = adaptiveInfo.windowSizeClass.toJCodeHeightClass(),
             posture = JCodePosture.Flat,
             hasPhysicalKeyboard = hasPhysicalKeyboard,
-            hasTextKeyboard = hasTextKeyboard,
         ),
         adaptiveInfo,
         activity,
         lifecycleOwner,
         hasPhysicalKeyboard,
-        hasTextKeyboard,
     ) {
         if (activity == null) {
-            value = value.copy(hasPhysicalKeyboard = hasPhysicalKeyboard, hasTextKeyboard = hasTextKeyboard)
+            value = value.copy(hasPhysicalKeyboard = hasPhysicalKeyboard)
             return@produceState
         }
 
@@ -142,7 +120,6 @@ fun rememberJCodeWindowInfo(): State<JCodeWindowInfo> {
                     heightClass = adaptiveInfo.windowSizeClass.toJCodeHeightClass(),
                     posture = foldingFeature.toJCodePosture(),
                     hasPhysicalKeyboard = hasPhysicalKeyboard,
-                    hasTextKeyboard = hasTextKeyboard,
                 )
             }
         }

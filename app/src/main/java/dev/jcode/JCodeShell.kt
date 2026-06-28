@@ -158,10 +158,6 @@ import dev.jcode.core.distro.SdkCatalogState
 import dev.jcode.core.term.TerminalSessionManager
 import dev.jcode.core.term.TerminalView
 import dev.jcode.design.CommandRegistry
-import dev.jcode.design.EditorKeyboardSettings
-import dev.jcode.design.InAppKeyboard
-import dev.jcode.design.InAppKeyboardController
-import dev.jcode.design.LocalInAppKeyboard
 import dev.jcode.design.ThemeMode
 import dev.jcode.feature.editor.pane.EditorGroup
 import dev.jcode.feature.editor.pane.EditorPageKind
@@ -238,13 +234,6 @@ fun JCodeApp(
     val formatterId by viewModel.formatterId.collectAsStateWithLifecycle()
     val railToolOrder by viewModel.railToolOrder.collectAsStateWithLifecycle()
     val terminalDoubleTapToFocus by viewModel.terminalDoubleTapToFocus.collectAsStateWithLifecycle()
-    val editorUseInAppKeyboard by viewModel.editorUseInAppKeyboard.collectAsStateWithLifecycle()
-    val editorCodeKeys by viewModel.editorCodeKeys.collectAsStateWithLifecycle()
-    val editorKeyboard = EditorKeyboardSettings(
-        useInAppKeyboard = editorUseInAppKeyboard,
-        codeKeys = editorCodeKeys,
-        onChange = { viewModel.setEditorKeyboard(it.useInAppKeyboard, it.codeKeys) },
-    )
     val tapContext = LocalContext.current
     val terminalTapConfig = TerminalTapConfig(
         doubleTapToFocus = terminalDoubleTapToFocus,
@@ -355,7 +344,6 @@ fun JCodeApp(
         onOpenSettingsPage = viewModel::openSettingsPage,
         terminalDoubleTapToFocus = terminalDoubleTapToFocus,
         onUpdateTerminalDoubleTapToFocus = viewModel::setTerminalDoubleTapToFocus,
-        editorKeyboard = editorKeyboard,
     )
     }
 
@@ -453,14 +441,12 @@ private fun JCodeShell(
     onOpenSettingsPage: () -> Unit,
     terminalDoubleTapToFocus: Boolean,
     onUpdateTerminalDoubleTapToFocus: (Boolean) -> Unit,
-    editorKeyboard: EditorKeyboardSettings,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
     val appContext = LocalContext.current.applicationContext
     val configuration = LocalConfiguration.current
     val focusRequester = remember { FocusRequester() }
-    val inAppKeyboard = remember { InAppKeyboardController() }
     val compactDrawerState = rememberDrawerState(DrawerValue.Closed)
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val isMobileLandscapeMode = isLandscape && windowInfo.widthClass != JCodeWindowWidthClass.Expanded
@@ -1010,7 +996,6 @@ private fun JCodeShell(
                             rightPanelTab = RightPanelTab.Terminal
                             rightSidebarVisible = true
                         },
-                        editorKeyboard = editorKeyboard,
                         onSelectEditorTab = onSelectEditorTab,
                         onCloseEditorTab = onCloseEditorTab,
                         onOpenFileRequest = {
@@ -1066,7 +1051,6 @@ private fun JCodeShell(
                                     onSelectFormatter = onSelectFormatter,
                                     terminalDoubleTapToFocus = terminalDoubleTapToFocus,
                                     onUpdateTerminalDoubleTapToFocus = onUpdateTerminalDoubleTapToFocus,
-                                    editorKeyboard = editorKeyboard,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                                 EditorPageKind.Environment -> OnboardingFeature.EnvironmentSetupPage(
@@ -1222,21 +1206,7 @@ private fun JCodeShell(
         }
     }
 
-    // Suppress the on-screen keyboard when a real text keyboard is attached — hardware keys reach the
-    // editor through dispatchKeyEvent regardless (game controllers don't count: hasTextKeyboard).
-    val showInAppKeyboard = editorKeyboard.useInAppKeyboard &&
-        inAppKeyboard.visible &&
-        !windowInfo.hasTextKeyboard
-    var inAppKeyboardHeight by remember { mutableStateOf(0.dp) }
-    val rootDensity = LocalDensity.current
-    CompositionLocalProvider(LocalInAppKeyboard provides inAppKeyboard) {
-    Box(modifier = modifier.fillMaxSize()) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .imePadding()
-            .padding(bottom = if (showInAppKeyboard) inAppKeyboardHeight else 0.dp),
-    ) {
+    Box(modifier = modifier.fillMaxSize().imePadding()) {
         if (usesModalWorkspace) {
             ModalNavigationDrawer(
                 drawerState = compactDrawerState,
@@ -1290,21 +1260,6 @@ private fun JCodeShell(
             compact = usesModalWorkspace,
             onDismiss = { commandPaletteVisible = false },
         )
-    }
-
-    // App-wide in-app keyboard: a full-width surface pinned to the very bottom that the focused
-    // editor drives. Its measured height pads the content above (so the caret stays visible).
-    if (showInAppKeyboard) {
-        InAppKeyboard(
-            codeKeys = editorKeyboard.codeKeys,
-            onAction = inAppKeyboard::dispatchKey,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .onSizeChanged { inAppKeyboardHeight = with(rootDensity) { it.height.toDp() } },
-        )
-    }
-    }
     }
 }
 
@@ -2196,7 +2151,6 @@ private fun EditorWorkspace(
     onToggleRightSidebar: () -> Unit,
     onRun: () -> Unit,
     onShowTerminal: () -> Unit,
-    editorKeyboard: EditorKeyboardSettings,
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
     onOpenFileRequest: () -> Unit,
@@ -2242,7 +2196,6 @@ private fun EditorWorkspace(
                     onOpenFile = onOpenFileRequest,
                     languageActionsEnabled = languageActionsEnabled,
                     onLanguageAction = onEditorLanguageAction,
-                    editorKeyboard = editorKeyboard,
                     pageContent = editorPageContent,
                 )
             }
