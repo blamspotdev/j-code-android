@@ -5,18 +5,16 @@ import dev.jcode.design.jcIcon
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,15 +22,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.jcode.fs.Project
 import dev.jcode.run.ProjectRunner
 
 /**
- * The "Build & Run" side-panel. Lists the projects in scope — all of them inside a User Workspace,
- * or just the single open project in the Default Workspace — and for each offers Build & Run and a
- * Configure action (which opens the structured `.jcode/run.yaml` editor). The actual run + browser
- * launch is orchestrated by the workbench shell (see `handleRun`).
+ * The "Build & Run" side-panel. One compact row per project — all projects inside a User Workspace,
+ * or just the open project in the Default Workspace. Each row shows the run kind + port and a status
+ * chip, with an inline Run/Stop control and a Configure (gear) action; a running row also reveals
+ * Open-in-browser. The actual run + browser launch is orchestrated by the workbench shell
+ * (`handleRun`).
  */
 @Composable
 internal fun RunDebugPanel(
@@ -50,24 +50,21 @@ internal fun RunDebugPanel(
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
+            modifier = Modifier.padding(start = 2.dp, top = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Icon(
-                imageVector = jcIcon(JCodeIcon.Run),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-            )
-            Text(text = "Build & Run", fontWeight = FontWeight.SemiBold)
+            Icon(jcIcon(JCodeIcon.Run), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Text("Build & Run", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
         }
 
         if (projects.isEmpty()) {
             Text(
-                text = "Open a project to build & run.",
+                "Open a project to build & run.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -104,70 +101,103 @@ private fun ProjectRunRow(
     // Re-resolve when the project changes or a config is saved (runConfigVersion bumps).
     val plan = remember(project.id, runConfigVersion) { ProjectRunner.effectivePlan(project) }
     val configured = plan != null
+    val subline = when {
+        plan == null -> "Not configured"
+        plan.readyPort > 0 -> "${plan.kindLabel} · :${plan.readyPort}"
+        else -> plan.kindLabel
+    }
+    val statusText = when {
+        isRunning && runInProgress -> "Building…"
+        isRunning -> "Running"
+        configured -> "Idle"
+        else -> "Not set up"
+    }
 
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f)) {
-        Column(
-            modifier = Modifier.padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 10.dp, top = 4.dp, bottom = 4.dp, end = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(project.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-            Text(
-                text = plan?.kindLabel ?: "Not configured",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (configured && plan!!.readyPort > 0) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = project.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    RunStatusChip(text = statusText, active = isRunning)
+                }
                 Text(
-                    text = "Serves on ${plan.url}",
+                    text = subline,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(
-                    onClick = { onRun(project) },
-                    enabled = configured && !(isRunning && runInProgress),
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(jcIcon(JCodeIcon.Run), contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(if (isRunning) "Re-run" else "Build & Run")
-                }
-                OutlinedButton(
-                    onClick = { onConfigure(project) },
-                    modifier = Modifier.weight(1f),
-                ) { Text("Configure") }
-            }
-
-            if (isRunning) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(
-                        onClick = onStop,
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                        ),
-                    ) {
-                        Icon(jcIcon(JCodeIcon.Stop), contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Stop")
-                    }
-                    if (runUrl != null) {
-                        FilledTonalButton(onClick = onOpenInBrowser, modifier = Modifier.weight(1f)) {
-                            Text("Open in browser")
-                        }
-                    }
-                }
-                if (runInProgress) {
-                    Text(
-                        text = "Building… the browser opens when the server is up.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+            if (isRunning && runUrl != null) {
+                IconButton(onClick = onOpenInBrowser) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                        contentDescription = "Open in browser",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
                     )
                 }
             }
+            if (isRunning) {
+                IconButton(onClick = onStop) {
+                    Icon(
+                        imageVector = jcIcon(JCodeIcon.Stop),
+                        contentDescription = "Stop",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            } else {
+                IconButton(onClick = { onRun(project) }, enabled = configured) {
+                    Icon(
+                        imageVector = jcIcon(JCodeIcon.Run),
+                        contentDescription = "Build & Run",
+                        tint = if (configured) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
+            IconButton(onClick = { onConfigure(project) }) {
+                Icon(
+                    imageVector = jcIcon(JCodeIcon.Settings),
+                    contentDescription = "Configure",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
+    }
+}
+
+@Composable
+private fun RunStatusChip(text: String, active: Boolean) {
+    Surface(
+        color = if (active) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+        } else {
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)
+        },
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
     }
 }
