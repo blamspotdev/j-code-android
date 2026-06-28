@@ -100,6 +100,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -582,8 +583,28 @@ private fun JCodeShell(
     // Terminals the user has actually looked at; anything else is a "new background" instance (badge dot).
     var seenTerminalIds by remember { mutableStateOf(emptySet<String>()) }
     LaunchedEffect(rightSidebarVisible, rightPanelTab, terminalSessionIds) {
-        if (rightSidebarVisible && rightPanelTab == RightPanelTab.Terminal) {
-            seenTerminalIds = terminalSessionIds.toSet()
+        val live = terminalSessionIds.toSet()
+        // Viewing the terminal panel marks everything seen; otherwise just prune closed sessions so the
+        // set can't grow stale (this also runs on every open/close/run-teardown that changes the ids).
+        seenTerminalIds = if (rightSidebarVisible && rightPanelTab == RightPanelTab.Terminal) {
+            live
+        } else {
+            seenTerminalIds intersect live
+        }
+    }
+    // Derived once per actual change (not per recomposition) so a busy-title update doesn't rebuild the
+    // whole top bar, and the instance list isn't a fresh List object every frame.
+    val terminalBusy by remember {
+        derivedStateOf { terminalSessionIds.any { (terminalTitles[it] ?: "terminal") != "terminal" } }
+    }
+    val terminalHasUnseen by remember {
+        derivedStateOf { terminalSessionIds.any { it !in seenTerminalIds } }
+    }
+    val terminalInstances by remember {
+        derivedStateOf {
+            terminalSessionIds.mapIndexed { index, id ->
+                TerminalInstance(id, "${index + 1}. ${terminalTabLabel(terminalTitles[id])}")
+            }
         }
     }
 
@@ -1052,11 +1073,9 @@ private fun JCodeShell(
                         onStop = ::handleStopRun,
                         onRerun = { selectedProject?.let(::handleRun) },
                         isRunning = runningProjectId != null,
-                        terminalBusy = terminalSessionIds.any { (terminalTitles[it] ?: "terminal") != "terminal" },
-                        terminalHasUnseen = terminalSessionIds.any { it !in seenTerminalIds },
-                        terminalSessions = terminalSessionIds.mapIndexed { index, id ->
-                            TerminalInstance(id, "${index + 1}. ${terminalTitles[id] ?: "terminal"}")
-                        },
+                        terminalBusy = terminalBusy,
+                        terminalHasUnseen = terminalHasUnseen,
+                        terminalSessions = terminalInstances,
                         onOpenTerminalSession = { id ->
                             rightPanelTab = RightPanelTab.Terminal
                             rightSidebarVisible = true
@@ -1358,18 +1377,17 @@ private fun WorkbenchIconActionButton(
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
-    // Pulse the icon while a background terminal is busy (a foreground process is running).
-    val iconAlpha = if (shimmer) {
-        val transition = rememberInfiniteTransition(label = "shimmer")
-        transition.animateFloat(
-            initialValue = 0.35f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
-            label = "shimmerAlpha",
-        ).value
-    } else {
-        1f
-    }
+    // Pulse the icon while a background terminal is busy (a foreground process is running). The
+    // transition is created unconditionally (Rules of Composition); its value is only read — and so
+    // only drives recomposition — when [shimmer] is true.
+    val shimmerTransition = rememberInfiniteTransition(label = "shimmer")
+    val shimmerAlpha by shimmerTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+        label = "shimmerAlpha",
+    )
+    val iconAlpha = if (shimmer) shimmerAlpha else 1f
 
     JcTooltip(contentDescription) {
         Box {
@@ -2119,6 +2137,12 @@ private fun EditorWorkspace(
 /** A live terminal instance shown in the Terminal-button long-press list. */
 private data class TerminalInstance(val id: String, val label: String)
 
+/** Terminal tab/instance label, capped at 8 characters (the OSC title can be a long command line). */
+private fun terminalTabLabel(raw: String?): String {
+    val s = (raw ?: "terminal").ifBlank { "terminal" }
+    return if (s.length > 8) s.take(7) + "…" else s
+}
+
 @Composable
 private fun WorkbenchTopBar(
     workspace: Workspace?,
@@ -2486,9 +2510,10 @@ private fun TerminalSidebarContent(
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
                             Text(
-                                text = terminalTitleFor(sessionId)
-                                    ?: terminalSessionFor(sessionId)?.label
-                                    ?: "terminal",
+                                text = terminalTabLabel(
+                                    terminalTitleFor(sessionId) ?: terminalSessionFor(sessionId)?.label
+                                ),
+                                maxLines = 1,
                                 style = MaterialTheme.typography.labelMedium,
                                 color = if (sessionId == selectedTerminalSessionId) {
                                     MaterialTheme.colorScheme.primary
