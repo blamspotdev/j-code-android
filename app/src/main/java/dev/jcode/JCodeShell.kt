@@ -244,6 +244,10 @@ fun JCodeApp(
             }
         },
     )
+    DisposableEffect(viewModel) {
+        TerminalSessionHost.setUiOpenFileListener { token -> viewModel.openFileByGuestPath(token) }
+        onDispose { TerminalSessionHost.setUiOpenFileListener(null) }
+    }
     val snackbarHostState = remember { SnackbarHostState() }
     val openFolderLauncher = rememberOpenFolderLauncher(
         onFolderPicked = viewModel::openExternalFolder,

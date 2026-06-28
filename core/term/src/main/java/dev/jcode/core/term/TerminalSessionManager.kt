@@ -37,6 +37,9 @@ class TerminalSessionManager(
         val parser: VtParser = VtParser(rows, cols)
         internal var readerJob: Job? = null
 
+        /** Detects the `code`/`jcode` open-file escape (OSC 7711) in this session's output stream. */
+        internal val openFileScanner = OpenFileOscScanner()
+
         /** Invoked off the main thread after new output is parsed, so a bound view can repaint. */
         @Volatile var onUpdate: (() -> Unit)? = null
 
@@ -64,6 +67,11 @@ class TerminalSessionManager(
     /** Invoked (off the main thread) when a session's shell exits on its own and it is auto-reaped,
      *  so the host can release the session's foreground-service hold and the UI can drop its tab. */
     var onSessionExit: ((String) -> Unit)? = null
+
+    /** Invoked (off the main thread) when a guest `code`/`jcode <path>[:line[:col]]` command runs,
+     *  carrying the path token so the host can open + focus it in the editor. */
+    @Volatile
+    var onOpenFileRequest: ((String) -> Unit)? = null
 
     @Volatile
     var activeSessionId: String? = null
@@ -105,6 +113,15 @@ class TerminalSessionManager(
                 File(rootfsPath, "home/$user").mkdirs()
                 File(rootfsPath, "home/$user/.hushlogin").createNewFile()
             }
+        }
+
+        // Install the `code`/`jcode` open-in-editor command for login shells (sourced via
+        // /etc/profile -> /etc/profile.d/*.sh). It prints OSC 7711 with the file path, which the
+        // session reader below detects and routes to the editor.
+        runCatching {
+            val profileD = File(rootfsPath, "etc/profile.d")
+            profileD.mkdirs()
+            File(profileD, "jcode-open.sh").writeText(GUEST_OPEN_COMMAND_SCRIPT)
         }
 
         // Foreign-arch environment: ensure the QEMU emulator is extracted before spawning.
@@ -184,6 +201,7 @@ class TerminalSessionManager(
                 when {
                     n > 0 -> {
                         synchronized(session) { session.parser.feed(buffer.copyOf(n)) }
+                        onOpenFileRequest?.let { cb -> session.openFileScanner.feed(buffer, n, cb) }
                         session.onUpdate?.invoke()
                     }
                     n < 0 -> { exited = true; break }   // EOF: the shell/process exited
@@ -284,3 +302,72 @@ class TerminalSessionManager(
         activeSessionId = null
     }
 }
+
+/**
+ * Scans a terminal output stream for the open-in-editor escape emitted by the guest `code`/`jcode`
+ * command: `ESC ] 7711 ; <path> BEL`. It is stateful across [feed] calls so a sequence split across
+ * PTY reads is still recognized. The same bytes are also fed to the VT parser, which consumes the
+ * (unknown) OSC without printing it.
+ */
+internal class OpenFileOscScanner {
+    private val prefix = byteArrayOf(
+        ESC, ']'.code.toByte(), '7'.code.toByte(), '7'.code.toByte(),
+        '1'.code.toByte(), '1'.code.toByte(), ';'.code.toByte(),
+    )
+    private var matched = 0
+    private var collecting = false
+    private val payload = StringBuilder()
+
+    fun feed(data: ByteArray, length: Int, onOpen: (String) -> Unit) {
+        var i = 0
+        while (i < length) {
+            val b = data[i]
+            if (collecting) {
+                when (b) {
+                    BEL, ESC -> finish(onOpen)
+                    else -> if (payload.length < MAX_PAYLOAD) payload.append((b.toInt() and 0xFF).toChar())
+                }
+            } else if (b == prefix[matched]) {
+                if (++matched == prefix.size) {
+                    matched = 0
+                    collecting = true
+                    payload.setLength(0)
+                }
+            } else {
+                matched = if (b == prefix[0]) 1 else 0
+            }
+            i++
+        }
+    }
+
+    private fun finish(onOpen: (String) -> Unit) {
+        val token = payload.toString().trim()
+        collecting = false
+        matched = 0
+        payload.setLength(0)
+        if (token.isNotEmpty()) onOpen(token)
+    }
+
+    private companion object {
+        const val ESC: Byte = 0x1b
+        const val BEL: Byte = 0x07
+        const val MAX_PAYLOAD = 4096
+    }
+}
+
+private val GUEST_OPEN_COMMAND_SCRIPT = """# J Code: open a file in the editor from the terminal.
+# Usage: jcode <path>[:line[:col]] ...   (also installed as `code` when no real `code` exists)
+jcode() {
+  local a p
+  for a in "${'$'}@"; do
+    [ -z "${'$'}a" ] && continue
+    case "${'$'}a" in
+      /*) p="${'$'}a" ;;
+      *) p="${'$'}PWD/${'$'}a" ;;
+    esac
+    printf '\033]7711;%s\007' "${'$'}p"
+  done
+}
+command -v code >/dev/null 2>&1 || code() { jcode "${'$'}@"; }
+"""
+

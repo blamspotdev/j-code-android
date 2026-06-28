@@ -41,6 +41,15 @@ object TerminalSessionHost {
         uiExitListener = listener
     }
 
+    // Optional UI hook so a guest `code`/`jcode <path>` command can open + focus a file in the editor.
+    // Set via a DisposableEffect and cleared on dispose, so it never outlives its composition.
+    @Volatile
+    private var uiOpenFileListener: ((String) -> Unit)? = null
+
+    fun setUiOpenFileListener(listener: ((String) -> Unit)?) {
+        uiOpenFileListener = listener
+    }
+
     fun manager(context: Context): TerminalSessionManager {
         manager?.let { return it }
         return synchronized(this) {
@@ -59,6 +68,11 @@ object TerminalSessionHost {
                 mgr.onSessionExit = { sessionId ->
                     onSessionStopped(sessionId)
                     uiExitListener?.let { listener -> mainHandler.post { listener(sessionId) } }
+                }
+                // A guest `code`/`jcode <path>` command (OSC 7711) fires this off the reader thread;
+                // hop to the main thread and hand the path token to the active UI listener.
+                mgr.onOpenFileRequest = { token ->
+                    uiOpenFileListener?.let { listener -> mainHandler.post { listener(token) } }
                 }
             }
         }
