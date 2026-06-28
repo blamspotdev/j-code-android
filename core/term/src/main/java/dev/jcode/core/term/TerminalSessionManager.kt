@@ -37,8 +37,8 @@ class TerminalSessionManager(
         val parser: VtParser = VtParser(rows, cols)
         internal var readerJob: Job? = null
 
-        /** Detects the `code`/`jcode` open-file escape (OSC 7711) in this session's output stream. */
-        internal val openFileScanner = OpenFileOscScanner()
+        /** Parses J Code OSC escapes in this session's output: open-file (7711) and tab-title (7712). */
+        internal val oscScanner = OscScanner()
 
         /** Invoked off the main thread after new output is parsed, so a bound view can repaint. */
         @Volatile var onUpdate: (() -> Unit)? = null
@@ -72,6 +72,11 @@ class TerminalSessionManager(
      *  carrying the path token so the host can open + focus it in the editor. */
     @Volatile
     var onOpenFileRequest: ((String) -> Unit)? = null
+
+    /** Invoked (off the main thread) with (sessionId, title) when the shell reports the running
+     *  program via OSC 7712, so the UI can name the terminal tab after the foreground process. */
+    @Volatile
+    var onTitleChange: ((String, String) -> Unit)? = null
 
     @Volatile
     var activeSessionId: String? = null
@@ -121,7 +126,7 @@ class TerminalSessionManager(
         runCatching {
             val profileD = File(rootfsPath, "etc/profile.d")
             profileD.mkdirs()
-            File(profileD, "jcode-open.sh").writeText(GUEST_OPEN_COMMAND_SCRIPT)
+            File(profileD, "jcode-open.sh").writeText(GUEST_SHELL_INTEGRATION)
         }
 
         // Foreign-arch environment: ensure the QEMU emulator is extracted before spawning.
@@ -137,7 +142,8 @@ class TerminalSessionManager(
         }
 
         val sessionId = "terminal-${UUID.randomUUID().toString().take(8)}"
-        val sessionLabel = label ?: "bash ${sessionCount + 1}"
+        // Seed label shown until the shell reports the running program (see OSC 7712 / GUEST_SHELL_INTEGRATION).
+        val sessionLabel = label ?: "terminal"
 
         val home = if (user == "root") "/root" else "/home/$user"
         val envVars = mapOf(
@@ -192,6 +198,12 @@ class TerminalSessionManager(
         session.readerJob = readerScope.launch {
             val buffer = ByteArray(8192)
             var exited = false
+            val oscHandler: (Int, String) -> Unit = { code, payload ->
+                when (code) {
+                    7711 -> onOpenFileRequest?.invoke(payload.trim())
+                    7712 -> onTitleChange?.invoke(session.id, payload.trim())
+                }
+            }
             while (isActive) {
                 val n = try {
                     session.pty.read(buffer)
@@ -201,7 +213,7 @@ class TerminalSessionManager(
                 when {
                     n > 0 -> {
                         synchronized(session) { session.parser.feed(buffer.copyOf(n)) }
-                        onOpenFileRequest?.let { cb -> session.openFileScanner.feed(buffer, n, cb) }
+                        session.oscScanner.feed(buffer, n, oscHandler)
                         session.onUpdate?.invoke()
                     }
                     n < 0 -> { exited = true; break }   // EOF: the shell/process exited
@@ -304,59 +316,68 @@ class TerminalSessionManager(
 }
 
 /**
- * Scans a terminal output stream for the open-in-editor escape emitted by the guest `code`/`jcode`
- * command: `ESC ] 7711 ; <path> BEL`. It is stateful across [feed] calls so a sequence split across
- * PTY reads is still recognized. The same bytes are also fed to the VT parser, which consumes the
+ * Scans a terminal output stream for OSC escapes (`ESC ] <code> ; <payload> (BEL|ST)`) and reports
+ * each as (code, payload). J Code uses two private codes — 7711 (open file) and 7712 (tab title) —
+ * but any OSC is parsed; the caller filters. Stateful across [feed] calls so a sequence split across
+ * PTY reads is still recognized. The same bytes also reach the VT parser, which consumes the
  * (unknown) OSC without printing it.
  */
-internal class OpenFileOscScanner {
-    private val prefix = byteArrayOf(
-        ESC, ']'.code.toByte(), '7'.code.toByte(), '7'.code.toByte(),
-        '1'.code.toByte(), '1'.code.toByte(), ';'.code.toByte(),
-    )
-    private var matched = 0
-    private var collecting = false
+internal class OscScanner {
+    private var state = 0
+    private val code = StringBuilder()
     private val payload = StringBuilder()
 
-    fun feed(data: ByteArray, length: Int, onOpen: (String) -> Unit) {
+    fun feed(data: ByteArray, length: Int, onOsc: (Int, String) -> Unit) {
         var i = 0
         while (i < length) {
-            val b = data[i]
-            if (collecting) {
-                when (b) {
-                    BEL, ESC -> finish(onOpen)
-                    else -> if (payload.length < MAX_PAYLOAD) payload.append((b.toInt() and 0xFF).toChar())
+            val b = data[i].toInt() and 0xFF
+            when (state) {
+                0 -> if (b == ESC) state = 1
+                1 -> when (b) {
+                    OSC -> { state = 2; code.setLength(0); payload.setLength(0) }
+                    ESC -> {}
+                    else -> state = 0
                 }
-            } else if (b == prefix[matched]) {
-                if (++matched == prefix.size) {
-                    matched = 0
-                    collecting = true
-                    payload.setLength(0)
+                2 -> when {
+                    b == SEMI -> state = 3
+                    b in DIGIT_0..DIGIT_9 && code.length < MAX_CODE -> code.append(b.toChar())
+                    b == ESC -> state = 1
+                    else -> state = 0
                 }
-            } else {
-                matched = if (b == prefix[0]) 1 else 0
+                else -> when (b) { // 3: collecting payload until BEL or ST (ESC \)
+                    BEL -> { dispatch(onOsc); state = 0 }
+                    ESC -> { dispatch(onOsc); state = 1 }
+                    else -> if (payload.length < MAX_PAYLOAD) payload.append(b.toChar())
+                }
             }
             i++
         }
     }
 
-    private fun finish(onOpen: (String) -> Unit) {
-        val token = payload.toString().trim()
-        collecting = false
-        matched = 0
+    private fun dispatch(onOsc: (Int, String) -> Unit) {
+        val c = code.toString().toIntOrNull()
+        val p = payload.toString()
+        code.setLength(0)
         payload.setLength(0)
-        if (token.isNotEmpty()) onOpen(token)
+        if (c != null) onOsc(c, p)
     }
 
     private companion object {
-        const val ESC: Byte = 0x1b
-        const val BEL: Byte = 0x07
+        const val ESC = 0x1b
+        const val OSC = 0x5d  // ']'
+        const val SEMI = 0x3b // ';'
+        const val BEL = 0x07
+        const val DIGIT_0 = 0x30
+        const val DIGIT_9 = 0x39
+        const val MAX_CODE = 6
         const val MAX_PAYLOAD = 4096
     }
 }
 
-private val GUEST_OPEN_COMMAND_SCRIPT = """# J Code: open a file in the editor from the terminal.
-# Usage: jcode <path>[:line[:col]] ...   (also installed as `code` when no real `code` exists)
+private val GUEST_SHELL_INTEGRATION = """# J Code shell integration (sourced via /etc/profile -> /etc/profile.d/*.sh).
+
+# Open a file in the editor from the terminal.
+# Usage: jcode <path>[:line[:col]] ...   (alias: code, when no real `code` exists)
 jcode() {
   local a p
   for a in "${'$'}@"; do
@@ -369,5 +390,19 @@ jcode() {
   done
 }
 command -v code >/dev/null 2>&1 || code() { jcode "${'$'}@"; }
+
+# Name the terminal tab after the running program (OSC 7712); "terminal" at the prompt.
+__jcode_tab() { printf '\033]7712;%s\007' "${'$'}1"; }
+__jcode_tab_cmd() {
+  case "${'$'}BASH_COMMAND" in __jcode_*) return ;; esac
+  local w=${'$'}{BASH_COMMAND%% *}
+  __jcode_tab "${'$'}{w##*/}"
+}
+__jcode_tab_reset() { __jcode_tab terminal; }
+trap '__jcode_tab_cmd' DEBUG
+case ";${'$'}{PROMPT_COMMAND};" in
+  *";__jcode_tab_reset;"*) ;;
+  *) PROMPT_COMMAND="__jcode_tab_reset;${'$'}{PROMPT_COMMAND}" ;;
+esac
 """
 

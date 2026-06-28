@@ -50,6 +50,15 @@ object TerminalSessionHost {
         uiOpenFileListener = listener
     }
 
+    // Optional UI hook so the terminal tab can be named after the running foreground process.
+    // Set via a DisposableEffect and cleared on dispose, so it never outlives its composition.
+    @Volatile
+    private var uiTitleListener: ((String, String) -> Unit)? = null
+
+    fun setUiTitleListener(listener: ((String, String) -> Unit)?) {
+        uiTitleListener = listener
+    }
+
     fun manager(context: Context): TerminalSessionManager {
         manager?.let { return it }
         return synchronized(this) {
@@ -73,6 +82,11 @@ object TerminalSessionHost {
                 // hop to the main thread and hand the path token to the active UI listener.
                 mgr.onOpenFileRequest = { token ->
                     uiOpenFileListener?.let { listener -> mainHandler.post { listener(token) } }
+                }
+                // The shell reports the running program via OSC 7712 (off the reader thread); hop to
+                // the main thread so the UI can rename the session's tab.
+                mgr.onTitleChange = { sessionId, title ->
+                    uiTitleListener?.let { listener -> mainHandler.post { listener(sessionId, title) } }
                 }
             }
         }

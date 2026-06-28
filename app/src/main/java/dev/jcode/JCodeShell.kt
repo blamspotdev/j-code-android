@@ -531,6 +531,8 @@ private fun JCodeShell(
     var commandPaletteVisible by rememberSaveable { mutableStateOf(false) }
     var terminalSessionIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var selectedTerminalSessionId by rememberSaveable { mutableStateOf("") }
+    // Live tab names keyed by session id, driven by the shell's OSC 7712 (the running program name).
+    val terminalTitles = remember { mutableStateMapOf<String, String>() }
 
     // Process-lifetime manager so terminal sessions (native PTY processes) survive Activity
     // recreation/backgrounding instead of being orphaned with the composition.
@@ -634,8 +636,16 @@ private fun JCodeShell(
     // Drop a terminal tab when its shell exits on its own (e.g. `exit`, or a finished one-shot command).
     // The manager has already reaped the PTY + released the foreground hold; here we just sync the UI.
     DisposableEffect(Unit) {
+        TerminalSessionHost.setUiTitleListener { id, title ->
+            terminalTitles[id] = title.ifBlank { "terminal" }
+        }
+        onDispose { TerminalSessionHost.setUiTitleListener(null) }
+    }
+
+    DisposableEffect(Unit) {
         TerminalSessionHost.setUiExitListener { exitedId ->
             terminalSessionIds = terminalSessionIds.filterNot { it == exitedId }
+            terminalTitles.remove(exitedId)
             if (selectedTerminalSessionId == exitedId) {
                 selectedTerminalSessionId = terminalSessionIds.lastOrNull().orEmpty()
                 selectedTerminalSessionId.takeIf { it.isNotEmpty() }
@@ -678,6 +688,7 @@ private fun JCodeShell(
         }
         if (previous.isNotEmpty()) {
             terminalSessionIds = terminalSessionIds.filterNot { it in previous }
+            previous.forEach { terminalTitles.remove(it) }
         }
         val startedIds = mutableListOf<String>()
         for (terminal in plan.terminals) {
@@ -728,6 +739,7 @@ private fun JCodeShell(
         val remaining = terminalSessionIds.filterNot { it == sessionId }
         terminalSessionManager.closeSession(sessionId)
         TerminalSessionHost.onSessionStopped(sessionId)
+        terminalTitles.remove(sessionId)
         terminalSessionIds = remaining
         if (selectedTerminalSessionId == sessionId) {
             if (remaining.isNotEmpty()) {
@@ -747,6 +759,7 @@ private fun JCodeShell(
             TerminalSessionHost.onSessionStopped(id)
         }
         terminalSessionIds = emptyList()
+        terminalTitles.clear()
         selectedTerminalSessionId = ""
     }
 
@@ -1184,6 +1197,7 @@ private fun JCodeShell(
                         selectedTerminalSessionId = selectedTerminalSessionId,
                         activeTerminalPty = terminalSessionManager.getSession(selectedTerminalSessionId)?.pty,
                         terminalSessionFor = { id -> terminalSessionManager.getSession(id) },
+                        terminalTitleFor = { id -> terminalTitles[id] },
                         terminalReady = terminalReady,
                         onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                         modifier = Modifier
@@ -1231,6 +1245,7 @@ private fun JCodeShell(
                         selectedTerminalSessionId = selectedTerminalSessionId,
                         activeTerminalPty = terminalSessionManager.getSession(selectedTerminalSessionId)?.pty,
                         terminalSessionFor = { id -> terminalSessionManager.getSession(id) },
+                        terminalTitleFor = { id -> terminalTitles[id] },
                         terminalReady = terminalReady,
                         onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                         modifier = Modifier
@@ -2122,6 +2137,7 @@ private fun WorkbenchRightSidebar(
     selectedTerminalSessionId: String,
     activeTerminalPty: dev.jcode.core.term.PtyProcess?,
     terminalSessionFor: (String) -> dev.jcode.core.term.TerminalSessionManager.Session?,
+    terminalTitleFor: (String) -> String?,
     terminalReady: Boolean,
     onOpenEnvironmentWizard: () -> Unit,
     onTabSelected: (RightPanelTab) -> Unit,
@@ -2192,6 +2208,7 @@ private fun WorkbenchRightSidebar(
                 selectedTerminalSessionId = selectedTerminalSessionId,
                 activeTerminalPty = activeTerminalPty,
                 terminalSessionFor = terminalSessionFor,
+                terminalTitleFor = terminalTitleFor,
                 terminalReady = terminalReady,
                 onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                 onSelectTerminalSession = onSelectTerminalSession,
@@ -2211,6 +2228,7 @@ private fun WorkbenchRightSidebarBody(
     selectedTerminalSessionId: String,
     activeTerminalPty: dev.jcode.core.term.PtyProcess?,
     terminalSessionFor: (String) -> dev.jcode.core.term.TerminalSessionManager.Session?,
+    terminalTitleFor: (String) -> String?,
     terminalReady: Boolean,
     onOpenEnvironmentWizard: () -> Unit,
     onSelectTerminalSession: (String) -> Unit,
@@ -2226,6 +2244,7 @@ private fun WorkbenchRightSidebarBody(
                 selectedTerminalSessionId = selectedTerminalSessionId,
                 activeTerminalPty = activeTerminalPty,
                 terminalSessionFor = terminalSessionFor,
+                terminalTitleFor = terminalTitleFor,
                 terminalReady = terminalReady,
                 onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                 onSelectTerminalSession = onSelectTerminalSession,
@@ -2263,6 +2282,7 @@ private fun TerminalSidebarContent(
     selectedTerminalSessionId: String,
     activeTerminalPty: dev.jcode.core.term.PtyProcess?,
     terminalSessionFor: (String) -> dev.jcode.core.term.TerminalSessionManager.Session?,
+    terminalTitleFor: (String) -> String?,
     terminalReady: Boolean,
     onOpenEnvironmentWizard: () -> Unit,
     onSelectTerminalSession: (String) -> Unit,
@@ -2272,9 +2292,6 @@ private fun TerminalSidebarContent(
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         var menuForId by remember { mutableStateOf<String?>(null) }
-        var renameForId by remember { mutableStateOf<String?>(null) }
-        // Renamed labels, kept observable so the tab recomposes (mutating Session.label alone wouldn't).
-        val labelOverrides = remember { mutableStateMapOf<String, String>() }
         // Session tab bar
         Row(
             modifier = Modifier
@@ -2283,7 +2300,7 @@ private fun TerminalSidebarContent(
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            terminalSessionIds.forEachIndexed { index, sessionId ->
+            terminalSessionIds.forEach { sessionId ->
                 Box {
                     Surface(
                         modifier = Modifier
@@ -2305,9 +2322,9 @@ private fun TerminalSidebarContent(
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
                             Text(
-                                text = labelOverrides[sessionId]
+                                text = terminalTitleFor(sessionId)
                                     ?: terminalSessionFor(sessionId)?.label
-                                    ?: "bash ${index + 1}",
+                                    ?: "terminal",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = if (sessionId == selectedTerminalSessionId) {
                                     MaterialTheme.colorScheme.primary
@@ -2339,10 +2356,6 @@ private fun TerminalSidebarContent(
                         expanded = menuForId == sessionId,
                         onDismissRequest = { menuForId = null },
                     ) {
-                        DropdownMenuItem(
-                            text = { Text("Rename") },
-                            onClick = { menuForId = null; renameForId = sessionId },
-                        )
                         DropdownMenuItem(
                             text = { Text("Clear") },
                             onClick = {
@@ -2385,36 +2398,6 @@ private fun TerminalSidebarContent(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-        }
-
-        renameForId?.let { id ->
-            var name by remember(id) {
-                mutableStateOf(labelOverrides[id] ?: terminalSessionFor(id)?.label.orEmpty())
-            }
-            AlertDialog(
-                onDismissRequest = { renameForId = null },
-                title = { Text("Rename terminal") },
-                text = {
-                    TextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        singleLine = true,
-                    )
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        val trimmed = name.trim()
-                        if (trimmed.isNotEmpty()) {
-                            terminalSessionFor(id)?.label = trimmed
-                            labelOverrides[id] = trimmed
-                        }
-                        renameForId = null
-                    }) { Text("Rename") }
-                },
-                dismissButton = {
-                    TextButton(onClick = { renameForId = null }) { Text("Cancel") }
-                },
-            )
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
