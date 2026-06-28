@@ -158,6 +158,7 @@ import dev.jcode.core.distro.SdkCatalogState
 import dev.jcode.core.term.TerminalSessionManager
 import dev.jcode.core.term.TerminalView
 import dev.jcode.design.CommandRegistry
+import dev.jcode.design.EditorKeyboardSettings
 import dev.jcode.design.ThemeMode
 import dev.jcode.feature.editor.pane.EditorGroup
 import dev.jcode.feature.editor.pane.EditorPageKind
@@ -234,6 +235,15 @@ fun JCodeApp(
     val formatterId by viewModel.formatterId.collectAsStateWithLifecycle()
     val railToolOrder by viewModel.railToolOrder.collectAsStateWithLifecycle()
     val terminalDoubleTapToFocus by viewModel.terminalDoubleTapToFocus.collectAsStateWithLifecycle()
+    val editorHideSuggestions by viewModel.editorHideSuggestions.collectAsStateWithLifecycle()
+    val editorShowSymbolBar by viewModel.editorShowSymbolBar.collectAsStateWithLifecycle()
+    val editorSymbolKeys by viewModel.editorSymbolKeys.collectAsStateWithLifecycle()
+    val editorKeyboard = EditorKeyboardSettings(
+        hideSuggestions = editorHideSuggestions,
+        showSymbolBar = editorShowSymbolBar,
+        symbolKeys = editorSymbolKeys,
+        onChange = { viewModel.setEditorKeyboard(it.hideSuggestions, it.showSymbolBar, it.symbolKeys) },
+    )
     val tapContext = LocalContext.current
     val terminalTapConfig = TerminalTapConfig(
         doubleTapToFocus = terminalDoubleTapToFocus,
@@ -344,6 +354,7 @@ fun JCodeApp(
         onOpenSettingsPage = viewModel::openSettingsPage,
         terminalDoubleTapToFocus = terminalDoubleTapToFocus,
         onUpdateTerminalDoubleTapToFocus = viewModel::setTerminalDoubleTapToFocus,
+        editorKeyboard = editorKeyboard,
     )
     }
 
@@ -441,6 +452,7 @@ private fun JCodeShell(
     onOpenSettingsPage: () -> Unit,
     terminalDoubleTapToFocus: Boolean,
     onUpdateTerminalDoubleTapToFocus: (Boolean) -> Unit,
+    editorKeyboard: EditorKeyboardSettings,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -996,6 +1008,7 @@ private fun JCodeShell(
                             rightPanelTab = RightPanelTab.Terminal
                             rightSidebarVisible = true
                         },
+                        editorKeyboard = editorKeyboard,
                         onSelectEditorTab = onSelectEditorTab,
                         onCloseEditorTab = onCloseEditorTab,
                         onOpenFileRequest = {
@@ -1051,6 +1064,7 @@ private fun JCodeShell(
                                     onSelectFormatter = onSelectFormatter,
                                     terminalDoubleTapToFocus = terminalDoubleTapToFocus,
                                     onUpdateTerminalDoubleTapToFocus = onUpdateTerminalDoubleTapToFocus,
+                                    editorKeyboard = editorKeyboard,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                                 EditorPageKind.Environment -> OnboardingFeature.EnvironmentSetupPage(
@@ -2151,6 +2165,7 @@ private fun EditorWorkspace(
     onToggleRightSidebar: () -> Unit,
     onRun: () -> Unit,
     onShowTerminal: () -> Unit,
+    editorKeyboard: EditorKeyboardSettings,
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
     onOpenFileRequest: () -> Unit,
@@ -2196,6 +2211,7 @@ private fun EditorWorkspace(
                     onOpenFile = onOpenFileRequest,
                     languageActionsEnabled = languageActionsEnabled,
                     onLanguageAction = onEditorLanguageAction,
+                    editorKeyboard = editorKeyboard,
                     pageContent = editorPageContent,
                 )
             }

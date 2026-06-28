@@ -26,6 +26,7 @@ import dev.jcode.core.distro.DistroServiceLocator
 import dev.jcode.core.distro.WizardStepId
 import dev.jcode.core.resource.ResourceManager
 import dev.jcode.core.resource.ResourceManagerLocator
+import dev.jcode.design.SymbolBarDefaults
 import dev.jcode.design.ThemeMode
 import dev.jcode.feature.editor.pane.EditorGroup
 import dev.jcode.feature.editor.pane.EditorPageKind
@@ -221,6 +222,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setIconBundle(id: String) {
         viewModelScope.launch {
             uiPreferences.edit { prefs -> prefs[iconBundleKey] = id }
+        }
+    }
+
+    private val editorHideSuggestionsKey = booleanPreferencesKey("editor_hide_suggestions")
+    private val editorShowSymbolBarKey = booleanPreferencesKey("editor_show_symbol_bar")
+    private val editorSymbolKeysKey = stringPreferencesKey("editor_symbol_keys")
+
+    /** When true (default), the editor asks the IME to drop its suggestion/autocorrect strip. */
+    val editorHideSuggestions: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[editorHideSuggestionsKey] ?: true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    /** When true (default), the quick-insert symbol bar shows above the keyboard in the editor. */
+    val editorShowSymbolBar: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[editorShowSymbolBarKey] ?: true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    /** Configurable symbol-bar keys (newline-delimited so any single symbol is safe to store). */
+    val editorSymbolKeys: StateFlow<List<String>> = uiPreferences.data
+        .map { prefs ->
+            prefs[editorSymbolKeysKey]?.split('\n')?.filter { it.isNotEmpty() }
+                ?: SymbolBarDefaults.symbols
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SymbolBarDefaults.symbols)
+
+    fun setEditorKeyboard(hideSuggestions: Boolean, showSymbolBar: Boolean, symbolKeys: List<String>) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                prefs[editorHideSuggestionsKey] = hideSuggestions
+                prefs[editorShowSymbolBarKey] = showSymbolBar
+                prefs[editorSymbolKeysKey] = symbolKeys.joinToString("\n")
+            }
         }
     }
 

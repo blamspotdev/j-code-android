@@ -61,6 +61,15 @@ class EditorView @JvmOverloads constructor(
      *  context menu. [EditorContextRequest.word] is empty when the press wasn't on a word. */
     var onContextRequest: ((EditorContextRequest) -> Unit)? = null
 
+    /** When true, the IME is asked to drop its suggestion/autocorrect strip (code-editor mode).
+     *  Flipping it while focused rebuilds the input connection so the change takes effect at once. */
+    var suppressSuggestions: Boolean = true
+        set(value) {
+            if (field == value) return
+            field = value
+            if (isFocused) imm().restartInput(this)
+        }
+
     private val gestureDetector = GestureDetector(
         context,
         object : GestureDetector.SimpleOnGestureListener() {
@@ -399,18 +408,42 @@ class EditorView @JvmOverloads constructor(
         updateImeCursor()
     }
 
+    /** Insert [text] at the caret. Used by the symbol bar (a sibling Compose view). */
+    fun insertTextAtCaret(text: String) {
+        val state = editorState ?: return
+        insertAtCaret(state, text)
+    }
+
+    /** Insert one indentation step (spaces sized to the active tab width). */
+    fun insertIndent() {
+        val state = editorState ?: return
+        val width = state.renderConfig.value.tabWidth.coerceIn(1, 16)
+        insertAtCaret(state, " ".repeat(width))
+    }
+
+    /** Move the caret one character left ([dir] < 0) or right ([dir] > 0). */
+    fun moveCaretBy(dir: Int) {
+        val state = editorState ?: return
+        moveCaret(state, dir)
+    }
+
     // Without this the IME framework treats the view as non-editable and never opens an input
     // connection, so the soft keyboard does nothing.
     override fun onCheckIsTextEditor(): Boolean = true
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        // VISIBLE_PASSWORD makes the IME commit each keystroke directly (no autocorrect, no
-        // composing region) — essential for a code editor: composing edits against the IME's own
-        // stale cursor model corrupt the buffer.
-        outAttrs.inputType = EditorInfo.TYPE_CLASS_TEXT or
-            EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
-            EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE or
-            EditorInfo.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        // When suppressing suggestions, VISIBLE_PASSWORD makes the IME commit each keystroke
+        // directly (no autocorrect, no composing region) — essential for a code editor, since
+        // composing edits against the IME's own stale cursor model corrupt the buffer. When the user
+        // opts back into suggestions, fall back to a plain multi-line text field.
+        val baseInputType = EditorInfo.TYPE_CLASS_TEXT or EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE
+        outAttrs.inputType = if (suppressSuggestions) {
+            baseInputType or
+                EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
+                EditorInfo.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        } else {
+            baseInputType
+        }
         outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or
             EditorInfo.IME_FLAG_NO_FULLSCREEN or
             EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or

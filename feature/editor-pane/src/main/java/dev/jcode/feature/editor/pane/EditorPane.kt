@@ -6,11 +6,14 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -39,10 +42,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import dev.jcode.core.editor.EditorContextRequest
 import dev.jcode.core.editor.EditorLanguageAction
 import dev.jcode.core.editor.EditorView
+import dev.jcode.design.EditorKeyboardSettings
+import dev.jcode.design.SymbolBar
+import dev.jcode.design.SymbolBarAction
 
 /**
  * Editor pane composable that hosts a tab strip and the active EditorView.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun EditorPane(
     group: EditorGroup,
@@ -52,8 +59,12 @@ fun EditorPane(
     onOpenFile: () -> Unit = {},
     languageActionsEnabled: Boolean = false,
     onLanguageAction: (EditorLanguageAction, String) -> Unit = { _, _ -> },
+    editorKeyboard: EditorKeyboardSettings = EditorKeyboardSettings(),
     pageContent: @Composable (EditorTab) -> Unit = {},
 ) {
+    // The active editor view, lifted so the sibling symbol bar can drive it.
+    var activeEditorView by remember { mutableStateOf<EditorView?>(null) }
+
     Column(modifier = modifier.clipToBounds()) {
         // Tab strip — explicit fixed height so it's never compressed
         TabStrip(
@@ -77,6 +88,8 @@ fun EditorPane(
                         editorState = editorState,
                         languageActionsEnabled = languageActionsEnabled,
                         onLanguageAction = onLanguageAction,
+                        suppressSuggestions = editorKeyboard.hideSuggestions,
+                        onEditorViewChanged = { activeEditorView = it },
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
@@ -102,6 +115,27 @@ fun EditorPane(
                     )
                 }
             }
+        }
+
+        // Quick-insert symbol bar: shown whenever a file editor is open with the keyboard up.
+        val imeVisible = WindowInsets.isImeVisible
+        val showSymbolBar = editorKeyboard.showSymbolBar &&
+            imeVisible &&
+            activeTab?.editorState != null &&
+            activeEditorView != null
+        if (showSymbolBar) {
+            SymbolBar(
+                symbols = editorKeyboard.symbolKeys,
+                onAction = { action ->
+                    val v = activeEditorView ?: return@SymbolBar
+                    when (action) {
+                        is SymbolBarAction.Insert -> v.insertTextAtCaret(action.text)
+                        SymbolBarAction.Tab -> v.insertIndent()
+                        SymbolBarAction.Left -> v.moveCaretBy(-1)
+                        SymbolBarAction.Right -> v.moveCaretBy(1)
+                    }
+                },
+            )
         }
     }
 }
@@ -212,6 +246,8 @@ fun EditorViewHost(
     modifier: Modifier = Modifier,
     languageActionsEnabled: Boolean = false,
     onLanguageAction: (EditorLanguageAction, String) -> Unit = { _, _ -> },
+    suppressSuggestions: Boolean = true,
+    onEditorViewChanged: (EditorView?) -> Unit = {},
 ) {
     val density = LocalDensity.current
     var view by remember { mutableStateOf<EditorView?>(null) }
@@ -223,16 +259,23 @@ fun EditorViewHost(
                 EditorView(context).apply {
                     attach(editorState)
                     onContextRequest = { menu = it }
+                    this.suppressSuggestions = suppressSuggestions
                     view = this
+                    onEditorViewChanged(this)
                 }
             },
             modifier = Modifier.fillMaxSize(),
             update = { v ->
                 v.attach(editorState)
                 v.onContextRequest = { menu = it }
+                v.suppressSuggestions = suppressSuggestions
                 view = v
+                onEditorViewChanged(v)
             },
-            onRelease = { it.detach() },
+            onRelease = {
+                onEditorViewChanged(null)
+                it.detach()
+            },
         )
 
         menu?.let { req ->
