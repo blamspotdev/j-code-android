@@ -156,6 +156,10 @@ class TerminalSessionManager(
             // guest) with the rootfs /tmp, so guest tools that use temp dirs work (.NET, gcc, etc.).
             "TMPDIR" to "/tmp",
             "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            // Non-interactive bash sources $BASH_ENV at startup, so the shell integration's tab-title
+            // hook also fires inside run scripts (`bash run-*.sh`) — naming the tab after the actual
+            // tool (npm/vite/dotnet) rather than the bash wrapper. See GUEST_SHELL_INTEGRATION.
+            "BASH_ENV" to "/etc/profile.d/jcode-open.sh",
         )
 
         val prootArgs = prootManager.buildShellCommand(
@@ -391,18 +395,22 @@ jcode() {
 }
 command -v code >/dev/null 2>&1 || code() { jcode "${'$'}@"; }
 
-# Name the terminal tab after the running program (OSC 7712); "terminal" at the prompt.
-__jcode_tab() { printf '\033]7712;%s\007' "${'$'}1"; }
-__jcode_tab_cmd() {
-  case "${'$'}BASH_COMMAND" in __jcode_*) return ;; esac
-  local w=${'$'}{BASH_COMMAND%% *}
-  __jcode_tab "${'$'}{w##*/}"
-}
-__jcode_tab_reset() { __jcode_tab terminal; }
-trap '__jcode_tab_cmd' DEBUG
-case ";${'$'}{PROMPT_COMMAND};" in
-  *";__jcode_tab_reset;"*) ;;
-  *) PROMPT_COMMAND="__jcode_tab_reset;${'$'}{PROMPT_COMMAND}" ;;
-esac
+# Name the terminal tab after the running program (OSC 7712); "terminal" at the prompt. Via
+# BASH_ENV this also runs inside `bash run-*.sh`, so run tabs show the tool (npm/vite/dotnet),
+# not the wrapper. Guarded on a tty so it stays silent when stdout is captured (e.g. $(bash -c ...)).
+if [ -t 1 ]; then
+  __jcode_tab() { printf '\033]7712;%s\007' "${'$'}1"; }
+  __jcode_tab_cmd() {
+    case "${'$'}BASH_COMMAND" in __jcode_*) return ;; esac
+    local w=${'$'}{BASH_COMMAND%% *}
+    __jcode_tab "${'$'}{w##*/}"
+  }
+  __jcode_tab_reset() { __jcode_tab terminal; }
+  trap '__jcode_tab_cmd' DEBUG
+  case ";${'$'}{PROMPT_COMMAND};" in
+    *";__jcode_tab_reset;"*) ;;
+    *) PROMPT_COMMAND="__jcode_tab_reset;${'$'}{PROMPT_COMMAND}" ;;
+  esac
+fi
 """
 
