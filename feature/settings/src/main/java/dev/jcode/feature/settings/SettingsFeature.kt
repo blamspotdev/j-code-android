@@ -91,6 +91,8 @@ object SettingsFeature {
         onSelectFormatter: (String) -> Unit,
         terminalDoubleTapToFocus: Boolean,
         onUpdateTerminalDoubleTapToFocus: (Boolean) -> Unit,
+        hideStatusBarWithKeyboard: Boolean,
+        onUpdateHideStatusBarWithKeyboard: (Boolean) -> Unit,
         modifier: Modifier = Modifier,
     ) {
         var selectedScope by rememberSaveable(projectOverridesAvailable) {
@@ -192,6 +194,19 @@ object SettingsFeature {
                         onClick = { onUpdateIconBundle(bundle.id) },
                     )
                 }
+            }
+
+            SettingsCard(
+                title = "Immersive keyboard",
+                description = "Reclaim screen space while typing.",
+                keywords = "status bar immersive fullscreen keyboard editor terminal",
+            ) {
+                ToggleRow(
+                    label = "Hide status bar with keyboard",
+                    supporting = "Hide the system status bar while the on-screen keyboard is open, for more room in the editor and terminal. Swipe down from the top to reveal it.",
+                    checked = hideStatusBarWithKeyboard,
+                    onCheckedChange = onUpdateHideStatusBarWithKeyboard,
+                )
             }
 
             SettingsSectionHeader("Environment")

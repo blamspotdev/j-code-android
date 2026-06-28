@@ -37,10 +37,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -127,6 +130,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jcode.adaptive.JCodeWindowInfo
 import dev.jcode.adaptive.JCodeWindowWidthClass
@@ -223,6 +229,8 @@ fun JCodeApp(
     val iconBundleId by viewModel.iconBundleId.collectAsStateWithLifecycle()
     val formatterId by viewModel.formatterId.collectAsStateWithLifecycle()
     val terminalDoubleTapToFocus by viewModel.terminalDoubleTapToFocus.collectAsStateWithLifecycle()
+    val hideStatusBarWithKeyboard by viewModel.hideStatusBarWithKeyboard.collectAsStateWithLifecycle()
+    StatusBarKeyboardController(enabled = hideStatusBarWithKeyboard)
     val tapContext = LocalContext.current
     val terminalTapConfig = TerminalTapConfig(
         doubleTapToFocus = terminalDoubleTapToFocus,
@@ -332,6 +340,8 @@ fun JCodeApp(
         onOpenSettingsPage = viewModel::openSettingsPage,
         terminalDoubleTapToFocus = terminalDoubleTapToFocus,
         onUpdateTerminalDoubleTapToFocus = viewModel::setTerminalDoubleTapToFocus,
+        hideStatusBarWithKeyboard = hideStatusBarWithKeyboard,
+        onUpdateHideStatusBarWithKeyboard = viewModel::setHideStatusBarWithKeyboard,
     )
     }
 
@@ -428,6 +438,8 @@ private fun JCodeShell(
     onOpenSettingsPage: () -> Unit,
     terminalDoubleTapToFocus: Boolean,
     onUpdateTerminalDoubleTapToFocus: (Boolean) -> Unit,
+    hideStatusBarWithKeyboard: Boolean,
+    onUpdateHideStatusBarWithKeyboard: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -1017,6 +1029,8 @@ private fun JCodeShell(
                                     onSelectFormatter = onSelectFormatter,
                                     terminalDoubleTapToFocus = terminalDoubleTapToFocus,
                                     onUpdateTerminalDoubleTapToFocus = onUpdateTerminalDoubleTapToFocus,
+                                    hideStatusBarWithKeyboard = hideStatusBarWithKeyboard,
+                                    onUpdateHideStatusBarWithKeyboard = onUpdateHideStatusBarWithKeyboard,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                                 EditorPageKind.Environment -> OnboardingFeature.EnvironmentSetupPage(
@@ -2709,6 +2723,32 @@ private fun Context.findActivity(): Activity? {
         current = current.baseContext
     }
     return null
+}
+
+/**
+ * When [enabled], hides the system status bar while the soft keyboard is up (and restores it when the
+ * keyboard closes), giving the editor and terminal more vertical room. The bar can still be revealed
+ * with a swipe from the top. Restores the bar when the setting is off or this leaves composition.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun StatusBarKeyboardController(enabled: Boolean) {
+    val activity = LocalContext.current.findActivity() ?: return
+    val imeVisible = WindowInsets.isImeVisible
+    DisposableEffect(enabled, imeVisible) {
+        val window = activity.window
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        if (enabled && imeVisible) {
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.statusBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.statusBars())
+        }
+        onDispose {
+            WindowCompat.getInsetsController(window, window.decorView)
+                .show(WindowInsetsCompat.Type.statusBars())
+        }
+    }
 }
 
 /**
