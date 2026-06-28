@@ -71,7 +71,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -80,10 +79,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
-import androidx.compose.material3.TooltipBox
-import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberDrawerState
-import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -123,12 +119,6 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.onClick
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -232,7 +222,6 @@ fun JCodeApp(
     val themeBundleId by viewModel.themeBundleId.collectAsStateWithLifecycle()
     val iconBundleId by viewModel.iconBundleId.collectAsStateWithLifecycle()
     val formatterId by viewModel.formatterId.collectAsStateWithLifecycle()
-    val railToolOrder by viewModel.railToolOrder.collectAsStateWithLifecycle()
     val terminalDoubleTapToFocus by viewModel.terminalDoubleTapToFocus.collectAsStateWithLifecycle()
     val tapContext = LocalContext.current
     val terminalTapConfig = TerminalTapConfig(
@@ -339,8 +328,6 @@ fun JCodeApp(
             onUninstallExtension = viewModel::uninstallExtension,
             onOpenExtensionDetail = viewModel::openExtensionDetailPage,
         ),
-        railToolOrder = railToolOrder,
-        onReorderRail = viewModel::setRailToolOrder,
         onOpenSettingsPage = viewModel::openSettingsPage,
         terminalDoubleTapToFocus = terminalDoubleTapToFocus,
         onUpdateTerminalDoubleTapToFocus = viewModel::setTerminalDoubleTapToFocus,
@@ -436,8 +423,6 @@ private fun JCodeShell(
     onConfigureRun: (Project) -> Unit,
     onSaveRunConfig: (Project, RunConfig) -> Unit,
     runConfigVersion: Int,
-    railToolOrder: List<String>,
-    onReorderRail: (List<String>) -> Unit,
     onOpenSettingsPage: () -> Unit,
     terminalDoubleTapToFocus: Boolean,
     onUpdateTerminalDoubleTapToFocus: (Boolean) -> Unit,
@@ -458,7 +443,6 @@ private fun JCodeShell(
     val rightSidebarWidth = (configuration.screenWidthDp * 0.75f).dp
     val activeTab = editorGroup.activeTab
     val metrics = rememberEditorMetrics(activeTab)
-    val showPersistentRail = !isPortraitMobileMode
     val portraitRightSidebarTabs = remember { RightPanelTab.entries.filter { it.enabled }.toSet() }
 
     var selectedTool by rememberSaveable { mutableStateOf(WorkbenchTool.Explorer) }
@@ -494,7 +478,6 @@ private fun JCodeShell(
             state.updateDecorations { it.replaceLayer(Layer.GLYPH_COLOR, spans) }
         }
     }
-    val railTools = remember(railToolOrder) { orderedRailTools(railToolOrder) }
     // Settings opens as an in-editor page; every other tool drives the side panel.
     val onSelectWorkbenchTool: (WorkbenchTool) -> Unit = { tool ->
         if (tool == WorkbenchTool.Settings) onOpenSettingsPage() else selectedTool = tool
@@ -942,26 +925,6 @@ private fun JCodeShell(
                     .fillMaxSize()
                     .padding(innerPadding),
             ) {
-                if (showPersistentRail) {
-                    DockRail(
-                        tools = railTools,
-                        selectedTool = selectedTool,
-                        onToolSelected = { tool ->
-                            if (tool == WorkbenchTool.Settings) {
-                                onOpenSettingsPage()
-                            } else {
-                                selectedTool = tool
-                                if (usesModalWorkspace) {
-                                    scope.launch { compactDrawerState.open() }
-                                } else {
-                                    leftSidebarExpanded = true
-                                }
-                            }
-                        },
-                        onReorder = onReorderRail,
-                        modifier = Modifier.fillMaxHeight(),
-                    )
-                }
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -1260,207 +1223,6 @@ private fun JCodeShell(
             compact = usesModalWorkspace,
             onDismiss = { commandPaletteVisible = false },
         )
-    }
-}
-
-/**
- * Merge the persisted rail order (tool names) with the full tool set: saved tools keep their order,
- * any tool missing from the saved order (e.g. a newly added one) is appended, unknown names dropped.
- */
-private fun orderedRailTools(order: List<String>): List<WorkbenchTool> {
-    val available = WorkbenchTool.entries.filter { it.available }
-    val byName = available.associateBy { it.name }
-    val result = LinkedHashSet<WorkbenchTool>()
-    order.forEach { name -> byName[name]?.let(result::add) }
-    result.addAll(available)
-    return result.toList()
-}
-
-/**
- * Minified left rail: icon-only buttons (titles shown as long-press tooltips), vertically
- * scrollable, with long-press-and-drag reordering that persists via [onReorder].
- */
-@Composable
-private fun DockRail(
-    tools: List<WorkbenchTool>,
-    selectedTool: WorkbenchTool,
-    onToolSelected: (WorkbenchTool) -> Unit,
-    onReorder: (List<String>) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val spacing = 8.dp
-    val spacingPx = with(LocalDensity.current) { spacing.toPx() }
-    val scrollState = rememberScrollState()
-
-    // Local working order so a drag reorders instantly; it re-seeds when the persisted order changes.
-    var items by remember(tools) { mutableStateOf(tools) }
-    var draggingTool by remember { mutableStateOf<WorkbenchTool?>(null) }
-    // Tooltip shows on the picked-up icon only until the drag actually moves (keeps the title popup
-    // from lingering at the now-stale anchor while the icon follows the finger).
-    var tooltipTool by remember { mutableStateOf<WorkbenchTool?>(null) }
-    var dragOffsetY by remember { mutableFloatStateOf(0f) }
-    var itemHeightPx by remember { mutableFloatStateOf(0f) }
-    // The long-lived pointerInput captures these once per gesture start; keep them fresh so a tap
-    // after a config change (e.g. rotation flipping modal vs. persistent layout) routes correctly.
-    val currentOnToolSelected by rememberUpdatedState(onToolSelected)
-    val currentOnReorder by rememberUpdatedState(onReorder)
-
-    fun moveTool(from: Int, to: Int) {
-        if (to < 0 || to >= items.size || from == to) return
-        items = items.toMutableList().also { it.add(to, it.removeAt(from)) }
-        currentOnReorder(items.map { it.name })
-    }
-
-    Surface(
-        modifier = modifier.width(60.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxHeight()
-                .verticalScroll(scrollState)
-                .padding(vertical = 10.dp, horizontal = 6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(spacing),
-        ) {
-            items.forEachIndexed { index, tool ->
-                key(tool) {
-                    val isDragging = draggingTool == tool
-                    RailButton(
-                        tool = tool,
-                        selected = selectedTool == tool,
-                        dragging = isDragging,
-                        showTooltip = tooltipTool == tool,
-                        onActivate = { currentOnToolSelected(tool) },
-                        onMoveUp = if (index > 0) ({ moveTool(index, index - 1) }) else null,
-                        onMoveDown = if (index < items.size - 1) ({ moveTool(index, index + 1) }) else null,
-                        modifier = Modifier
-                            .onSizeChanged { size -> if (size.height > 0) itemHeightPx = size.height.toFloat() }
-                            .zIndex(if (isDragging) 1f else 0f)
-                            .graphicsLayer { translationY = if (isDragging) dragOffsetY else 0f }
-                            .pointerInput(tools) {
-                                awaitEachGesture {
-                                    val down = awaitFirstDown(requireUnconsumed = false)
-                                    var up: PointerInputChange? = null
-                                    val timedOut = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
-                                        up = waitForUpOrCancellation()
-                                    } == null
-                                    if (!timedOut) {
-                                        // Released/cancelled before the long-press fired: a plain tap selects
-                                        // (ignored while another icon is mid-drag).
-                                        if (up != null && draggingTool == null) currentOnToolSelected(tool)
-                                        return@awaitEachGesture
-                                    }
-                                    // Only one icon may own the drag at a time (guards multi-touch).
-                                    if (draggingTool != null) return@awaitEachGesture
-                                    // Long press: pick the icon up and let it follow the finger.
-                                    draggingTool = tool
-                                    tooltipTool = tool
-                                    dragOffsetY = 0f
-                                    val startItems = items
-                                    while (true) {
-                                        val event = awaitPointerEvent()
-                                        val change = event.changes.firstOrNull { it.id == down.id }
-                                        if (change == null || !change.pressed) {
-                                            change?.consume()
-                                            break
-                                        }
-                                        val dy = change.positionChange().y
-                                        if (dy != 0f) {
-                                            change.consume()
-                                            tooltipTool = null
-                                            dragOffsetY += dy
-                                            val pitch = itemHeightPx + spacingPx
-                                            if (pitch > 0f) {
-                                                val curIndex = items.indexOf(tool)
-                                                if (curIndex >= 0) {
-                                                    val target = (curIndex + (dragOffsetY / pitch).roundToInt())
-                                                        .coerceIn(0, items.size - 1)
-                                                    if (target != curIndex) {
-                                                        items = items.toMutableList().also { list ->
-                                                            list.add(target, list.removeAt(curIndex))
-                                                        }
-                                                        dragOffsetY -= (target - curIndex) * pitch
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    draggingTool = null
-                                    tooltipTool = null
-                                    dragOffsetY = 0f
-                                    // Persist only when the order actually changed (avoids a disk write
-                                    // on an accidental long-press that never moved).
-                                    if (items != startItems) currentOnReorder(items.map { it.name })
-                                }
-                            },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun RailButton(
-    tool: WorkbenchTool,
-    selected: Boolean,
-    dragging: Boolean,
-    showTooltip: Boolean,
-    onActivate: () -> Unit,
-    onMoveUp: (() -> Unit)?,
-    onMoveDown: (() -> Unit)?,
-    modifier: Modifier = Modifier,
-) {
-    val tooltipState = rememberTooltipState(isPersistent = true)
-    LaunchedEffect(showTooltip) {
-        if (showTooltip) tooltipState.show() else tooltipState.dismiss()
-    }
-    val container = when {
-        dragging -> MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
-        selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
-        else -> Color.Transparent
-    }
-    val content = if (selected || dragging) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
-
-    // Keep the rail operable for accessibility services: the pointer gesture handles sighted touch,
-    // while these semantics expose activation and keyboard/TalkBack reordering.
-    val moveActions = remember(onMoveUp, onMoveDown) {
-        buildList {
-            onMoveUp?.let { add(CustomAccessibilityAction("Move up") { it(); true }) }
-            onMoveDown?.let { add(CustomAccessibilityAction("Move down") { it(); true }) }
-        }
-    }
-
-    TooltipBox(
-        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-        tooltip = { PlainTooltip { Text(tool.label) } },
-        state = tooltipState,
-        enableUserInput = false,
-        modifier = modifier.semantics(mergeDescendants = true) {
-            role = Role.Button
-            onClick(label = "Open ${tool.label}") { onActivate(); true }
-            if (moveActions.isNotEmpty()) customActions = moveActions
-        },
-    ) {
-        Surface(
-            modifier = Modifier.size(40.dp),
-            shape = CircleShape,
-            color = container,
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = jcIcon(tool.icon),
-                    contentDescription = tool.label,
-                    tint = content,
-                )
-            }
-        }
     }
 }
 

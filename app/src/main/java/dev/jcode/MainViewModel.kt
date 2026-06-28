@@ -172,18 +172,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // DataStore for the same file (e.g. when a new MainViewModel is built after Activity recreation)
     // crashes with "multiple DataStores active for the same file".
     private val uiPreferences = UiPreferencesStore.get(appContext)
-    private val railToolOrderKey = stringPreferencesKey("rail_tool_order")
-
-    /** Persisted left-rail icon order as tool names; empty until the user reorders. */
-    val railToolOrder: StateFlow<List<String>> = uiPreferences.data
-        .map { prefs -> prefs[railToolOrderKey]?.split(',')?.filter { it.isNotBlank() }.orEmpty() }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    fun setRailToolOrder(order: List<String>) {
-        viewModelScope.launch {
-            uiPreferences.edit { prefs -> prefs[railToolOrderKey] = order.joinToString(",") }
-        }
-    }
 
     private val terminalDoubleTapKey = booleanPreferencesKey("terminal_double_tap_focus")
 
