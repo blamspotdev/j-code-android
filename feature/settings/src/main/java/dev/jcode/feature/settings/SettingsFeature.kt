@@ -131,19 +131,6 @@ object SettingsFeature {
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             SettingsSearchField(query = query, onQueryChange = { query = it })
-            SettingsSectionHeader("Overview")
-            SettingsCard(
-                title = "Effective config",
-                description = "Project values override workspace values. Invalid YAML keeps the last working config active.",
-            ) {
-                SummaryRow("Font size", "${effectiveConfig.editor.fontSize.toInt()} sp")
-                SummaryRow("Tab size", "${effectiveConfig.editor.tabSize}")
-                SummaryRow("Word wrap", if (effectiveConfig.editor.wordWrap) "On" else "Off")
-                SummaryRow("Minimap", if (effectiveConfig.editor.minimap) "On" else "Off")
-                SummaryRow("Ligatures", if (effectiveConfig.editor.ligatures) "On" else "Off")
-                SummaryRow("Distro", effectiveConfig.distro.id)
-            }
-
             SettingsSectionHeader("Appearance")
             SettingsCard(
                 title = "Appearance",
