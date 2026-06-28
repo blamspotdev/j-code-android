@@ -41,6 +41,9 @@ class ExtensionInstaller internal constructor(context: Context) {
                     subcategory = entry.str("subcategory"),
                     version = entry.str("version"),
                     repo = repo,
+                    description = entry.str("description"),
+                    longDescription = entry.str("longDescription"),
+                    samples = parseSamples(entry["samples"]),
                     requires = parseDeps(entry["requires"]),
                     suggests = parseDeps(entry["suggests"]),
                 )
@@ -101,6 +104,8 @@ class ExtensionInstaller internal constructor(context: Context) {
             version = map.str("version"),
             description = map.str("description") ?: "",
             dir = dir,
+            longDescription = map.str("longDescription"),
+            samples = parseSamples(map["samples"]),
             templates = templates,
             language = language,
         )
@@ -126,6 +131,20 @@ class ExtensionInstaller internal constructor(context: Context) {
             requires = map.listOfAny("requires").mapNotNull { it?.toString()?.takeIf(String::isNotBlank) },
             recipe = recipe,
         )
+    }
+
+    private fun parseSamples(raw: Any?): List<CodeSample> {
+        val list = raw as? List<*> ?: return emptyList()
+        return list.mapNotNull { item ->
+            val s = (item as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
+            val code = s.str("code") ?: return@mapNotNull null
+            CodeSample(
+                title = s.str("title") ?: "Sample",
+                description = s.str("description"),
+                code = code,
+                language = s.str("language"),
+            )
+        }
     }
 
     private fun parseDeps(raw: Any?): ExtensionDeps {

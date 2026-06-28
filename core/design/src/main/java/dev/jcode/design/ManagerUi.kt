@@ -1,6 +1,8 @@
 package dev.jcode.design
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -240,10 +242,14 @@ fun ManagerDetailScreen(
     onVerify: () -> Unit,
     modifier: Modifier = Modifier,
     showActions: Boolean = true,
+    showVerify: Boolean = true,
+    showOutput: Boolean = true,
     extra: @Composable () -> Unit = {},
 ) {
     Column(
-        modifier = modifier.padding(16.dp),
+        modifier = modifier
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -277,13 +283,17 @@ fun ManagerDetailScreen(
                         modifier = Modifier.weight(1f),
                     )
                 }
-                CompactOutlinedButton("Verify", onClick = onVerify, enabled = actionsEnabled, modifier = Modifier.weight(1f))
+                if (showVerify) {
+                    CompactOutlinedButton("Verify", onClick = onVerify, enabled = actionsEnabled, modifier = Modifier.weight(1f))
+                }
                 CompactOutlinedButton("Uninstall", onClick = onUninstall, enabled = installed && actionsEnabled, modifier = Modifier.weight(1f))
             }
         }
 
-        ManagerSectionCard(title = "Output", description = "Rolling output from the last action.") {
-            ManagerOutputLog(logLines)
+        if (showOutput) {
+            ManagerSectionCard(title = "Output", description = "Rolling output from the last action.") {
+                ManagerOutputLog(logLines)
+            }
         }
     }
 }

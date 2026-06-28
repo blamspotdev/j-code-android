@@ -770,6 +770,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) { distroService.checkLspStatuses() }
     }
 
+    /** Open (or focus) the detail page for a single extension (installed or marketplace). */
+    fun openExtensionDetailPage(extensionId: String) {
+        val tabId = EXT_DETAIL_PREFIX + extensionId
+        val existing = _editorGroup.value.tabs.firstOrNull { it.id == tabId }
+        if (existing != null) {
+            _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
+            return
+        }
+        val title = _installedExtensions.value.firstOrNull { it.id == extensionId }?.name
+            ?: _marketplaceEntries.value.firstOrNull { it.id == extensionId }?.name
+            ?: extensionId
+        _editorGroup.value = _editorGroup.value.withTabAdded(EditorTab.page(tabId, title, EditorPageKind.ExtensionDetail))
+    }
+
     fun selectEditorTab(tabId: String) {
         _editorGroup.value = _editorGroup.value.withActiveTabChanged(tabId)
     }

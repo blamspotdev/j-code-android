@@ -32,6 +32,14 @@ data class ExtensionDeps(
     }
 }
 
+/** A code/config sample shown on an extension's detail page. */
+data class CodeSample(
+    val title: String,
+    val description: String? = null,
+    val code: String,
+    val language: String? = null,
+)
+
 /** One extension listed in the remote marketplace index (marketplace.yaml). */
 data class MarketplaceEntry(
     val id: String,
@@ -43,6 +51,12 @@ data class MarketplaceEntry(
     val version: String?,
     /** The extension's git repo (https .git URL); the installer derives a codeload zip URL from it. */
     val repo: String,
+    /** One-line summary shown in the compact row. */
+    val description: String? = null,
+    /** Full description shown on the detail page. */
+    val longDescription: String? = null,
+    /** Usage samples shown on the detail page. */
+    val samples: List<CodeSample> = emptyList(),
     val requires: ExtensionDeps = ExtensionDeps.EMPTY,
     val suggests: ExtensionDeps = ExtensionDeps.EMPTY,
 )
@@ -120,6 +134,8 @@ data class InstalledExtension(
     val version: String?,
     val description: String,
     val dir: File,
+    val longDescription: String? = null,
+    val samples: List<CodeSample> = emptyList(),
     val templates: List<ProjectTemplate> = emptyList(),
     val language: LanguagePack? = null,
 )

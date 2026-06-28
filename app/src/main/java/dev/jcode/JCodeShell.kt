@@ -173,6 +173,7 @@ import dev.jcode.feature.sdkmanager.SdkManagerFeature
 import dev.jcode.feature.settings.SettingsFeature
 import dev.jcode.workbench.dialog.NewItemDialog
 import dev.jcode.workbench.dialog.OpenFolderTypeDialog
+import dev.jcode.workbench.marketplace.ExtensionDetailPage
 import dev.jcode.workbench.marketplace.ExtensionsPanel
 import dev.jcode.workbench.LocalTerminalTapConfig
 import dev.jcode.workbench.RightPanelTab
@@ -309,6 +310,7 @@ fun JCodeApp(
         onRefreshMarketplace = viewModel::refreshMarketplace,
         onInstallExtension = viewModel::installExtension,
         onUninstallExtension = viewModel::uninstallExtension,
+        onOpenExtensionDetail = viewModel::openExtensionDetailPage,
         onOpenWorkspaceConfig = viewModel::openWorkspaceConfigFile,
         onOpenProjectConfig = viewModel::openProjectConfigFile,
         onRefreshEnvironment = viewModel::refreshEnvironment,
@@ -413,6 +415,7 @@ private fun JCodeShell(
     onRefreshMarketplace: () -> Unit,
     onInstallExtension: (MarketplaceEntry) -> Unit,
     onUninstallExtension: (String) -> Unit,
+    onOpenExtensionDetail: (String) -> Unit,
     formatterId: String,
     onSelectFormatter: (String) -> Unit,
     onOpenWorkspaceConfig: () -> Unit,
@@ -878,8 +881,7 @@ private fun JCodeShell(
                 marketplaceEntries = marketplaceEntries,
                 marketplaceBusy = marketplaceBusy,
                 onRefreshMarketplace = onRefreshMarketplace,
-                onInstallExtension = onInstallExtension,
-                onUninstallExtension = onUninstallExtension,
+                onOpenExtensionDetail = onOpenExtensionDetail,
             )
         }
     }
@@ -1068,7 +1070,23 @@ private fun JCodeShell(
                                         )
                                     }
                                 }
-                                EditorPageKind.ExtensionDetail -> Unit
+                                EditorPageKind.ExtensionDetail -> {
+                                    val id = tab.id.substringAfter(MainViewModel.EXT_DETAIL_PREFIX)
+                                    val entry = marketplaceEntries.firstOrNull { it.id == id }
+                                    val inst = installedExtensions.firstOrNull { it.id == id }
+                                    if (entry != null || inst != null) {
+                                        ExtensionDetailPage(
+                                            entry = entry,
+                                            installed = inst,
+                                            available = marketplaceEntries,
+                                            installedIds = installedExtensions.map { it.id }.toSet(),
+                                            busy = marketplaceBusy,
+                                            onInstall = onInstallExtension,
+                                            onUninstall = onUninstallExtension,
+                                            modifier = Modifier.fillMaxSize(),
+                                        )
+                                    }
+                                }
                                 EditorPageKind.None -> Unit
                             }
                         },
@@ -1126,8 +1144,7 @@ private fun JCodeShell(
                             marketplaceEntries = marketplaceEntries,
                             marketplaceBusy = marketplaceBusy,
                             onRefreshMarketplace = onRefreshMarketplace,
-                            onInstallExtension = onInstallExtension,
-                            onUninstallExtension = onUninstallExtension,
+                            onOpenExtensionDetail = onOpenExtensionDetail,
                         )
                     }
                 }
@@ -1536,8 +1553,7 @@ private fun WorkspacePanel(
     marketplaceEntries: List<MarketplaceEntry>,
     marketplaceBusy: Boolean,
     onRefreshMarketplace: () -> Unit,
-    onInstallExtension: (MarketplaceEntry) -> Unit,
-    onUninstallExtension: (String) -> Unit,
+    onOpenExtensionDetail: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -1652,8 +1668,7 @@ private fun WorkspacePanel(
                         available = marketplaceEntries,
                         busy = marketplaceBusy,
                         onRefreshMarketplace = onRefreshMarketplace,
-                        onInstall = onInstallExtension,
-                        onUninstall = onUninstallExtension,
+                        onOpenDetail = onOpenExtensionDetail,
                         themeBundleId = themeBundleId,
                         onSelectTheme = onUpdateThemeBundle,
                         iconBundleId = iconBundleId,
