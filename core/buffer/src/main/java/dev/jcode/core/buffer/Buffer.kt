@@ -197,6 +197,14 @@ class Buffer internal constructor(
         @JvmStatic
         private external fun nativeCloseByHandle(handle: Long)
 
+        // The native piece-tree (native/buffer/piece_tree.cpp) is an unfinished skeleton: its
+        // insert/split orphans the inserted text and leaves the original piece in place (duplicating
+        // content), and the red-black balancing + remove are empty stubs. It corrupts the buffer on
+        // the first edit. Until it is correctly implemented we use the pure-Kotlin array-splice path,
+        // which is correct (and fast enough for the file sizes edited on-device). Flip this back on
+        // once the native tree is fixed and tested.
+        private const val USE_NATIVE_BUFFER = false
+
         // Check if native library is available
         @Volatile
         private var nativeAvailable = false
@@ -204,7 +212,7 @@ class Buffer internal constructor(
         init {
             try {
                 System.loadLibrary("jcodebuffer")
-                nativeAvailable = true
+                nativeAvailable = USE_NATIVE_BUFFER
             } catch (e: UnsatisfiedLinkError) {
                 nativeAvailable = false
             }

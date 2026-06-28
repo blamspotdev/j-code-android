@@ -64,6 +64,14 @@ class EditorView @JvmOverloads constructor(
     private val gestureDetector = GestureDetector(
         context,
         object : GestureDetector.SimpleOnGestureListener() {
+            override fun onSingleTapUp(e: MotionEvent): Boolean {
+                // Tapping the editor should focus it and raise the soft keyboard so the file is
+                // editable (placing the caret happens on ACTION_DOWN in onTouchEvent).
+                this@EditorView.requestFocus()
+                this@EditorView.showKeyboard()
+                return true
+            }
+
             override fun onLongPress(e: MotionEvent) {
                 val offset = offsetAt(e.x, e.y) ?: return
                 val word = wordAt(offset)
@@ -168,6 +176,10 @@ class EditorView @JvmOverloads constructor(
             val offset = offsetAt(event.x, event.y)
             if (offset != null) {
                 runBlocking { editorState?.setSelection(listOf(Caret(offset, offset))) }
+                // The caret moved out from under the IME; restart input so it re-reads the new
+                // cursor (via onCreateInputConnection's initialSel) and drops any stale composing
+                // region. Without this the IME edits against a stale model and corrupts the buffer.
+                imm().restartInput(this)
             }
             return true
         }
@@ -283,38 +295,159 @@ class EditorView @JvmOverloads constructor(
 
         // Ctrl+Z / Ctrl+Shift+Z for undo/redo
         if (event.isCtrlPressed && event.keyCode == KeyEvent.KEYCODE_Z) {
-            if (event.isShiftPressed) {
-                state.undoManager?.redo()
-                return true
-            } else {
-                state.undoManager?.undo()
-                return true
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                if (event.isShiftPressed) state.undoManager?.redo() else state.undoManager?.undo()
             }
+            return true
+        }
+
+        // Editing keys arrive as key events (the soft IME sends them via sendKeyEvent), so they must
+        // be handled here — commitText only covers printable characters.
+        if (event.keyCode in HANDLED_KEYS || (event.unicodeChar != 0 && !event.isCtrlPressed && !event.isAltPressed)) {
+            if (event.action != KeyEvent.ACTION_DOWN) return true
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_DEL -> deleteAtCaret(state, forward = false)
+                KeyEvent.KEYCODE_FORWARD_DEL -> deleteAtCaret(state, forward = true)
+                KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> insertAtCaret(state, "\n")
+                KeyEvent.KEYCODE_TAB -> insertAtCaret(state, "    ")
+                KeyEvent.KEYCODE_DPAD_LEFT -> moveCaret(state, -1)
+                KeyEvent.KEYCODE_DPAD_RIGHT -> moveCaret(state, 1)
+                KeyEvent.KEYCODE_DPAD_UP -> moveCaretLine(state, -1)
+                KeyEvent.KEYCODE_DPAD_DOWN -> moveCaretLine(state, 1)
+                else -> insertAtCaret(state, event.unicodeChar.toChar().toString())
+            }
+            return true
         }
 
         return super.dispatchKeyEvent(event)
     }
 
+    private fun caretOrNull(state: EditorState): Caret? = state.carets.value.firstOrNull()
+
+    /** UTF-8-aware: the start offset of the code point ending at [offset]. */
+    private fun prevCharStart(snapshot: dev.jcode.core.buffer.Snapshot, offset: Int): Int {
+        if (offset <= 0) return 0
+        val from = max(0, offset - 4)
+        val bytes = snapshot.readRange(from, offset)
+        var i = bytes.size - 1
+        while (i > 0 && (bytes[i].toInt() and 0xC0) == 0x80) i--
+        return from + i
+    }
+
+    /** UTF-8-aware: the end offset of the code point starting at [offset]. */
+    private fun nextCharEnd(snapshot: dev.jcode.core.buffer.Snapshot, offset: Int): Int {
+        val len = snapshot.byteLength
+        if (offset >= len) return len
+        val bytes = snapshot.readRange(offset, min(len, offset + 4))
+        var i = 1
+        while (i < bytes.size && (bytes[i].toInt() and 0xC0) == 0x80) i++
+        return offset + i
+    }
+
+    private fun insertAtCaret(state: EditorState, text: String) {
+        val caret = caretOrNull(state) ?: return
+        runBlocking {
+            if (caret.isSelection) state.applyEdit(EditTx.delete(caret.start, caret.end))
+            val at = min(caret.start, caret.end)
+            state.applyEdit(EditTx.insert(at, text))
+            val newPos = at + text.toByteArray(Charsets.UTF_8).size
+            state.setSelection(listOf(Caret(newPos, newPos)))
+        }
+        invalidate()
+        updateImeCursor()
+    }
+
+    private fun deleteAtCaret(state: EditorState, forward: Boolean) {
+        val caret = caretOrNull(state) ?: return
+        val snapshot = state.snapshot.value
+        runBlocking {
+            if (caret.isSelection) {
+                state.applyEdit(EditTx.delete(caret.start, caret.end))
+                state.setSelection(listOf(Caret(caret.start, caret.start)))
+            } else if (forward) {
+                val end = nextCharEnd(snapshot, caret.head)
+                if (end > caret.head) state.applyEdit(EditTx.delete(caret.head, end))
+            } else {
+                val start = prevCharStart(snapshot, caret.head)
+                if (start < caret.head) {
+                    state.applyEdit(EditTx.delete(start, caret.head))
+                    state.setSelection(listOf(Caret(start, start)))
+                }
+            }
+        }
+        invalidate()
+        updateImeCursor()
+    }
+
+    private fun moveCaret(state: EditorState, dir: Int) {
+        val caret = caretOrNull(state) ?: return
+        val snapshot = state.snapshot.value
+        val newPos = if (dir < 0) prevCharStart(snapshot, caret.head) else nextCharEnd(snapshot, caret.head)
+        runBlocking { state.setSelection(listOf(Caret(newPos, newPos))) }
+        invalidate()
+        updateImeCursor()
+    }
+
+    private fun moveCaretLine(state: EditorState, dir: Int) {
+        val caret = caretOrNull(state) ?: return
+        val snapshot = state.snapshot.value
+        val (line, col) = snapshot.offsetToLineColumn(caret.head)
+        val targetLine = (line + dir).coerceIn(0, max(0, snapshot.lineCount - 1))
+        val newPos = snapshot.lineColumnToOffset(targetLine, col)
+        runBlocking { state.setSelection(listOf(Caret(newPos, newPos))) }
+        invalidate()
+        updateImeCursor()
+    }
+
+    // Without this the IME framework treats the view as non-editable and never opens an input
+    // connection, so the soft keyboard does nothing.
+    override fun onCheckIsTextEditor(): Boolean = true
+
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
+        // VISIBLE_PASSWORD makes the IME commit each keystroke directly (no autocorrect, no
+        // composing region) — essential for a code editor: composing edits against the IME's own
+        // stale cursor model corrupt the buffer.
         outAttrs.inputType = EditorInfo.TYPE_CLASS_TEXT or
             EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
-            EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE
+            EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE or
+            EditorInfo.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
         outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or
             EditorInfo.IME_FLAG_NO_FULLSCREEN or
             EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or
             EditorInfo.IME_ACTION_NONE
-        outAttrs.initialSelStart = 0
-        outAttrs.initialSelEnd = 0
 
         val state = editorState ?: return super.onCreateInputConnection(outAttrs)
+        // Seed the IME with the real caret (byte offsets ≈ UTF-16 indices for ASCII); otherwise it
+        // assumes 0 and composes against the wrong position.
+        val sel = state.carets.value.firstOrNull()
+        outAttrs.initialSelStart = sel?.let { min(it.anchor, it.head) } ?: 0
+        outAttrs.initialSelEnd = sel?.let { max(it.anchor, it.head) } ?: 0
+
         val conn = EditorInputConnection(this, state)
         inputConnection = conn
         return conn
     }
 
+    /** Tell the IME the current caret/selection + composing region so its model stays in sync. */
+    fun updateImeCursor(composingStart: Int = -1, composingEnd: Int = -1) {
+        val caret = editorState?.carets?.value?.firstOrNull() ?: return
+        imm().updateSelection(
+            this,
+            min(caret.anchor, caret.head),
+            max(caret.anchor, caret.head),
+            composingStart,
+            composingEnd,
+        )
+    }
+
     /** Get the InputMethodManager for this view. */
     fun imm(): InputMethodManager {
         return context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+    }
+
+    /** Raise the soft keyboard for this editor (call after the view has focus). */
+    fun showKeyboard() {
+        imm().showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
     }
 
     private fun computeGutterWidth(snapshot: dev.jcode.core.buffer.Snapshot, config: RenderConfig): Int {
@@ -326,6 +459,20 @@ class EditorView @JvmOverloads constructor(
             typeface = this@EditorView.typeface
         }
         return (paint.measureText(sample) + 24).toInt()
+    }
+
+    private companion object {
+        val HANDLED_KEYS = setOf(
+            KeyEvent.KEYCODE_DEL,
+            KeyEvent.KEYCODE_FORWARD_DEL,
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_NUMPAD_ENTER,
+            KeyEvent.KEYCODE_TAB,
+            KeyEvent.KEYCODE_DPAD_LEFT,
+            KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_DPAD_UP,
+            KeyEvent.KEYCODE_DPAD_DOWN,
+        )
     }
 }
 
@@ -408,31 +555,38 @@ class EditorInputConnection(
         val newText = text?.toString() ?: ""
         state.undoManager?.beginComposing()
 
-        // Remove previous composing text if any
-        val currentCaret = state.carets.value.firstOrNull() ?: return false
-        val snapshot = state.snapshot.value
+        // Anchor at the existing composing region start (so each keystroke replaces it in place),
+        // else the caret. Re-using the caret directly would drift, because the caret advances past
+        // the inserted text while the IME keeps editing the same composing region.
+        val anchor = composingRegion?.first ?: (state.carets.value.firstOrNull()?.head ?: return false)
 
-        if (composingRegion != null) {
-            val region = composingRegion!!
-            val deleteTx = EditTx.delete(region.first, region.last)
-            runBlocking { state.applyEdit(deleteTx) }
+        composingRegion?.let { region ->
+            runBlocking { state.applyEdit(EditTx.delete(region.first, region.last + 1)) }
         }
 
         if (newText.isNotEmpty()) {
-            val insertTx = EditTx.insert(currentCaret.head, newText)
-            runBlocking { state.applyEdit(insertTx) }
-            composingRegion = currentCaret.head until (currentCaret.head + newText.toByteArray(Charsets.UTF_8).size)
+            runBlocking { state.applyEdit(EditTx.insert(anchor, newText)) }
+            val endByte = anchor + newText.toByteArray(Charsets.UTF_8).size
+            composingRegion = anchor until endByte
+            val caretPos = if (newCursorPosition > 0) endByte else anchor
+            runBlocking { state.setSelection(listOf(Caret(caretPos, caretPos))) }
+            composingText = newText
+            view.invalidate()
+            view.updateImeCursor(anchor, endByte)
         } else {
             composingRegion = null
+            composingText = ""
+            runBlocking { state.setSelection(listOf(Caret(anchor, anchor))) }
+            view.invalidate()
+            view.updateImeCursor()
         }
-
-        composingText = newText
-        view.invalidate()
         return true
     }
 
     override fun setComposingRegion(start: Int, end: Int): Boolean {
-        composingRegion = start..end
+        // [start, end) is half-open (Android convention); store it the same way the composing-text
+        // path does so the exclusive-end delete (region.last + 1) removes exactly this range.
+        composingRegion = start until end
         return true
     }
 
@@ -441,6 +595,7 @@ class EditorInputConnection(
         composingRegion = null
         composingText = ""
         view.invalidate()
+        view.updateImeCursor()
         return true
     }
 
@@ -448,24 +603,24 @@ class EditorInputConnection(
         val newText = text?.toString() ?: ""
         state.undoManager?.endComposing()
 
-        // Remove composing region if present
-        if (composingRegion != null) {
-            val region = composingRegion!!
-            runBlocking { state.applyEdit(EditTx.delete(region.first, region.last)) }
+        // Replace the composing region if present, else insert at the caret.
+        val anchor = composingRegion?.first ?: (state.carets.value.firstOrNull()?.head ?: return false)
+        composingRegion?.let { region ->
+            runBlocking { state.applyEdit(EditTx.delete(region.first, region.last + 1)) }
             composingRegion = null
         }
 
-        if (newText.isNotEmpty()) {
-            val currentCaret = state.carets.value.firstOrNull() ?: return false
-            runBlocking { state.applyEdit(EditTx.insert(currentCaret.head, newText)) }
-            runBlocking {
-                val newOffset = currentCaret.head + newText.toByteArray(Charsets.UTF_8).size
-                state.setSelection(listOf(Caret(newOffset, newOffset)))
-            }
+        val caretPos = if (newText.isNotEmpty()) {
+            runBlocking { state.applyEdit(EditTx.insert(anchor, newText)) }
+            anchor + newText.toByteArray(Charsets.UTF_8).size
+        } else {
+            anchor
         }
+        runBlocking { state.setSelection(listOf(Caret(caretPos, caretPos))) }
 
         composingText = ""
         view.invalidate()
+        view.updateImeCursor()
         return true
     }
 
@@ -506,6 +661,7 @@ class EditorInputConnection(
             }
         }
         view.invalidate()
+        view.updateImeCursor()
         return true
     }
 
