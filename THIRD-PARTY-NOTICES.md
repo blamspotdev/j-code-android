@@ -105,5 +105,5 @@ Bundled into the APK (`classes.dex` / merged resources). Unless noted, each is
 All first-party modules — `:app`, `:core:*`, `:feature:*`, and the native
 libraries `jcodebuffer`, `jcode_core`, `pty`, `jcode_vt`, and the
 editor-render / ripgrep-ffi / wasmtime-ffi / tree-sitter / libgit2 FFI wrappers —
-are © 2026 Janrick Samorin and licensed under the Business Source License 1.1 (see
+are © 2026 blamspotdev (Janrick Samorin) and licensed under the Business Source License 1.1 (see
 [`LICENSE`](LICENSE)).

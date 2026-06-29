@@ -325,7 +325,7 @@ class ExtensionInstaller internal constructor(context: Context) {
     private fun safeDirName(id: String): String = id.replace(Regex("[^A-Za-z0-9._-]"), "_")
 
     private companion object {
-        const val BASE_URL = "https://raw.githubusercontent.com/janrick123/j-code-marketplace/main/"
+        const val BASE_URL = "https://raw.githubusercontent.com/blamspotdev/j-code-marketplace/main/"
         const val INDEX_URL = BASE_URL + "marketplace.yaml"
         const val JEHM_FILE = "extension.jehm"
         const val JEXT_MANIFEST = ".jext-manifest.json"

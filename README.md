@@ -52,7 +52,7 @@ Requirements: **JDK 21**, the Android SDK (`compileSdk 36`), **NDK r27c**
 (`27.2.12479018`), and CMake 3.28+. `minSdk 28`. AGP 8.7.x / Gradle 8.11.x.
 
 ```bash
-git clone https://github.com/janrick123/j-code-android.git
+git clone https://github.com/blamspotdev/j-code-android.git
 cd j-code-android
 ./gradlew :app:assembleDebug      # → app/build/outputs/apk/debug/app-debug.apk
 ```
@@ -79,15 +79,14 @@ wrapped as `AutoCloseable` + `Cleaner`.
 ## Extensions
 
 Language packs, templates, and (later) theme / icon sets install from the
-[**JCode marketplace**](https://github.com/janrick123/j-code-marketplace) as
+[**JCode marketplace**](https://github.com/blamspotdev/j-code-marketplace) as
 verified `.jext` packages. To build your own, see the marketplace's
-[`CREATING-EXTENSIONS.md`](https://github.com/janrick123/j-code-marketplace/blob/main/CREATING-EXTENSIONS.md)
+[`CREATING-EXTENSIONS.md`](https://github.com/blamspotdev/j-code-marketplace/blob/main/CREATING-EXTENSIONS.md)
 and the [`j-code-make-tools`](https://github.com/blamspotdev/j-code-make-tools) CLI.
 
 ## License
 
-Source-available under the [Business Source License 1.1](LICENSE). © 2026 Janrick
-Samorin. You may **use the app for free** for any purpose (personal, internal,
+Source-available under the [Business Source License 1.1](LICENSE). © 2026 blamspotdev (Janrick Samorin). You may **use the app for free** for any purpose (personal, internal,
 commercial, educational) and modify or contribute to it; you may **not** redistribute
 it as a competing hosted/packaged product. Each released version automatically
 converts to the **Apache License 2.0** three years after its release. Contributions
