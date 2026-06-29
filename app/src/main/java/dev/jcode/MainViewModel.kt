@@ -1121,6 +1121,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun emitMessage(message: String) {
         _messages.emit(message)
+        // Persist transient toasts in the Output channel too (errors flagged for coloring).
+        val isError = message.contains("Failed", ignoreCase = true) ||
+            message.contains("Can't", ignoreCase = true) ||
+            message.contains("error", ignoreCase = true)
+        OutputLog.append(message, if (isError) OutputKind.Error else OutputKind.Info)
     }
 
     private fun findBootstrapFile(root: File): File? {

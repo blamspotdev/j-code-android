@@ -88,6 +88,11 @@ object TerminalSessionHost {
                 mgr.onTitleChange = { sessionId, title ->
                     uiTitleListener?.let { listener -> mainHandler.post { listener(sessionId, title) } }
                 }
+                // Mirror run terminals' output into the Output channel (filtered to captured run
+                // sessions inside OutputLog). Runs on the reader thread; OutputLog copies what it keeps.
+                mgr.onOutput = { sessionId, data, length ->
+                    OutputLog.appendRaw(sessionId, data, length)
+                }
             }
         }
     }

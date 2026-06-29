@@ -71,6 +71,11 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -776,11 +781,13 @@ private fun JCodeShell(
             terminalSessionIds = terminalSessionIds.filterNot { it in previous }
             previous.forEach { terminalTitles.remove(it) }
         }
+        OutputLog.beginRun(plan.kindLabel)
         val startedIds = mutableListOf<String>()
         for (terminal in plan.terminals) {
             val session = spawnTerminalSession(label = terminal.label) ?: break
             terminalSessionManager.sendInput(session.id, ProjectRunner.runInvocation(project, terminal) + "\n")
             startedIds += session.id
+            OutputLog.captureSession(session.id)
         }
         if (startedIds.isEmpty()) return
         runSessionIds = startedIds
@@ -795,8 +802,10 @@ private fun JCodeShell(
                 val up = ProjectRunner.awaitServer(plan.readyPort)
                 runInProgress = false
                 if (up) {
+                    OutputLog.append("✓ Dev server ready — opening ${plan.url}")
                     ProjectRunner.openInBrowser(appContext, plan.url)
                 } else {
+                    OutputLog.append("✗ Dev server didn't start in time; check the run terminals.", OutputKind.Error)
                     snackbarHostState.showSnackbar("Dev server didn't start in time; check the run terminals.")
                 }
             }
@@ -811,6 +820,7 @@ private fun JCodeShell(
     // state. The terminal session is kept so its output stays visible and a re-run can reuse it.
     fun handleStopRun() {
         runPollJob?.cancel()
+        OutputLog.append("■ Stopped run")
         runSessionIds.forEach { id ->
             if (id in terminalSessionIds && terminalSessionManager.getSession(id) != null) {
                 terminalSessionManager.sendInput(id, byteArrayOf(0x03)) // Ctrl-C / SIGINT
@@ -2764,19 +2774,62 @@ private fun DisabledTabContent(
 private fun OutputSidebarContent(
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text("Output", fontWeight = FontWeight.SemiBold)
-        Text(
-            text = "Build logs and tool output will appear here.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+    val lines by OutputLog.lines.collectAsStateWithLifecycle()
+    Box(modifier = modifier.fillMaxSize()) {
+        if (lines.isEmpty()) {
+            Text(
+                text = "Build logs and tool output will appear here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(12.dp),
+            )
+        } else {
+            val listState = rememberLazyListState()
+            // Auto-follow new output only when already pinned to the bottom, so scrolling up to read
+            // mid-build doesn't yank the view back down on the next line.
+            val atBottom by remember {
+                derivedStateOf {
+                    val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+                    last == null || last.index >= listState.layoutInfo.totalItemsCount - 1
+                }
+            }
+            LaunchedEffect(lines.size) {
+                if (atBottom && lines.isNotEmpty()) listState.scrollToItem(lines.size - 1)
+            }
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp),
+            ) {
+                items(lines) { line ->
+                    Text(
+                        text = line.text.ifEmpty { " " },
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp,
+                        color = outputColor(line.kind),
+                    )
+                }
+            }
+        }
+        if (lines.isNotEmpty()) {
+            Box(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
+                WorkbenchIconActionButton(
+                    icon = jcIcon(JCodeIcon.Clear),
+                    contentDescription = "Clear output",
+                    onClick = { OutputLog.clear() },
+                )
+            }
+        }
     }
+}
+
+@Composable
+private fun outputColor(kind: OutputKind) = when (kind) {
+    OutputKind.Header -> MaterialTheme.colorScheme.primary
+    OutputKind.Error -> MaterialTheme.colorScheme.error
+    OutputKind.Info -> MaterialTheme.colorScheme.onSurfaceVariant
+    OutputKind.Stdout -> MaterialTheme.colorScheme.onSurface
 }
 
 @Composable

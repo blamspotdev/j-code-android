@@ -78,6 +78,12 @@ class TerminalSessionManager(
     @Volatile
     var onTitleChange: ((String, String) -> Unit)? = null
 
+    /** Invoked (off the reader thread) with each session's raw PTY output (id, buffer, length), so the
+     *  host can mirror run output into the Output panel. The buffer is reused after the call — the
+     *  callback must consume/copy it synchronously. */
+    @Volatile
+    var onOutput: ((String, ByteArray, Int) -> Unit)? = null
+
     @Volatile
     var activeSessionId: String? = null
         private set
@@ -218,6 +224,7 @@ class TerminalSessionManager(
                     n > 0 -> {
                         synchronized(session) { session.parser.feed(buffer.copyOf(n)) }
                         session.oscScanner.feed(buffer, n, oscHandler)
+                        onOutput?.invoke(session.id, buffer, n)
                         session.onUpdate?.invoke()
                     }
                     n < 0 -> { exited = true; break }   // EOF: the shell/process exited
