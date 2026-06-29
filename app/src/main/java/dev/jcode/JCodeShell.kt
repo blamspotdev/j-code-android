@@ -6,6 +6,8 @@ import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
 import dev.jcode.design.EditorSaveActions
 import dev.jcode.design.IconBundleRegistry
+import dev.jcode.core.editor.completion.LocalCompletionSource
+import dev.jcode.editor.languagePackCompletionItems
 import dev.jcode.design.LocalEditorSaveActions
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.JcTooltip
@@ -263,6 +265,14 @@ fun JCodeApp(
             onFormat = viewModel::formatActiveTab,
         )
     }
+    // Completion items for the focused file, resolved from its installed language pack (if any).
+    val activeFileName = editorGroup.activeTab?.filePath?.name
+    val activeLanguagePack = remember(activeFileName, installedExtensions) {
+        activeFileName?.let { n -> installedExtensions.firstNotNullOfOrNull { it.language?.takeIf { l -> l.matchesFile(n) } } }
+    }
+    val completionSource = remember(activeLanguagePack) {
+        { prefix: String -> languagePackCompletionItems(activeLanguagePack, prefix) }
+    }
     StatusBarKeyboardController(enabled = hideStatusBarWithKeyboard)
     val tapContext = LocalContext.current
     val terminalTapConfig = TerminalTapConfig(
@@ -317,6 +327,7 @@ fun JCodeApp(
         LocalTerminalTapConfig provides terminalTapConfig,
         LocalTabCloseButtonSetting provides tabCloseSetting,
         LocalEditorSaveActions provides editorSaveActions,
+        LocalCompletionSource provides completionSource,
     ) {
     JCodeShell(
         modifier = modifier,

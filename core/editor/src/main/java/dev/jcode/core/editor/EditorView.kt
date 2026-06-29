@@ -28,6 +28,18 @@ import kotlin.math.min
 /** A long-press context request: pixel position and the selected word (empty if none). */
 data class EditorContextRequest(val xPx: Float, val yPx: Float, val word: String)
 
+/**
+ * The identifier prefix being typed at the caret, with the byte range it occupies and the pixel
+ * position (relative to this view) to anchor a completion popup. Null means "no active prefix".
+ */
+data class CompletionAnchor(
+    val prefix: String,
+    val replaceStart: Int,
+    val caret: Int,
+    val xPx: Float,
+    val yPx: Float,
+)
+
 /** Language-aware context actions (resolved by the host; semantic ones need a language server). */
 enum class EditorLanguageAction(val label: String) {
     GoToDefinition("Go to Definition"),
@@ -54,6 +66,10 @@ class EditorView @JvmOverloads constructor(
 
     private var typeface: Typeface = Typeface.MONOSPACE
 
+    // Suppresses the post-edit completion-anchor refresh while we programmatically accept a completion
+    // (otherwise inserting the accepted text would immediately re-open the popup on the new word).
+    private var suppressAnchorUpdate = false
+
     // sp→px factor; RenderConfig.fontSizeSp is in sp but Paint.textSize / layout math need px.
     private val density: Float get() = resources.displayMetrics.density
 
@@ -63,6 +79,9 @@ class EditorView @JvmOverloads constructor(
 
     /** Invoked when the user requests a save (Ctrl+S); the host writes the buffer to disk. */
     var onSaveRequest: (() -> Unit)? = null
+
+    /** Invoked after edits/caret moves with the current completion prefix anchor (null = dismiss). */
+    var onCompletionAnchorChanged: ((CompletionAnchor?) -> Unit)? = null
 
     private val gestureDetector = GestureDetector(
         context,
@@ -205,6 +224,7 @@ class EditorView @JvmOverloads constructor(
                 // cursor (via onCreateInputConnection's initialSel) and drops any stale composing
                 // region. Without this the IME edits against a stale model and corrupts the buffer.
                 imm().restartInput(this)
+                updateCompletionAnchor()
             }
             return true
         }
@@ -261,6 +281,63 @@ class EditorView @JvmOverloads constructor(
             snapshot.lineColumnToOffset(line, end),
             lineText.substring(start, end),
         )
+    }
+
+    // --- completion popup support ---------------------------------------------------------------
+
+    /** Recompute the identifier prefix at the caret and notify the host (null when there's none). */
+    fun updateCompletionAnchor() {
+        val cb = onCompletionAnchorChanged ?: return
+        val state = editorState ?: return
+        val caretObj = state.carets.value.firstOrNull()
+        if (caretObj == null || caretObj.isSelection) { cb(null); return }
+        val caret = caretObj.head
+        val snapshot = state.snapshot.value
+        val (line, _) = snapshot.offsetToLineColumn(caret)
+        val (lineStart, _) = snapshot.lineAt(line)
+        val before = snapshot.readRangeAsUtf16(lineStart, caret)
+        var i = before.length
+        while (i > 0 && (before[i - 1].isLetterOrDigit() || before[i - 1] == '_')) i--
+        val prefix = before.substring(i)
+        if (prefix.isEmpty()) { cb(null); return }
+        val replaceStart = caret - prefix.toByteArray(Charsets.UTF_8).size
+        val pixel = anchorPixel(replaceStart, line) ?: run { cb(null); return }
+        cb(CompletionAnchor(prefix, replaceStart, caret, pixel.first, pixel.second))
+    }
+
+    /** View-relative pixel (x at [offset], y at the bottom of [line]) to anchor a popup under the word. */
+    private fun anchorPixel(offset: Int, line: Int): Pair<Float, Float>? {
+        val state = editorState ?: return null
+        val snapshot = state.snapshot.value
+        val config = state.renderConfig.value
+        val lineHeight = (config.fontSizeSp * density * config.lineHeightMultiplier).toInt().coerceAtLeast(1)
+        val (lineStart, _) = snapshot.lineAt(line)
+        val prefixText = snapshot.readRangeAsUtf16(lineStart, offset)
+        val paint = android.text.TextPaint().apply {
+            textSize = config.fontSizeSp * density
+            typeface = this@EditorView.typeface
+        }
+        val gutter = computeGutterWidth(snapshot, config)
+        val x = gutter + 8f + paint.measureText(prefixText)
+        val y = ((line + 1) * lineHeight - state.viewport.value.scrollY).toFloat()
+        return x to y
+    }
+
+    /** Replace [start, end) (byte offsets) with [text], placing the caret at [caretAfter]; accepts a completion. */
+    fun replaceRange(start: Int, end: Int, text: String, caretAfter: Int) {
+        val state = editorState ?: return
+        runBlocking {
+            state.applyEdit(EditTx.replace(start, end, text))
+            val len = state.snapshot.value.byteLength
+            val c = caretAfter.coerceIn(0, len)
+            state.setSelection(listOf(Caret(c, c)))
+        }
+        invalidate()
+        suppressAnchorUpdate = true
+        updateImeCursor()
+        suppressAnchorUpdate = false
+        imm().restartInput(this)
+        onCompletionAnchorChanged?.invoke(null)
     }
 
     // --- clipboard / selection actions (used by the context menu) -------------------------------
@@ -469,6 +546,8 @@ class EditorView @JvmOverloads constructor(
             composingStart,
             composingEnd,
         )
+        // Every edit/caret move funnels through here, so refresh the completion popup anchor too.
+        if (!suppressAnchorUpdate) updateCompletionAnchor()
     }
 
     /** Get the InputMethodManager for this view. */

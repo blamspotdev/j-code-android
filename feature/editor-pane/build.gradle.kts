@@ -35,6 +35,7 @@ dependencies {
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
     implementation(project(":core:editor"))
+    implementation(project(":core:editor-completion"))
     implementation(project(":core:buffer"))
     implementation(project(":core:design"))
     implementation(project(":core:config"))

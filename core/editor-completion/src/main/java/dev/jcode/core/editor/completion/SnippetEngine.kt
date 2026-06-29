@@ -49,7 +49,9 @@ class SnippetEngine {
                         val result = parseComplexTabStop(snippet, i)
                         if (result != null) {
                             val (stop, endIndex) = result
-                            tabStops.add(stop.copy(index = tabStopIndex))
+                            // Record the stop's position in the expanded text now (before its
+                            // placeholder is appended) so apply() can place the caret accurately.
+                            tabStops.add(stop.copy(index = tabStopIndex, offset = text.length))
                             text.append(stop.placeholder)
                             tabStopIndex++
                             i = endIndex
@@ -63,7 +65,7 @@ class SnippetEngine {
                         val numStart = i
                         while (i < snippet.length && snippet[i].isDigit()) i++
                         val num = snippet.substring(numStart, i).toIntOrNull() ?: 0
-                        tabStops.add(TabStop(index = tabStopIndex, number = num))
+                        tabStops.add(TabStop(index = tabStopIndex, number = num, offset = text.length))
                         tabStopIndex++
                     } else if (snippet[i].isLetter()) {
                         // Variable: $VAR_NAME
@@ -164,19 +166,16 @@ class SnippetEngine {
      */
     fun apply(snippet: String, offset: Int): AppliedSnippet {
         val result = parse(snippet)
+        // parse() recorded each stop's char position within the expanded text; shift by the insertion
+        // offset to get absolute positions (byte == char for ASCII snippets, which these are).
         val adjustedStops = result.tabStops.map { stop ->
-            stop.copy(offset = offset + findPlaceholderStart(result.text, stop))
+            stop.copy(offset = offset + stop.offset)
         }
         return AppliedSnippet(
             text = result.text,
             tabStops = adjustedStops,
             finalOffset = offset + result.text.length,
         )
-    }
-
-    private fun findPlaceholderStart(text: String, stop: TabStop): Int {
-        if (stop.placeholder.isEmpty()) return 0
-        return text.indexOf(stop.placeholder).coerceAtLeast(0)
     }
 }
 

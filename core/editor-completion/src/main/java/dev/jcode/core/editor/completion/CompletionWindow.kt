@@ -13,9 +13,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 
 /**
@@ -53,8 +58,31 @@ fun CompletionWindow(
         }
     }
 
+    // Anchor the popup just below the caret/word (anchorX, anchorY are pixels relative to the editor
+    // view, which the popup's parent overlays), flipping above when there isn't room below.
+    val positionProvider = remember(anchorX, anchorY) {
+        object : PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: IntRect,
+                windowSize: IntSize,
+                layoutDirection: LayoutDirection,
+                popupContentSize: IntSize,
+            ): IntOffset {
+                val x = (anchorBounds.left + anchorX.toInt())
+                    .coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
+                val below = anchorBounds.top + anchorY.toInt()
+                val y = if (below + popupContentSize.height <= windowSize.height) {
+                    below
+                } else {
+                    (below - popupContentSize.height).coerceAtLeast(0)
+                }
+                return IntOffset(x, y)
+            }
+        }
+    }
+
     Popup(
-        alignment = Alignment.TopStart,
+        popupPositionProvider = positionProvider,
         properties = PopupProperties(
             focusable = false,
             dismissOnBackPress = true,

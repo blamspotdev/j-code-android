@@ -24,6 +24,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,9 +37,14 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import dev.jcode.core.editor.CompletionAnchor
 import dev.jcode.core.editor.EditorContextRequest
 import dev.jcode.core.editor.EditorLanguageAction
 import dev.jcode.core.editor.EditorView
+import dev.jcode.core.editor.completion.CompletionContext
+import dev.jcode.core.editor.completion.CompletionWindow
+import dev.jcode.core.editor.completion.EditorCompletionModule
+import dev.jcode.core.editor.completion.LocalCompletionSource
 import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
 import dev.jcode.design.JCodeIcon
@@ -249,6 +255,11 @@ fun EditorViewHost(
     val density = LocalDensity.current
     var view by remember { mutableStateOf<EditorView?>(null) }
     var menu by remember { mutableStateOf<EditorContextRequest?>(null) }
+    var completionAnchor by remember { mutableStateOf<CompletionAnchor?>(null) }
+    val completionSource = LocalCompletionSource.current
+
+    // A completion popup belongs to its file; clear it when the active editor (tab) changes.
+    LaunchedEffect(editorState) { completionAnchor = null }
 
     Box(modifier = modifier.clipToBounds()) {
         AndroidView(
@@ -257,6 +268,7 @@ fun EditorViewHost(
                     attach(editorState)
                     onContextRequest = { menu = it }
                     onSaveRequest = { onSave() }
+                    onCompletionAnchorChanged = { completionAnchor = it }
                     view = this
                 }
             },
@@ -265,10 +277,42 @@ fun EditorViewHost(
                 v.attach(editorState)
                 v.onContextRequest = { menu = it }
                 v.onSaveRequest = { onSave() }
+                v.onCompletionAnchorChanged = { completionAnchor = it }
                 view = v
             },
             onRelease = { it.detach() },
         )
+
+        val anchor = completionAnchor
+        val completionItems = remember(anchor?.prefix, completionSource) {
+            anchor?.let { completionSource(it.prefix) } ?: emptyList()
+        }
+        if (anchor != null && completionItems.isNotEmpty()) {
+            CompletionWindow(
+                context = CompletionContext(completionItems, anchor.replaceStart, null),
+                anchorX = anchor.xPx,
+                anchorY = anchor.yPx,
+                onDismiss = { completionAnchor = null },
+                onSelect = { item ->
+                    view?.let { v ->
+                        val snippet = item.snippetText
+                        if (snippet != null) {
+                            val applied = EditorCompletionModule.snippetEngine.apply(snippet, anchor.replaceStart)
+                            // Caret goes to the first real tab stop ($1…), else the final stop ($0), else end.
+                            val firstStop = applied.tabStops.filter { it.number > 0 }.minByOrNull { it.number }
+                            val zeroStop = applied.tabStops.firstOrNull { it.number == 0 }
+                            val target = firstStop?.offset ?: zeroStop?.offset ?: applied.finalOffset
+                            v.replaceRange(anchor.replaceStart, anchor.caret, applied.text, target)
+                        } else {
+                            val insert = item.insertText ?: item.label
+                            val caretAfter = anchor.replaceStart + insert.toByteArray(Charsets.UTF_8).size
+                            v.replaceRange(anchor.replaceStart, anchor.caret, insert, caretAfter)
+                        }
+                    }
+                    completionAnchor = null
+                },
+            )
+        }
 
         menu?.let { req ->
             val offset = with(density) { DpOffset(req.xPx.toDp(), req.yPx.toDp()) }
