@@ -101,7 +101,10 @@ internal fun ExtensionsPanel(
                     if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                     ManagerListRow(
                         name = entry.name,
-                        description = entry.description ?: entrySubtitle(entry),
+                        description = listOfNotNull(
+                            entry.author?.let { "by $it" },
+                            entry.description ?: entrySubtitle(entry),
+                        ).joinToString(" · "),
                         status = marketStatus(entry, installedById[entry.id]),
                         onClick = { onOpenDetail(entry.id) },
                         leading = {
@@ -123,7 +126,10 @@ internal fun ExtensionsPanel(
                     if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                     ManagerListRow(
                         name = ext.name,
-                        description = ext.description.ifBlank { ext.type.name.lowercase() },
+                        description = listOfNotNull(
+                            ext.author?.let { "by $it" },
+                            ext.description.ifBlank { ext.type.name.lowercase() },
+                        ).joinToString(" · "),
                         status = ManagerItemStatus.Installed,
                         onClick = { onOpenDetail(ext.id) },
                         leading = { ExtensionIcon(type = ext.type, name = ext.name, iconFile = ext.iconFile) },
@@ -195,8 +201,10 @@ internal fun ExtensionDetailPage(
     val id = entry?.id ?: installed?.id ?: return
     val status = marketStatus(entry, installed)
     val subtitle = buildString {
+        val author = entry?.author ?: installed?.author
+        author?.let { append("by $it") }
         val type = entry?.type ?: installed?.type
-        type?.let { append(it.name.lowercase()) }
+        type?.let { if (isNotEmpty()) append(" · "); append(it.name.lowercase()) }
         entry?.category?.let { append(" · $it") }
         val version = installed?.version ?: entry?.version
         version?.let { append(" · v$it") }

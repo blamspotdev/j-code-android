@@ -44,6 +44,7 @@ class ExtensionInstaller internal constructor(context: Context) {
                 MarketplaceEntry(
                     id = id,
                     name = entry.str("name") ?: id,
+                    author = entry.str("publisher") ?: entry.str("author"),
                     type = ExtensionType.from(entry.str("type")),
                     category = entry.str("category"),
                     subcategory = entry.str("subcategory"),
@@ -183,6 +184,7 @@ class ExtensionInstaller internal constructor(context: Context) {
         return InstalledExtension(
             id = id,
             name = map.str("name") ?: id,
+            author = map.str("publisher") ?: map.str("author"),
             type = type,
             version = map.str("version"),
             description = map.str("description") ?: "",

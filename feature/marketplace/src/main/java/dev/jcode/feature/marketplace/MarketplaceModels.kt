@@ -45,6 +45,8 @@ data class MarketplaceEntry(
     /** Globally-unique reverse-DNS install id (the .jehm `uniqueName`). */
     val id: String,
     val name: String,
+    /** Publisher / author / channel that published this extension. */
+    val author: String? = null,
     val type: ExtensionType,
     val category: String?,
     val subcategory: String?,
@@ -139,6 +141,8 @@ data class LanguagePack(
 data class InstalledExtension(
     val id: String,
     val name: String,
+    /** Publisher / author / channel that published this extension. */
+    val author: String? = null,
     val type: ExtensionType,
     val version: String?,
     val description: String,
