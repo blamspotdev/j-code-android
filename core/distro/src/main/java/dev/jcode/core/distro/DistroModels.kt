@@ -109,17 +109,31 @@ data class DistroProfile(
         private val defaultProfiles = listOf(
             DistroProfile(
                 id = "ubuntu-24.04",
-                label = "Ubuntu 24.04 LTS",
+                label = "Ubuntu 24.04 LTS (ARM64)",
                 installRecipe = "ubuntu:24.04",
                 approxFootprint = "~2.5 GB",
                 arch = Arch.ARM64,
             ),
             DistroProfile(
-                id = "debian-12",
-                label = "Debian 12 Bookworm",
-                installRecipe = "debian:bookworm",
-                approxFootprint = "~2.0 GB",
+                id = "ubuntu-26.04",
+                label = "Ubuntu 26.04 LTS (ARM64)",
+                installRecipe = "ubuntu:26.04",
+                approxFootprint = "~2.5 GB",
                 arch = Arch.ARM64,
+            ),
+            DistroProfile(
+                id = "ubuntu-24.04-amd64",
+                label = "Ubuntu 24.04 LTS (x86_64)",
+                installRecipe = "ubuntu:24.04",
+                approxFootprint = "~2.5 GB (emulated)",
+                arch = Arch.X86_64,
+            ),
+            DistroProfile(
+                id = "ubuntu-26.04-amd64",
+                label = "Ubuntu 26.04 LTS (x86_64)",
+                installRecipe = "ubuntu:26.04",
+                approxFootprint = "~2.5 GB (emulated)",
+                arch = Arch.X86_64,
             ),
         )
 
@@ -141,7 +155,6 @@ data class DistroProfile(
         private fun legacyMatches(profile: DistroProfile, raw: String): Boolean {
             return when (raw) {
                 "ubuntu" -> profile.installRecipe == "ubuntu:24.04"
-                "debian" -> profile.installRecipe == "debian:bookworm"
                 else -> false
             }
         }
