@@ -1,38 +1,43 @@
 package dev.jcode.feature.marketplace
 
 import android.content.Context
-import java.io.BufferedInputStream
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import java.util.LinkedHashMap
 import java.util.zip.ZipInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import org.snakeyaml.engine.v2.api.Load
 import org.snakeyaml.engine.v2.api.LoadSettings
 
 /**
  * Runtime marketplace client + on-device extension store.
  *
- * Extensions are installed by downloading their GitHub repo as a zip (codeload) and unpacking it
- * under `filesDir/extensions/<id>/`; the app reads each extension's `extension.yaml` from there.
- * The marketplace index lists each extension's repo URL, so the app only needs the index to browse
- * and the per-extension repo to install.
+ * Extensions are installed ONLY from a compiled `.jext` package (a zip; see the JEXT spec). The
+ * marketplace index lists each extension's `.jext` path + fingerprint; install downloads it, verifies
+ * the package fingerprint (`.jext-manifest.json`) and the `minJCodeVersion` from `extension.jehm`,
+ * then unpacks it under `filesDir/extensions/<uniqueName>/`. The app reads each extension's
+ * `extension.yaml` from there.
  */
 class ExtensionInstaller internal constructor(context: Context) {
     private val appContext = context.applicationContext
     private val installRoot = File(appContext.filesDir, "extensions")
 
-    /** Browse the remote marketplace index. */
+    /** Browse the remote marketplace index. Only entries that ship a `.jext` are installable. */
     suspend fun fetchIndex(): Result<MarketplaceIndex> = withContext(Dispatchers.IO) {
         runCatching {
             val map = parseYamlMapping(httpGetString(INDEX_URL))
             val entries = map.listOfAny("extensions").mapNotNull { raw ->
                 val entry = (raw as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
-                val id = entry.str("id") ?: return@mapNotNull null
-                val repo = entry.str("repo") ?: return@mapNotNull null
+                val id = entry.str("uniqueName") ?: entry.str("id") ?: return@mapNotNull null
+                val jext = entry.str("jext") ?: return@mapNotNull null // .jext-only marketplace
+                val fingerprint = (entry["fingerprint"] as? Map<*, *>)?.toStringKeyMap()?.str("value")
+                    ?: entry.str("fingerprint")
                 MarketplaceEntry(
                     id = id,
                     name = entry.str("name") ?: id,
@@ -40,8 +45,11 @@ class ExtensionInstaller internal constructor(context: Context) {
                     category = entry.str("category"),
                     subcategory = entry.str("subcategory"),
                     version = entry.str("version"),
-                    repo = repo,
-                    description = entry.str("description"),
+                    jext = jext,
+                    fingerprint = fingerprint,
+                    minJCodeVersion = entry.str("minJCodeVersion"),
+                    targetJCodeVersion = entry.str("targetJCodeVersion"),
+                    description = entry.str("shortDescription") ?: entry.str("description"),
                     longDescription = entry.str("longDescription"),
                     samples = parseSamples(entry["samples"]),
                     requires = parseDeps(entry["requires"]),
@@ -52,22 +60,93 @@ class ExtensionInstaller internal constructor(context: Context) {
         }
     }
 
-    /** Download + unpack an extension, replacing any previous install. */
-    suspend fun install(entry: MarketplaceEntry): Result<InstalledExtension> = withContext(Dispatchers.IO) {
-        runCatching {
-            installRoot.mkdirs()
-            val dest = File(installRoot, safeDirName(entry.id))
-            val tmp = File(installRoot, ".tmp-${safeDirName(entry.id)}")
-            tmp.deleteRecursively()
-            tmp.mkdirs()
-            openStream(codeloadZipUrl(entry.repo)).use { input -> extractZipStrippingTop(input, tmp) }
-            dest.deleteRecursively()
-            if (!tmp.renameTo(dest)) {
-                tmp.copyRecursively(dest, overwrite = true)
-                tmp.deleteRecursively()
+    /** Download the entry's `.jext`, verify it, and install — replacing any previous copy. */
+    suspend fun install(entry: MarketplaceEntry, appVersion: String): Result<InstalledExtension> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val jextPath = entry.jext ?: error("${entry.name} has no .jext package")
+                requireCompatible(entry.minJCodeVersion, appVersion, entry.name)
+                val bytes = openStream(BASE_URL + jextPath).use { it.readBytes() }
+                installFromJextBytes(bytes, expectedFingerprint = entry.fingerprint, appVersion = appVersion)
             }
-            loadInstalled(dest) ?: error("Installed extension has no valid extension.yaml")
         }
+
+    /** Install from a local `.jext` file (sideload). */
+    suspend fun installLocalJext(file: File, appVersion: String): Result<InstalledExtension> =
+        withContext(Dispatchers.IO) {
+            runCatching { installFromJextBytes(file.readBytes(), expectedFingerprint = null, appVersion = appVersion) }
+        }
+
+    /** Verify a .jext (integrity + compatibility), then unpack it under the install root. */
+    private fun installFromJextBytes(
+        bytes: ByteArray,
+        expectedFingerprint: String?,
+        appVersion: String,
+    ): InstalledExtension {
+        val files = readZipEntries(bytes)
+        val manifestText = files[JEXT_MANIFEST]?.toString(Charsets.UTF_8)
+            ?: error("not a .jext package (missing $JEXT_MANIFEST)")
+        verifyManifest(JSONObject(manifestText), files, expectedFingerprint)
+
+        val jehmText = files[JEHM_FILE]?.toString(Charsets.UTF_8)
+            ?: error("not a .jext package (missing $JEHM_FILE)")
+        val header = parseJehmHeader(jehmText)
+        val uniqueName = header.str("uniqueName") ?: error("$JEHM_FILE missing uniqueName")
+        requireCompatible(header.str("minJCodeVersion"), appVersion, header.str("name") ?: uniqueName)
+
+        installRoot.mkdirs()
+        val dest = File(installRoot, safeDirName(uniqueName))
+        val tmp = File(installRoot, ".tmp-${safeDirName(uniqueName)}")
+        tmp.deleteRecursively()
+        tmp.mkdirs()
+        val tmpPath = tmp.canonicalPath + File.separator
+        for ((rel, data) in files) {
+            val outFile = File(tmp, rel)
+            if (!outFile.canonicalPath.startsWith(tmpPath)) continue // zip-slip guard
+            outFile.parentFile?.mkdirs()
+            outFile.writeBytes(data)
+        }
+        dest.deleteRecursively()
+        if (!tmp.renameTo(dest)) {
+            tmp.copyRecursively(dest, overwrite = true)
+            tmp.deleteRecursively()
+        }
+        return loadInstalled(dest) ?: error("Installed package has no valid extension.yaml")
+    }
+
+    private fun requireCompatible(minVersion: String?, appVersion: String, name: String) {
+        if (minVersion.isNullOrBlank()) return
+        if (compareVersions(appVersion, minVersion) < 0) {
+            error("$name requires JCode $minVersion or newer (you have $appVersion)")
+        }
+    }
+
+    // Verify every listed file's SHA-256 and the order-independent package fingerprint. The fingerprint
+    // is recomputed over the manifest's file list IN ORDER, matching how `jext pack` produced it.
+    private fun verifyManifest(manifest: JSONObject, files: Map<String, ByteArray>, expectedFingerprint: String?) {
+        val arr = manifest.optJSONArray("files") ?: error(".jext manifest has no files[]")
+        val pairs = (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            o.getString("path") to o.getString("sha256")
+        }
+        for ((path, expected) in pairs) {
+            val data = files[path] ?: error(".jext is missing a listed file: $path")
+            if (sha256Hex(data) != expected) error(".jext checksum mismatch for $path")
+        }
+        val recomputed = sha256Hex(pairs.joinToString("\n") { "${it.first}\t${it.second}" }.toByteArray(Charsets.UTF_8))
+        val declared = manifest.optJSONObject("fingerprint")?.optString("value")?.takeIf { it.isNotBlank() }
+        if (declared != null && declared != recomputed) error(".jext fingerprint does not match its contents")
+        if (!expectedFingerprint.isNullOrBlank() && expectedFingerprint != recomputed) {
+            error(".jext fingerprint does not match the marketplace index (possible tampering)")
+        }
+    }
+
+    // Parse only the YAML frontmatter of an extension.jehm (between the leading and next "---").
+    private fun parseJehmHeader(text: String): Map<String, Any?> {
+        val t = text.removePrefix("﻿")
+        val m = Regex("^---\\r?\\n(.*?)\\r?\\n---", setOf(RegexOption.DOT_MATCHES_ALL)).find(t)
+            ?: error("$JEHM_FILE: missing YAML frontmatter")
+        return parseYamlMapping(m.groupValues[1])
     }
 
     fun uninstall(id: String) {
@@ -207,40 +286,32 @@ class ExtensionInstaller internal constructor(context: Context) {
         return conn.inputStream
     }
 
-    private fun extractZipStrippingTop(input: InputStream, destDir: File) {
-        val destPath = destDir.canonicalPath + File.separator
-        ZipInputStream(BufferedInputStream(input)).use { zip ->
+    // Read every file entry of a .jext (files live at the zip root — no top-dir stripping).
+    private fun readZipEntries(bytes: ByteArray): Map<String, ByteArray> {
+        val out = LinkedHashMap<String, ByteArray>()
+        ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
             var entry = zip.nextEntry
             while (entry != null) {
-                // codeload zips nest everything under "<repo>-<ref>/"; drop that leading segment.
-                val rel = entry.name.substringAfter('/', "")
-                if (rel.isNotBlank()) {
-                    val outFile = File(destDir, rel)
-                    if (outFile.canonicalPath.startsWith(destPath)) {
-                        if (entry.isDirectory) {
-                            outFile.mkdirs()
-                        } else {
-                            outFile.parentFile?.mkdirs()
-                            outFile.outputStream().use { zip.copyTo(it) }
-                        }
-                    }
+                if (!entry.isDirectory) {
+                    out[entry.name.replace('\\', '/')] = zip.readBytes()
                 }
                 zip.closeEntry()
                 entry = zip.nextEntry
             }
         }
+        return out
     }
 
-    private fun codeloadZipUrl(repo: String): String {
-        val slug = repo.removePrefix("https://github.com/").removeSuffix("/").removeSuffix(".git")
-        return "https://codeload.github.com/$slug/zip/refs/heads/main"
-    }
+    private fun sha256Hex(data: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(data).joinToString("") { "%02x".format(it.toInt() and 0xFF) }
 
     private fun safeDirName(id: String): String = id.replace(Regex("[^A-Za-z0-9._-]"), "_")
 
     private companion object {
-        const val INDEX_URL =
-            "https://raw.githubusercontent.com/janrick123/j-code-marketplace/main/marketplace.yaml"
+        const val BASE_URL = "https://raw.githubusercontent.com/janrick123/j-code-marketplace/main/"
+        const val INDEX_URL = BASE_URL + "marketplace.yaml"
+        const val JEHM_FILE = "extension.jehm"
+        const val JEXT_MANIFEST = ".jext-manifest.json"
     }
 }
 

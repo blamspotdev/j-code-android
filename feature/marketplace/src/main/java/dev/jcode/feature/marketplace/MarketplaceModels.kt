@@ -42,6 +42,7 @@ data class CodeSample(
 
 /** One extension listed in the remote marketplace index (marketplace.yaml). */
 data class MarketplaceEntry(
+    /** Globally-unique reverse-DNS install id (the .jehm `uniqueName`). */
     val id: String,
     val name: String,
     val type: ExtensionType,
@@ -49,8 +50,14 @@ data class MarketplaceEntry(
     val subcategory: String?,
     /** Latest published version, used to detect updates against an installed copy. */
     val version: String?,
-    /** The extension's git repo (https .git URL); the installer derives a codeload zip URL from it. */
-    val repo: String,
+    /** Path to the compiled .jext within the marketplace repo, e.g. "dist/jcode.lang.csharp-0.2.0.jext". */
+    val jext: String?,
+    /** Expected package fingerprint (sha256) from the index; verified against the downloaded .jext. */
+    val fingerprint: String? = null,
+    /** Lowest JCode app version that can run this extension. */
+    val minJCodeVersion: String? = null,
+    /** JCode version this extension was built/tested against. */
+    val targetJCodeVersion: String? = null,
     /** One-line summary shown in the compact row. */
     val description: String? = null,
     /** Full description shown on the detail page. */

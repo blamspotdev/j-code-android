@@ -137,7 +137,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun installExtension(entry: MarketplaceEntry) {
         viewModelScope.launch {
             _marketplaceBusy.value = true
-            extensionInstaller.install(entry)
+            extensionInstaller.install(entry, BuildConfig.VERSION_NAME)
                 .onSuccess { _messages.tryEmit("Installed ${it.name}") }
                 .onFailure { _messages.tryEmit("Install failed: ${it.message ?: "error"}") }
             _marketplaceBusy.value = false
