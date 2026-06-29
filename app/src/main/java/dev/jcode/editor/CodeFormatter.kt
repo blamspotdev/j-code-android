@@ -34,8 +34,9 @@ object CodeFormatter {
 
         var result = out.toString()
         if (finalNewline) {
-            result = result.trimEnd('\n', '\r')
-            if (result.isNotEmpty()) result += nl
+            // Collapse any trailing blank lines to exactly one newline. Always re-add it (input is
+            // non-empty here, guarded above), so an all-whitespace file becomes "\n", never "".
+            result = result.trimEnd('\n', '\r') + nl
         }
         return result
     }

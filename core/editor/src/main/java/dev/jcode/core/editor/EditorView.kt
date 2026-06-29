@@ -333,11 +333,13 @@ class EditorView @JvmOverloads constructor(
             state.setSelection(listOf(Caret(c, c)))
         }
         invalidate()
+        // Keep the anchor refresh suppressed through the whole sync sequence (updateImeCursor +
+        // restartInput + dismiss), so accepting a completion can't transiently re-open the popup.
         suppressAnchorUpdate = true
         updateImeCursor()
-        suppressAnchorUpdate = false
         imm().restartInput(this)
         onCompletionAnchorChanged?.invoke(null)
+        suppressAnchorUpdate = false
     }
 
     // --- clipboard / selection actions (used by the context menu) -------------------------------

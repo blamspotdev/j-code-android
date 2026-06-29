@@ -166,15 +166,17 @@ class SnippetEngine {
      */
     fun apply(snippet: String, offset: Int): AppliedSnippet {
         val result = parse(snippet)
-        // parse() recorded each stop's char position within the expanded text; shift by the insertion
-        // offset to get absolute positions (byte == char for ASCII snippets, which these are).
+        val text = result.text
+        // parse() recorded each stop as a CHARACTER index into the expanded text; the editor addresses
+        // the buffer in UTF-8 BYTES, so convert char index -> byte length and shift by the (byte) offset.
         val adjustedStops = result.tabStops.map { stop ->
-            stop.copy(offset = offset + stop.offset)
+            val byteIndex = text.substring(0, stop.offset.coerceIn(0, text.length)).toByteArray(Charsets.UTF_8).size
+            stop.copy(offset = offset + byteIndex)
         }
         return AppliedSnippet(
-            text = result.text,
+            text = text,
             tabStops = adjustedStops,
-            finalOffset = offset + result.text.length,
+            finalOffset = offset + text.toByteArray(Charsets.UTF_8).size,
         )
     }
 }
