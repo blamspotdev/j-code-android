@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <style name="Theme.JCode" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- App + launch theme. A dark window background (matching the launcher icon) prevents the white
+         flash before the dark Compose UI draws; on Android 12+ the system splash shows the JCode logo
+         on the same dark background. Parent kept Light so any android-themed component is unchanged. -->
+    <style name="Theme.JCode" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/ic_launcher_background</item>
+        <item name="android:colorBackground">@color/ic_launcher_background</item>
+        <item name="android:statusBarColor">@color/ic_launcher_background</item>
+        <item name="android:navigationBarColor">@color/ic_launcher_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowSplashScreenBackground" tools:targetApi="31">@color/ic_launcher_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon" tools:targetApi="31">@mipmap/ic_launcher_foreground</item>
+    </style>
 </resources>
