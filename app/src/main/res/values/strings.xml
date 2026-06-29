@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">J Code</string>
+    <string name="backend_service_channel_name">Backend sessions</string>
+    <string name="backend_service_channel_description">Keeps active terminal, language server, and debug sessions running.</string>
+    <string name="backend_service_notification_title">J Code backend active</string>
+    <plurals name="backend_service_active_sessions">
+        <item quantity="one">%d active session</item>
+        <item quantity="other">%d active sessions</item>
+    </plurals>
+</resources>

@@ -1,0 +1,106 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JCode Workspace Configuration",
+  "description": "Workspace-level configuration for J Code IDE",
+  "type": "object",
+  "properties": {
+    "editor": {
+      "type": "object",
+      "properties": {
+        "fontSize": { "type": "number", "minimum": 8, "maximum": 72, "default": 14 },
+        "tabSize": { "type": "integer", "minimum": 1, "maximum": 16, "default": 4 },
+        "insertSpaces": { "type": "boolean", "default": true },
+        "wordWrap": { "type": "boolean", "default": false },
+        "minimap": { "type": "boolean", "default": true },
+        "formatOnSave": { "type": "boolean", "default": false },
+        "ligatures": { "type": "boolean", "default": true },
+        "aggressiveAutocorrectKill": { "type": "boolean", "default": false }
+      }
+    },
+    "files": {
+      "type": "object",
+      "properties": {
+        "exclude": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["**/node_modules/**", "**/.git/**", "**/build/**"]
+        },
+        "watcherExclude": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["**/.git/objects/**", "**/.git/subtree-cache/**"]
+        }
+      }
+    },
+    "search": {
+      "type": "object",
+      "properties": {
+        "exclude": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["**/node_modules/**", "**/.git/**"]
+        }
+      }
+    },
+    "git": {
+      "type": "object",
+      "properties": {
+        "autoFetch": { "type": "boolean", "default": true }
+      }
+    },
+    "terminal": {
+      "type": "object",
+      "properties": {
+        "shell": {
+          "type": "object",
+          "properties": {
+            "linux": { "type": "string" }
+          }
+        }
+      }
+    },
+    "languages": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "formatter": { "type": "string" },
+          "lspId": { "type": "string" }
+        }
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "properties": {
+        "allowed": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "theme": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "default": "dark" }
+      }
+    },
+    "distro": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "enum": ["ubuntu", "debian"], "default": "ubuntu" },
+        "bind": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["host", "target"],
+            "properties": {
+              "host": { "type": "string" },
+              "target": { "type": "string" }
+            }
+          }
+        },
+        "user": { "type": "string", "default": "jcode" }
+      }
+    }
+  }
+}

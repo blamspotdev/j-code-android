@@ -1,0 +1,103 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JCode Project Configuration",
+  "description": "Project-level configuration for J Code IDE (overrides workspace config)",
+  "type": "object",
+  "properties": {
+    "editor": {
+      "type": "object",
+      "properties": {
+        "fontSize": { "type": "number", "minimum": 8, "maximum": 72 },
+        "tabSize": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "insertSpaces": { "type": "boolean" },
+        "wordWrap": { "type": "boolean" },
+        "minimap": { "type": "boolean" },
+        "formatOnSave": { "type": "boolean" },
+        "ligatures": { "type": "boolean" },
+        "aggressiveAutocorrectKill": { "type": "boolean" }
+      }
+    },
+    "files": {
+      "type": "object",
+      "properties": {
+        "exclude": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "watcherExclude": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "search": {
+      "type": "object",
+      "properties": {
+        "exclude": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "git": {
+      "type": "object",
+      "properties": {
+        "autoFetch": { "type": "boolean" }
+      }
+    },
+    "terminal": {
+      "type": "object",
+      "properties": {
+        "shell": {
+          "type": "object",
+          "properties": {
+            "linux": { "type": "string" }
+          }
+        }
+      }
+    },
+    "languages": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "formatter": { "type": "string" },
+          "lspId": { "type": "string" }
+        }
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "properties": {
+        "allowed": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "theme": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }
+      }
+    },
+    "distro": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "enum": ["ubuntu", "debian"] },
+        "bind": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["host", "target"],
+            "properties": {
+              "host": { "type": "string" },
+              "target": { "type": "string" }
+            }
+          }
+        },
+        "user": { "type": "string" }
+      }
+    }
+  }
+}
