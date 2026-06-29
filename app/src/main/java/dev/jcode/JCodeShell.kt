@@ -260,6 +260,7 @@ fun JCodeApp(
             onRedo = viewModel::redoActiveTab,
             onDiscard = viewModel::discardActiveTab,
             onSaveAll = viewModel::saveAllTabs,
+            onFormat = viewModel::formatActiveTab,
         )
     }
     StatusBarKeyboardController(enabled = hideStatusBarWithKeyboard)
@@ -1005,6 +1006,7 @@ private fun JCodeShell(
     }
 
     val content: @Composable () -> Unit = {
+        val editorActions = LocalEditorSaveActions.current
         Scaffold(
             modifier = Modifier
                 .fillMaxSize()
@@ -1101,10 +1103,14 @@ private fun JCodeShell(
                             name != null && installedExtensions.any { it.language?.matchesFile(name) == true }
                         },
                         onEditorLanguageAction = { action, word ->
-                            // Semantic actions need a language server (deferred); surface intent.
-                            scope.launch {
-                                val target = if (word.isNotBlank()) " \"$word\"" else ""
-                                snackbarHostState.showSnackbar("${action.label}$target — needs a language server (coming soon)")
+                            if (action == EditorLanguageAction.FormatDocument) {
+                                editorActions.onFormat()
+                            } else {
+                                // Semantic actions need a language server (deferred); surface intent.
+                                scope.launch {
+                                    val target = if (word.isNotBlank()) " \"$word\"" else ""
+                                    snackbarHostState.showSnackbar("${action.label}$target — needs a language server (coming soon)")
+                                }
                             }
                         },
                         editorPageContent = { tab ->

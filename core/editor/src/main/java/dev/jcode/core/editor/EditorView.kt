@@ -33,7 +33,7 @@ enum class EditorLanguageAction(val label: String) {
     GoToDefinition("Go to Definition"),
     FindReferences("Find References"),
     RenameSymbol("Rename Symbol"),
-    FormatSelection("Format Selection"),
+    FormatDocument("Format Document"),
 }
 
 /**

@@ -66,6 +66,7 @@ class EditorSaveActions(
     val onRedo: () -> Unit = {},
     val onDiscard: () -> Unit = {},
     val onSaveAll: () -> Unit = {},
+    val onFormat: () -> Unit = {},
 )
 
 val LocalEditorSaveActions = compositionLocalOf { EditorSaveActions() }

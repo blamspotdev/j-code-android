@@ -16,6 +16,8 @@ import dev.jcode.backend.SessionRegistry
 import dev.jcode.core.config.ConfigScope
 import dev.jcode.core.config.ConfigService
 import dev.jcode.core.config.ConfigServiceLocator
+import dev.jcode.core.editor.Caret
+import dev.jcode.core.buffer.EditTx
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.distro.DistroProfile
 import dev.jcode.core.distro.DistroWizardProgress
@@ -988,6 +990,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             state.replaceAll(bytes.toString(Charsets.UTF_8)) // force: discard intentionally drops edits
             withContext(Dispatchers.IO) { file.diskSignatureOrNull() }?.let { diskSignatures[tab.id] = it }
             emitMessage("Discarded changes in ${tab.title}")
+        }
+    }
+
+    /** Format the active tab with the built-in formatter, honoring its language pack's rules. */
+    fun formatActiveTab() {
+        val tab = _editorGroup.value.activeTab ?: return
+        val state = tab.editorState ?: run {
+            viewModelScope.launch { emitMessage("Nothing to format") }
+            return
+        }
+        val name = tab.filePath.name
+        val lang = _installedExtensions.value.firstNotNullOfOrNull { ext ->
+            ext.language?.takeIf { it.matchesFile(name) }
+        }
+        viewModelScope.launch {
+            val snap = state.snapshot.value
+            val original = snap.readRangeAsUtf16(0, snap.byteLength)
+            val formatted = dev.jcode.editor.CodeFormatter.format(original, lang)
+            if (formatted == original) {
+                emitMessage("Already formatted")
+                return@launch
+            }
+            state.applyEdit(EditTx.replace(0, snap.byteLength, formatted))
+            val newLen = state.snapshot.value.byteLength
+            val caret = (state.carets.value.firstOrNull()?.head ?: 0).coerceIn(0, newLen)
+            state.setSelection(listOf(Caret(caret, caret)))
+            emitMessage("Formatted ${tab.title}")
         }
     }
 

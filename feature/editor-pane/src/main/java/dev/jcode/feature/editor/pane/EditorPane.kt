@@ -302,5 +302,5 @@ private fun EditorLanguageAction.menuIcon(): JCodeIcon = when (this) {
     EditorLanguageAction.GoToDefinition -> JCodeIcon.Definition
     EditorLanguageAction.FindReferences -> JCodeIcon.References
     EditorLanguageAction.RenameSymbol -> JCodeIcon.Rename
-    EditorLanguageAction.FormatSelection -> JCodeIcon.Format
+    EditorLanguageAction.FormatDocument -> JCodeIcon.Format
 }
