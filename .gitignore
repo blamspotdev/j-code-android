@@ -36,3 +36,13 @@ AGENTS.md
 
 # Local scratch (screenshots, junk)
 temp/
+.claude/
+.kotlin/
+plans/
+build-warnings.txt
+wd.xml
+# Loose screenshots/images at the repo root (keep README assets under docs/)
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp
