@@ -293,6 +293,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             uniqueName = "jcode.lang.markup",
             version = "1.0.0",
         ),
+        BundledExtensionSpec(
+            assetPath = "builtin-extensions/jcode.lang.stylesheet-1.0.0.jext",
+            uniqueName = "jcode.lang.stylesheet",
+            version = "1.0.0",
+        ),
     )
 
     init {
