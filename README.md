@@ -86,4 +86,10 @@ and the [`j-code-make-tools`](https://github.com/blamspotdev/j-code-make-tools) 
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE). © 2026 Janrick Samorin.
+Source-available under the [Business Source License 1.1](LICENSE). © 2026 Janrick
+Samorin. You may **use the app for free** for any purpose (personal, internal,
+commercial, educational) and modify or contribute to it; you may **not** redistribute
+it as a competing hosted/packaged product. Each released version automatically
+converts to the **Apache License 2.0** three years after its release. Contributions
+are covered by [`CONTRIBUTING.md`](CONTRIBUTING.md); third-party components and their
+licenses are listed in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
