@@ -58,6 +58,8 @@ data class MarketplaceEntry(
     val minJCodeVersion: String? = null,
     /** JCode version this extension was built/tested against. */
     val targetJCodeVersion: String? = null,
+    /** Absolute URL of the marketplace-published icon, shown before install. Null if none. */
+    val iconUrl: String? = null,
     /** One-line summary shown in the compact row. */
     val description: String? = null,
     /** Full description shown on the detail page. */
@@ -145,4 +147,6 @@ data class InstalledExtension(
     val samples: List<CodeSample> = emptyList(),
     val templates: List<ProjectTemplate> = emptyList(),
     val language: LanguagePack? = null,
+    /** The extension's icon file inside [dir], if it shipped one. */
+    val iconFile: File? = null,
 )

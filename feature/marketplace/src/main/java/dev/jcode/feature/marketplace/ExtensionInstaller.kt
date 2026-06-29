@@ -38,6 +38,9 @@ class ExtensionInstaller internal constructor(context: Context) {
                 val jext = entry.str("jext") ?: return@mapNotNull null // .jext-only marketplace
                 val fingerprint = (entry["fingerprint"] as? Map<*, *>)?.toStringKeyMap()?.str("value")
                     ?: entry.str("fingerprint")
+                // Only the marketplace-published `icon:` path (dist/icons/…) is fetchable; the
+                // per-package `images.icon` points inside the .jext and isn't a usable URL.
+                val iconUrl = entry.str("icon")?.let { if (it.startsWith("http")) it else BASE_URL + it }
                 MarketplaceEntry(
                     id = id,
                     name = entry.str("name") ?: id,
@@ -49,6 +52,7 @@ class ExtensionInstaller internal constructor(context: Context) {
                     fingerprint = fingerprint,
                     minJCodeVersion = entry.str("minJCodeVersion"),
                     targetJCodeVersion = entry.str("targetJCodeVersion"),
+                    iconUrl = iconUrl,
                     description = entry.str("shortDescription") ?: entry.str("description"),
                     longDescription = entry.str("longDescription"),
                     samples = parseSamples(entry["samples"]),
@@ -187,7 +191,18 @@ class ExtensionInstaller internal constructor(context: Context) {
             samples = parseSamples(map["samples"]),
             templates = templates,
             language = language,
+            iconFile = findIconFile(dir),
         )
+    }
+
+    // The icon path the .jehm declares (images.icon), else a conventional location; null if absent.
+    private fun findIconFile(dir: File): File? {
+        val declared = File(dir, JEHM_FILE).takeIf { it.isFile }
+            ?.let { runCatching { parseJehmHeader(it.readText()) }.getOrNull() }
+            ?.let { (it["images"] as? Map<*, *>)?.toStringKeyMap()?.str("icon") }
+        return listOfNotNull(declared, "media/icon.png", "icon.png")
+            .map { File(dir, it) }
+            .firstOrNull { it.isFile }
     }
 
     private fun loadTemplate(extensionDir: File, id: String?): ProjectTemplate? {

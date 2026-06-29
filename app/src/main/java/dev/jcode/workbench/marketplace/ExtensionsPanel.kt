@@ -43,6 +43,7 @@ import dev.jcode.design.ManagerSectionCard
 import dev.jcode.design.ThemeBundleRegistry
 import dev.jcode.feature.marketplace.CodeSample
 import dev.jcode.feature.marketplace.ExtensionDeps
+import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.isUpdateAvailable
@@ -103,6 +104,14 @@ internal fun ExtensionsPanel(
                         description = entry.description ?: entrySubtitle(entry),
                         status = marketStatus(entry, installedById[entry.id]),
                         onClick = { onOpenDetail(entry.id) },
+                        leading = {
+                            ExtensionIcon(
+                                type = entry.type,
+                                name = entry.name,
+                                iconFile = installedById[entry.id]?.iconFile,
+                                iconUrl = entry.iconUrl,
+                            )
+                        },
                     )
                 }
             }
@@ -117,6 +126,7 @@ internal fun ExtensionsPanel(
                         description = ext.description.ifBlank { ext.type.name.lowercase() },
                         status = ManagerItemStatus.Installed,
                         onClick = { onOpenDetail(ext.id) },
+                        leading = { ExtensionIcon(type = ext.type, name = ext.name, iconFile = ext.iconFile) },
                     )
                 }
             }
@@ -214,6 +224,15 @@ internal fun ExtensionDetailPage(
         onUninstall = { onUninstall(id) },
         onVerify = {},
         modifier = modifier,
+        leading = {
+            ExtensionIcon(
+                type = entry?.type ?: installed?.type ?: ExtensionType.Unknown,
+                name = entry?.name ?: installed?.name ?: id,
+                iconFile = installed?.iconFile,
+                iconUrl = entry?.iconUrl,
+                size = 56.dp,
+            )
+        },
         extra = {
             if (samples.isNotEmpty()) {
                 ManagerSectionCard(title = "Samples", description = "Example usage.") {
