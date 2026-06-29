@@ -150,7 +150,12 @@ data class InstalledExtension(
     val longDescription: String? = null,
     val samples: List<CodeSample> = emptyList(),
     val templates: List<ProjectTemplate> = emptyList(),
-    val language: LanguagePack? = null,
+    /** Language packs this extension provides. A pack may bundle several (e.g. a markup pack). */
+    val languages: List<LanguagePack> = emptyList(),
     /** The extension's icon file inside [dir], if it shipped one. */
     val iconFile: File? = null,
 )
+
+/** The first bundled language that claims [fileName] (by file extension), or null. */
+fun InstalledExtension.languageFor(fileName: String): LanguagePack? =
+    languages.firstOrNull { it.matchesFile(fileName) }

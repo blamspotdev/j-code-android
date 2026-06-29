@@ -32,8 +32,10 @@ import dev.jcode.design.ThemeMode
 import dev.jcode.feature.editor.pane.EditorGroup
 import dev.jcode.feature.editor.pane.EditorPageKind
 import dev.jcode.feature.editor.pane.EditorTab
+import dev.jcode.feature.marketplace.BundledExtensionSpec
 import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
+import dev.jcode.feature.marketplace.languageFor
 import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.MarketplaceServiceLocator
 import dev.jcode.feature.marketplace.ProjectTemplate
@@ -284,8 +286,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _bringEditorToFront = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val bringEditorToFront = _bringEditorToFront.asSharedFlow()
 
+    // Extensions shipped inside the APK (assets/builtin-extensions/) and installed on first run.
+    private val builtinExtensions = listOf(
+        BundledExtensionSpec(
+            assetPath = "builtin-extensions/jcode.lang.markup-1.0.0.jext",
+            uniqueName = "jcode.lang.markup",
+            version = "1.0.0",
+        ),
+    )
+
     init {
-        refreshInstalledExtensions()
+        viewModelScope.launch {
+            runCatching {
+                extensionInstaller.ensureBundledExtensionsInstalled(builtinExtensions, BuildConfig.VERSION_NAME)
+            }
+            refreshInstalledExtensions()
+        }
 
         viewModelScope.launch {
             currentWorkspace.collectLatest { workspace ->
@@ -1001,9 +1017,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val name = tab.filePath.name
-        val lang = _installedExtensions.value.firstNotNullOfOrNull { ext ->
-            ext.language?.takeIf { it.matchesFile(name) }
-        }
+        val lang = _installedExtensions.value.firstNotNullOfOrNull { ext -> ext.languageFor(name) }
         viewModelScope.launch {
             val snap = state.snapshot.value
             val original = snap.readRangeAsUtf16(0, snap.byteLength)

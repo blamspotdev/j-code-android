@@ -187,6 +187,7 @@ import dev.jcode.feature.explorer.ExplorerFeature
 import dev.jcode.feature.explorer.ExplorerViewMode
 import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
+import dev.jcode.feature.marketplace.languageFor
 import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.isUpdateAvailable
 import dev.jcode.feature.marketplace.ProjectTemplate
@@ -273,7 +274,7 @@ fun JCodeApp(
     // Completion items for the focused file, resolved from its installed language pack (if any).
     val activeFileName = editorGroup.activeTab?.filePath?.name
     val activeLanguagePack = remember(activeFileName, installedExtensions) {
-        activeFileName?.let { n -> installedExtensions.firstNotNullOfOrNull { it.language?.takeIf { l -> l.matchesFile(n) } } }
+        activeFileName?.let { n -> installedExtensions.firstNotNullOfOrNull { it.languageFor(n) } }
     }
     val completionSource = remember(activeLanguagePack) {
         { prefix: String -> languagePackCompletionItems(activeLanguagePack, prefix) }
@@ -534,9 +535,9 @@ private fun JCodeShell(
     // A previously-persisted selection may point at a now-hidden destination; fall back to Explorer.
     LaunchedEffect(Unit) { if (!selectedTool.available) selectedTool = WorkbenchTool.Explorer }
 
-    // Syntax highlighting for the active file, driven by the installed language pack (pack-driven:
-    // no matching pack => plain text). Re-tokenizes on every edit; spans are pushed as a GLYPH_COLOR
-    // decoration layer that the editor renderer consumes.
+    // Syntax highlighting for the active file: the installed language pack if one matches, else the
+    // built-in Markdown pack (.md) or a generic fallback, so every file gets baseline coloring.
+    // Re-tokenizes on every edit; spans are pushed as a GLYPH_COLOR decoration layer the renderer consumes.
     val systemDark = isSystemInDarkTheme()
     val editorDark = when (themeMode) {
         ThemeMode.Dark -> true
@@ -547,18 +548,12 @@ private fun JCodeShell(
     LaunchedEffect(highlightTab?.id, installedExtensions, editorDark) {
         val state = highlightTab?.editorState ?: return@LaunchedEffect
         val fileName = highlightTab.filePath.name
-        val lang = installedExtensions.firstNotNullOfOrNull { ext ->
-            ext.language?.takeIf { it.matchesFile(fileName) }
-        }
-        if (lang == null) {
-            state.updateDecorations { it.replaceLayer(Layer.GLYPH_COLOR, emptyList()) }
-            return@LaunchedEffect
-        }
+        val lang = installedExtensions.firstNotNullOfOrNull { ext -> ext.languageFor(fileName) }
         val palette = if (editorDark) TokenPalette.DARK else TokenPalette.LIGHT
         state.snapshot.collectLatest { snap ->
             val spans = withContext(Dispatchers.Default) {
                 val text = runCatching { snap.readRangeAsUtf16(0, snap.byteLength) }.getOrDefault("")
-                SyntaxHighlighter.highlight(text, lang, palette)
+                SyntaxHighlighter.highlightFor(text, fileName, lang, palette)
             }
             state.updateDecorations { it.replaceLayer(Layer.GLYPH_COLOR, spans) }
         }
@@ -1121,7 +1116,7 @@ private fun JCodeShell(
                         },
                         languageActionsEnabled = run {
                             val name = editorGroup.activeTab?.filePath?.name
-                            name != null && installedExtensions.any { it.language?.matchesFile(name) == true }
+                            name != null && installedExtensions.any { it.languageFor(name) != null }
                         },
                         onEditorLanguageAction = { action, word ->
                             if (action == EditorLanguageAction.FormatDocument) {

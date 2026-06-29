@@ -82,6 +82,32 @@ class ExtensionInstaller internal constructor(context: Context) {
             runCatching { installFromJextBytes(file.readBytes(), expectedFingerprint = null, appVersion = appVersion) }
         }
 
+    /**
+     * Install extensions bundled in the APK assets (e.g. `builtin-extensions/foo.jext`) that aren't
+     * present yet, or whose bundled version is newer than the installed copy. Best-effort and
+     * idempotent — safe to call on every launch; reuses the same verify + extract pipeline as a
+     * marketplace install.
+     */
+    suspend fun ensureBundledExtensionsInstalled(specs: List<BundledExtensionSpec>, appVersion: String) =
+        withContext(Dispatchers.IO) {
+            for (spec in specs) {
+                runCatching {
+                    val installedDir = File(installRoot, safeDirName(spec.uniqueName))
+                    val needsInstall = !isInstalled(spec.uniqueName) ||
+                        (spec.version != null && compareVersions(spec.version, installedVersionOf(installedDir)) > 0)
+                    if (needsInstall) {
+                        val bytes = appContext.assets.open(spec.assetPath).use { it.readBytes() }
+                        installFromJextBytes(bytes, expectedFingerprint = null, appVersion = appVersion)
+                    }
+                }
+            }
+        }
+
+    private fun installedVersionOf(dir: File): String {
+        val map = runCatching { parseYamlMapping(File(dir, "extension.yaml").readText()) }.getOrNull()
+        return map?.str("version") ?: "0.0.0"
+    }
+
     /** Verify a .jext (integrity + compatibility), then unpack it under the install root. */
     private fun installFromJextBytes(
         bytes: ByteArray,
@@ -180,7 +206,7 @@ class ExtensionInstaller internal constructor(context: Context) {
         } else {
             emptyList()
         }
-        val language = if (type == ExtensionType.Language) parseLanguage(map) else null
+        val languages = if (type == ExtensionType.Language) parseLanguages(map) else emptyList()
         return InstalledExtension(
             id = id,
             name = map.str("name") ?: id,
@@ -192,7 +218,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             longDescription = map.str("longDescription"),
             samples = parseSamples(map["samples"]),
             templates = templates,
-            language = language,
+            languages = languages,
             iconFile = findIconFile(dir),
         )
     }
@@ -250,8 +276,18 @@ class ExtensionInstaller internal constructor(context: Context) {
         return ExtensionDeps(sdks = ids("sdks"), lsps = ids("lsps"), extensions = ids("extensions"))
     }
 
-    private fun parseLanguage(map: Map<String, Any?>): LanguagePack? {
-        val lang = (map["language"] as? Map<*, *>)?.toStringKeyMap() ?: return null
+    // A `type: language` extension may declare a single `language:` block (legacy) or a `languages:`
+    // array (a pack bundling several languages, e.g. HTML/XML/YAML). Both yield a list of packs.
+    private fun parseLanguages(map: Map<String, Any?>): List<LanguagePack> {
+        val multi = map.listOfAny("languages").mapNotNull { raw ->
+            (raw as? Map<*, *>)?.toStringKeyMap()?.let(::parseOneLanguage)
+        }
+        if (multi.isNotEmpty()) return multi
+        val single = (map["language"] as? Map<*, *>)?.toStringKeyMap()?.let(::parseOneLanguage)
+        return listOfNotNull(single)
+    }
+
+    private fun parseOneLanguage(lang: Map<String, Any?>): LanguagePack? {
         val comment = (lang["comment"] as? Map<*, *>)?.toStringKeyMap()
         val formatter = (lang["formatter"] as? Map<*, *>)?.toStringKeyMap()
         val completions = lang.listOfAny("completions").mapNotNull { raw ->
@@ -331,6 +367,16 @@ class ExtensionInstaller internal constructor(context: Context) {
         const val JEXT_MANIFEST = ".jext-manifest.json"
     }
 }
+
+/** An extension packaged inside the APK assets, to be installed on first run. */
+data class BundledExtensionSpec(
+    /** Path under `app/src/main/assets/`, e.g. `builtin-extensions/jcode.lang.markup-1.0.0.jext`. */
+    val assetPath: String,
+    /** The extension's uniqueName (install id), used to detect whether it's already installed. */
+    val uniqueName: String,
+    /** Bundled version; when set and newer than the installed copy, the bundle is re-installed. */
+    val version: String? = null,
+)
 
 // --- shared YAML helpers --------------------------------------------------------------------
 
