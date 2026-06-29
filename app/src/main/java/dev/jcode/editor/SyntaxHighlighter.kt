@@ -10,6 +10,12 @@ data class TokenPalette(
     val string: Int,
     val comment: Int,
     val number: Int,
+    val function: Int,
+    val variable: Int,
+    val constant: Int,
+    val property: Int,
+    val operator: Int,
+    val annotation: Int,
 ) {
     companion object {
         val DARK = TokenPalette(
@@ -18,6 +24,12 @@ data class TokenPalette(
             string = 0xFFA6E3A1.toInt(),
             comment = 0xFF7F849C.toInt(),
             number = 0xFFFAB387.toInt(),
+            function = 0xFF89B4FA.toInt(),
+            variable = 0xFFB4BEFE.toInt(),
+            constant = 0xFFEBA0AC.toInt(),
+            property = 0xFF94E2D5.toInt(),
+            operator = 0xFFBAC2DE.toInt(),
+            annotation = 0xFFF9E2AF.toInt(),
         )
         val LIGHT = TokenPalette(
             keyword = 0xFF8839EF.toInt(),
@@ -25,17 +37,27 @@ data class TokenPalette(
             string = 0xFF40A02B.toInt(),
             comment = 0xFF8C8FA1.toInt(),
             number = 0xFFFE640B.toInt(),
+            function = 0xFF1E66F5.toInt(),
+            variable = 0xFF7287FD.toInt(),
+            constant = 0xFFE64553.toInt(),
+            property = 0xFF04A5E5.toInt(),
+            operator = 0xFF6C6F85.toInt(),
+            annotation = 0xFFDF8E1D.toInt(),
         )
     }
 }
 
 /**
  * A small, dependency-free tokenizer that produces [ColoredSpan]s (byte offsets) for an editor
- * buffer, driven by a [LanguagePack]'s syntax rules. Not a full grammar — it colors comments,
- * strings, numbers, and keyword/type identifiers, which covers the "code coloring" need without a
- * native grammar. Spans use UTF-8 byte offsets to match the renderer.
+ * buffer, driven by a [LanguagePack]'s syntax rules plus language-agnostic heuristics. It colors
+ * comments, strings, numbers, operators, annotations/decorators, and classifies identifiers as
+ * keyword / type / function-call / constant / property / variable. Not a full grammar, but it covers
+ * the common "code coloring" need without a native grammar. Spans use UTF-8 byte offsets to match the
+ * renderer.
  */
 object SyntaxHighlighter {
+    private val OPERATORS = "+-*/%=<>!&|^~?:".toCharArray().toHashSet()
+
     fun highlight(text: String, lang: LanguagePack, palette: TokenPalette): List<ColoredSpan> {
         val n = text.length
         if (n == 0) return emptyList()
@@ -96,25 +118,64 @@ object SyntaxHighlighter {
                 if (j > n) j = n
                 add(i, j, palette.string); i = j; continue
             }
+            // annotation / decorator: @name  (Java/C#/TS/Python)
+            if (c == '@' && i + 1 < n && (text[i + 1].isLetter() || text[i + 1] == '_')) {
+                var j = i + 1
+                while (j < n && (text[j].isLetterOrDigit() || text[j] == '_')) j++
+                add(i, j, palette.annotation); i = j; continue
+            }
             // number
             if (c.isDigit()) {
                 var j = i
                 while (j < n && (text[j].isLetterOrDigit() || text[j] == '.' || text[j] == '_')) j++
                 add(i, j, palette.number); i = j; continue
             }
-            // identifier -> keyword / type
+            // identifier -> keyword / type / function / constant / property / variable
             if (c.isLetter() || c == '_') {
                 var j = i
                 while (j < n && (text[j].isLetterOrDigit() || text[j] == '_')) j++
                 val word = text.substring(i, j)
-                when (word) {
-                    in lang.keywords -> add(i, j, palette.keyword)
-                    in lang.types -> add(i, j, palette.type)
+                // next non-space char: '(' marks a function call/definition
+                var k = j
+                while (k < n && (text[k] == ' ' || text[k] == '\t')) k++
+                val isCall = k < n && text[k] == '('
+                // previous non-space char: '.' marks member/property access
+                var p = i - 1
+                while (p >= 0 && (text[p] == ' ' || text[p] == '\t')) p--
+                val isMember = p >= 0 && text[p] == '.'
+                val color = when {
+                    word in lang.keywords -> palette.keyword
+                    word in lang.types -> palette.type
+                    isCall -> palette.function
+                    isConstantName(word) -> palette.constant
+                    isMember -> palette.property
+                    else -> palette.variable
                 }
-                i = j; continue
+                add(i, j, color); i = j; continue
+            }
+            // operators (+, -, =, =>, &&, etc.); comments are handled above so '/' is safe here
+            if (c in OPERATORS) {
+                var j = i
+                while (j < n && text[j] in OPERATORS) j++
+                add(i, j, palette.operator); i = j; continue
             }
             i++
         }
         return spans
+    }
+
+    // ALL_CAPS identifier (at least one letter; only A-Z, 0-9, _), e.g. MAX_VALUE, PI — treated as a
+    // constant. Single chars (T, K) are left as plain identifiers to avoid mis-coloring type params.
+    private fun isConstantName(w: String): Boolean {
+        if (w.length < 2) return false
+        var hasLetter = false
+        for (ch in w) {
+            when (ch) {
+                in 'A'..'Z' -> hasLetter = true
+                in '0'..'9', '_' -> {}
+                else -> return false
+            }
+        }
+        return hasLetter
     }
 }
