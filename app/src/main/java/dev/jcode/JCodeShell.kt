@@ -1662,10 +1662,6 @@ private fun WorkspacePanel(
                         busy = marketplaceBusy,
                         onRefreshMarketplace = managerActions.onRefreshMarketplace,
                         onOpenDetail = managerActions.onOpenExtensionDetail,
-                        themeBundleId = themeBundleId,
-                        onSelectTheme = onUpdateThemeBundle,
-                        iconBundleId = iconBundleId,
-                        onSelectIcon = onUpdateIconBundle,
                         modifier = Modifier.fillMaxSize(),
                     )
 
