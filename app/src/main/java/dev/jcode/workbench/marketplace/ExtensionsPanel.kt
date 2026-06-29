@@ -33,12 +33,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import dev.jcode.design.CompactFilledButton
 import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.ManagerDetailScreen
 import dev.jcode.design.ManagerItemStatus
 import dev.jcode.design.ManagerListRow
+import dev.jcode.design.ManagerPanelHeader
 import dev.jcode.design.ManagerSectionCard
 import dev.jcode.design.ThemeBundleRegistry
 import dev.jcode.feature.marketplace.CodeSample
@@ -47,6 +47,7 @@ import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.isUpdateAvailable
+import java.io.File
 
 @Composable
 internal fun ExtensionsPanel(
@@ -62,9 +63,9 @@ internal fun ExtensionsPanel(
     modifier: Modifier = Modifier,
 ) {
     LaunchedEffect(Unit) { if (available.isEmpty()) onRefreshMarketplace() }
-    val installedById = remember(installed) { installed.associateBy { it.id } }
-    val availableIds = remember(available) { available.map { it.id }.toSet() }
-    val installedOnly = remember(installed, availableIds) { installed.filter { it.id !in availableIds } }
+    var query by remember { mutableStateOf("") }
+    var searchActive by remember { mutableStateOf(false) }
+    val rows = remember(available, installed, query) { buildExtensionRows(available, installed, query) }
 
     Column(
         modifier = modifier
@@ -73,67 +74,47 @@ internal fun ExtensionsPanel(
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        ManagerSectionCard(
+        ManagerPanelHeader(
             title = "Extensions",
-            description = "Templates, language packs, and formatters from the marketplace.",
+            installedCount = installed.size,
+            onRefresh = onRefreshMarketplace,
+            busy = busy,
+            searchActive = searchActive,
+            onToggleSearch = { searchActive = !searchActive; if (!searchActive) query = "" },
+            query = query,
+            onQueryChange = { query = it },
+            searchPlaceholder = "Search extensions",
+        )
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f),
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CompactFilledButton(
-                    text = if (busy) "Refreshing…" else "Refresh",
-                    onClick = onRefreshMarketplace,
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth(),
+            if (rows.isEmpty()) {
+                Text(
+                    text = when {
+                        busy && available.isEmpty() -> "Loading marketplace…"
+                        query.isNotBlank() -> "No extensions match “$query”."
+                        else -> "Refresh to load installable extensions."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(12.dp),
                 )
-            }
-        }
-
-        if (available.isEmpty() && installedOnly.isEmpty()) {
-            Text(
-                if (busy) "Loading marketplace…" else "Refresh to load installable extensions.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        if (available.isNotEmpty()) {
-            ManagerSectionCard(title = "Marketplace", description = "Browse and install extensions.") {
-                available.forEachIndexed { index, entry ->
-                    if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-                    ManagerListRow(
-                        name = entry.name,
-                        description = listOfNotNull(
-                            entry.author?.let { "by $it" },
-                            entry.description ?: entrySubtitle(entry),
-                        ).joinToString(" · "),
-                        status = marketStatus(entry, installedById[entry.id]),
-                        onClick = { onOpenDetail(entry.id) },
-                        leading = {
-                            ExtensionIcon(
-                                type = entry.type,
-                                name = entry.name,
-                                iconFile = installedById[entry.id]?.iconFile,
-                                iconUrl = entry.iconUrl,
-                            )
-                        },
-                    )
-                }
-            }
-        }
-
-        if (installedOnly.isNotEmpty()) {
-            ManagerSectionCard(title = "Installed", description = "Extensions not in the current marketplace index.") {
-                installedOnly.forEachIndexed { index, ext ->
-                    if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-                    ManagerListRow(
-                        name = ext.name,
-                        description = listOfNotNull(
-                            ext.author?.let { "by $it" },
-                            ext.description.ifBlank { ext.type.name.lowercase() },
-                        ).joinToString(" · "),
-                        status = ManagerItemStatus.Installed,
-                        onClick = { onOpenDetail(ext.id) },
-                        leading = { ExtensionIcon(type = ext.type, name = ext.name, iconFile = ext.iconFile) },
-                    )
+            } else {
+                Column {
+                    rows.forEachIndexed { index, row ->
+                        if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        ManagerListRow(
+                            name = row.name,
+                            description = listOfNotNull(row.author?.let { "by $it" }, row.description).joinToString(" · "),
+                            status = row.status,
+                            onClick = { onOpenDetail(row.id) },
+                            leading = {
+                                ExtensionIcon(type = row.type, name = row.name, iconFile = row.iconFile, iconUrl = row.iconUrl)
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -279,6 +260,64 @@ private fun marketStatus(entry: MarketplaceEntry?, installed: InstalledExtension
     installed == null -> ManagerItemStatus.NotInstalled
     isUpdateAvailable(entry?.version, installed.version) -> ManagerItemStatus.UpdateAvailable
     else -> ManagerItemStatus.Installed
+}
+
+/** One row of the unified extensions list (marketplace entries + installed-only extensions). */
+private data class ExtensionRow(
+    val id: String,
+    val name: String,
+    val author: String?,
+    val description: String,
+    val type: ExtensionType,
+    val status: ManagerItemStatus,
+    val installed: Boolean,
+    val iconFile: File?,
+    val iconUrl: String?,
+)
+
+/** Merge marketplace + installed into one list, filtered by [query] and sorted installed-first. */
+private fun buildExtensionRows(
+    available: List<MarketplaceEntry>,
+    installed: List<InstalledExtension>,
+    query: String,
+): List<ExtensionRow> {
+    val installedById = installed.associateBy { it.id }
+    val availableIds = available.map { it.id }.toSet()
+    val fromMarket = available.map { e ->
+        val inst = installedById[e.id]
+        ExtensionRow(
+            id = e.id,
+            name = e.name,
+            author = e.author,
+            description = e.description ?: entrySubtitle(e),
+            type = e.type,
+            status = marketStatus(e, inst),
+            installed = inst != null,
+            iconFile = inst?.iconFile,
+            iconUrl = e.iconUrl,
+        )
+    }
+    val installedOnly = installed.filter { it.id !in availableIds }.map { ext ->
+        ExtensionRow(
+            id = ext.id,
+            name = ext.name,
+            author = ext.author,
+            description = ext.description.ifBlank { ext.type.name.lowercase() },
+            type = ext.type,
+            status = ManagerItemStatus.Installed,
+            installed = true,
+            iconFile = ext.iconFile,
+            iconUrl = null,
+        )
+    }
+    return (fromMarket + installedOnly)
+        .filter { r ->
+            query.isBlank() ||
+                r.name.contains(query, ignoreCase = true) ||
+                (r.author?.contains(query, ignoreCase = true) == true) ||
+                r.description.contains(query, ignoreCase = true)
+        }
+        .sortedWith(compareByDescending<ExtensionRow> { it.installed }.thenBy { it.name.lowercase() })
 }
 
 @Composable

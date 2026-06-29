@@ -9,19 +9,23 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.core.distro.LspCatalogEntry
 import dev.jcode.core.distro.LspCatalogState
-import dev.jcode.design.CompactFilledButton
 import dev.jcode.design.ManagerDetailScreen
 import dev.jcode.design.ManagerItemStatus
 import dev.jcode.design.ManagerListRow
 import dev.jcode.design.ManagerNoticeCard
-import dev.jcode.design.ManagerSectionCard
-import dev.jcode.design.ManagerSummaryRow
+import dev.jcode.design.ManagerPanelHeader
 
 object LspManagerFeature {
 
@@ -33,8 +37,25 @@ object LspManagerFeature {
         onOpenDetail: (String) -> Unit,
         modifier: Modifier = Modifier,
     ) {
-        val groupedEntries = state.entries.groupBy(LspCatalogEntry::category)
         val environmentReady = environmentState.distroInstalled == true && environmentState.jcodeUserReady == true
+        var query by remember { mutableStateOf("") }
+        var searchActive by remember { mutableStateOf(false) }
+
+        // One flat list, installed/updatable first, then by name. Category becomes the row subtitle.
+        val rows = remember(state.entries, state.installedEntryIds, state.updatableEntryIds, query) {
+            state.entries
+                .filter {
+                    query.isBlank() ||
+                        it.name.contains(query, ignoreCase = true) ||
+                        it.description.contains(query, ignoreCase = true) ||
+                        it.category.contains(query, ignoreCase = true)
+                }
+                .sortedWith(
+                    compareByDescending<LspCatalogEntry> {
+                        it.id in state.installedEntryIds || it.id in state.updatableEntryIds
+                    }.thenBy { it.name.lowercase() },
+                )
+        }
 
         Column(
             modifier = modifier
@@ -43,16 +64,17 @@ object LspManagerFeature {
                 .padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            ManagerSectionCard(
+            ManagerPanelHeader(
                 title = "Language servers",
-                description = "Install language servers into the active distro, tracked per distro.",
-            ) {
-                ManagerSummaryRow(
-                    "Installed",
-                    if (state.checking) "Checking…" else "${state.installedEntryIds.size} / ${state.entries.size}",
-                )
-                CompactFilledButton("Refresh", onClick = onRefresh, modifier = Modifier.fillMaxWidth())
-            }
+                installedCount = state.installedEntryIds.size,
+                onRefresh = onRefresh,
+                busy = state.checking,
+                searchActive = searchActive,
+                onToggleSearch = { searchActive = !searchActive; if (!searchActive) query = "" },
+                query = query,
+                onQueryChange = { query = it },
+                searchPlaceholder = "Search language servers",
+            )
 
             if (!environmentReady) {
                 ManagerNoticeCard(
@@ -60,25 +82,35 @@ object LspManagerFeature {
                     message = "Set up the Linux environment in Settings before installing servers.",
                 )
             }
-
             state.errorMessage?.let { message ->
                 ManagerNoticeCard(title = "LSP manager notice", message = message)
             }
 
-            groupedEntries.forEach { (category, entries) ->
-                if (entries.isEmpty()) return@forEach
-                ManagerSectionCard(title = category, description = "Language servers for $category.") {
-                    entries.forEachIndexed { index, entry ->
-                        if (index > 0) {
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f),
+            ) {
+                if (rows.isEmpty()) {
+                    Text(
+                        text = if (query.isBlank()) "No language servers available." else "No servers match “$query”.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(12.dp),
+                    )
+                } else {
+                    Column {
+                        rows.forEachIndexed { index, entry ->
+                            if (index > 0) {
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            }
+                            ManagerListRow(
+                                name = entry.name,
+                                description = "${entry.category} · ${entry.description}",
+                                status = statusOf(entry.id, state),
+                                checking = state.checking && entry.id !in state.installedEntryIds,
+                                onClick = { onOpenDetail(entry.id) },
+                            )
                         }
-                        ManagerListRow(
-                            name = entry.name,
-                            description = entry.description,
-                            status = statusOf(entry.id, state),
-                            checking = state.checking && entry.id !in state.installedEntryIds,
-                            onClick = { onOpenDetail(entry.id) },
-                        )
                     }
                 }
             }

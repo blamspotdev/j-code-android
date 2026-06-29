@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -11,16 +12,26 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -57,6 +68,97 @@ fun ManagerStatusChip(
             color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * Shared header for the Extensions / SDK / LSP manager panels: a title with icon-only Search and
+ * Refresh buttons, an "N installed" count, and (when Search is toggled on) a filter field. The
+ * panel owns the [query]/[searchActive] state and does the actual filtering + installed-first sort.
+ */
+@Composable
+fun ManagerPanelHeader(
+    title: String,
+    installedCount: Int,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+    busy: Boolean = false,
+    searchActive: Boolean = false,
+    onToggleSearch: () -> Unit = {},
+    query: String = "",
+    onQueryChange: (String) -> Unit = {},
+    searchPlaceholder: String = "Search",
+) {
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            HeaderIconButton(
+                icon = LocalIconBundle.current[JCodeIcon.Search],
+                contentDescription = "Search",
+                onClick = onToggleSearch,
+                active = searchActive,
+            )
+            if (busy) {
+                Box(modifier = Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                }
+            } else {
+                HeaderIconButton(
+                    icon = LocalIconBundle.current[JCodeIcon.Refresh],
+                    contentDescription = "Refresh",
+                    onClick = onRefresh,
+                )
+            }
+        }
+        Text(
+            text = "$installedCount installed",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (searchActive) {
+            val focusRequester = remember { FocusRequester() }
+            LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodySmall,
+                placeholder = { Text(searchPlaceholder, style = MaterialTheme.typography.bodySmall) },
+                leadingIcon = {
+                    Icon(LocalIconBundle.current[JCodeIcon.Search], contentDescription = null, modifier = Modifier.size(18.dp))
+                },
+                trailingIcon = {
+                    if (query.isNotEmpty()) {
+                        IconButton(onClick = { onQueryChange("") }) {
+                            Icon(LocalIconBundle.current[JCodeIcon.Close], contentDescription = "Clear search", modifier = Modifier.size(18.dp))
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+            )
+        }
+    }
+}
+
+@Composable
+private fun HeaderIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    active: Boolean = false,
+) {
+    IconButton(onClick = onClick, modifier = Modifier.size(36.dp)) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            modifier = Modifier.size(18.dp),
+            tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
