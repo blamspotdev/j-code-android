@@ -217,7 +217,15 @@ class DistroService(
                 return
             }
 
-            val distroId = _environmentState.value.runtime.selectedDistro.id
+            val selectedDistro = _environmentState.value.runtime.selectedDistro
+            if (!entry.isSupportedOn(selectedDistro.id, selectedDistro.arch)) {
+                _sdkCatalogState.value = _sdkCatalogState.value.copy(
+                    errorMessage = "${entry.name} is not available on ${selectedDistro.label}.",
+                )
+                return
+            }
+
+            val distroId = selectedDistro.id
             _sdkCatalogState.value = _sdkCatalogState.value.copy(
                 runningEntryId = entry.id,
                 runningAction = action,
@@ -803,6 +811,7 @@ class DistroService(
         env: Map<String, String> = emptyMap(),
         timeoutMs: Long = 60_000L,
         onLine: ((String) -> Unit)? = null,
+        user: String = _environmentState.value.runtime.user,
     ): ExecResult {
         return execInDistro(
             command = command,
@@ -810,6 +819,7 @@ class DistroService(
             env = env,
             timeoutMs = timeoutMs,
             onLine = onLine,
+            user = user,
         )
     }
 

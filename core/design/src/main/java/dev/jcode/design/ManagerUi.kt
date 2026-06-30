@@ -89,6 +89,8 @@ fun ManagerPanelHeader(
     query: String = "",
     onQueryChange: (String) -> Unit = {},
     searchPlaceholder: String = "Search",
+    onManage: (() -> Unit)? = null,
+    manageContentDescription: String = "Manage",
 ) {
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -98,6 +100,13 @@ fun ManagerPanelHeader(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
             )
+            if (onManage != null) {
+                HeaderIconButton(
+                    icon = LocalIconBundle.current[JCodeIcon.Settings],
+                    contentDescription = manageContentDescription,
+                    onClick = onManage,
+                )
+            }
             HeaderIconButton(
                 icon = LocalIconBundle.current[JCodeIcon.Search],
                 contentDescription = "Search",
@@ -349,6 +358,8 @@ fun ManagerDetailScreen(
     showVerify: Boolean = true,
     showOutput: Boolean = true,
     leading: (@Composable () -> Unit)? = null,
+    onManage: (() -> Unit)? = null,
+    manageLabel: String = "Manage",
     extra: @Composable () -> Unit = {},
 ) {
     Column(
@@ -377,6 +388,10 @@ fun ManagerDetailScreen(
         }
 
         extra()
+
+        if (onManage != null) {
+            CompactFilledButton(manageLabel, onClick = onManage, enabled = actionsEnabled, modifier = Modifier.fillMaxWidth())
+        }
 
         if (showActions) {
             val installed = status == ManagerItemStatus.Installed || status == ManagerItemStatus.UpdateAvailable

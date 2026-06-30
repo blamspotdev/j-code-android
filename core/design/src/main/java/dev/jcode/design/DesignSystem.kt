@@ -57,6 +57,23 @@ class TabCloseButtonSetting(
 val LocalTabCloseButtonSetting = compositionLocalOf { TabCloseButtonSetting() }
 
 /**
+ * Editor drag-gesture preference, shared (via [LocalEditorDragMovesCursor]) with the editor view host and
+ * the settings screen. When [enabled], a one-finger drag on the editor moves the text cursor (the view
+ * scrolls to follow) instead of scrolling the content; long-press text selection is unaffected.
+ */
+class EditorDragSetting(
+    val enabled: Boolean = false,
+    val onChange: (Boolean) -> Unit = {},
+    /** Drag-to-cursor sensitivity, 1 (slow/precise) … 5 (fast), independent per axis. */
+    val verticalLevel: Int = 2,
+    val horizontalLevel: Int = 2,
+    val onVerticalLevelChange: (Int) -> Unit = {},
+    val onHorizontalLevelChange: (Int) -> Unit = {},
+)
+
+val LocalEditorDragMovesCursor = compositionLocalOf { EditorDragSetting() }
+
+/**
  * Editor save-related actions, shared (via [LocalEditorSaveActions]) with the top bar's Save button so
  * its long-press menu can offer them without threading callbacks as params (JCodeShell is at the ART
  * verifier's register limit). Each defaults to a no-op.
@@ -70,6 +87,19 @@ class EditorSaveActions(
 )
 
 val LocalEditorSaveActions = compositionLocalOf { EditorSaveActions() }
+
+/**
+ * "Restore last session" preference, shared (via [LocalRestoreSession]) with the settings screen without
+ * threading a param through JCodeShell (which is at the ART verifier's register limit). When [enabled]
+ * (the default), the last open workspace/project and editor tabs (incl. unsaved changes) are reopened on
+ * launch; [onChange] toggles it.
+ */
+class RestoreSessionSetting(
+    val enabled: Boolean = true,
+    val onChange: (Boolean) -> Unit = {},
+)
+
+val LocalRestoreSession = compositionLocalOf { RestoreSessionSetting() }
 
 val JetBrainsMonoFontFamily: FontFamily
     @Composable get() = FontFamily.Monospace

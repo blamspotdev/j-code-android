@@ -224,10 +224,13 @@ class TerminalView @JvmOverloads constructor(
         cellHeight = textPaint.fontSpacing
         
         // Handle touch events for selection, history scrolling, and keyboard.
-        setOnTouchListener { _, event ->
+        setOnTouchListener { v, event ->
             val gestureHandled = gestureDetector.onTouchEvent(event)
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    // Claim the gesture: a touch starting in the terminal belongs to it (scroll / text
+                    // selection), so the nav drawer's swipe-to-open can't steal a drag and pop the drawer.
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
                     // After "Select text" from the menu, the next touch-drag selects.
                     if (selectionArmed) startSelection(event.x, event.y)
                     true

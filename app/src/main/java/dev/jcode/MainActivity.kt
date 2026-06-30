@@ -37,6 +37,12 @@ class MainActivity : ComponentActivity() {
         viewModel.refreshEnvironment()
     }
 
+    override fun onStop() {
+        super.onStop()
+        // Capture the latest workbench state when backgrounded, in case the process is killed next.
+        viewModel.flushSessionNow()
+    }
+
     fun openPermissionSettings() {
         Log.d(TAG, "Opening permission settings")
         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {

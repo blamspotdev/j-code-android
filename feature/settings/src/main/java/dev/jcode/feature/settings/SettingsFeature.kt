@@ -55,6 +55,8 @@ import dev.jcode.core.config.WorkspaceConfig
 import dev.jcode.design.IconBundle
 import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.JCodeIcon
+import dev.jcode.design.LocalEditorDragMovesCursor
+import dev.jcode.design.LocalRestoreSession
 import dev.jcode.design.LocalTabCloseButtonSetting
 import dev.jcode.design.ThemeBundleRegistry
 import dev.jcode.core.distro.DistroEnvironmentState
@@ -97,6 +99,8 @@ object SettingsFeature {
         modifier: Modifier = Modifier,
     ) {
         val tabCloseSetting = LocalTabCloseButtonSetting.current
+        val editorDragSetting = LocalEditorDragMovesCursor.current
+        val restoreSessionSetting = LocalRestoreSession.current
         var selectedScope by rememberSaveable(projectOverridesAvailable) {
             mutableStateOf(if (projectOverridesAvailable) ConfigScope.Project else ConfigScope.Workspace)
         }
@@ -195,6 +199,20 @@ object SettingsFeature {
                     supporting = "Hide the system status bar while the on-screen keyboard is open, for more room in the editor and terminal. Swipe down from the top to reveal it.",
                     checked = hideStatusBarWithKeyboard,
                     onCheckedChange = onUpdateHideStatusBarWithKeyboard,
+                )
+            }
+
+            SettingsSectionHeader("Startup")
+            SettingsCard(
+                title = "Restore last session",
+                description = "Pick up where you left off after closing the app.",
+                keywords = "restore session reopen tabs workspace project unsaved recover startup launch",
+            ) {
+                ToggleRow(
+                    label = "Restore last session on launch",
+                    supporting = "Reopen the last workspace, project, and editor tabs — including unsaved changes — when J Code starts. Missing files are skipped.",
+                    checked = restoreSessionSetting.enabled,
+                    onCheckedChange = restoreSessionSetting.onChange,
                 )
             }
 
@@ -362,6 +380,26 @@ object SettingsFeature {
                     checked = ligatures,
                     onCheckedChange = { onUpdateLigatures(selectedScope, it) },
                 )
+                ToggleRow(
+                    label = "Drag to move cursor",
+                    supporting = "Drag a finger on the editor to move the text cursor (the view scrolls to follow) instead of scrolling. Long-press still selects text. Applies app-wide.",
+                    checked = editorDragSetting.enabled,
+                    onCheckedChange = editorDragSetting.onChange,
+                )
+                if (editorDragSetting.enabled) {
+                    StepperRow(
+                        label = "Cursor drag speed — vertical",
+                        value = "${editorDragSetting.verticalLevel} / 5",
+                        onDecrease = { editorDragSetting.onVerticalLevelChange((editorDragSetting.verticalLevel - 1).coerceAtLeast(1)) },
+                        onIncrease = { editorDragSetting.onVerticalLevelChange((editorDragSetting.verticalLevel + 1).coerceAtMost(5)) },
+                    )
+                    StepperRow(
+                        label = "Cursor drag speed — horizontal",
+                        value = "${editorDragSetting.horizontalLevel} / 5",
+                        onDecrease = { editorDragSetting.onHorizontalLevelChange((editorDragSetting.horizontalLevel - 1).coerceAtLeast(1)) },
+                        onIncrease = { editorDragSetting.onHorizontalLevelChange((editorDragSetting.horizontalLevel + 1).coerceAtMost(5)) },
+                    )
+                }
             }
 
             SettingsCard(

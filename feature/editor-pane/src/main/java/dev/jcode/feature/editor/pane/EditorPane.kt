@@ -47,6 +47,7 @@ import dev.jcode.core.editor.completion.EditorCompletionModule
 import dev.jcode.core.editor.completion.LocalCompletionSource
 import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
+import dev.jcode.design.LocalEditorDragMovesCursor
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.JcTooltip
 import dev.jcode.design.LocalTabCloseButtonSetting
@@ -257,6 +258,10 @@ fun EditorViewHost(
     var menu by remember { mutableStateOf<EditorContextRequest?>(null) }
     var completionAnchor by remember { mutableStateOf<CompletionAnchor?>(null) }
     val completionSource = LocalCompletionSource.current
+    val dragSetting = LocalEditorDragMovesCursor.current
+    val dragCursorEnabled = dragSetting.enabled
+    val dragCursorVLevel = dragSetting.verticalLevel
+    val dragCursorHLevel = dragSetting.horizontalLevel
 
     // A completion popup belongs to its file; clear it when the active editor (tab) changes.
     LaunchedEffect(editorState) { completionAnchor = null }
@@ -269,6 +274,9 @@ fun EditorViewHost(
                     onContextRequest = { menu = it }
                     onSaveRequest = { onSave() }
                     onCompletionAnchorChanged = { completionAnchor = it }
+                    dragMovesCursor = dragCursorEnabled
+                    cursorDragVerticalLevel = dragCursorVLevel
+                    cursorDragHorizontalLevel = dragCursorHLevel
                     view = this
                 }
             },
@@ -278,6 +286,9 @@ fun EditorViewHost(
                 v.onContextRequest = { menu = it }
                 v.onSaveRequest = { onSave() }
                 v.onCompletionAnchorChanged = { completionAnchor = it }
+                v.dragMovesCursor = dragCursorEnabled
+                v.cursorDragVerticalLevel = dragCursorVLevel
+                v.cursorDragHorizontalLevel = dragCursorHLevel
                 view = v
             },
             onRelease = { it.detach() },

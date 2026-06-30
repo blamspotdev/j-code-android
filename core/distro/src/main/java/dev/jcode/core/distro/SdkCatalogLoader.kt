@@ -45,6 +45,8 @@ internal class SdkCatalogLoader(
                 verifyScript = verifyScript.trim(),
                 uninstallScript = uninstallScript.trim(),
                 updateCheckScript = updateCheckScript,
+                supportedDistros = entry.stringList("supportedDistros"),
+                supportedArches = entry.stringList("supportedArches"),
             )
         }
     }
@@ -67,6 +69,15 @@ internal class SdkCatalogLoader(
 
     private fun Map<String, Any?>.list(key: String): List<Any?> {
         return this[key] as? List<Any?> ?: emptyList()
+    }
+
+    private fun Map<String, Any?>.stringList(key: String): List<String> {
+        return when (val value = this[key]) {
+            null -> emptyList()
+            is List<*> -> value.mapNotNull { it?.toString()?.trim()?.takeIf(String::isNotEmpty) }
+            is String -> value.split(',').mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+            else -> emptyList()
+        }
     }
 
     private companion object {

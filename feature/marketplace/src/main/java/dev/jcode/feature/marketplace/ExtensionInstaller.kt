@@ -220,8 +220,16 @@ class ExtensionInstaller internal constructor(context: Context) {
             templates = templates,
             languages = languages,
             iconFile = findIconFile(dir),
+            webUiEntry = findWebUiEntry(dir),
         )
     }
+
+    // The web-frontend HTML entry the .jehm declares (entry.ui), if any. Used by App/DbManager types.
+    private fun findWebUiEntry(dir: File): String? =
+        File(dir, JEHM_FILE).takeIf { it.isFile }
+            ?.let { runCatching { parseJehmHeader(it.readText()) }.getOrNull() }
+            ?.let { (it["entry"] as? Map<*, *>)?.toStringKeyMap()?.str("ui") }
+            ?.takeIf { it.isNotBlank() && File(dir, it).isFile }
 
     // The icon path the .jehm declares (images.icon), else a conventional location; null if absent.
     private fun findIconFile(dir: File): File? {

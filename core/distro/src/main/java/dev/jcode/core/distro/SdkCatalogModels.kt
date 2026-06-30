@@ -10,7 +10,16 @@ data class SdkCatalogEntry(
     val uninstallScript: String,
     /** Optional: exits 0 when a newer version is available. Empty = update detection skipped. */
     val updateCheckScript: String = "",
-)
+    /** Distro ids this entry supports. Empty = every distro. */
+    val supportedDistros: List<String> = emptyList(),
+    /** Arch keys (Arch.rootfsKey: "arm64"/"amd64") this entry supports. Empty = every arch. */
+    val supportedArches: List<String> = emptyList(),
+) {
+    /** Whether this entry should be offered on the given environment. */
+    fun isSupportedOn(distroId: String, arch: Arch): Boolean =
+        (supportedDistros.isEmpty() || distroId in supportedDistros) &&
+            (supportedArches.isEmpty() || arch.rootfsKey in supportedArches)
+}
 
 enum class SdkCatalogCategory(val label: String) {
     Languages("Languages"),
@@ -18,7 +27,8 @@ enum class SdkCatalogCategory(val label: String) {
     Android("Android"),
     DotNet(".NET"),
     Embedded("Embedded"),
-    Databases("Databases");
+    Databases("Databases"),
+    Virtualization("Virtualization");
 
     companion object {
         fun fromSerialized(raw: String?): SdkCatalogCategory? {
@@ -36,6 +46,7 @@ enum class SdkCatalogCategory(val label: String) {
                 "dotnet", ".net", "net" -> DotNet
                 "embedded" -> Embedded
                 "databases", "database", "db" -> Databases
+                "virtualization", "virtual", "vm", "emulation" -> Virtualization
                 else -> null
             }
         }

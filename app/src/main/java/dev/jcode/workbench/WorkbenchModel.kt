@@ -33,6 +33,11 @@ internal data class WorkbenchManagerActions(
     val onInstallExtension: (MarketplaceEntry) -> Unit,
     val onUninstallExtension: (String) -> Unit,
     val onOpenExtensionDetail: (String) -> Unit,
+    val onOpenExtensionPermissions: () -> Unit,
+    /** Opens an extension's bundled web-frontend ("Manage"/DB-manager) screen by extension id. */
+    val onOpenExtensionApp: (String) -> Unit,
+    /** Runs a command in the Linux runtime for an extension web frontend; returns a JSON result. */
+    val onExtensionExec: suspend (command: String, timeoutMs: Long) -> String,
 )
 
 internal enum class WorkbenchTool(
@@ -49,6 +54,7 @@ internal enum class WorkbenchTool(
     Extensions("Extensions", JCodeIcon.Extensions, "Ext"),
     SdkManager("SDK Manager", JCodeIcon.Sdk, "SDK"),
     LspManager("LSP Manager", JCodeIcon.Lsp, "LSP"),
+    DbManager("DB Managers", JCodeIcon.Database, "DB"),
     Settings("Settings", JCodeIcon.Settings, "Settings"),
 }
 

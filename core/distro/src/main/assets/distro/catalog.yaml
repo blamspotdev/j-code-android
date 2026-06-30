@@ -181,3 +181,17 @@ entries:
     uninstallScript: |
       sudo apt-get remove -y docker.io
     updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^docker.io/'"
+
+  - id: qemu-system-x86
+    category: virtualization
+    name: x86 Virtualization (QEMU)
+    description: Full-system QEMU to run x86/x86_64 virtual machines on this ARM device, for software with no ARM build (e.g. Microsoft SQL Server). Pure software emulation (no KVM on device) — VMs are slow but fully compatible. Drives the VM Manager extension.
+    supportedArches: [arm64]
+    installScript: |
+      sudo apt-get update
+      sudo apt-get install -y qemu-system-x86 qemu-utils
+    verifyScript: |
+      command -v qemu-system-x86_64 >/dev/null 2>&1 && command -v qemu-img >/dev/null 2>&1 && echo ready
+    uninstallScript: |
+      sudo apt-get remove -y qemu-system-x86 qemu-utils
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(qemu-system-x86|qemu-utils)/'"

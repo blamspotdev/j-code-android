@@ -73,6 +73,11 @@ class WorkspaceManager @Inject constructor(
         currentWorkspaceId.value = workspaceId
     }
 
+    /** True if a workspace row with this id still exists (it may have been deleted since last session). */
+    suspend fun workspaceExists(workspaceId: Long): Boolean = withContext(Dispatchers.IO) {
+        workspaceDao.observeWorkspace(workspaceId).first() != null
+    }
+
     suspend fun closeWorkspace() {
         currentWorkspaceId.value = null
     }

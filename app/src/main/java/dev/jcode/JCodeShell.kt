@@ -11,7 +11,11 @@ import dev.jcode.editor.languagePackCompletionItems
 import dev.jcode.design.LocalEditorSaveActions
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.JcTooltip
+import dev.jcode.design.EditorDragSetting
+import dev.jcode.design.LocalEditorDragMovesCursor
+import dev.jcode.design.LocalRestoreSession
 import dev.jcode.design.LocalTabCloseButtonSetting
+import dev.jcode.design.RestoreSessionSetting
 import dev.jcode.design.TabCloseButtonSetting
 import dev.jcode.editor.SyntaxHighlighter
 import dev.jcode.editor.TokenPalette
@@ -200,7 +204,13 @@ import dev.jcode.feature.sdkmanager.SdkManagerFeature
 import dev.jcode.feature.settings.SettingsFeature
 import dev.jcode.workbench.dialog.NewItemDialog
 import dev.jcode.workbench.dialog.OpenFolderTypeDialog
+import dev.jcode.feature.marketplace.ExtensionActivation
+import dev.jcode.workbench.marketplace.ExtensionActivationSetting
+import dev.jcode.workbench.ExtensionWebViewPage
+import dev.jcode.workbench.marketplace.DbManagerPanel
 import dev.jcode.workbench.marketplace.ExtensionDetailPage
+import dev.jcode.workbench.marketplace.ExtensionPermissionsPage
+import dev.jcode.workbench.marketplace.LocalExtensionActivation
 import dev.jcode.workbench.marketplace.ExtensionsPanel
 import dev.jcode.workbench.LocalTerminalTapConfig
 import dev.jcode.workbench.RightPanelTab
@@ -253,6 +263,16 @@ fun JCodeApp(
     val runConfigVersion by viewModel.runConfigVersion.collectAsStateWithLifecycle()
     val autoSetupProgress by viewModel.autoSetupProgress.collectAsStateWithLifecycle(initialValue = DistroWizardProgress.Idle)
     val installedExtensions by viewModel.installedExtensions.collectAsStateWithLifecycle()
+    // Extensions whose contributions are active (not set to Manual) — used for all language-pack lookups
+    // so the per-extension activation mode actually gates highlighting/completions/formatting.
+    val activeLanguageExtensions by viewModel.activeLanguageExtensions.collectAsStateWithLifecycle()
+    val extensionActivations by viewModel.extensionActivations.collectAsStateWithLifecycle()
+    val extensionActivationSetting = remember(extensionActivations) {
+        ExtensionActivationSetting(
+            modeFor = { id -> extensionActivations[id] ?: ExtensionActivation.Default },
+            onChange = viewModel::setExtensionActivation,
+        )
+    }
     val marketplaceEntries by viewModel.marketplaceEntries.collectAsStateWithLifecycle()
     val marketplaceBusy by viewModel.marketplaceBusy.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -267,6 +287,23 @@ fun JCodeApp(
     val tabCloseSetting = remember(hideTabCloseButton) {
         TabCloseButtonSetting(hideTabCloseButton, viewModel::setHideTabCloseButton)
     }
+    val editorDragMovesCursor by viewModel.editorDragMovesCursor.collectAsStateWithLifecycle()
+    val cursorDragVerticalLevel by viewModel.editorCursorDragVerticalLevel.collectAsStateWithLifecycle()
+    val cursorDragHorizontalLevel by viewModel.editorCursorDragHorizontalLevel.collectAsStateWithLifecycle()
+    val editorDragSetting = remember(editorDragMovesCursor, cursorDragVerticalLevel, cursorDragHorizontalLevel) {
+        EditorDragSetting(
+            enabled = editorDragMovesCursor,
+            onChange = viewModel::setEditorDragMovesCursor,
+            verticalLevel = cursorDragVerticalLevel,
+            horizontalLevel = cursorDragHorizontalLevel,
+            onVerticalLevelChange = viewModel::setEditorCursorDragVerticalLevel,
+            onHorizontalLevelChange = viewModel::setEditorCursorDragHorizontalLevel,
+        )
+    }
+    val restoreLastSession by viewModel.restoreLastSession.collectAsStateWithLifecycle()
+    val restoreSessionSetting = remember(restoreLastSession) {
+        RestoreSessionSetting(restoreLastSession, viewModel::setRestoreLastSession)
+    }
     val editorSaveActions = remember(viewModel) {
         EditorSaveActions(
             onUndo = viewModel::undoActiveTab,
@@ -278,8 +315,8 @@ fun JCodeApp(
     }
     // Completion items for the focused file, resolved from its installed language pack (if any).
     val activeFileName = editorGroup.activeTab?.filePath?.name
-    val activeLanguagePack = remember(activeFileName, installedExtensions) {
-        activeFileName?.let { n -> installedExtensions.firstNotNullOfOrNull { it.languageFor(n) } }
+    val activeLanguagePack = remember(activeFileName, activeLanguageExtensions) {
+        activeFileName?.let { n -> activeLanguageExtensions.firstNotNullOfOrNull { it.languageFor(n) } }
     }
     val completionSource = remember(activeLanguagePack) {
         { prefix: String -> languagePackCompletionItems(activeLanguagePack, prefix) }
@@ -355,6 +392,9 @@ fun JCodeApp(
     CompositionLocalProvider(
         LocalTerminalTapConfig provides terminalTapConfig,
         LocalTabCloseButtonSetting provides tabCloseSetting,
+        LocalEditorDragMovesCursor provides editorDragSetting,
+        LocalRestoreSession provides restoreSessionSetting,
+        LocalExtensionActivation provides extensionActivationSetting,
         LocalEditorSaveActions provides editorSaveActions,
         LocalCompletionSource provides completionSource,
         LocalEnvironmentManager provides environmentManagerActions,
@@ -431,6 +471,9 @@ fun JCodeApp(
             onInstallExtension = viewModel::installExtension,
             onUninstallExtension = viewModel::uninstallExtension,
             onOpenExtensionDetail = viewModel::openExtensionDetailPage,
+            onOpenExtensionPermissions = viewModel::openExtensionPermissionsPage,
+            onOpenExtensionApp = viewModel::openExtensionAppPage,
+            onExtensionExec = viewModel::runtimeExecJson,
         ),
         onOpenSettingsPage = viewModel::openSettingsPage,
         terminalDoubleTapToFocus = terminalDoubleTapToFocus,
@@ -569,11 +612,15 @@ private fun JCodeShell(
         ThemeMode.Light -> false
         ThemeMode.System -> systemDark
     }
+    // Only extensions not set to Manual contribute language features (highlighting/completions/format).
+    val activeLanguageExtensions = installedExtensions.filter {
+        LocalExtensionActivation.current.modeFor(it.id) != ExtensionActivation.Manual
+    }
     val highlightTab = editorGroup.activeTab
-    LaunchedEffect(highlightTab?.id, installedExtensions, editorDark) {
+    LaunchedEffect(highlightTab?.id, activeLanguageExtensions, editorDark) {
         val state = highlightTab?.editorState ?: return@LaunchedEffect
         val fileName = highlightTab.filePath.name
-        val lang = installedExtensions.firstNotNullOfOrNull { ext -> ext.languageFor(fileName) }
+        val lang = activeLanguageExtensions.firstNotNullOfOrNull { ext -> ext.languageFor(fileName) }
         val palette = if (editorDark) TokenPalette.DARK else TokenPalette.LIGHT
         state.snapshot.collectLatest { snap ->
             val spans = withContext(Dispatchers.Default) {
@@ -1142,7 +1189,7 @@ private fun JCodeShell(
                         },
                         languageActionsEnabled = run {
                             val name = editorGroup.activeTab?.filePath?.name
-                            name != null && installedExtensions.any { it.languageFor(name) != null }
+                            name != null && activeLanguageExtensions.any { it.languageFor(name) != null }
                         },
                         onEditorLanguageAction = { action, word ->
                             if (action == EditorLanguageAction.FormatDocument) {
@@ -1258,8 +1305,26 @@ private fun JCodeShell(
                                             busy = marketplaceBusy,
                                             onInstall = managerActions.onInstallExtension,
                                             onUninstall = managerActions.onUninstallExtension,
+                                            onOpenApp = managerActions.onOpenExtensionApp,
                                             modifier = Modifier.fillMaxSize(),
                                         )
+                                    }
+                                }
+                                EditorPageKind.ExtensionPermissions -> ExtensionPermissionsPage(
+                                    installed = installedExtensions,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                                EditorPageKind.ExtensionApp -> {
+                                    val appId = tab.id.substringAfter(MainViewModel.EXT_APP_PREFIX)
+                                    installedExtensions.firstOrNull { it.id == appId }?.let { ext ->
+                                        // Key by id so each extension app gets its own WebView (no reuse across tabs).
+                                        key(ext.id) {
+                                            ExtensionWebViewPage(
+                                                extension = ext,
+                                                onExec = managerActions.onExtensionExec,
+                                                modifier = Modifier.fillMaxSize(),
+                                            )
+                                        }
                                     }
                                 }
                                 EditorPageKind.None -> Unit
@@ -1683,6 +1748,7 @@ private fun WorkspacePanel(
                         busy = marketplaceBusy,
                         onRefreshMarketplace = managerActions.onRefreshMarketplace,
                         onOpenDetail = managerActions.onOpenExtensionDetail,
+                        onOpenPermissions = managerActions.onOpenExtensionPermissions,
                         modifier = Modifier.fillMaxSize(),
                     )
 
@@ -1699,6 +1765,12 @@ private fun WorkspacePanel(
                         environmentState = environmentState,
                         onRefresh = managerActions.onCheckLspStatuses,
                         onOpenDetail = managerActions.onOpenLspDetail,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+
+                    WorkbenchTool.DbManager -> DbManagerPanel(
+                        installed = installedExtensions,
+                        onOpenApp = managerActions.onOpenExtensionApp,
                         modifier = Modifier.fillMaxSize(),
                     )
 

@@ -62,7 +62,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 enum class JCodeIcon {
     Run, Stop, Terminal,
     Files, Folder, NewFolder, NewFile,
-    Sdk, Lsp, Scm, Settings, Search, Extensions, Destinations, Code,
+    Sdk, Lsp, Scm, Settings, Search, Extensions, Destinations, Code, Database,
     Add, Close, Refresh, Paste, Collapse, MoreVert, Save, Undo, Redo, Discard,
     Continue, Rerun, StepInto, StepOver, StepOut,
     Output, Logs, Problems, Radar,
@@ -109,6 +109,7 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.Search to Icons.Rounded.Search,
         JCodeIcon.Extensions to Icons.Rounded.Extension,
         JCodeIcon.Destinations to Icons.Rounded.DatasetLinked,
+        JCodeIcon.Database to Icons.Rounded.DatasetLinked,
         JCodeIcon.Code to Icons.Rounded.Code,
         JCodeIcon.Add to Icons.Rounded.Add,
         JCodeIcon.Close to Icons.Rounded.Close,

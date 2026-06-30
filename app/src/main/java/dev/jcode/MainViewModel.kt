@@ -7,6 +7,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
@@ -34,6 +35,7 @@ import dev.jcode.feature.editor.pane.EditorGroup
 import dev.jcode.feature.editor.pane.EditorPageKind
 import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.feature.marketplace.BundledExtensionSpec
+import dev.jcode.feature.marketplace.ExtensionActivation
 import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.languageFor
@@ -65,13 +67,17 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
 
 /**
  * Process-singleton holder for the app-level UI-preferences DataStore. A DataStore must be created
@@ -153,6 +159,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun uninstallExtension(id: String) {
+        clearExtensionActivation(id)
         viewModelScope.launch(Dispatchers.IO) {
             extensionInstaller.uninstall(id)
             refreshInstalledExtensions()
@@ -223,6 +230,77 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val editorDragMovesCursorKey = booleanPreferencesKey("editor_drag_moves_cursor")
+
+    /** When true, a one-finger drag on the editor moves the text cursor (the view follows) instead of
+     *  scrolling the content; long-press text selection is unaffected. */
+    val editorDragMovesCursor: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[editorDragMovesCursorKey] ?: false }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setEditorDragMovesCursor(enabled: Boolean) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[editorDragMovesCursorKey] = enabled }
+        }
+    }
+
+    private val editorCursorDragVerticalKey = intPreferencesKey("editor_cursor_drag_vertical_level")
+    private val editorCursorDragHorizontalKey = intPreferencesKey("editor_cursor_drag_horizontal_level")
+
+    /** "Drag to move cursor" sensitivity per axis: 1 (slow/precise) … 5 (fast). Default 2. */
+    val editorCursorDragVerticalLevel: StateFlow<Int> = uiPreferences.data
+        .map { prefs -> (prefs[editorCursorDragVerticalKey] ?: 2).coerceIn(1, 5) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 2)
+
+    val editorCursorDragHorizontalLevel: StateFlow<Int> = uiPreferences.data
+        .map { prefs -> (prefs[editorCursorDragHorizontalKey] ?: 2).coerceIn(1, 5) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 2)
+
+    fun setEditorCursorDragVerticalLevel(level: Int) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[editorCursorDragVerticalKey] = level.coerceIn(1, 5) }
+        }
+    }
+
+    fun setEditorCursorDragHorizontalLevel(level: Int) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[editorCursorDragHorizontalKey] = level.coerceIn(1, 5) }
+        }
+    }
+
+    private val restoreLastSessionKey = booleanPreferencesKey("restore_last_session")
+
+    /** When true (default), the last open workspace/project + editor tabs (with unsaved changes) are
+     *  reopened on launch, surviving a force-close or swipe-away from Recents. */
+    val restoreLastSession: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[restoreLastSessionKey] ?: true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    fun setRestoreLastSession(enabled: Boolean) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[restoreLastSessionKey] = enabled }
+        }
+        // Opting out should not leave a stale session blob behind on disk.
+        if (!enabled) viewModelScope.launch(Dispatchers.IO) { sessionStore.clear() }
+    }
+
+    private val sessionStore = SessionStore(appContext)
+
+    /** Suppresses the project bootstrap file while a session restore is deciding/opening tabs, so the
+     *  restored tabs aren't raced by a freshly bootstrapped file. Cleared when restore settles. */
+    @Volatile
+    private var suppressBootstrap = true
+
+    /** Gate that keeps incremental saves from clobbering the stored session before restore has read it. */
+    @Volatile
+    private var sessionSaveEnabled = false
+
+    private val sessionSaveSignal = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    private fun scheduleSessionSave() {
+        sessionSaveSignal.tryEmit(Unit)
+    }
+
     private val themeBundleKey = stringPreferencesKey("theme_bundle_id")
 
     /** App-wide selected theme bundle id; empty resolves to the default bundle. */
@@ -264,6 +342,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // Per-extension activation mode (auto-start / on-demand / manual), keyed by extension id. Stored as a
+    // small JSON object (only non-default entries) in one preference, mirroring how SessionStore persists
+    // structured data with org.json. Absent id => ExtensionActivation.Default (OnDemand).
+    private val extensionActivationKey = stringPreferencesKey("extension_activation_modes")
+
+    val extensionActivations: StateFlow<Map<String, ExtensionActivation>> = uiPreferences.data
+        .map { prefs -> parseActivations(prefs[extensionActivationKey]) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** Installed extensions whose contributions are currently allowed to apply (i.e. not set to Manual).
+     *  Drives language-pack resolution for highlighting/completions/formatting so Manual truly disables. */
+    val activeLanguageExtensions: StateFlow<List<InstalledExtension>> =
+        combine(installedExtensions, extensionActivations) { exts, modes ->
+            exts.filter { (modes[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    private fun parseActivations(json: String?): Map<String, ExtensionActivation> {
+        if (json.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val obj = JSONObject(json)
+            buildMap {
+                obj.keys().forEach { key -> put(key, ExtensionActivation.from(obj.optString(key))) }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    fun setExtensionActivation(id: String, mode: ExtensionActivation) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val obj = runCatching { JSONObject(prefs[extensionActivationKey] ?: "{}") }.getOrDefault(JSONObject())
+                if (mode == ExtensionActivation.Default) obj.remove(id) else obj.put(id, mode.name)
+                prefs[extensionActivationKey] = obj.toString()
+            }
+        }
+    }
+
+    private fun clearExtensionActivation(id: String) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val obj = runCatching { JSONObject(prefs[extensionActivationKey] ?: "{}") }.getOrDefault(JSONObject())
+                obj.remove(id)
+                prefs[extensionActivationKey] = obj.toString()
+            }
+        }
+    }
+
     val workspaceConfig = configService.workspaceConfig
     val projectConfig = configService.projectConfig
     val workspaceConfigError = configService.workspaceError
@@ -301,6 +425,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             uniqueName = "jcode.lang.stylesheet",
             version = "1.0.0",
         ),
+        // NOTE: manager extensions (SQL Client, VM Manager) are NOT bundled — they pull in
+        // libraries/binaries at runtime and are distributed via the marketplace, not baked into the app.
     )
 
     init {
@@ -355,6 +481,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        // Restore the previous session (workspace/project + tabs + unsaved edits) on cold launch, then
+        // enable incremental persistence. Runs once per process: init fires only when the ViewModel is
+        // freshly built, which is exactly the cold-launch / post-process-death case we restore for.
+        viewModelScope.launch { restoreSessionOnLaunch() }
+
+        // Debounced session writer: coalesce bursts of edits/tab changes into one disk write.
+        viewModelScope.launch {
+            sessionSaveSignal.collectLatest {
+                delay(700)
+                persistSession()
+            }
+        }
+        // Structural changes (tab open/close/switch, dirty-dot flips) and project/workspace switches.
+        viewModelScope.launch { editorGroup.collect { scheduleSessionSave() } }
+        viewModelScope.launch { selectedProject.collect { scheduleSessionSave() } }
     }
 
     data class NewItemRequest(
@@ -730,6 +871,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var lastBootstrappedProjectId: Long? = null
 
     fun ensureProjectBootstrapTab() {
+        // While a session restore is in flight, don't open the bootstrap file — restore handles the tabs.
+        if (suppressBootstrap) return
         // Ignore page tabs (e.g. Settings): only an open file tab should suppress the bootstrap file.
         if (_editorGroup.value.tabs.any { !it.isPage }) return
         val project = selectedProject.value ?: return
@@ -806,6 +949,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val tab = EditorTab.page(ENVIRONMENT_TAB_ID, "Environment", EditorPageKind.Environment)
+        _editorGroup.value = _editorGroup.value.withTabAdded(tab)
+    }
+
+    /** Open (or focus) an installed extension's bundled web frontend as a full-screen in-editor page. */
+    fun openExtensionAppPage(extensionId: String) {
+        openDetailPage(EXT_APP_PREFIX + extensionId, EditorPageKind.ExtensionApp) {
+            _installedExtensions.value.firstOrNull { it.id == extensionId }?.name ?: "App"
+        }
+    }
+
+    /** Run a command in the Linux runtime for an extension frontend; returns a JSON result payload.
+     *  Runs as root: manager extensions (SQL Client, VM Manager) need privilege to install/run software. */
+    suspend fun runtimeExecJson(command: String, timeoutMs: Long): String {
+        val result = distroService.exec(command, timeoutMs = timeoutMs, user = "root")
+        return JSONObject().apply {
+            put("stdout", result.stdout)
+            put("stderr", result.stderr)
+            put("exitCode", result.exitCode ?: -1)
+            result.internalError?.let { put("error", it) }
+        }.toString()
+    }
+
+    /** Open (or focus) the Extension Permissions manager as an in-editor page. */
+    fun openExtensionPermissionsPage() {
+        val existing = _editorGroup.value.tabs.firstOrNull { it.pageKind == EditorPageKind.ExtensionPermissions }
+        if (existing != null) {
+            _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
+            return
+        }
+        val tab = EditorTab.page(EXT_PERMISSIONS_TAB_ID, "Extension Permissions", EditorPageKind.ExtensionPermissions)
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
     }
 
@@ -896,11 +1069,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val tabId = tab.id
         dirtyJobs.remove(tabId)?.cancel()
         dirtyJobs[tabId] = viewModelScope.launch {
-            state.dirty.collect { dirty ->
-                val current = _editorGroup.value.tabs.firstOrNull { it.id == tabId } ?: return@collect
-                if (current.isDirty != dirty) {
-                    _editorGroup.value = _editorGroup.value.withTabUpdated(current.copy(isDirty = dirty))
+            launch {
+                state.dirty.collect { dirty ->
+                    val current = _editorGroup.value.tabs.firstOrNull { it.id == tabId } ?: return@collect
+                    if (current.isDirty != dirty) {
+                        _editorGroup.value = _editorGroup.value.withTabUpdated(current.copy(isDirty = dirty))
+                    }
                 }
+            }
+            // Content edits that keep the tab dirty don't change the EditorGroup, so persist the unsaved
+            // buffer on snapshot changes too (debounced) to capture in-progress typing before a kill.
+            launch {
+                state.snapshot.collect { scheduleSessionSave() }
             }
         }
     }
@@ -1037,7 +1217,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val name = tab.filePath.name
-        val lang = _installedExtensions.value.firstNotNullOfOrNull { ext -> ext.languageFor(name) }
+        val lang = activeLanguageExtensions.value.firstNotNullOfOrNull { ext -> ext.languageFor(name) }
         viewModelScope.launch {
             val snap = state.snapshot.value
             val original = snap.readRangeAsUtf16(0, snap.byteLength)
@@ -1151,6 +1331,116 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         applyConfigToTab(tab, effectiveConfig.value)
         trackDirty(tab)
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
+    }
+
+    // --- Session restore: reopen the last workspace/project + tabs (with unsaved edits) on launch. ---
+
+    private suspend fun restoreSessionOnLaunch() {
+        try {
+            val enabled = uiPreferences.data.map { it[restoreLastSessionKey] ?: true }.first()
+            if (!enabled) return
+            val record = withContext(Dispatchers.IO) { sessionStore.load() } ?: return
+
+            // Workspace: only switch if it still exists (a dangling id would blank the workbench).
+            val targetWs = record.workspaceId
+            if (targetWs != null && targetWs != currentWorkspace.value?.id &&
+                workspaceManager.workspaceExists(targetWs)
+            ) {
+                workspaceManager.openWorkspace(targetWs)
+            }
+            // Wait for the workspace (and its project list) to load so the project selection sticks.
+            val workspace = withTimeoutOrNull(4_000) {
+                currentWorkspace.first { it != null && (targetWs == null || it.id == targetWs) }
+            }
+
+            // Project: only select if it still belongs to the restored workspace.
+            val targetProj = record.projectId
+            if (targetProj != null && workspace?.projects?.any { it.id == targetProj } == true) {
+                _selectedProjectId.value = targetProj
+            }
+
+            // Tabs: open each surviving file; recover unsaved buffers where the file (or its folder) remains.
+            for (t in record.tabs) {
+                val file = File(t.filePath)
+                if (t.dirty && t.bufferFileName != null) {
+                    val text = withContext(Dispatchers.IO) { sessionStore.readBuffer(t.bufferFileName) }
+                    val parentExists = file.parentFile?.isDirectory == true
+                    if (text != null && (file.isFile || parentExists)) {
+                        openRestoredDirtyTab(file, t.id, text)
+                    }
+                } else if (file.isFile) {
+                    openLocalFile(file)
+                }
+            }
+
+            // Active tab (only if it survived as one of the restored tabs).
+            record.activeTabId?.let { id ->
+                if (_editorGroup.value.tabs.any { it.id == id }) {
+                    _editorGroup.value = _editorGroup.value.withActiveTabChanged(id)
+                }
+            }
+        } finally {
+            suppressBootstrap = false
+            sessionSaveEnabled = true
+            // If restore opened no file tab (opt-out, no saved session, or every file was missing), fall
+            // back to the normal project bootstrap. The composition's bootstrap effect may have already
+            // fired and no-op'd while suppressed; this covers the case where the project is ready now.
+            if (_editorGroup.value.tabs.none { !it.isPage }) {
+                ensureProjectBootstrapTab()
+            }
+        }
+    }
+
+    /** Reopen a tab that had unsaved edits: load the file (or an empty buffer if it's gone) then re-apply
+     *  the recovered text as an edit so the tab opens dirty and a save rewrites the file. */
+    private suspend fun openRestoredDirtyTab(file: File, stableId: String, text: String) {
+        if (_editorGroup.value.tabs.any { it.id == stableId }) return
+        val tab = EditorTab.create(file, stableId)
+        applyConfigToTab(tab, effectiveConfig.value)
+        trackDirty(tab)
+        file.diskSignatureOrNull()?.let { diskSignatures[stableId] = it }
+        // Add to the group first so trackDirty's collector can mirror the dirty flag once we edit below.
+        _editorGroup.value = _editorGroup.value.withTabAdded(tab)
+        tab.editorState?.let { state ->
+            state.applyEdit(EditTx.replace(0, state.snapshot.value.byteLength, text))
+        }
+    }
+
+    /** Persist the current workbench (open workspace/project + file tabs + unsaved buffers). Debounced. */
+    private suspend fun persistSession() {
+        if (!sessionSaveEnabled) return
+        val group = _editorGroup.value
+        val fileTabs = group.tabs.filter {
+            !it.isPage && it.editorState != null && it.filePath.path.isNotBlank()
+        }
+        val wsId = currentWorkspace.value?.id
+        val projId = _selectedProjectId.value
+        withContext(Dispatchers.IO) {
+            val tabRecords = fileTabs.map { tab ->
+                val state = tab.editorState!!
+                if (tab.isDirty) {
+                    val snap = state.snapshot.value
+                    val name = sessionStore.writeBuffer(tab.id, snap.readRangeAsUtf16(0, snap.byteLength))
+                    SessionTabRecord(tab.id, tab.filePath.absolutePath, dirty = true, bufferFileName = name)
+                } else {
+                    SessionTabRecord(tab.id, tab.filePath.absolutePath, dirty = false, bufferFileName = null)
+                }
+            }
+            sessionStore.saveManifest(
+                SessionRecord(
+                    workspaceId = wsId,
+                    projectId = projId,
+                    activeTabId = group.activeTabId?.takeIf { id -> fileTabs.any { it.id == id } },
+                    tabs = tabRecords,
+                )
+            )
+            sessionStore.pruneBuffers(tabRecords.mapNotNull { it.bufferFileName }.toSet())
+        }
+    }
+
+    /** Best-effort synchronous-ish flush from the Activity's onStop (covers graceful backgrounding). */
+    fun flushSessionNow() {
+        viewModelScope.launch { persistSession() }
     }
 
     private suspend fun emitMessage(message: String) {
@@ -1285,6 +1575,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val SDK_DETAIL_PREFIX = "jcode://sdk/"
         const val LSP_DETAIL_PREFIX = "jcode://lsp/"
         const val EXT_DETAIL_PREFIX = "jcode://ext/"
+        const val EXT_APP_PREFIX = "jcode://ext-app/"
+        const val EXT_PERMISSIONS_TAB_ID = "jcode://ext-permissions"
         const val RUN_CONFIG_PREFIX = "jcode://run-config/"
     }
 }

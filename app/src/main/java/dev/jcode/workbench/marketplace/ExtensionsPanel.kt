@@ -9,8 +9,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -31,9 +35,11 @@ import dev.jcode.design.ManagerListRow
 import dev.jcode.design.ManagerPanelHeader
 import dev.jcode.design.ManagerSectionCard
 import dev.jcode.feature.marketplace.CodeSample
+import dev.jcode.feature.marketplace.ExtensionActivation
 import dev.jcode.feature.marketplace.ExtensionDeps
 import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
+import dev.jcode.feature.marketplace.hasWebUi
 import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.isUpdateAvailable
 import java.io.File
@@ -45,6 +51,7 @@ internal fun ExtensionsPanel(
     busy: Boolean,
     onRefreshMarketplace: () -> Unit,
     onOpenDetail: (String) -> Unit,
+    onOpenPermissions: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LaunchedEffect(Unit) { if (available.isEmpty()) onRefreshMarketplace() }
@@ -69,6 +76,8 @@ internal fun ExtensionsPanel(
             query = query,
             onQueryChange = { query = it },
             searchPlaceholder = "Search extensions",
+            onManage = onOpenPermissions,
+            manageContentDescription = "Extension permissions",
         )
 
         Surface(
@@ -107,6 +116,56 @@ internal fun ExtensionsPanel(
     }
 }
 
+/** Left-drawer "DB Managers" panel: installed database-manager extensions; tap to open their UI. */
+@Composable
+internal fun DbManagerPanel(
+    installed: List<InstalledExtension>,
+    onOpenApp: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val dbExtensions = installed.filter { it.type == ExtensionType.DbManager }
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("DB Managers", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text(
+            "${dbExtensions.size} installed",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f),
+        ) {
+            if (dbExtensions.isEmpty()) {
+                Text(
+                    text = "No database managers installed. Install one (e.g. SQL Server) from Extensions.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(12.dp),
+                )
+            } else {
+                Column {
+                    dbExtensions.forEachIndexed { index, ext ->
+                        if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        ManagerListRow(
+                            name = ext.name,
+                            description = ext.description.ifBlank { "Database manager" },
+                            status = ManagerItemStatus.Installed,
+                            onClick = { onOpenApp(ext.id) },
+                            leading = { ExtensionIcon(type = ext.type, name = ext.name, iconFile = ext.iconFile, iconUrl = null) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** Full-width detail page for one extension, opened as an in-editor page tab. */
 @Composable
 internal fun ExtensionDetailPage(
@@ -117,6 +176,7 @@ internal fun ExtensionDetailPage(
     busy: Boolean,
     onInstall: (MarketplaceEntry) -> Unit,
     onUninstall: (String) -> Unit,
+    onOpenApp: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val id = entry?.id ?: installed?.id ?: return
@@ -152,6 +212,12 @@ internal fun ExtensionDetailPage(
         onUpdate = { entry?.let(onInstall) },
         onUninstall = { onUninstall(id) },
         onVerify = {},
+        onManage = if (installed?.hasWebUi == true) {
+            { onOpenApp(installed.id) }
+        } else {
+            null
+        },
+        manageLabel = "Manage",
         modifier = modifier,
         leading = {
             ExtensionIcon(
@@ -189,6 +255,83 @@ internal fun ExtensionDetailPage(
         )
     }
 }
+
+/** Full-width Extension Permissions manager page: every installed extension + its activation mode. */
+@Composable
+internal fun ExtensionPermissionsPage(
+    installed: List<InstalledExtension>,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = "Choose when each installed extension's features turn on. Manual disables an extension.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (installed.isEmpty()) {
+            Text(
+                text = "No extensions installed yet.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            installed.sortedBy { it.name.lowercase() }.forEach { ext ->
+                ManagerSectionCard(
+                    title = ext.name,
+                    description = listOfNotNull(
+                        ext.author?.let { "by $it" },
+                        ext.type.name.lowercase(),
+                    ).joinToString(" · "),
+                ) {
+                    ActivationSelector(extensionId = ext.id)
+                }
+            }
+        }
+    }
+}
+
+/** Per-extension activation-mode selector (auto-start / on-demand / manual). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ActivationSelector(extensionId: String) {
+    val activation = LocalExtensionActivation.current
+    val mode = activation.modeFor(extensionId)
+    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+        ExtensionActivation.entries.forEachIndexed { index, m ->
+            SegmentedButton(
+                shape = SegmentedButtonDefaults.itemShape(index = index, count = ExtensionActivation.entries.size),
+                selected = mode == m,
+                onClick = { activation.onChange(extensionId, m) },
+                label = { Text(m.label) },
+            )
+        }
+    }
+    Text(
+        text = mode.blurb,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+private val ExtensionActivation.label: String
+    get() = when (this) {
+        ExtensionActivation.AutoStart -> "Auto-start"
+        ExtensionActivation.OnDemand -> "On-demand"
+        ExtensionActivation.Manual -> "Manual"
+    }
+
+private val ExtensionActivation.blurb: String
+    get() = when (this) {
+        ExtensionActivation.AutoStart -> "Active from launch — always on."
+        ExtensionActivation.OnDemand -> "Activates when you open a file this extension supports."
+        ExtensionActivation.Manual -> "Disabled — this extension's features stay off until you switch modes."
+    }
 
 private fun entrySubtitle(entry: MarketplaceEntry): String = buildString {
     append(entry.type.name.lowercase())

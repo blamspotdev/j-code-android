@@ -70,6 +70,17 @@ class EditorView @JvmOverloads constructor(
     // (otherwise inserting the accepted text would immediately re-open the popup on the new word).
     private var suppressAnchorUpdate = false
 
+    /** When true (app setting), a one-finger drag moves the caret (view follows) instead of scrolling. */
+    var dragMovesCursor: Boolean = false
+
+    /** Drag-to-cursor sensitivity per axis: 1 (slow/precise) … 5 (fast). */
+    var cursorDragVerticalLevel: Int = 2
+    var cursorDragHorizontalLevel: Int = 2
+
+    // Sub-cell drag accumulators for the "drag moves cursor" gesture; reset at the start of each drag.
+    private var dragAccumX = 0f
+    private var dragAccumY = 0f
+
     // sp→px factor; RenderConfig.fontSizeSp is in sp but Paint.textSize / layout math need px.
     private val density: Float get() = resources.displayMetrics.density
 
@@ -87,11 +98,38 @@ class EditorView @JvmOverloads constructor(
         context,
         object : GestureDetector.SimpleOnGestureListener() {
             override fun onSingleTapUp(e: MotionEvent): Boolean {
-                // Tapping the editor focuses it and raises the soft keyboard so the file is editable
-                // (placing the caret happens on ACTION_DOWN in onTouchEvent).
+                // Tapping focuses the editor, raises the keyboard, and places the caret. Caret placement
+                // lives here (not on ACTION_DOWN) so dragging to scroll never moves the caret or pops the
+                // completion list.
                 this@EditorView.requestFocus()
                 this@EditorView.showKeyboard()
+                val offset = offsetAt(e.x, e.y)
+                if (offset != null) {
+                    runBlocking { editorState?.setSelection(listOf(Caret(offset, offset))) }
+                    // Restart input so the IME re-reads the new cursor (via onCreateInputConnection's
+                    // initialSel) and drops any stale composing region; otherwise it corrupts the buffer.
+                    imm().restartInput(this@EditorView)
+                    updateCompletionAnchor()
+                }
                 return true
+            }
+
+            override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
+                val state = editorState ?: return false
+                if (dragMovesCursor) {
+                    moveCaretByDrag(state, distanceX, distanceY)
+                    return true
+                }
+                val vp = state.viewport.value
+                val cfg = state.renderConfig.value
+                val lineHeight = (cfg.fontSizeSp * density * cfg.lineHeightMultiplier).toInt().coerceAtLeast(1)
+                val maxScrollY = (state.snapshot.value.lineCount * lineHeight - vp.heightPx).coerceAtLeast(0)
+                val newScrollY = (vp.scrollY + distanceY.toInt()).coerceIn(0, maxScrollY)
+                if (newScrollY != vp.scrollY) {
+                    state.updateViewport { it.copy(scrollY = newScrollY) }
+                    return true
+                }
+                return false
             }
 
             override fun onLongPress(e: MotionEvent) {
@@ -145,7 +183,12 @@ class EditorView @JvmOverloads constructor(
             invalidate()
         }.launchIn(scope)
         editorState.decorations.onEach { invalidate() }.launchIn(scope)
-        editorState.carets.onEach { invalidate() }.launchIn(scope)
+        // Follow the caret while typing: keep a collapsed cursor in view as it moves. Selections don't
+        // auto-scroll, so select-all / drag-select don't yank the viewport around.
+        editorState.carets.onEach { carets ->
+            if (carets.firstOrNull()?.isSelection == false) ensureCaretVisible()
+            invalidate()
+        }.launchIn(scope)
         // A pending "reveal (line,col)" request (e.g. opening a file at a location tapped in the
         // terminal): place the caret there and scroll it into view.
         editorState.revealRequest.onEach { req -> if (req != null) revealLineColumn(req.line, req.column) }
@@ -168,6 +211,36 @@ class EditorView @JvmOverloads constructor(
         state.clearReveal()
         requestFocus()
         invalidate()
+    }
+
+    /**
+     * Scroll the caret back into the visible viewport when it sits outside it — e.g. the soft keyboard
+     * just shrank the editor and the cursor ended up hidden behind it. Keeps one line of margin from the
+     * edge it crossed; no-op when the caret is already comfortably visible.
+     */
+    private fun ensureCaretVisible() {
+        val state = editorState ?: return
+        val vp = state.viewport.value
+        if (vp.heightPx <= 0) return
+        val caret = state.carets.value.firstOrNull() ?: return
+        val snapshot = state.snapshot.value
+        val cfg = state.renderConfig.value
+        val lineHeight = (cfg.fontSizeSp * density * cfg.lineHeightMultiplier).toInt().coerceAtLeast(1)
+        val (caretLine, _) = snapshot.offsetToLineColumn(caret.head)
+        val caretTop = caretLine * lineHeight
+        val caretBottom = caretTop + lineHeight
+        // Breathing room around the caret line, capped so the line itself still fully fits a short
+        // (keyboard-squeezed) viewport instead of being clipped at an edge.
+        val margin = ((vp.heightPx - lineHeight) / 3).coerceIn(0, lineHeight)
+        val newScrollY = when {
+            caretBottom + margin > vp.scrollY + vp.heightPx -> caretBottom + margin - vp.heightPx
+            caretTop - margin < vp.scrollY -> caretTop - margin
+            else -> return
+        }.coerceAtLeast(0)
+        if (newScrollY != vp.scrollY) {
+            state.updateViewport { it.copy(scrollY = newScrollY) }
+            invalidate()
+        }
     }
 
     /** Detach the current EditorState. */
@@ -193,6 +266,8 @@ class EditorView @JvmOverloads constructor(
                 heightPx = h,
             )
         }
+        // The IME (or any layout change) shrank the editor: keep the caret above the keyboard.
+        if (h in 1 until oldh && hasFocus()) ensureCaretVisible()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -215,17 +290,16 @@ class EditorView @JvmOverloads constructor(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         gestureDetector.onTouchEvent(event)
+        // Consume ACTION_DOWN so the gesture detector gets the rest of the stream (drag-scroll + tap).
+        // Caret placement happens in the detector's onSingleTapUp, so dragging only scrolls.
         if (event.action == MotionEvent.ACTION_DOWN) {
             requestFocus()
-            val offset = offsetAt(event.x, event.y)
-            if (offset != null) {
-                runBlocking { editorState?.setSelection(listOf(Caret(offset, offset))) }
-                // The caret moved out from under the IME; restart input so it re-reads the new
-                // cursor (via onCreateInputConnection's initialSel) and drops any stale composing
-                // region. Without this the IME edits against a stale model and corrupts the buffer.
-                imm().restartInput(this)
-                updateCompletionAnchor()
-            }
+            dragAccumX = 0f
+            dragAccumY = 0f
+            // Claim the whole gesture: a touch that starts inside the editor belongs to the editor
+            // (drag-scroll, or drag-to-move-caret when enabled). Otherwise an ancestor — the navigation
+            // drawer's swipe-to-open — steals the left/right drag and pops the drawer mid-scroll.
+            parent?.requestDisallowInterceptTouchEvent(true)
             return true
         }
         return super.onTouchEvent(event)
@@ -504,6 +578,51 @@ class EditorView @JvmOverloads constructor(
         val (line, col) = snapshot.offsetToLineColumn(caret.head)
         val targetLine = (line + dir).coerceIn(0, max(0, snapshot.lineCount - 1))
         val newPos = snapshot.lineColumnToOffset(targetLine, col)
+        runBlocking { state.setSelection(listOf(Caret(newPos, newPos))) }
+        invalidate()
+        updateImeCursor()
+    }
+
+    /**
+     * "Drag moves cursor" gesture: translate a one-finger drag into caret movement (lines vertically,
+     * columns horizontally) and collapse to a single caret. The carets observer scrolls the view to
+     * follow, so the cursor can be dragged anywhere in the document. [updateImeCursor] keeps the IME in
+     * sync; long-press selection is handled separately and is unaffected.
+     */
+    // Drag distance (in line-heights / char-widths) needed to advance the caret one step. Higher level
+    // = less drag per step = faster cursor. Level 3 is the raw 1:1 mapping; default 2 is calmer.
+    private fun dragStepScale(level: Int): Float = when (level.coerceIn(1, 5)) {
+        1 -> 3.0f
+        2 -> 2.0f
+        3 -> 1.0f
+        4 -> 0.7f
+        else -> 0.5f
+    }
+
+    private fun moveCaretByDrag(state: EditorState, distanceX: Float, distanceY: Float) {
+        val cfg = state.renderConfig.value
+        val lineHeight = (cfg.fontSizeSp * density * cfg.lineHeightMultiplier).toInt().coerceAtLeast(1)
+        val charWidth = android.text.TextPaint().apply {
+            textSize = cfg.fontSizeSp * density
+            typeface = this@EditorView.typeface
+        }.measureText("0").coerceAtLeast(1f)
+        val vStep = (lineHeight * dragStepScale(cursorDragVerticalLevel)).coerceAtLeast(1f)
+        val hStep = (charWidth * dragStepScale(cursorDragHorizontalLevel)).coerceAtLeast(1f)
+        // onScroll distance is (previous - current); negate so a down/right drag advances the caret.
+        dragAccumY -= distanceY
+        dragAccumX -= distanceX
+        val dLines = (dragAccumY / vStep).toInt()
+        val dCols = (dragAccumX / hStep).toInt()
+        if (dLines == 0 && dCols == 0) return
+        dragAccumY -= dLines * vStep
+        dragAccumX -= dCols * hStep
+
+        val caret = caretOrNull(state) ?: return
+        val snapshot = state.snapshot.value
+        val (line, col) = snapshot.offsetToLineColumn(caret.head)
+        val targetLine = (line + dLines).coerceIn(0, max(0, snapshot.lineCount - 1))
+        val targetCol = (col + dCols).coerceAtLeast(0)
+        val newPos = snapshot.lineColumnToOffset(targetLine, targetCol)
         runBlocking { state.setSelection(listOf(Caret(newPos, newPos))) }
         invalidate()
         updateImeCursor()
