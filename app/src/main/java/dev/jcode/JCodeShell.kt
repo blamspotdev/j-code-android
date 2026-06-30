@@ -192,6 +192,8 @@ import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.isUpdateAvailable
 import dev.jcode.feature.marketplace.ProjectTemplate
 import dev.jcode.feature.marketplace.ScaffoldState
+import dev.jcode.feature.onboarding.EnvironmentManagerActions
+import dev.jcode.feature.onboarding.LocalEnvironmentManager
 import dev.jcode.feature.onboarding.OnboardingFeature
 import dev.jcode.feature.lspmanager.LspManagerFeature
 import dev.jcode.feature.sdkmanager.SdkManagerFeature
@@ -208,6 +210,8 @@ import dev.jcode.workbench.WorkbenchTool
 import dev.jcode.fs.DEFAULT_SHARED_PROJECTS_ROOT
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
+import dev.jcode.fs.ProjectKind
+import dev.jcode.fs.RecentEntity
 import dev.jcode.run.ProjectRunner
 import dev.jcode.run.RunConfigPage
 import dev.jcode.fs.Workspace
@@ -243,6 +247,7 @@ fun JCodeApp(
     val workspaceConfigError by viewModel.workspaceConfigError.collectAsStateWithLifecycle()
     val projectConfigError by viewModel.projectConfigError.collectAsStateWithLifecycle()
     val environmentState by viewModel.environmentState.collectAsStateWithLifecycle()
+    val installedEnvironments by viewModel.environments.collectAsStateWithLifecycle()
     val sdkCatalogState by viewModel.sdkCatalogState.collectAsStateWithLifecycle()
     val lspCatalogState by viewModel.lspCatalogState.collectAsStateWithLifecycle()
     val runConfigVersion by viewModel.runConfigVersion.collectAsStateWithLifecycle()
@@ -329,11 +334,31 @@ fun JCodeApp(
         }
     }
 
+    val environmentManagerActions = remember(installedEnvironments) {
+        EnvironmentManagerActions(
+            environments = installedEnvironments,
+            onSwitch = viewModel::setActiveEnvironment,
+            onDelete = viewModel::deleteEnvironment,
+        )
+    }
+
+    val recents by viewModel.recents.collectAsStateWithLifecycle()
+    val editorEmptyActions = remember(recents) {
+        EditorEmptyActions(
+            recents = recents,
+            onOpenRecent = viewModel::openRecent,
+            onNewProject = viewModel::requestNew,
+            onOpenFolder = { openFolderLauncher.launch(null) },
+        )
+    }
+
     CompositionLocalProvider(
         LocalTerminalTapConfig provides terminalTapConfig,
         LocalTabCloseButtonSetting provides tabCloseSetting,
         LocalEditorSaveActions provides editorSaveActions,
         LocalCompletionSource provides completionSource,
+        LocalEnvironmentManager provides environmentManagerActions,
+        LocalEditorEmptyActions provides editorEmptyActions,
     ) {
     JCodeShell(
         modifier = modifier,
@@ -1048,6 +1073,7 @@ private fun JCodeShell(
                     selectedProject = selectedProject,
                     workspace = workspace,
                     effectiveConfig = effectiveConfig,
+                    activeDistroId = environmentState.runtime.selectedDistro.id,
                     windowInfo = windowInfo,
                 )
             },
@@ -2127,8 +2153,9 @@ private fun EditorWorkspace(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
 
             if (editorGroup.tabs.isEmpty()) {
-                // No open file: a clean, empty editor surface (no startup page).
-                Box(
+                EditorEmptyState(
+                    hasProject = selectedProject != null,
+                    onOpenFileRequest = onOpenFileRequest,
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
@@ -2150,6 +2177,188 @@ private fun EditorWorkspace(
             }
         }
     }
+}
+
+/**
+ * Recents + folder actions for the empty-editor "no project" state. Provided by [JCodeApp] and read by
+ * [EditorEmptyState] via CompositionLocal so the (register-pressured) shell composable's signature stays
+ * untouched.
+ */
+internal data class EditorEmptyActions(
+    val recents: List<RecentEntity> = emptyList(),
+    val onOpenRecent: (RecentEntity) -> Unit = {},
+    val onNewProject: () -> Unit = {},
+    val onOpenFolder: () -> Unit = {},
+)
+
+internal val LocalEditorEmptyActions = compositionLocalOf { EditorEmptyActions() }
+
+/**
+ * Editor area when no tab is open. With a project open it points at the Explorer; with no project it
+ * lists recently opened folders plus New/Open actions.
+ */
+@Composable
+private fun EditorEmptyState(
+    hasProject: Boolean,
+    onOpenFileRequest: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (hasProject) {
+        EditorEmptyHint(
+            title = "No file open",
+            message = "Pick a file from the Explorer to start editing.",
+            actionLabel = "Open Explorer",
+            onAction = onOpenFileRequest,
+            modifier = modifier,
+        )
+    } else {
+        EditorRecents(actions = LocalEditorEmptyActions.current, modifier = modifier)
+    }
+}
+
+@Composable
+private fun EditorEmptyHint(
+    title: String,
+    message: String,
+    actionLabel: String,
+    onAction: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        Column(
+            modifier = Modifier.padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Surface(
+                modifier = Modifier.size(56.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = jcIcon(JCodeIcon.Files),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            WorkbenchActionButton(text = actionLabel, onClick = onAction, active = true)
+        }
+    }
+}
+
+@Composable
+private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modifier) {
+    Box(modifier = modifier, contentAlignment = Alignment.TopCenter) {
+        Column(
+            modifier = Modifier
+                .widthIn(max = 460.dp)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Icon(
+                    imageVector = jcIcon(JCodeIcon.Files),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Text("Open a project", fontWeight = FontWeight.SemiBold)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                WorkbenchActionButton(text = "New Folder", onClick = actions.onNewProject, active = true)
+                WorkbenchActionButton(text = "Open Folder", onClick = actions.onOpenFolder)
+            }
+            if (actions.recents.isEmpty()) {
+                Text(
+                    text = "No recent projects yet. Open or create a folder to get started.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Text(
+                    text = "Recent",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                actions.recents.forEach { recent ->
+                    RecentRow(recent = recent, onOpen = { actions.onOpenRecent(recent) })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecentRow(recent: RecentEntity, onOpen: () -> Unit) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onOpen),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.16f),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Surface(
+                modifier = Modifier.size(24.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = jcIcon(JCodeIcon.Code),
+                        contentDescription = null,
+                        modifier = Modifier.size(15.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = recentDisplayName(recent),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    text = recentSubtitle(recent),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+private fun recentDisplayName(recent: RecentEntity): String = when (recent.kind) {
+    ProjectKind.Local -> File(recent.uri).name.ifBlank { recent.uri }
+    ProjectKind.Saf -> Uri.parse(recent.uri).lastPathSegment
+        ?.substringAfterLast('/')?.substringAfterLast(':')?.ifBlank { null }
+        ?: "Folder"
+}
+
+private fun recentSubtitle(recent: RecentEntity): String = when (recent.kind) {
+    ProjectKind.Local -> File(recent.uri).parent ?: recent.uri
+    ProjectKind.Saf -> "External folder"
 }
 
 /** A live terminal instance shown in the Terminal-button long-press list. */

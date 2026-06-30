@@ -201,7 +201,8 @@ object SettingsFeature {
             SettingsSectionHeader("Environment")
             SettingsCard(
                 title = "Environment",
-                description = "Environment setup: proot, distro bootstrap, and the final smoke test.",
+                description = "Environment setup: proot, distro bootstrap, and the final smoke test. " +
+                    "Install, switch between, or remove environments from the setup page.",
             ) {
                 SummaryRow(
                     label = "proot",
@@ -251,7 +252,7 @@ object SettingsFeature {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilledTonalButton(onClick = onOpenEnvironmentWizard, modifier = Modifier.weight(1f)) {
-                        Text("Open setup")
+                        Text("Manage environments")
                     }
                     OutlinedButton(onClick = onRefreshEnvironment, modifier = Modifier.weight(1f)) {
                         Text("Refresh checks")

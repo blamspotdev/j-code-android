@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -43,9 +44,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.jcode.core.distro.Arch
 import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.core.distro.DistroProfile
 import dev.jcode.core.distro.DistroWizardProgress
+import dev.jcode.core.distro.EnvironmentInfo
 import dev.jcode.core.distro.WizardStepId
 
 object OnboardingFeature {
@@ -86,6 +89,7 @@ object OnboardingFeature {
         onSelectDistro: (DistroProfile) -> Unit,
         onAutoSetup: () -> Unit,
     ) {
+        val manager = LocalEnvironmentManager.current
         StepperScreen(
             environmentState = environmentState,
             autoSetupProgress = autoSetupProgress,
@@ -96,6 +100,9 @@ object OnboardingFeature {
             onDismiss = null,
             modifier = Modifier.fillMaxSize(),
             shape = RoundedCornerShape(0.dp),
+            installedEnvironments = manager.environments,
+            onSwitchEnvironment = manager.onSwitch,
+            onDeleteEnvironment = manager.onDelete,
         )
     }
 }
@@ -111,6 +118,9 @@ private fun StepperScreen(
     onDismiss: (() -> Unit)?,
     modifier: Modifier,
     shape: RoundedCornerShape,
+    installedEnvironments: List<EnvironmentInfo> = emptyList(),
+    onSwitchEnvironment: (String) -> Unit = {},
+    onDeleteEnvironment: (String) -> Unit = {},
 ) {
     val running = autoSetupProgress is DistroWizardProgress.Running
     val completed = autoSetupProgress is DistroWizardProgress.AllDone
@@ -138,6 +148,16 @@ private fun StepperScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
+                if (installedEnvironments.isNotEmpty()) {
+                    item {
+                        InstalledEnvironmentsCard(
+                            environments = installedEnvironments,
+                            enabled = !running,
+                            onSwitch = onSwitchEnvironment,
+                            onDelete = onDeleteEnvironment,
+                        )
+                    }
+                }
                 item {
                     StepCard(
                         number = 1,
@@ -238,6 +258,134 @@ private fun StepperScreen(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InstalledEnvironmentsCard(
+    environments: List<EnvironmentInfo>,
+    enabled: Boolean,
+    onSwitch: (String) -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    val hostArch = Arch.host()
+    var pendingDelete by rememberSaveable { mutableStateOf<String?>(null) }
+
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Installed environments", fontWeight = FontWeight.SemiBold)
+            Text(
+                text = "Switch which environment terminals and builds target. SDKs and language servers stay " +
+                    "installed per environment. Open terminals keep their original environment.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                environments.forEach { env ->
+                    EnvironmentRow(
+                        env = env,
+                        emulated = env.requiresEmulation(hostArch),
+                        enabled = enabled,
+                        canDelete = enabled && environments.size > 1,
+                        onSwitch = { onSwitch(env.id) },
+                        onDelete = { pendingDelete = env.id },
+                    )
+                }
+            }
+        }
+    }
+
+    val deleteId = pendingDelete
+    if (deleteId != null) {
+        val target = environments.firstOrNull { it.id == deleteId }
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Remove environment") },
+            text = {
+                Text(
+                    "Remove ${target?.label ?: deleteId}? Its rootfs and everything installed inside it " +
+                        "(SDKs, language servers, packages) will be deleted. This cannot be undone.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDelete(deleteId)
+                    pendingDelete = null
+                }) { Text("Remove", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun EnvironmentRow(
+    env: EnvironmentInfo,
+    emulated: Boolean,
+    enabled: Boolean,
+    canDelete: Boolean,
+    onSwitch: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = if (env.isActive) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+        } else {
+            Color.Transparent
+        },
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(enabled = enabled && !env.isActive, onClick = onSwitch)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            RadioButton(
+                selected = env.isActive,
+                onClick = onSwitch,
+                enabled = enabled && !env.isActive,
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    env.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = buildString {
+                        append(if (emulated) "Emulated (QEMU)" else "Native")
+                        if (env.isActive) append(" · active")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (env.isActive) {
+                        JCodeTheme.semanticColors.success
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+            TextButton(onClick = onDelete, enabled = canDelete) {
+                Text("Remove", color = MaterialTheme.colorScheme.error)
             }
         }
     }

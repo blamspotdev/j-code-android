@@ -2,6 +2,7 @@ package dev.jcode
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
@@ -46,6 +47,8 @@ import dev.jcode.fs.FsKind
 import dev.jcode.fs.FsNode
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
+import dev.jcode.fs.ProjectKind
+import dev.jcode.fs.RecentEntity
 import dev.jcode.fs.Workspace
 import dev.jcode.fs.WorkspaceCrumb
 import dev.jcode.fs.WorkspaceManager
@@ -459,6 +462,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissOpenFolderPrompt() {
         _openFolderTypePrompt.value = null
+    }
+
+    /** Recently opened folders (most-recent first) for the empty-editor "Recent" list. */
+    val recents: StateFlow<List<RecentEntity>> = workspaceManager.recents
+
+    /** Re-open a recent folder; [openExternalFolder] enters it as a workspace or opens it as a project. */
+    fun openRecent(recent: RecentEntity) {
+        val path = when (recent.kind) {
+            ProjectKind.Local -> FsPath.Local(File(recent.uri))
+            ProjectKind.Saf -> FsPath.Saf(Uri.parse(recent.uri))
+        }
+        openExternalFolder(path)
     }
 
     fun removeProject(projectId: Long) {

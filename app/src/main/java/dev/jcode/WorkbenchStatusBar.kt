@@ -13,6 +13,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -24,7 +25,11 @@ import dev.jcode.adaptive.JCodeWindowInfo
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.fs.Project
+import dev.jcode.fs.ProjectKind
 import dev.jcode.fs.Workspace
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 
 /** Lightweight per-file editor metrics surfaced in the bottom status bar. */
 internal data class EditorMetrics(
@@ -41,8 +46,13 @@ internal fun WorkbenchStatusBar(
     selectedProject: Project?,
     workspace: Workspace?,
     effectiveConfig: EffectiveConfig,
+    activeDistroId: String,
     windowInfo: JCodeWindowInfo,
 ) {
+    val branch = rememberGitBranch(selectedProject)
+    // A project's effective distro can be overridden in its `.jcode`; otherwise fall back to the
+    // globally active environment so the cell still reflects what terminals/builds target.
+    val distro = if (selectedProject != null) effectiveConfig.distro.id else activeDistroId
     Surface(
         modifier = Modifier.navigationBarsPadding(),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
@@ -55,7 +65,7 @@ internal fun WorkbenchStatusBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            StatusCell("branch: --")
+            StatusCell("branch: $branch")
             StatusCell("problems: 0")
             // File-only metrics are meaningless for a page tab (e.g. Settings); hide them there.
             if (activeTab?.isPage != true) {
@@ -63,11 +73,50 @@ internal fun WorkbenchStatusBar(
                 StatusCell("lang: ${metrics.language}")
                 StatusCell("enc: ${metrics.encoding}")
             }
-            StatusCell("distro: ${if (selectedProject != null) effectiveConfig.distro.id else "--"}")
+            StatusCell("distro: ${distro.ifBlank { "--" }}")
             Spacer(modifier = Modifier.weight(1f))
             StatusCell(workspace?.name ?: "Workspace")
             StatusCell("posture: ${windowInfo.posture.shortLabel()}")
         }
+    }
+}
+
+/**
+ * Resolve the current git branch (or short detached-HEAD sha) for a local project by reading
+ * `.git/HEAD` off the main thread. Returns "--" when there is no project, the project is a SAF
+ * (content-uri) tree, or the folder is not a git repo.
+ */
+@Composable
+private fun rememberGitBranch(project: Project?): String {
+    val location = if (project?.kind == ProjectKind.Local) project.location else null
+    val branch by produceState(initialValue = "--", location) {
+        value = withContext(Dispatchers.IO) { readGitBranch(location) } ?: "--"
+    }
+    return branch
+}
+
+private fun readGitBranch(location: String?): String? {
+    if (location.isNullOrBlank()) return null
+    val dotGit = File(location, ".git")
+    val headFile = when {
+        dotGit.isDirectory -> File(dotGit, "HEAD")
+        // Worktrees/submodules store ".git" as a file: "gitdir: <path-to-real-gitdir>".
+        dotGit.isFile -> {
+            val gitdir = runCatching { dotGit.readText() }.getOrNull()
+                ?.lineSequence()?.firstOrNull { it.startsWith("gitdir:") }
+                ?.removePrefix("gitdir:")?.trim()
+                ?: return null
+            val resolved = File(gitdir).let { if (it.isAbsolute) it else File(location, gitdir) }
+            File(resolved, "HEAD")
+        }
+        else -> return null
+    }
+    if (!headFile.isFile) return null
+    val head = runCatching { headFile.readText().trim() }.getOrNull() ?: return null
+    return when {
+        head.startsWith("ref:") -> head.substringAfterLast('/').ifBlank { null }
+        head.length >= 7 -> head.take(7)
+        else -> null
     }
 }
 

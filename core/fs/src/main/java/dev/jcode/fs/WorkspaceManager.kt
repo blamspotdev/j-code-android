@@ -56,6 +56,10 @@ class WorkspaceManager @Inject constructor(
     val rememberedSafTreeUris: StateFlow<Set<Uri>> = safPermissionStore.rememberedTrees
         .stateIn(scope, SharingStarted.Eagerly, emptySet())
 
+    /** Recently opened folders (projects/workspaces), most-recent first, pinned on top. */
+    val recents: StateFlow<List<RecentEntity>> = workspaceDao.observeRecents(12)
+        .stateIn(scope, SharingStarted.Eagerly, emptyList())
+
     init {
         scope.launch {
             val workspace = ensureDefaultWorkspace()

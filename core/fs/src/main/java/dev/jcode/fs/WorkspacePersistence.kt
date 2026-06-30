@@ -63,6 +63,9 @@ interface WorkspaceDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertRecent(recent: RecentEntity)
 
+    @Query("SELECT * FROM recents ORDER BY pinned DESC, lastOpened DESC LIMIT :limit")
+    fun observeRecents(limit: Int): Flow<List<RecentEntity>>
+
     @Query("SELECT COUNT(*) FROM projects WHERE workspaceId = :workspaceId")
     suspend fun projectCount(workspaceId: Long): Int
 

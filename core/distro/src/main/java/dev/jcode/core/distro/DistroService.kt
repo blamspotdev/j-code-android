@@ -513,49 +513,55 @@ class DistroService(
             )
         }
 
-        var completedSteps = readCompletedSteps().toMutableSet()
-        val storedSetupDeferred = readFirstRunSetupDeferred()
+        deriveSelectedDistroState()
+    }
 
-        // Check proot installation
+    /**
+     * Re-derive all per-distro environment state for the CURRENTLY selected distro, probing disk/proot.
+     * [DistroEnvironmentState.completedSteps] is rebuilt from scratch (never seeded from the persisted set)
+     * so switching to a different — or not-yet-installed — distro never inherits the previous distro's
+     * completion, and the per-distro readiness flags are cleared when the distro isn't installed. Uses the
+     * in-memory selection only (no persisted re-read), so it is safe to call straight after
+     * [setSelectedDistro] without racing the async persist — which is why [runAllPendingSteps] calls it
+     * before computing pending steps.
+     */
+    private suspend fun deriveSelectedDistroState() {
+        val storedSetupDeferred = readFirstRunSetupDeferred()
+        val completedSteps = mutableSetOf<WizardStepId>()
+
         val prootInstalled = prootManager.isProotInstalled
         if (prootInstalled) {
             completedSteps += WizardStepId.ProotReady
         }
 
-        // Always mark distro selected as complete (default is Ubuntu)
+        // A distro is always selected (default is Ubuntu).
         completedSteps += WizardStepId.DistroSelected
 
-        // Check storage space
         val hasEnoughStorage = checkStorageSpace()
         if (hasEnoughStorage) {
             completedSteps += WizardStepId.CheckStorage
         }
 
-        // Check distro installation
         val distroId = _environmentState.value.runtime.selectedDistro.id
         val distroInstalled = rootfsManager.isDistroInstalled(distroId)
         if (distroInstalled) {
             completedSteps += WizardStepId.DistroInstalled
 
-            // Check workspace
             val workspaceReady = primaryBind().hostFile.exists()
             if (workspaceReady) {
                 completedSteps += WizardStepId.WorkspaceReady
             }
 
-            // Check jcode user
             val jcodeUserReady = checkDistroUser()
             if (jcodeUserReady == true) {
                 completedSteps += WizardStepId.JcodeUserCreated
             }
 
-            // Check toolchain
             val toolchainReady = checkToolchainReady()
             if (toolchainReady == true) {
                 completedSteps += WizardStepId.ToolchainBootstrapped
             }
 
-            // Smoke test
             var smokeTestPassed: Boolean? = null
             if (jcodeUserReady == true && toolchainReady == true && workspaceReady) {
                 smokeTestPassed = checkSmokeTest()
@@ -576,9 +582,14 @@ class DistroService(
                 errorMessage = null,
             )
         } else {
+            // Not installed: clear any readiness carried over from a previously selected distro.
             _environmentState.value = _environmentState.value.copy(
                 prootInstalled = prootInstalled,
                 distroInstalled = distroInstalled,
+                workspaceReady = false,
+                toolchainReady = null,
+                jcodeUserReady = null,
+                smokeTestPassed = null,
                 firstRunSetupDeferred = storedSetupDeferred,
                 completedSteps = completedSteps.toSet(),
                 errorMessage = null,
@@ -664,6 +675,10 @@ class DistroService(
     @Suppress("UNUSED_PARAMETER")
     suspend fun runAllPendingSteps(callerContext: Context = appContext) {
         lock.withLock {
+            // Re-derive completion for the currently selected distro first, so a freshly selected (and
+            // possibly not-yet-installed) distro is not treated as "already set up" from another distro's
+            // state. Without this, selecting a second distro and tapping "Use" would no-op.
+            deriveSelectedDistroState()
             val state = _environmentState.value
 
             val pendingSteps = WizardStepId.entries.filter { step ->
@@ -1105,13 +1120,6 @@ class DistroService(
         dataStore.edit { prefs ->
             prefs[PreferencesKeys.SelectedDistro] = profile.id
         }
-    }
-
-    private suspend fun readCompletedSteps(): Set<WizardStepId> {
-        return dataStore.data.first()[PreferencesKeys.CompletedSteps]
-            .orEmpty()
-            .mapNotNull(WizardStepId::fromKey)
-            .toSet()
     }
 
     private suspend fun persistCompletedSteps(steps: Set<WizardStepId>) {
