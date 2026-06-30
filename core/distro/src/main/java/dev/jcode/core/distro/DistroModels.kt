@@ -121,20 +121,6 @@ data class DistroProfile(
                 approxFootprint = "~2.5 GB",
                 arch = Arch.ARM64,
             ),
-            DistroProfile(
-                id = "ubuntu-24.04-amd64",
-                label = "Ubuntu 24.04 LTS (x86_64)",
-                installRecipe = "ubuntu:24.04",
-                approxFootprint = "~2.5 GB (emulated)",
-                arch = Arch.X86_64,
-            ),
-            DistroProfile(
-                id = "ubuntu-26.04-amd64",
-                label = "Ubuntu 26.04 LTS (x86_64)",
-                installRecipe = "ubuntu:26.04",
-                approxFootprint = "~2.5 GB (emulated)",
-                arch = Arch.X86_64,
-            ),
         )
 
         fun defaults(): List<DistroProfile> = defaultProfiles

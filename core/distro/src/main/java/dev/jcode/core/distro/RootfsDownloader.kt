@@ -179,20 +179,10 @@ class RootfsDownloader(
          */
         const val UBUNTU_24_04_ARM64_URL = "https://raw.githubusercontent.com/EXALAB/Anlinux-Resources/master/Rootfs/Ubuntu/arm64/ubuntu-rootfs-arm64.tar.xz"
 
-        /**
-         * Ubuntu 24.04 base (amd64) from the official Ubuntu cdimage (tar.gz). Foreign-arch on
-         * arm64 phones -> runs under qemu-x86_64 / box64. Pinned to the current point release
-         * (the un-versioned name 404s once point releases ship).
-         */
-        const val UBUNTU_24_04_AMD64_URL = "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-amd64.tar.gz"
-
         // --- Ubuntu 26.04 LTS --- (official Ubuntu cdimage minimal base, tar.gz)
 
         /** Ubuntu 26.04 base (arm64) — native on arm64 phones. */
         const val UBUNTU_26_04_ARM64_URL = "https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/ubuntu-base-26.04-base-arm64.tar.gz"
-
-        /** Ubuntu 26.04 base (amd64) — foreign-arch on arm64 phones -> qemu-x86_64 / box64. */
-        const val UBUNTU_26_04_AMD64_URL = "https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/ubuntu-base-26.04-base-amd64.tar.gz"
     }
 }
 
@@ -248,26 +238,6 @@ data class RootfsManifest(
                     installRecipe = "ubuntu:26.04",
                     approxFootprint = "~2.5 GB",
                     arch = Arch.ARM64,
-                ),
-                RootfsEntry(
-                    distroId = "ubuntu-24.04-amd64",
-                    name = "Ubuntu 24.04 LTS (x86_64)",
-                    url = RootfsDownloader.UBUNTU_24_04_AMD64_URL,
-                    sha256 = "",
-                    sizeBytes = 30_000_000L, // ~30MB compressed
-                    installRecipe = "ubuntu:24.04",
-                    approxFootprint = "~2.5 GB (emulated)",
-                    arch = Arch.X86_64,
-                ),
-                RootfsEntry(
-                    distroId = "ubuntu-26.04-amd64",
-                    name = "Ubuntu 26.04 LTS (x86_64)",
-                    url = RootfsDownloader.UBUNTU_26_04_AMD64_URL,
-                    sha256 = "",
-                    sizeBytes = 30_000_000L, // ~30MB compressed (minimal base)
-                    installRecipe = "ubuntu:26.04",
-                    approxFootprint = "~2.5 GB (emulated)",
-                    arch = Arch.X86_64,
                 ),
             ),
         )
