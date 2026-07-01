@@ -218,6 +218,10 @@ import dev.jcode.workbench.DebugSessionUi
 import dev.jcode.workbench.LocalDebugCatalogState
 import dev.jcode.workbench.LocalDebugEditorState
 import dev.jcode.workbench.LocalDebugSession
+import dev.jcode.design.PerformanceSettings
+import dev.jcode.design.LocalPerformanceSettings
+import dev.jcode.workbench.CloseTarget
+import dev.jcode.core.debug.DebugState
 import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.workbench.LocalTerminalTapConfig
 import dev.jcode.workbench.RightPanelTab
@@ -294,6 +298,19 @@ fun JCodeApp(
     val iconBundleId by viewModel.iconBundleId.collectAsStateWithLifecycle()
     val formatterId by viewModel.formatterId.collectAsStateWithLifecycle()
     val terminalDoubleTapToFocus by viewModel.terminalDoubleTapToFocus.collectAsStateWithLifecycle()
+    val confirmCloseRunning by viewModel.confirmCloseRunning.collectAsStateWithLifecycle()
+    val autoCloseIdleTerminals by viewModel.autoCloseIdleTerminals.collectAsStateWithLifecycle()
+    val idleTimeoutMinutes by viewModel.idleTimeoutMinutes.collectAsStateWithLifecycle()
+    val performanceSettings = remember(confirmCloseRunning, autoCloseIdleTerminals, idleTimeoutMinutes) {
+        PerformanceSettings(
+            confirmCloseRunning = confirmCloseRunning,
+            autoCloseIdleTerminals = autoCloseIdleTerminals,
+            idleTimeoutMinutes = idleTimeoutMinutes,
+            onSetConfirmCloseRunning = viewModel::setConfirmCloseRunning,
+            onSetAutoCloseIdleTerminals = viewModel::setAutoCloseIdleTerminals,
+            onSetIdleTimeoutMinutes = viewModel::setIdleTimeoutMinutes,
+        )
+    }
     val hideStatusBarWithKeyboard by viewModel.hideStatusBarWithKeyboard.collectAsStateWithLifecycle()
     val hideTabCloseButton by viewModel.hideTabCloseButton.collectAsStateWithLifecycle()
     // Carried via CompositionLocal (not a JCodeShell param — that composable is at the ART verifier's
@@ -440,6 +457,7 @@ fun JCodeApp(
         LocalEditorEmptyActions provides editorEmptyActions,
         LocalDebugCatalogState provides debugCatalogState,
         LocalDebugSession provides debugSessionUi,
+        LocalPerformanceSettings provides performanceSettings,
         LocalDebugEditorState provides DebugEditorState(
             breakpoints = breakpoints,
             stoppedPath = debugLocation?.hostPath,
@@ -983,12 +1001,74 @@ private fun JCodeShell(
     // terminal stays empty (a clean slate). Reset once a project/workspace is opened again.
     var terminalAutoStartSuppressed by rememberSaveable { mutableStateOf(false) }
 
-    // Closing a project tears down its working context: kill its terminal sessions (the VM clears the
-    // editor + unregisters the project), leaving a clean slate.
-    val handleCloseProject: () -> Unit = {
+    // Closing a project/workspace tears down its working context. Everything still running is stopped:
+    // the run (Ctrl-C), the debug adapter, and every terminal PTY (proot --kill-on-exit reaps the tree).
+    // If something is running and the user opted to be warned, a confirm dialog gates the teardown.
+    val perf = LocalPerformanceSettings.current
+    val debugSessionUiLocal = LocalDebugSession.current
+    var pendingCloseTarget by remember { mutableStateOf<CloseTarget?>(null) }
+
+    fun runningItems(): List<String> = buildList {
+        terminalSessionManager.foregroundSessions().forEach { (_, prog) -> add("Terminal: $prog") }
+        if (runInProgress || runningProjectId != null) add("Build & Run")
+        val dbgState = debugSessionUiLocal.state
+        if (dbgState != DebugState.DISCONNECTED && dbgState != DebugState.TERMINATED) add("Debug session")
+    }
+
+    fun teardownRunning() {
+        if (runInProgress || runningProjectId != null) handleStopRun()
+        debugSessionUiLocal.onStop()
         closeAllTerminalSessions()
+    }
+
+    fun performClose(target: CloseTarget) {
+        teardownRunning()
         terminalAutoStartSuppressed = true
-        onCloseProject()
+        when (target) {
+            CloseTarget.Project -> onCloseProject()
+            CloseTarget.Workspace -> onCloseWorkspace()
+        }
+    }
+
+    fun requestClose(target: CloseTarget) {
+        if (perf.confirmCloseRunning && runningItems().isNotEmpty()) pendingCloseTarget = target
+        else performClose(target)
+    }
+
+    val handleCloseProject: () -> Unit = { requestClose(CloseTarget.Project) }
+    val handleCloseWorkspace: () -> Unit = { requestClose(CloseTarget.Workspace) }
+
+    pendingCloseTarget?.let { target ->
+        val items = runningItems()
+        AlertDialog(
+            onDismissRequest = { pendingCloseTarget = null },
+            title = { Text(if (target == CloseTarget.Workspace) "Close workspace?" else "Close project?") },
+            text = {
+                Text(
+                    "Still running — closing will stop:\n" +
+                        items.joinToString("\n") { "•  $it" },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { pendingCloseTarget = null; performClose(target) }) {
+                    Text("Close anyway")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingCloseTarget = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    // Auto-close idle terminals (no foreground program + no I/O past the threshold) to free proot
+    // trees + memory, when enabled in Performance settings. onSessionExit drops each reaped tab.
+    LaunchedEffect(perf.autoCloseIdleTerminals, perf.idleTimeoutMinutes) {
+        if (!perf.autoCloseIdleTerminals) return@LaunchedEffect
+        val idleMs = perf.idleTimeoutMinutes.toLong() * 60_000L
+        while (isActive) {
+            delay(60_000L)
+            runCatching { terminalSessionManager.reapIdle(idleMs) }
+        }
     }
 
     LaunchedEffect(selectedProject?.id, breadcrumb.size) {
@@ -1110,7 +1190,7 @@ private fun JCodeShell(
                 windowInfo = windowInfo,
                 modifier = Modifier.fillMaxHeight(),
                 breadcrumb = breadcrumb,
-                onCloseWorkspace = onCloseWorkspace,
+                onCloseWorkspace = handleCloseWorkspace,
                 onCloseProject = handleCloseProject,
                 onCreateProject = onCreateProject,
                 onRemoveProject = onRemoveProject,
@@ -1419,7 +1499,7 @@ private fun JCodeShell(
                                 .width(leftSidebarWidth)
                                 .zIndex(1f),
                             breadcrumb = breadcrumb,
-                            onCloseWorkspace = onCloseWorkspace,
+                            onCloseWorkspace = handleCloseWorkspace,
                             onCloseProject = handleCloseProject,
                             onCreateProject = onCreateProject,
                             onRemoveProject = onRemoveProject,

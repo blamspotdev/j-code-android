@@ -208,6 +208,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val confirmCloseRunningKey = booleanPreferencesKey("perf_confirm_close_running")
+
+    /** When true (default), closing a project/workspace with a running terminal program, an active
+     *  Build & Run, or a live debug session prompts for confirmation before killing them. */
+    val confirmCloseRunning: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[confirmCloseRunningKey] ?: true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    fun setConfirmCloseRunning(enabled: Boolean) {
+        viewModelScope.launch { uiPreferences.edit { it[confirmCloseRunningKey] = enabled } }
+    }
+
+    private val autoCloseIdleKey = booleanPreferencesKey("perf_auto_close_idle_terminals")
+
+    /** When true, terminals sitting idle at the prompt (no foreground program, no I/O) past
+     *  [idleTimeoutMinutes] are closed automatically to free their proot process trees + memory. */
+    val autoCloseIdleTerminals: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[autoCloseIdleKey] ?: false }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setAutoCloseIdleTerminals(enabled: Boolean) {
+        viewModelScope.launch { uiPreferences.edit { it[autoCloseIdleKey] = enabled } }
+    }
+
+    private val idleTimeoutMinKey = intPreferencesKey("perf_idle_timeout_minutes")
+
+    /** Idle-terminal auto-close threshold in minutes (5…120). Default 30. */
+    val idleTimeoutMinutes: StateFlow<Int> = uiPreferences.data
+        .map { prefs -> (prefs[idleTimeoutMinKey] ?: 30).coerceIn(5, 120) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 30)
+
+    fun setIdleTimeoutMinutes(minutes: Int) {
+        viewModelScope.launch { uiPreferences.edit { it[idleTimeoutMinKey] = minutes.coerceIn(5, 120) } }
+    }
+
     private val hideStatusBarWithKeyboardKey = booleanPreferencesKey("hide_status_bar_with_keyboard")
 
     /** When true, the system status bar is hidden while the soft keyboard is up (more room to edit). */

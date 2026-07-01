@@ -101,6 +101,24 @@ class RestoreSessionSetting(
 
 val LocalRestoreSession = compositionLocalOf { RestoreSessionSetting() }
 
+/**
+ * Performance / resource-management preferences, shared (via [LocalPerformanceSettings]) with both the
+ * settings screen and JCodeShell without threading params through the latter (ART register limit).
+ * [confirmCloseRunning] warns before closing a project/workspace that still has a running terminal
+ * program, an active Build & Run, or a live debug session; [autoCloseIdleTerminals] auto-closes
+ * terminals idle at the prompt past [idleTimeoutMinutes] to free their proot trees + memory.
+ */
+class PerformanceSettings(
+    val confirmCloseRunning: Boolean = true,
+    val autoCloseIdleTerminals: Boolean = false,
+    val idleTimeoutMinutes: Int = 30,
+    val onSetConfirmCloseRunning: (Boolean) -> Unit = {},
+    val onSetAutoCloseIdleTerminals: (Boolean) -> Unit = {},
+    val onSetIdleTimeoutMinutes: (Int) -> Unit = {},
+)
+
+val LocalPerformanceSettings = compositionLocalOf { PerformanceSettings() }
+
 val JetBrainsMonoFontFamily: FontFamily
     @Composable get() = FontFamily.Monospace
 

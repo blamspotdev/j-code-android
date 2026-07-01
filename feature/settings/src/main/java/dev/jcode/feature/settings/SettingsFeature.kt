@@ -56,6 +56,7 @@ import dev.jcode.design.IconBundle
 import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.LocalEditorDragMovesCursor
+import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.LocalRestoreSession
 import dev.jcode.design.LocalTabCloseButtonSetting
 import dev.jcode.design.ThemeBundleRegistry
@@ -101,6 +102,7 @@ object SettingsFeature {
         val tabCloseSetting = LocalTabCloseButtonSetting.current
         val editorDragSetting = LocalEditorDragMovesCursor.current
         val restoreSessionSetting = LocalRestoreSession.current
+        val perf = LocalPerformanceSettings.current
         var selectedScope by rememberSaveable(projectOverridesAvailable) {
             mutableStateOf(if (projectOverridesAvailable) ConfigScope.Project else ConfigScope.Workspace)
         }
@@ -214,6 +216,37 @@ object SettingsFeature {
                     checked = restoreSessionSetting.enabled,
                     onCheckedChange = restoreSessionSetting.onChange,
                 )
+            }
+
+            SettingsSectionHeader("Performance")
+            SettingsCard(
+                title = "Resource management",
+                description = "Keep the Linux runtime lean by stopping work you're done with. Each terminal, " +
+                    "run, and debug session holds a proot process tree in memory.",
+                keywords = "performance memory cpu battery proot process terminal kill close idle background resource optimize",
+            ) {
+                ToggleRow(
+                    label = "Warn before closing running processes",
+                    supporting = "When closing a project or workspace with a running terminal command, an active " +
+                        "Build & Run, or a live debug session, ask first before stopping them.",
+                    checked = perf.confirmCloseRunning,
+                    onCheckedChange = perf.onSetConfirmCloseRunning,
+                )
+                ToggleRow(
+                    label = "Auto-close idle terminals",
+                    supporting = "Automatically close terminals left idle at the prompt (no running program) to " +
+                        "free their process tree and memory. Terminals running a command are never auto-closed.",
+                    checked = perf.autoCloseIdleTerminals,
+                    onCheckedChange = perf.onSetAutoCloseIdleTerminals,
+                )
+                if (perf.autoCloseIdleTerminals) {
+                    StepperRow(
+                        label = "Idle timeout",
+                        value = "${perf.idleTimeoutMinutes} min",
+                        onDecrease = { perf.onSetIdleTimeoutMinutes(perf.idleTimeoutMinutes - 5) },
+                        onIncrease = { perf.onSetIdleTimeoutMinutes(perf.idleTimeoutMinutes + 5) },
+                    )
+                }
             }
 
             SettingsSectionHeader("Environment")

@@ -56,6 +56,9 @@ internal data class DebugSessionUi(
 
 internal val LocalDebugSession = compositionLocalOf { DebugSessionUi() }
 
+/** What a close request targets — used to route the confirm-before-close teardown. */
+internal enum class CloseTarget { Project, Workspace }
+
 /**
  * The SDK / LSP / Extension manager callbacks, bundled so the giant [dev.jcode.JCodeShell] composable
  * stays under the ART verifier's per-method register limit (too many individual params overflow it).
