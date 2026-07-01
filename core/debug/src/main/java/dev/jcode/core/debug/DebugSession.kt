@@ -175,32 +175,47 @@ class DebugSession(
 
     private suspend fun readLoop() {
         val buffer = ByteArray(8192)
-        var acc = ""
+        var acc = ByteArray(0)
         while (scope.isActive && _state.value != DebugState.DISCONNECTED) {
             val t = transport ?: break
             val n = t.read(buffer)
             when {
-                n > 0 -> { acc += String(buffer, 0, n); acc = process(acc) }
+                n > 0 -> { acc += buffer.copyOf(n); acc = process(acc) }
                 n < 0 -> break
                 else -> delay(10)
             }
         }
     }
 
-    private fun process(data: String): String {
+    /**
+     * Frame DAP messages from the raw byte stream. `Content-Length` is a BYTE count, so the header
+     * scan and body slice must operate on bytes — decoding to a String first would mis-slice any
+     * response containing multi-byte UTF-8 (e.g. a large `variables` body), stalling every later request.
+     */
+    private fun process(data: ByteArray): ByteArray {
         var remaining = data
         while (true) {
-            val headerEnd = remaining.indexOf("\r\n\r\n")
+            val headerEnd = indexOfHeaderEnd(remaining)
             if (headerEnd < 0) break
-            val header = remaining.substring(0, headerEnd)
+            val header = String(remaining, 0, headerEnd, Charsets.US_ASCII)
             val len = Regex("Content-Length: (\\d+)").find(header)?.groupValues?.get(1)?.toIntOrNull() ?: break
             val start = headerEnd + 4
-            if (remaining.length < start + len) break
-            val content = remaining.substring(start, start + len)
-            remaining = remaining.substring(start + len)
+            if (remaining.size < start + len) break
+            val content = String(remaining, start, len, Charsets.UTF_8)
+            remaining = remaining.copyOfRange(start + len, remaining.size)
             runCatching { handleMessage(JSONObject(content)) }
         }
         return remaining
+    }
+
+    /** Index of the first `\r\n\r\n` in [data], or -1. */
+    private fun indexOfHeaderEnd(data: ByteArray): Int {
+        for (i in 0..data.size - 4) {
+            if (data[i] == 0x0D.toByte() && data[i + 1] == 0x0A.toByte() &&
+                data[i + 2] == 0x0D.toByte() && data[i + 3] == 0x0A.toByte()
+            ) return i
+        }
+        return -1
     }
 
     private fun handleMessage(json: JSONObject) {

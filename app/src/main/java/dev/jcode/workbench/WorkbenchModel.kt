@@ -1,7 +1,10 @@
 package dev.jcode.workbench
 
 import androidx.compose.runtime.compositionLocalOf
+import dev.jcode.core.debug.DapStackFrame
+import dev.jcode.core.debug.DebugState
 import dev.jcode.core.distro.DebugEngineCatalogState
+import dev.jcode.debug.VariableRow
 import dev.jcode.design.JCodeIcon
 import dev.jcode.feature.marketplace.MarketplaceEntry
 
@@ -31,6 +34,27 @@ internal data class DebugEditorState(
 )
 
 internal val LocalDebugEditorState = compositionLocalOf { DebugEditorState() }
+
+/** Live debug-session state + controls for the Run/Debug panel, provided via a CompositionLocal so
+ *  the giant [dev.jcode.JCodeShell] composable stays under the ART verifier's register limit. */
+internal data class DebugSessionUi(
+    val state: DebugState = DebugState.DISCONNECTED,
+    val callStack: List<DapStackFrame> = emptyList(),
+    val variables: List<VariableRow> = emptyList(),
+    val output: List<String> = emptyList(),
+    /** Name of the file that Debug will launch (the active editor tab), or null if none is debuggable. */
+    val debugTargetName: String? = null,
+    /** True when [debugTargetName] has an installed debug engine (enables the Debug button). */
+    val canDebug: Boolean = false,
+    val onDebug: () -> Unit = {},
+    val onContinue: () -> Unit = {},
+    val onStepOver: () -> Unit = {},
+    val onStepInto: () -> Unit = {},
+    val onStepOut: () -> Unit = {},
+    val onStop: () -> Unit = {},
+)
+
+internal val LocalDebugSession = compositionLocalOf { DebugSessionUi() }
 
 /**
  * The SDK / LSP / Extension manager callbacks, bundled so the giant [dev.jcode.JCodeShell] composable

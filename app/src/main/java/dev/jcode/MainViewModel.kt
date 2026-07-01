@@ -434,8 +434,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Start debugging the given host file with a matching debug engine (debugpy for .py, …). */
-    fun startDebug(hostPath: String, projectDir: String) {
-        debugController.startDebug(hostPath, projectDir, _breakpoints.value)
+    fun startDebug(hostPath: String) {
+        debugController.startDebug(hostPath, deriveProjectDir(hostPath), _breakpoints.value)
+    }
+
+    private fun deriveProjectDir(hostPath: String): String {
+        val marker = "/JCode/projects/"
+        val i = hostPath.indexOf(marker)
+        if (i < 0) return java.io.File(hostPath).parent ?: hostPath
+        val name = hostPath.substring(i + marker.length).substringBefore('/')
+        return hostPath.substring(0, i + marker.length) + name
     }
 
     fun debugContinue() = debugController.resume()

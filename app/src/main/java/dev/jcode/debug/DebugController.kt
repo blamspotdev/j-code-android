@@ -81,19 +81,26 @@ class DebugController(
                 _callStack.value = frames
                 val top = frames.firstOrNull()
                 _location.value = top?.sourcePath?.let { DebugLocation(it, (top.line - 1).coerceAtLeast(0)) }
-                if (top != null) {
-                    val rows = mutableListOf<VariableRow>()
-                    for (sc in s.scopes(top.id)) {
-                        rows.add(VariableRow(sc.name, "", null, depth = 0))
-                        if (!sc.expensive) {
-                            for (v in s.variables(sc.variablesReference)) {
-                                rows.add(VariableRow(v.name, v.value, v.type, depth = 1))
-                            }
-                        }
-                    }
-                    _variables.value = rows
-                }
+                if (top != null) refreshVariables(s, top.id)
             }
+        }
+    }
+
+    /**
+     * Fetch each non-expensive scope's variables for [frameId], publishing incrementally so a slow or
+     * large scope (e.g. Globals) never hides the ones already resolved. Resilient to one scope failing.
+     */
+    private suspend fun refreshVariables(s: DebugSession, frameId: Int) {
+        val scopes = runCatching { s.scopes(frameId) }.getOrDefault(emptyList())
+        val rows = mutableListOf<VariableRow>()
+        _variables.value = emptyList()
+        for (sc in scopes) {
+            if (sc.expensive || sc.variablesReference == 0) continue
+            rows.add(VariableRow(sc.name, "", null, depth = 0))
+            _variables.value = rows.toList()
+            val vars = runCatching { s.variables(sc.variablesReference) }.getOrDefault(emptyList())
+            for (v in vars.take(200)) rows.add(VariableRow(v.name, v.value, v.type, depth = 1))
+            _variables.value = rows.toList()
         }
     }
 

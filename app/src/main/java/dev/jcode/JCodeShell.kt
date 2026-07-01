@@ -214,8 +214,11 @@ import dev.jcode.workbench.marketplace.ExtensionPermissionsPage
 import dev.jcode.workbench.marketplace.LocalExtensionActivation
 import dev.jcode.workbench.marketplace.ExtensionsPanel
 import dev.jcode.workbench.DebugEditorState
+import dev.jcode.workbench.DebugSessionUi
 import dev.jcode.workbench.LocalDebugCatalogState
 import dev.jcode.workbench.LocalDebugEditorState
+import dev.jcode.workbench.LocalDebugSession
+import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.workbench.LocalTerminalTapConfig
 import dev.jcode.workbench.RightPanelTab
 import dev.jcode.workbench.WorkbenchManagerActions
@@ -267,6 +270,10 @@ fun JCodeApp(
     val debugCatalogState by viewModel.debugCatalogState.collectAsStateWithLifecycle()
     val breakpoints by viewModel.breakpoints.collectAsStateWithLifecycle()
     val debugLocation by viewModel.debugLocation.collectAsStateWithLifecycle()
+    val debugState by viewModel.debugState.collectAsStateWithLifecycle()
+    val debugCallStack by viewModel.debugCallStack.collectAsStateWithLifecycle()
+    val debugVariables by viewModel.debugVariables.collectAsStateWithLifecycle()
+    val debugOutput by viewModel.debugOutput.collectAsStateWithLifecycle()
     val runConfigVersion by viewModel.runConfigVersion.collectAsStateWithLifecycle()
     val autoSetupProgress by viewModel.autoSetupProgress.collectAsStateWithLifecycle(initialValue = DistroWizardProgress.Idle)
     val installedExtensions by viewModel.installedExtensions.collectAsStateWithLifecycle()
@@ -328,6 +335,31 @@ fun JCodeApp(
     val completionSource = remember(activeLanguagePack) {
         { prefix: String -> languagePackCompletionItems(activeLanguagePack, prefix) }
     }
+    // Debug launch target = the active source file, if it has an installed stdio debug engine.
+    val activeDebugFile = editorGroup.activeTab?.takeIf { !it.isPage }?.filePath
+    val activeDebugEngine = remember(activeDebugFile?.path) {
+        activeDebugFile?.let { f ->
+            val ext = "." + f.name.substringAfterLast('.', "")
+            DebugEngineCatalog.BUILT_IN.firstOrNull { ext in it.extensions }
+        }
+    }
+    val canDebug = activeDebugEngine != null &&
+        activeDebugEngine.transport == "stdio" &&
+        activeDebugEngine.id in debugCatalogState.installedEntryIds
+    val debugSessionUi = DebugSessionUi(
+        state = debugState,
+        callStack = debugCallStack,
+        variables = debugVariables,
+        output = debugOutput,
+        debugTargetName = activeDebugFile?.name,
+        canDebug = canDebug,
+        onDebug = { activeDebugFile?.let { viewModel.startDebug(it.path) } },
+        onContinue = viewModel::debugContinue,
+        onStepOver = viewModel::debugStepOver,
+        onStepInto = viewModel::debugStepInto,
+        onStepOut = viewModel::debugStepOut,
+        onStop = viewModel::debugStop,
+    )
     StatusBarKeyboardController(enabled = hideStatusBarWithKeyboard)
     val tapContext = LocalContext.current
     val terminalTapConfig = TerminalTapConfig(
@@ -407,6 +439,7 @@ fun JCodeApp(
         LocalEnvironmentManager provides environmentManagerActions,
         LocalEditorEmptyActions provides editorEmptyActions,
         LocalDebugCatalogState provides debugCatalogState,
+        LocalDebugSession provides debugSessionUi,
         LocalDebugEditorState provides DebugEditorState(
             breakpoints = breakpoints,
             stoppedPath = debugLocation?.hostPath,
@@ -1758,24 +1791,36 @@ private fun WorkspacePanel(
                         ),
                     )
 
-                    WorkbenchTool.RunDebug -> RunDebugPanel(
-                        // A User Workspace lists every project; the Default Workspace shows just the
-                        // one open project.
-                        projects = if (inUserWorkspace) {
-                            workspace?.projects.orEmpty()
-                        } else {
-                            listOfNotNull(selectedProject)
-                        },
-                        runningProjectId = runningProjectId,
-                        runUrl = runUrl,
-                        runInProgress = runInProgress,
-                        runConfigVersion = runConfigVersion,
-                        onRun = onRun,
-                        onConfigure = onConfigureRun,
-                        onStop = onStopRun,
-                        onOpenInBrowser = onOpenRunInBrowser,
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    WorkbenchTool.RunDebug -> Column(modifier = Modifier.fillMaxSize()) {
+                        Column(
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState())
+                                .padding(10.dp),
+                        ) {
+                            DebugSessionPanel(ui = LocalDebugSession.current)
+                        }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                        RunDebugPanel(
+                            // A User Workspace lists every project; the Default Workspace shows just the
+                            // one open project.
+                            projects = if (inUserWorkspace) {
+                                workspace?.projects.orEmpty()
+                            } else {
+                                listOfNotNull(selectedProject)
+                            },
+                            runningProjectId = runningProjectId,
+                            runUrl = runUrl,
+                            runInProgress = runInProgress,
+                            runConfigVersion = runConfigVersion,
+                            onRun = onRun,
+                            onConfigure = onConfigureRun,
+                            onStop = onStopRun,
+                            onOpenInBrowser = onOpenRunInBrowser,
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                        )
+                    }
 
                     WorkbenchTool.Extensions -> ExtensionsPanel(
                         installed = installedExtensions,
