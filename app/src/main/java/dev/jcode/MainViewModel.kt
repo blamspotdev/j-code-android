@@ -130,7 +130,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val installed = runCatching { extensionInstaller.installed() }.getOrDefault(emptyList())
             _installedExtensions.value = installed
             // Any extension may contribute templates (a language/dev pack can bundle them too).
-            _templates.value = installed.flatMap { it.templates }
+            // Always offer an "Empty Project" first — a blank folder that needs no extension.
+            val fromExtensions = installed.flatMap { it.templates }
+            val emptyOption = fromExtensions.filter { it.id == "empty" }.ifEmpty {
+                listOf(ProjectTemplate(id = "empty", name = "Empty Project", description = "A blank project folder — no scaffolding."))
+            }
+            _templates.value = emptyOption + fromExtensions.filter { it.id != "empty" }
         }
     }
 
