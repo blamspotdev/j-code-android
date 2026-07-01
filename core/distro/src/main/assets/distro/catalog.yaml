@@ -67,15 +67,50 @@ entries:
   - id: android-prereqs
     category: android
     name: Android SDK prerequisites
-    description: Installs the base distro-side prerequisites needed before wiring Android command-line tools manually.
+    description: JDK 21 plus the distro's native aarch64 Android build tools (aapt2/aapt/zipalign/apksigner) — the ARM-native pieces Google's x86_64-only build-tools can't provide on this device.
+    supportedArches: [arm64]
     installScript: |
       sudo apt-get update
-      sudo apt-get install -y openjdk-21-jdk-headless unzip wget zip
+      sudo apt-get install -y openjdk-21-jdk-headless unzip wget zip file aapt android-sdk-build-tools
     verifyScript: |
-      command -v javac >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1 && command -v wget >/dev/null 2>&1 && echo ready
+      command -v javac >/dev/null 2>&1 && /usr/lib/android-sdk/build-tools/debian/aapt2 version >/dev/null 2>&1 && echo ready
     uninstallScript: |
-      sudo apt-get remove -y openjdk-21-jdk-headless unzip wget zip
-    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(openjdk-21-jdk-headless|unzip|wget|zip)/'"
+      sudo apt-get remove -y openjdk-21-jdk-headless aapt android-sdk-build-tools
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(openjdk-21-jdk-headless|aapt|android-sdk-build-tools)/'"
+
+  - id: android-sdk
+    category: android
+    name: Android SDK (platform 34 + Gradle)
+    description: Command-line tools, the Android 34 platform, build-tools 34, and Gradle 8.7 — wired with the ARM-native aapt2 so on-device Gradle builds (assembleDebug) produce a real APK. Requires the Android SDK prerequisites. Large download.
+    supportedArches: [arm64]
+    installScript: |
+      set -e
+      export ANDROID_HOME="$HOME/android-sdk"
+      export JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
+      mkdir -p "$ANDROID_HOME"
+      if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+        wget -q -O /tmp/clt.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+        rm -rf /tmp/cmdline-tools && (cd /tmp && unzip -q clt.zip)
+        mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
+        mv /tmp/cmdline-tools/* "$ANDROID_HOME/cmdline-tools/latest/"
+        rm -rf /tmp/cmdline-tools /tmp/clt.zip
+      fi
+      SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+      # Accept licenses (timeout guards a known post-write hang), then install with stdin closed.
+      yes | timeout 120 "$SDKM" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
+      "$SDKM" --sdk_root="$ANDROID_HOME" "platforms;android-34" "build-tools;34.0.0" "platform-tools" </dev/null 2>&1 | tail -3
+      # Replace the x86_64 aapt2/aapt/zipalign with the distro's native aarch64 builds.
+      DEB=/usr/lib/android-sdk/build-tools/debian
+      for b in aapt2 aapt zipalign; do [ -e "$DEB/$b" ] && cp -f "$DEB/$b" "$ANDROID_HOME/build-tools/34.0.0/$b"; done
+      if [ ! -x /opt/gradle/gradle-8.7/bin/gradle ]; then
+        wget -q -O /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip
+        sudo mkdir -p /opt/gradle && (cd /opt/gradle && sudo unzip -q /tmp/gradle.zip) && rm -f /tmp/gradle.zip
+      fi
+    verifyScript: |
+      [ -f "$HOME/android-sdk/platforms/android-34/android.jar" ] && [ -x /opt/gradle/gradle-8.7/bin/gradle ] && "$HOME/android-sdk/build-tools/34.0.0/aapt2" version >/dev/null 2>&1 && echo ready
+    uninstallScript: |
+      rm -rf "$HOME/android-sdk"
+      sudo rm -rf /opt/gradle/gradle-8.7
 
   - id: dotnet
     category: dotnet
