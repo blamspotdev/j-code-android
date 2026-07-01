@@ -71,7 +71,7 @@ entries:
     supportedArches: [arm64]
     installScript: |
       sudo apt-get update
-      sudo apt-get install -y openjdk-21-jdk-headless unzip wget zip file aapt android-sdk-build-tools
+      sudo apt-get install -y openjdk-21-jdk-headless unzip wget zip file procps aapt android-sdk-build-tools
     verifyScript: |
       command -v javac >/dev/null 2>&1 && /usr/lib/android-sdk/build-tools/debian/aapt2 version >/dev/null 2>&1 && echo ready
     uninstallScript: |
@@ -96,9 +96,16 @@ entries:
         rm -rf /tmp/cmdline-tools /tmp/clt.zip
       fi
       SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-      # Accept licenses (timeout guards a known post-write hang), then install with stdin closed.
+      # Accept licenses (timeout guards a post-write hang).
       yes | timeout 120 "$SDKM" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
-      "$SDKM" --sdk_root="$ANDROID_HOME" "platforms;android-34" "build-tools;34.0.0" "platform-tools" </dev/null 2>&1 | tail -3
+      # sdkmanager downloads only when fed 'yes' on stdin, but then HANGS after finishing. Run it in
+      # the background, wait for the platform + build-tools to land, then stop it.
+      ( yes | "$SDKM" --sdk_root="$ANDROID_HOME" "platforms;android-34" "build-tools;34.0.0" "platform-tools" >/tmp/android-sdk-install.log 2>&1 ) &
+      for i in $(seq 1 180); do
+        [ -f "$ANDROID_HOME/platforms/android-34/android.jar" ] && [ -x "$ANDROID_HOME/build-tools/34.0.0/aapt2" ] && break
+        sleep 10
+      done
+      pkill -f sdkmanager 2>/dev/null || true
       # Replace the x86_64 aapt2/aapt/zipalign with the distro's native aarch64 builds.
       DEB=/usr/lib/android-sdk/build-tools/debian
       for b in aapt2 aapt zipalign; do [ -e "$DEB/$b" ] && cp -f "$DEB/$b" "$ANDROID_HOME/build-tools/34.0.0/$b"; done
