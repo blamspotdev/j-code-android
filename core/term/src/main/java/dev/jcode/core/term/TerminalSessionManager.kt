@@ -40,6 +40,13 @@ class TerminalSessionManager(
         /** Parses J Code OSC escapes in this session's output: open-file (7711) and tab-title (7712). */
         internal val oscScanner = OscScanner()
 
+        /** The foreground program reported via OSC 7712 (see GUEST_SHELL_INTEGRATION), or null while the
+         *  shell sits at its prompt ("terminal"). Lets the UI warn before closing a busy terminal. */
+        @Volatile var foreground: String? = null
+
+        /** Epoch millis of this session's last I/O (output drained or input sent), for idle reaping. */
+        @Volatile var lastActivityAt: Long = System.currentTimeMillis()
+
         /** Invoked off the main thread after new output is parsed, so a bound view can repaint. */
         @Volatile var onUpdate: (() -> Unit)? = null
 
@@ -211,7 +218,12 @@ class TerminalSessionManager(
             val oscHandler: (Int, String) -> Unit = { code, payload ->
                 when (code) {
                     7711 -> onOpenFileRequest?.invoke(payload.trim())
-                    7712 -> onTitleChange?.invoke(session.id, payload.trim())
+                    7712 -> {
+                        val title = payload.trim()
+                        // "terminal" (or empty) = back at the prompt with no foreground program.
+                        session.foreground = title.takeUnless { it.isEmpty() || it == "terminal" }
+                        onTitleChange?.invoke(session.id, title)
+                    }
                 }
             }
             while (isActive) {
@@ -222,6 +234,7 @@ class TerminalSessionManager(
                 }
                 when {
                     n > 0 -> {
+                        session.lastActivityAt = System.currentTimeMillis()
                         synchronized(session) { session.parser.feed(buffer.copyOf(n)) }
                         session.oscScanner.feed(buffer, n, oscHandler)
                         onOutput?.invoke(session.id, buffer, n)
@@ -287,14 +300,41 @@ class TerminalSessionManager(
      * Send input to a specific session.
      */
     fun sendInput(id: String, text: String) {
-        getSession(id)?.pty?.write(text)
+        getSession(id)?.let { it.lastActivityAt = System.currentTimeMillis(); it.pty.write(text) }
     }
 
     /**
      * Send input bytes to a specific session.
      */
     fun sendInput(id: String, data: ByteArray) {
-        getSession(id)?.pty?.write(data)
+        getSession(id)?.let { it.lastActivityAt = System.currentTimeMillis(); it.pty.write(data) }
+    }
+
+    /** Sessions currently running a foreground program (not idle at the shell prompt): (id, program). */
+    fun foregroundSessions(): List<Pair<String, String>> =
+        synchronized(sessionsLock) { _sessions.values.mapNotNull { s -> s.foreground?.let { s.id to it } } }
+
+    /** True if any session is running a foreground program (used to warn before closing). */
+    fun hasForegroundProcess(): Boolean =
+        synchronized(sessionsLock) { _sessions.values.any { it.foreground != null } }
+
+    /**
+     * Close sessions that are idle — no foreground program and no I/O for [idleMillis] — to free their
+     * proot process trees and memory. Fires [onSessionExit] for each closed session so the host drops
+     * its tab and releases the foreground-service hold. Returns the closed session ids.
+     */
+    fun reapIdle(idleMillis: Long): List<String> {
+        val now = System.currentTimeMillis()
+        val stale = synchronized(sessionsLock) {
+            _sessions.values
+                .filter { it.foreground == null && now - it.lastActivityAt >= idleMillis }
+                .map { it.id }
+        }
+        stale.forEach { id ->
+            closeSession(id)
+            onSessionExit?.invoke(id)
+        }
+        return stale
     }
 
     /**

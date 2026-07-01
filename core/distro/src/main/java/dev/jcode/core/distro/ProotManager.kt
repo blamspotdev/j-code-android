@@ -302,6 +302,12 @@ class ProotManager(private val context: Context) {
         // break the command. Use --verbose=-1 to silence instead.
         args.add("--verbose=-1")
 
+        // Kill the whole guest process tree when the top-level command exits or proot is terminated.
+        // Without this, tearing down only the proot launcher (PtyProcess.close / Process.destroy)
+        // orphans its descendants (e.g. a debug adapter's python3), leaking proot trees on every
+        // close. Requires a graceful signal (SIGTERM) so proot can run its cleanup.
+        args.add("--kill-on-exit")
+
         // This proot build does NOT accept `--` as an option/command terminator (it reports
         // "unknown option '--'"). proot stops parsing options at the first non-option token, so the
         // command (a path like /bin/sh) is passed directly; its own args follow.
