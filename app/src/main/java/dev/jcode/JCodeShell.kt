@@ -1121,7 +1121,6 @@ private fun JCodeShell(
                     workspace = workspace,
                     effectiveConfig = effectiveConfig,
                     activeDistroId = environmentState.runtime.selectedDistro.id,
-                    windowInfo = windowInfo,
                 )
             },
             containerColor = MaterialTheme.colorScheme.background,

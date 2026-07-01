@@ -20,8 +20,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.jcode.adaptive.JCodePosture
-import dev.jcode.adaptive.JCodeWindowInfo
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.fs.Project
@@ -47,7 +45,6 @@ internal fun WorkbenchStatusBar(
     workspace: Workspace?,
     effectiveConfig: EffectiveConfig,
     activeDistroId: String,
-    windowInfo: JCodeWindowInfo,
 ) {
     val branch = rememberGitBranch(selectedProject)
     // A project's effective distro can be overridden in its `.jcode`; otherwise fall back to the
@@ -76,7 +73,6 @@ internal fun WorkbenchStatusBar(
             StatusCell("distro: ${distro.ifBlank { "--" }}")
             Spacer(modifier = Modifier.weight(1f))
             StatusCell(workspace?.name ?: "Workspace")
-            StatusCell("posture: ${windowInfo.posture.shortLabel()}")
         }
     }
 }
@@ -152,10 +148,4 @@ internal fun rememberEditorMetrics(activeTab: EditorTab?): EditorMetrics {
         language = activeTab.languageDescriptor?.name ?: "Plain Text",
         encoding = "UTF-8",
     )
-}
-
-private fun JCodePosture.shortLabel(): String = when (this) {
-    JCodePosture.Flat -> "flat"
-    JCodePosture.TableTop -> "tabletop"
-    JCodePosture.Book -> "book"
 }
