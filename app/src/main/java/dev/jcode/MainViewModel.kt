@@ -36,7 +36,6 @@ import dev.jcode.feature.editor.pane.EditorPageKind
 import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.feature.marketplace.BundledExtensionSpec
 import dev.jcode.feature.marketplace.ExtensionActivation
-import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.languageFor
 import dev.jcode.feature.marketplace.MarketplaceEntry
@@ -130,9 +129,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val installed = runCatching { extensionInstaller.installed() }.getOrDefault(emptyList())
             _installedExtensions.value = installed
-            _templates.value = installed
-                .filter { it.type == ExtensionType.Templates }
-                .flatMap { it.templates }
+            // Any extension may contribute templates (a language/dev pack can bundle them too).
+            _templates.value = installed.flatMap { it.templates }
         }
     }
 

@@ -202,12 +202,10 @@ class ExtensionInstaller internal constructor(context: Context) {
         val map = runCatching { parseYamlMapping(manifest.readText()) }.getOrNull() ?: return null
         val id = map.str("id") ?: return null
         val type = ExtensionType.from(map.str("type"))
-        val templates = if (type == ExtensionType.Templates) {
-            map.listOfAny("templates").mapNotNull { raw -> loadTemplate(dir, raw?.toString()) }
-        } else {
-            emptyList()
-        }
-        val languages = if (type == ExtensionType.Language) parseLanguages(map) else emptyList()
+        // A "dev pack" may bundle both languages and templates regardless of its primary type;
+        // parse whatever it declares (missing sections resolve to empty).
+        val templates = map.listOfAny("templates").mapNotNull { raw -> loadTemplate(dir, raw?.toString()) }
+        val languages = parseLanguages(map)
         return InstalledExtension(
             id = id,
             name = map.str("name") ?: id,
