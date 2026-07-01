@@ -25,6 +25,7 @@ import dev.jcode.core.distro.DistroProfile
 import dev.jcode.core.distro.DistroWizardProgress
 import dev.jcode.core.distro.DebugEngineAction
 import dev.jcode.core.distro.LspCatalogAction
+import dev.jcode.debug.DebugController
 import dev.jcode.core.distro.SdkCatalogAction
 import dev.jcode.core.distro.DistroService
 import dev.jcode.core.distro.DistroServiceLocator
@@ -410,6 +411,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val lspCatalogState = distroService.lspCatalogState
     val debugCatalogState = distroService.debugCatalogState
     val autoSetupProgress = distroService.autoSetupProgress
+
+    private val debugController = DebugController(distroService, viewModelScope)
+    val debugState = debugController.state
+    val debugCallStack = debugController.callStack
+    val debugVariables = debugController.variables
+    val debugOutput = debugController.output
+    val debugLocation = debugController.currentLocation
+
+    /** Breakpoints per host file path -> set of 0-based lines. Toggled from the editor gutter. */
+    private val _breakpoints = MutableStateFlow<Map<String, Set<Int>>>(emptyMap())
+    val breakpoints: StateFlow<Map<String, Set<Int>>> = _breakpoints.asStateFlow()
+
+    /** Toggle a breakpoint at [line] (0-based) in the file at host [path]. */
+    fun toggleBreakpoint(path: String, line: Int) {
+        val next = _breakpoints.value.toMutableMap()
+        val lines = next[path]?.toMutableSet() ?: mutableSetOf()
+        if (!lines.add(line)) lines.remove(line)
+        if (lines.isEmpty()) next.remove(path) else next[path] = lines
+        _breakpoints.value = next
+        debugController.onBreakpointsChanged(path, next[path].orEmpty())
+    }
+
+    /** Start debugging the given host file with a matching debug engine (debugpy for .py, …). */
+    fun startDebug(hostPath: String, projectDir: String) {
+        debugController.startDebug(hostPath, projectDir, _breakpoints.value)
+    }
+
+    fun debugContinue() = debugController.resume()
+    fun debugStepOver() = debugController.stepOver()
+    fun debugStepInto() = debugController.stepInto()
+    fun debugStepOut() = debugController.stepOut()
+    fun debugStop() = debugController.stop()
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages = _messages.asSharedFlow()

@@ -1,6 +1,5 @@
 package dev.jcode.core.debug
 
-import dev.jcode.core.term.PtyProcess
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,10 +35,11 @@ class DebugSession(
     /** DAP `adapterID` / config `type` (e.g. "python", "lldb", "coreclr"). */
     val debugType: String,
     val projectRoot: String,
-    private val ptyFactory: (command: String) -> PtyProcess,
+    /** Spawns the adapter (given a shell command) and returns its stdio as a [DapTransport], or null. */
+    private val transportFactory: (command: String) -> DapTransport?,
 ) : Closeable {
 
-    private var pty: PtyProcess? = null
+    private var transport: DapTransport? = null
     private var readJob: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val seq = AtomicInteger(0)
@@ -79,7 +79,8 @@ class DebugSession(
         _state.value = DebugState.STARTING
         try {
             val escaped = adapterCommand.replace("'", "'\\''")
-            pty = ptyFactory("exec bash --noprofile --norc -c '$escaped'")
+            transport = transportFactory("exec bash --noprofile --norc -c '$escaped'")
+                ?: throw DebugException("Could not start debug adapter")
             readJob = scope.launch { readLoop() }
             _state.value = DebugState.INITIALIZING
 
@@ -169,15 +170,15 @@ class DebugSession(
     private suspend fun writeMessage(message: JSONObject) {
         val content = message.toString()
         val full = "Content-Length: ${content.toByteArray().size}\r\n\r\n$content"
-        writeMutex.withLock { pty?.write(full.toByteArray()) }
+        writeMutex.withLock { transport?.write(full.toByteArray()) }
     }
 
     private suspend fun readLoop() {
         val buffer = ByteArray(8192)
         var acc = ""
         while (scope.isActive && _state.value != DebugState.DISCONNECTED) {
-            val p = pty ?: break
-            val n = p.read(buffer)
+            val t = transport ?: break
+            val n = t.read(buffer)
             when {
                 n > 0 -> { acc += String(buffer, 0, n); acc = process(acc) }
                 n < 0 -> break
@@ -253,7 +254,7 @@ class DebugSession(
     override fun close() {
         scope.launch { runCatching { sendRequest("disconnect", JSONObject().put("terminateDebuggee", true)) } }
         readJob?.cancel()
-        pty?.close(); pty = null
+        transport?.close(); transport = null
         _state.value = DebugState.DISCONNECTED
         pending.values.forEach { it.cancel() }
         pending.clear()
@@ -318,3 +319,13 @@ data class DapBreakpoint(val id: Int, val verified: Boolean, val line: Int)
 data class StoppedInfo(val reason: String, val threadId: Int, val description: String, val text: String)
 
 class DebugException(message: String) : Exception(message)
+
+/**
+ * Bidirectional byte transport for a debug adapter. Backed by a child process's stdio pipes (preferred
+ * for DAP — no PTY echo) or a PTY. [read] blocks; returns bytes read, 0 when idle, <0 at EOF.
+ */
+interface DapTransport {
+    fun read(buffer: ByteArray): Int
+    fun write(bytes: ByteArray)
+    fun close()
+}

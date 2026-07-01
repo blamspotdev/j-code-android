@@ -21,6 +21,17 @@ internal val LocalTerminalTapConfig = compositionLocalOf { TerminalTapConfig() }
  */
 internal val LocalDebugCatalogState = compositionLocalOf { DebugEngineCatalogState() }
 
+/** Editor-facing debug state (breakpoints + current stopped location + toggle), provided via a
+ *  CompositionLocal so the giant [dev.jcode.JCodeShell] composable stays under the register limit. */
+internal data class DebugEditorState(
+    val breakpoints: Map<String, Set<Int>> = emptyMap(),
+    val stoppedPath: String? = null,
+    val stoppedLine: Int? = null,
+    val onToggleBreakpoint: (String, Int) -> Unit = { _, _ -> },
+)
+
+internal val LocalDebugEditorState = compositionLocalOf { DebugEditorState() }
+
 /**
  * The SDK / LSP / Extension manager callbacks, bundled so the giant [dev.jcode.JCodeShell] composable
  * stays under the ART verifier's per-method register limit (too many individual params overflow it).

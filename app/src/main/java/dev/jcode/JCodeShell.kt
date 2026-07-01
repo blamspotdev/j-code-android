@@ -213,7 +213,9 @@ import dev.jcode.workbench.marketplace.ExtensionDetailPage
 import dev.jcode.workbench.marketplace.ExtensionPermissionsPage
 import dev.jcode.workbench.marketplace.LocalExtensionActivation
 import dev.jcode.workbench.marketplace.ExtensionsPanel
+import dev.jcode.workbench.DebugEditorState
 import dev.jcode.workbench.LocalDebugCatalogState
+import dev.jcode.workbench.LocalDebugEditorState
 import dev.jcode.workbench.LocalTerminalTapConfig
 import dev.jcode.workbench.RightPanelTab
 import dev.jcode.workbench.WorkbenchManagerActions
@@ -263,6 +265,8 @@ fun JCodeApp(
     val sdkCatalogState by viewModel.sdkCatalogState.collectAsStateWithLifecycle()
     val lspCatalogState by viewModel.lspCatalogState.collectAsStateWithLifecycle()
     val debugCatalogState by viewModel.debugCatalogState.collectAsStateWithLifecycle()
+    val breakpoints by viewModel.breakpoints.collectAsStateWithLifecycle()
+    val debugLocation by viewModel.debugLocation.collectAsStateWithLifecycle()
     val runConfigVersion by viewModel.runConfigVersion.collectAsStateWithLifecycle()
     val autoSetupProgress by viewModel.autoSetupProgress.collectAsStateWithLifecycle(initialValue = DistroWizardProgress.Idle)
     val installedExtensions by viewModel.installedExtensions.collectAsStateWithLifecycle()
@@ -403,6 +407,12 @@ fun JCodeApp(
         LocalEnvironmentManager provides environmentManagerActions,
         LocalEditorEmptyActions provides editorEmptyActions,
         LocalDebugCatalogState provides debugCatalogState,
+        LocalDebugEditorState provides DebugEditorState(
+            breakpoints = breakpoints,
+            stoppedPath = debugLocation?.hostPath,
+            stoppedLine = debugLocation?.line,
+            onToggleBreakpoint = viewModel::toggleBreakpoint,
+        ),
     ) {
     JCodeShell(
         modifier = modifier,
@@ -2266,6 +2276,7 @@ private fun EditorWorkspace(
                         .weight(1f),
                 )
             } else {
+                val dbg = LocalDebugEditorState.current
                 EditorPane(
                     group = editorGroup,
                     modifier = Modifier
@@ -2277,6 +2288,9 @@ private fun EditorWorkspace(
                     onSave = onSave,
                     languageActionsEnabled = languageActionsEnabled,
                     onLanguageAction = onEditorLanguageAction,
+                    breakpointLinesFor = { tab -> dbg.breakpoints[tab.filePath.path].orEmpty() },
+                    stoppedLineFor = { tab -> if (dbg.stoppedPath == tab.filePath.path) dbg.stoppedLine else null },
+                    onToggleBreakpoint = { tab, line -> dbg.onToggleBreakpoint(tab.filePath.path, line) },
                     pageContent = editorPageContent,
                 )
             }

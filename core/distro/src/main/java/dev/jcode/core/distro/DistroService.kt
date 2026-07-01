@@ -1180,6 +1180,52 @@ class DistroService(
     }
 
     /**
+     * Spawn a long-lived process inside the active distro for a debug adapter, with stdin/stdout PIPES
+     * (no PTY — clean bidirectional DAP, no echo). The caller reads DAP from `process.inputStream` and
+     * writes to `process.outputStream`; stderr is kept separate. Returns null if the runtime isn't ready.
+     */
+    fun spawnDapProcess(
+        command: String,
+        workdir: String = _environmentState.value.runtime.workdir,
+    ): Process? {
+        val runtime = _environmentState.value.runtime
+        val distroId = runtime.selectedDistro.id
+        val arch = runtime.selectedDistro.arch
+        val rootfsPath = rootfsManager.getRootfsPath(distroId)
+        val user = runtime.user
+        if (!rootfsManager.isDistroInstalled(distroId) || !prootManager.isProotInstalled) return null
+        if (prootManager.needsQemu(arch) && !prootManager.isQemuInstalled(arch)) return null
+        val env = mapOf(
+            "HOME" to (if (user == "root") "/root" else "/home/$user"),
+            "USER" to user,
+            "TERM" to "dumb",
+            "LANG" to "en_US.UTF-8",
+            "TMPDIR" to "/tmp",
+            "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        )
+        val prootArgs = prootManager.buildShellCommand(
+            rootfsPath = rootfsPath,
+            shellCommand = command,
+            binds = runtime.binds,
+            env = env,
+            workdir = workdir,
+            user = user,
+            rootfsArch = arch,
+        )
+        return try {
+            val builder = ProcessBuilder(prootArgs).redirectErrorStream(false)
+            for (kv in prootManager.runtimeEnv(arch)) {
+                val sep = kv.indexOf('=')
+                if (sep > 0) builder.environment()[kv.substring(0, sep)] = kv.substring(sep + 1)
+            }
+            builder.start()
+        } catch (e: Exception) {
+            android.util.Log.e("DistroService", "spawnDapProcess failed", e)
+            null
+        }
+    }
+
+    /**
      * Execute a process and capture output.
      */
     private fun executeProcess(

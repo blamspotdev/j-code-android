@@ -64,6 +64,9 @@ fun EditorPane(
     onSave: () -> Unit = {},
     languageActionsEnabled: Boolean = false,
     onLanguageAction: (EditorLanguageAction, String) -> Unit = { _, _ -> },
+    breakpointLinesFor: (EditorTab) -> Set<Int> = { emptySet() },
+    stoppedLineFor: (EditorTab) -> Int? = { null },
+    onToggleBreakpoint: (EditorTab, Int) -> Unit = { _, _ -> },
     pageContent: @Composable (EditorTab) -> Unit = {},
 ) {
     Column(modifier = modifier.clipToBounds()) {
@@ -90,6 +93,9 @@ fun EditorPane(
                         onSave = onSave,
                         languageActionsEnabled = languageActionsEnabled,
                         onLanguageAction = onLanguageAction,
+                        breakpointLines = breakpointLinesFor(activeTab),
+                        stoppedLine = stoppedLineFor(activeTab),
+                        onToggleBreakpoint = { line -> onToggleBreakpoint(activeTab, line) },
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
@@ -252,6 +258,9 @@ fun EditorViewHost(
     onSave: () -> Unit = {},
     languageActionsEnabled: Boolean = false,
     onLanguageAction: (EditorLanguageAction, String) -> Unit = { _, _ -> },
+    breakpointLines: Set<Int> = emptySet(),
+    stoppedLine: Int? = null,
+    onToggleBreakpoint: (Int) -> Unit = {},
 ) {
     val density = LocalDensity.current
     var view by remember { mutableStateOf<EditorView?>(null) }
@@ -266,6 +275,38 @@ fun EditorViewHost(
     // A completion popup belongs to its file; clear it when the active editor (tab) changes.
     LaunchedEffect(editorState) { completionAnchor = null }
 
+    // Apply breakpoint dots (GUTTER) + the current-stopped line marker/highlight (BACKGROUND). These
+    // layers are independent of syntax (GLYPH_COLOR), so replacing them never clobbers highlighting.
+    LaunchedEffect(editorState, breakpointLines, stoppedLine) {
+        val markers = buildList<dev.jcode.core.editor.decor.Decoration> {
+            breakpointLines.forEach { line ->
+                add(
+                    dev.jcode.core.editor.decor.GutterMarkerDecoration(
+                        id = "bp:$line", line = line, color = 0xFFE5484D.toInt(),
+                        kind = dev.jcode.core.editor.decor.GutterMarkerDecoration.Kind.Breakpoint,
+                    ),
+                )
+            }
+            stoppedLine?.let { l ->
+                add(
+                    dev.jcode.core.editor.decor.GutterMarkerDecoration(
+                        id = "cur", line = l, color = 0xFFF2C94C.toInt(),
+                        kind = dev.jcode.core.editor.decor.GutterMarkerDecoration.Kind.CurrentLine,
+                    ),
+                )
+            }
+        }
+        val highlights = buildList<dev.jcode.core.editor.decor.Decoration> {
+            stoppedLine?.let { l ->
+                add(dev.jcode.core.editor.decor.LineHighlightDecoration(id = "curline", line = l, color = 0x33F2C94C))
+            }
+        }
+        editorState.updateDecorations {
+            it.replaceLayer(dev.jcode.core.editor.decor.Layer.GUTTER, markers)
+                .replaceLayer(dev.jcode.core.editor.decor.Layer.BACKGROUND, highlights)
+        }
+    }
+
     Box(modifier = modifier.clipToBounds()) {
         AndroidView(
             factory = { context ->
@@ -274,6 +315,7 @@ fun EditorViewHost(
                     onContextRequest = { menu = it }
                     onSaveRequest = { onSave() }
                     onCompletionAnchorChanged = { completionAnchor = it }
+                    onGutterTap = { onToggleBreakpoint(it) }
                     dragMovesCursor = dragCursorEnabled
                     cursorDragVerticalLevel = dragCursorVLevel
                     cursorDragHorizontalLevel = dragCursorHLevel
@@ -286,6 +328,7 @@ fun EditorViewHost(
                 v.onContextRequest = { menu = it }
                 v.onSaveRequest = { onSave() }
                 v.onCompletionAnchorChanged = { completionAnchor = it }
+                v.onGutterTap = { onToggleBreakpoint(it) }
                 v.dragMovesCursor = dragCursorEnabled
                 v.cursorDragVerticalLevel = dragCursorVLevel
                 v.cursorDragHorizontalLevel = dragCursorHLevel

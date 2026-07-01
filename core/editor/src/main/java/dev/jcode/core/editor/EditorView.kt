@@ -94,10 +94,19 @@ class EditorView @JvmOverloads constructor(
     /** Invoked after edits/caret moves with the current completion prefix anchor (null = dismiss). */
     var onCompletionAnchorChanged: ((CompletionAnchor?) -> Unit)? = null
 
+    /** Invoked with the 0-based line when the gutter (left margin) is tapped — used to toggle breakpoints. */
+    var onGutterTap: ((line: Int) -> Unit)? = null
+
     private val gestureDetector = GestureDetector(
         context,
         object : GestureDetector.SimpleOnGestureListener() {
             override fun onSingleTapUp(e: MotionEvent): Boolean {
+                // A tap in the gutter toggles a breakpoint (no caret move, no keyboard).
+                val gutterLine = gutterLineAt(e.x, e.y)
+                if (gutterLine != null) {
+                    onGutterTap?.invoke(gutterLine)
+                    return true
+                }
                 // Tapping focuses the editor, raises the keyboard, and places the caret. Caret placement
                 // lives here (not on ACTION_DOWN) so dragging to scroll never moves the caret or pops the
                 // completion list.
@@ -303,6 +312,20 @@ class EditorView @JvmOverloads constructor(
             return true
         }
         return super.onTouchEvent(event)
+    }
+
+    /** The 0-based line if the tap is in the gutter (left margin), else null. */
+    private fun gutterLineAt(x: Float, y: Float): Int? {
+        val state = editorState ?: return null
+        val snapshot = state.snapshot.value
+        val config = state.renderConfig.value
+        val gutterWidth = computeGutterWidth(snapshot, config)
+        if (x >= gutterWidth) return null
+        val lineHeightPx = (config.fontSizeSp * density * config.lineHeightMultiplier).toInt().coerceAtLeast(1)
+        val lineIndex = state.viewport.value.visibleLineTop +
+            ((y - state.viewport.value.scrollY % lineHeightPx) / lineHeightPx).toInt()
+        if (lineIndex < 0 || lineIndex >= snapshot.lineCount) return null
+        return lineIndex
     }
 
     /** Buffer offset at a pixel position, or null if outside the text. */
