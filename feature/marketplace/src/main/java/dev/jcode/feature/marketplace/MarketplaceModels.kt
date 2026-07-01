@@ -75,8 +75,10 @@ data class MarketplaceEntry(
     /** Globally-unique reverse-DNS install id (the .jehm `uniqueName`). */
     val id: String,
     val name: String,
-    /** Publisher / author / channel that published this extension. */
+    /** Publisher / author / channel that published this extension (back-compat single author). */
     val author: String? = null,
+    /** All authors, ordered; the first is the primary author, the rest are co-authors. Empty = fall back to [author]. */
+    val authors: List<String> = emptyList(),
     val type: ExtensionType,
     val category: String?,
     val subcategory: String?,
@@ -171,8 +173,10 @@ data class LanguagePack(
 data class InstalledExtension(
     val id: String,
     val name: String,
-    /** Publisher / author / channel that published this extension. */
+    /** Publisher / author / channel that published this extension (back-compat single author). */
     val author: String? = null,
+    /** All authors, ordered; the first is the primary author, the rest are co-authors. Empty = fall back to [author]. */
+    val authors: List<String> = emptyList(),
     val type: ExtensionType,
     val version: String?,
     val description: String,
@@ -198,3 +202,15 @@ val InstalledExtension.hasWebUi: Boolean get() = webUiFile != null
 /** The extension's web-frontend HTML entry file inside [dir], or null if it doesn't ship one. */
 val InstalledExtension.webUiFile: File?
     get() = webUiEntry?.let { File(dir, it) }?.takeIf { it.isFile }
+
+/** The primary author: the first of [authors], or the legacy single [author], or "unknown". */
+val MarketplaceEntry.primaryAuthor: String get() = authors.firstOrNull() ?: author ?: "unknown"
+
+/** Co-authors beyond the primary one (empty for single-author / legacy extensions). */
+val MarketplaceEntry.otherAuthors: List<String> get() = authors.drop(1)
+
+/** The primary author: the first of [authors], or the legacy single [author], or "unknown". */
+val InstalledExtension.primaryAuthor: String get() = authors.firstOrNull() ?: author ?: "unknown"
+
+/** Co-authors beyond the primary one (empty for single-author / legacy extensions). */
+val InstalledExtension.otherAuthors: List<String> get() = authors.drop(1)

@@ -45,6 +45,7 @@ class ExtensionInstaller internal constructor(context: Context) {
                     id = id,
                     name = entry.str("name") ?: id,
                     author = entry.str("publisher") ?: entry.str("author"),
+                    authors = entry.strList("authors"),
                     type = ExtensionType.from(entry.str("type")),
                     category = entry.str("category"),
                     subcategory = entry.str("subcategory"),
@@ -211,6 +212,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             id = id,
             name = map.str("name") ?: id,
             author = map.str("publisher") ?: map.str("author"),
+            authors = map.strList("authors"),
             type = type,
             version = map.str("version"),
             description = map.str("description") ?: "",
@@ -409,3 +411,7 @@ internal fun Map<String, Any?>.str(key: String): String? = when (val value = thi
 }
 
 internal fun Map<String, Any?>.listOfAny(key: String): List<Any?> = this[key] as? List<Any?> ?: emptyList()
+
+/** A YAML list coerced to non-blank strings (e.g. `authors: [jcode, alice]`). Empty when absent. */
+internal fun Map<String, Any?>.strList(key: String): List<String> =
+    listOfAny(key).mapNotNull { it?.toString()?.trim()?.takeIf(String::isNotBlank) }

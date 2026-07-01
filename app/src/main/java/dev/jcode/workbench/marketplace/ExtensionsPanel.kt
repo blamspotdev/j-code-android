@@ -42,6 +42,8 @@ import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.hasWebUi
 import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.isUpdateAvailable
+import dev.jcode.feature.marketplace.otherAuthors
+import dev.jcode.feature.marketplace.primaryAuthor
 import java.io.File
 
 @Composable
@@ -101,7 +103,7 @@ internal fun ExtensionsPanel(
                         if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                         ManagerListRow(
                             name = row.name,
-                            description = listOfNotNull(row.author?.let { "by $it" }, row.description).joinToString(" · "),
+                            description = listOfNotNull(authorLabel(row.primaryAuthor, row.otherAuthors), row.description).joinToString(" · "),
                             status = row.status,
                             onClick = { onOpenDetail(row.id) },
                             leading = {
@@ -182,8 +184,9 @@ internal fun ExtensionDetailPage(
     val id = entry?.id ?: installed?.id ?: return
     val status = marketStatus(entry, installed)
     val subtitle = buildString {
-        val author = entry?.author ?: installed?.author
-        author?.let { append("by $it") }
+        val primary = entry?.primaryAuthor ?: installed?.primaryAuthor
+        val others = entry?.otherAuthors ?: installed?.otherAuthors ?: emptyList()
+        primary?.let { append(authorDetail(it, others)) }
         val type = entry?.type ?: installed?.type
         type?.let { if (isNotEmpty()) append(" · "); append(it.name.lowercase()) }
         entry?.category?.let { append(" · $it") }
@@ -285,7 +288,7 @@ internal fun ExtensionPermissionsPage(
                 ManagerSectionCard(
                     title = ext.name,
                     description = listOfNotNull(
-                        ext.author?.let { "by $it" },
+                        authorLabel(ext.primaryAuthor, ext.otherAuthors),
                         ext.type.name.lowercase(),
                     ).joinToString(" · "),
                 ) {
@@ -333,6 +336,17 @@ private val ExtensionActivation.blurb: String
         ExtensionActivation.Manual -> "Disabled — this extension's features stay off until you switch modes."
     }
 
+/** Compact author line for list rows: "by X", "by X, Y", or "by X +N" when the co-author list is long. */
+private fun authorLabel(primary: String, others: List<String>): String {
+    if (others.isEmpty()) return "by $primary"
+    val inline = (listOf(primary) + others).joinToString(", ")
+    return if (others.size <= 2 && inline.length <= 28) "by $inline" else "by $primary +${others.size}"
+}
+
+/** Full author line for the detail page: "by X" plus a clearly-labelled co-author list. */
+private fun authorDetail(primary: String, others: List<String>): String =
+    if (others.isEmpty()) "by $primary" else "by $primary · with ${others.joinToString(", ")}"
+
 private fun entrySubtitle(entry: MarketplaceEntry): String = buildString {
     append(entry.type.name.lowercase())
     entry.category?.let { append(" · $it") }
@@ -349,7 +363,8 @@ private fun marketStatus(entry: MarketplaceEntry?, installed: InstalledExtension
 private data class ExtensionRow(
     val id: String,
     val name: String,
-    val author: String?,
+    val primaryAuthor: String,
+    val otherAuthors: List<String>,
     val description: String,
     val type: ExtensionType,
     val status: ManagerItemStatus,
@@ -371,7 +386,8 @@ private fun buildExtensionRows(
         ExtensionRow(
             id = e.id,
             name = e.name,
-            author = e.author,
+            primaryAuthor = e.primaryAuthor,
+            otherAuthors = e.otherAuthors,
             description = e.description ?: entrySubtitle(e),
             type = e.type,
             status = marketStatus(e, inst),
@@ -384,7 +400,8 @@ private fun buildExtensionRows(
         ExtensionRow(
             id = ext.id,
             name = ext.name,
-            author = ext.author,
+            primaryAuthor = ext.primaryAuthor,
+            otherAuthors = ext.otherAuthors,
             description = ext.description.ifBlank { ext.type.name.lowercase() },
             type = ext.type,
             status = ManagerItemStatus.Installed,
@@ -397,7 +414,8 @@ private fun buildExtensionRows(
         .filter { r ->
             query.isBlank() ||
                 r.name.contains(query, ignoreCase = true) ||
-                (r.author?.contains(query, ignoreCase = true) == true) ||
+                r.primaryAuthor.contains(query, ignoreCase = true) ||
+                r.otherAuthors.any { it.contains(query, ignoreCase = true) } ||
                 r.description.contains(query, ignoreCase = true)
         }
         .sortedWith(compareByDescending<ExtensionRow> { it.installed }.thenBy { it.name.lowercase() })
