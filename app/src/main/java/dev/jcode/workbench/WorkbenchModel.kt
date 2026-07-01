@@ -1,6 +1,7 @@
 package dev.jcode.workbench
 
 import androidx.compose.runtime.compositionLocalOf
+import dev.jcode.core.distro.DebugEngineCatalogState
 import dev.jcode.design.JCodeIcon
 import dev.jcode.feature.marketplace.MarketplaceEntry
 
@@ -13,6 +14,12 @@ internal data class TerminalTapConfig(
 )
 
 internal val LocalTerminalTapConfig = compositionLocalOf { TerminalTapConfig() }
+
+/**
+ * Debug-engine catalog state, provided to the giant [dev.jcode.JCodeShell] composable via a
+ * CompositionLocal instead of one more param (the composable is at the ART verifier's register limit).
+ */
+internal val LocalDebugCatalogState = compositionLocalOf { DebugEngineCatalogState() }
 
 /**
  * The SDK / LSP / Extension manager callbacks, bundled so the giant [dev.jcode.JCodeShell] composable
@@ -29,6 +36,11 @@ internal data class WorkbenchManagerActions(
     val onVerifyLspCatalogEntry: (String) -> Unit,
     val onUninstallLspCatalogEntry: (String) -> Unit,
     val onOpenLspDetail: (String) -> Unit,
+    val onCheckDebugStatuses: () -> Unit,
+    val onInstallDebugEngine: (String) -> Unit,
+    val onVerifyDebugEngine: (String) -> Unit,
+    val onUninstallDebugEngine: (String) -> Unit,
+    val onOpenDebugEngineDetail: (String) -> Unit,
     val onRefreshMarketplace: () -> Unit,
     val onInstallExtension: (MarketplaceEntry) -> Unit,
     val onUninstallExtension: (String) -> Unit,
@@ -54,6 +66,7 @@ internal enum class WorkbenchTool(
     Extensions("Extensions", JCodeIcon.Extensions, "Ext"),
     SdkManager("SDK Manager", JCodeIcon.Sdk, "SDK"),
     LspManager("LSP Manager", JCodeIcon.Lsp, "LSP"),
+    DebugEngineManager("Debug Engines", JCodeIcon.Debug, "DBG"),
     DbManager("DB Managers", JCodeIcon.Database, "DB"),
     Settings("Settings", JCodeIcon.Settings, "Settings"),
 }

@@ -199,6 +199,7 @@ import dev.jcode.feature.marketplace.ScaffoldState
 import dev.jcode.feature.onboarding.EnvironmentManagerActions
 import dev.jcode.feature.onboarding.LocalEnvironmentManager
 import dev.jcode.feature.onboarding.OnboardingFeature
+import dev.jcode.feature.debug.DebugEngineManagerFeature
 import dev.jcode.feature.lspmanager.LspManagerFeature
 import dev.jcode.feature.sdkmanager.SdkManagerFeature
 import dev.jcode.feature.settings.SettingsFeature
@@ -212,6 +213,7 @@ import dev.jcode.workbench.marketplace.ExtensionDetailPage
 import dev.jcode.workbench.marketplace.ExtensionPermissionsPage
 import dev.jcode.workbench.marketplace.LocalExtensionActivation
 import dev.jcode.workbench.marketplace.ExtensionsPanel
+import dev.jcode.workbench.LocalDebugCatalogState
 import dev.jcode.workbench.LocalTerminalTapConfig
 import dev.jcode.workbench.RightPanelTab
 import dev.jcode.workbench.WorkbenchManagerActions
@@ -260,6 +262,7 @@ fun JCodeApp(
     val installedEnvironments by viewModel.environments.collectAsStateWithLifecycle()
     val sdkCatalogState by viewModel.sdkCatalogState.collectAsStateWithLifecycle()
     val lspCatalogState by viewModel.lspCatalogState.collectAsStateWithLifecycle()
+    val debugCatalogState by viewModel.debugCatalogState.collectAsStateWithLifecycle()
     val runConfigVersion by viewModel.runConfigVersion.collectAsStateWithLifecycle()
     val autoSetupProgress by viewModel.autoSetupProgress.collectAsStateWithLifecycle(initialValue = DistroWizardProgress.Idle)
     val installedExtensions by viewModel.installedExtensions.collectAsStateWithLifecycle()
@@ -399,6 +402,7 @@ fun JCodeApp(
         LocalCompletionSource provides completionSource,
         LocalEnvironmentManager provides environmentManagerActions,
         LocalEditorEmptyActions provides editorEmptyActions,
+        LocalDebugCatalogState provides debugCatalogState,
     ) {
     JCodeShell(
         modifier = modifier,
@@ -467,6 +471,11 @@ fun JCodeApp(
             onVerifyLspCatalogEntry = viewModel::verifyLspCatalogEntry,
             onUninstallLspCatalogEntry = viewModel::uninstallLspCatalogEntry,
             onOpenLspDetail = viewModel::openLspDetailPage,
+            onCheckDebugStatuses = viewModel::checkDebugEngineStatuses,
+            onInstallDebugEngine = viewModel::installDebugEngine,
+            onVerifyDebugEngine = viewModel::verifyDebugEngine,
+            onUninstallDebugEngine = viewModel::uninstallDebugEngine,
+            onOpenDebugEngineDetail = viewModel::openDebugEngineDetailPage,
             onRefreshMarketplace = viewModel::refreshMarketplace,
             onInstallExtension = viewModel::installExtension,
             onUninstallExtension = viewModel::uninstallExtension,
@@ -639,6 +648,7 @@ private fun JCodeShell(
         when (selectedTool) {
             WorkbenchTool.SdkManager -> managerActions.onCheckSdkStatuses()
             WorkbenchTool.LspManager -> managerActions.onCheckLspStatuses()
+            WorkbenchTool.DebugEngineManager -> managerActions.onCheckDebugStatuses()
             else -> Unit
         }
     }
@@ -1276,6 +1286,22 @@ private fun JCodeShell(
                                         )
                                     }
                                 }
+                                EditorPageKind.DebugEngineDetail -> {
+                                    val id = tab.id.substringAfter(MainViewModel.DEBUG_ENGINE_DETAIL_PREFIX)
+                                    val debugState = LocalDebugCatalogState.current
+                                    debugState.entries.firstOrNull { it.id == id }?.let { entry ->
+                                        DebugEngineManagerFeature.DetailPage(
+                                            entry = entry,
+                                            state = debugState,
+                                            environmentState = environmentState,
+                                            onInstall = managerActions.onInstallDebugEngine,
+                                            onUpdate = managerActions.onInstallDebugEngine,
+                                            onUninstall = managerActions.onUninstallDebugEngine,
+                                            onVerify = managerActions.onVerifyDebugEngine,
+                                            modifier = Modifier.fillMaxSize(),
+                                        )
+                                    }
+                                }
                                 EditorPageKind.RunConfig -> {
                                     val id = tab.id.substringAfter(MainViewModel.RUN_CONFIG_PREFIX).toLongOrNull()
                                     val project = (workspace?.projects.orEmpty() + listOfNotNull(selectedProject))
@@ -1764,6 +1790,14 @@ private fun WorkspacePanel(
                         environmentState = environmentState,
                         onRefresh = managerActions.onCheckLspStatuses,
                         onOpenDetail = managerActions.onOpenLspDetail,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+
+                    WorkbenchTool.DebugEngineManager -> DebugEngineManagerFeature.Content(
+                        state = LocalDebugCatalogState.current,
+                        environmentState = environmentState,
+                        onRefresh = managerActions.onCheckDebugStatuses,
+                        onOpenDetail = managerActions.onOpenDebugEngineDetail,
                         modifier = Modifier.fillMaxSize(),
                     )
 

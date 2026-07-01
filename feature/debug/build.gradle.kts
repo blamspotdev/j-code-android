@@ -36,4 +36,5 @@ dependencies {
     ksp(libs.hilt.compiler)
     implementation(project(":core:debug"))
     implementation(project(":core:design"))
+    implementation(project(":core:distro"))
 }

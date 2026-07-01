@@ -23,6 +23,7 @@ import dev.jcode.core.buffer.EditTx
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.distro.DistroProfile
 import dev.jcode.core.distro.DistroWizardProgress
+import dev.jcode.core.distro.DebugEngineAction
 import dev.jcode.core.distro.LspCatalogAction
 import dev.jcode.core.distro.SdkCatalogAction
 import dev.jcode.core.distro.DistroService
@@ -407,6 +408,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val environments = distroService.environments
     val sdkCatalogState = distroService.sdkCatalogState
     val lspCatalogState = distroService.lspCatalogState
+    val debugCatalogState = distroService.debugCatalogState
     val autoSetupProgress = distroService.autoSetupProgress
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
@@ -874,6 +876,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runLspCatalogAction(entryId, LspCatalogAction.Uninstall)
     }
 
+    fun installDebugEngine(entryId: String) {
+        runDebugCatalogAction(entryId, DebugEngineAction.Install)
+    }
+
+    fun verifyDebugEngine(entryId: String) {
+        runDebugCatalogAction(entryId, DebugEngineAction.Verify)
+    }
+
+    fun uninstallDebugEngine(entryId: String) {
+        runDebugCatalogAction(entryId, DebugEngineAction.Uninstall)
+    }
+
     private var lastBootstrappedProjectId: Long? = null
 
     fun ensureProjectBootstrapTab() {
@@ -1022,6 +1036,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Full status re-check (installed + update-available) for the LSP catalog; runs async, no-op if already running. */
     fun checkLspStatuses() {
         viewModelScope.launch(Dispatchers.IO) { distroService.checkLspStatuses() }
+    }
+
+    fun checkDebugEngineStatuses() {
+        viewModelScope.launch(Dispatchers.IO) { distroService.checkDebugEngineStatuses() }
+    }
+
+    /** Open the detail page for a single debug engine. Reuses one debug-detail tab (replaces any other). */
+    fun openDebugEngineDetailPage(entryId: String) {
+        openDetailPage(DEBUG_ENGINE_DETAIL_PREFIX + entryId, EditorPageKind.DebugEngineDetail) {
+            distroService.debugCatalogState.value.entries.firstOrNull { it.id == entryId }?.name ?: entryId
+        }
     }
 
     /** Open the detail page for a single extension. Reuses one extension-detail tab (replaces any other). */
@@ -1569,6 +1594,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun runDebugCatalogAction(
+        entryId: String,
+        action: DebugEngineAction,
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = SessionRegistry.registerSession(
+                context = getApplication(),
+                kind = BackendSessionKind.JOB,
+                name = "debug:${action.name.lowercase()}:$entryId",
+            )
+            try {
+                distroService.runDebugEngineCatalogAction(entryId, action)
+            } finally {
+                session.close()
+            }
+        }
+    }
+
     private fun stepNeedsForegroundService(stepId: WizardStepId): Boolean {
         return stepId == WizardStepId.DistroInstalled ||
             stepId == WizardStepId.ToolchainBootstrapped
@@ -1580,6 +1623,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val ENVIRONMENT_TAB_ID = "jcode://environment"
         const val SDK_DETAIL_PREFIX = "jcode://sdk/"
         const val LSP_DETAIL_PREFIX = "jcode://lsp/"
+        const val DEBUG_ENGINE_DETAIL_PREFIX = "jcode://debug-engine/"
         const val EXT_DETAIL_PREFIX = "jcode://ext/"
         const val EXT_APP_PREFIX = "jcode://ext-app/"
         const val EXT_PERMISSIONS_TAB_ID = "jcode://ext-permissions"

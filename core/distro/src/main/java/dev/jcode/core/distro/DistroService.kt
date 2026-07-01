@@ -48,6 +48,7 @@ class DistroService(
     private val lock = Mutex()
     private val sdkCheckInProgress = AtomicBoolean(false)
     private val lspCheckInProgress = AtomicBoolean(false)
+    private val debugCheckInProgress = AtomicBoolean(false)
     private val activityLogLock = Any()
     private val dataStore = PreferenceDataStoreFactory.create {
         appContext.preferencesDataStoreFile("distro-environment.preferences_pb")
@@ -62,6 +63,9 @@ class DistroService(
     private val _lspCatalogState = MutableStateFlow(LspCatalogState())
     val lspCatalogState: StateFlow<LspCatalogState> = _lspCatalogState.asStateFlow()
 
+    private val _debugCatalogState = MutableStateFlow(DebugEngineCatalogState())
+    val debugCatalogState: StateFlow<DebugEngineCatalogState> = _debugCatalogState.asStateFlow()
+
     private val _autoSetupProgress = MutableSharedFlow<DistroWizardProgress>(extraBufferCapacity = 64)
     val autoSetupProgress: Flow<DistroWizardProgress> = _autoSetupProgress.asSharedFlow()
 
@@ -74,6 +78,7 @@ class DistroService(
             refreshEnvironment()
             refreshSdkCatalog()
             refreshLspCatalog()
+            refreshDebugEngineCatalog()
         }
     }
 
@@ -154,6 +159,7 @@ class DistroService(
         dataStore.edit { prefs ->
             prefs.remove(installedEntriesKey(environmentId))
             prefs.remove(installedLspEntriesKey(environmentId))
+            prefs.remove(installedDebugEntriesKey(environmentId))
         }
         if (_environmentState.value.runtime.selectedDistro.id == environmentId) {
             val available = _environmentState.value.availableDistros
@@ -492,6 +498,153 @@ class DistroService(
         } finally {
             _lspCatalogState.value = _lspCatalogState.value.copy(checking = false)
             lspCheckInProgress.set(false)
+        }
+    }
+
+    suspend fun refreshDebugEngineCatalog() {
+        lock.withLock {
+            val distroId = _environmentState.value.runtime.selectedDistro.id
+            _debugCatalogState.value = _debugCatalogState.value.copy(
+                entries = DebugEngineCatalog.BUILT_IN,
+                installedEntryIds = readInstalledDebugEntries(distroId),
+                runningEntryId = null,
+                runningAction = null,
+                selectedDistroId = distroId,
+                errorMessage = null,
+            )
+        }
+    }
+
+    suspend fun runDebugEngineCatalogAction(
+        entryId: String,
+        action: DebugEngineAction,
+    ) {
+        lock.withLock {
+            val entry = DebugEngineCatalog.findById(entryId)
+            if (entry == null) {
+                _debugCatalogState.value = _debugCatalogState.value.copy(
+                    errorMessage = "Unknown debug engine '$entryId'.",
+                )
+                return
+            }
+
+            if (_environmentState.value.distroInstalled != true || _environmentState.value.jcodeUserReady != true) {
+                _debugCatalogState.value = _debugCatalogState.value.copy(
+                    errorMessage = "Complete the environment setup before installing debug engines.",
+                )
+                return
+            }
+
+            val distroId = _environmentState.value.runtime.selectedDistro.id
+            val name = entry.name
+            _debugCatalogState.value = _debugCatalogState.value.copy(
+                runningEntryId = entry.id,
+                runningAction = action,
+                executionLabel = "${action.label} $name",
+                selectedDistroId = distroId,
+                errorMessage = null,
+                logLines = appendCatalogLogLines(
+                    existing = _debugCatalogState.value.logLines,
+                    lines = buildList {
+                        add("== ${action.label} $name (${_environmentState.value.runtime.selectedDistro.label}) ==")
+                        addAll(entry.commandFor(action).lineSequence().map { line -> "$ $line" })
+                    },
+                ),
+            )
+
+            val actionResult = when (action) {
+                DebugEngineAction.Install -> execInDistro(entry.installCommand, timeoutMs = 1_800_000L)
+                DebugEngineAction.Verify -> execInDistro(entry.verifyCommand, timeoutMs = 120_000L)
+                DebugEngineAction.Uninstall -> execInDistro(entry.uninstallCommand, timeoutMs = 900_000L)
+            }
+            val verifyResult = when (action) {
+                DebugEngineAction.Verify -> actionResult
+                DebugEngineAction.Install,
+                DebugEngineAction.Uninstall,
+                -> execInDistro(entry.verifyCommand, timeoutMs = 120_000L)
+            }
+
+            val installedNow = verifyResult.succeeded
+            val updatedInstalledEntries = readInstalledDebugEntries(distroId).toMutableSet().apply {
+                if (installedNow) add(entry.id) else remove(entry.id)
+            }.toSet()
+            persistInstalledDebugEntries(distroId, updatedInstalledEntries)
+
+            val errorMessage = when {
+                !actionResult.succeeded -> actionResult.internalError
+                    ?: actionResult.stderr.lineSequence().firstOrNull { it.isNotBlank() }
+                    ?: actionResult.stdout.lineSequence().firstOrNull { it.isNotBlank() }
+                    ?: "${action.label} failed."
+
+                action == DebugEngineAction.Install && !installedNow ->
+                    "Install finished, but verification did not detect $name."
+
+                action == DebugEngineAction.Uninstall && installedNow ->
+                    "Removal finished, but verification still detects $name."
+
+                else -> null
+            }
+
+            _debugCatalogState.value = _debugCatalogState.value.copy(
+                installedEntryIds = updatedInstalledEntries,
+                runningEntryId = null,
+                runningAction = null,
+                executionLabel = "${action.label} $name",
+                selectedDistroId = distroId,
+                errorMessage = errorMessage,
+                logLines = appendCatalogLogLines(
+                    existing = _debugCatalogState.value.logLines,
+                    lines = formatDebugActionLogs(
+                        name = name,
+                        action = action,
+                        actionResult = actionResult,
+                        verifyResult = verifyResult,
+                        installedNow = installedNow,
+                    ),
+                ),
+            )
+        }
+    }
+
+    /** Re-check installed + update-available status for every debug engine. Full check, run async; no-op if already running. */
+    suspend fun checkDebugEngineStatuses() {
+        val ready = _environmentState.value.distroInstalled == true && _environmentState.value.jcodeUserReady == true
+        if (!ready) return
+        if (!debugCheckInProgress.compareAndSet(false, true)) return
+        try {
+            lock.withLock {
+                val distroId = _environmentState.value.runtime.selectedDistro.id
+                val entries = DebugEngineCatalog.BUILT_IN
+                _debugCatalogState.value = _debugCatalogState.value.copy(
+                    entries = entries, checking = true, selectedDistroId = distroId, errorMessage = null,
+                )
+                val installed = linkedSetOf<String>()
+                val updatable = linkedSetOf<String>()
+                var aptUpdated = false
+                for (entry in entries) {
+                    if (execInDistro(entry.verifyCommand, timeoutMs = 120_000L).succeeded) {
+                        installed.add(entry.id)
+                        if (entry.updateCheckCommand.isNotBlank()) {
+                            if (!aptUpdated && entry.updateCheckCommand.contains("apt list")) {
+                                execInDistro("sudo apt-get update", timeoutMs = 300_000L)
+                                aptUpdated = true
+                            }
+                            if (execInDistro(entry.updateCheckCommand, timeoutMs = 120_000L).succeeded) updatable.add(entry.id)
+                        }
+                    }
+                    _debugCatalogState.value = _debugCatalogState.value.copy(
+                        installedEntryIds = installed.toSet(), updatableEntryIds = updatable.toSet(),
+                    )
+                }
+                persistInstalledDebugEntries(distroId, installed.toSet())
+                _debugCatalogState.value = _debugCatalogState.value.copy(
+                    installedEntryIds = installed.toSet(), updatableEntryIds = updatable.toSet(),
+                    checking = false, selectedDistroId = distroId,
+                )
+            }
+        } finally {
+            _debugCatalogState.value = _debugCatalogState.value.copy(checking = false)
+            debugCheckInProgress.set(false)
         }
     }
 
@@ -1338,6 +1491,54 @@ class DistroService(
 
     private fun installedLspEntriesKey(distroId: String) =
         stringSetPreferencesKey("lsp_catalog_installed.$distroId")
+
+    private suspend fun readInstalledDebugEntries(distroId: String): Set<String> {
+        return dataStore.data.first()[installedDebugEntriesKey(distroId)].orEmpty()
+    }
+
+    private suspend fun persistInstalledDebugEntries(distroId: String, entryIds: Set<String>) {
+        dataStore.edit { prefs -> prefs[installedDebugEntriesKey(distroId)] = entryIds }
+    }
+
+    private fun installedDebugEntriesKey(distroId: String) =
+        stringSetPreferencesKey("debug_catalog_installed.$distroId")
+
+    private fun formatDebugActionLogs(
+        name: String,
+        action: DebugEngineAction,
+        actionResult: ExecResult,
+        verifyResult: ExecResult,
+        installedNow: Boolean,
+    ): List<String> {
+        return buildList {
+            add("[command] ${action.label} $name")
+            addAll(actionResult.toLogBlock())
+            if (action != DebugEngineAction.Verify) {
+                add("[verify] $name")
+                addAll(verifyResult.toLogBlock())
+            }
+            add(
+                when (action) {
+                    DebugEngineAction.Install ->
+                        if (installedNow) "[result] Installed." else "[result] Install completed but verification failed."
+
+                    DebugEngineAction.Verify ->
+                        if (installedNow) "[result] Installed." else "[result] Not installed."
+
+                    DebugEngineAction.Uninstall ->
+                        if (!installedNow) "[result] Removed." else "[result] Still detected after removal."
+                },
+            )
+        }
+    }
+
+    private fun DebugEngineEntry.commandFor(action: DebugEngineAction): String {
+        return when (action) {
+            DebugEngineAction.Install -> installCommand
+            DebugEngineAction.Verify -> verifyCommand
+            DebugEngineAction.Uninstall -> uninstallCommand
+        }
+    }
 
     private data class PrimaryBind(
         val host: String,
