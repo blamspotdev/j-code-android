@@ -505,6 +505,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val name: String,
         val isWorkspace: Boolean,
         val templateId: String?,
+        /** Values the user picked for the template's declared inputs, keyed by input id. */
+        val inputs: Map<String, String> = emptyMap(),
     )
 
     fun requestNew() {
@@ -556,6 +558,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         template = template,
                         projectName = project.name,
                         projectDir = project.distroBindTarget,
+                        inputs = request.inputs,
                     ),
                 )
                 emitMessage(

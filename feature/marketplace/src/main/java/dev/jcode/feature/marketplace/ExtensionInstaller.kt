@@ -254,11 +254,23 @@ class ExtensionInstaller internal constructor(context: Context) {
                 workdir = step.str("workdir"),
             )
         }
+        val inputs = map.listOfAny("inputs").mapNotNull { raw ->
+            val input = (raw as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
+            val inputId = input.str("id")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+            TemplateInput(
+                id = inputId,
+                label = input.str("label") ?: inputId,
+                type = input.str("type") ?: "select",
+                options = input.listOfAny("options").mapNotNull { it?.toString() },
+                default = input.str("default"),
+            )
+        }
         return ProjectTemplate(
             id = map.str("id") ?: id,
             name = map.str("name") ?: id,
             description = map.str("description") ?: "",
             requires = map.listOfAny("requires").mapNotNull { it?.toString()?.takeIf(String::isNotBlank) },
+            inputs = inputs,
             recipe = recipe,
         )
     }
