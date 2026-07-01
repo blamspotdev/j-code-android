@@ -42,8 +42,8 @@ object SdkManagerFeature {
         var searchActive by remember { mutableStateOf(false) }
 
         // One flat list, installed/updatable first, then by name. Category becomes the row subtitle.
-        // Entries that don't support the active distro/arch are hidden (e.g. the x86_64-only SQL Server
-        // engine never appears on an ARM64 environment).
+        // Entries that don't support the active distro/arch are hidden (an amd64-only entry never
+        // appears on an ARM64 environment, and vice versa).
         val selectedDistro = environmentState.runtime.selectedDistro
         val rows = remember(state.entries, state.installedEntryIds, state.updatableEntryIds, query, selectedDistro) {
             state.entries

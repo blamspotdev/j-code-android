@@ -143,7 +143,7 @@ internal fun DbManagerPanel(
         ) {
             if (dbExtensions.isEmpty()) {
                 Text(
-                    text = "No database managers installed. Install one (e.g. SQL Server) from Extensions.",
+                    text = "No database managers installed. Install one (e.g. SQL Client) from Extensions.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(12.dp),
