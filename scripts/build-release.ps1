@@ -124,6 +124,9 @@ if (-not (Test-Path "$SdkRoot\build-tools") -or -not (Get-ChildItem "$SdkRoot\bu
 
 $CargoTasks = @()
 $rustReady = $true
+if (-not (Have cargo) -and (Test-Path "$env:USERPROFILE\.cargo\bin\cargo.exe")) {
+    $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+}
 if (-not (Have cargo)) {
     $rustReady = $false
     Warn 'Rust (cargo) not found - the ripgrep/wasmtime native libs will be built as stubs.'

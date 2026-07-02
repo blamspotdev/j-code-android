@@ -133,6 +133,10 @@ fi
 CARGO_TASKS=""
 rust_ready=1
 if ! have cargo; then
+    # shellcheck disable=SC1091
+    [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+fi
+if ! have cargo; then
     rust_ready=0
     warn "Rust (cargo) not found — the ripgrep/wasmtime native libs will be built as stubs."
     say  "  install with: $RUST_HINT"
