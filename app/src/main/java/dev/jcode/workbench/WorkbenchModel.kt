@@ -24,6 +24,15 @@ internal val LocalTerminalTapConfig = compositionLocalOf { TerminalTapConfig() }
  */
 internal val LocalDebugCatalogState = compositionLocalOf { DebugEngineCatalogState() }
 
+/** Per-extension install phase labels ("Installing…", "Installing required tools…", "Verifying…"),
+ *  keyed by extension id. A CompositionLocal so the giant [dev.jcode.JCodeShell] composable stays
+ *  under the ART register limit. */
+internal val LocalExtensionInstallPhases = compositionLocalOf<Map<String, String>> { emptyMap() }
+
+/** Session id of the background "Setup" terminal (toolchain installs / project scaffolds), or null
+ *  while none has been started. Same register-limit rationale as above. */
+internal val LocalSetupTerminalSessionId = compositionLocalOf<String?> { null }
+
 /** Editor-facing debug state (breakpoints + current stopped location + toggle), provided via a
  *  CompositionLocal so the giant [dev.jcode.JCodeShell] composable stays under the register limit. */
 internal data class DebugEditorState(

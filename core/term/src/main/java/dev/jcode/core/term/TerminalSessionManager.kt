@@ -91,6 +91,11 @@ class TerminalSessionManager(
     @Volatile
     var onOutput: ((String, ByteArray, Int) -> Unit)? = null
 
+    /** Invoked (off the reader thread) with (sessionId, payload) when a guest task reports completion
+     *  via OSC 7713. The payload is `<token>;<exitCode>` — see the Setup-terminal task runner. */
+    @Volatile
+    var onTaskComplete: ((String, String) -> Unit)? = null
+
     @Volatile
     var activeSessionId: String? = null
         private set
@@ -224,6 +229,7 @@ class TerminalSessionManager(
                         session.foreground = title.takeUnless { it.isEmpty() || it == "terminal" }
                         onTitleChange?.invoke(session.id, title)
                     }
+                    7713 -> onTaskComplete?.invoke(session.id, payload.trim())
                 }
             }
             while (isActive) {

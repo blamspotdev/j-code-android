@@ -249,9 +249,9 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                SdkCatalogAction.Install -> execCatalogScript(entry.installScript, timeoutMs = 1_800_000L)
+                SdkCatalogAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installScript, timeoutMs = 1_800_000L)
                 SdkCatalogAction.Verify -> execCatalogScript(entry.verifyScript, timeoutMs = 120_000L)
-                SdkCatalogAction.Uninstall -> execCatalogScript(entry.uninstallScript, timeoutMs = 900_000L)
+                SdkCatalogAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", entry.uninstallScript, timeoutMs = 900_000L)
             }
             val verifyResult = when (action) {
                 SdkCatalogAction.Verify -> actionResult
@@ -358,9 +358,9 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                LspCatalogAction.Install -> execCatalogScript(entry.installCommand, timeoutMs = 1_800_000L)
+                LspCatalogAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installCommand, timeoutMs = 1_800_000L)
                 LspCatalogAction.Verify -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
-                LspCatalogAction.Uninstall -> execCatalogScript(entry.uninstallCommand, timeoutMs = 900_000L)
+                LspCatalogAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", entry.uninstallCommand, timeoutMs = 900_000L)
             }
             val verifyResult = when (action) {
                 LspCatalogAction.Verify -> actionResult
@@ -554,9 +554,9 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                DebugEngineAction.Install -> execCatalogScript(entry.installCommand, timeoutMs = 1_800_000L)
+                DebugEngineAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installCommand, timeoutMs = 1_800_000L)
                 DebugEngineAction.Verify -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
-                DebugEngineAction.Uninstall -> execCatalogScript(entry.uninstallCommand, timeoutMs = 900_000L)
+                DebugEngineAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", entry.uninstallCommand, timeoutMs = 900_000L)
             }
             val verifyResult = when (action) {
                 DebugEngineAction.Verify -> actionResult
@@ -1242,6 +1242,28 @@ class DistroService(
             user = "root",
             env = mapOf("HOME" to "/home/${runtime.user}", "USER" to runtime.user),
         )
+    }
+
+    /**
+     * App-provided runner that executes a catalog install/uninstall inside the shared Setup terminal
+     * (visible in the right drawer) instead of a silent in-process exec. Returns null to decline
+     * (e.g. no session slot free), in which case the action falls back to [execCatalogScript].
+     * Scripts run with the same semantics either way: root, with HOME/USER pointing at the jcode user.
+     */
+    @Volatile
+    var interactiveCatalogRunner: (suspend (label: String, script: String, timeoutMs: Long) -> ExecResult?)? = null
+
+    /** Long-running catalog actions go through the Setup terminal when wired; verify stays quiet so
+     *  its exit code and output remain capturable. */
+    private suspend fun execCatalogAction(label: String, script: String, timeoutMs: Long): ExecResult {
+        val runner = interactiveCatalogRunner
+        if (runner != null) {
+            val runtime = _environmentState.value.runtime
+            val ensure = ensureDistroUser(runtime.selectedDistro.id, runtime.user)
+            if (!ensure.succeeded) return ensure
+            runner(label, script, timeoutMs)?.let { return it }
+        }
+        return execCatalogScript(script, timeoutMs)
     }
 
     /**
