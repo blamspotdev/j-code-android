@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.IntegrationInstructions
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.ManageSearch
+import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.NoteAdd
@@ -66,7 +67,7 @@ enum class JCodeIcon {
     Sdk, Lsp, Scm, Settings, Search, Extensions, Destinations, Code, Database,
     Add, Close, Refresh, Paste, Collapse, MoreVert, Save, Undo, Redo, Discard,
     Continue, Rerun, StepInto, StepOver, StepOut,
-    Output, Logs, Problems, Radar, Debug,
+    Output, Logs, Problems, Radar, Debug, Tasks,
     DropDown, ChevronDown, ChevronRight, ArrowUp, MenuToggle, Help,
     Copy, Cut, Delete, Open, Rename, SelectAll, Clear, Definition, References, Format,
 }
@@ -132,6 +133,7 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.Logs to Icons.AutoMirrored.Rounded.Article,
         JCodeIcon.Problems to Icons.Rounded.SyncProblem,
         JCodeIcon.Radar to Icons.Rounded.Radar,
+        JCodeIcon.Tasks to Icons.Rounded.Memory,
         JCodeIcon.DropDown to Icons.Rounded.ArrowDropDown,
         JCodeIcon.ChevronDown to Icons.Rounded.KeyboardArrowDown,
         JCodeIcon.ChevronRight to Icons.AutoMirrored.Rounded.KeyboardArrowRight,

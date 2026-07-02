@@ -1594,6 +1594,11 @@ private fun JCodeShell(
                         onAddTerminalSession = ::createTerminalSession,
                         onRemoveTerminalSession = ::closeTerminalSession,
                         onHide = { rightSidebarVisible = false },
+                        runningProjectName = runningProjectId?.let { id ->
+                            workspace?.projects?.firstOrNull { it.id == id }?.name ?: selectedProject?.name
+                        },
+                        runInProgress = runInProgress,
+                        onStopRun = ::handleStopRun,
                     )
                 }
             }
@@ -1645,6 +1650,11 @@ private fun JCodeShell(
                         onAddTerminalSession = ::createTerminalSession,
                         onRemoveTerminalSession = ::closeTerminalSession,
                         onHide = { rightSidebarVisible = false },
+                        runningProjectName = runningProjectId?.let { id ->
+                            workspace?.projects?.firstOrNull { it.id == id }?.name ?: selectedProject?.name
+                        },
+                        runInProgress = runInProgress,
+                        onStopRun = ::handleStopRun,
                     )
                 }
             }
@@ -2835,6 +2845,9 @@ private fun WorkbenchRightSidebar(
     onAddTerminalSession: () -> Unit,
     onRemoveTerminalSession: (String) -> Unit,
     onHide: () -> Unit,
+    runningProjectName: String?,
+    runInProgress: Boolean,
+    onStopRun: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -2908,6 +2921,9 @@ private fun WorkbenchRightSidebar(
                 onSelectTerminalSession = onSelectTerminalSession,
                 onAddTerminalSession = onAddTerminalSession,
                 onRemoveTerminalSession = onRemoveTerminalSession,
+                runningProjectName = runningProjectName,
+                runInProgress = runInProgress,
+                onStopRun = onStopRun,
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -2928,6 +2944,9 @@ private fun WorkbenchRightSidebarBody(
     onSelectTerminalSession: (String) -> Unit,
     onAddTerminalSession: () -> Unit,
     onRemoveTerminalSession: (String) -> Unit,
+    runningProjectName: String?,
+    runInProgress: Boolean,
+    onStopRun: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when (tab) {
@@ -2957,6 +2976,18 @@ private fun WorkbenchRightSidebarBody(
         }
         RightPanelTab.DebugConsole -> {
             DebugConsoleSidebarContent(modifier = modifier)
+        }
+        RightPanelTab.Tasks -> {
+            TaskManagerSidebarContent(
+                terminalSessionIds = terminalSessionIds,
+                terminalSessionFor = terminalSessionFor,
+                terminalTitleFor = terminalTitleFor,
+                onCloseTerminal = onRemoveTerminalSession,
+                runningProjectName = runningProjectName,
+                runInProgress = runInProgress,
+                onStopRun = onStopRun,
+                modifier = modifier,
+            )
         }
     }
 }

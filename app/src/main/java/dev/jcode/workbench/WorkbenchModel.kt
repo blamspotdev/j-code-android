@@ -128,4 +128,5 @@ internal enum class RightPanelTab(
     Output("Output", JCodeIcon.Logs, enabled = true),
     Problems("Issues", JCodeIcon.Problems, enabled = true),
     DebugConsole("Debug", JCodeIcon.Debug, enabled = true),
+    Tasks("Tasks", JCodeIcon.Tasks, enabled = true),
 }
