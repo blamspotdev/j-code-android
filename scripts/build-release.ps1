@@ -168,7 +168,13 @@ $Version = if (Test-Path 'VERSION.txt') { (Get-Content 'VERSION.txt' -Raw).Trim(
 $Code = (git rev-list --count HEAD 2>$null); if (-not $Code) { $Code = 0 }
 Say "Building JCode v$Version ($Code) - this compiles native code and can take a while..."
 
-& .\gradlew.bat @CargoTasks ':app:assembleRelease'
+# Cargo libs build in a separate invocation: assembleRelease's configuration then sees them
+# and drops the CMake stub for the Rust modules (see root build.gradle.kts).
+if ($CargoTasks.Count -gt 0) {
+    & .\gradlew.bat @CargoTasks
+    if ($LASTEXITCODE -ne 0) { Fail 'Cargo build failed.' }
+}
+& .\gradlew.bat ':app:assembleRelease'
 if ($LASTEXITCODE -ne 0) { Fail 'Gradle build failed.' }
 
 $Apk = Get-ChildItem 'app\build\outputs\apk\release\*.apk' -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -180,20 +186,64 @@ $Out = "builds\jcode-v$Version-$Code-release.apk"
 $LatestBuildTools = Get-ChildItem "$SdkRoot\build-tools" -Directory | Sort-Object { [version]($_.Name -replace '[^\d.].*$', '') } | Select-Object -Last 1
 $ApkSigner = Join-Path $LatestBuildTools.FullName 'apksigner.bat'
 
+function Get-Keytool {
+    $j = (Get-Command java -ErrorAction SilentlyContinue).Source
+    if (-not $j -and $env:JAVA_HOME) { $j = Join-Path $env:JAVA_HOME 'bin\java.exe' }
+    if (-not $j) { return $null }
+    $kt = Join-Path (Split-Path $j) 'keytool.exe'
+    if (Test-Path $kt) { return $kt } else { return $null }
+}
+
+function New-ReleaseKeystore($KsPath, $PassFile) {
+    $keytool = Get-Keytool
+    if (-not $keytool) { Warn 'keytool not found; cannot create a keystore.'; return $null }
+    New-Item -ItemType Directory -Force (Split-Path $KsPath) | Out-Null
+    $bytes = New-Object 'System.Byte[]' 18
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    $pw = ((([Convert]::ToBase64String($bytes)) -replace '[+/=]', '') + 'aA1').Substring(0, 24)
+    & $keytool -genkeypair -v -keystore $KsPath -alias jcode -keyalg RSA -keysize 4096 -validity 10000 `
+        -storepass $pw -keypass $pw -dname 'CN=J Code, O=JCode, C=US'
+    if ($LASTEXITCODE -ne 0) { Warn 'keytool failed to create the keystore.'; return $null }
+    Set-Content -Path $PassFile -Value $pw -NoNewline
+    Say  "Created release keystore: $KsPath"
+    Say  "  password saved to: $PassFile"
+    Warn 'KEEP this keystore + password - reuse it to sign every future release.'
+    return @{ Keystore = $KsPath; Pass = $pw }
+}
+
+# Resolve the signing keystore: explicit env wins; else the default JCode keystore; else create one.
+$KeystoreDefault = Join-Path $env:USERPROFILE '.jcode\jcode-release.jks'
+$KeystorePassFile = Join-Path $env:USERPROFILE '.jcode\jcode-release.password.txt'
+$Keystore = $env:JCODE_KEYSTORE
+$KeystorePass = $env:JCODE_KEYSTORE_PASS
+$KeyAlias = $env:JCODE_KEY_ALIAS
+$KeyPass = $env:JCODE_KEY_PASS
+if (-not $Keystore -and (Test-Path $KeystoreDefault)) {
+    $Keystore = $KeystoreDefault
+    if (-not $KeyAlias) { $KeyAlias = 'jcode' }
+    if (-not $KeystorePass -and (Test-Path $KeystorePassFile)) { $KeystorePass = (Get-Content $KeystorePassFile -Raw).Trim() }
+    if (-not $KeyPass) { $KeyPass = $KeystorePass }
+    Say "Using release keystore $Keystore"
+}
+if (-not $Keystore -and (Ask "No release keystore found. Create one now at $KeystoreDefault and sign with it?")) {
+    $created = New-ReleaseKeystore $KeystoreDefault $KeystorePassFile
+    if ($created) { $Keystore = $created.Keystore; $KeystorePass = $created.Pass; $KeyAlias = 'jcode'; $KeyPass = $created.Pass }
+}
+
 $signState = 'unsigned'
-if ($env:JCODE_KEYSTORE) {
-    if (-not (Test-Path $env:JCODE_KEYSTORE)) { Fail "JCODE_KEYSTORE is set but not a file: $env:JCODE_KEYSTORE" }
-    if (-not $env:JCODE_KEYSTORE_PASS) { Fail 'JCODE_KEYSTORE_PASS must be set alongside JCODE_KEYSTORE.' }
-    Say "Signing with keystore $env:JCODE_KEYSTORE"
-    $signArgs = @('sign', '--ks', $env:JCODE_KEYSTORE, '--ks-pass', "pass:$env:JCODE_KEYSTORE_PASS")
-    if ($env:JCODE_KEY_ALIAS) { $signArgs += @('--ks-key-alias', $env:JCODE_KEY_ALIAS) }
-    if ($env:JCODE_KEY_PASS)  { $signArgs += @('--key-pass', "pass:$env:JCODE_KEY_PASS") }
+if ($Keystore) {
+    if (-not (Test-Path $Keystore)) { Fail "JCODE_KEYSTORE is set but not a file: $Keystore" }
+    if (-not $KeystorePass) { Fail "No keystore password (set JCODE_KEYSTORE_PASS or provide $KeystorePassFile)." }
+    Say "Signing with keystore $Keystore"
+    $signArgs = @('sign', '--ks', $Keystore, '--ks-pass', "pass:$KeystorePass")
+    if ($KeyAlias) { $signArgs += @('--ks-key-alias', $KeyAlias) }
+    if ($KeyPass)  { $signArgs += @('--key-pass', "pass:$KeyPass") }
     $signArgs += @('--out', $Out, $Apk.FullName)
     & $ApkSigner @signArgs
     if ($LASTEXITCODE -ne 0) { Fail 'apksigner failed.' }
     $signState = 'release-signed'
 } elseif ((Test-Path "$env:USERPROFILE\.android\debug.keystore") -and
-          (Ask-Interactive 'No release keystore configured (set JCODE_KEYSTORE/JCODE_KEYSTORE_PASS). Sign with the Android debug keystore so the APK is installable?')) {
+          (Ask-Interactive 'No release keystore configured. Sign with the Android debug keystore so the APK is installable?')) {
     $Out = "builds\jcode-v$Version-$Code-release-debugsigned.apk"
     & $ApkSigner sign --ks "$env:USERPROFILE\.android\debug.keystore" --ks-pass pass:android --out $Out $Apk.FullName
     if ($LASTEXITCODE -ne 0) { Fail 'apksigner failed.' }

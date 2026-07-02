@@ -181,8 +181,13 @@ VERSION="$(tr -d '[:space:]' < VERSION.txt 2>/dev/null || echo 1.0.0)"
 CODE="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
 say "Building JCode v$VERSION ($CODE) — this compiles native code and can take a while..."
 
-# shellcheck disable=SC2086
-./gradlew $CARGO_TASKS :app:assembleRelease || die "Gradle build failed."
+# Cargo libs build in a separate invocation: assembleRelease's configuration then sees them
+# and drops the CMake stub for the Rust modules (see root build.gradle.kts).
+if [ -n "$CARGO_TASKS" ]; then
+    # shellcheck disable=SC2086
+    ./gradlew $CARGO_TASKS || die "Cargo build failed."
+fi
+./gradlew :app:assembleRelease || die "Gradle build failed."
 
 APK="$(ls app/build/outputs/apk/release/*.apk 2>/dev/null | head -1)"
 [ -n "$APK" ] || die "Build finished but no APK found in app/build/outputs/apk/release/"
@@ -193,17 +198,61 @@ OUT="builds/jcode-v$VERSION-$CODE-release.apk"
 latest_build_tools() { ls "$SDK_ROOT/build-tools" | sort -V | tail -1; }
 APKSIGNER="$SDK_ROOT/build-tools/$(latest_build_tools)/apksigner"
 
+# Locate keytool alongside the java we already resolved (for auto-creating a keystore).
+find_keytool() {
+    if have keytool; then command -v keytool; return; fi
+    local j; j="$(command -v java 2>/dev/null)"
+    [ -n "$j" ] && [ -x "$(dirname "$j")/keytool" ] && echo "$(dirname "$j")/keytool"
+}
+
+# Generate a fresh 4096-bit RSA release keystore at the default path (sets JCODE_KEYSTORE/_PASS).
+create_release_keystore() {
+    local keytool; keytool="$(find_keytool)"
+    [ -n "$keytool" ] || { warn "keytool not found; cannot create a keystore."; return 1; }
+    mkdir -p "$(dirname "$JCODE_KEYSTORE_DEFAULT")"
+    local pw; pw="$(head -c 18 /dev/urandom | base64 | tr -d '+/=' | cut -c1-21)aA1"
+    "$keytool" -genkeypair -v -keystore "$JCODE_KEYSTORE_DEFAULT" -alias jcode \
+        -keyalg RSA -keysize 4096 -validity 10000 \
+        -storepass "$pw" -keypass "$pw" -dname "CN=J Code, O=JCode, C=US" \
+        || { warn "keytool failed to create the keystore."; return 1; }
+    printf '%s' "$pw" > "$JCODE_KEYSTORE_PASS_FILE"
+    chmod 600 "$JCODE_KEYSTORE_PASS_FILE" 2>/dev/null || true
+    JCODE_KEYSTORE="$JCODE_KEYSTORE_DEFAULT"
+    JCODE_KEYSTORE_PASS="$pw"
+    JCODE_KEY_ALIAS="jcode"
+    JCODE_KEY_PASS="$pw"
+    say  "Created release keystore: $JCODE_KEYSTORE"
+    say  "  password saved to: $JCODE_KEYSTORE_PASS_FILE"
+    warn "KEEP this keystore + password — reuse it to sign every future release."
+}
+
+# Resolve the signing keystore: explicit env wins; else the default JCode keystore; else create one.
+JCODE_KEYSTORE_DEFAULT="$HOME/.jcode/jcode-release.jks"
+JCODE_KEYSTORE_PASS_FILE="$HOME/.jcode/jcode-release.password.txt"
+if [ -z "${JCODE_KEYSTORE:-}" ] && [ -f "$JCODE_KEYSTORE_DEFAULT" ]; then
+    JCODE_KEYSTORE="$JCODE_KEYSTORE_DEFAULT"
+    JCODE_KEY_ALIAS="${JCODE_KEY_ALIAS:-jcode}"
+    if [ -z "${JCODE_KEYSTORE_PASS:-}" ] && [ -f "$JCODE_KEYSTORE_PASS_FILE" ]; then
+        JCODE_KEYSTORE_PASS="$(cat "$JCODE_KEYSTORE_PASS_FILE")"
+    fi
+    JCODE_KEY_PASS="${JCODE_KEY_PASS:-${JCODE_KEYSTORE_PASS:-}}"
+    say "Using release keystore $JCODE_KEYSTORE"
+fi
+if [ -z "${JCODE_KEYSTORE:-}" ] && ask "No release keystore found. Create one now at $JCODE_KEYSTORE_DEFAULT and sign with it?"; then
+    create_release_keystore || true
+fi
+
 SIGN_STATE="unsigned"
 if [ -n "${JCODE_KEYSTORE:-}" ]; then
     [ -f "$JCODE_KEYSTORE" ] || die "JCODE_KEYSTORE is set but not a file: $JCODE_KEYSTORE"
-    [ -n "${JCODE_KEYSTORE_PASS:-}" ] || die "JCODE_KEYSTORE_PASS must be set alongside JCODE_KEYSTORE."
+    [ -n "${JCODE_KEYSTORE_PASS:-}" ] || die "No keystore password (set JCODE_KEYSTORE_PASS or provide $JCODE_KEYSTORE_PASS_FILE)."
     say "Signing with keystore $JCODE_KEYSTORE"
     "$APKSIGNER" sign --ks "$JCODE_KEYSTORE" --ks-pass "pass:$JCODE_KEYSTORE_PASS" \
         ${JCODE_KEY_ALIAS:+--ks-key-alias "$JCODE_KEY_ALIAS"} \
         ${JCODE_KEY_PASS:+--key-pass "pass:$JCODE_KEY_PASS"} \
         --out "$OUT" "$APK"
     SIGN_STATE="release-signed"
-elif [ -f "$HOME/.android/debug.keystore" ] && ask_interactive "No release keystore configured (set JCODE_KEYSTORE/JCODE_KEYSTORE_PASS). Sign with the Android debug keystore so the APK is installable?"; then
+elif [ -f "$HOME/.android/debug.keystore" ] && ask_interactive "No release keystore configured. Sign with the Android debug keystore so the APK is installable?"; then
     OUT="builds/jcode-v$VERSION-$CODE-release-debugsigned.apk"
     "$APKSIGNER" sign --ks "$HOME/.android/debug.keystore" --ks-pass pass:android --out "$OUT" "$APK"
     SIGN_STATE="debug-signed"
