@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -30,6 +29,7 @@ import dev.jcode.core.distro.SdkCatalogState
 import dev.jcode.design.ManagerItemStatus
 import dev.jcode.design.ManagerListRow
 import dev.jcode.design.ManagerNoticeCard
+import dev.jcode.design.ManagerFilterChip
 import dev.jcode.design.ManagerPanelHeader
 
 /** What a unified toolchain row is: which catalog it came from decides its detail route. */
@@ -171,16 +171,16 @@ internal fun ToolchainManagerPanel(
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            FilterChip(
+            ManagerFilterChip(
                 selected = filter == null,
+                label = "All",
                 onClick = { filterName = "" },
-                label = { Text("All") },
             )
             ToolchainKind.entries.forEach { kind ->
-                FilterChip(
+                ManagerFilterChip(
                     selected = filter == kind,
+                    label = kind.chip,
                     onClick = { filterName = if (filter == kind) "" else kind.name },
-                    label = { Text(kind.chip) },
                 )
             }
         }

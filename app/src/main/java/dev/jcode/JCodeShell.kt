@@ -480,6 +480,7 @@ fun JCodeApp(
             environments = installedEnvironments,
             onSwitch = viewModel::setActiveEnvironment,
             onDelete = viewModel::deleteEnvironment,
+            onStorageAccessGranted = viewModel::onStorageAccessGranted,
         )
     }
 
@@ -683,9 +684,8 @@ fun JCodeApp(
             autoSetupProgress = autoSetupProgress,
             onRefresh = { viewModel.refreshEnvironment() },
             onSelectDistro = { viewModel.selectWizardDistro(it) },
-            onRunStep = { stepId -> viewModel.runEnvironmentStep(stepId) },
             onAutoSetup = { viewModel.runAutoSetup() },
-            onSetupManualLater = { viewModel.deferFirstRunEnvironmentSetup() },
+            onStorageAccessGranted = { viewModel.onStorageAccessGranted() },
             onDismiss = { viewModel.deferFirstRunEnvironmentSetup() },
         )
     }
@@ -2974,52 +2974,60 @@ private fun WorkbenchRightSidebar(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 8.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // The Chat tab's title tracks the installed agent extension (e.g. "OpenChamber").
-                val chatTabTitle = agentChatTabTitle()
-                RightPanelTab.entries.filter { it.enabled }.forEach { tab ->
-                    val selected = tab == selectedTab
-                    val tabLabel = if (tab == RightPanelTab.Chat) chatTabTitle else tab.label
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = if (selected) {
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)
-                        },
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable { onTabSelected(tab) },
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        ) {
-                            val tint = if (selected) {
-                                MaterialTheme.colorScheme.primary
+                // Tabs scroll within their own weighted area so the trailing actions below stay
+                // pinned to the right edge — no scrolling to reach "Hide".
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // The Chat tab's title tracks the installed agent extension (e.g. "OpenChamber").
+                    val chatTabTitle = agentChatTabTitle()
+                    RightPanelTab.entries.filter { it.enabled }.forEach { tab ->
+                        val selected = tab == selectedTab
+                        val tabLabel = if (tab == RightPanelTab.Chat) chatTabTitle else tab.label
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
                             } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)
+                            },
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { onTabSelected(tab) },
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                val tint = if (selected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                                Icon(
+                                    imageVector = jcIcon(tab.icon),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                    tint = tint,
+                                )
+                                Text(
+                                    text = tabLabel,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = tint,
+                                )
                             }
-                            Icon(
-                                imageVector = jcIcon(tab.icon),
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                                tint = tint,
-                            )
-                            Text(
-                                text = tabLabel,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = tint,
-                            )
                         }
                     }
                 }
-                Spacer(modifier = Modifier.weight(1f))
                 if (selectedTab == RightPanelTab.Chat) {
                     WorkbenchIconActionButton(
                         icon = jcIcon(JCodeIcon.Settings),
