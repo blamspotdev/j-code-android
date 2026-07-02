@@ -2,10 +2,12 @@ package dev.jcode
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
@@ -21,11 +23,14 @@ import dev.jcode.core.buffer.EditTx
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.distro.DistroProfile
 import dev.jcode.core.distro.DistroWizardProgress
+import dev.jcode.core.distro.DebugEngineAction
 import dev.jcode.core.distro.LspCatalogAction
+import dev.jcode.debug.DebugController
 import dev.jcode.core.distro.SdkCatalogAction
 import dev.jcode.core.distro.DistroService
 import dev.jcode.core.distro.DistroServiceLocator
-import dev.jcode.core.distro.WizardStepId
+import dev.jcode.core.lsp.Diagnostic as LspDiagnostic
+import dev.jcode.core.lsp.DiagnosticSeverity as LspDiagnosticSeverity
 import dev.jcode.core.resource.ResourceManager
 import dev.jcode.core.resource.ResourceManagerLocator
 import dev.jcode.design.ThemeMode
@@ -33,7 +38,7 @@ import dev.jcode.feature.editor.pane.EditorGroup
 import dev.jcode.feature.editor.pane.EditorPageKind
 import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.feature.marketplace.BundledExtensionSpec
-import dev.jcode.feature.marketplace.ExtensionType
+import dev.jcode.feature.marketplace.ExtensionActivation
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.languageFor
 import dev.jcode.feature.marketplace.MarketplaceEntry
@@ -46,11 +51,14 @@ import dev.jcode.fs.FsKind
 import dev.jcode.fs.FsNode
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
+import dev.jcode.fs.ProjectKind
+import dev.jcode.fs.RecentEntity
 import dev.jcode.fs.Workspace
 import dev.jcode.fs.WorkspaceCrumb
 import dev.jcode.fs.WorkspaceManager
 import dev.jcode.fs.WorkspaceNodeType
 import dev.jcode.fs.WorkspaceServiceLocator
+import dev.jcode.run.ProjectRunner
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -62,13 +70,22 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
+
+/** Version of the JCode <-> extension request/event API served by this app build. Bump when route
+ *  families or envelope semantics change; extensions gate on it via their manifest's api.minApiVersion. */
+const val EXTENSION_API_VERSION = 1
 
 /**
  * Process-singleton holder for the app-level UI-preferences DataStore. A DataStore must be created
@@ -121,9 +138,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val installed = runCatching { extensionInstaller.installed() }.getOrDefault(emptyList())
             _installedExtensions.value = installed
-            _templates.value = installed
-                .filter { it.type == ExtensionType.Templates }
-                .flatMap { it.templates }
+            // Any extension may contribute templates (a language/dev pack can bundle them too).
+            // Always offer an "Empty Project" first — a blank folder that needs no extension.
+            val fromExtensions = installed.flatMap { it.templates }
+            val emptyOption = fromExtensions.filter { it.id == "empty" }.ifEmpty {
+                listOf(ProjectTemplate(id = "empty", name = "Empty Project", description = "A blank project folder — no scaffolding."))
+            }
+            _templates.value = emptyOption + fromExtensions.filter { it.id != "empty" }
         }
     }
 
@@ -141,15 +162,94 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun installExtension(entry: MarketplaceEntry) {
         viewModelScope.launch {
             _marketplaceBusy.value = true
-            extensionInstaller.install(entry, BuildConfig.VERSION_NAME)
-                .onSuccess { _messages.tryEmit("Installed ${it.name}") }
-                .onFailure { _messages.tryEmit("Install failed: ${it.message ?: "error"}") }
+            installExtensionResolvingDeps(entry, visiting = mutableSetOf())
             _marketplaceBusy.value = false
             refreshInstalledExtensions()
         }
     }
 
+    /**
+     * Install [entry] after everything it `requires` (extensions recursively, then toolchains and
+     * language servers via the catalogs). Any required dependency that fails to install aborts the
+     * whole install. `suggests` stays manual.
+     */
+    private suspend fun installExtensionResolvingDeps(
+        entry: MarketplaceEntry,
+        visiting: MutableSet<String>,
+    ): Boolean {
+        if (!visiting.add(entry.id)) return true
+
+        for (depId in entry.requires.extensions) {
+            if (depId in visiting) continue
+            if (_installedExtensions.value.any { it.id == depId }) continue
+            val depEntry = _marketplaceEntries.value.firstOrNull { it.id == depId }
+            if (depEntry == null) {
+                _messages.tryEmit("${entry.name}: required extension '$depId' isn't in the marketplace — install aborted.")
+                return false
+            }
+            _messages.tryEmit("Installing required extension: ${depEntry.name}…")
+            if (!installExtensionResolvingDeps(depEntry, visiting)) {
+                _messages.tryEmit("${entry.name}: required extension ${depEntry.name} failed — install aborted.")
+                return false
+            }
+        }
+
+        for (sdkId in entry.requires.sdks) {
+            if (sdkId in distroService.sdkCatalogState.value.installedEntryIds) continue
+            _messages.tryEmit("Installing required toolchain: $sdkId…")
+            if (!installRequiredSdk(sdkId)) {
+                val reason = distroService.sdkCatalogState.value.errorMessage ?: "install failed"
+                _messages.tryEmit("${entry.name}: required toolchain '$sdkId' — $reason Install aborted.")
+                return false
+            }
+        }
+
+        for (lspId in entry.requires.lsps) {
+            if (lspId in distroService.lspCatalogState.value.installedEntryIds) continue
+            _messages.tryEmit("Installing required language server: $lspId…")
+            if (!installRequiredLsp(lspId)) {
+                val reason = distroService.lspCatalogState.value.errorMessage ?: "install failed"
+                _messages.tryEmit("${entry.name}: required language server '$lspId' — $reason Install aborted.")
+                return false
+            }
+        }
+
+        val result = extensionInstaller.install(entry, BuildConfig.VERSION_NAME)
+            .onSuccess { _messages.tryEmit("Installed ${it.name}") }
+            .onFailure { _messages.tryEmit("Install failed: ${it.message ?: "error"}") }
+        return result.isSuccess
+    }
+
+    private suspend fun installRequiredSdk(entryId: String): Boolean = withContext(Dispatchers.IO) {
+        val session = SessionRegistry.registerSession(
+            context = getApplication(),
+            kind = BackendSessionKind.JOB,
+            name = "sdk:install:$entryId",
+        )
+        try {
+            distroService.runSdkCatalogAction(entryId, SdkCatalogAction.Install)
+        } finally {
+            session.close()
+        }
+        entryId in distroService.sdkCatalogState.value.installedEntryIds
+    }
+
+    private suspend fun installRequiredLsp(entryId: String): Boolean = withContext(Dispatchers.IO) {
+        val session = SessionRegistry.registerSession(
+            context = getApplication(),
+            kind = BackendSessionKind.JOB,
+            name = "lsp:install:$entryId",
+        )
+        try {
+            distroService.runLspCatalogAction(entryId, LspCatalogAction.Install)
+        } finally {
+            session.close()
+        }
+        entryId in distroService.lspCatalogState.value.installedEntryIds
+    }
+
     fun uninstallExtension(id: String) {
+        clearExtensionActivation(id)
         viewModelScope.launch(Dispatchers.IO) {
             extensionInstaller.uninstall(id)
             refreshInstalledExtensions()
@@ -193,6 +293,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val confirmCloseRunningKey = booleanPreferencesKey("perf_confirm_close_running")
+
+    /** When true (default), closing a project/workspace with a running terminal program, an active
+     *  Build & Run, or a live debug session prompts for confirmation before killing them. */
+    val confirmCloseRunning: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[confirmCloseRunningKey] ?: true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    fun setConfirmCloseRunning(enabled: Boolean) {
+        viewModelScope.launch { uiPreferences.edit { it[confirmCloseRunningKey] = enabled } }
+    }
+
+    private val autoCloseIdleKey = booleanPreferencesKey("perf_auto_close_idle_terminals")
+
+    /** When true, terminals sitting idle at the prompt (no foreground program, no I/O) past
+     *  [idleTimeoutMinutes] are closed automatically to free their proot process trees + memory. */
+    val autoCloseIdleTerminals: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[autoCloseIdleKey] ?: false }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setAutoCloseIdleTerminals(enabled: Boolean) {
+        viewModelScope.launch { uiPreferences.edit { it[autoCloseIdleKey] = enabled } }
+    }
+
+    private val idleTimeoutMinKey = intPreferencesKey("perf_idle_timeout_minutes")
+
+    /** Idle-terminal auto-close threshold in minutes (5…120). Default 30. */
+    val idleTimeoutMinutes: StateFlow<Int> = uiPreferences.data
+        .map { prefs -> (prefs[idleTimeoutMinKey] ?: 30).coerceIn(5, 120) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 30)
+
+    fun setIdleTimeoutMinutes(minutes: Int) {
+        viewModelScope.launch { uiPreferences.edit { it[idleTimeoutMinKey] = minutes.coerceIn(5, 120) } }
+    }
+
     private val hideStatusBarWithKeyboardKey = booleanPreferencesKey("hide_status_bar_with_keyboard")
 
     /** When true, the system status bar is hidden while the soft keyboard is up (more room to edit). */
@@ -219,6 +354,82 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             uiPreferences.edit { prefs -> prefs[hideTabCloseButtonKey] = enabled }
         }
     }
+
+    private val editorDragMovesCursorKey = booleanPreferencesKey("editor_drag_moves_cursor")
+
+    /** When true, a one-finger drag on the editor moves the text cursor (the view follows) instead of
+     *  scrolling the content; long-press text selection is unaffected. */
+    val editorDragMovesCursor: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[editorDragMovesCursorKey] ?: false }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setEditorDragMovesCursor(enabled: Boolean) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[editorDragMovesCursorKey] = enabled }
+        }
+    }
+
+    private val editorCursorDragVerticalKey = intPreferencesKey("editor_cursor_drag_vertical_level")
+    private val editorCursorDragHorizontalKey = intPreferencesKey("editor_cursor_drag_horizontal_level")
+
+    /** "Drag to move cursor" sensitivity per axis: 1 (slow/precise) … 5 (fast). Default 2. */
+    val editorCursorDragVerticalLevel: StateFlow<Int> = uiPreferences.data
+        .map { prefs -> (prefs[editorCursorDragVerticalKey] ?: 2).coerceIn(1, 5) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 2)
+
+    val editorCursorDragHorizontalLevel: StateFlow<Int> = uiPreferences.data
+        .map { prefs -> (prefs[editorCursorDragHorizontalKey] ?: 2).coerceIn(1, 5) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 2)
+
+    fun setEditorCursorDragVerticalLevel(level: Int) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[editorCursorDragVerticalKey] = level.coerceIn(1, 5) }
+        }
+    }
+
+    fun setEditorCursorDragHorizontalLevel(level: Int) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[editorCursorDragHorizontalKey] = level.coerceIn(1, 5) }
+        }
+    }
+
+    private val restoreLastSessionKey = booleanPreferencesKey("restore_last_session")
+
+    /** When true (default), the last open workspace/project + editor tabs (with unsaved changes) are
+     *  reopened on launch, surviving a force-close or swipe-away from Recents. */
+    val restoreLastSession: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[restoreLastSessionKey] ?: true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    fun setRestoreLastSession(enabled: Boolean) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[restoreLastSessionKey] = enabled }
+        }
+        // Opting out should not leave a stale session blob behind on disk.
+        if (!enabled) viewModelScope.launch(Dispatchers.IO) { sessionStore.clear() }
+    }
+
+    private val sessionStore = SessionStore(appContext)
+
+    /** Suppresses the project bootstrap file while a session restore is deciding/opening tabs, so the
+     *  restored tabs aren't raced by a freshly bootstrapped file. Cleared when restore settles. */
+    @Volatile
+    private var suppressBootstrap = true
+
+    /** Gate that keeps incremental saves from clobbering the stored session before restore has read it. */
+    @Volatile
+    private var sessionSaveEnabled = false
+
+    private val sessionSaveSignal = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    private fun scheduleSessionSave() {
+        sessionSaveSignal.tryEmit(Unit)
+    }
+
+    /** Events pushed to the live extension WebView as `window.JCode._onEvent(name, jsonString)`.
+     *  Declared BEFORE the init block: its collector emits during ViewModel construction. */
+    private val _extensionEvents = MutableSharedFlow<Pair<String, String>>(extraBufferCapacity = 16)
+    val extensionEvents: SharedFlow<Pair<String, String>> = _extensionEvents
 
     private val themeBundleKey = stringPreferencesKey("theme_bundle_id")
 
@@ -261,6 +472,94 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // "Open web previews in" — which browser Build & Run / URL taps use. A global default plus a
+    // per-project override (device-local: which browser apps exist is not portable project config).
+    /** Installed browser apps, discovered once (the set rarely changes within a session). */
+    val installedBrowsers: List<dev.jcode.design.BrowserApp> by lazy { dev.jcode.run.ProjectRunner.installedBrowsers(appContext) }
+
+    private val webPreviewBrowserKey = stringPreferencesKey("web_preview_browser")
+
+    /** Global default: SYSTEM (device default) | ASK (chooser) | a browser package name. */
+    val webPreviewBrowser: StateFlow<String> = uiPreferences.data
+        .map { prefs -> prefs[webPreviewBrowserKey]?.takeIf { it.isNotBlank() } ?: "SYSTEM" }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "SYSTEM")
+
+    fun setWebPreviewBrowser(choice: String) {
+        viewModelScope.launch { uiPreferences.edit { it[webPreviewBrowserKey] = choice } }
+    }
+
+    private val webPreviewBrowserProjectsKey = stringPreferencesKey("web_preview_browser_projects")
+
+    /** Per-project overrides keyed by project id; absent = inherit the global default. */
+    val webPreviewBrowserProjects: StateFlow<Map<String, String>> = uiPreferences.data
+        .map { prefs -> parseStringMap(prefs[webPreviewBrowserProjectsKey]) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    fun setProjectWebPreviewBrowser(projectKey: String, choice: String) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val obj = runCatching { JSONObject(prefs[webPreviewBrowserProjectsKey] ?: "{}") }.getOrDefault(JSONObject())
+                // Blank/INHERIT means "follow the global default" — drop the override to keep the blob minimal.
+                if (choice.isBlank()) obj.remove(projectKey) else obj.put(projectKey, choice)
+                prefs[webPreviewBrowserProjectsKey] = obj.toString()
+            }
+        }
+    }
+
+    private fun parseStringMap(json: String?): Map<String, String> {
+        if (json.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val obj = JSONObject(json)
+            buildMap { obj.keys().forEach { k -> put(k, obj.optString(k)) } }
+        }.getOrDefault(emptyMap())
+    }
+
+    // Per-extension activation mode (auto-start / on-demand / manual), keyed by extension id. Stored as a
+    // small JSON object (only non-default entries) in one preference, mirroring how SessionStore persists
+    // structured data with org.json. Absent id => ExtensionActivation.Default (OnDemand).
+    private val extensionActivationKey = stringPreferencesKey("extension_activation_modes")
+
+    val extensionActivations: StateFlow<Map<String, ExtensionActivation>> = uiPreferences.data
+        .map { prefs -> parseActivations(prefs[extensionActivationKey]) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** Installed extensions whose contributions are currently allowed to apply (i.e. not set to Manual).
+     *  Drives language-pack resolution for highlighting/completions/formatting so Manual truly disables. */
+    val activeLanguageExtensions: StateFlow<List<InstalledExtension>> =
+        combine(installedExtensions, extensionActivations) { exts, modes ->
+            exts.filter { (modes[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    private fun parseActivations(json: String?): Map<String, ExtensionActivation> {
+        if (json.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val obj = JSONObject(json)
+            buildMap {
+                obj.keys().forEach { key -> put(key, ExtensionActivation.from(obj.optString(key))) }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    fun setExtensionActivation(id: String, mode: ExtensionActivation) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val obj = runCatching { JSONObject(prefs[extensionActivationKey] ?: "{}") }.getOrDefault(JSONObject())
+                if (mode == ExtensionActivation.Default) obj.remove(id) else obj.put(id, mode.name)
+                prefs[extensionActivationKey] = obj.toString()
+            }
+        }
+    }
+
+    private fun clearExtensionActivation(id: String) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val obj = runCatching { JSONObject(prefs[extensionActivationKey] ?: "{}") }.getOrDefault(JSONObject())
+                obj.remove(id)
+                prefs[extensionActivationKey] = obj.toString()
+            }
+        }
+    }
+
     val workspaceConfig = configService.workspaceConfig
     val projectConfig = configService.projectConfig
     val workspaceConfigError = configService.workspaceError
@@ -277,7 +576,138 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val environments = distroService.environments
     val sdkCatalogState = distroService.sdkCatalogState
     val lspCatalogState = distroService.lspCatalogState
+    val debugCatalogState = distroService.debugCatalogState
     val autoSetupProgress = distroService.autoSetupProgress
+
+    private val debugController = DebugController(distroService, viewModelScope)
+    val debugState = debugController.state
+    val debugCallStack = debugController.callStack
+    val debugVariables = debugController.variables
+    val debugOutput = debugController.output
+    val debugLocation = debugController.currentLocation
+
+    /** Breakpoints per host file path -> set of 0-based lines. Toggled from the editor gutter. */
+    private val _breakpoints = MutableStateFlow<Map<String, Set<Int>>>(emptyMap())
+    val breakpoints: StateFlow<Map<String, Set<Int>>> = _breakpoints.asStateFlow()
+
+    /** Toggle a breakpoint at [line] (0-based) in the file at host [path]. */
+    fun toggleBreakpoint(path: String, line: Int) {
+        val next = _breakpoints.value.toMutableMap()
+        val lines = next[path]?.toMutableSet() ?: mutableSetOf()
+        if (!lines.add(line)) lines.remove(line)
+        if (lines.isEmpty()) next.remove(path) else next[path] = lines
+        _breakpoints.value = next
+        debugController.onBreakpointsChanged(path, next[path].orEmpty())
+    }
+
+    /** Start debugging the given host file with a matching debug engine (debugpy for .py, …). */
+    fun startDebug(hostPath: String) {
+        debugController.startDebug(hostPath, deriveProjectDir(hostPath), _breakpoints.value)
+    }
+
+    private fun deriveProjectDir(hostPath: String): String {
+        val marker = "/JCode/projects/"
+        val i = hostPath.indexOf(marker)
+        if (i < 0) return java.io.File(hostPath).parent ?: hostPath
+        val name = hostPath.substring(i + marker.length).substringBefore('/')
+        return hostPath.substring(0, i + marker.length) + name
+    }
+
+    fun debugContinue() = debugController.resume()
+    fun debugStepOver() = debugController.stepOver()
+    fun debugStepInto() = debugController.stepInto()
+    fun debugStepOut() = debugController.stepOut()
+    fun debugStop() = debugController.stop()
+    fun debugEvaluate(expression: String, onResult: (String?) -> Unit) =
+        debugController.evaluate(expression, onResult)
+
+    // ---- Issues (diagnostics bus) producers ----
+
+    private val diagnosticsBus = dev.jcode.core.lsp.LspModule.diagnosticsBus
+
+    init {
+        // .jcode YAML config parse errors are real project issues; mirror them onto the bus.
+        viewModelScope.launch {
+            configService.workspaceError.collect { err ->
+                publishConfigDiagnostic("config-workspace", configService.workspaceConfigPath, err)
+            }
+        }
+        viewModelScope.launch {
+            configService.projectError.collect { err ->
+                publishConfigDiagnostic("config-project", configService.projectConfigPath, err)
+            }
+        }
+    }
+
+    private fun publishConfigDiagnostic(source: String, path: String?, error: String?) {
+        if (error == null || path == null) {
+            diagnosticsBus.clearSource(source)
+            return
+        }
+        // snakeyaml errors carry "line N, column M" (1-based); default to the file top otherwise.
+        val pos = Regex("""line (\d+), column (\d+)""").find(error)
+        val line = ((pos?.groupValues?.get(1)?.toIntOrNull() ?: 1) - 1).coerceAtLeast(0)
+        val col = ((pos?.groupValues?.get(2)?.toIntOrNull() ?: 1) - 1).coerceAtLeast(0)
+        val message = error.lineSequence().firstOrNull { it.isNotBlank() }?.trim() ?: error
+        diagnosticsBus.updateSourceDiagnostics(
+            source,
+            mapOf(
+                path to listOf(
+                    LspDiagnostic(line, col, line, col, LspDiagnosticSeverity.ERROR, message, "jcode-config", null),
+                ),
+            ),
+        )
+    }
+
+    /**
+     * On-open/on-save syntax check for the flagship script languages: a one-shot compile inside the
+     * distro (no artifacts written), its errors published to the Issues bus. Silent no-op when the
+     * runtime isn't ready, the file lives outside /workspace, or the language has no checker.
+     */
+    private fun queueSyntaxCheck(file: File) {
+        val projectsRoot = DEFAULT_SHARED_PROJECTS_ROOT.trimEnd('/')
+        if (!file.path.startsWith("$projectsRoot/")) return
+        val guest = "/workspace" + file.path.removePrefix(projectsRoot)
+        val command = when (file.extension.lowercase()) {
+            "py", "pyw" ->
+                "python3 -c \"import sys; compile(open(sys.argv[1]).read(), sys.argv[1], 'exec')\" '$guest'"
+            "js", "mjs", "cjs" ->
+                "command -v node >/dev/null 2>&1 || exit 0; node --check '$guest'"
+            else -> return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching { distroService.exec(command, timeoutMs = 30_000L) }.getOrNull() ?: return@launch
+            if (result.internalError != null) return@launch // runtime not ready: leave issues untouched
+            val diagnostics = if (result.succeeded) emptyList() else parseSyntaxErrors(result.stderr, guest)
+            diagnosticsBus.updateDiagnostics("syntax", file.path, diagnostics)
+        }
+    }
+
+    /** Pull (line, message) out of python/node syntax-error stderr for [guestPath]. */
+    private fun parseSyntaxErrors(stderr: String, guestPath: String): List<LspDiagnostic> {
+        if (stderr.isBlank()) return emptyList()
+        val lines = stderr.lineSequence().map { it.trimEnd() }.filter { it.isNotBlank() }.toList()
+        // python: File "<path>", line N — node: <path>:N at the very first line.
+        val lineNo = lines.firstNotNullOfOrNull { l ->
+            Regex("""File "${Regex.escape(guestPath)}", line (\d+)""").find(l)?.groupValues?.get(1)?.toIntOrNull()
+        } ?: lines.firstNotNullOfOrNull { l ->
+            Regex("""^${Regex.escape(guestPath)}:(\d+)""").find(l)?.groupValues?.get(1)?.toIntOrNull()
+        } ?: 1
+        val message = lines.lastOrNull { Regex("""^\w*(Error|Warning)\b""").containsMatchIn(it) }
+            ?: lines.last()
+        return listOf(
+            LspDiagnostic(
+                startLine = (lineNo - 1).coerceAtLeast(0),
+                startCol = 0,
+                endLine = (lineNo - 1).coerceAtLeast(0),
+                endCol = 0,
+                severity = LspDiagnosticSeverity.ERROR,
+                message = message.take(300),
+                source = "syntax",
+                code = null,
+            ),
+        )
+    }
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages = _messages.asSharedFlow()
@@ -298,6 +728,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             uniqueName = "jcode.lang.stylesheet",
             version = "1.0.0",
         ),
+        // NOTE: manager extensions (SQL Client, VM Manager) are NOT bundled — they pull in
+        // libraries/binaries at runtime and are distributed via the marketplace, not baked into the app.
     )
 
     init {
@@ -352,12 +784,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        // Restore the previous session (workspace/project + tabs + unsaved edits) on cold launch, then
+        // enable incremental persistence. Runs once per process: init fires only when the ViewModel is
+        // freshly built, which is exactly the cold-launch / post-process-death case we restore for.
+        viewModelScope.launch { restoreSessionOnLaunch() }
+
+        // Debounced session writer: coalesce bursts of edits/tab changes into one disk write.
+        viewModelScope.launch {
+            sessionSaveSignal.collectLatest {
+                delay(700)
+                persistSession()
+            }
+        }
+        // Structural changes (tab open/close/switch, dirty-dot flips) and project/workspace switches.
+        viewModelScope.launch { editorGroup.collect { scheduleSessionSave() } }
+        viewModelScope.launch { selectedProject.collect { scheduleSessionSave() } }
+
+        // Push the focused-file context to the live extension WebView (Extension API `activeFile`
+        // event); deduped so tab-internal churn doesn't spam the bridge.
+        viewModelScope.launch {
+            var last: String? = null
+            editorGroup.collect {
+                val json = activeFileEventJson()
+                if (json != last) {
+                    last = json
+                    _extensionEvents.tryEmit("activeFile" to json)
+                }
+            }
+        }
     }
 
     data class NewItemRequest(
         val name: String,
         val isWorkspace: Boolean,
         val templateId: String?,
+        /** Values the user picked for the template's declared inputs, keyed by input id. */
+        val inputs: Map<String, String> = emptyMap(),
     )
 
     fun requestNew() {
@@ -379,6 +841,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             if (request.isWorkspace) {
                 // Open the new workspace (enter it) so its (empty) project list shows.
+                clearEditorTabs()
                 val workspaceNode = workspaceManager.createNode(name, nodeType, null)
                 workspaceManager.enterWorkspaceFolder(workspaceNode)
                 _showNewItemDialog.value = false
@@ -409,6 +872,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         template = template,
                         projectName = project.name,
                         projectDir = project.distroBindTarget,
+                        inputs = request.inputs,
                     ),
                 )
                 emitMessage(
@@ -428,7 +892,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val resolved = workspaceManager.resolveManageable(path)
             when {
                 workspaceManager.isWorkspaceFolder(resolved) &&
-                    workspaceManager.enterFolderAsWorkspace(resolved) != null -> Unit
+                    workspaceManager.enterFolderAsWorkspace(resolved) != null -> clearEditorTabs()
 
                 workspaceManager.folderNeedsType(resolved) -> _openFolderTypePrompt.value = resolved
 
@@ -447,6 +911,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _openFolderTypePrompt.value = null
         viewModelScope.launch {
             if (isWorkspace && workspaceManager.enterFolderAsWorkspace(path) != null) {
+                clearEditorTabs()
                 return@launch
             }
             resetDefaultWorkspaceProject()
@@ -459,6 +924,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissOpenFolderPrompt() {
         _openFolderTypePrompt.value = null
+    }
+
+    /** Recently opened folders (most-recent first) for the empty-editor "Recent" list. */
+    val recents: StateFlow<List<RecentEntity>> = workspaceManager.recents
+
+    /** Re-open a recent folder; [openExternalFolder] enters it as a workspace or opens it as a project. */
+    fun openRecent(recent: RecentEntity) {
+        val path = when (recent.kind) {
+            ProjectKind.Local -> FsPath.Local(File(recent.uri))
+            ProjectKind.Saf -> FsPath.Saf(Uri.parse(recent.uri))
+        }
+        openExternalFolder(path)
     }
 
     fun removeProject(projectId: Long) {
@@ -475,7 +952,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Roster tap / "Open": a Workspace is entered (its projects show); a Project is selected. */
     fun openProject(project: Project) {
         if (project.nodeType == WorkspaceNodeType.Workspace) {
-            viewModelScope.launch { workspaceManager.enterWorkspaceFolder(project) }
+            viewModelScope.launch {
+                clearEditorTabs()
+                workspaceManager.enterWorkspaceFolder(project)
+            }
         } else {
             _selectedProjectId.value = project.id
         }
@@ -484,7 +964,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Leave the current User Workspace and return to the Default Workspace (the first crumb). */
     fun closeWorkspace() {
         val defaultId = breadcrumb.value.firstOrNull()?.id ?: return
-        viewModelScope.launch { workspaceManager.navigateToWorkspace(defaultId) }
+        viewModelScope.launch {
+            clearEditorTabs()
+            workspaceManager.navigateToWorkspace(defaultId)
+            // currentWorkspace is DB-derived; wait for it to reflect the switch so the immediate
+            // session save records the default workspace, not the one just closed.
+            withTimeoutOrNull(2_000) { currentWorkspace.first { it?.id == defaultId } }
+            persistSession()
+        }
     }
 
     /**
@@ -496,6 +983,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             clearEditorTabs()
             clearDefaultWorkspaceProjects()
+            persistSession()
             emitMessage("Project closed.")
         }
     }
@@ -509,6 +997,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Page tabs (e.g. Settings) are app-level, not project content: keep them across project switches.
         _editorGroup.value = tabs.filter { it.isPage }
             .fold(EditorGroup.create()) { group, tab -> group.withTabAdded(tab) }
+        diagnosticsBus.clearSource("syntax")
     }
 
     /** The Default Workspace holds a single open project; unregister whatever it currently has. */
@@ -587,7 +1076,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteEnvironment(environmentId: String) {
-        viewModelScope.launch {
+        // IO: switches the active distro and re-derives its state, which can exec into the rootfs.
+        viewModelScope.launch(Dispatchers.IO) {
             val label = environmentId
             val removed = distroService.deleteEnvironment(environmentId)
             emitMessage(if (removed) "Removed environment '$label'." else "Could not remove '$label'.")
@@ -638,30 +1128,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun runEnvironmentStep(
-        @Suppress("UNUSED_PARAMETER")
-        stepId: WizardStepId,
-        @Suppress("UNUSED_PARAMETER")
-        callerContext: Context? = null,
-    ) {
-        viewModelScope.launch(Dispatchers.IO) {
-            if (stepNeedsForegroundService(stepId)) {
-                val session = SessionRegistry.registerSession(
-                    context = getApplication(),
-                    kind = BackendSessionKind.JOB,
-                    name = "environment:${stepId.key}",
-                )
-                try {
-                    distroService.runWizardStep(stepId)
-                } finally {
-                    session.close()
-                }
-            } else {
-                distroService.runWizardStep(stepId)
-            }
-        }
-    }
-
     fun selectWizardDistro(profile: DistroProfile) {
         distroService.setSelectedDistro(profile)
     }
@@ -669,6 +1135,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun deferFirstRunEnvironmentSetup() {
         viewModelScope.launch {
             distroService.setFirstRunSetupDeferred(true)
+        }
+    }
+
+    /** Storage permission was granted mid-onboarding: re-anchor storage on the shared /JCode root. */
+    fun onStorageAccessGranted() {
+        viewModelScope.launch {
+            workspaceManager.refreshStorageRoots()
         }
     }
 
@@ -712,9 +1185,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runLspCatalogAction(entryId, LspCatalogAction.Uninstall)
     }
 
+    fun installDebugEngine(entryId: String) {
+        runDebugCatalogAction(entryId, DebugEngineAction.Install)
+    }
+
+    fun verifyDebugEngine(entryId: String) {
+        runDebugCatalogAction(entryId, DebugEngineAction.Verify)
+    }
+
+    fun uninstallDebugEngine(entryId: String) {
+        runDebugCatalogAction(entryId, DebugEngineAction.Uninstall)
+    }
+
     private var lastBootstrappedProjectId: Long? = null
 
     fun ensureProjectBootstrapTab() {
+        // While a session restore is in flight, don't open the bootstrap file — restore handles the tabs.
+        if (suppressBootstrap) return
         // Ignore page tabs (e.g. Settings): only an open file tab should suppress the bootstrap file.
         if (_editorGroup.value.tabs.any { !it.isPage }) return
         val project = selectedProject.value ?: return
@@ -794,6 +1281,312 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
     }
 
+    /** Open (or focus) an installed extension's bundled web frontend as a full-screen in-editor page. */
+    fun openExtensionAppPage(extensionId: String) {
+        openDetailPage(EXT_APP_PREFIX + extensionId, EditorPageKind.ExtensionApp) {
+            _installedExtensions.value.firstOrNull { it.id == extensionId }?.name ?: "App"
+        }
+    }
+
+    /** Run a command in the Linux runtime for an extension frontend; returns a JSON result payload.
+     *  Runs as root: manager extensions (SQL Client, VM Manager) need privilege to install/run software. */
+    suspend fun runtimeExecJson(command: String, timeoutMs: Long): String {
+        val result = distroService.exec(command, timeoutMs = timeoutMs, user = "root")
+        return JSONObject().apply {
+            put("stdout", result.stdout)
+            put("stderr", result.stderr)
+            put("exitCode", result.exitCode ?: -1)
+            result.internalError?.let { put("error", it) }
+        }.toString()
+    }
+
+    // --- Extension API v1: versioned request envelope + pushed events over the WebView bridge ---
+    // Requests arrive as {"type":"family.verb","payload":{...}} via JCodeNative.request and are
+    // answered through window.JCode._onResult as {"ok":true,"data":{}} | {"ok":false,"error":""}.
+    // Route families ("exec", "fs", "workbench") are capability-gated: an extension must declare a
+    // family under its manifest's api.capabilities AND the user must not have revoked it.
+
+    /** Per-extension capability DENIALS (granted-by-default), keyed by extension id — same
+     *  org.json-blob DataStore pattern as [extensionActivationKey]. */
+    private val extensionCapabilityKey = stringPreferencesKey("extension_capability_denials")
+
+    val extensionCapabilityDenials: StateFlow<Map<String, Set<String>>> = uiPreferences.data
+        .map { prefs -> parseCapabilityDenials(prefs[extensionCapabilityKey]) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    private fun parseCapabilityDenials(json: String?): Map<String, Set<String>> {
+        if (json.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val obj = JSONObject(json)
+            buildMap {
+                obj.keys().forEach { ext ->
+                    val arr = obj.optJSONArray(ext) ?: return@forEach
+                    put(ext, buildSet { for (i in 0 until arr.length()) add(arr.optString(i)) })
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    fun setExtensionCapability(extensionId: String, capability: String, granted: Boolean) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val obj = runCatching { JSONObject(prefs[extensionCapabilityKey] ?: "{}") }.getOrDefault(JSONObject())
+                val denied = buildSet {
+                    obj.optJSONArray(extensionId)?.let { arr -> for (i in 0 until arr.length()) add(arr.optString(i)) }
+                }.toMutableSet()
+                if (granted) denied.remove(capability) else denied.add(capability)
+                if (denied.isEmpty()) obj.remove(extensionId)
+                else obj.put(extensionId, org.json.JSONArray().apply { denied.forEach { put(it) } })
+                prefs[extensionCapabilityKey] = obj.toString()
+            }
+        }
+    }
+
+    private fun capabilityGranted(ext: InstalledExtension, capability: String): Boolean =
+        capability in ext.apiCapabilities &&
+            capability !in (extensionCapabilityDenials.value[ext.id] ?: emptySet())
+
+    // Per-extension "keep running in background": whether an extension's chat/app WebView survives
+    // its panel closing. ENABLED-by-default; stored as the set of ids the user has DISABLED (same
+    // org.json-array-in-one-key pattern as the other per-extension settings).
+    private val extensionKeepAliveKey = stringPreferencesKey("extension_keepalive_disabled")
+
+    val extensionKeepAliveDisabled: StateFlow<Set<String>> = uiPreferences.data
+        .map { prefs -> parseIdSet(prefs[extensionKeepAliveKey]) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
+    private fun parseIdSet(json: String?): Set<String> {
+        if (json.isNullOrBlank()) return emptySet()
+        return runCatching {
+            val arr = org.json.JSONArray(json)
+            buildSet { for (i in 0 until arr.length()) add(arr.optString(i)) }
+        }.getOrDefault(emptySet())
+    }
+
+    fun setExtensionKeepAlive(extensionId: String, enabled: Boolean) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val disabled = parseIdSet(prefs[extensionKeepAliveKey]).toMutableSet()
+                if (enabled) disabled.remove(extensionId) else disabled.add(extensionId)
+                prefs[extensionKeepAliveKey] =
+                    org.json.JSONArray().apply { disabled.forEach { put(it) } }.toString()
+            }
+        }
+    }
+
+    /** The `activeFile` event/query payload: guest (/workspace) path of the focused file tab, or {}. */
+    private fun activeFileEventJson(): String {
+        val tab = _editorGroup.value.tabs.firstOrNull { it.id == _editorGroup.value.activeTabId && !it.isPage }
+        return JSONObject().apply {
+            if (tab != null) {
+                put("path", hostToGuestPath(tab.filePath))
+                put("name", tab.filePath.name)
+                put("dirty", tab.isDirty)
+            }
+        }.toString()
+    }
+
+    /** Host file → guest (/workspace) path where possible, else the raw host path. */
+    private fun hostToGuestPath(file: File): String {
+        val root = DEFAULT_SHARED_PROJECTS_ROOT.trimEnd('/')
+        val p = file.absolutePath
+        return if (p.startsWith(root)) "/workspace" + p.removePrefix(root) else p
+    }
+
+    /** Entry point for JCodeNative.request — validates the envelope, version, and capability. */
+    suspend fun extensionApiRequest(ext: InstalledExtension, envelopeJson: String): String {
+        val req = runCatching { JSONObject(envelopeJson) }.getOrNull()
+            ?: return apiError("malformed request envelope")
+        val type = req.optString("type")
+        val payload = req.optJSONObject("payload") ?: JSONObject()
+        if (ext.apiMinVersion > EXTENSION_API_VERSION) {
+            return apiError("extension requires API v${ext.apiMinVersion}; this JCode has v$EXTENSION_API_VERSION")
+        }
+        val family = type.substringBefore('.')
+        // "service.*" (long-lived runtime servers) is an exec-level privilege — gate it on "exec".
+        val requiredCapability = if (family == "service") "exec" else family
+        if (family != "api" && !capabilityGranted(ext, requiredCapability)) {
+            return apiError("capability '$requiredCapability' is not declared by ${ext.id} or was revoked by the user")
+        }
+        return runCatching { dispatchExtensionApi(type, payload) }
+            .getOrElse { apiError(it.message ?: "internal error") }
+    }
+
+    private suspend fun dispatchExtensionApi(type: String, p: JSONObject): String = when (type) {
+        "api.hello" -> apiOk(
+            JSONObject()
+                .put("apiVersion", EXTENSION_API_VERSION)
+                .put("jcodeVersion", BuildConfig.VERSION_NAME),
+        )
+
+        "exec.run" -> {
+            val command = p.optString("command")
+            require(command.isNotBlank()) { "command required" }
+            val timeout = p.optLong("timeoutMs", 60_000L)
+            val workdir = p.optString("workdir").ifBlank { null }
+            val user = p.optString("user").ifBlank { "root" }
+            val env = p.optJSONObject("env")
+                ?.let { o -> buildMap { o.keys().forEach { put(it, o.optString(it)) } } }
+                .orEmpty()
+            val r = if (workdir != null) {
+                distroService.exec(command, workdir = workdir, env = env, timeoutMs = timeout, user = user)
+            } else {
+                distroService.exec(command, env = env, timeoutMs = timeout, user = user)
+            }
+            apiOk(
+                JSONObject().apply {
+                    put("stdout", r.stdout)
+                    put("stderr", r.stderr)
+                    put("exitCode", r.exitCode ?: -1)
+                    r.internalError?.let { put("error", it) }
+                },
+            )
+        }
+
+        "fs.read" -> {
+            val f = resolveHostFile(p.optString("path"))
+            require(f != null && f.isFile) { "not a readable file: ${p.optString("path")}" }
+            require(f.length() <= 2_000_000) { "file too large for fs.read (>2MB); use exec.run" }
+            apiOk(JSONObject().put("content", f.readText()))
+        }
+
+        "fs.write" -> {
+            val f = resolveHostFile(p.optString("path"))
+            require(f != null) { "unresolvable path: ${p.optString("path")}" }
+            f.parentFile?.mkdirs()
+            f.writeText(p.optString("content"))
+            apiOk(JSONObject())
+        }
+
+        "fs.list" -> {
+            val f = resolveHostFile(p.optString("path"))
+            require(f != null && f.isDirectory) { "not a directory: ${p.optString("path")}" }
+            val entries = org.json.JSONArray()
+            f.listFiles()?.sortedBy { it.name.lowercase() }?.forEach { c ->
+                entries.put(
+                    JSONObject()
+                        .put("name", c.name)
+                        .put("dir", c.isDirectory)
+                        .put("size", if (c.isFile) c.length() else 0),
+                )
+            }
+            apiOk(JSONObject().put("entries", entries))
+        }
+
+        "workbench.openFile" -> {
+            val f = resolveHostFile(p.optString("path"))
+            require(f != null && f.isFile) { "not an openable file: ${p.optString("path")}" }
+            _bringEditorToFront.tryEmit(Unit)
+            openLocalFile(f, p.optInt("line", 0).takeIf { it > 0 }, p.optInt("column", 0).takeIf { it > 0 })
+            apiOk(JSONObject())
+        }
+
+        "workbench.notify" -> {
+            emitMessage(p.optString("message").take(300))
+            apiOk(JSONObject())
+        }
+
+        "workbench.openUrl" -> {
+            val url = p.optString("url")
+            require(url.startsWith("http://") || url.startsWith("https://")) { "http(s) URLs only" }
+            ProjectRunner.openInBrowser(appContext, url, "")
+            apiOk(JSONObject())
+        }
+
+        "service.start" -> {
+            val id = p.optString("id").ifBlank { "service" }
+            val command = p.optString("command")
+            require(command.isNotBlank()) { "command required" }
+            val started = startRuntimeService(
+                id = id,
+                command = command,
+                user = p.optString("user").ifBlank { "root" },
+                extraPath = p.optString("extraPath"),
+            )
+            apiOk(JSONObject().put("running", started).put("id", id))
+        }
+
+        "service.stop" -> {
+            stopRuntimeService(p.optString("id").ifBlank { "service" })
+            apiOk(JSONObject())
+        }
+
+        "service.status" -> {
+            val id = p.optString("id").ifBlank { "service" }
+            apiOk(JSONObject().put("running", runtimeServices[id]?.isAlive == true).put("id", id))
+        }
+
+        "workbench.activeFile" -> apiOk(JSONObject(activeFileEventJson()))
+
+        "workbench.projectInfo" -> apiOk(
+            JSONObject().apply {
+                selectedProject.value?.let { proj ->
+                    put("name", proj.name)
+                    (proj.fsPath as? FsPath.Local)?.file?.let { put("path", hostToGuestPath(it)) }
+                }
+                currentWorkspace.value?.let { put("workspace", it.name) }
+            },
+        )
+
+        else -> throw IllegalArgumentException("unknown request type: $type")
+    }
+
+    private fun apiOk(data: JSONObject): String =
+        JSONObject().put("ok", true).put("data", data).toString()
+
+    private fun apiError(message: String): String =
+        JSONObject().put("ok", false).put("error", message).toString()
+
+    // Long-lived runtime services (e.g. the opencode agent server behind the OpenChamber Chat UI).
+    // A one-shot exec.run can't host a server: proot --kill-on-exit reaps the tree the moment the
+    // launcher exec returns. spawnDapProcess gives a piped proot Process the JVM holds open, so the
+    // server survives until we destroy() it (which reaps its tree). Keyed by service id.
+    private val runtimeServices = ConcurrentHashMap<String, Process>()
+
+    /** Start (or confirm running) a long-lived server inside the runtime. Idempotent per [id]. */
+    fun startRuntimeService(id: String, command: String, user: String = "root", extraPath: String = ""): Boolean {
+        runtimeServices[id]?.let { if (it.isAlive) return true else runtimeServices.remove(id) }
+        val process = distroService.spawnDapProcess(
+            command = command,
+            userOverride = user,
+            extraPath = extraPath,
+        ) ?: return false
+        runtimeServices[id] = process
+        // Drain stdout/stderr so the OS pipe buffers never fill and block the server. Kept as daemon
+        // threads (mirrors DebugController's stderr drainer); output is discarded (server has its own log).
+        Thread { runCatching { process.inputStream.bufferedReader().forEachLine { } } }
+            .apply { isDaemon = true }.start()
+        Thread { runCatching { process.errorStream.bufferedReader().forEachLine { } } }
+            .apply { isDaemon = true }.start()
+        return true
+    }
+
+    fun stopRuntimeService(id: String) {
+        runtimeServices.remove(id)?.let { runCatching { it.destroy() } }
+    }
+
+    /** Reap every runtime service (called on project/workspace close and ViewModel teardown). */
+    fun stopAllRuntimeServices() {
+        runtimeServices.values.forEach { runCatching { it.destroy() } }
+        runtimeServices.clear()
+    }
+
+    override fun onCleared() {
+        stopAllRuntimeServices()
+        super.onCleared()
+    }
+
+    /** Open (or focus) the Extension Permissions manager as an in-editor page. */
+    fun openExtensionPermissionsPage() {
+        val existing = _editorGroup.value.tabs.firstOrNull { it.pageKind == EditorPageKind.ExtensionPermissions }
+        if (existing != null) {
+            _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
+            return
+        }
+        val tab = EditorTab.page(EXT_PERMISSIONS_TAB_ID, "Extension Permissions", EditorPageKind.ExtensionPermissions)
+        _editorGroup.value = _editorGroup.value.withTabAdded(tab)
+    }
+
     /** Open the detail page for a single SDK entry. Reuses one SDK-detail tab (replaces any other). */
     fun openSdkDetailPage(entryId: String) {
         openDetailPage(SDK_DETAIL_PREFIX + entryId, EditorPageKind.SdkDetail) {
@@ -828,6 +1621,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Full status re-check (installed + update-available) for the LSP catalog; runs async, no-op if already running. */
     fun checkLspStatuses() {
         viewModelScope.launch(Dispatchers.IO) { distroService.checkLspStatuses() }
+    }
+
+    fun checkDebugEngineStatuses() {
+        viewModelScope.launch(Dispatchers.IO) { distroService.checkDebugEngineStatuses() }
+    }
+
+    /** Open the detail page for a single debug engine. Reuses one debug-detail tab (replaces any other). */
+    fun openDebugEngineDetailPage(entryId: String) {
+        openDetailPage(DEBUG_ENGINE_DETAIL_PREFIX + entryId, EditorPageKind.DebugEngineDetail) {
+            distroService.debugCatalogState.value.entries.firstOrNull { it.id == entryId }?.name ?: entryId
+        }
     }
 
     /** Open the detail page for a single extension. Reuses one extension-detail tab (replaces any other). */
@@ -881,11 +1685,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val tabId = tab.id
         dirtyJobs.remove(tabId)?.cancel()
         dirtyJobs[tabId] = viewModelScope.launch {
-            state.dirty.collect { dirty ->
-                val current = _editorGroup.value.tabs.firstOrNull { it.id == tabId } ?: return@collect
-                if (current.isDirty != dirty) {
-                    _editorGroup.value = _editorGroup.value.withTabUpdated(current.copy(isDirty = dirty))
+            launch {
+                state.dirty.collect { dirty ->
+                    val current = _editorGroup.value.tabs.firstOrNull { it.id == tabId } ?: return@collect
+                    if (current.isDirty != dirty) {
+                        _editorGroup.value = _editorGroup.value.withTabUpdated(current.copy(isDirty = dirty))
+                    }
                 }
+            }
+            // Content edits that keep the tab dirty don't change the EditorGroup, so persist the unsaved
+            // buffer on snapshot changes too (debounced) to capture in-progress typing before a kill.
+            launch {
+                state.snapshot.collect { scheduleSessionSave() }
             }
         }
     }
@@ -1022,7 +1833,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val name = tab.filePath.name
-        val lang = _installedExtensions.value.firstNotNullOfOrNull { ext -> ext.languageFor(name) }
+        val lang = activeLanguageExtensions.value.firstNotNullOfOrNull { ext -> ext.languageFor(name) }
         viewModelScope.launch {
             val snap = state.snapshot.value
             val original = snap.readRangeAsUtf16(0, snap.byteLength)
@@ -1057,6 +1868,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (state.snapshot.value === snapshot) state.markClean()
                 file.diskSignatureOrNull()?.let { diskSignatures[tab.id] = it }
                 emitMessage("Saved ${tab.title}")
+                queueSyntaxCheck(file)
             }.onFailure {
                 emitMessage("Failed to save ${tab.title}: ${it.message ?: "error"}")
             }
@@ -1103,6 +1915,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         trackDirty(tab)
         file.diskSignatureOrNull()?.let { diskSignatures[stableId] = it }
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
+        queueSyntaxCheck(file)
     }
 
     /** Convert a 1-based (line, optional column) to the editor's 0-based reveal request. */
@@ -1136,6 +1949,116 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         applyConfigToTab(tab, effectiveConfig.value)
         trackDirty(tab)
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
+    }
+
+    // --- Session restore: reopen the last workspace/project + tabs (with unsaved edits) on launch. ---
+
+    private suspend fun restoreSessionOnLaunch() {
+        try {
+            val enabled = uiPreferences.data.map { it[restoreLastSessionKey] ?: true }.first()
+            if (!enabled) return
+            val record = withContext(Dispatchers.IO) { sessionStore.load() } ?: return
+
+            // Workspace: only switch if it still exists (a dangling id would blank the workbench).
+            val targetWs = record.workspaceId
+            if (targetWs != null && targetWs != currentWorkspace.value?.id &&
+                workspaceManager.workspaceExists(targetWs)
+            ) {
+                workspaceManager.openWorkspace(targetWs)
+            }
+            // Wait for the workspace (and its project list) to load so the project selection sticks.
+            val workspace = withTimeoutOrNull(4_000) {
+                currentWorkspace.first { it != null && (targetWs == null || it.id == targetWs) }
+            }
+
+            // Project: only select if it still belongs to the restored workspace.
+            val targetProj = record.projectId
+            if (targetProj != null && workspace?.projects?.any { it.id == targetProj } == true) {
+                _selectedProjectId.value = targetProj
+            }
+
+            // Tabs: open each surviving file; recover unsaved buffers where the file (or its folder) remains.
+            for (t in record.tabs) {
+                val file = File(t.filePath)
+                if (t.dirty && t.bufferFileName != null) {
+                    val text = withContext(Dispatchers.IO) { sessionStore.readBuffer(t.bufferFileName) }
+                    val parentExists = file.parentFile?.isDirectory == true
+                    if (text != null && (file.isFile || parentExists)) {
+                        openRestoredDirtyTab(file, t.id, text)
+                    }
+                } else if (file.isFile) {
+                    openLocalFile(file)
+                }
+            }
+
+            // Active tab (only if it survived as one of the restored tabs).
+            record.activeTabId?.let { id ->
+                if (_editorGroup.value.tabs.any { it.id == id }) {
+                    _editorGroup.value = _editorGroup.value.withActiveTabChanged(id)
+                }
+            }
+        } finally {
+            suppressBootstrap = false
+            sessionSaveEnabled = true
+            // If restore opened no file tab (opt-out, no saved session, or every file was missing), fall
+            // back to the normal project bootstrap. The composition's bootstrap effect may have already
+            // fired and no-op'd while suppressed; this covers the case where the project is ready now.
+            if (_editorGroup.value.tabs.none { !it.isPage }) {
+                ensureProjectBootstrapTab()
+            }
+        }
+    }
+
+    /** Reopen a tab that had unsaved edits: load the file (or an empty buffer if it's gone) then re-apply
+     *  the recovered text as an edit so the tab opens dirty and a save rewrites the file. */
+    private suspend fun openRestoredDirtyTab(file: File, stableId: String, text: String) {
+        if (_editorGroup.value.tabs.any { it.id == stableId }) return
+        val tab = EditorTab.create(file, stableId)
+        applyConfigToTab(tab, effectiveConfig.value)
+        trackDirty(tab)
+        file.diskSignatureOrNull()?.let { diskSignatures[stableId] = it }
+        // Add to the group first so trackDirty's collector can mirror the dirty flag once we edit below.
+        _editorGroup.value = _editorGroup.value.withTabAdded(tab)
+        tab.editorState?.let { state ->
+            state.applyEdit(EditTx.replace(0, state.snapshot.value.byteLength, text))
+        }
+    }
+
+    /** Persist the current workbench (open workspace/project + file tabs + unsaved buffers). Debounced. */
+    private suspend fun persistSession() {
+        if (!sessionSaveEnabled) return
+        val group = _editorGroup.value
+        val fileTabs = group.tabs.filter {
+            !it.isPage && it.editorState != null && it.filePath.path.isNotBlank()
+        }
+        val wsId = currentWorkspace.value?.id
+        val projId = _selectedProjectId.value
+        withContext(Dispatchers.IO) {
+            val tabRecords = fileTabs.map { tab ->
+                val state = tab.editorState!!
+                if (tab.isDirty) {
+                    val snap = state.snapshot.value
+                    val name = sessionStore.writeBuffer(tab.id, snap.readRangeAsUtf16(0, snap.byteLength))
+                    SessionTabRecord(tab.id, tab.filePath.absolutePath, dirty = true, bufferFileName = name)
+                } else {
+                    SessionTabRecord(tab.id, tab.filePath.absolutePath, dirty = false, bufferFileName = null)
+                }
+            }
+            sessionStore.saveManifest(
+                SessionRecord(
+                    workspaceId = wsId,
+                    projectId = projId,
+                    activeTabId = group.activeTabId?.takeIf { id -> fileTabs.any { it.id == id } },
+                    tabs = tabRecords,
+                )
+            )
+            sessionStore.pruneBuffers(tabRecords.mapNotNull { it.bufferFileName }.toSet())
+        }
+    }
+
+    /** Best-effort synchronous-ish flush from the Activity's onStop (covers graceful backgrounding). */
+    fun flushSessionNow() {
+        viewModelScope.launch { persistSession() }
     }
 
     private suspend fun emitMessage(message: String) {
@@ -1258,9 +2181,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun stepNeedsForegroundService(stepId: WizardStepId): Boolean {
-        return stepId == WizardStepId.DistroInstalled ||
-            stepId == WizardStepId.ToolchainBootstrapped
+    private fun runDebugCatalogAction(
+        entryId: String,
+        action: DebugEngineAction,
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = SessionRegistry.registerSession(
+                context = getApplication(),
+                kind = BackendSessionKind.JOB,
+                name = "debug:${action.name.lowercase()}:$entryId",
+            )
+            try {
+                distroService.runDebugEngineCatalogAction(entryId, action)
+            } finally {
+                session.close()
+            }
+        }
     }
 
     companion object {
@@ -1269,7 +2205,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val ENVIRONMENT_TAB_ID = "jcode://environment"
         const val SDK_DETAIL_PREFIX = "jcode://sdk/"
         const val LSP_DETAIL_PREFIX = "jcode://lsp/"
+        const val DEBUG_ENGINE_DETAIL_PREFIX = "jcode://debug-engine/"
         const val EXT_DETAIL_PREFIX = "jcode://ext/"
+        const val EXT_APP_PREFIX = "jcode://ext-app/"
+        const val EXT_PERMISSIONS_TAB_ID = "jcode://ext-permissions"
         const val RUN_CONFIG_PREFIX = "jcode://run-config/"
     }
 }

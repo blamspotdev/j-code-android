@@ -7,6 +7,10 @@ enum class ExtensionType {
     Templates,
     Language,
     Formatter,
+    /** Ships a web frontend ("Manage" UI), e.g. a runtime/tool manager like the VM Manager. */
+    App,
+    /** Like [App], but its UI is a database manager surfaced under the "DB Managers" drawer. */
+    DbManager,
     Unknown;
 
     companion object {
@@ -14,7 +18,33 @@ enum class ExtensionType {
             "templates" -> Templates
             "language" -> Language
             "formatter" -> Formatter
+            "app", "tool", "runtime" -> App
+            "dbmanager", "db-manager", "database" -> DbManager
             else -> Unknown
+        }
+    }
+}
+
+/**
+ * When an installed extension's contributions (e.g. a language pack's highlighting, completions, and
+ * formatting) are allowed to turn on. [OnDemand] is the default; [Manual] disables the extension.
+ */
+enum class ExtensionActivation {
+    /** Active from launch — always on. */
+    AutoStart,
+    /** Active when relevant (e.g. a file the extension supports is open). The default. */
+    OnDemand,
+    /** Disabled — the extension's features stay off until the mode is changed. */
+    Manual;
+
+    companion object {
+        val Default = OnDemand
+
+        fun from(raw: String?): ExtensionActivation = when (raw?.lowercase()) {
+            "autostart", "auto", "auto-start" -> AutoStart
+            "manual" -> Manual
+            "ondemand", "on-demand" -> OnDemand
+            else -> Default
         }
     }
 }
@@ -45,8 +75,10 @@ data class MarketplaceEntry(
     /** Globally-unique reverse-DNS install id (the .jehm `uniqueName`). */
     val id: String,
     val name: String,
-    /** Publisher / author / channel that published this extension. */
+    /** Publisher / author / channel that published this extension (back-compat single author). */
     val author: String? = null,
+    /** All authors, ordered; the first is the primary author, the rest are co-authors. Empty = fall back to [author]. */
+    val authors: List<String> = emptyList(),
     val type: ExtensionType,
     val category: String?,
     val subcategory: String?,
@@ -141,8 +173,10 @@ data class LanguagePack(
 data class InstalledExtension(
     val id: String,
     val name: String,
-    /** Publisher / author / channel that published this extension. */
+    /** Publisher / author / channel that published this extension (back-compat single author). */
     val author: String? = null,
+    /** All authors, ordered; the first is the primary author, the rest are co-authors. Empty = fall back to [author]. */
+    val authors: List<String> = emptyList(),
     val type: ExtensionType,
     val version: String?,
     val description: String,
@@ -154,8 +188,33 @@ data class InstalledExtension(
     val languages: List<LanguagePack> = emptyList(),
     /** The extension's icon file inside [dir], if it shipped one. */
     val iconFile: File? = null,
+    /** Relative path (from [dir]) to the extension's web-frontend HTML entry, e.g. "www/index.html". */
+    val webUiEntry: String? = null,
+    /** Lowest JCode extension-API version this extension needs (0 = legacy exec-only bridge). */
+    val apiMinVersion: Int = 0,
+    /** Capability families this extension declares it uses (e.g. "exec", "fs", "workbench"). */
+    val apiCapabilities: List<String> = emptyList(),
 )
 
 /** The first bundled language that claims [fileName] (by file extension), or null. */
 fun InstalledExtension.languageFor(fileName: String): LanguagePack? =
     languages.firstOrNull { it.matchesFile(fileName) }
+
+/** True if this extension ships a web-frontend ("Manage" / DB-manager) UI that resolves on disk. */
+val InstalledExtension.hasWebUi: Boolean get() = webUiFile != null
+
+/** The extension's web-frontend HTML entry file inside [dir], or null if it doesn't ship one. */
+val InstalledExtension.webUiFile: File?
+    get() = webUiEntry?.let { File(dir, it) }?.takeIf { it.isFile }
+
+/** The primary author: the first of [authors], or the legacy single [author], or "unknown". */
+val MarketplaceEntry.primaryAuthor: String get() = authors.firstOrNull() ?: author ?: "unknown"
+
+/** Co-authors beyond the primary one (empty for single-author / legacy extensions). */
+val MarketplaceEntry.otherAuthors: List<String> get() = authors.drop(1)
+
+/** The primary author: the first of [authors], or the legacy single [author], or "unknown". */
+val InstalledExtension.primaryAuthor: String get() = authors.firstOrNull() ?: author ?: "unknown"
+
+/** Co-authors beyond the primary one (empty for single-author / legacy extensions). */
+val InstalledExtension.otherAuthors: List<String> get() = authors.drop(1)

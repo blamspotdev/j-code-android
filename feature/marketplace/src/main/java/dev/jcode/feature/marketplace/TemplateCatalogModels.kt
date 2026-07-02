@@ -8,6 +8,24 @@ data class TemplateRecipeStep(
     val workdir: String? = null,
 )
 
+/**
+ * A value the user picks before scaffolding (e.g. Android min/target SDK, a .NET version). The
+ * chosen value is substituted into the recipe as `{{id}}`. All specifics — labels, choices,
+ * defaults — live in the extension's template.yaml so the app stays generic and small.
+ */
+data class TemplateInput(
+    /** Placeholder token: an input with id "minSdk" fills `{{minSdk}}` in the recipe. */
+    val id: String,
+    val label: String,
+    /** "select" (a fixed choice list) or "text" (free entry). Unknown types fall back to text. */
+    val type: String = "select",
+    val options: List<String> = emptyList(),
+    val default: String? = null,
+) {
+    /** The value to pre-fill / fall back to when the user leaves it untouched. */
+    val defaultValue: String get() = default ?: options.firstOrNull() ?: ""
+}
+
 /** A project template that can be scaffolded on-device by the embedded runtime. */
 data class ProjectTemplate(
     val id: String,
@@ -15,6 +33,8 @@ data class ProjectTemplate(
     val description: String,
     /** Toolchain ids (from the SDK catalog) this template needs at scaffold time. */
     val requires: List<String> = emptyList(),
+    /** User-configurable inputs collected before scaffolding; empty for fixed templates. */
+    val inputs: List<TemplateInput> = emptyList(),
     val recipe: List<TemplateRecipeStep> = emptyList(),
 ) {
     /** An empty template creates only the folder; there is nothing to run. */

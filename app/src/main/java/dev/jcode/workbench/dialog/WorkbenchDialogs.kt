@@ -3,6 +3,7 @@ package dev.jcode.workbench.dialog
 import android.content.res.Configuration
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,9 +14,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -23,7 +31,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -36,6 +46,7 @@ import androidx.compose.ui.window.DialogProperties
 import dev.jcode.MainViewModel
 import dev.jcode.feature.marketplace.ProjectTemplate
 import dev.jcode.feature.marketplace.ScaffoldState
+import dev.jcode.feature.marketplace.TemplateInput
 
 @Composable
 internal fun OpenFolderTypeDialog(
@@ -102,6 +113,18 @@ internal fun NewItemDialog(
     var selectedTemplateId by rememberSaveable(templates) {
         mutableStateOf(templates.firstOrNull()?.id)
     }
+    // 0 = pick folder type / name / template; 1 = configure the template's inputs.
+    var step by rememberSaveable { mutableStateOf(0) }
+
+    val selectedTemplate = if (isWorkspace) null else templates.firstOrNull { it.id == selectedTemplateId }
+    val hasInputs = selectedTemplate?.inputs?.isNotEmpty() == true
+    // Live values for the selected template's inputs, seeded from each input's default.
+    val inputValues = remember(selectedTemplateId) {
+        mutableStateMapOf<String, String>().apply {
+            selectedTemplate?.inputs?.forEach { put(it.id, it.defaultValue) }
+        }
+    }
+    if (!hasInputs && step != 0) step = 0
 
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
@@ -154,11 +177,29 @@ internal fun NewItemDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        modifier = if (isLandscape) Modifier.fillMaxWidth(0.82f).widthIn(max = 760.dp) else Modifier,
-        properties = DialogProperties(usePlatformDefaultWidth = !isLandscape),
-        title = { Text("New") },
+        modifier = if (isLandscape && step == 0) Modifier.fillMaxWidth(0.82f).widthIn(max = 760.dp) else Modifier,
+        properties = DialogProperties(usePlatformDefaultWidth = !(isLandscape && step == 0)),
+        title = { Text(if (step == 1 && selectedTemplate != null) selectedTemplate.name else "New") },
         text = {
-            if (isLandscape) {
+            if (step == 1 && selectedTemplate != null) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Text(
+                        "Configure this project, then create it.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    selectedTemplate.inputs.forEach { input ->
+                        TemplateInputField(
+                            input = input,
+                            value = inputValues[input.id] ?: input.defaultValue,
+                            onValue = { inputValues[input.id] = it },
+                        )
+                    }
+                }
+            } else if (isLandscape) {
                 // Two columns side by side so the (tall) template list doesn't overflow the short
                 // landscape dialog height.
                 Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -191,25 +232,71 @@ internal fun NewItemDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    onConfirm(
-                        MainViewModel.NewItemRequest(
-                            name = name,
-                            isWorkspace = isWorkspace,
-                            templateId = if (isWorkspace) null else selectedTemplateId,
-                        ),
-                    )
+                    if (step == 0 && hasInputs) {
+                        step = 1
+                    } else {
+                        onConfirm(
+                            MainViewModel.NewItemRequest(
+                                name = name,
+                                isWorkspace = isWorkspace,
+                                templateId = if (isWorkspace) null else selectedTemplateId,
+                                inputs = if (hasInputs) inputValues.toMap() else emptyMap(),
+                            ),
+                        )
+                    }
                 },
                 enabled = name.isNotBlank(),
             ) {
-                Text("Create")
+                Text(if (step == 0 && hasInputs) "Next" else "Create")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
+            TextButton(onClick = { if (step == 1) step = 0 else onDismiss() }) {
+                Text(if (step == 1) "Back" else "Cancel")
             }
         },
     )
+}
+
+@Composable
+private fun TemplateInputField(
+    input: TemplateInput,
+    value: String,
+    onValue: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(input.label, style = MaterialTheme.typography.labelLarge)
+        if (input.type == "select" && input.options.isNotEmpty()) {
+            var expanded by remember { mutableStateOf(false) }
+            Box {
+                OutlinedButton(
+                    onClick = { expanded = true },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(value.ifBlank { "Select" }, modifier = Modifier.weight(1f))
+                    Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
+                }
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    input.options.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option) },
+                            onClick = {
+                                onValue(option)
+                                expanded = false
+                            },
+                        )
+                    }
+                }
+            }
+        } else {
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValue,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+        }
+    }
 }
 
 @Composable

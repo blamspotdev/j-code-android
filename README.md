@@ -86,7 +86,7 @@ and the [`j-code-make-tools`](https://github.com/blamspotdev/j-code-make-tools) 
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE). © 2026 blamspotdev (Janrick Samorin).
-You're free to use, modify, and redistribute it under the Apache-2.0 terms. Contributions
+Licensed under the [MIT License](LICENSE). © 2026 blamspotdev (Janrick Samorin).
+You're free to use, modify, and redistribute it under the MIT terms. Contributions
 are covered by [`CONTRIBUTING.md`](CONTRIBUTING.md); third-party components and their
 licenses are listed in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).

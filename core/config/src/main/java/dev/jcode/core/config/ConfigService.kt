@@ -52,6 +52,12 @@ class ConfigService {
 
     private var workspaceConfigFile: File? = null
     private var projectConfigFile: File? = null
+
+    /** Host path of the bound workspace config file (for diagnostics), or null when unbound. */
+    val workspaceConfigPath: String? get() = workspaceConfigFile?.absolutePath
+
+    /** Host path of the bound project config file (for diagnostics), or null when unbound. */
+    val projectConfigPath: String? get() = projectConfigFile?.absolutePath
     private var workspaceWatcher: Job? = null
     private var projectWatcher: Job? = null
     private var workspaceDocument: Map<String, Any?> = emptyMap()

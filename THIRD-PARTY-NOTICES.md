@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-J Code is licensed under the Apache License 2.0 (see [`LICENSE`](LICENSE)). J Code bundles,
+J Code is licensed under the MIT License (see [`LICENSE`](LICENSE)). J Code bundles,
 links, or otherwise distributes the third-party components listed below. Each
 component remains under its own license; the notices below are provided to comply
 with those licenses and are for informational purposes only.
@@ -104,5 +104,5 @@ Bundled into the APK (`classes.dex` / merged resources). Unless noted, each is
 All first-party modules — `:app`, `:core:*`, `:feature:*`, and the native
 libraries `jcodebuffer`, `jcode_core`, `pty`, `jcode_vt`, and the
 editor-render / ripgrep-ffi / wasmtime-ffi / tree-sitter / libgit2 FFI wrappers —
-are © 2026 blamspotdev (Janrick Samorin) and licensed under the Apache License 2.0 (see
+are © 2026 blamspotdev (Janrick Samorin) and licensed under the MIT License (see
 [`LICENSE`](LICENSE)).

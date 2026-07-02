@@ -55,6 +55,11 @@ import dev.jcode.core.config.WorkspaceConfig
 import dev.jcode.design.IconBundle
 import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.JCodeIcon
+import dev.jcode.design.LocalEditorDragMovesCursor
+import dev.jcode.design.LocalPerformanceSettings
+import dev.jcode.design.LocalRestoreSession
+import dev.jcode.design.WebPreviewBrowsers
+import dev.jcode.design.LocalWebPreviewBrowsers
 import dev.jcode.design.LocalTabCloseButtonSetting
 import dev.jcode.design.ThemeBundleRegistry
 import dev.jcode.core.distro.DistroEnvironmentState
@@ -97,6 +102,10 @@ object SettingsFeature {
         modifier: Modifier = Modifier,
     ) {
         val tabCloseSetting = LocalTabCloseButtonSetting.current
+        val editorDragSetting = LocalEditorDragMovesCursor.current
+        val restoreSessionSetting = LocalRestoreSession.current
+        val perf = LocalPerformanceSettings.current
+        val webPreview = LocalWebPreviewBrowsers.current
         var selectedScope by rememberSaveable(projectOverridesAvailable) {
             mutableStateOf(if (projectOverridesAvailable) ConfigScope.Project else ConfigScope.Workspace)
         }
@@ -198,10 +207,83 @@ object SettingsFeature {
                 )
             }
 
+            SettingsSectionHeader("Startup")
+            SettingsCard(
+                title = "Restore last session",
+                description = "Pick up where you left off after closing the app.",
+                keywords = "restore session reopen tabs workspace project unsaved recover startup launch",
+            ) {
+                ToggleRow(
+                    label = "Restore last session on launch",
+                    supporting = "Reopen the last workspace, project, and editor tabs — including unsaved changes — when J Code starts. Missing files are skipped.",
+                    checked = restoreSessionSetting.enabled,
+                    onCheckedChange = restoreSessionSetting.onChange,
+                )
+            }
+
+            SettingsSectionHeader("Performance")
+            SettingsCard(
+                title = "Resource management",
+                description = "Keep the Linux runtime lean by stopping work you're done with. Each terminal, " +
+                    "run, and debug session holds a proot process tree in memory.",
+                keywords = "performance memory cpu battery proot process terminal kill close idle background resource optimize",
+            ) {
+                ToggleRow(
+                    label = "Warn before closing running processes",
+                    supporting = "When closing a project or workspace with a running terminal command, an active " +
+                        "Build & Run, or a live debug session, ask first before stopping them.",
+                    checked = perf.confirmCloseRunning,
+                    onCheckedChange = perf.onSetConfirmCloseRunning,
+                )
+                ToggleRow(
+                    label = "Auto-close idle terminals",
+                    supporting = "Automatically close terminals left idle at the prompt (no running program) to " +
+                        "free their process tree and memory. Terminals running a command are never auto-closed.",
+                    checked = perf.autoCloseIdleTerminals,
+                    onCheckedChange = perf.onSetAutoCloseIdleTerminals,
+                )
+                if (perf.autoCloseIdleTerminals) {
+                    StepperRow(
+                        label = "Idle timeout",
+                        value = "${perf.idleTimeoutMinutes} min",
+                        onDecrease = { perf.onSetIdleTimeoutMinutes(perf.idleTimeoutMinutes - 5) },
+                        onIncrease = { perf.onSetIdleTimeoutMinutes(perf.idleTimeoutMinutes + 5) },
+                    )
+                }
+            }
+
+            SettingsSectionHeader("Web preview")
+            SettingsCard(
+                title = "Open web previews in",
+                description = "The browser used when you open a running dev server (Build & Run) or tap a URL " +
+                    "in the terminal. A project can override this in its Build & Run panel.",
+                keywords = "browser web preview open url chrome firefox default run dev server",
+            ) {
+                val globalOptions = buildList {
+                    add(WebPreviewBrowsers.SYSTEM)
+                    add(WebPreviewBrowsers.ASK)
+                    webPreview.available.forEach { add(it.packageName) }
+                }
+                globalOptions.forEach { choice ->
+                    BundleRow(
+                        name = webPreview.label(choice),
+                        description = when (choice) {
+                            WebPreviewBrowsers.SYSTEM -> "The device's default browser app"
+                            WebPreviewBrowsers.ASK -> "Show the Android app chooser each time"
+                            else -> choice
+                        },
+                        selected = webPreview.globalChoice == choice,
+                        swatch = emptyList(),
+                        onClick = { webPreview.onSetGlobal(choice) },
+                    )
+                }
+            }
+
             SettingsSectionHeader("Environment")
             SettingsCard(
                 title = "Environment",
-                description = "Environment setup: proot, distro bootstrap, and the final smoke test.",
+                description = "Environment setup: proot, distro bootstrap, and the final smoke test. " +
+                    "Install, switch between, or remove environments from the setup page.",
             ) {
                 SummaryRow(
                     label = "proot",
@@ -251,7 +333,7 @@ object SettingsFeature {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilledTonalButton(onClick = onOpenEnvironmentWizard, modifier = Modifier.weight(1f)) {
-                        Text("Open setup")
+                        Text("Manage environments")
                     }
                     OutlinedButton(onClick = onRefreshEnvironment, modifier = Modifier.weight(1f)) {
                         Text("Refresh checks")
@@ -361,6 +443,26 @@ object SettingsFeature {
                     checked = ligatures,
                     onCheckedChange = { onUpdateLigatures(selectedScope, it) },
                 )
+                ToggleRow(
+                    label = "Drag to move cursor",
+                    supporting = "Drag a finger on the editor to move the text cursor (the view scrolls to follow) instead of scrolling. Long-press still selects text. Applies app-wide.",
+                    checked = editorDragSetting.enabled,
+                    onCheckedChange = editorDragSetting.onChange,
+                )
+                if (editorDragSetting.enabled) {
+                    StepperRow(
+                        label = "Cursor drag speed — vertical",
+                        value = "${editorDragSetting.verticalLevel} / 5",
+                        onDecrease = { editorDragSetting.onVerticalLevelChange((editorDragSetting.verticalLevel - 1).coerceAtLeast(1)) },
+                        onIncrease = { editorDragSetting.onVerticalLevelChange((editorDragSetting.verticalLevel + 1).coerceAtMost(5)) },
+                    )
+                    StepperRow(
+                        label = "Cursor drag speed — horizontal",
+                        value = "${editorDragSetting.horizontalLevel} / 5",
+                        onDecrease = { editorDragSetting.onHorizontalLevelChange((editorDragSetting.horizontalLevel - 1).coerceAtLeast(1)) },
+                        onIncrease = { editorDragSetting.onHorizontalLevelChange((editorDragSetting.horizontalLevel + 1).coerceAtMost(5)) },
+                    )
+                }
             }
 
             SettingsCard(

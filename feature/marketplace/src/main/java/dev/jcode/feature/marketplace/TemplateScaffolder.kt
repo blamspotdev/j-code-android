@@ -40,6 +40,8 @@ class TemplateScaffolder internal constructor(
         val projectName: String,
         /** Project root inside the runtime, e.g. `/workspace/<name>`. */
         val projectDir: String,
+        /** User-picked template inputs, keyed by input id; each fills `{{id}}` in the recipe. */
+        val inputs: Map<String, String> = emptyMap(),
     )
 
     fun reset() {
@@ -61,7 +63,11 @@ class TemplateScaffolder internal constructor(
         }
 
         val staging = "\$HOME/.jcode-staging/${request.projectName}"
-        val replacements = mapOf(
+        // Each declared input becomes `{{id}}`, taking the user's pick or the template default.
+        val inputTokens = template.inputs.associate { input ->
+            "{{${input.id}}}" to (request.inputs[input.id] ?: input.defaultValue)
+        }
+        val replacements = inputTokens + mapOf(
             "{{name}}" to request.projectName,
             "{{projectDir}}" to request.projectDir,
             "{{hostStaging}}" to staging,

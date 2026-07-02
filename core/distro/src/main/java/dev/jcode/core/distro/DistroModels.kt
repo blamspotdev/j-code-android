@@ -61,7 +61,14 @@ data class DistroEvent(
 /** Progress emitted by the auto-setup orchestrator. */
 sealed interface DistroWizardProgress {
     data object Idle : DistroWizardProgress
-    data class Running(val step: WizardStepId, val label: String) : DistroWizardProgress
+    data class Running(
+        val step: WizardStepId,
+        val label: String,
+        /** 0-100 while the step reports determinate progress (e.g. rootfs download), else null. */
+        val progressPercent: Int? = null,
+        /** Human progress detail, e.g. "12.4 / 41.0 MB". */
+        val progressDetail: String? = null,
+    ) : DistroWizardProgress
     data class Completed(val step: WizardStepId, val detail: String) : DistroWizardProgress
     data class Failed(val step: WizardStepId, val error: String) : DistroWizardProgress
     data class AllDone(
@@ -109,16 +116,16 @@ data class DistroProfile(
         private val defaultProfiles = listOf(
             DistroProfile(
                 id = "ubuntu-24.04",
-                label = "Ubuntu 24.04 LTS",
+                label = "Ubuntu 24.04 LTS (ARM64)",
                 installRecipe = "ubuntu:24.04",
                 approxFootprint = "~2.5 GB",
                 arch = Arch.ARM64,
             ),
             DistroProfile(
-                id = "debian-12",
-                label = "Debian 12 Bookworm",
-                installRecipe = "debian:bookworm",
-                approxFootprint = "~2.0 GB",
+                id = "ubuntu-26.04",
+                label = "Ubuntu 26.04 LTS (ARM64)",
+                installRecipe = "ubuntu:26.04",
+                approxFootprint = "~2.5 GB",
                 arch = Arch.ARM64,
             ),
         )
@@ -141,7 +148,6 @@ data class DistroProfile(
         private fun legacyMatches(profile: DistroProfile, raw: String): Boolean {
             return when (raw) {
                 "ubuntu" -> profile.installRecipe == "ubuntu:24.04"
-                "debian" -> profile.installRecipe == "debian:bookworm"
                 else -> false
             }
         }

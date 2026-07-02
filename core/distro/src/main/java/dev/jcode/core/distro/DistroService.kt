@@ -48,6 +48,7 @@ class DistroService(
     private val lock = Mutex()
     private val sdkCheckInProgress = AtomicBoolean(false)
     private val lspCheckInProgress = AtomicBoolean(false)
+    private val debugCheckInProgress = AtomicBoolean(false)
     private val activityLogLock = Any()
     private val dataStore = PreferenceDataStoreFactory.create {
         appContext.preferencesDataStoreFile("distro-environment.preferences_pb")
@@ -62,6 +63,9 @@ class DistroService(
     private val _lspCatalogState = MutableStateFlow(LspCatalogState())
     val lspCatalogState: StateFlow<LspCatalogState> = _lspCatalogState.asStateFlow()
 
+    private val _debugCatalogState = MutableStateFlow(DebugEngineCatalogState())
+    val debugCatalogState: StateFlow<DebugEngineCatalogState> = _debugCatalogState.asStateFlow()
+
     private val _autoSetupProgress = MutableSharedFlow<DistroWizardProgress>(extraBufferCapacity = 64)
     val autoSetupProgress: Flow<DistroWizardProgress> = _autoSetupProgress.asSharedFlow()
 
@@ -74,6 +78,7 @@ class DistroService(
             refreshEnvironment()
             refreshSdkCatalog()
             refreshLspCatalog()
+            refreshDebugEngineCatalog()
         }
     }
 
@@ -151,9 +156,11 @@ class DistroService(
      */
     suspend fun deleteEnvironment(environmentId: String): Boolean {
         val removed = rootfsManager.removeDistro(environmentId)
+        verifiedDistroUsers.keys.removeAll { it.startsWith("$environmentId:") }
         dataStore.edit { prefs ->
             prefs.remove(installedEntriesKey(environmentId))
             prefs.remove(installedLspEntriesKey(environmentId))
+            prefs.remove(installedDebugEntriesKey(environmentId))
         }
         if (_environmentState.value.runtime.selectedDistro.id == environmentId) {
             val available = _environmentState.value.availableDistros
@@ -217,7 +224,15 @@ class DistroService(
                 return
             }
 
-            val distroId = _environmentState.value.runtime.selectedDistro.id
+            val selectedDistro = _environmentState.value.runtime.selectedDistro
+            if (!entry.isSupportedOn(selectedDistro.id, selectedDistro.arch)) {
+                _sdkCatalogState.value = _sdkCatalogState.value.copy(
+                    errorMessage = "${entry.name} is not available on ${selectedDistro.label}.",
+                )
+                return
+            }
+
+            val distroId = selectedDistro.id
             _sdkCatalogState.value = _sdkCatalogState.value.copy(
                 runningEntryId = entry.id,
                 runningAction = action,
@@ -234,15 +249,15 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                SdkCatalogAction.Install -> execInDistro(entry.installScript, timeoutMs = 1_800_000L)
-                SdkCatalogAction.Verify -> execInDistro(entry.verifyScript, timeoutMs = 120_000L)
-                SdkCatalogAction.Uninstall -> execInDistro(entry.uninstallScript, timeoutMs = 900_000L)
+                SdkCatalogAction.Install -> execCatalogScript(entry.installScript, timeoutMs = 1_800_000L)
+                SdkCatalogAction.Verify -> execCatalogScript(entry.verifyScript, timeoutMs = 120_000L)
+                SdkCatalogAction.Uninstall -> execCatalogScript(entry.uninstallScript, timeoutMs = 900_000L)
             }
             val verifyResult = when (action) {
                 SdkCatalogAction.Verify -> actionResult
                 SdkCatalogAction.Install,
                 SdkCatalogAction.Uninstall,
-                -> execInDistro(entry.verifyScript, timeoutMs = 120_000L)
+                -> execCatalogScript(entry.verifyScript, timeoutMs = 120_000L)
             }
 
             val installedNow = verifyResult.succeeded
@@ -343,15 +358,15 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                LspCatalogAction.Install -> execInDistro(entry.installCommand, timeoutMs = 1_800_000L)
-                LspCatalogAction.Verify -> execInDistro(entry.verifyCommand, timeoutMs = 120_000L)
-                LspCatalogAction.Uninstall -> execInDistro(entry.uninstallCommand, timeoutMs = 900_000L)
+                LspCatalogAction.Install -> execCatalogScript(entry.installCommand, timeoutMs = 1_800_000L)
+                LspCatalogAction.Verify -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
+                LspCatalogAction.Uninstall -> execCatalogScript(entry.uninstallCommand, timeoutMs = 900_000L)
             }
             val verifyResult = when (action) {
                 LspCatalogAction.Verify -> actionResult
                 LspCatalogAction.Install,
                 LspCatalogAction.Uninstall,
-                -> execInDistro(entry.verifyCommand, timeoutMs = 120_000L)
+                -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
             }
 
             val installedNow = verifyResult.succeeded
@@ -487,6 +502,153 @@ class DistroService(
         }
     }
 
+    suspend fun refreshDebugEngineCatalog() {
+        lock.withLock {
+            val distroId = _environmentState.value.runtime.selectedDistro.id
+            _debugCatalogState.value = _debugCatalogState.value.copy(
+                entries = DebugEngineCatalog.BUILT_IN,
+                installedEntryIds = readInstalledDebugEntries(distroId),
+                runningEntryId = null,
+                runningAction = null,
+                selectedDistroId = distroId,
+                errorMessage = null,
+            )
+        }
+    }
+
+    suspend fun runDebugEngineCatalogAction(
+        entryId: String,
+        action: DebugEngineAction,
+    ) {
+        lock.withLock {
+            val entry = DebugEngineCatalog.findById(entryId)
+            if (entry == null) {
+                _debugCatalogState.value = _debugCatalogState.value.copy(
+                    errorMessage = "Unknown debug engine '$entryId'.",
+                )
+                return
+            }
+
+            if (_environmentState.value.distroInstalled != true || _environmentState.value.jcodeUserReady != true) {
+                _debugCatalogState.value = _debugCatalogState.value.copy(
+                    errorMessage = "Complete the environment setup before installing debug engines.",
+                )
+                return
+            }
+
+            val distroId = _environmentState.value.runtime.selectedDistro.id
+            val name = entry.name
+            _debugCatalogState.value = _debugCatalogState.value.copy(
+                runningEntryId = entry.id,
+                runningAction = action,
+                executionLabel = "${action.label} $name",
+                selectedDistroId = distroId,
+                errorMessage = null,
+                logLines = appendCatalogLogLines(
+                    existing = _debugCatalogState.value.logLines,
+                    lines = buildList {
+                        add("== ${action.label} $name (${_environmentState.value.runtime.selectedDistro.label}) ==")
+                        addAll(entry.commandFor(action).lineSequence().map { line -> "$ $line" })
+                    },
+                ),
+            )
+
+            val actionResult = when (action) {
+                DebugEngineAction.Install -> execCatalogScript(entry.installCommand, timeoutMs = 1_800_000L)
+                DebugEngineAction.Verify -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
+                DebugEngineAction.Uninstall -> execCatalogScript(entry.uninstallCommand, timeoutMs = 900_000L)
+            }
+            val verifyResult = when (action) {
+                DebugEngineAction.Verify -> actionResult
+                DebugEngineAction.Install,
+                DebugEngineAction.Uninstall,
+                -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
+            }
+
+            val installedNow = verifyResult.succeeded
+            val updatedInstalledEntries = readInstalledDebugEntries(distroId).toMutableSet().apply {
+                if (installedNow) add(entry.id) else remove(entry.id)
+            }.toSet()
+            persistInstalledDebugEntries(distroId, updatedInstalledEntries)
+
+            val errorMessage = when {
+                !actionResult.succeeded -> actionResult.internalError
+                    ?: actionResult.stderr.lineSequence().firstOrNull { it.isNotBlank() }
+                    ?: actionResult.stdout.lineSequence().firstOrNull { it.isNotBlank() }
+                    ?: "${action.label} failed."
+
+                action == DebugEngineAction.Install && !installedNow ->
+                    "Install finished, but verification did not detect $name."
+
+                action == DebugEngineAction.Uninstall && installedNow ->
+                    "Removal finished, but verification still detects $name."
+
+                else -> null
+            }
+
+            _debugCatalogState.value = _debugCatalogState.value.copy(
+                installedEntryIds = updatedInstalledEntries,
+                runningEntryId = null,
+                runningAction = null,
+                executionLabel = "${action.label} $name",
+                selectedDistroId = distroId,
+                errorMessage = errorMessage,
+                logLines = appendCatalogLogLines(
+                    existing = _debugCatalogState.value.logLines,
+                    lines = formatDebugActionLogs(
+                        name = name,
+                        action = action,
+                        actionResult = actionResult,
+                        verifyResult = verifyResult,
+                        installedNow = installedNow,
+                    ),
+                ),
+            )
+        }
+    }
+
+    /** Re-check installed + update-available status for every debug engine. Full check, run async; no-op if already running. */
+    suspend fun checkDebugEngineStatuses() {
+        val ready = _environmentState.value.distroInstalled == true && _environmentState.value.jcodeUserReady == true
+        if (!ready) return
+        if (!debugCheckInProgress.compareAndSet(false, true)) return
+        try {
+            lock.withLock {
+                val distroId = _environmentState.value.runtime.selectedDistro.id
+                val entries = DebugEngineCatalog.BUILT_IN
+                _debugCatalogState.value = _debugCatalogState.value.copy(
+                    entries = entries, checking = true, selectedDistroId = distroId, errorMessage = null,
+                )
+                val installed = linkedSetOf<String>()
+                val updatable = linkedSetOf<String>()
+                var aptUpdated = false
+                for (entry in entries) {
+                    if (execInDistro(entry.verifyCommand, timeoutMs = 120_000L).succeeded) {
+                        installed.add(entry.id)
+                        if (entry.updateCheckCommand.isNotBlank()) {
+                            if (!aptUpdated && entry.updateCheckCommand.contains("apt list")) {
+                                execInDistro("sudo apt-get update", timeoutMs = 300_000L)
+                                aptUpdated = true
+                            }
+                            if (execInDistro(entry.updateCheckCommand, timeoutMs = 120_000L).succeeded) updatable.add(entry.id)
+                        }
+                    }
+                    _debugCatalogState.value = _debugCatalogState.value.copy(
+                        installedEntryIds = installed.toSet(), updatableEntryIds = updatable.toSet(),
+                    )
+                }
+                persistInstalledDebugEntries(distroId, installed.toSet())
+                _debugCatalogState.value = _debugCatalogState.value.copy(
+                    installedEntryIds = installed.toSet(), updatableEntryIds = updatable.toSet(),
+                    checking = false, selectedDistroId = distroId,
+                )
+            }
+        } finally {
+            _debugCatalogState.value = _debugCatalogState.value.copy(checking = false)
+            debugCheckInProgress.set(false)
+        }
+    }
+
     suspend fun refreshEnvironment() {
         lock.withLock {
             refreshEnvironmentInternal()
@@ -513,49 +675,55 @@ class DistroService(
             )
         }
 
-        var completedSteps = readCompletedSteps().toMutableSet()
-        val storedSetupDeferred = readFirstRunSetupDeferred()
+        deriveSelectedDistroState()
+    }
 
-        // Check proot installation
+    /**
+     * Re-derive all per-distro environment state for the CURRENTLY selected distro, probing disk/proot.
+     * [DistroEnvironmentState.completedSteps] is rebuilt from scratch (never seeded from the persisted set)
+     * so switching to a different — or not-yet-installed — distro never inherits the previous distro's
+     * completion, and the per-distro readiness flags are cleared when the distro isn't installed. Uses the
+     * in-memory selection only (no persisted re-read), so it is safe to call straight after
+     * [setSelectedDistro] without racing the async persist — which is why [runAllPendingSteps] calls it
+     * before computing pending steps.
+     */
+    private suspend fun deriveSelectedDistroState() {
+        val storedSetupDeferred = readFirstRunSetupDeferred()
+        val completedSteps = mutableSetOf<WizardStepId>()
+
         val prootInstalled = prootManager.isProotInstalled
         if (prootInstalled) {
             completedSteps += WizardStepId.ProotReady
         }
 
-        // Always mark distro selected as complete (default is Ubuntu)
+        // A distro is always selected (default is Ubuntu).
         completedSteps += WizardStepId.DistroSelected
 
-        // Check storage space
         val hasEnoughStorage = checkStorageSpace()
         if (hasEnoughStorage) {
             completedSteps += WizardStepId.CheckStorage
         }
 
-        // Check distro installation
         val distroId = _environmentState.value.runtime.selectedDistro.id
         val distroInstalled = rootfsManager.isDistroInstalled(distroId)
         if (distroInstalled) {
             completedSteps += WizardStepId.DistroInstalled
 
-            // Check workspace
             val workspaceReady = primaryBind().hostFile.exists()
             if (workspaceReady) {
                 completedSteps += WizardStepId.WorkspaceReady
             }
 
-            // Check jcode user
             val jcodeUserReady = checkDistroUser()
             if (jcodeUserReady == true) {
                 completedSteps += WizardStepId.JcodeUserCreated
             }
 
-            // Check toolchain
             val toolchainReady = checkToolchainReady()
             if (toolchainReady == true) {
                 completedSteps += WizardStepId.ToolchainBootstrapped
             }
 
-            // Smoke test
             var smokeTestPassed: Boolean? = null
             if (jcodeUserReady == true && toolchainReady == true && workspaceReady) {
                 smokeTestPassed = checkSmokeTest()
@@ -576,9 +744,14 @@ class DistroService(
                 errorMessage = null,
             )
         } else {
+            // Not installed: clear any readiness carried over from a previously selected distro.
             _environmentState.value = _environmentState.value.copy(
                 prootInstalled = prootInstalled,
                 distroInstalled = distroInstalled,
+                workspaceReady = false,
+                toolchainReady = null,
+                jcodeUserReady = null,
+                smokeTestPassed = null,
                 firstRunSetupDeferred = storedSetupDeferred,
                 completedSteps = completedSteps.toSet(),
                 errorMessage = null,
@@ -664,6 +837,10 @@ class DistroService(
     @Suppress("UNUSED_PARAMETER")
     suspend fun runAllPendingSteps(callerContext: Context = appContext) {
         lock.withLock {
+            // Re-derive completion for the currently selected distro first, so a freshly selected (and
+            // possibly not-yet-installed) distro is not treated as "already set up" from another distro's
+            // state. Without this, selecting a second distro and tapping "Use" would no-op.
+            deriveSelectedDistroState()
             val state = _environmentState.value
 
             val pendingSteps = WizardStepId.entries.filter { step ->
@@ -690,7 +867,14 @@ class DistroService(
                     WizardStepId.CheckStorage -> checkStorageStep()
                     WizardStepId.ProotReady -> ensureProotStep()
                     WizardStepId.DistroSelected -> ExecResult(stdout = "Distro selected.", exitCode = 0)
-                    WizardStepId.DistroInstalled -> installSelectedDistro(onLine = ::appendActivityLogLine)
+                    WizardStepId.DistroInstalled -> installSelectedDistro(
+                        onLine = ::appendActivityLogLine,
+                        onDownloadProgress = { percent, detail ->
+                            _autoSetupProgress.tryEmit(
+                                DistroWizardProgress.Running(step, stepLabel(step), percent, detail),
+                            )
+                        },
+                    )
                     WizardStepId.WorkspaceReady -> ensureWorkspaceDirectory()
                     WizardStepId.ToolchainBootstrapped -> bootstrapToolchain(onLine = ::appendActivityLogLine)
                     WizardStepId.JcodeUserCreated -> createDistroUser(onLine = ::appendActivityLogLine)
@@ -788,6 +972,7 @@ class DistroService(
         env: Map<String, String> = emptyMap(),
         timeoutMs: Long = 60_000L,
         onLine: ((String) -> Unit)? = null,
+        user: String = _environmentState.value.runtime.user,
     ): ExecResult {
         return execInDistro(
             command = command,
@@ -795,6 +980,7 @@ class DistroService(
             env = env,
             timeoutMs = timeoutMs,
             onLine = onLine,
+            user = user,
         )
     }
 
@@ -846,6 +1032,7 @@ class DistroService(
     private fun installSelectedDistro(
         profile: DistroProfile = _environmentState.value.runtime.selectedDistro,
         onLine: ((String) -> Unit)? = null,
+        onDownloadProgress: ((percent: Int?, detail: String) -> Unit)? = null,
     ): ExecResult {
         return try {
             android.util.Log.d("DistroService", "installSelectedDistro: checking for ${profile.id}")
@@ -869,7 +1056,15 @@ class DistroService(
             }
             val tarball = File(rootfsManager.tmpDir, "${profile.id}$urlExt")
             // Synchronous download for auto-setup (blocks the wizard but gives immediate feedback)
-            val downloadOk = rootfsManager.downloadDirect(entry, tarball)
+            var lastLoggedQuarter = -1
+            val downloadOk = rootfsManager.downloadDirect(entry, tarball) { percent, detail ->
+                onDownloadProgress?.invoke(percent, detail)
+                val quarter = (percent ?: 0) / 25
+                if (percent != null && quarter != lastLoggedQuarter) {
+                    lastLoggedQuarter = quarter
+                    onLine?.invoke("Downloading ${profile.label} rootfs: $percent% ($detail)")
+                }
+            }
             android.util.Log.d("DistroService", "installSelectedDistro: download result=$downloadOk, fileSize=${tarball.length()}")
             if (!downloadOk) {
                 return ExecResult(internalError = "Failed to download rootfs for ${profile.label}", exitCode = 1)
@@ -915,20 +1110,92 @@ class DistroService(
     }
 
     private fun createDistroUser(onLine: ((String) -> Unit)? = null): ExecResult {
+        val runtime = _environmentState.value.runtime
+        return ensureDistroUser(runtime.selectedDistro.id, runtime.user, onLine)
+    }
+
+    /** (distroId:user) pairs verified to exist in the rootfs, so execs don't re-check every time. */
+    private val verifiedDistroUsers = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    /** Last failed ensure per (distroId:user): a broken rootfs must not re-run the script on every refresh. */
+    private val distroUserEnsureFailures = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /**
+     * Idempotently make sure [user] exists inside [distroId]'s rootfs (useradd silently fails under
+     * proot on some rootfs images, so fall back to writing the account records directly), has
+     * passwordless sudo, and that a sudo binary is present — minimal images (cdimage ubuntu-base)
+     * ship none, so install a shim that mimics sudo's argument handling (env assignments, -u, --)
+     * and defers to /usr/bin/sudo once a real one is installed. Verified with `id -u` at the end —
+     * failure here is a real failure, not swallowed.
+     */
+    private fun ensureDistroUser(distroId: String, user: String, onLine: ((String) -> Unit)? = null): ExecResult {
         if (!prootManager.isProotInstalled) {
             return ExecResult(stdout = "proot not available - skipping user creation.", exitCode = 0)
         }
-        val runtime = _environmentState.value.runtime
-        // Minimal rootfs may not have grep. Just try to create the user; useradd handles duplicates gracefully with || true.
+        val cacheKey = "$distroId:$user"
+        if (verifiedDistroUsers[cacheKey] == true) {
+            return ExecResult(stdout = "user $user ready.", exitCode = 0)
+        }
+        val lastFailure = distroUserEnsureFailures[cacheKey]
+        if (lastFailure != null && System.currentTimeMillis() - lastFailure < ENSURE_USER_RETRY_MS) {
+            return ExecResult(internalError = "user '$user' could not be created in $distroId (retrying later).", exitCode = 1)
+        }
+        val d = "${'$'}"
+        // Written on one printf line (no % or backslash in the body) so no heredoc-indentation
+        // pitfalls. Runs as root (proot fake-root): passes commands through, exports leading
+        // VAR=val, and honours `-u <user>` by su-ing to that account (e.g. postgres refuses root).
+        val sudoShim = "#!/bin/sh\\n" +
+            "[ -x /usr/bin/sudo ] && exec /usr/bin/sudo \"${d}@\"\\n" +
+            "u=\\n" +
+            "while [ ${d}# -gt 0 ]; do case \"${d}1\" in " +
+            "-u|--user) u=${d}2; shift 2 ;; " +
+            "--) shift; break ;; " +
+            "[A-Za-z_]*=*) export \"${d}1\"; shift ;; " +
+            "-*) shift ;; " +
+            "*) break ;; esac; done\\n" +
+            "[ -n \"${d}u\" ] && [ \"${d}u\" != root ] && exec su - \"${d}u\" -c \"${d}*\"\\n" +
+            "exec \"${d}@\"\\n"
         val command = """
-            /usr/sbin/useradd -m -u 1000 -s /bin/bash ${runtime.user} 2>/dev/null || true
-            /usr/bin/passwd -d ${runtime.user} >/dev/null 2>&1 || true
+            if id -u $user >/dev/null 2>&1; then
+                echo "user $user already exists"
+            else
+                /usr/sbin/useradd -m -u 1000 -s /bin/bash $user 2>/dev/null || true
+                if ! id -u $user >/dev/null 2>&1; then
+                    echo "$user:x:1000:1000:$user:/home/$user:/bin/bash" >> /etc/passwd
+                    echo "$user:x:1000:" >> /etc/group
+                    echo "$user::19000:0:99999:7:::" >> /etc/shadow 2>/dev/null || true
+                    echo "manually registered $user"
+                fi
+            fi
+            mkdir -p /home/$user
+            chown -R 1000:1000 /home/$user 2>/dev/null || true
+            /usr/bin/passwd -d $user >/dev/null 2>&1 || true
+            /usr/bin/passwd -d root >/dev/null 2>&1 || true
             /usr/bin/install -d /etc/sudoers.d
-            /usr/bin/printf '%s ALL=(ALL) NOPASSWD:ALL\n' ${runtime.user} > /etc/sudoers.d/${runtime.user}
-            /usr/bin/chmod 440 /etc/sudoers.d/${runtime.user}
-            echo OK
+            /usr/bin/printf '%s ALL=(ALL) NOPASSWD:ALL\n' $user > /etc/sudoers.d/$user
+            /usr/bin/chmod 440 /etc/sudoers.d/$user
+            if [ ! -x /usr/bin/sudo ]; then
+                /usr/bin/printf '$sudoShim' > /usr/local/bin/sudo
+                /usr/bin/chmod 755 /usr/local/bin/sudo
+                echo "installed sudo shim"
+            fi
+            if id -u $user >/dev/null 2>&1; then echo OK; else echo "failed to create user $user"; exit 1; fi
         """.trimIndent()
-        return execInDistro(command = command, timeoutMs = 300_000L, onLine = onLine, user = "root")
+        val result = execInDistro(command = command, timeoutMs = 300_000L, onLine = onLine, user = "root")
+        if (result.succeeded) {
+            distroUserEnsureFailures.remove(cacheKey)
+            // Only cache when the world still matches what we verified: the rootfs must still be
+            // there and the selection unchanged (a mid-flight environment switch or delete would
+            // otherwise pin a stale "verified" entry and defeat the self-heal).
+            if (rootfsManager.isDistroInstalled(distroId) &&
+                _environmentState.value.runtime.selectedDistro.id == distroId
+            ) {
+                verifiedDistroUsers[cacheKey] = true
+            }
+        } else {
+            distroUserEnsureFailures[cacheKey] = System.currentTimeMillis()
+        }
+        return result
     }
 
     private fun smokeTest(onLine: ((String) -> Unit)? = null): ExecResult {
@@ -943,13 +1210,38 @@ class DistroService(
     }
 
     private fun checkDistroUser(): Boolean? {
-        // Minimal rootfs may not have grep. If proot and rootfs are ready, assume user is configured.
-        return true
+        // Self-healing check: verify the user actually exists in the rootfs (a fresh rootfs, or one
+        // where useradd silently failed under proot, won't have it) and create it when missing.
+        // Cached per (distro, user), so this execs at most once per process for a healthy rootfs.
+        val runtime = _environmentState.value.runtime
+        if (!prootManager.isProotInstalled) return null
+        if (verifiedDistroUsers["${runtime.selectedDistro.id}:${runtime.user}"] == true) return true
+        return ensureDistroUser(runtime.selectedDistro.id, runtime.user).succeeded
     }
 
     private fun checkSmokeTest(): Boolean? {
         // Smoke test is skipped during onboarding; rootfs is verified by other steps.
         return true
+    }
+
+    /**
+     * Run a toolchain catalog script (install/verify/uninstall) privileged. proot's fake-root only
+     * covers uid 0, and `su - jcode` drops to uid 1000 where apt/dpkg refuse to run — so these
+     * scripts run as root, but with HOME/USER pointed at the jcode user so toolchains install into
+     * /home/jcode and remain usable from the (non-root) terminal. The scripts' own `sudo` prefixes
+     * become a passthrough via the shim installed by [ensureDistroUser].
+     */
+    private fun execCatalogScript(script: String, timeoutMs: Long): ExecResult {
+        val runtime = _environmentState.value.runtime
+        // Root execs skip the su-guard, so make sure the jcode home + sudo shim exist first.
+        val ensure = ensureDistroUser(runtime.selectedDistro.id, runtime.user)
+        if (!ensure.succeeded) return ensure
+        return execInDistro(
+            command = script,
+            timeoutMs = timeoutMs,
+            user = "root",
+            env = mapOf("HOME" to "/home/${runtime.user}", "USER" to runtime.user),
+        )
     }
 
     /**
@@ -988,6 +1280,19 @@ class DistroService(
             }
         }
 
+        // Non-root commands run through `su - <user>`, which hard-fails if the account is missing
+        // (fresh rootfs, or useradd silently failed during setup). Ensure it exists first.
+        if (user != "root" && verifiedDistroUsers["$distroId:$user"] != true) {
+            val ensure = ensureDistroUser(distroId, user)
+            if (!ensure.succeeded) {
+                return ExecResult(
+                    internalError = "user '$user' does not exist in $distroId and could not be created: " +
+                        (ensure.internalError ?: ensure.stderr.lineSequence().firstOrNull { it.isNotBlank() } ?: "unknown error"),
+                    exitCode = 1,
+                )
+            }
+        }
+
         val prootArgs = prootManager.buildShellCommand(
             rootfsPath = rootfsPath,
             shellCommand = command,
@@ -999,6 +1304,58 @@ class DistroService(
         )
 
         return executeProcess(prootArgs, timeoutMs, onLine = onLine, rootfsArch = arch)
+    }
+
+    /**
+     * Spawn a long-lived process inside the active distro for a debug adapter, with stdin/stdout PIPES
+     * (no PTY — clean bidirectional DAP, no echo). The caller reads DAP from `process.inputStream` and
+     * writes to `process.outputStream`; stderr is kept separate. Returns null if the runtime isn't ready.
+     */
+    fun spawnDapProcess(
+        command: String,
+        workdir: String = _environmentState.value.runtime.workdir,
+        // Some adapters must run as a specific user — e.g. netcoredbg needs root, where the .NET SDK
+        // (installed under /root/.dotnet) is readable. Defaults to the runtime user.
+        userOverride: String? = null,
+        // Prepended to PATH so the adapter can find its runtime (e.g. /root/.dotnet for netcoredbg).
+        extraPath: String = "",
+    ): Process? {
+        val runtime = _environmentState.value.runtime
+        val distroId = runtime.selectedDistro.id
+        val arch = runtime.selectedDistro.arch
+        val rootfsPath = rootfsManager.getRootfsPath(distroId)
+        val user = userOverride ?: runtime.user
+        if (!rootfsManager.isDistroInstalled(distroId) || !prootManager.isProotInstalled) return null
+        if (prootManager.needsQemu(arch) && !prootManager.isQemuInstalled(arch)) return null
+        val basePath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        val env = mapOf(
+            "HOME" to (if (user == "root") "/root" else "/home/$user"),
+            "USER" to user,
+            "TERM" to "dumb",
+            "LANG" to "en_US.UTF-8",
+            "TMPDIR" to "/tmp",
+            "PATH" to (if (extraPath.isNotBlank()) "$extraPath:$basePath" else basePath),
+        )
+        val prootArgs = prootManager.buildShellCommand(
+            rootfsPath = rootfsPath,
+            shellCommand = command,
+            binds = runtime.binds,
+            env = env,
+            workdir = workdir,
+            user = user,
+            rootfsArch = arch,
+        )
+        return try {
+            val builder = ProcessBuilder(prootArgs).redirectErrorStream(false)
+            for (kv in prootManager.runtimeEnv(arch)) {
+                val sep = kv.indexOf('=')
+                if (sep > 0) builder.environment()[kv.substring(0, sep)] = kv.substring(sep + 1)
+            }
+            builder.start()
+        } catch (e: Exception) {
+            android.util.Log.e("DistroService", "spawnDapProcess failed", e)
+            null
+        }
     }
 
     /**
@@ -1105,13 +1462,6 @@ class DistroService(
         dataStore.edit { prefs ->
             prefs[PreferencesKeys.SelectedDistro] = profile.id
         }
-    }
-
-    private suspend fun readCompletedSteps(): Set<WizardStepId> {
-        return dataStore.data.first()[PreferencesKeys.CompletedSteps]
-            .orEmpty()
-            .mapNotNull(WizardStepId::fromKey)
-            .toSet()
     }
 
     private suspend fun persistCompletedSteps(steps: Set<WizardStepId>) {
@@ -1321,6 +1671,54 @@ class DistroService(
     private fun installedLspEntriesKey(distroId: String) =
         stringSetPreferencesKey("lsp_catalog_installed.$distroId")
 
+    private suspend fun readInstalledDebugEntries(distroId: String): Set<String> {
+        return dataStore.data.first()[installedDebugEntriesKey(distroId)].orEmpty()
+    }
+
+    private suspend fun persistInstalledDebugEntries(distroId: String, entryIds: Set<String>) {
+        dataStore.edit { prefs -> prefs[installedDebugEntriesKey(distroId)] = entryIds }
+    }
+
+    private fun installedDebugEntriesKey(distroId: String) =
+        stringSetPreferencesKey("debug_catalog_installed.$distroId")
+
+    private fun formatDebugActionLogs(
+        name: String,
+        action: DebugEngineAction,
+        actionResult: ExecResult,
+        verifyResult: ExecResult,
+        installedNow: Boolean,
+    ): List<String> {
+        return buildList {
+            add("[command] ${action.label} $name")
+            addAll(actionResult.toLogBlock())
+            if (action != DebugEngineAction.Verify) {
+                add("[verify] $name")
+                addAll(verifyResult.toLogBlock())
+            }
+            add(
+                when (action) {
+                    DebugEngineAction.Install ->
+                        if (installedNow) "[result] Installed." else "[result] Install completed but verification failed."
+
+                    DebugEngineAction.Verify ->
+                        if (installedNow) "[result] Installed." else "[result] Not installed."
+
+                    DebugEngineAction.Uninstall ->
+                        if (!installedNow) "[result] Removed." else "[result] Still detected after removal."
+                },
+            )
+        }
+    }
+
+    private fun DebugEngineEntry.commandFor(action: DebugEngineAction): String {
+        return when (action) {
+            DebugEngineAction.Install -> installCommand
+            DebugEngineAction.Verify -> verifyCommand
+            DebugEngineAction.Uninstall -> uninstallCommand
+        }
+    }
+
     private data class PrimaryBind(
         val host: String,
         val hostFile: File,
@@ -1335,6 +1733,8 @@ class DistroService(
 
     companion object {
         private const val SETUP_ACTIVITY_LOG_LIMIT: Int = 240
+        /** Back-off between ensureDistroUser retries on a rootfs where creation keeps failing. */
+        private const val ENSURE_USER_RETRY_MS: Long = 30_000L
         /** Minimum required storage: 2GB */
         private const val MIN_REQUIRED_STORAGE_BYTES: Long = 2L * 1024 * 1024 * 1024
     }

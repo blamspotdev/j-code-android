@@ -58,13 +58,15 @@ object SyntaxHighlighter {
     private val OPERATORS = "+-*/%=<>!&|^~?:".toCharArray().toHashSet()
 
     /**
-     * Resolve the right highlighter for a file: an explicit installed [lang] pack when given, else the
-     * built-in Markdown pack for `.md` files, else the generic fallback so every buffer gets coloring.
+     * Resolve the right highlighter for a file. Markdown and JSON are built into J Code, so they color
+     * natively and authoritatively — ahead of any installed pack — with no extension required. Otherwise
+     * an installed [lang] pack drives coloring, falling back to the generic tokenizer so every buffer is lit.
      */
     fun highlightFor(text: String, fileName: String, lang: LanguagePack?, palette: TokenPalette): List<ColoredSpan> =
         when {
-            lang != null -> highlight(text, lang, palette)
             isMarkdownFile(fileName) -> highlightMarkdown(text, palette)
+            isJsonFile(fileName) -> highlightJson(text, palette)
+            lang != null -> highlight(text, lang, palette)
             else -> highlightGeneric(text, palette)
         }
 
@@ -74,17 +76,54 @@ object SyntaxHighlighter {
             l.endsWith(".mkd") || l.endsWith(".mkdn")
     }
 
-    /** Language-pack-driven coloring. */
+    fun isJsonFile(name: String): Boolean {
+        val l = name.lowercase()
+        return l.endsWith(".json") || l.endsWith(".jsonc") || l.endsWith(".json5") || l.endsWith(".webmanifest")
+    }
+
+    /**
+     * Language-pack-driven coloring. Markup languages (HTML/XML/SVG — detected by their `<!-- -->` block
+     * comment) use the structural [highlightMarkup] pass instead of the keyword tokenizer: the tokenizer
+     * would only match bare tag names that happen to be in the keyword list and would mis-color common
+     * words (`a`, `code`, `link`, `title`, `path`, ...) wherever they appear in text content.
+     */
     fun highlight(text: String, lang: LanguagePack, palette: TokenPalette): List<ColoredSpan> =
-        tokenize(
-            text, palette,
-            lineComments = listOfNotNull(lang.lineComment),
-            blockStart = lang.blockCommentStart,
-            blockEnd = lang.blockCommentEnd,
-            delimiters = lang.stringDelimiters,
-            keywords = lang.keywords,
-            types = lang.types,
-        )
+        when {
+            isMarkupLanguage(lang) -> highlightMarkup(text, palette)
+            isKeyValueLanguage(lang) -> {
+                val yaml = lang.languageId.lowercase() in YAML_LANGS
+                highlightKeyValue(
+                    text, palette,
+                    sep = if (yaml) ':' else '=',
+                    // INI also accepts ';' comments on top of the pack's '#'.
+                    lineComments = listOfNotNull(lang.lineComment) +
+                        (if (lang.languageId.equals("ini", true)) listOf(";") else emptyList()),
+                    delimiters = lang.stringDelimiters,
+                    boolWords = lang.keywords,
+                    sections = !yaml,
+                )
+            }
+            else -> tokenize(
+                text, palette,
+                lineComments = listOfNotNull(lang.lineComment),
+                blockStart = lang.blockCommentStart,
+                blockEnd = lang.blockCommentEnd,
+                delimiters = lang.stringDelimiters,
+                keywords = lang.keywords,
+                types = lang.types,
+            )
+        }
+
+    /** Markup = uses the `<!-- -->` comment form (HTML, XML, SVG and friends). */
+    private fun isMarkupLanguage(lang: LanguagePack): Boolean =
+        lang.blockCommentStart == "<!--" && lang.blockCommentEnd == "-->"
+
+    private val YAML_LANGS = hashSetOf("yaml", "yml")
+    private val KEY_VALUE_LANGS = hashSetOf("yaml", "yml", "toml", "ini")
+
+    /** Line-oriented `key: value` / `key = value` config languages (YAML, TOML, INI). */
+    private fun isKeyValueLanguage(lang: LanguagePack): Boolean =
+        lang.languageId.lowercase() in KEY_VALUE_LANGS
 
     /**
      * Built-in fallback coloring for files with no language pack: strings, numbers, `//` and (space-led)
@@ -297,6 +336,236 @@ object SyntaxHighlighter {
             if (mEnd > t) { add(t, mEnd, palette.operator); contentStart = mEnd }
             inline(contentStart, lineEnd)
             i = nextLine
+        }
+        return spans
+    }
+
+    /**
+     * Structural coloring for markup (HTML / XML / SVG): `<!-- -->` comments, tag delimiters, tag names,
+     * attribute names, quoted attribute values, and `&entity;` references — mapped onto the [TokenPalette].
+     * Text content between tags is intentionally left uncolored. Unlike the keyword tokenizer it is aware
+     * of `<...>` structure, so it never colors a word like `code` or `link` when it appears in body text.
+     */
+    fun highlightMarkup(text: String, palette: TokenPalette): List<ColoredSpan> {
+        val n = text.length
+        if (n == 0) return emptyList()
+        val byteAt = byteOffsets(text)
+        val spans = ArrayList<ColoredSpan>()
+        fun add(start: Int, end: Int, color: Int) {
+            if (end > start) spans.add(ColoredSpan(byteAt[start], byteAt[end], color))
+        }
+        fun isNameChar(ch: Char) =
+            ch.isLetterOrDigit() || ch == '-' || ch == '_' || ch == ':' || ch == '.'
+
+        var i = 0
+        while (i < n) {
+            val c = text[i]
+            // comment <!-- ... -->
+            if (text.startsWith("<!--", i)) {
+                val end = text.indexOf("-->", i + 4)
+                val j = if (end < 0) n else end + 3
+                add(i, j, palette.comment); i = j; continue
+            }
+            // entity: &name; or &#123;
+            if (c == '&') {
+                var j = i + 1
+                while (j < n && (text[j].isLetterOrDigit() || text[j] == '#')) j++
+                if (j < n && text[j] == ';') j++
+                if (j > i + 1) { add(i, j, palette.constant); i = j; continue }
+                i++; continue
+            }
+            // tag: < ... >  (also </close>, <!doctype ...>, <?pi ...?>)
+            if (c == '<') {
+                var j = i + 1
+                add(i, i + 1, palette.operator)                 // '<'
+                if (j < n && text[j] in "/!?") { add(j, j + 1, palette.operator); j++ }  // '/', '!', '?'
+                while (j < n && (text[j] == ' ' || text[j] == '\t')) j++
+                val nameStart = j
+                while (j < n && isNameChar(text[j])) j++
+                if (j > nameStart) add(nameStart, j, palette.keyword)   // tag name
+                while (j < n && text[j] != '>') {
+                    val a = text[j]
+                    when {
+                        a == ' ' || a == '\t' || a == '\n' || a == '\r' -> j++
+                        a == '/' || a == '?' || a == '=' -> { add(j, j + 1, palette.operator); j++ }
+                        a == '"' || a == '\'' -> {
+                            var k = j + 1
+                            while (k < n && text[k] != a) k++
+                            val close = if (k < n) k + 1 else n
+                            add(j, close, palette.string); j = close   // attribute value
+                        }
+                        isNameChar(a) -> {
+                            val attrStart = j
+                            while (j < n && isNameChar(text[j])) j++
+                            add(attrStart, j, palette.property)         // attribute name
+                        }
+                        else -> j++
+                    }
+                }
+                if (j < n && text[j] == '>') { add(j, j + 1, palette.operator); j++ }  // '>'
+                i = j; continue
+            }
+            i++   // text content: uncolored
+        }
+        return spans
+    }
+
+    /**
+     * Structural coloring for line-oriented config/data languages (YAML, TOML, INI): keys get the
+     * property color so they read distinctly from values, the `:`/`=` [sep] is an operator, `[section]`
+     * / `[[table]]` headers and YAML `---` markers stand out, and values are scanned for quoted strings,
+     * numbers, [boolWords] (true/false/null/...) and trailing inline comments. Unlike the keyword
+     * tokenizer this is structure-aware, so a key never shares the color of an arbitrary value word.
+     */
+    fun highlightKeyValue(
+        text: String,
+        palette: TokenPalette,
+        sep: Char,
+        lineComments: List<String>,
+        delimiters: List<String>,
+        boolWords: Set<String>,
+        sections: Boolean,
+    ): List<ColoredSpan> {
+        val n = text.length
+        if (n == 0) return emptyList()
+        val byteAt = byteOffsets(text)
+        val comments = lineComments.filter { it.isNotEmpty() }
+        val spans = ArrayList<ColoredSpan>()
+        fun add(start: Int, end: Int, color: Int) {
+            if (end > start) spans.add(ColoredSpan(byteAt[start], byteAt[end], color))
+        }
+        // Color a value range: quoted strings, numbers, boolean/null words, and a trailing inline comment.
+        fun value(start: Int, end: Int) {
+            var k = start
+            while (k < end) {
+                val ch = text[k]
+                if ((k == start || text[k - 1] == ' ' || text[k - 1] == '\t') &&
+                    comments.any { text.startsWith(it, k) }
+                ) {
+                    add(k, end, palette.comment); return
+                }
+                val d = delimiters.firstOrNull { text.startsWith(it, k) }
+                if (d != null) {
+                    var j = k + d.length
+                    while (j < end && !text.startsWith(d, j)) { if (text[j] == '\\') j++; j++ }
+                    val close = if (j < end) j + d.length else end
+                    add(k, close, palette.string); k = close; continue
+                }
+                if (ch.isDigit() || (ch == '-' && k + 1 < end && text[k + 1].isDigit())) {
+                    var j = k + 1
+                    while (j < end && (text[j].isLetterOrDigit() || text[j] in ".:+-_")) j++
+                    add(k, j, palette.number); k = j; continue
+                }
+                if (ch.isLetter() || ch == '_' || ch == '~') {
+                    var j = k
+                    while (j < end && (text[j].isLetterOrDigit() || text[j] in "_-~")) j++
+                    if (text.substring(k, j) in boolWords) add(k, j, palette.keyword)
+                    k = j; continue
+                }
+                k++
+            }
+        }
+
+        var i = 0
+        while (i < n) {
+            val lineStart = i
+            var lineEnd = i
+            while (lineEnd < n && text[lineEnd] != '\n') lineEnd++
+            val nextLine = if (lineEnd < n) lineEnd + 1 else lineEnd
+
+            var t = lineStart
+            while (t < lineEnd && (text[t] == ' ' || text[t] == '\t')) t++
+
+            when {
+                t >= lineEnd -> {}
+                comments.any { text.startsWith(it, t) } -> add(t, lineEnd, palette.comment)
+                sections && text[t] == '[' -> add(t, lineEnd, palette.type)
+                sep == ':' && (text.startsWith("---", t) || text.startsWith("...", t)) ->
+                    add(t, lineEnd, palette.operator)
+                else -> {
+                    var c = t
+                    // YAML list marker "- "
+                    if (sep == ':' && text[c] == '-' && c + 1 < lineEnd &&
+                        (text[c + 1] == ' ' || text[c + 1] == '\t')
+                    ) {
+                        add(c, c + 1, palette.operator); c++
+                        while (c < lineEnd && (text[c] == ' ' || text[c] == '\t')) c++
+                    }
+                    // Locate the key/value separator: for YAML the ':' must be followed by space/EOL.
+                    var s = c
+                    while (s < lineEnd && !(text[s] == sep &&
+                            (sep != ':' || s + 1 >= lineEnd || text[s + 1] == ' ' || text[s + 1] == '\t'))
+                    ) s++
+                    if (s < lineEnd && text[s] == sep && s > c) {
+                        var keyEnd = s
+                        while (keyEnd > c && (text[keyEnd - 1] == ' ' || text[keyEnd - 1] == '\t')) keyEnd--
+                        add(c, keyEnd, palette.property)   // key
+                        add(s, s + 1, palette.operator)    // : or =
+                        value(s + 1, lineEnd)
+                    } else {
+                        value(c, lineEnd)
+                    }
+                }
+            }
+            i = nextLine
+        }
+        return spans
+    }
+
+    /**
+     * Built-in JSON coloring (no extension needed): object keys get the property color so they read
+     * distinctly from string values, plus numbers, `true`/`false`/`null`, structural punctuation, and
+     * `//` + `/* */` comments for JSONC/JSON5. A string is treated as a key when the next non-space
+     * character is `:`.
+     */
+    fun highlightJson(text: String, palette: TokenPalette): List<ColoredSpan> {
+        val n = text.length
+        if (n == 0) return emptyList()
+        val byteAt = byteOffsets(text)
+        val spans = ArrayList<ColoredSpan>()
+        fun add(start: Int, end: Int, color: Int) {
+            if (end > start) spans.add(ColoredSpan(byteAt[start], byteAt[end], color))
+        }
+
+        var i = 0
+        while (i < n) {
+            val c = text[i]
+            when {
+                c == '/' && i + 1 < n && text[i + 1] == '/' -> {
+                    var j = i + 2
+                    while (j < n && text[j] != '\n') j++
+                    add(i, j, palette.comment); i = j
+                }
+                c == '/' && i + 1 < n && text[i + 1] == '*' -> {
+                    val e = text.indexOf("*/", i + 2)
+                    val j = if (e < 0) n else e + 2
+                    add(i, j, palette.comment); i = j
+                }
+                c == '"' || c == '\'' -> {
+                    var j = i + 1
+                    while (j < n && text[j] != c) { if (text[j] == '\\') j++; j++ }
+                    val close = if (j < n) j + 1 else n
+                    var k = close
+                    while (k < n && (text[k] == ' ' || text[k] == '\t' || text[k] == '\n' || text[k] == '\r')) k++
+                    val isKey = k < n && text[k] == ':'
+                    add(i, close, if (isKey) palette.property else palette.string); i = close
+                }
+                c.isDigit() || (c == '-' && i + 1 < n && text[i + 1].isDigit()) -> {
+                    var j = i + 1
+                    while (j < n && (text[j].isLetterOrDigit() || text[j] in ".+-eE")) j++
+                    add(i, j, palette.number); i = j
+                }
+                c.isLetter() -> {
+                    var j = i
+                    while (j < n && text[j].isLetter()) j++
+                    when (text.substring(i, j)) {
+                        "true", "false", "null", "Infinity", "NaN" -> add(i, j, palette.keyword)
+                    }
+                    i = j
+                }
+                c in "{}[]:," -> { add(i, i + 1, palette.operator); i++ }
+                else -> i++
+            }
         }
         return spans
     }

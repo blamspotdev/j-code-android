@@ -45,6 +45,7 @@ class ExtensionInstaller internal constructor(context: Context) {
                     id = id,
                     name = entry.str("name") ?: id,
                     author = entry.str("publisher") ?: entry.str("author"),
+                    authors = entry.strList("authors"),
                     type = ExtensionType.from(entry.str("type")),
                     category = entry.str("category"),
                     subcategory = entry.str("subcategory"),
@@ -201,16 +202,15 @@ class ExtensionInstaller internal constructor(context: Context) {
         val map = runCatching { parseYamlMapping(manifest.readText()) }.getOrNull() ?: return null
         val id = map.str("id") ?: return null
         val type = ExtensionType.from(map.str("type"))
-        val templates = if (type == ExtensionType.Templates) {
-            map.listOfAny("templates").mapNotNull { raw -> loadTemplate(dir, raw?.toString()) }
-        } else {
-            emptyList()
-        }
-        val languages = if (type == ExtensionType.Language) parseLanguages(map) else emptyList()
+        // A "dev pack" may bundle both languages and templates regardless of its primary type;
+        // parse whatever it declares (missing sections resolve to empty).
+        val templates = map.listOfAny("templates").mapNotNull { raw -> loadTemplate(dir, raw?.toString()) }
+        val languages = parseLanguages(map)
         return InstalledExtension(
             id = id,
             name = map.str("name") ?: id,
             author = map.str("publisher") ?: map.str("author"),
+            authors = map.strList("authors"),
             type = type,
             version = map.str("version"),
             description = map.str("description") ?: "",
@@ -220,8 +220,18 @@ class ExtensionInstaller internal constructor(context: Context) {
             templates = templates,
             languages = languages,
             iconFile = findIconFile(dir),
+            webUiEntry = findWebUiEntry(dir),
+            apiMinVersion = (map["api"] as? Map<*, *>)?.toStringKeyMap()?.str("minApiVersion")?.toIntOrNull() ?: 0,
+            apiCapabilities = (map["api"] as? Map<*, *>)?.toStringKeyMap()?.strList("capabilities") ?: emptyList(),
         )
     }
+
+    // The web-frontend HTML entry the .jehm declares (entry.ui), if any. Used by App/DbManager types.
+    private fun findWebUiEntry(dir: File): String? =
+        File(dir, JEHM_FILE).takeIf { it.isFile }
+            ?.let { runCatching { parseJehmHeader(it.readText()) }.getOrNull() }
+            ?.let { (it["entry"] as? Map<*, *>)?.toStringKeyMap()?.str("ui") }
+            ?.takeIf { it.isNotBlank() && File(dir, it).isFile }
 
     // The icon path the .jehm declares (images.icon), else a conventional location; null if absent.
     private fun findIconFile(dir: File): File? {
@@ -246,11 +256,23 @@ class ExtensionInstaller internal constructor(context: Context) {
                 workdir = step.str("workdir"),
             )
         }
+        val inputs = map.listOfAny("inputs").mapNotNull { raw ->
+            val input = (raw as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
+            val inputId = input.str("id")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+            TemplateInput(
+                id = inputId,
+                label = input.str("label") ?: inputId,
+                type = input.str("type") ?: "select",
+                options = input.listOfAny("options").mapNotNull { it?.toString() },
+                default = input.str("default"),
+            )
+        }
         return ProjectTemplate(
             id = map.str("id") ?: id,
             name = map.str("name") ?: id,
             description = map.str("description") ?: "",
             requires = map.listOfAny("requires").mapNotNull { it?.toString()?.takeIf(String::isNotBlank) },
+            inputs = inputs,
             recipe = recipe,
         )
     }
@@ -401,3 +423,7 @@ internal fun Map<String, Any?>.str(key: String): String? = when (val value = thi
 }
 
 internal fun Map<String, Any?>.listOfAny(key: String): List<Any?> = this[key] as? List<Any?> ?: emptyList()
+
+/** A YAML list coerced to non-blank strings (e.g. `authors: [jcode, alice]`). Empty when absent. */
+internal fun Map<String, Any?>.strList(key: String): List<String> =
+    listOfAny(key).mapNotNull { it?.toString()?.trim()?.takeIf(String::isNotBlank) }

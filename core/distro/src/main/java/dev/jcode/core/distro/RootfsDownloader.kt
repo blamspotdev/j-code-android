@@ -58,8 +58,10 @@ class RootfsDownloader(
         connection.connectTimeout = 30_000
         connection.readTimeout = 60_000
         
-        val totalSize = entry.sizeBytes.takeIf { it > 0 }
-            ?: connection.contentLengthLong.takeIf { it > 0 }
+        // Prefer the server's content length (exact) over the manifest's sizeBytes (an estimate
+        // that would make the percent drift past 100).
+        val totalSize = connection.contentLengthLong.takeIf { it > 0 }
+            ?: entry.sizeBytes.takeIf { it > 0 }
             ?: -1L
         
         targetFile.parentFile?.mkdirs()
@@ -171,38 +173,18 @@ class RootfsDownloader(
          */
         const val DEFAULT_ROOTFS_BASE_URL = "https://distro.jcode.dev/rootfs"
         
+        // --- Ubuntu 24.04 LTS (Noble) ---
+
         /**
-         * Ubuntu rootfs from AnLinux Resources on GitHub (tar.xz - requires XZ decompression)
-         * Size: ~40MB compressed
+         * Ubuntu 24.04 ARM64 rootfs from AnLinux Resources (tar.xz). Native on arm64 phones;
+         * this is the proven default image. Size: ~40MB compressed.
          */
         const val UBUNTU_24_04_ARM64_URL = "https://raw.githubusercontent.com/EXALAB/Anlinux-Resources/master/Rootfs/Ubuntu/arm64/ubuntu-rootfs-arm64.tar.xz"
-        
-        /**
-         * Debian 12 (Bookworm) - From AnLinux Resources on GitHub (tar.xz)
-         * NOTE: Requires xz decompressor which may not be available on all devices.
-         * Fall back to Ubuntu if Debian extraction fails.
-         * Size: ~80MB compressed
-         */
-        const val DEBIAN_12_ARM64_URL = "https://raw.githubusercontent.com/EXALAB/Anlinux-Resources/master/Rootfs/Debian/arm64/debian-rootfs-arm64.tar.xz"
 
-        // --- x86_64 (amd64) sources: run under QEMU user-mode on arm64 hosts ---
-        // These exact URLs are finalized during QEMU bring-up (the remote manifest at
-        // DEFAULT_ROOTFS_BASE_URL overrides them); they are best-effort upstream defaults.
+        // --- Ubuntu 26.04 LTS --- (official Ubuntu cdimage minimal base, tar.gz)
 
-        /**
-         * Ubuntu 24.04 base (amd64) from the official Ubuntu cdimage (tar.gz).
-         * Foreign-arch on arm64 phones -> requires qemu-x86_64.
-         */
-        const val UBUNTU_24_04_AMD64_URL = "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04-base-amd64.tar.gz"
-
-        /**
-         * Alpine minirootfs (x86_64) - tiny (~3 MB), ideal as the first QEMU smoke test.
-         * `uname -m` inside should report `x86_64` once qemu-x86_64 is wired.
-         */
-        const val ALPINE_3_20_AMD64_URL = "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz"
-
-        /** Alpine minirootfs (aarch64) - tiny native counterpart for quick testing. */
-        const val ALPINE_3_20_ARM64_URL = "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-minirootfs-3.20.3-aarch64.tar.gz"
+        /** Ubuntu 26.04 base (arm64) — native on arm64 phones. */
+        const val UBUNTU_26_04_ARM64_URL = "https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/ubuntu-base-26.04-base-arm64.tar.gz"
     }
 }
 
@@ -241,7 +223,7 @@ data class RootfsManifest(
             entries = listOf(
                 RootfsEntry(
                     distroId = "ubuntu-24.04",
-                    name = "Ubuntu 24.04 LTS (Noble)",
+                    name = "Ubuntu 24.04 LTS (ARM64)",
                     url = RootfsDownloader.UBUNTU_24_04_ARM64_URL,
                     sha256 = "",
                     sizeBytes = 40_000_000L, // ~40MB compressed
@@ -250,43 +232,13 @@ data class RootfsManifest(
                     arch = Arch.ARM64,
                 ),
                 RootfsEntry(
-                    distroId = "debian-12",
-                    name = "Debian 12 (Bookworm)",
-                    url = RootfsDownloader.DEBIAN_12_ARM64_URL,
-                    sha256 = "", // Will be verified on first download, then cached
-                    sizeBytes = 85_000_000L, // ~85MB compressed
-                    installRecipe = "debian:bookworm",
-                    approxFootprint = "~2.0 GB",
-                    arch = Arch.ARM64,
-                ),
-                RootfsEntry(
-                    distroId = "ubuntu-24.04-amd64",
-                    name = "Ubuntu 24.04 LTS (x86_64)",
-                    url = RootfsDownloader.UBUNTU_24_04_AMD64_URL,
+                    distroId = "ubuntu-26.04",
+                    name = "Ubuntu 26.04 LTS (ARM64)",
+                    url = RootfsDownloader.UBUNTU_26_04_ARM64_URL,
                     sha256 = "",
-                    sizeBytes = 30_000_000L, // ~30MB compressed
-                    installRecipe = "ubuntu:24.04",
-                    approxFootprint = "~2.5 GB (emulated)",
-                    arch = Arch.X86_64,
-                ),
-                RootfsEntry(
-                    distroId = "alpine-3.20-amd64",
-                    name = "Alpine 3.20 (x86_64)",
-                    url = RootfsDownloader.ALPINE_3_20_AMD64_URL,
-                    sha256 = "",
-                    sizeBytes = 3_500_000L, // ~3.5MB compressed
-                    installRecipe = "alpine:3.20",
-                    approxFootprint = "~10 MB (emulated)",
-                    arch = Arch.X86_64,
-                ),
-                RootfsEntry(
-                    distroId = "alpine-3.20-arm64",
-                    name = "Alpine 3.20 (arm64)",
-                    url = RootfsDownloader.ALPINE_3_20_ARM64_URL,
-                    sha256 = "",
-                    sizeBytes = 3_500_000L, // ~3.5MB compressed
-                    installRecipe = "alpine:3.20",
-                    approxFootprint = "~10 MB",
+                    sizeBytes = 30_000_000L, // ~30MB compressed (minimal base)
+                    installRecipe = "ubuntu:26.04",
+                    approxFootprint = "~2.5 GB",
                     arch = Arch.ARM64,
                 ),
             ),

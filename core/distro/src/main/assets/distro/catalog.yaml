@@ -20,7 +20,7 @@ entries:
       sudo apt-get update
       sudo apt-get install -y python3 python3-venv python3-pip
     verifyScript: |
-      command -v python3 >/dev/null 2>&1 && python3 -m venv --help >/dev/null 2>&1 && echo ready
+      command -v python3 >/dev/null 2>&1 && python3 -m venv /tmp/_jcodevenv >/dev/null 2>&1 && rm -rf /tmp/_jcodevenv && echo ready
     uninstallScript: |
       sudo apt-get remove -y python3 python3-venv python3-pip
     updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(python3|python3-venv|python3-pip)/'"
@@ -67,15 +67,57 @@ entries:
   - id: android-prereqs
     category: android
     name: Android SDK prerequisites
-    description: Installs the base distro-side prerequisites needed before wiring Android command-line tools manually.
+    description: JDK 21 plus the distro's native aarch64 Android build tools (aapt2/aapt/zipalign/apksigner) — the ARM-native pieces Google's x86_64-only build-tools can't provide on this device.
+    supportedArches: [arm64]
     installScript: |
       sudo apt-get update
-      sudo apt-get install -y openjdk-21-jdk-headless unzip wget zip
+      sudo apt-get install -y openjdk-21-jdk-headless unzip wget zip file procps aapt android-sdk-build-tools
     verifyScript: |
-      command -v javac >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1 && command -v wget >/dev/null 2>&1 && echo ready
+      command -v javac >/dev/null 2>&1 && /usr/lib/android-sdk/build-tools/debian/aapt2 version >/dev/null 2>&1 && echo ready
     uninstallScript: |
-      sudo apt-get remove -y openjdk-21-jdk-headless unzip wget zip
-    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(openjdk-21-jdk-headless|unzip|wget|zip)/'"
+      sudo apt-get remove -y openjdk-21-jdk-headless aapt android-sdk-build-tools
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(openjdk-21-jdk-headless|aapt|android-sdk-build-tools)/'"
+
+  - id: android-sdk
+    category: android
+    name: Android SDK (platform 34 + Gradle)
+    description: Command-line tools, the Android 34 platform, build-tools 34, and Gradle 8.7 — wired with the ARM-native aapt2 so on-device Gradle builds (assembleDebug) produce a real APK. Requires the Android SDK prerequisites. Large download.
+    supportedArches: [arm64]
+    installScript: |
+      set -e
+      export ANDROID_HOME="$HOME/android-sdk"
+      export JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
+      mkdir -p "$ANDROID_HOME"
+      if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+        wget -q -O /tmp/clt.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+        rm -rf /tmp/cmdline-tools && (cd /tmp && unzip -q clt.zip)
+        mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
+        mv /tmp/cmdline-tools/* "$ANDROID_HOME/cmdline-tools/latest/"
+        rm -rf /tmp/cmdline-tools /tmp/clt.zip
+      fi
+      SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+      # Accept licenses (timeout guards a post-write hang).
+      yes | timeout 120 "$SDKM" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
+      # sdkmanager downloads only when fed 'yes' on stdin, but then HANGS after finishing. Run it in
+      # the background, wait for the platform + build-tools to land, then stop it.
+      ( yes | "$SDKM" --sdk_root="$ANDROID_HOME" "platforms;android-34" "build-tools;34.0.0" "platform-tools" >/tmp/android-sdk-install.log 2>&1 ) &
+      for i in $(seq 1 180); do
+        [ -f "$ANDROID_HOME/platforms/android-34/android.jar" ] && [ -x "$ANDROID_HOME/build-tools/34.0.0/aapt2" ] && break
+        sleep 10
+      done
+      pkill -f sdkmanager 2>/dev/null || true
+      # Replace the x86_64 aapt2/aapt/zipalign with the distro's native aarch64 builds.
+      DEB=/usr/lib/android-sdk/build-tools/debian
+      for b in aapt2 aapt zipalign; do [ -e "$DEB/$b" ] && cp -f "$DEB/$b" "$ANDROID_HOME/build-tools/34.0.0/$b"; done
+      if [ ! -x /opt/gradle/gradle-8.7/bin/gradle ]; then
+        wget -q -O /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip
+        sudo mkdir -p /opt/gradle && (cd /opt/gradle && sudo unzip -q /tmp/gradle.zip) && rm -f /tmp/gradle.zip
+      fi
+    verifyScript: |
+      [ -f "$HOME/android-sdk/platforms/android-34/android.jar" ] && [ -x /opt/gradle/gradle-8.7/bin/gradle ] && "$HOME/android-sdk/build-tools/34.0.0/aapt2" version >/dev/null 2>&1 && echo ready
+    uninstallScript: |
+      rm -rf "$HOME/android-sdk"
+      sudo rm -rf /opt/gradle/gradle-8.7
 
   - id: dotnet
     category: dotnet
@@ -181,3 +223,54 @@ entries:
     uninstallScript: |
       sudo apt-get remove -y docker.io
     updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^docker.io/'"
+
+  - id: qemu-system-x86
+    category: virtualization
+    name: x86 Virtualization (QEMU)
+    description: Full-system QEMU to run x86/x86_64 virtual machines on this ARM device, for software with no ARM build (e.g. Microsoft SQL Server). Pure software emulation (no KVM on device) — VMs are slow but fully compatible. Drives the VM Manager extension.
+    supportedArches: [arm64]
+    installScript: |
+      sudo apt-get update
+      sudo apt-get install -y qemu-system-x86 qemu-utils
+    verifyScript: |
+      command -v qemu-system-x86_64 >/dev/null 2>&1 && command -v qemu-img >/dev/null 2>&1 && echo ready
+    uninstallScript: |
+      sudo apt-get remove -y qemu-system-x86 qemu-utils
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(qemu-system-x86|qemu-utils)/'"
+  - id: opencode
+    category: ai
+    name: opencode AI agent
+    description: >-
+      The opencode AI coding agent (single self-contained binary, no Node.js needed). Powers the
+      Chat tab in the right drawer via the OpenChamber extension, and briefs the agent on JCode's
+      environment. Bring an API key or subscription for your model provider.
+    supportedArches: [arm64]
+    installScript: |
+      set -e
+      sudo apt-get update -qq
+      sudo apt-get install -y -qq curl ca-certificates git
+      if ! [ -x "$HOME/.opencode/bin/opencode" ]; then curl -fsSL https://opencode.ai/install | bash; fi
+      sudo ln -sf "$HOME/.opencode/bin/opencode" /usr/local/bin/opencode || true
+      mkdir -p "$HOME/.config/opencode"
+      cat > "$HOME/.config/opencode/AGENTS.md" <<'JCODE_EOF'
+      # You are running inside JCode
+      You are an AI coding agent inside JCode, a native Android IDE on an ARM64 handheld. Your shell
+      runs in a proot Ubuntu 24.04 (aarch64) userland. Hard constraints:
+      - Projects live under /workspace (a FUSE mount). It is noexec and has no symlink support: never
+        execute compiled binaries from it and never create node_modules there. Use ext4 instead,
+        e.g. $HOME/.jcode-run/<project>/.
+      - HOME=/root, USER=root, TMPDIR=/tmp. No systemd, no GUI, no Docker, no x86 emulation.
+      - .NET: export DOTNET_GCHeapHardLimit=0x40000000 before any dotnet command.
+      - The IDE runs projects via .jcode/run.yaml (name, readyPort, terminals: label+command list);
+        keep it working when you change how a project runs.
+      - Dev servers should bind 127.0.0.1; the IDE opens the device browser against localhost.
+      - The screen is small and builds are slow: keep output short, prefer incremental commands.
+      JCODE_EOF
+      echo "installed: opencode $(opencode --version 2>/dev/null | tail -1)"
+    verifyScript: |
+      export PATH="$PATH:$HOME/.opencode/bin"
+      command -v opencode >/dev/null 2>&1 && echo ready
+    uninstallScript: |
+      rm -rf "$HOME/.opencode"
+      sudo rm -f /usr/local/bin/opencode
+    updateCheckScript: ""

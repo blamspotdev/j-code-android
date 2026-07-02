@@ -1,6 +1,9 @@
 package dev.jcode.design
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
@@ -32,6 +35,7 @@ import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.IntegrationInstructions
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.ManageSearch
+import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.NoteAdd
@@ -62,10 +66,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 enum class JCodeIcon {
     Run, Stop, Terminal,
     Files, Folder, NewFolder, NewFile,
-    Sdk, Lsp, Scm, Settings, Search, Extensions, Destinations, Code,
+    Sdk, Lsp, Scm, Settings, Search, Extensions, Destinations, Code, Database,
     Add, Close, Refresh, Paste, Collapse, MoreVert, Save, Undo, Redo, Discard,
     Continue, Rerun, StepInto, StepOver, StepOut,
-    Output, Logs, Problems, Radar,
+    Output, Logs, Problems, Radar, Debug, Tasks, Chat, Cursor,
     DropDown, ChevronDown, ChevronRight, ArrowUp, MenuToggle, Help,
     Copy, Cut, Delete, Open, Rename, SelectAll, Clear, Definition, References, Format,
 }
@@ -104,11 +108,13 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.NewFile to Icons.Rounded.NoteAdd,
         JCodeIcon.Sdk to Icons.Rounded.BuildCircle,
         JCodeIcon.Lsp to Icons.Rounded.IntegrationInstructions,
+        JCodeIcon.Debug to Icons.Rounded.BugReport,
         JCodeIcon.Scm to Icons.Rounded.Source,
         JCodeIcon.Settings to Icons.Rounded.Settings,
         JCodeIcon.Search to Icons.Rounded.Search,
         JCodeIcon.Extensions to Icons.Rounded.Extension,
         JCodeIcon.Destinations to Icons.Rounded.DatasetLinked,
+        JCodeIcon.Database to Icons.Rounded.DatasetLinked,
         JCodeIcon.Code to Icons.Rounded.Code,
         JCodeIcon.Add to Icons.Rounded.Add,
         JCodeIcon.Close to Icons.Rounded.Close,
@@ -129,6 +135,9 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.Logs to Icons.AutoMirrored.Rounded.Article,
         JCodeIcon.Problems to Icons.Rounded.SyncProblem,
         JCodeIcon.Radar to Icons.Rounded.Radar,
+        JCodeIcon.Tasks to Icons.Rounded.Memory,
+        JCodeIcon.Chat to Icons.Rounded.Forum,
+        JCodeIcon.Cursor to Icons.Rounded.TextFields,
         JCodeIcon.DropDown to Icons.Rounded.ArrowDropDown,
         JCodeIcon.ChevronDown to Icons.Rounded.KeyboardArrowDown,
         JCodeIcon.ChevronRight to Icons.AutoMirrored.Rounded.KeyboardArrowRight,

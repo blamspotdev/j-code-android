@@ -1,10 +1,6 @@
 package dev.jcode
 
-import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
-import android.provider.Settings
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -37,27 +33,10 @@ class MainActivity : ComponentActivity() {
         viewModel.refreshEnvironment()
     }
 
-    fun openPermissionSettings() {
-        Log.d(TAG, "Opening permission settings")
-        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-            data = Uri.fromParts("package", packageName, null)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        startActivity(intent)
-    }
-
-    fun runEnvironmentStep(stepId: dev.jcode.core.distro.WizardStepId) {
-        Log.d(TAG, "Running environment step: ${stepId.key}")
-        viewModel.runEnvironmentStep(stepId)
-    }
-
-    fun runAutoSetup() {
-        Log.d(TAG, "Running environment auto setup")
-        viewModel.runAutoSetup()
-    }
-
-    companion object {
-        private const val TAG = "MainActivity"
+    override fun onStop() {
+        super.onStop()
+        // Capture the latest workbench state when backgrounded, in case the process is killed next.
+        viewModel.flushSessionNow()
     }
 }
 

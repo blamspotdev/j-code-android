@@ -34,8 +34,12 @@ google-services.json
 *.hprof
 AGENTS.md
 
+# Rust build outputs (native FFI modules)
+native/*/rust/target/
+
 # Local scratch (screenshots, junk)
 temp/
+/builds/
 .claude/
 .kotlin/
 plans/

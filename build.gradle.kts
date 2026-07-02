@@ -68,6 +68,13 @@ subprojects {
                     excludes += duplicateManifestResource
                 }
             }
+
+            lint {
+                // NullSafeMutableLiveData crashes lintVitalRelease (androidx.lifecycle detector vs
+                // Kotlin 2.1 analysis API). ExpiredTargetSdkVersion is a Play-Store rule; targetSdk
+                // stays 28 deliberately so the proot runtime may exec binaries from app storage.
+                disable += setOf("NullSafeMutableLiveData", "ExpiredTargetSdkVersion")
+            }
         }
     }
 
@@ -127,8 +134,17 @@ subprojects {
                     }
                 }
 
-                sourceSets.getByName("debug").jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs/debug"))
-                sourceSets.getByName("release").jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs/release"))
+                // Rust FFI modules also register generated/cargoJniLibs (see gradle/cargo.gradle.kts).
+                // Their CMake target is only a stub for cargo-less machines: once real cargo-built
+                // libs exist for a variant, drop the stub dir or the jniLibs merger sees duplicates.
+                val cargoModule = path == ":native:ripgrep-ffi" || path == ":native:wasmtime-ffi"
+                listOf("debug", "release").forEach { variant ->
+                    val cargoLibs = layout.buildDirectory.dir("generated/cargoJniLibs/$variant").get().asFile
+                    val hasCargoLibs = cargoModule && cargoLibs.walkTopDown().any { it.extension == "so" }
+                    if (!hasCargoLibs) {
+                        sourceSets.getByName(variant).jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs/$variant"))
+                    }
+                }
 
                 ndkVersion = "27.2.12479018"
             }
@@ -142,6 +158,11 @@ subprojects {
                 resources {
                     excludes += duplicateManifestResource
                 }
+            }
+
+            lint {
+                // Crashes lintVitalRelease: androidx.lifecycle detector vs Kotlin 2.1 analysis API.
+                disable += "NullSafeMutableLiveData"
             }
         }
     }

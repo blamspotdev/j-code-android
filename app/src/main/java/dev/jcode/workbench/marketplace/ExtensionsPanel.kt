@@ -9,9 +9,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -31,11 +36,15 @@ import dev.jcode.design.ManagerListRow
 import dev.jcode.design.ManagerPanelHeader
 import dev.jcode.design.ManagerSectionCard
 import dev.jcode.feature.marketplace.CodeSample
+import dev.jcode.feature.marketplace.ExtensionActivation
 import dev.jcode.feature.marketplace.ExtensionDeps
 import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
+import dev.jcode.feature.marketplace.hasWebUi
 import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.isUpdateAvailable
+import dev.jcode.feature.marketplace.otherAuthors
+import dev.jcode.feature.marketplace.primaryAuthor
 import java.io.File
 
 @Composable
@@ -45,6 +54,7 @@ internal fun ExtensionsPanel(
     busy: Boolean,
     onRefreshMarketplace: () -> Unit,
     onOpenDetail: (String) -> Unit,
+    onOpenPermissions: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LaunchedEffect(Unit) { if (available.isEmpty()) onRefreshMarketplace() }
@@ -69,6 +79,8 @@ internal fun ExtensionsPanel(
             query = query,
             onQueryChange = { query = it },
             searchPlaceholder = "Search extensions",
+            onManage = onOpenPermissions,
+            manageContentDescription = "Extension permissions",
         )
 
         Surface(
@@ -92,7 +104,7 @@ internal fun ExtensionsPanel(
                         if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                         ManagerListRow(
                             name = row.name,
-                            description = listOfNotNull(row.author?.let { "by $it" }, row.description).joinToString(" · "),
+                            description = listOfNotNull(authorLabel(row.primaryAuthor, row.otherAuthors), row.description).joinToString(" · "),
                             status = row.status,
                             onClick = { onOpenDetail(row.id) },
                             leading = {
@@ -107,6 +119,56 @@ internal fun ExtensionsPanel(
     }
 }
 
+/** Left-drawer "DB Managers" panel: installed database-manager extensions; tap to open their UI. */
+@Composable
+internal fun DbManagerPanel(
+    installed: List<InstalledExtension>,
+    onOpenApp: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val dbExtensions = installed.filter { it.type == ExtensionType.DbManager }
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("DB Managers", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text(
+            "${dbExtensions.size} installed",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f),
+        ) {
+            if (dbExtensions.isEmpty()) {
+                Text(
+                    text = "No database managers installed. Install one (e.g. SQL Client) from Extensions.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(12.dp),
+                )
+            } else {
+                Column {
+                    dbExtensions.forEachIndexed { index, ext ->
+                        if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        ManagerListRow(
+                            name = ext.name,
+                            description = ext.description.ifBlank { "Database manager" },
+                            status = ManagerItemStatus.Installed,
+                            onClick = { onOpenApp(ext.id) },
+                            leading = { ExtensionIcon(type = ext.type, name = ext.name, iconFile = ext.iconFile, iconUrl = null) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** Full-width detail page for one extension, opened as an in-editor page tab. */
 @Composable
 internal fun ExtensionDetailPage(
@@ -117,13 +179,15 @@ internal fun ExtensionDetailPage(
     busy: Boolean,
     onInstall: (MarketplaceEntry) -> Unit,
     onUninstall: (String) -> Unit,
+    onOpenApp: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val id = entry?.id ?: installed?.id ?: return
     val status = marketStatus(entry, installed)
     val subtitle = buildString {
-        val author = entry?.author ?: installed?.author
-        author?.let { append("by $it") }
+        val primary = entry?.primaryAuthor ?: installed?.primaryAuthor
+        val others = entry?.otherAuthors ?: installed?.otherAuthors ?: emptyList()
+        primary?.let { append(authorDetail(it, others)) }
         val type = entry?.type ?: installed?.type
         type?.let { if (isNotEmpty()) append(" · "); append(it.name.lowercase()) }
         entry?.category?.let { append(" · $it") }
@@ -152,6 +216,12 @@ internal fun ExtensionDetailPage(
         onUpdate = { entry?.let(onInstall) },
         onUninstall = { onUninstall(id) },
         onVerify = {},
+        onManage = if (installed?.hasWebUi == true) {
+            { onOpenApp(installed.id) }
+        } else {
+            null
+        },
+        manageLabel = "Manage",
         modifier = modifier,
         leading = {
             ExtensionIcon(
@@ -169,9 +239,12 @@ internal fun ExtensionDetailPage(
                 }
             }
             if (entry != null && (!entry.requires.isEmpty || !entry.suggests.isEmpty)) {
-                ManagerSectionCard(title = "Requirements", description = "Works best with these installed.") {
-                    RequirementList("Required", entry.requires, available, installedIds)
-                    RequirementList("Suggested", entry.suggests, available, installedIds)
+                ManagerSectionCard(
+                    title = "Requirements",
+                    description = "Required items are installed together with this extension.",
+                ) {
+                    RequirementList("Required", entry.requires, available, installedIds, autoInstalled = true)
+                    RequirementList("Suggested", entry.suggests, available, installedIds, autoInstalled = false)
                 }
             }
         },
@@ -190,6 +263,159 @@ internal fun ExtensionDetailPage(
     }
 }
 
+/** Full-width Extension Permissions manager page: every installed extension + its activation mode. */
+@Composable
+internal fun ExtensionPermissionsPage(
+    installed: List<InstalledExtension>,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = "Choose when each installed extension's features turn on. Manual disables an extension.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (installed.isEmpty()) {
+            Text(
+                text = "No extensions installed yet.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            installed.sortedBy { it.name.lowercase() }.forEach { ext ->
+                ManagerSectionCard(
+                    title = ext.name,
+                    description = listOfNotNull(
+                        authorLabel(ext.primaryAuthor, ext.otherAuthors),
+                        ext.type.name.lowercase(),
+                    ).joinToString(" · "),
+                ) {
+                    ActivationSelector(extensionId = ext.id)
+                    if (ext.apiCapabilities.isNotEmpty()) {
+                        CapabilityToggles(extensionId = ext.id, capabilities = ext.apiCapabilities)
+                    }
+                    if (ext.hasWebUi) {
+                        KeepAliveToggle(extensionId = ext.id)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Per-capability grant switches for extensions that declare Extension-API capabilities. */
+@Composable
+private fun CapabilityToggles(extensionId: String, capabilities: List<String>) {
+    val grants = LocalExtensionCapabilities.current
+    Text(
+        text = "API capabilities",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    capabilities.forEach { capability ->
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(capability, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    text = when (capability) {
+                        "exec" -> "Run commands in the Linux runtime (as root)"
+                        "fs" -> "Read and write project files"
+                        "workbench" -> "Open files/URLs, show notices, read the focused file"
+                        else -> "Extension-defined capability"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = grants.grantedFor(extensionId, capability),
+                onCheckedChange = { grants.onSetGranted(extensionId, capability, it) },
+            )
+        }
+    }
+}
+
+/** "Keep running in background" switch for extensions with a web UI (e.g. the OpenChamber chat
+ *  keeps its agent session alive when its right-drawer panel is closed). */
+@Composable
+private fun KeepAliveToggle(extensionId: String) {
+    val keepAlive = LocalExtensionKeepAlive.current
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Keep running in background", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text = "Keep the panel alive (agent session, unsent input) when you close or switch away from it",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = keepAlive.enabledFor(extensionId),
+            onCheckedChange = { keepAlive.onSetEnabled(extensionId, it) },
+        )
+    }
+}
+
+/** Per-extension activation-mode selector (auto-start / on-demand / manual). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ActivationSelector(extensionId: String) {
+    val activation = LocalExtensionActivation.current
+    val mode = activation.modeFor(extensionId)
+    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+        ExtensionActivation.entries.forEachIndexed { index, m ->
+            SegmentedButton(
+                shape = SegmentedButtonDefaults.itemShape(index = index, count = ExtensionActivation.entries.size),
+                selected = mode == m,
+                onClick = { activation.onChange(extensionId, m) },
+                label = { Text(m.label) },
+            )
+        }
+    }
+    Text(
+        text = mode.blurb,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+private val ExtensionActivation.label: String
+    get() = when (this) {
+        ExtensionActivation.AutoStart -> "Auto-start"
+        ExtensionActivation.OnDemand -> "On-demand"
+        ExtensionActivation.Manual -> "Manual"
+    }
+
+private val ExtensionActivation.blurb: String
+    get() = when (this) {
+        ExtensionActivation.AutoStart -> "Active from launch — always on."
+        ExtensionActivation.OnDemand -> "Activates when you open a file this extension supports."
+        ExtensionActivation.Manual -> "Disabled — this extension's features stay off until you switch modes."
+    }
+
+/** Compact author line for list rows: "by X", "by X, Y", or "by X +N" when the co-author list is long. */
+private fun authorLabel(primary: String, others: List<String>): String {
+    if (others.isEmpty()) return "by $primary"
+    val inline = (listOf(primary) + others).joinToString(", ")
+    return if (others.size <= 2 && inline.length <= 28) "by $inline" else "by $primary +${others.size}"
+}
+
+/** Full author line for the detail page: "by X" plus a clearly-labelled co-author list. */
+private fun authorDetail(primary: String, others: List<String>): String =
+    if (others.isEmpty()) "by $primary" else "by $primary · with ${others.joinToString(", ")}"
+
 private fun entrySubtitle(entry: MarketplaceEntry): String = buildString {
     append(entry.type.name.lowercase())
     entry.category?.let { append(" · $it") }
@@ -206,7 +432,8 @@ private fun marketStatus(entry: MarketplaceEntry?, installed: InstalledExtension
 private data class ExtensionRow(
     val id: String,
     val name: String,
-    val author: String?,
+    val primaryAuthor: String,
+    val otherAuthors: List<String>,
     val description: String,
     val type: ExtensionType,
     val status: ManagerItemStatus,
@@ -228,7 +455,8 @@ private fun buildExtensionRows(
         ExtensionRow(
             id = e.id,
             name = e.name,
-            author = e.author,
+            primaryAuthor = e.primaryAuthor,
+            otherAuthors = e.otherAuthors,
             description = e.description ?: entrySubtitle(e),
             type = e.type,
             status = marketStatus(e, inst),
@@ -241,7 +469,8 @@ private fun buildExtensionRows(
         ExtensionRow(
             id = ext.id,
             name = ext.name,
-            author = ext.author,
+            primaryAuthor = ext.primaryAuthor,
+            otherAuthors = ext.otherAuthors,
             description = ext.description.ifBlank { ext.type.name.lowercase() },
             type = ext.type,
             status = ManagerItemStatus.Installed,
@@ -254,7 +483,8 @@ private fun buildExtensionRows(
         .filter { r ->
             query.isBlank() ||
                 r.name.contains(query, ignoreCase = true) ||
-                (r.author?.contains(query, ignoreCase = true) == true) ||
+                r.primaryAuthor.contains(query, ignoreCase = true) ||
+                r.otherAuthors.any { it.contains(query, ignoreCase = true) } ||
                 r.description.contains(query, ignoreCase = true)
         }
         .sortedWith(compareByDescending<ExtensionRow> { it.installed }.thenBy { it.name.lowercase() })
@@ -285,15 +515,17 @@ private fun RequirementList(
     deps: ExtensionDeps,
     available: List<MarketplaceEntry>,
     installedIds: Set<String>,
+    autoInstalled: Boolean,
 ) {
     if (deps.isEmpty) return
     Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+    val pendingSuffix = if (autoInstalled) "installs automatically" else "optional"
     deps.extensions.forEach { id ->
         val name = available.firstOrNull { it.id == id }?.name ?: id
-        DependencyRow(name = name, kind = if (id in installedIds) "extension · installed" else "extension")
+        DependencyRow(name = name, kind = if (id in installedIds) "extension · installed" else "extension · $pendingSuffix")
     }
-    deps.sdks.forEach { id -> DependencyRow(name = id, kind = "SDK · install via SDK Manager") }
-    deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server · install via LSP Manager") }
+    deps.sdks.forEach { id -> DependencyRow(name = id, kind = "toolchain · $pendingSuffix") }
+    deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server · $pendingSuffix") }
 }
 
 @Composable
@@ -311,13 +543,16 @@ private fun DependencyDialog(
         title = { Text("Install ${entry.name}") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    "Works best with these installed:",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                DependencyGroup("Required", entry.requires, available, installedIds, busy, onInstall)
-                DependencyGroup("Suggested", entry.suggests, available, installedIds, busy, onInstall)
+                if (!entry.requires.isEmpty) {
+                    Text(
+                        "Required items are installed automatically; if any of them fails, the " +
+                            "extension isn't installed.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                RequiredGroup(entry.requires, available, installedIds)
+                SuggestedGroup(entry.suggests, available, installedIds, busy, onInstall)
             }
         },
         confirmButton = { TextButton(onClick = onProceed, enabled = !busy) { Text("Install ${entry.name}") } },
@@ -326,8 +561,30 @@ private fun DependencyDialog(
 }
 
 @Composable
-private fun DependencyGroup(
-    label: String,
+private fun RequiredGroup(
+    deps: ExtensionDeps,
+    available: List<MarketplaceEntry>,
+    installedIds: Set<String>,
+) {
+    if (deps.isEmpty) return
+    Text("Required", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+    val status: @Composable (installed: Boolean) -> Unit = { installed ->
+        Text(
+            if (installed) "Installed" else "Auto-install",
+            style = MaterialTheme.typography.labelMedium,
+            color = if (installed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    deps.extensions.forEach { id ->
+        val depEntry = available.firstOrNull { it.id == id }
+        DependencyRow(name = depEntry?.name ?: id, kind = "extension") { status(id in installedIds) }
+    }
+    deps.sdks.forEach { id -> DependencyRow(name = id, kind = "toolchain") { status(false) } }
+    deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server") { status(false) } }
+}
+
+@Composable
+private fun SuggestedGroup(
     deps: ExtensionDeps,
     available: List<MarketplaceEntry>,
     installedIds: Set<String>,
@@ -335,7 +592,7 @@ private fun DependencyGroup(
     onInstall: (MarketplaceEntry) -> Unit,
 ) {
     if (deps.isEmpty) return
-    Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+    Text("Suggested", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
     deps.extensions.forEach { id ->
         val depEntry = available.firstOrNull { it.id == id }
         DependencyRow(name = depEntry?.name ?: id, kind = "extension") {
@@ -354,8 +611,8 @@ private fun DependencyGroup(
             }
         }
     }
-    deps.sdks.forEach { id -> DependencyRow(name = id, kind = "SDK · install via SDK Manager") {} }
-    deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server · install via LSP Manager") {} }
+    deps.sdks.forEach { id -> DependencyRow(name = id, kind = "toolchain · install via Toolchains") {} }
+    deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server · install via Toolchains") {} }
 }
 
 @Composable
