@@ -60,11 +60,5 @@ fun registerCargoNdkBuildTask(taskName: String, buildMode: String) =
         }
     }
 
-val cargoBuildDebugJniLibs = registerCargoNdkBuildTask("cargoBuildDebugJniLibs", "debug")
-val cargoBuildReleaseJniLibs = registerCargoNdkBuildTask("cargoBuildReleaseJniLibs", "release")
-
-tasks.register("prepareCargoJniLibs") {
-    group = "build"
-    description = "Prepares cargo JNI libs for $cargoPackageName"
-    dependsOn(cargoBuildDebugJniLibs, cargoBuildReleaseJniLibs)
-}
+registerCargoNdkBuildTask("cargoBuildDebugJniLibs", "debug")
+registerCargoNdkBuildTask("cargoBuildReleaseJniLibs", "release")
