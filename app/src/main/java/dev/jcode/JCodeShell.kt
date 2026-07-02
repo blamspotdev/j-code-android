@@ -745,13 +745,12 @@ private fun JCodeShell(
     val onSelectWorkbenchTool: (WorkbenchTool) -> Unit = { tool ->
         if (tool == WorkbenchTool.Settings) onOpenSettingsPage() else selectedTool = tool
     }
-    // Refresh installed/update-available status when a manager panel comes into view (async, guarded).
+    // Refresh installed/update-available status when the merged manager comes into view (async, guarded).
     LaunchedEffect(selectedTool) {
-        when (selectedTool) {
-            WorkbenchTool.SdkManager -> managerActions.onCheckSdkStatuses()
-            WorkbenchTool.LspManager -> managerActions.onCheckLspStatuses()
-            WorkbenchTool.DebugEngineManager -> managerActions.onCheckDebugStatuses()
-            else -> Unit
+        if (selectedTool == WorkbenchTool.ToolchainManager) {
+            managerActions.onCheckSdkStatuses()
+            managerActions.onCheckLspStatuses()
+            managerActions.onCheckDebugStatuses()
         }
     }
     var leftSidebarExpanded by rememberSaveable(isLandscape, windowInfo.widthClass) {
@@ -1953,27 +1952,19 @@ private fun WorkspacePanel(
                         modifier = Modifier.fillMaxSize(),
                     )
 
-                    WorkbenchTool.SdkManager -> SdkManagerFeature.Content(
-                        state = sdkCatalogState,
+                    WorkbenchTool.ToolchainManager -> ToolchainManagerPanel(
+                        sdkState = sdkCatalogState,
+                        lspState = lspCatalogState,
+                        debugState = LocalDebugCatalogState.current,
                         environmentState = environmentState,
-                        onRefresh = managerActions.onCheckSdkStatuses,
-                        onOpenDetail = managerActions.onOpenSdkDetail,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-
-                    WorkbenchTool.LspManager -> LspManagerFeature.Content(
-                        state = lspCatalogState,
-                        environmentState = environmentState,
-                        onRefresh = managerActions.onCheckLspStatuses,
-                        onOpenDetail = managerActions.onOpenLspDetail,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-
-                    WorkbenchTool.DebugEngineManager -> DebugEngineManagerFeature.Content(
-                        state = LocalDebugCatalogState.current,
-                        environmentState = environmentState,
-                        onRefresh = managerActions.onCheckDebugStatuses,
-                        onOpenDetail = managerActions.onOpenDebugEngineDetail,
+                        onRefreshAll = {
+                            managerActions.onCheckSdkStatuses()
+                            managerActions.onCheckLspStatuses()
+                            managerActions.onCheckDebugStatuses()
+                        },
+                        onOpenSdkDetail = managerActions.onOpenSdkDetail,
+                        onOpenLspDetail = managerActions.onOpenLspDetail,
+                        onOpenDebugDetail = managerActions.onOpenDebugEngineDetail,
                         modifier = Modifier.fillMaxSize(),
                     )
 

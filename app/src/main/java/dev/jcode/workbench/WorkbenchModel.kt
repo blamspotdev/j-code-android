@@ -113,9 +113,8 @@ internal enum class WorkbenchTool(
     Scm("SCM", JCodeIcon.Scm, "SCM", available = false),
     RunDebug("Run/Debug", JCodeIcon.Run, "Run"),
     Extensions("Extensions", JCodeIcon.Extensions, "Ext"),
-    SdkManager("SDK Manager", JCodeIcon.Sdk, "SDK"),
-    LspManager("LSP Manager", JCodeIcon.Lsp, "LSP"),
-    DebugEngineManager("Debug Engines", JCodeIcon.Debug, "DBG"),
+    /** SDKs + language servers + debug engines, merged into one searchable/filterable catalog. */
+    ToolchainManager("Toolchains", JCodeIcon.Sdk, "Tools"),
     DbManager("DB Managers", JCodeIcon.Database, "DB"),
     Settings("Settings", JCodeIcon.Settings, "Settings"),
 }
