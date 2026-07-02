@@ -221,6 +221,8 @@ import dev.jcode.workbench.LocalDebugSession
 import dev.jcode.design.PerformanceSettings
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.workbench.CloseTarget
+import dev.jcode.workbench.IssueActions
+import dev.jcode.workbench.LocalIssueActions
 import dev.jcode.core.debug.DebugState
 import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.workbench.LocalTerminalTapConfig
@@ -446,6 +448,43 @@ fun JCodeApp(
         )
     }
 
+    val issueActions = remember(viewModel) {
+        IssueActions(onOpen = { path, line -> viewModel.openFileByGuestPath("$path:${line + 1}") })
+    }
+
+    // Mirror the active file's bus diagnostics onto its editor as squiggly underlines. Positions are
+    // resolved against the current snapshot; they drift with unsaved edits until the next check runs.
+    val allDiagnostics by dev.jcode.core.lsp.LspModule.diagnosticsBus.allDiagnostics.collectAsStateWithLifecycle()
+    val activeDiagTab = editorGroup.activeTab
+    LaunchedEffect(activeDiagTab?.id, allDiagnostics) {
+        val state = activeDiagTab?.editorState ?: return@LaunchedEffect
+        val diags = allDiagnostics[activeDiagTab.filePath.path].orEmpty()
+        val snap = state.snapshot.value
+        val decos = if (snap.lineCount == 0) emptyList() else diags.mapIndexed { i, d ->
+            val line = d.startLine.coerceIn(0, snap.lineCount - 1)
+            val (ls, le) = snap.lineAt(line)
+            val endLine = d.endLine.coerceIn(line, snap.lineCount - 1)
+            val (els, ele) = snap.lineAt(endLine)
+            var start = (ls + d.startCol).coerceIn(ls, le)
+            var end = (els + d.endCol).coerceIn(els, ele)
+            if (end <= start) { start = ls; end = le } // zero-width diagnostic: underline the line
+            dev.jcode.core.editor.decor.SquiggleDecoration(
+                id = "diag:${activeDiagTab.id}:$i",
+                startByte = start,
+                endByte = end,
+                severity = when (d.severity) {
+                    dev.jcode.core.lsp.DiagnosticSeverity.ERROR -> dev.jcode.core.editor.decor.DiagnosticSeverity.ERROR
+                    dev.jcode.core.lsp.DiagnosticSeverity.WARNING -> dev.jcode.core.editor.decor.DiagnosticSeverity.WARNING
+                    dev.jcode.core.lsp.DiagnosticSeverity.INFORMATION -> dev.jcode.core.editor.decor.DiagnosticSeverity.INFO
+                    dev.jcode.core.lsp.DiagnosticSeverity.HINT -> dev.jcode.core.editor.decor.DiagnosticSeverity.HINT
+                },
+                message = d.message,
+                source = d.source,
+            )
+        }
+        state.updateDecorations { it.replaceLayer(dev.jcode.core.editor.decor.Layer.SQUIGGLY, decos) }
+    }
+
     CompositionLocalProvider(
         LocalTerminalTapConfig provides terminalTapConfig,
         LocalTabCloseButtonSetting provides tabCloseSetting,
@@ -459,6 +498,7 @@ fun JCodeApp(
         LocalDebugCatalogState provides debugCatalogState,
         LocalDebugSession provides debugSessionUi,
         LocalPerformanceSettings provides performanceSettings,
+        LocalIssueActions provides issueActions,
         LocalDebugEditorState provides DebugEditorState(
             breakpoints = breakpoints,
             stoppedPath = debugLocation?.hostPath,
@@ -2922,11 +2962,7 @@ private fun WorkbenchRightSidebarBody(
             )
         }
         RightPanelTab.Problems -> {
-            DisabledTabContent(
-                title = "Problems",
-                message = "Project problem detection coming in a future update.",
-                modifier = modifier,
-            )
+            IssuesSidebarContent(modifier = modifier)
         }
         RightPanelTab.DebugConsole -> {
             DebugConsoleSidebarContent(modifier = modifier)
@@ -3176,41 +3212,6 @@ private fun TerminalSidebarContent(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun DisabledTabContent(
-    title: String,
-    message: String,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Icon(
-            imageVector = jcIcon(JCodeIcon.Sdk),
-            contentDescription = null,
-            modifier = Modifier.size(48.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        Text(
-            text = title,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-            textAlign = TextAlign.Center,
-        )
     }
 }
 

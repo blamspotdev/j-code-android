@@ -17,10 +17,12 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jcode.core.config.EffectiveConfig
+import dev.jcode.core.lsp.LspModule
 import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.fs.Project
 import dev.jcode.fs.ProjectKind
@@ -47,6 +49,7 @@ internal fun WorkbenchStatusBar(
     activeDistroId: String,
 ) {
     val branch = rememberGitBranch(selectedProject)
+    val issueCount by LspModule.diagnosticsBus.totalCount.collectAsStateWithLifecycle()
     // A project's effective distro can be overridden in its `.jcode`; otherwise fall back to the
     // globally active environment so the cell still reflects what terminals/builds target.
     val distro = if (selectedProject != null) effectiveConfig.distro.id else activeDistroId
@@ -63,7 +66,10 @@ internal fun WorkbenchStatusBar(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             StatusCell("branch: $branch")
-            StatusCell("problems: 0")
+            StatusCell(
+                "issues: ${issueCount.total}",
+                color = if (issueCount.hasErrors) MaterialTheme.colorScheme.error else Color.Unspecified,
+            )
             // File-only metrics are meaningless for a page tab (e.g. Settings); hide them there.
             if (activeTab?.isPage != true) {
                 StatusCell("cursor: ${metrics.line}:${metrics.column}")
@@ -117,10 +123,11 @@ private fun readGitBranch(location: String?): String? {
 }
 
 @Composable
-private fun RowScope.StatusCell(text: String) {
+private fun RowScope.StatusCell(text: String, color: Color = Color.Unspecified) {
     Text(
         text = text,
         style = MaterialTheme.typography.bodySmall,
+        color = color,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
     )

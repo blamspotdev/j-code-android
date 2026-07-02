@@ -61,6 +61,15 @@ internal val LocalDebugSession = compositionLocalOf { DebugSessionUi() }
 /** What a close request targets — used to route the confirm-before-close teardown. */
 internal enum class CloseTarget { Project, Workspace }
 
+/** Issues-tab actions, provided via a CompositionLocal so the deeply nested right drawer can open a
+ *  diagnostic's file at its line without threading params through the register-limited shell. */
+internal data class IssueActions(
+    /** Open [path] (host path) in the editor and jump to the 0-based [line]. */
+    val onOpen: (path: String, line: Int) -> Unit = { _, _ -> },
+)
+
+internal val LocalIssueActions = compositionLocalOf { IssueActions() }
+
 /**
  * The SDK / LSP / Extension manager callbacks, bundled so the giant [dev.jcode.JCodeShell] composable
  * stays under the ART verifier's per-method register limit (too many individual params overflow it).
@@ -118,6 +127,6 @@ internal enum class RightPanelTab(
 ) {
     Terminal("Terminal", JCodeIcon.Terminal, enabled = true),
     Output("Output", JCodeIcon.Logs, enabled = true),
-    Problems("Problems", JCodeIcon.Problems, enabled = false),
+    Problems("Issues", JCodeIcon.Problems, enabled = true),
     DebugConsole("Debug", JCodeIcon.Debug, enabled = true),
 }

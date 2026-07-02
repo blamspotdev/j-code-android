@@ -10,6 +10,7 @@ import dev.jcode.core.editor.decor.ColoredSpan
 import dev.jcode.core.editor.decor.DecorationSet
 import dev.jcode.core.editor.decor.GutterMarkerDecoration
 import dev.jcode.core.editor.decor.LineHighlightDecoration
+import dev.jcode.core.editor.decor.SquiggleDecoration
 import dev.jcode.core.resource.LruManagedCache
 import dev.jcode.core.resource.ResourceManager
 import java.nio.charset.StandardCharsets
@@ -71,6 +72,10 @@ class Renderer(
     }
     private val breakpointPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val lineHighlightPaint = Paint()
+    private val squigglePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+    }
 
     fun draw(canvas: Canvas, snapshot: Snapshot, viewport: Viewport, config: RenderConfig, carets: List<Caret>, decorations: DecorationSet = DecorationSet.EMPTY, theme: EditorTheme = EditorTheme.DARK) {
         // Configure paint for current config. fontSizeSp is in sp; Paint.textSize is in px, so convert
@@ -158,6 +163,31 @@ class Renderer(
             } else {
                 textPaint.color = theme.foreground.toInt()
                 canvas.drawText(lineText, gutterWidth + 8f, y + lineHeightPx * 0.7f, textPaint)
+            }
+        }
+
+        // Squiggly diagnostic underlines, drawn just below each affected line's text baseline.
+        val squiggles = decorations.atLayer(dev.jcode.core.editor.decor.Layer.SQUIGGLY)
+            .filterIsInstance<SquiggleDecoration>()
+        for (sq in squiggles) {
+            val sqStart = sq.startByte.coerceAtLeast(0)
+            val sqEnd = sq.endByte.coerceAtLeast(sqStart)
+            val startLine = snapshot.offsetToLineColumn(sqStart).first
+            val endLine = snapshot.offsetToLineColumn(sqEnd).first
+            for (line in startLine..endLine) {
+                if (line !in visibleTop until visibleBottom) continue
+                val (lineStart, lineEnd) = snapshot.lineAt(line)
+                val lineText = snapshot.readRangeAsUtf16(lineStart, lineEnd)
+                val c0 = (if (line == startLine) sqStart - lineStart else 0)
+                    .coerceIn(0, lineText.length)
+                val c1 = (if (line == endLine) sqEnd - lineStart else lineEnd - lineStart)
+                    .coerceIn(c0, lineText.length)
+                val xStart = gutterWidth + 8f + measureTextWidth(lineText.substring(0, c0), config)
+                var xEnd = gutterWidth + 8f + measureTextWidth(lineText.substring(0, c1), config)
+                if (xEnd < xStart + 12f) xEnd = xStart + 12f // keep zero-width diagnostics visible
+                val y = (line - visibleTop) * lineHeightPx + viewport.scrollY % lineHeightPx
+                squigglePaint.color = sq.severity.color
+                SquiggleDecoration.drawSquiggle(canvas, squigglePaint, xStart, xEnd, y + lineHeightPx * 0.7f + 5f)
             }
         }
 

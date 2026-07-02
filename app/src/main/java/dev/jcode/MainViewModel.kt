@@ -30,6 +30,8 @@ import dev.jcode.core.distro.SdkCatalogAction
 import dev.jcode.core.distro.DistroService
 import dev.jcode.core.distro.DistroServiceLocator
 import dev.jcode.core.distro.WizardStepId
+import dev.jcode.core.lsp.Diagnostic as LspDiagnostic
+import dev.jcode.core.lsp.DiagnosticSeverity as LspDiagnosticSeverity
 import dev.jcode.core.resource.ResourceManager
 import dev.jcode.core.resource.ResourceManagerLocator
 import dev.jcode.design.ThemeMode
@@ -489,6 +491,94 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun debugEvaluate(expression: String, onResult: (String?) -> Unit) =
         debugController.evaluate(expression, onResult)
 
+    // ---- Issues (diagnostics bus) producers ----
+
+    private val diagnosticsBus = dev.jcode.core.lsp.LspModule.diagnosticsBus
+
+    init {
+        // .jcode YAML config parse errors are real project issues; mirror them onto the bus.
+        viewModelScope.launch {
+            configService.workspaceError.collect { err ->
+                publishConfigDiagnostic("config-workspace", configService.workspaceConfigPath, err)
+            }
+        }
+        viewModelScope.launch {
+            configService.projectError.collect { err ->
+                publishConfigDiagnostic("config-project", configService.projectConfigPath, err)
+            }
+        }
+    }
+
+    private fun publishConfigDiagnostic(source: String, path: String?, error: String?) {
+        if (error == null || path == null) {
+            diagnosticsBus.clearSource(source)
+            return
+        }
+        // snakeyaml errors carry "line N, column M" (1-based); default to the file top otherwise.
+        val pos = Regex("""line (\d+), column (\d+)""").find(error)
+        val line = ((pos?.groupValues?.get(1)?.toIntOrNull() ?: 1) - 1).coerceAtLeast(0)
+        val col = ((pos?.groupValues?.get(2)?.toIntOrNull() ?: 1) - 1).coerceAtLeast(0)
+        val message = error.lineSequence().firstOrNull { it.isNotBlank() }?.trim() ?: error
+        diagnosticsBus.updateSourceDiagnostics(
+            source,
+            mapOf(
+                path to listOf(
+                    LspDiagnostic(line, col, line, col, LspDiagnosticSeverity.ERROR, message, "jcode-config", null),
+                ),
+            ),
+        )
+    }
+
+    /**
+     * On-open/on-save syntax check for the flagship script languages: a one-shot compile inside the
+     * distro (no artifacts written), its errors published to the Issues bus. Silent no-op when the
+     * runtime isn't ready, the file lives outside /workspace, or the language has no checker.
+     */
+    private fun queueSyntaxCheck(file: File) {
+        val projectsRoot = DEFAULT_SHARED_PROJECTS_ROOT.trimEnd('/')
+        if (!file.path.startsWith("$projectsRoot/")) return
+        val guest = "/workspace" + file.path.removePrefix(projectsRoot)
+        val command = when (file.extension.lowercase()) {
+            "py", "pyw" ->
+                "python3 -c \"import sys; compile(open(sys.argv[1]).read(), sys.argv[1], 'exec')\" '$guest'"
+            "js", "mjs", "cjs" ->
+                "command -v node >/dev/null 2>&1 || exit 0; node --check '$guest'"
+            else -> return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching { distroService.exec(command, timeoutMs = 30_000L) }.getOrNull() ?: return@launch
+            if (result.internalError != null) return@launch // runtime not ready: leave issues untouched
+            val diagnostics = if (result.succeeded) emptyList() else parseSyntaxErrors(result.stderr, guest)
+            diagnosticsBus.updateDiagnostics("syntax", file.path, diagnostics)
+        }
+    }
+
+    /** Pull (line, message) out of python/node syntax-error stderr for [guestPath]. */
+    private fun parseSyntaxErrors(stderr: String, guestPath: String): List<LspDiagnostic> {
+        if (stderr.isBlank()) return emptyList()
+        val lines = stderr.lineSequence().map { it.trimEnd() }.filter { it.isNotBlank() }.toList()
+        // python: File "<path>", line N — node: <path>:N at the very first line.
+        val lineNo = lines.firstNotNullOfOrNull { l ->
+            Regex("""File "${Regex.escape(guestPath)}", line (\d+)""").find(l)?.groupValues?.get(1)?.toIntOrNull()
+        } ?: lines.firstNotNullOfOrNull { l ->
+            Regex("""^${Regex.escape(guestPath)}:(\d+)""").find(l)?.groupValues?.get(1)?.toIntOrNull()
+        } ?: 1
+        val message = lines.lastOrNull { Regex("""^\w*(Error|Warning)\b""").containsMatchIn(it) }
+            ?: lines.last()
+        return listOf(
+            LspDiagnostic(
+                startLine = (lineNo - 1).coerceAtLeast(0),
+                startCol = 0,
+                endLine = (lineNo - 1).coerceAtLeast(0),
+                endCol = 0,
+                severity = LspDiagnosticSeverity.ERROR,
+                message = message.take(300),
+                source = "syntax",
+                code = null,
+            ),
+        )
+    }
+
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages = _messages.asSharedFlow()
 
@@ -738,6 +828,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             clearEditorTabs()
             clearDefaultWorkspaceProjects()
+            diagnosticsBus.clearSource("syntax")
             emitMessage("Project closed.")
         }
     }
@@ -1361,6 +1452,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (state.snapshot.value === snapshot) state.markClean()
                 file.diskSignatureOrNull()?.let { diskSignatures[tab.id] = it }
                 emitMessage("Saved ${tab.title}")
+                queueSyntaxCheck(file)
             }.onFailure {
                 emitMessage("Failed to save ${tab.title}: ${it.message ?: "error"}")
             }
@@ -1407,6 +1499,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         trackDirty(tab)
         file.diskSignatureOrNull()?.let { diskSignatures[stableId] = it }
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
+        queueSyntaxCheck(file)
     }
 
     /** Convert a 1-based (line, optional column) to the editor's 0-based reveal request. */
