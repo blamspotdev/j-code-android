@@ -15,3 +15,26 @@ class ExtensionActivationSetting(
 )
 
 val LocalExtensionActivation = compositionLocalOf { ExtensionActivationSetting() }
+
+/**
+ * Per-extension Extension-API capability grants (declared in the manifest's `api.capabilities`,
+ * granted by default, revocable per capability on the Extension Permissions page). Same
+ * CompositionLocal convention as [LocalExtensionActivation].
+ */
+class ExtensionCapabilitySetting(
+    val grantedFor: (extensionId: String, capability: String) -> Boolean = { _, _ -> true },
+    val onSetGranted: (extensionId: String, capability: String, granted: Boolean) -> Unit = { _, _, _ -> },
+)
+
+val LocalExtensionCapabilities = compositionLocalOf { ExtensionCapabilitySetting() }
+
+/**
+ * Per-extension "keep running in background": whether an extension's chat/app WebView survives its
+ * panel closing (enabled by default). Same CompositionLocal convention as [LocalExtensionActivation].
+ */
+class ExtensionKeepAliveSetting(
+    val enabledFor: (extensionId: String) -> Boolean = { true },
+    val onSetEnabled: (extensionId: String, enabled: Boolean) -> Unit = { _, _ -> },
+)
+
+val LocalExtensionKeepAlive = compositionLocalOf { ExtensionKeepAliveSetting() }

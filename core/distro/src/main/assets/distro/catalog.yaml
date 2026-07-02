@@ -237,3 +237,40 @@ entries:
     uninstallScript: |
       sudo apt-get remove -y qemu-system-x86 qemu-utils
     updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(qemu-system-x86|qemu-utils)/'"
+  - id: opencode
+    category: ai
+    name: opencode AI agent
+    description: >-
+      The opencode AI coding agent (single self-contained binary, no Node.js needed). Powers the
+      Chat tab in the right drawer via the OpenChamber extension, and briefs the agent on JCode's
+      environment. Bring an API key or subscription for your model provider.
+    supportedArches: [arm64]
+    installScript: |
+      set -e
+      sudo apt-get update -qq
+      sudo apt-get install -y -qq curl ca-certificates git
+      if ! [ -x "$HOME/.opencode/bin/opencode" ]; then curl -fsSL https://opencode.ai/install | bash; fi
+      sudo ln -sf "$HOME/.opencode/bin/opencode" /usr/local/bin/opencode || true
+      mkdir -p "$HOME/.config/opencode"
+      cat > "$HOME/.config/opencode/AGENTS.md" <<'JCODE_EOF'
+      # You are running inside JCode
+      You are an AI coding agent inside JCode, a native Android IDE on an ARM64 handheld. Your shell
+      runs in a proot Ubuntu 24.04 (aarch64) userland. Hard constraints:
+      - Projects live under /workspace (a FUSE mount). It is noexec and has no symlink support: never
+        execute compiled binaries from it and never create node_modules there. Use ext4 instead,
+        e.g. $HOME/.jcode-run/<project>/.
+      - HOME=/root, USER=root, TMPDIR=/tmp. No systemd, no GUI, no Docker, no x86 emulation.
+      - .NET: export DOTNET_GCHeapHardLimit=0x40000000 before any dotnet command.
+      - The IDE runs projects via .jcode/run.yaml (name, readyPort, terminals: label+command list);
+        keep it working when you change how a project runs.
+      - Dev servers should bind 127.0.0.1; the IDE opens the device browser against localhost.
+      - The screen is small and builds are slow: keep output short, prefer incremental commands.
+      JCODE_EOF
+      echo "installed: opencode $(opencode --version 2>/dev/null | tail -1)"
+    verifyScript: |
+      export PATH="$PATH:$HOME/.opencode/bin"
+      command -v opencode >/dev/null 2>&1 && echo ready
+    uninstallScript: |
+      rm -rf "$HOME/.opencode"
+      sudo rm -f /usr/local/bin/opencode
+    updateCheckScript: ""

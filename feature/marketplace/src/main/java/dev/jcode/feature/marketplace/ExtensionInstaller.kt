@@ -221,6 +221,8 @@ class ExtensionInstaller internal constructor(context: Context) {
             languages = languages,
             iconFile = findIconFile(dir),
             webUiEntry = findWebUiEntry(dir),
+            apiMinVersion = (map["api"] as? Map<*, *>)?.toStringKeyMap()?.str("minApiVersion")?.toIntOrNull() ?: 0,
+            apiCapabilities = (map["api"] as? Map<*, *>)?.toStringKeyMap()?.strList("capabilities") ?: emptyList(),
         )
     }
 

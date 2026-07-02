@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cleartext HTTP is allowed ONLY to the device itself: extension web UIs and web previews talk to
+     dev servers (opencode/openchamber, Vite, etc.) running inside the local Linux runtime, which
+     shares the host network namespace and serves plain http on 127.0.0.1. Everything else stays
+     HTTPS-only. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

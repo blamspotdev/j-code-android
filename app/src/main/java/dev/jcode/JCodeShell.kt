@@ -207,6 +207,10 @@ import dev.jcode.workbench.dialog.NewItemDialog
 import dev.jcode.workbench.dialog.OpenFolderTypeDialog
 import dev.jcode.feature.marketplace.ExtensionActivation
 import dev.jcode.workbench.marketplace.ExtensionActivationSetting
+import dev.jcode.workbench.marketplace.ExtensionCapabilitySetting
+import dev.jcode.workbench.marketplace.ExtensionKeepAliveSetting
+import dev.jcode.workbench.marketplace.LocalExtensionCapabilities
+import dev.jcode.workbench.marketplace.LocalExtensionKeepAlive
 import dev.jcode.workbench.ExtensionWebViewPage
 import dev.jcode.workbench.marketplace.DbManagerPanel
 import dev.jcode.workbench.marketplace.ExtensionDetailPage
@@ -222,6 +226,11 @@ import dev.jcode.design.PerformanceSettings
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.WebPreviewBrowsers
 import dev.jcode.design.LocalWebPreviewBrowsers
+import dev.jcode.workbench.AgentChatActions
+import dev.jcode.workbench.AgentChatSidebarContent
+import dev.jcode.workbench.AgentChatWebViewHolder
+import dev.jcode.workbench.agentChatTabTitle
+import dev.jcode.workbench.LocalAgentChatActions
 import dev.jcode.workbench.CloseTarget
 import dev.jcode.workbench.IssueActions
 import dev.jcode.workbench.LocalIssueActions
@@ -293,6 +302,24 @@ fun JCodeApp(
         ExtensionActivationSetting(
             modeFor = { id -> extensionActivations[id] ?: ExtensionActivation.Default },
             onChange = viewModel::setExtensionActivation,
+        )
+    }
+    val extensionCapabilityDenials by viewModel.extensionCapabilityDenials.collectAsStateWithLifecycle()
+    val extensionCapabilitySetting = remember(extensionCapabilityDenials) {
+        ExtensionCapabilitySetting(
+            grantedFor = { id, capability -> capability !in (extensionCapabilityDenials[id] ?: emptySet()) },
+            onSetGranted = viewModel::setExtensionCapability,
+        )
+    }
+    val extensionKeepAliveDisabled by viewModel.extensionKeepAliveDisabled.collectAsStateWithLifecycle()
+    val extensionKeepAliveSetting = remember(extensionKeepAliveDisabled) {
+        ExtensionKeepAliveSetting(
+            enabledFor = { id -> id !in extensionKeepAliveDisabled },
+            onSetEnabled = { id, enabled ->
+                viewModel.setExtensionKeepAlive(id, enabled)
+                // Turning it off tears down the persisted WebView so it can't linger detached.
+                if (!enabled) AgentChatWebViewHolder.destroy(id)
+            },
         )
     }
     val marketplaceEntries by viewModel.marketplaceEntries.collectAsStateWithLifecycle()
@@ -439,8 +466,10 @@ fun JCodeApp(
         }
     }
 
-    LaunchedEffect(selectedProject?.id, editorGroup.tabs.count { !it.isPage }) {
-        // Page tabs (e.g. Settings) don't count as project content, so the bootstrap file still opens.
+    // Keyed on the selection ONLY (page tabs like Settings don't count as project content). Deliberately
+    // NOT keyed on the tab count: tabs emptying mid-close (Close Project/Workspace clears them while the
+    // old selection is still momentarily set) must not re-open the file the user just closed.
+    LaunchedEffect(selectedProject?.id) {
         if (selectedProject != null && editorGroup.tabs.none { !it.isPage }) {
             viewModel.ensureProjectBootstrapTab()
         }
@@ -507,6 +536,18 @@ fun JCodeApp(
         LocalEditorDragMovesCursor provides editorDragSetting,
         LocalRestoreSession provides restoreSessionSetting,
         LocalExtensionActivation provides extensionActivationSetting,
+        LocalExtensionCapabilities provides extensionCapabilitySetting,
+        LocalExtensionKeepAlive provides extensionKeepAliveSetting,
+        LocalAgentChatActions provides remember(extensionKeepAliveDisabled) {
+            AgentChatActions(
+                extensions = viewModel.installedExtensions,
+                exec = viewModel::runtimeExecJson,
+                apiRequest = viewModel::extensionApiRequest,
+                events = viewModel.extensionEvents,
+                onStopAllServices = viewModel::stopAllRuntimeServices,
+                keepAliveFor = { id -> id !in extensionKeepAliveDisabled },
+            )
+        },
         LocalEditorSaveActions provides editorSaveActions,
         LocalCompletionSource provides completionSource,
         LocalEnvironmentManager provides environmentManagerActions,
@@ -602,6 +643,12 @@ fun JCodeApp(
             onOpenExtensionPermissions = viewModel::openExtensionPermissionsPage,
             onOpenExtensionApp = viewModel::openExtensionAppPage,
             onExtensionExec = viewModel::runtimeExecJson,
+            onExtensionApiRequest = { extId, envelope ->
+                val ext = viewModel.installedExtensions.value.firstOrNull { it.id == extId }
+                if (ext == null) """{"ok":false,"error":"unknown extension: $extId"}"""
+                else viewModel.extensionApiRequest(ext, envelope)
+            },
+            extensionEvents = viewModel.extensionEvents,
         ),
         onOpenSettingsPage = viewModel::openSettingsPage,
         terminalDoubleTapToFocus = terminalDoubleTapToFocus,
@@ -917,21 +964,21 @@ private fun JCodeShell(
     var runSessionIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var runPollJob by remember { mutableStateOf<Job?>(null) }
 
-    // System back: navigate back one step (close the active page tab, then any open drawer). With
-    // nothing left to go back to, the second back within 2s exits — but if a run is in progress or a
-    // terminal is live, it backgrounds the app instead so the work keeps running. Extracted into its
-    // own composable so its locals stay out of JCodeShell's (already huge) generated method.
-    WorkbenchBackHandler(
-        activeTabIsPage = editorGroup.activeTab?.isPage == true,
-        activeTabId = editorGroup.activeTab?.id,
-        onCloseActiveTab = onCloseEditorTab,
-        drawerOpen = compactDrawerState.isOpen,
-        onCloseDrawer = { scope.launch { compactDrawerState.close() } },
-        rightSidebarVisible = rightSidebarVisible,
-        onCloseRightSidebar = { rightSidebarVisible = false },
-        isBusy = { runInProgress || terminalSessionManager.sessions.isNotEmpty() },
-        snackbarHostState = snackbarHostState,
-    )
+    // A run's terminal(s) going away — the server crashed/exited (EOF), or the user closed the tab or
+    // killed it from the Task Manager — must clear the WHOLE run state, else the Build & Run row stays
+    // stuck on "Running". Manual close doesn't fire the exit listener, so both paths call this.
+    val onRunSessionGone: (String) -> Unit = { sessionId ->
+        if (sessionId in runSessionIds) {
+            runSessionIds = runSessionIds.filterNot { it == sessionId }
+            if (runSessionIds.isEmpty()) {
+                runPollJob?.cancel()
+                runPollJob = null
+                runInProgress = false
+                runUrl = null
+                runningProjectId = null
+            }
+        }
+    }
 
     // Drop a terminal tab when its shell exits on its own (e.g. `exit`, or a finished one-shot command).
     // The manager has already reaped the PTY + released the foreground hold; here we just sync the UI.
@@ -951,13 +998,7 @@ private fun JCodeShell(
                 selectedTerminalSessionId.takeIf { it.isNotEmpty() }
                     ?.let { terminalSessionManager.switchSession(it) }
             }
-            if (exitedId in runSessionIds) {
-                runSessionIds = runSessionIds.filterNot { it == exitedId }
-                if (runSessionIds.isEmpty()) {
-                    runInProgress = false
-                    runUrl = null
-                }
-            }
+            onRunSessionGone(exitedId)
         }
         onDispose { TerminalSessionHost.setUiExitListener(null) }
     }
@@ -1048,6 +1089,8 @@ private fun JCodeShell(
         TerminalSessionHost.onSessionStopped(sessionId)
         terminalTitles.remove(sessionId)
         terminalSessionIds = remaining
+        // Manual close doesn't fire the EOF exit listener, so clear run state here too (Build & Run row).
+        onRunSessionGone(sessionId)
         if (selectedTerminalSessionId == sessionId) {
             if (remaining.isNotEmpty()) {
                 selectedTerminalSessionId = remaining.last()
@@ -1064,6 +1107,7 @@ private fun JCodeShell(
         ids.forEach { id ->
             terminalSessionManager.closeSession(id)
             TerminalSessionHost.onSessionStopped(id)
+            onRunSessionGone(id)
         }
         terminalSessionIds = emptyList()
         terminalTitles.clear()
@@ -1079,6 +1123,7 @@ private fun JCodeShell(
     // If something is running and the user opted to be warned, a confirm dialog gates the teardown.
     val perf = LocalPerformanceSettings.current
     val debugSessionUiLocal = LocalDebugSession.current
+    val agentChatActionsLocal = LocalAgentChatActions.current
     var pendingCloseTarget by remember { mutableStateOf<CloseTarget?>(null) }
 
     fun runningItems(): List<String> = buildList {
@@ -1091,8 +1136,29 @@ private fun JCodeShell(
     fun teardownRunning() {
         if (runInProgress || runningProjectId != null) handleStopRun()
         debugSessionUiLocal.onStop()
+        agentChatActionsLocal.onStopAllServices()
+        AgentChatWebViewHolder.destroyAll()
         closeAllTerminalSessions()
     }
+
+    // System back: navigate back one step (close the active page tab, then any open drawer). With
+    // nothing left to go back to, the second back within 2s exits — but if foreground work is running
+    // (terminal program, Build & Run, debug session) it asks first: terminate it all, keep it running
+    // in the background, or cancel. Extracted into its own composable so its locals stay out of
+    // JCodeShell's (already huge) generated method. Sits below runningItems/teardownRunning because
+    // it captures them.
+    WorkbenchBackHandler(
+        activeTabIsPage = editorGroup.activeTab?.isPage == true,
+        activeTabId = editorGroup.activeTab?.id,
+        onCloseActiveTab = onCloseEditorTab,
+        drawerOpen = compactDrawerState.isOpen,
+        onCloseDrawer = { scope.launch { compactDrawerState.close() } },
+        rightSidebarVisible = rightSidebarVisible,
+        onCloseRightSidebar = { rightSidebarVisible = false },
+        runningItems = { runningItems() },
+        onTerminateAll = { teardownRunning() },
+        snackbarHostState = snackbarHostState,
+    )
 
     fun performClose(target: CloseTarget) {
         teardownRunning()
@@ -1549,6 +1615,10 @@ private fun JCodeShell(
                                             ExtensionWebViewPage(
                                                 extension = ext,
                                                 onExec = managerActions.onExtensionExec,
+                                                onApiRequest = { envelope ->
+                                                    managerActions.onExtensionApiRequest(ext.id, envelope)
+                                                },
+                                                events = managerActions.extensionEvents,
                                                 modifier = Modifier.fillMaxSize(),
                                             )
                                         }
@@ -2910,8 +2980,11 @@ private fun WorkbenchRightSidebar(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // The Chat tab's title tracks the installed agent extension (e.g. "OpenChamber").
+                val chatTabTitle = agentChatTabTitle()
                 RightPanelTab.entries.filter { it.enabled }.forEach { tab ->
                     val selected = tab == selectedTab
+                    val tabLabel = if (tab == RightPanelTab.Chat) chatTabTitle else tab.label
                     Surface(
                         shape = RoundedCornerShape(10.dp),
                         color = if (selected) {
@@ -2940,7 +3013,7 @@ private fun WorkbenchRightSidebar(
                                 tint = tint,
                             )
                             Text(
-                                text = tab.label,
+                                text = tabLabel,
                                 style = MaterialTheme.typography.labelMedium,
                                 color = tint,
                             )
@@ -2948,6 +3021,13 @@ private fun WorkbenchRightSidebar(
                     }
                 }
                 Spacer(modifier = Modifier.weight(1f))
+                if (selectedTab == RightPanelTab.Chat) {
+                    WorkbenchIconActionButton(
+                        icon = jcIcon(JCodeIcon.Settings),
+                        contentDescription = "Agent settings",
+                        onClick = { AgentChatWebViewHolder.postCommand("showSettings") },
+                    )
+                }
                 WorkbenchIconActionButton(
                     icon = jcIcon(JCodeIcon.ChevronRight),
                     contentDescription = "Hide",
@@ -3035,6 +3115,9 @@ private fun WorkbenchRightSidebarBody(
                 onStopRun = onStopRun,
                 modifier = modifier,
             )
+        }
+        RightPanelTab.Chat -> {
+            AgentChatSidebarContent(modifier = modifier)
         }
     }
 }
@@ -3547,32 +3630,62 @@ private fun WorkbenchBackHandler(
     onCloseDrawer: () -> Unit,
     rightSidebarVisible: Boolean,
     onCloseRightSidebar: () -> Unit,
-    isBusy: () -> Boolean,
+    runningItems: () -> List<String>,
+    onTerminateAll: () -> Unit,
     snackbarHostState: SnackbarHostState,
 ) {
     val activity = LocalContext.current.findActivity()
     val scope = rememberCoroutineScope()
     var lastBackAt by remember { mutableStateOf(0L) }
+    var exitPromptItems by remember { mutableStateOf<List<String>?>(null) }
     BackHandler(enabled = true) {
         when {
             activeTabIsPage && activeTabId != null -> onCloseActiveTab(activeTabId)
             drawerOpen -> onCloseDrawer()
             rightSidebarVisible -> onCloseRightSidebar()
             else -> {
-                val busy = isBusy()
                 val now = System.currentTimeMillis()
                 if (now - lastBackAt < 2000L) {
-                    if (busy) activity?.moveTaskToBack(true) else activity?.finish()
+                    val items = runningItems()
+                    if (items.isEmpty()) {
+                        // Also reaps idle terminals: exiting must not leave proot trees behind.
+                        onTerminateAll()
+                        activity?.finish()
+                    } else {
+                        exitPromptItems = items
+                    }
                 } else {
                     lastBackAt = now
-                    scope.launch {
-                        snackbarHostState.showSnackbar(
-                            if (busy) "Press back again to run in background" else "Press back again to exit",
-                        )
-                    }
+                    scope.launch { snackbarHostState.showSnackbar("Press back again to exit") }
                 }
             }
         }
+    }
+    exitPromptItems?.let { items ->
+        AlertDialog(
+            onDismissRequest = { exitPromptItems = null },
+            title = { Text("Exit J Code?") },
+            text = {
+                Text("Still running:\n" + items.joinToString("\n") { "•  $it" })
+            },
+            confirmButton = {
+                TextButton(onClick = { exitPromptItems = null; activity?.moveTaskToBack(true) }) {
+                    Text("Run in background")
+                }
+                TextButton(
+                    onClick = {
+                        exitPromptItems = null
+                        onTerminateAll()
+                        activity?.finish()
+                    },
+                ) {
+                    Text("Terminate & exit", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { exitPromptItems = null }) { Text("Cancel") }
+            },
+        )
     }
 }
 

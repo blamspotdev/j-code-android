@@ -16,6 +16,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -293,9 +294,74 @@ internal fun ExtensionPermissionsPage(
                     ).joinToString(" · "),
                 ) {
                     ActivationSelector(extensionId = ext.id)
+                    if (ext.apiCapabilities.isNotEmpty()) {
+                        CapabilityToggles(extensionId = ext.id, capabilities = ext.apiCapabilities)
+                    }
+                    if (ext.hasWebUi) {
+                        KeepAliveToggle(extensionId = ext.id)
+                    }
                 }
             }
         }
+    }
+}
+
+/** Per-capability grant switches for extensions that declare Extension-API capabilities. */
+@Composable
+private fun CapabilityToggles(extensionId: String, capabilities: List<String>) {
+    val grants = LocalExtensionCapabilities.current
+    Text(
+        text = "API capabilities",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    capabilities.forEach { capability ->
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(capability, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    text = when (capability) {
+                        "exec" -> "Run commands in the Linux runtime (as root)"
+                        "fs" -> "Read and write project files"
+                        "workbench" -> "Open files/URLs, show notices, read the focused file"
+                        else -> "Extension-defined capability"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = grants.grantedFor(extensionId, capability),
+                onCheckedChange = { grants.onSetGranted(extensionId, capability, it) },
+            )
+        }
+    }
+}
+
+/** "Keep running in background" switch for extensions with a web UI (e.g. the OpenChamber chat
+ *  keeps its agent session alive when its right-drawer panel is closed). */
+@Composable
+private fun KeepAliveToggle(extensionId: String) {
+    val keepAlive = LocalExtensionKeepAlive.current
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Keep running in background", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text = "Keep the panel alive (agent session, unsent input) when you close or switch away from it",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = keepAlive.enabledFor(extensionId),
+            onCheckedChange = { keepAlive.onSetEnabled(extensionId, it) },
+        )
     }
 }
 

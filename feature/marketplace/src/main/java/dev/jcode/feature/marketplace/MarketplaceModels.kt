@@ -190,6 +190,10 @@ data class InstalledExtension(
     val iconFile: File? = null,
     /** Relative path (from [dir]) to the extension's web-frontend HTML entry, e.g. "www/index.html". */
     val webUiEntry: String? = null,
+    /** Lowest JCode extension-API version this extension needs (0 = legacy exec-only bridge). */
+    val apiMinVersion: Int = 0,
+    /** Capability families this extension declares it uses (e.g. "exec", "fs", "workbench"). */
+    val apiCapabilities: List<String> = emptyList(),
 )
 
 /** The first bundled language that claims [fileName] (by file extension), or null. */

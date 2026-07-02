@@ -28,7 +28,8 @@ enum class SdkCatalogCategory(val label: String) {
     DotNet(".NET"),
     Embedded("Embedded"),
     Databases("Databases"),
-    Virtualization("Virtualization");
+    Virtualization("Virtualization"),
+    Ai("AI");
 
     companion object {
         fun fromSerialized(raw: String?): SdkCatalogCategory? {
@@ -47,6 +48,7 @@ enum class SdkCatalogCategory(val label: String) {
                 "embedded" -> Embedded
                 "databases", "database", "db" -> Databases
                 "virtualization", "virtual", "vm", "emulation" -> Virtualization
+                "ai", "agents", "agent" -> Ai
                 else -> null
             }
         }

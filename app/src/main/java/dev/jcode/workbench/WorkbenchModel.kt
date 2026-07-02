@@ -99,6 +99,11 @@ internal data class WorkbenchManagerActions(
     val onOpenExtensionApp: (String) -> Unit,
     /** Runs a command in the Linux runtime for an extension web frontend; returns a JSON result. */
     val onExtensionExec: suspend (command: String, timeoutMs: Long) -> String,
+    /** Extension API v1 envelope handler: (extensionId, requestJson) -> response JSON. */
+    val onExtensionApiRequest: suspend (extensionId: String, envelopeJson: String) -> String =
+        { _, _ -> """{"ok":false,"error":"extension API unavailable"}""" },
+    /** Host events pushed to the live extension WebView as `JCode._onEvent(name, json)`. */
+    val extensionEvents: kotlinx.coroutines.flow.SharedFlow<Pair<String, String>>? = null,
 )
 
 internal enum class WorkbenchTool(
@@ -129,4 +134,5 @@ internal enum class RightPanelTab(
     Problems("Issues", JCodeIcon.Problems, enabled = true),
     DebugConsole("Debug", JCodeIcon.Debug, enabled = true),
     Tasks("Tasks", JCodeIcon.Tasks, enabled = true),
+    Chat("Chat", JCodeIcon.Chat, enabled = true),
 }
