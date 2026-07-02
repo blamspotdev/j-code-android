@@ -2850,9 +2850,11 @@ private fun WorkbenchRightSidebar(
     onStopRun: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Fully opaque: any translucency lets bright editor text ghost through the panel content
+    // (clearly visible on OLED), and every tab's text then sits on an unstable background.
     Surface(
         modifier = modifier,
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f),
+        color = MaterialTheme.colorScheme.surface,
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             Row(

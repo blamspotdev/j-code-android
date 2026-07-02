@@ -134,7 +134,7 @@ internal fun TaskManagerSidebarContent(
         TaskSectionLabel("Processes · ${processes.size} · $totalMb MB")
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.26f),
         ) {
             Column {
                 processes.forEachIndexed { index, proc ->
@@ -176,7 +176,7 @@ private fun TaskRow(
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.26f),
     ) {
         Row(
             modifier = Modifier
