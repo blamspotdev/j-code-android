@@ -160,13 +160,33 @@ class RootfsManager(
      * Download a rootfs tarball synchronously (for auto-setup).
      * @return true if download succeeded
      */
-    fun downloadDirect(entry: RootfsEntry, targetFile: File): Boolean {
+    fun downloadDirect(
+        entry: RootfsEntry,
+        targetFile: File,
+        onProgress: ((percent: Int?, detail: String) -> Unit)? = null,
+    ): Boolean {
         return try {
             android.util.Log.d("RootfsManager", "downloadDirect: downloading ${entry.url} to ${targetFile.absolutePath}")
             kotlinx.coroutines.runBlocking {
                 var result = false
+                var lastPercent = -1
+                var lastReportedBytes = 0L
                 downloader.download(entry, targetFile).collect { progress ->
                     when (progress) {
+                        is DownloadProgress.Downloading -> {
+                            val mb = progress.bytesDownloaded / (1024f * 1024f)
+                            if (progress.totalBytes > 0) {
+                                val percent = progress.percent.coerceIn(0, 100)
+                                if (percent != lastPercent) {
+                                    lastPercent = percent
+                                    val totalMb = progress.totalBytes / (1024f * 1024f)
+                                    onProgress?.invoke(percent, "%.1f / %.1f MB".format(mb, totalMb))
+                                }
+                            } else if (progress.bytesDownloaded - lastReportedBytes >= 512 * 1024) {
+                                lastReportedBytes = progress.bytesDownloaded
+                                onProgress?.invoke(null, "%.1f MB downloaded".format(mb))
+                            }
+                        }
                         is DownloadProgress.Completed -> {
                             result = true
                             android.util.Log.d("RootfsManager", "downloadDirect: completed, size=${progress.bytesDownloaded}")

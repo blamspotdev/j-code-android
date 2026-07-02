@@ -58,8 +58,10 @@ class RootfsDownloader(
         connection.connectTimeout = 30_000
         connection.readTimeout = 60_000
         
-        val totalSize = entry.sizeBytes.takeIf { it > 0 }
-            ?: connection.contentLengthLong.takeIf { it > 0 }
+        // Prefer the server's content length (exact) over the manifest's sizeBytes (an estimate
+        // that would make the percent drift past 100).
+        val totalSize = connection.contentLengthLong.takeIf { it > 0 }
+            ?: entry.sizeBytes.takeIf { it > 0 }
             ?: -1L
         
         targetFile.parentFile?.mkdirs()

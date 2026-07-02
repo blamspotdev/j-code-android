@@ -61,7 +61,14 @@ data class DistroEvent(
 /** Progress emitted by the auto-setup orchestrator. */
 sealed interface DistroWizardProgress {
     data object Idle : DistroWizardProgress
-    data class Running(val step: WizardStepId, val label: String) : DistroWizardProgress
+    data class Running(
+        val step: WizardStepId,
+        val label: String,
+        /** 0-100 while the step reports determinate progress (e.g. rootfs download), else null. */
+        val progressPercent: Int? = null,
+        /** Human progress detail, e.g. "12.4 / 41.0 MB". */
+        val progressDetail: String? = null,
+    ) : DistroWizardProgress
     data class Completed(val step: WizardStepId, val detail: String) : DistroWizardProgress
     data class Failed(val step: WizardStepId, val error: String) : DistroWizardProgress
     data class AllDone(

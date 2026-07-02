@@ -33,7 +33,11 @@ class WorkspaceManager @Inject constructor(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val currentWorkspaceId = MutableStateFlow<Long?>(null)
-    private val storageRoots by lazy { resolveStorageRoots(context) }
+
+    @Volatile
+    private var storageRootsCache: StorageRoots? = null
+    private val storageRoots: StorageRoots
+        get() = storageRootsCache ?: resolveStorageRoots(context).also { storageRootsCache = it }
 
     /** Id of the root "Default Workspace" (whose projects live in [StorageRoots.projectsRoot]). */
     @Volatile
@@ -63,6 +67,24 @@ class WorkspaceManager @Inject constructor(
     init {
         scope.launch {
             val workspace = ensureDefaultWorkspace()
+            _breadcrumb.value = listOf(WorkspaceCrumb(workspace.id, workspace.name))
+            currentWorkspaceId.value = workspace.id
+        }
+    }
+
+    /**
+     * Re-resolve the storage roots after a runtime storage-permission grant. The roots are cached
+     * from before the grant (the shared /JCode location was unwritable then, so the app-private
+     * fallback won); this re-anchors the Default Workspace on the shared location.
+     */
+    suspend fun refreshStorageRoots() {
+        val old = storageRootsCache
+        val fresh = resolveStorageRoots(context)
+        storageRootsCache = fresh
+        if (old != null && old.workspaceRoot == fresh.workspaceRoot) return
+        val previousDefaultId = defaultWorkspaceId
+        val workspace = ensureDefaultWorkspace()
+        if (currentWorkspaceId.value == null || currentWorkspaceId.value == previousDefaultId) {
             _breadcrumb.value = listOf(WorkspaceCrumb(workspace.id, workspace.name))
             currentWorkspaceId.value = workspace.id
         }

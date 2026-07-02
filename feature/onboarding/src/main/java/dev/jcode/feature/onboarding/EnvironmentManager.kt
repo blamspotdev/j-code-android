@@ -13,6 +13,8 @@ data class EnvironmentManagerActions(
     val environments: List<EnvironmentInfo> = emptyList(),
     val onSwitch: (String) -> Unit = {},
     val onDelete: (String) -> Unit = {},
+    /** Storage permission granted from the setup page: re-anchor storage on the shared /JCode root. */
+    val onStorageAccessGranted: () -> Unit = {},
 )
 
 val LocalEnvironmentManager = compositionLocalOf { EnvironmentManagerActions() }
