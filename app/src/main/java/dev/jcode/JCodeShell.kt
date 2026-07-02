@@ -376,6 +376,7 @@ fun JCodeApp(
         onStepInto = viewModel::debugStepInto,
         onStepOut = viewModel::debugStepOut,
         onStop = viewModel::debugStop,
+        onEvaluate = viewModel::debugEvaluate,
     )
     StatusBarKeyboardController(enabled = hideStatusBarWithKeyboard)
     val tapContext = LocalContext.current
@@ -2402,6 +2403,7 @@ private fun EditorWorkspace(
                 )
             } else {
                 val dbg = LocalDebugEditorState.current
+                val dbgSession = LocalDebugSession.current
                 EditorPane(
                     group = editorGroup,
                     modifier = Modifier
@@ -2416,6 +2418,8 @@ private fun EditorWorkspace(
                     breakpointLinesFor = { tab -> dbg.breakpoints[tab.filePath.path].orEmpty() },
                     stoppedLineFor = { tab -> if (dbg.stoppedPath == tab.filePath.path) dbg.stoppedLine else null },
                     onToggleBreakpoint = { tab, line -> dbg.onToggleBreakpoint(tab.filePath.path, line) },
+                    // Long-press variable inspection is live only while the debugger is paused.
+                    evaluateInDebugFrame = if (dbgSession.state == DebugState.STOPPED) dbgSession.onEvaluate else null,
                     pageContent = editorPageContent,
                 )
             }
@@ -2925,11 +2929,7 @@ private fun WorkbenchRightSidebarBody(
             )
         }
         RightPanelTab.DebugConsole -> {
-            DisabledTabContent(
-                title = "Debug Console",
-                message = "Debug console coming in a future update.",
-                modifier = modifier,
-            )
+            DebugConsoleSidebarContent(modifier = modifier)
         }
     }
 }

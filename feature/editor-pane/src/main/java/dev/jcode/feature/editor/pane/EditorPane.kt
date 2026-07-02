@@ -34,9 +34,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import dev.jcode.core.editor.CompletionAnchor
 import dev.jcode.core.editor.EditorContextRequest
 import dev.jcode.core.editor.EditorLanguageAction
@@ -67,6 +79,7 @@ fun EditorPane(
     breakpointLinesFor: (EditorTab) -> Set<Int> = { emptySet() },
     stoppedLineFor: (EditorTab) -> Int? = { null },
     onToggleBreakpoint: (EditorTab, Int) -> Unit = { _, _ -> },
+    evaluateInDebugFrame: ((String, (String?) -> Unit) -> Unit)? = null,
     pageContent: @Composable (EditorTab) -> Unit = {},
 ) {
     Column(modifier = modifier.clipToBounds()) {
@@ -96,6 +109,7 @@ fun EditorPane(
                         breakpointLines = breakpointLinesFor(activeTab),
                         stoppedLine = stoppedLineFor(activeTab),
                         onToggleBreakpoint = { line -> onToggleBreakpoint(activeTab, line) },
+                        evaluateInDebugFrame = evaluateInDebugFrame,
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
@@ -261,11 +275,23 @@ fun EditorViewHost(
     breakpointLines: Set<Int> = emptySet(),
     stoppedLine: Int? = null,
     onToggleBreakpoint: (Int) -> Unit = {},
+    evaluateInDebugFrame: ((String, (String?) -> Unit) -> Unit)? = null,
 ) {
     val density = LocalDensity.current
     var view by remember { mutableStateOf<EditorView?>(null) }
     var menu by remember { mutableStateOf<EditorContextRequest?>(null) }
     var completionAnchor by remember { mutableStateOf<CompletionAnchor?>(null) }
+    var inspection by remember { mutableStateOf<VariableInspection?>(null) }
+    // Long-press variable inspection is active only while a debug session is stopped (the host passes
+    // a non-null evaluator). Consuming the press suppresses selection + the context menu.
+    val wordLongPressHandler: ((String, Float, Float) -> Boolean)? = evaluateInDebugFrame?.let { eval ->
+        { word, x, y ->
+            eval(word) { value ->
+                if (value != null) inspection = VariableInspection(word, value, x, y)
+            }
+            true
+        }
+    }
     val completionSource = LocalCompletionSource.current
     val dragSetting = LocalEditorDragMovesCursor.current
     val dragCursorEnabled = dragSetting.enabled
@@ -274,6 +300,9 @@ fun EditorViewHost(
 
     // A completion popup belongs to its file; clear it when the active editor (tab) changes.
     LaunchedEffect(editorState) { completionAnchor = null }
+
+    // An inspection popup belongs to the stopped debug frame; clear it on tab switch or resume.
+    LaunchedEffect(editorState, evaluateInDebugFrame == null) { inspection = null }
 
     // Apply breakpoint dots (GUTTER) + the current-stopped line marker/highlight (BACKGROUND). These
     // layers are independent of syntax (GLYPH_COLOR), so replacing them never clobbers highlighting.
@@ -316,6 +345,7 @@ fun EditorViewHost(
                     onSaveRequest = { onSave() }
                     onCompletionAnchorChanged = { completionAnchor = it }
                     onGutterTap = { onToggleBreakpoint(it) }
+                    onWordLongPress = wordLongPressHandler
                     dragMovesCursor = dragCursorEnabled
                     cursorDragVerticalLevel = dragCursorVLevel
                     cursorDragHorizontalLevel = dragCursorHLevel
@@ -329,6 +359,7 @@ fun EditorViewHost(
                 v.onSaveRequest = { onSave() }
                 v.onCompletionAnchorChanged = { completionAnchor = it }
                 v.onGutterTap = { onToggleBreakpoint(it) }
+                v.onWordLongPress = wordLongPressHandler
                 v.dragMovesCursor = dragCursorEnabled
                 v.cursorDragVerticalLevel = dragCursorVLevel
                 v.cursorDragHorizontalLevel = dragCursorHLevel
@@ -368,6 +399,10 @@ fun EditorViewHost(
             )
         }
 
+        inspection?.let { insp ->
+            VariableInspectPopup(inspection = insp, onDismiss = { inspection = null })
+        }
+
         menu?.let { req ->
             val offset = with(density) { DpOffset(req.xPx.toDp(), req.yPx.toDp()) }
             CompactContextMenu(
@@ -393,6 +428,68 @@ fun EditorViewHost(
 
     DisposableEffect(editorState) {
         onDispose { /* EditorState lifecycle managed by EditorTab */ }
+    }
+}
+
+/** A resolved long-press variable inspection: the word, its evaluated value, and the press position. */
+private data class VariableInspection(val word: String, val value: String, val xPx: Float, val yPx: Float)
+
+/**
+ * Small floating "name = value" card shown when a variable is long-pressed while the debugger is
+ * stopped. Anchored at the press position (view-relative px), flipping above when out of room —
+ * the same positioning scheme as the completion window.
+ */
+@Composable
+private fun VariableInspectPopup(inspection: VariableInspection, onDismiss: () -> Unit) {
+    val positionProvider = remember(inspection.xPx, inspection.yPx) {
+        object : PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: IntRect,
+                windowSize: IntSize,
+                layoutDirection: LayoutDirection,
+                popupContentSize: IntSize,
+            ): IntOffset {
+                val x = (anchorBounds.left + inspection.xPx.toInt())
+                    .coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
+                val below = anchorBounds.top + inspection.yPx.toInt() + 24
+                val y = if (below + popupContentSize.height <= windowSize.height) {
+                    below
+                } else {
+                    (anchorBounds.top + inspection.yPx.toInt() - popupContentSize.height - 12).coerceAtLeast(0)
+                }
+                return IntOffset(x, y)
+            }
+        }
+    }
+    Popup(
+        popupPositionProvider = positionProvider,
+        properties = PopupProperties(focusable = false, dismissOnBackPress = true, dismissOnClickOutside = true),
+        onDismissRequest = onDismiss,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shadowElevation = 8.dp,
+            modifier = Modifier.widthIn(min = 120.dp, max = 420.dp),
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                Text(
+                    text = inspection.word,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = inspection.value,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 12,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
     }
 }
 

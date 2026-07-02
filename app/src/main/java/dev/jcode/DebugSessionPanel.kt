@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -21,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -236,24 +238,69 @@ private fun DebugConsole(lines: List<String>) {
         shape = RoundedCornerShape(6.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 160.dp)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-        ) {
-            lines.takeLast(200).forEach { line ->
-                Text(
-                    text = line,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                )
-            }
+        DebugConsoleLines(lines, maxHeight = 160.dp)
+    }
+}
+
+/** Scrolling monospace console lines — shared by the Debug side-panel and the right-drawer tab. */
+@Composable
+internal fun DebugConsoleLines(
+    lines: List<String>,
+    maxHeight: androidx.compose.ui.unit.Dp = androidx.compose.ui.unit.Dp.Unspecified,
+    modifier: Modifier = Modifier,
+) {
+    val heightModifier = if (maxHeight.isSpecified) Modifier.heightIn(max = maxHeight) else Modifier
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .then(heightModifier)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+    ) {
+        lines.takeLast(200).forEach { line ->
+            Text(
+                text = line,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+            )
         }
+    }
+}
+
+/**
+ * The right-drawer "Debug" tab: live session state + transport controls + the full-height console.
+ * Reads [dev.jcode.workbench.LocalDebugSession] so it mirrors the Run/Debug side panel's session.
+ */
+@Composable
+internal fun DebugConsoleSidebarContent(modifier: Modifier = Modifier) {
+    val ui = dev.jcode.workbench.LocalDebugSession.current
+    val active = ui.state != DebugState.DISCONNECTED && ui.state != DebugState.TERMINATED
+    Column(modifier = modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 6.dp)) {
+        if (!active && ui.output.isEmpty()) {
+            Text(
+                "Start a debug session to see its console output here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(6.dp),
+            )
+            return@Column
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = ui.debugTargetName?.let { "Debug: $it" } ?: "Debug",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            DebugStateChip(ui.state)
+        }
+        if (active) DebugToolbar(ui)
+        DebugConsoleLines(ui.output, modifier = Modifier.weight(1f))
     }
 }
 

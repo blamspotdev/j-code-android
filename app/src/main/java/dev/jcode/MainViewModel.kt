@@ -486,6 +486,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun debugStepInto() = debugController.stepInto()
     fun debugStepOut() = debugController.stepOut()
     fun debugStop() = debugController.stop()
+    fun debugEvaluate(expression: String, onResult: (String?) -> Unit) =
+        debugController.evaluate(expression, onResult)
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages = _messages.asSharedFlow()

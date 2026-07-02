@@ -97,6 +97,11 @@ class EditorView @JvmOverloads constructor(
     /** Invoked with the 0-based line when the gutter (left margin) is tapped — used to toggle breakpoints. */
     var onGutterTap: ((line: Int) -> Unit)? = null
 
+    /** Invoked on long-press over a word BEFORE selection/context-menu, with the word and the press's
+     *  view-relative pixel position. Return true to consume the press (no selection, no menu) — used by
+     *  the debugger to inspect a variable while stopped; return false to fall through. */
+    var onWordLongPress: ((word: String, xPx: Float, yPx: Float) -> Boolean)? = null
+
     private val gestureDetector = GestureDetector(
         context,
         object : GestureDetector.SimpleOnGestureListener() {
@@ -142,8 +147,13 @@ class EditorView @JvmOverloads constructor(
             }
 
             override fun onLongPress(e: MotionEvent) {
+                if (gutterLineAt(e.x, e.y) != null) return
                 val offset = offsetAt(e.x, e.y) ?: return
                 val word = wordAt(offset)
+                if (word != null && onWordLongPress?.invoke(word.third, e.x, e.y) == true) {
+                    performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    return
+                }
                 if (word != null) {
                     runBlocking { editorState?.setSelection(listOf(Caret(word.first, word.second))) }
                 }

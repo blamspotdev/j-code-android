@@ -9,10 +9,12 @@ import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.core.distro.DebugEngineEntry
 import dev.jcode.core.distro.DistroService
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /** A source location the debugger is stopped at. [line] is 0-based (editor convention). */
@@ -120,6 +122,26 @@ class DebugController(
     fun stepOver() = withThread { s, t -> s.next(t) }
     fun stepInto() = withThread { s, t -> s.stepIn(t) }
     fun stepOut() = withThread { s, t -> s.stepOut(t) }
+
+    /**
+     * Evaluate [expression] in the top stopped frame (DAP `evaluate`, context "hover") and deliver the
+     * result — or null if there is no stopped frame or the expression has no value — on the main thread.
+     * Backs the editor's long-press variable inspection.
+     */
+    fun evaluate(expression: String, onResult: (String?) -> Unit) {
+        val s = session
+        val frameId = _callStack.value.firstOrNull()?.id
+        if (s == null || frameId == null || _state.value != DebugState.STOPPED) {
+            onResult(null)
+            return
+        }
+        scope.launch {
+            val value = runCatching { s.evaluate(expression, frameId, "hover") }
+                .getOrNull()
+                ?.takeIf { it.isNotBlank() }
+            withContext(Dispatchers.Main) { onResult(value) }
+        }
+    }
 
     fun stop() {
         session?.close()

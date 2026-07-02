@@ -52,6 +52,8 @@ internal data class DebugSessionUi(
     val onStepInto: () -> Unit = {},
     val onStepOut: () -> Unit = {},
     val onStop: () -> Unit = {},
+    /** Evaluate an expression in the stopped frame (DAP hover); null result = no value. */
+    val onEvaluate: (String, (String?) -> Unit) -> Unit = { _, cb -> cb(null) },
 )
 
 internal val LocalDebugSession = compositionLocalOf { DebugSessionUi() }
@@ -117,5 +119,5 @@ internal enum class RightPanelTab(
     Terminal("Terminal", JCodeIcon.Terminal, enabled = true),
     Output("Output", JCodeIcon.Logs, enabled = true),
     Problems("Problems", JCodeIcon.Problems, enabled = false),
-    DebugConsole("Debug Console", JCodeIcon.Radar, enabled = false),
+    DebugConsole("Debug", JCodeIcon.Debug, enabled = true),
 }
