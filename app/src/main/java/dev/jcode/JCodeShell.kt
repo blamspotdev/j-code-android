@@ -770,6 +770,17 @@ private fun JCodeShell(
     var rightPanelTab by rememberSaveable {
         mutableStateOf(RightPanelTab.Terminal)
     }
+    // When a debug session starts, surface its console: reveal the right drawer on its Debug tab
+    // (the left Run/Debug panel keeps only the launch button + call stack + variables).
+    val debugSessionActive = LocalDebugSession.current.state.let {
+        it != DebugState.DISCONNECTED && it != DebugState.TERMINATED
+    }
+    LaunchedEffect(debugSessionActive) {
+        if (debugSessionActive) {
+            rightPanelTab = RightPanelTab.DebugConsole
+            rightSidebarVisible = true
+        }
+    }
     var commandPaletteVisible by rememberSaveable { mutableStateOf(false) }
     var terminalSessionIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var selectedTerminalSessionId by rememberSaveable { mutableStateOf("") }

@@ -55,6 +55,10 @@ class DebugController(
         val config: JSONObject,
         val adapterCommand: String,
         val tcpPort: Int?,
+        /** Adapter process user override (netcoredbg needs root for /root/.dotnet); null = runtime user. */
+        val user: String? = null,
+        /** Prepended to the adapter's PATH (e.g. /root/.dotnet). */
+        val adapterPath: String = "",
     )
 
     /** Start debugging [hostPath] (its language picks the engine) with the current [bps] breakpoints. */
@@ -85,7 +89,9 @@ class DebugController(
 
     private fun beginSession(engine: DebugEngineEntry, plan: LaunchPlan, hostPath: String, bps: Map<String, Set<Int>>) {
         val transportFactory: (String) -> DapTransport? = { command ->
-            val proc = distroService.spawnDapProcess(command, workdir = plan.distroCwd)
+            val proc = distroService.spawnDapProcess(
+                command, workdir = plan.distroCwd, userOverride = plan.user, extraPath = plan.adapterPath,
+            )
             when {
                 proc == null -> null
                 // TCP adapters (js-debug) listen on a port; connect a socket to it once it's up.
@@ -171,7 +177,13 @@ class DebugController(
         val distroDir = hostToDistro(csprojDir.path)
         // .NET lives under /root/.dotnet (installed as root); build with that HOME/PATH.
         val dotnetPath = "/root/.dotnet:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-        val env = mapOf("HOME" to "/root", "DOTNET_ROOT" to "/root/.dotnet", "DOTNET_CLI_TELEMETRY_OPTOUT" to "1", "PATH" to dotnetPath)
+        // Under proot the .NET GC otherwise tries to reserve 256 GiB of address space and CoreCLR fails
+        // to start (0x8007000E) — for the Roslyn compiler AND the debuggee. Cap the heap to 1 GiB.
+        val gcHeapLimit = "0x40000000"
+        val env = mapOf(
+            "HOME" to "/root", "DOTNET_ROOT" to "/root/.dotnet", "DOTNET_CLI_TELEMETRY_OPTOUT" to "1",
+            "DOTNET_GCHeapHardLimit" to gcHeapLimit, "PATH" to dotnetPath,
+        )
         pushOutput("Building ${csproj.name} (dotnet build)…\n")
         val build = distroService.exec(
             command = "cd '$distroDir' && dotnet build -c Debug -v m",
@@ -193,10 +205,14 @@ class DebugController(
             put("justMyCode", false)
             put("env", JSONObject()
                 .put("DOTNET_ROOT", "/root/.dotnet")
+                .put("DOTNET_GCHeapHardLimit", gcHeapLimit)
                 .put("ASPNETCORE_ENVIRONMENT", "Development")
                 .put("PATH", dotnetPath))
         }
-        return LaunchPlan(distroDir, config, engine.adapterCommand, tcpPort = null)
+        // netcoredbg must run as root (where /root/.dotnet lives) with DOTNET_ROOT set, or CoreCLR
+        // hosting of the debuggee fails.
+        val adapterCommand = "export DOTNET_ROOT=/root/.dotnet; exec ${engine.adapterCommand}"
+        return LaunchPlan(distroDir, config, adapterCommand, tcpPort = null, user = "root", adapterPath = "/root/.dotnet")
     }
 
     /** Walk up from the source file to [projectDir] for a .csproj, else search a few levels down. */

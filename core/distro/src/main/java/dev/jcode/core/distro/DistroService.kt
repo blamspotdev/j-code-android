@@ -1187,21 +1187,27 @@ class DistroService(
     fun spawnDapProcess(
         command: String,
         workdir: String = _environmentState.value.runtime.workdir,
+        // Some adapters must run as a specific user — e.g. netcoredbg needs root, where the .NET SDK
+        // (installed under /root/.dotnet) is readable. Defaults to the runtime user.
+        userOverride: String? = null,
+        // Prepended to PATH so the adapter can find its runtime (e.g. /root/.dotnet for netcoredbg).
+        extraPath: String = "",
     ): Process? {
         val runtime = _environmentState.value.runtime
         val distroId = runtime.selectedDistro.id
         val arch = runtime.selectedDistro.arch
         val rootfsPath = rootfsManager.getRootfsPath(distroId)
-        val user = runtime.user
+        val user = userOverride ?: runtime.user
         if (!rootfsManager.isDistroInstalled(distroId) || !prootManager.isProotInstalled) return null
         if (prootManager.needsQemu(arch) && !prootManager.isQemuInstalled(arch)) return null
+        val basePath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         val env = mapOf(
             "HOME" to (if (user == "root") "/root" else "/home/$user"),
             "USER" to user,
             "TERM" to "dumb",
             "LANG" to "en_US.UTF-8",
             "TMPDIR" to "/tmp",
-            "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "PATH" to (if (extraPath.isNotBlank()) "$extraPath:$basePath" else basePath),
         )
         val prootArgs = prootManager.buildShellCommand(
             rootfsPath = rootfsPath,

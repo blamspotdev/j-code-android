@@ -59,7 +59,7 @@ internal fun DebugSessionPanel(ui: DebugSessionUi, modifier: Modifier = Modifier
             DebugToolbar(ui)
             if (ui.callStack.isNotEmpty()) CallStackList(ui)
             if (ui.variables.isNotEmpty()) VariablesList(ui)
-            if (ui.output.isNotEmpty()) DebugConsole(ui.output)
+            // Console output lives in the right-drawer "Debug" tab (alongside Terminal/Output), not here.
         }
     }
 }
@@ -227,18 +227,6 @@ private fun VariablesList(ui: DebugSessionUi) {
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun DebugConsole(lines: List<String>) {
-    SectionLabel("Console")
-    Surface(
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
-        shape = RoundedCornerShape(6.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        DebugConsoleLines(lines, maxHeight = 160.dp)
     }
 }
 
