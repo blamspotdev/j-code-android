@@ -239,9 +239,12 @@ internal fun ExtensionDetailPage(
                 }
             }
             if (entry != null && (!entry.requires.isEmpty || !entry.suggests.isEmpty)) {
-                ManagerSectionCard(title = "Requirements", description = "Works best with these installed.") {
-                    RequirementList("Required", entry.requires, available, installedIds)
-                    RequirementList("Suggested", entry.suggests, available, installedIds)
+                ManagerSectionCard(
+                    title = "Requirements",
+                    description = "Required items are installed together with this extension.",
+                ) {
+                    RequirementList("Required", entry.requires, available, installedIds, autoInstalled = true)
+                    RequirementList("Suggested", entry.suggests, available, installedIds, autoInstalled = false)
                 }
             }
         },
@@ -512,15 +515,17 @@ private fun RequirementList(
     deps: ExtensionDeps,
     available: List<MarketplaceEntry>,
     installedIds: Set<String>,
+    autoInstalled: Boolean,
 ) {
     if (deps.isEmpty) return
     Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+    val pendingSuffix = if (autoInstalled) "installs automatically" else "optional"
     deps.extensions.forEach { id ->
         val name = available.firstOrNull { it.id == id }?.name ?: id
-        DependencyRow(name = name, kind = if (id in installedIds) "extension · installed" else "extension")
+        DependencyRow(name = name, kind = if (id in installedIds) "extension · installed" else "extension · $pendingSuffix")
     }
-    deps.sdks.forEach { id -> DependencyRow(name = id, kind = "SDK · install via SDK Manager") }
-    deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server · install via LSP Manager") }
+    deps.sdks.forEach { id -> DependencyRow(name = id, kind = "toolchain · $pendingSuffix") }
+    deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server · $pendingSuffix") }
 }
 
 @Composable
@@ -538,13 +543,16 @@ private fun DependencyDialog(
         title = { Text("Install ${entry.name}") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    "Works best with these installed:",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                DependencyGroup("Required", entry.requires, available, installedIds, busy, onInstall)
-                DependencyGroup("Suggested", entry.suggests, available, installedIds, busy, onInstall)
+                if (!entry.requires.isEmpty) {
+                    Text(
+                        "Required items are installed automatically; if any of them fails, the " +
+                            "extension isn't installed.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                RequiredGroup(entry.requires, available, installedIds)
+                SuggestedGroup(entry.suggests, available, installedIds, busy, onInstall)
             }
         },
         confirmButton = { TextButton(onClick = onProceed, enabled = !busy) { Text("Install ${entry.name}") } },
@@ -553,8 +561,30 @@ private fun DependencyDialog(
 }
 
 @Composable
-private fun DependencyGroup(
-    label: String,
+private fun RequiredGroup(
+    deps: ExtensionDeps,
+    available: List<MarketplaceEntry>,
+    installedIds: Set<String>,
+) {
+    if (deps.isEmpty) return
+    Text("Required", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+    val status: @Composable (installed: Boolean) -> Unit = { installed ->
+        Text(
+            if (installed) "Installed" else "Auto-install",
+            style = MaterialTheme.typography.labelMedium,
+            color = if (installed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    deps.extensions.forEach { id ->
+        val depEntry = available.firstOrNull { it.id == id }
+        DependencyRow(name = depEntry?.name ?: id, kind = "extension") { status(id in installedIds) }
+    }
+    deps.sdks.forEach { id -> DependencyRow(name = id, kind = "toolchain") { status(false) } }
+    deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server") { status(false) } }
+}
+
+@Composable
+private fun SuggestedGroup(
     deps: ExtensionDeps,
     available: List<MarketplaceEntry>,
     installedIds: Set<String>,
@@ -562,7 +592,7 @@ private fun DependencyGroup(
     onInstall: (MarketplaceEntry) -> Unit,
 ) {
     if (deps.isEmpty) return
-    Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+    Text("Suggested", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
     deps.extensions.forEach { id ->
         val depEntry = available.firstOrNull { it.id == id }
         DependencyRow(name = depEntry?.name ?: id, kind = "extension") {
@@ -581,8 +611,8 @@ private fun DependencyGroup(
             }
         }
     }
-    deps.sdks.forEach { id -> DependencyRow(name = id, kind = "SDK · install via SDK Manager") {} }
-    deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server · install via LSP Manager") {} }
+    deps.sdks.forEach { id -> DependencyRow(name = id, kind = "toolchain · install via Toolchains") {} }
+    deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server · install via Toolchains") {} }
 }
 
 @Composable

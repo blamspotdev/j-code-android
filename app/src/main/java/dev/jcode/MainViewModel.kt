@@ -29,7 +29,6 @@ import dev.jcode.debug.DebugController
 import dev.jcode.core.distro.SdkCatalogAction
 import dev.jcode.core.distro.DistroService
 import dev.jcode.core.distro.DistroServiceLocator
-import dev.jcode.core.distro.WizardStepId
 import dev.jcode.core.lsp.Diagnostic as LspDiagnostic
 import dev.jcode.core.lsp.DiagnosticSeverity as LspDiagnosticSeverity
 import dev.jcode.core.resource.ResourceManager
@@ -163,12 +162,90 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun installExtension(entry: MarketplaceEntry) {
         viewModelScope.launch {
             _marketplaceBusy.value = true
-            extensionInstaller.install(entry, BuildConfig.VERSION_NAME)
-                .onSuccess { _messages.tryEmit("Installed ${it.name}") }
-                .onFailure { _messages.tryEmit("Install failed: ${it.message ?: "error"}") }
+            installExtensionResolvingDeps(entry, visiting = mutableSetOf())
             _marketplaceBusy.value = false
             refreshInstalledExtensions()
         }
+    }
+
+    /**
+     * Install [entry] after everything it `requires` (extensions recursively, then toolchains and
+     * language servers via the catalogs). Any required dependency that fails to install aborts the
+     * whole install. `suggests` stays manual.
+     */
+    private suspend fun installExtensionResolvingDeps(
+        entry: MarketplaceEntry,
+        visiting: MutableSet<String>,
+    ): Boolean {
+        if (!visiting.add(entry.id)) return true
+
+        for (depId in entry.requires.extensions) {
+            if (depId in visiting) continue
+            if (_installedExtensions.value.any { it.id == depId }) continue
+            val depEntry = _marketplaceEntries.value.firstOrNull { it.id == depId }
+            if (depEntry == null) {
+                _messages.tryEmit("${entry.name}: required extension '$depId' isn't in the marketplace — install aborted.")
+                return false
+            }
+            _messages.tryEmit("Installing required extension: ${depEntry.name}…")
+            if (!installExtensionResolvingDeps(depEntry, visiting)) {
+                _messages.tryEmit("${entry.name}: required extension ${depEntry.name} failed — install aborted.")
+                return false
+            }
+        }
+
+        for (sdkId in entry.requires.sdks) {
+            if (sdkId in distroService.sdkCatalogState.value.installedEntryIds) continue
+            _messages.tryEmit("Installing required toolchain: $sdkId…")
+            if (!installRequiredSdk(sdkId)) {
+                val reason = distroService.sdkCatalogState.value.errorMessage ?: "install failed"
+                _messages.tryEmit("${entry.name}: required toolchain '$sdkId' — $reason Install aborted.")
+                return false
+            }
+        }
+
+        for (lspId in entry.requires.lsps) {
+            if (lspId in distroService.lspCatalogState.value.installedEntryIds) continue
+            _messages.tryEmit("Installing required language server: $lspId…")
+            if (!installRequiredLsp(lspId)) {
+                val reason = distroService.lspCatalogState.value.errorMessage ?: "install failed"
+                _messages.tryEmit("${entry.name}: required language server '$lspId' — $reason Install aborted.")
+                return false
+            }
+        }
+
+        val result = extensionInstaller.install(entry, BuildConfig.VERSION_NAME)
+            .onSuccess { _messages.tryEmit("Installed ${it.name}") }
+            .onFailure { _messages.tryEmit("Install failed: ${it.message ?: "error"}") }
+        return result.isSuccess
+    }
+
+    private suspend fun installRequiredSdk(entryId: String): Boolean = withContext(Dispatchers.IO) {
+        val session = SessionRegistry.registerSession(
+            context = getApplication(),
+            kind = BackendSessionKind.JOB,
+            name = "sdk:install:$entryId",
+        )
+        try {
+            distroService.runSdkCatalogAction(entryId, SdkCatalogAction.Install)
+        } finally {
+            session.close()
+        }
+        entryId in distroService.sdkCatalogState.value.installedEntryIds
+    }
+
+    private suspend fun installRequiredLsp(entryId: String): Boolean = withContext(Dispatchers.IO) {
+        val session = SessionRegistry.registerSession(
+            context = getApplication(),
+            kind = BackendSessionKind.JOB,
+            name = "lsp:install:$entryId",
+        )
+        try {
+            distroService.runLspCatalogAction(entryId, LspCatalogAction.Install)
+        } finally {
+            session.close()
+        }
+        entryId in distroService.lspCatalogState.value.installedEntryIds
     }
 
     fun uninstallExtension(id: String) {
@@ -999,7 +1076,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteEnvironment(environmentId: String) {
-        viewModelScope.launch {
+        // IO: switches the active distro and re-derives its state, which can exec into the rootfs.
+        viewModelScope.launch(Dispatchers.IO) {
             val label = environmentId
             val removed = distroService.deleteEnvironment(environmentId)
             emitMessage(if (removed) "Removed environment '$label'." else "Could not remove '$label'.")
@@ -1050,30 +1128,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun runEnvironmentStep(
-        @Suppress("UNUSED_PARAMETER")
-        stepId: WizardStepId,
-        @Suppress("UNUSED_PARAMETER")
-        callerContext: Context? = null,
-    ) {
-        viewModelScope.launch(Dispatchers.IO) {
-            if (stepNeedsForegroundService(stepId)) {
-                val session = SessionRegistry.registerSession(
-                    context = getApplication(),
-                    kind = BackendSessionKind.JOB,
-                    name = "environment:${stepId.key}",
-                )
-                try {
-                    distroService.runWizardStep(stepId)
-                } finally {
-                    session.close()
-                }
-            } else {
-                distroService.runWizardStep(stepId)
-            }
-        }
-    }
-
     fun selectWizardDistro(profile: DistroProfile) {
         distroService.setSelectedDistro(profile)
     }
@@ -1081,6 +1135,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun deferFirstRunEnvironmentSetup() {
         viewModelScope.launch {
             distroService.setFirstRunSetupDeferred(true)
+        }
+    }
+
+    /** Storage permission was granted mid-onboarding: re-anchor storage on the shared /JCode root. */
+    fun onStorageAccessGranted() {
+        viewModelScope.launch {
+            workspaceManager.refreshStorageRoots()
         }
     }
 
@@ -2136,11 +2197,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 session.close()
             }
         }
-    }
-
-    private fun stepNeedsForegroundService(stepId: WizardStepId): Boolean {
-        return stepId == WizardStepId.DistroInstalled ||
-            stepId == WizardStepId.ToolchainBootstrapped
     }
 
     companion object {

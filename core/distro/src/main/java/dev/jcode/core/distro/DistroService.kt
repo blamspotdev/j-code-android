@@ -156,6 +156,7 @@ class DistroService(
      */
     suspend fun deleteEnvironment(environmentId: String): Boolean {
         val removed = rootfsManager.removeDistro(environmentId)
+        verifiedDistroUsers.keys.removeAll { it.startsWith("$environmentId:") }
         dataStore.edit { prefs ->
             prefs.remove(installedEntriesKey(environmentId))
             prefs.remove(installedLspEntriesKey(environmentId))
@@ -248,15 +249,15 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                SdkCatalogAction.Install -> execInDistro(entry.installScript, timeoutMs = 1_800_000L)
-                SdkCatalogAction.Verify -> execInDistro(entry.verifyScript, timeoutMs = 120_000L)
-                SdkCatalogAction.Uninstall -> execInDistro(entry.uninstallScript, timeoutMs = 900_000L)
+                SdkCatalogAction.Install -> execCatalogScript(entry.installScript, timeoutMs = 1_800_000L)
+                SdkCatalogAction.Verify -> execCatalogScript(entry.verifyScript, timeoutMs = 120_000L)
+                SdkCatalogAction.Uninstall -> execCatalogScript(entry.uninstallScript, timeoutMs = 900_000L)
             }
             val verifyResult = when (action) {
                 SdkCatalogAction.Verify -> actionResult
                 SdkCatalogAction.Install,
                 SdkCatalogAction.Uninstall,
-                -> execInDistro(entry.verifyScript, timeoutMs = 120_000L)
+                -> execCatalogScript(entry.verifyScript, timeoutMs = 120_000L)
             }
 
             val installedNow = verifyResult.succeeded
@@ -357,15 +358,15 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                LspCatalogAction.Install -> execInDistro(entry.installCommand, timeoutMs = 1_800_000L)
-                LspCatalogAction.Verify -> execInDistro(entry.verifyCommand, timeoutMs = 120_000L)
-                LspCatalogAction.Uninstall -> execInDistro(entry.uninstallCommand, timeoutMs = 900_000L)
+                LspCatalogAction.Install -> execCatalogScript(entry.installCommand, timeoutMs = 1_800_000L)
+                LspCatalogAction.Verify -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
+                LspCatalogAction.Uninstall -> execCatalogScript(entry.uninstallCommand, timeoutMs = 900_000L)
             }
             val verifyResult = when (action) {
                 LspCatalogAction.Verify -> actionResult
                 LspCatalogAction.Install,
                 LspCatalogAction.Uninstall,
-                -> execInDistro(entry.verifyCommand, timeoutMs = 120_000L)
+                -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
             }
 
             val installedNow = verifyResult.succeeded
@@ -553,15 +554,15 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                DebugEngineAction.Install -> execInDistro(entry.installCommand, timeoutMs = 1_800_000L)
-                DebugEngineAction.Verify -> execInDistro(entry.verifyCommand, timeoutMs = 120_000L)
-                DebugEngineAction.Uninstall -> execInDistro(entry.uninstallCommand, timeoutMs = 900_000L)
+                DebugEngineAction.Install -> execCatalogScript(entry.installCommand, timeoutMs = 1_800_000L)
+                DebugEngineAction.Verify -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
+                DebugEngineAction.Uninstall -> execCatalogScript(entry.uninstallCommand, timeoutMs = 900_000L)
             }
             val verifyResult = when (action) {
                 DebugEngineAction.Verify -> actionResult
                 DebugEngineAction.Install,
                 DebugEngineAction.Uninstall,
-                -> execInDistro(entry.verifyCommand, timeoutMs = 120_000L)
+                -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
             }
 
             val installedNow = verifyResult.succeeded
@@ -866,7 +867,14 @@ class DistroService(
                     WizardStepId.CheckStorage -> checkStorageStep()
                     WizardStepId.ProotReady -> ensureProotStep()
                     WizardStepId.DistroSelected -> ExecResult(stdout = "Distro selected.", exitCode = 0)
-                    WizardStepId.DistroInstalled -> installSelectedDistro(onLine = ::appendActivityLogLine)
+                    WizardStepId.DistroInstalled -> installSelectedDistro(
+                        onLine = ::appendActivityLogLine,
+                        onDownloadProgress = { percent, detail ->
+                            _autoSetupProgress.tryEmit(
+                                DistroWizardProgress.Running(step, stepLabel(step), percent, detail),
+                            )
+                        },
+                    )
                     WizardStepId.WorkspaceReady -> ensureWorkspaceDirectory()
                     WizardStepId.ToolchainBootstrapped -> bootstrapToolchain(onLine = ::appendActivityLogLine)
                     WizardStepId.JcodeUserCreated -> createDistroUser(onLine = ::appendActivityLogLine)
@@ -1024,6 +1032,7 @@ class DistroService(
     private fun installSelectedDistro(
         profile: DistroProfile = _environmentState.value.runtime.selectedDistro,
         onLine: ((String) -> Unit)? = null,
+        onDownloadProgress: ((percent: Int?, detail: String) -> Unit)? = null,
     ): ExecResult {
         return try {
             android.util.Log.d("DistroService", "installSelectedDistro: checking for ${profile.id}")
@@ -1047,7 +1056,15 @@ class DistroService(
             }
             val tarball = File(rootfsManager.tmpDir, "${profile.id}$urlExt")
             // Synchronous download for auto-setup (blocks the wizard but gives immediate feedback)
-            val downloadOk = rootfsManager.downloadDirect(entry, tarball)
+            var lastLoggedQuarter = -1
+            val downloadOk = rootfsManager.downloadDirect(entry, tarball) { percent, detail ->
+                onDownloadProgress?.invoke(percent, detail)
+                val quarter = (percent ?: 0) / 25
+                if (percent != null && quarter != lastLoggedQuarter) {
+                    lastLoggedQuarter = quarter
+                    onLine?.invoke("Downloading ${profile.label} rootfs: $percent% ($detail)")
+                }
+            }
             android.util.Log.d("DistroService", "installSelectedDistro: download result=$downloadOk, fileSize=${tarball.length()}")
             if (!downloadOk) {
                 return ExecResult(internalError = "Failed to download rootfs for ${profile.label}", exitCode = 1)
@@ -1093,20 +1110,92 @@ class DistroService(
     }
 
     private fun createDistroUser(onLine: ((String) -> Unit)? = null): ExecResult {
+        val runtime = _environmentState.value.runtime
+        return ensureDistroUser(runtime.selectedDistro.id, runtime.user, onLine)
+    }
+
+    /** (distroId:user) pairs verified to exist in the rootfs, so execs don't re-check every time. */
+    private val verifiedDistroUsers = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    /** Last failed ensure per (distroId:user): a broken rootfs must not re-run the script on every refresh. */
+    private val distroUserEnsureFailures = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /**
+     * Idempotently make sure [user] exists inside [distroId]'s rootfs (useradd silently fails under
+     * proot on some rootfs images, so fall back to writing the account records directly), has
+     * passwordless sudo, and that a sudo binary is present — minimal images (cdimage ubuntu-base)
+     * ship none, so install a shim that mimics sudo's argument handling (env assignments, -u, --)
+     * and defers to /usr/bin/sudo once a real one is installed. Verified with `id -u` at the end —
+     * failure here is a real failure, not swallowed.
+     */
+    private fun ensureDistroUser(distroId: String, user: String, onLine: ((String) -> Unit)? = null): ExecResult {
         if (!prootManager.isProotInstalled) {
             return ExecResult(stdout = "proot not available - skipping user creation.", exitCode = 0)
         }
-        val runtime = _environmentState.value.runtime
-        // Minimal rootfs may not have grep. Just try to create the user; useradd handles duplicates gracefully with || true.
+        val cacheKey = "$distroId:$user"
+        if (verifiedDistroUsers[cacheKey] == true) {
+            return ExecResult(stdout = "user $user ready.", exitCode = 0)
+        }
+        val lastFailure = distroUserEnsureFailures[cacheKey]
+        if (lastFailure != null && System.currentTimeMillis() - lastFailure < ENSURE_USER_RETRY_MS) {
+            return ExecResult(internalError = "user '$user' could not be created in $distroId (retrying later).", exitCode = 1)
+        }
+        val d = "${'$'}"
+        // Written on one printf line (no % or backslash in the body) so no heredoc-indentation
+        // pitfalls. Runs as root (proot fake-root): passes commands through, exports leading
+        // VAR=val, and honours `-u <user>` by su-ing to that account (e.g. postgres refuses root).
+        val sudoShim = "#!/bin/sh\\n" +
+            "[ -x /usr/bin/sudo ] && exec /usr/bin/sudo \"${d}@\"\\n" +
+            "u=\\n" +
+            "while [ ${d}# -gt 0 ]; do case \"${d}1\" in " +
+            "-u|--user) u=${d}2; shift 2 ;; " +
+            "--) shift; break ;; " +
+            "[A-Za-z_]*=*) export \"${d}1\"; shift ;; " +
+            "-*) shift ;; " +
+            "*) break ;; esac; done\\n" +
+            "[ -n \"${d}u\" ] && [ \"${d}u\" != root ] && exec su - \"${d}u\" -c \"${d}*\"\\n" +
+            "exec \"${d}@\"\\n"
         val command = """
-            /usr/sbin/useradd -m -u 1000 -s /bin/bash ${runtime.user} 2>/dev/null || true
-            /usr/bin/passwd -d ${runtime.user} >/dev/null 2>&1 || true
+            if id -u $user >/dev/null 2>&1; then
+                echo "user $user already exists"
+            else
+                /usr/sbin/useradd -m -u 1000 -s /bin/bash $user 2>/dev/null || true
+                if ! id -u $user >/dev/null 2>&1; then
+                    echo "$user:x:1000:1000:$user:/home/$user:/bin/bash" >> /etc/passwd
+                    echo "$user:x:1000:" >> /etc/group
+                    echo "$user::19000:0:99999:7:::" >> /etc/shadow 2>/dev/null || true
+                    echo "manually registered $user"
+                fi
+            fi
+            mkdir -p /home/$user
+            chown -R 1000:1000 /home/$user 2>/dev/null || true
+            /usr/bin/passwd -d $user >/dev/null 2>&1 || true
+            /usr/bin/passwd -d root >/dev/null 2>&1 || true
             /usr/bin/install -d /etc/sudoers.d
-            /usr/bin/printf '%s ALL=(ALL) NOPASSWD:ALL\n' ${runtime.user} > /etc/sudoers.d/${runtime.user}
-            /usr/bin/chmod 440 /etc/sudoers.d/${runtime.user}
-            echo OK
+            /usr/bin/printf '%s ALL=(ALL) NOPASSWD:ALL\n' $user > /etc/sudoers.d/$user
+            /usr/bin/chmod 440 /etc/sudoers.d/$user
+            if [ ! -x /usr/bin/sudo ]; then
+                /usr/bin/printf '$sudoShim' > /usr/local/bin/sudo
+                /usr/bin/chmod 755 /usr/local/bin/sudo
+                echo "installed sudo shim"
+            fi
+            if id -u $user >/dev/null 2>&1; then echo OK; else echo "failed to create user $user"; exit 1; fi
         """.trimIndent()
-        return execInDistro(command = command, timeoutMs = 300_000L, onLine = onLine, user = "root")
+        val result = execInDistro(command = command, timeoutMs = 300_000L, onLine = onLine, user = "root")
+        if (result.succeeded) {
+            distroUserEnsureFailures.remove(cacheKey)
+            // Only cache when the world still matches what we verified: the rootfs must still be
+            // there and the selection unchanged (a mid-flight environment switch or delete would
+            // otherwise pin a stale "verified" entry and defeat the self-heal).
+            if (rootfsManager.isDistroInstalled(distroId) &&
+                _environmentState.value.runtime.selectedDistro.id == distroId
+            ) {
+                verifiedDistroUsers[cacheKey] = true
+            }
+        } else {
+            distroUserEnsureFailures[cacheKey] = System.currentTimeMillis()
+        }
+        return result
     }
 
     private fun smokeTest(onLine: ((String) -> Unit)? = null): ExecResult {
@@ -1121,13 +1210,38 @@ class DistroService(
     }
 
     private fun checkDistroUser(): Boolean? {
-        // Minimal rootfs may not have grep. If proot and rootfs are ready, assume user is configured.
-        return true
+        // Self-healing check: verify the user actually exists in the rootfs (a fresh rootfs, or one
+        // where useradd silently failed under proot, won't have it) and create it when missing.
+        // Cached per (distro, user), so this execs at most once per process for a healthy rootfs.
+        val runtime = _environmentState.value.runtime
+        if (!prootManager.isProotInstalled) return null
+        if (verifiedDistroUsers["${runtime.selectedDistro.id}:${runtime.user}"] == true) return true
+        return ensureDistroUser(runtime.selectedDistro.id, runtime.user).succeeded
     }
 
     private fun checkSmokeTest(): Boolean? {
         // Smoke test is skipped during onboarding; rootfs is verified by other steps.
         return true
+    }
+
+    /**
+     * Run a toolchain catalog script (install/verify/uninstall) privileged. proot's fake-root only
+     * covers uid 0, and `su - jcode` drops to uid 1000 where apt/dpkg refuse to run — so these
+     * scripts run as root, but with HOME/USER pointed at the jcode user so toolchains install into
+     * /home/jcode and remain usable from the (non-root) terminal. The scripts' own `sudo` prefixes
+     * become a passthrough via the shim installed by [ensureDistroUser].
+     */
+    private fun execCatalogScript(script: String, timeoutMs: Long): ExecResult {
+        val runtime = _environmentState.value.runtime
+        // Root execs skip the su-guard, so make sure the jcode home + sudo shim exist first.
+        val ensure = ensureDistroUser(runtime.selectedDistro.id, runtime.user)
+        if (!ensure.succeeded) return ensure
+        return execInDistro(
+            command = script,
+            timeoutMs = timeoutMs,
+            user = "root",
+            env = mapOf("HOME" to "/home/${runtime.user}", "USER" to runtime.user),
+        )
     }
 
     /**
@@ -1161,6 +1275,19 @@ class DistroService(
                 return ExecResult(
                     internalError = "${arch.qemuUserBinary} is required to run ${runtime.selectedDistro.label} " +
                         "but is not available. The QEMU emulator binary has not been bundled yet.",
+                    exitCode = 1,
+                )
+            }
+        }
+
+        // Non-root commands run through `su - <user>`, which hard-fails if the account is missing
+        // (fresh rootfs, or useradd silently failed during setup). Ensure it exists first.
+        if (user != "root" && verifiedDistroUsers["$distroId:$user"] != true) {
+            val ensure = ensureDistroUser(distroId, user)
+            if (!ensure.succeeded) {
+                return ExecResult(
+                    internalError = "user '$user' does not exist in $distroId and could not be created: " +
+                        (ensure.internalError ?: ensure.stderr.lineSequence().firstOrNull { it.isNotBlank() } ?: "unknown error"),
                     exitCode = 1,
                 )
             }
@@ -1606,6 +1733,8 @@ class DistroService(
 
     companion object {
         private const val SETUP_ACTIVITY_LOG_LIMIT: Int = 240
+        /** Back-off between ensureDistroUser retries on a rootfs where creation keeps failing. */
+        private const val ENSURE_USER_RETRY_MS: Long = 30_000L
         /** Minimum required storage: 2GB */
         private const val MIN_REQUIRED_STORAGE_BYTES: Long = 2L * 1024 * 1024 * 1024
     }
