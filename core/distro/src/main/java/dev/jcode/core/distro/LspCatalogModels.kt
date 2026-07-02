@@ -76,11 +76,17 @@ object LspServerCatalog {
             id = "csharp-ls",
             category = ".NET",
             name = "C# (csharp-ls)",
-            description = "Roslyn-based C# language server, installed as a .NET global tool.",
-            installCommand = "dotnet tool install --global csharp-ls",
-            verifyCommand = "csharp-ls --version",
+            description = "Roslyn-based C# language server, installed as a .NET global tool (needs the .NET SDK toolchain).",
+            // dotnet lives behind the /usr/local/bin/dotnet shim (GC heap cap + DOTNET_ROOT — see the
+            // dotnet catalog entry); global tools land in ~/.dotnet/tools, which non-login shells
+            // don't have on PATH, and the tool's apphost needs the same env to find the runtime.
+            // 0.16.0 = the newest release that still runs on the .NET 8 SDK the dotnet toolchain
+            // installs (0.17+ package the tool for a newer runtime and fail with
+            // "DotnetToolSettings.xml was not found in the package"; device-verified).
+            installCommand = "dotnet tool install --global csharp-ls --version 0.16.0",
+            verifyCommand = "env DOTNET_ROOT=\"\$HOME/.dotnet\" DOTNET_GCHeapHardLimit=0x40000000 \"\$HOME/.dotnet/tools/csharp-ls\" --version",
             uninstallCommand = "dotnet tool uninstall --global csharp-ls",
-            runCommand = "csharp-ls",
+            runCommand = "env DOTNET_ROOT=\"\$HOME/.dotnet\" DOTNET_GCHeapHardLimit=0x40000000 \"\$HOME/.dotnet/tools/csharp-ls\"",
             languageIds = listOf("csharp"),
             extensions = listOf(".cs"),
             rootDetectors = listOf(".sln", ".csproj", ".git"),
