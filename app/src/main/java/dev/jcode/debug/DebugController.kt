@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** A source location the debugger is stopped at. [line] is 0-based (editor convention). */
@@ -45,19 +46,54 @@ class DebugController(
     private val _location = MutableStateFlow<DebugLocation?>(null)
     val currentLocation: StateFlow<DebugLocation?> = _location.asStateFlow()
 
+    /**
+     * How a session should be launched, after any per-language preparation (e.g. building a .NET
+     * project). [tcpPort] non-null selects the TCP transport (js-debug); null uses the adapter's stdio.
+     */
+    private data class LaunchPlan(
+        val distroCwd: String,
+        val config: JSONObject,
+        val adapterCommand: String,
+        val tcpPort: Int?,
+    )
+
     /** Start debugging [hostPath] (its language picks the engine) with the current [bps] breakpoints. */
     fun startDebug(hostPath: String, projectDir: String, bps: Map<String, Set<Int>>) {
         stop()
         val engine = engineForFile(hostPath)
+        _output.value = emptyList()
         if (engine == null) {
             pushOutput("No debug engine is installed for ${hostPath.substringAfterLast('/')}.\n")
+            _state.value = DebugState.ERROR
             return
         }
-        val distroCwd = hostToDistro(projectDir)
-        val distroProgram = hostToDistro(hostPath)
-        val s = DebugSession(engine.debugType, distroCwd) { command ->
-            distroService.spawnDapProcess(command, workdir = distroCwd)?.let { ProcessTransport(it) }
+        // STARTING covers the prepare phase (a .NET build can take a while) so the UI shows progress
+        // before any adapter process exists.
+        _state.value = DebugState.STARTING
+        pushOutput("Preparing ${engine.name}…\n")
+        scope.launch {
+            val plan = runCatching { prepareLaunch(engine, hostPath, projectDir) }
+                .onFailure { pushOutput("Debug setup failed: ${it.message}\n") }
+                .getOrNull()
+            if (plan == null) {
+                _state.value = DebugState.ERROR
+                return@launch
+            }
+            beginSession(engine, plan, hostPath, bps)
         }
+    }
+
+    private fun beginSession(engine: DebugEngineEntry, plan: LaunchPlan, hostPath: String, bps: Map<String, Set<Int>>) {
+        val transportFactory: (String) -> DapTransport? = { command ->
+            val proc = distroService.spawnDapProcess(command, workdir = plan.distroCwd)
+            when {
+                proc == null -> null
+                // TCP adapters (js-debug) listen on a port; connect a socket to it once it's up.
+                plan.tcpPort != null -> TcpTransport.connect("127.0.0.1", plan.tcpPort, proc, 12_000L)
+                else -> ProcessTransport(proc)
+            }
+        }
+        val s = DebugSession(engine.debugType, plan.distroCwd, transportFactory)
         session = s
         s.onOutput = { _, text -> pushOutput(text) }
         s.onTerminated = {
@@ -68,19 +104,131 @@ class DebugController(
             if (session === s) session = null
             _state.value = DebugState.TERMINATED
         }
-        scope.launch { s.state.collect { _state.value = it } }
+        // While preparing we hold STARTING; ignore the fresh session's initial DISCONNECTED so the
+        // panel doesn't flicker back to the launch row between build and adapter start.
+        scope.launch { s.state.collect { if (!(it == DebugState.DISCONNECTED && _state.value == DebugState.STARTING)) _state.value = it } }
         scope.launch { s.stopped.collect { st -> if (st != null) onStopped(st) else clearStoppedView() } }
 
-        val config = launchConfig(engine.debugType, distroProgram, distroCwd)
         val distroBreakpoints = bps.mapKeys { hostToDistro(it.key) }
             .mapValues { entry -> entry.value.map { it + 1 } } // DAP lines are 1-based
-        _output.value = emptyList()
         pushOutput("Starting ${engine.name} on ${hostPath.substringAfterLast('/')}…\n")
         scope.launch {
-            runCatching { s.start(engine.adapterCommand, "launch", config, distroBreakpoints) }
+            runCatching { s.start(plan.adapterCommand, "launch", plan.config, distroBreakpoints) }
                 .onFailure { pushOutput("Debug failed: ${it.message}\n"); _state.value = DebugState.ERROR }
         }
     }
+
+    /** Per-language launch preparation: interpreted langs run the source directly; compiled/served
+     *  langs need a build or a TCP adapter. Runs off the main thread (a .NET build blocks). */
+    private suspend fun prepareLaunch(engine: DebugEngineEntry, hostPath: String, projectDir: String): LaunchPlan {
+        val distroCwd = hostToDistro(projectDir)
+        return when (engine.debugType) {
+            "python" -> LaunchPlan(
+                distroCwd = distroCwd,
+                config = baseConfig("python", distroCwd).apply {
+                    put("program", hostToDistro(hostPath)); put("justMyCode", false); put("redirectOutput", true)
+                },
+                adapterCommand = engine.adapterCommand,
+                tcpPort = null,
+            )
+            "coreclr" -> prepareDotnet(engine, hostPath, projectDir)
+            "pwa-node" -> {
+                val port = randomDebugPort()
+                LaunchPlan(
+                    distroCwd = distroCwd,
+                    config = baseConfig("pwa-node", distroCwd).apply { put("program", hostToDistro(hostPath)) },
+                    adapterCommand = engine.adapterCommand.replace("{{port}}", port.toString()),
+                    tcpPort = port,
+                )
+            }
+            "pwa-chrome" -> {
+                val port = randomDebugPort()
+                LaunchPlan(
+                    distroCwd = distroCwd,
+                    config = baseConfig("pwa-chrome", distroCwd).apply {
+                        put("url", "http://127.0.0.1:5173"); put("webRoot", distroCwd)
+                    },
+                    adapterCommand = engine.adapterCommand.replace("{{port}}", port.toString()),
+                    tcpPort = port,
+                )
+            }
+            else -> LaunchPlan(
+                distroCwd = distroCwd,
+                config = baseConfig(engine.debugType, distroCwd).apply {
+                    put("program", hostToDistro(hostPath)); put("args", JSONArray())
+                },
+                adapterCommand = engine.adapterCommand,
+                tcpPort = null,
+            )
+        }
+    }
+
+    /** Build the enclosing .csproj and point netcoredbg at the produced DLL (source alone won't launch). */
+    private suspend fun prepareDotnet(engine: DebugEngineEntry, hostPath: String, projectDir: String): LaunchPlan {
+        val csproj = findCsproj(hostPath, projectDir)
+            ?: throw dev.jcode.core.debug.DebugException("No .csproj found near ${hostPath.substringAfterLast('/')}.")
+        val csprojDir = csproj.parentFile ?: throw dev.jcode.core.debug.DebugException("Bad project path.")
+        val distroDir = hostToDistro(csprojDir.path)
+        // .NET lives under /root/.dotnet (installed as root); build with that HOME/PATH.
+        val dotnetPath = "/root/.dotnet:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        val env = mapOf("HOME" to "/root", "DOTNET_ROOT" to "/root/.dotnet", "DOTNET_CLI_TELEMETRY_OPTOUT" to "1", "PATH" to dotnetPath)
+        pushOutput("Building ${csproj.name} (dotnet build)…\n")
+        val build = distroService.exec(
+            command = "cd '$distroDir' && dotnet build -c Debug -v m",
+            workdir = distroDir,
+            env = env,
+            timeoutMs = 600_000L,
+            onLine = { pushOutput(it + "\n") },
+            user = "root",
+        )
+        if (!build.succeeded) {
+            throw dev.jcode.core.debug.DebugException("dotnet build failed (exit ${build.exitCode ?: build.internalError}).")
+        }
+        val dll = findBuiltDll(csprojDir, build.stdout)
+            ?: throw dev.jcode.core.debug.DebugException("Build succeeded but no output DLL was found.")
+        pushOutput("Launching $dll under netcoredbg…\n")
+        val config = baseConfig("coreclr", distroDir).apply {
+            put("program", dll)
+            put("stopAtEntry", false)
+            put("justMyCode", false)
+            put("env", JSONObject()
+                .put("DOTNET_ROOT", "/root/.dotnet")
+                .put("ASPNETCORE_ENVIRONMENT", "Development")
+                .put("PATH", dotnetPath))
+        }
+        return LaunchPlan(distroDir, config, engine.adapterCommand, tcpPort = null)
+    }
+
+    /** Walk up from the source file to [projectDir] for a .csproj, else search a few levels down. */
+    private fun findCsproj(hostPath: String, projectDir: String): java.io.File? {
+        val root = java.io.File(projectDir)
+        var dir = java.io.File(hostPath).parentFile
+        while (dir != null && dir.path.length >= root.path.length) {
+            dir.listFiles { f -> f.extension == "csproj" }?.firstOrNull()?.let { return it }
+            dir = dir.parentFile
+        }
+        return root.walkTopDown().maxDepth(4).firstOrNull { it.extension == "csproj" }
+    }
+
+    /** The main output DLL: prefer dotnet's "Name -> /path/Name.dll" log line, else glob bin/Debug. */
+    private fun findBuiltDll(csprojDir: java.io.File, buildStdout: String): String? {
+        Regex("""->\s+(\S+\.dll)""").findAll(buildStdout).map { it.groupValues[1] }.lastOrNull()?.let { return it }
+        val name = csprojDir.listFiles { f -> f.extension == "csproj" }?.firstOrNull()?.nameWithoutExtension
+        val dll = java.io.File(csprojDir, "bin/Debug").walkTopDown()
+            .firstOrNull { it.extension == "dll" && (name == null || it.nameWithoutExtension == name) }
+        return dll?.let { hostToDistro(it.path) }
+    }
+
+    private fun baseConfig(type: String, cwd: String): JSONObject = JSONObject().apply {
+        put("type", type)
+        put("request", "launch")
+        put("name", "JCode Debug")
+        put("cwd", cwd)
+        put("console", "internalConsole")
+        put("stopOnEntry", false)
+    }
+
+    private fun randomDebugPort(): Int = 41000 + kotlin.random.Random.nextInt(4000)
 
     private fun onStopped(st: StoppedInfo) {
         val s = session ?: return
@@ -173,20 +321,6 @@ class DebugController(
         return DebugEngineCatalog.BUILT_IN.firstOrNull { ext in it.extensions }
     }
 
-    private fun launchConfig(debugType: String, program: String, cwd: String): JSONObject = JSONObject().apply {
-        put("type", debugType)
-        put("request", "launch")
-        put("name", "JCode Debug")
-        put("program", program)
-        put("cwd", cwd)
-        put("console", "internalConsole")
-        put("stopOnEntry", false)
-        when (debugType) {
-            "python" -> { put("justMyCode", false); put("redirectOutput", true) }
-            "lldb", "coreclr" -> put("args", org.json.JSONArray())
-        }
-    }
-
     private fun hostToDistro(p: String): String =
         p.replace("/storage/emulated/0/JCode/projects/", "/workspace/").replace("\\", "/")
 }
@@ -209,5 +343,48 @@ private class ProcessTransport(private val process: Process) : DapTransport {
     }
     override fun close() {
         runCatching { process.destroy() }
+    }
+}
+
+/**
+ * Adapts a TCP DAP adapter (js-debug's `dapDebugServer`, which listens on a port inside proot) to
+ * [DapTransport]. proot shares the host network namespace, so the guest's 127.0.0.1:port is directly
+ * reachable from the app. The listener [process] is held so closing tears down its proot tree too.
+ */
+private class TcpTransport private constructor(
+    private val socket: java.net.Socket,
+    private val process: Process,
+) : DapTransport {
+    private val input = socket.getInputStream()
+    private val output = socket.getOutputStream()
+
+    init {
+        Thread { runCatching { process.errorStream.bufferedReader().forEachLine { } } }
+            .apply { isDaemon = true }.start()
+    }
+
+    override fun read(buffer: ByteArray): Int = try { input.read(buffer) } catch (e: Exception) { -1 }
+    override fun write(bytes: ByteArray) {
+        try { output.write(bytes); output.flush() } catch (_: Exception) {}
+    }
+    override fun close() {
+        runCatching { socket.close() }
+        runCatching { process.destroy() }
+    }
+
+    companion object {
+        /** Retry-connect until the adapter is listening or [timeoutMs] elapses / the process dies. */
+        fun connect(host: String, port: Int, process: Process, timeoutMs: Long): TcpTransport? {
+            val deadline = System.currentTimeMillis() + timeoutMs
+            while (System.currentTimeMillis() < deadline) {
+                if (!process.isAlive) return null
+                val sock = runCatching {
+                    java.net.Socket().apply { connect(java.net.InetSocketAddress(host, port), 1000) }
+                }.getOrNull()
+                if (sock != null) return TcpTransport(sock, process)
+                Thread.sleep(200)
+            }
+            return null
+        }
     }
 }

@@ -354,7 +354,8 @@ fun JCodeApp(
     val completionSource = remember(activeLanguagePack) {
         { prefix: String -> languagePackCompletionItems(activeLanguagePack, prefix) }
     }
-    // Debug launch target = the active source file, if it has an installed stdio debug engine.
+    // Debug launch target = the active source file, if it has an installed debug engine (stdio adapters
+    // and js-debug's TCP adapter are both supported now).
     val activeDebugFile = editorGroup.activeTab?.takeIf { !it.isPage }?.filePath
     val activeDebugEngine = remember(activeDebugFile?.path) {
         activeDebugFile?.let { f ->
@@ -363,7 +364,6 @@ fun JCodeApp(
         }
     }
     val canDebug = activeDebugEngine != null &&
-        activeDebugEngine.transport == "stdio" &&
         activeDebugEngine.id in debugCatalogState.installedEntryIds
     val debugSessionUi = DebugSessionUi(
         state = debugState,
