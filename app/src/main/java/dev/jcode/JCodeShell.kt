@@ -1396,7 +1396,6 @@ private fun JCodeShell(
                     metrics = metrics,
                     activeTab = activeTab,
                     selectedProject = selectedProject,
-                    workspace = workspace,
                     effectiveConfig = effectiveConfig,
                     activeDistroId = environmentState.runtime.selectedDistro.id,
                 )
