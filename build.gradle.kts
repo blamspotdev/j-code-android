@@ -68,6 +68,13 @@ subprojects {
                     excludes += duplicateManifestResource
                 }
             }
+
+            lint {
+                // NullSafeMutableLiveData crashes lintVitalRelease (androidx.lifecycle detector vs
+                // Kotlin 2.1 analysis API). ExpiredTargetSdkVersion is a Play-Store rule; targetSdk
+                // stays 28 deliberately so the proot runtime may exec binaries from app storage.
+                disable += setOf("NullSafeMutableLiveData", "ExpiredTargetSdkVersion")
+            }
         }
     }
 
@@ -142,6 +149,11 @@ subprojects {
                 resources {
                     excludes += duplicateManifestResource
                 }
+            }
+
+            lint {
+                // Crashes lintVitalRelease: androidx.lifecycle detector vs Kotlin 2.1 analysis API.
+                disable += "NullSafeMutableLiveData"
             }
         }
     }

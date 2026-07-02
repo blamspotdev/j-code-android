@@ -36,6 +36,7 @@ AGENTS.md
 
 # Local scratch (screenshots, junk)
 temp/
+/builds/
 .claude/
 .kotlin/
 plans/
