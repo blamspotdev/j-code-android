@@ -222,6 +222,8 @@ import dev.jcode.workbench.DebugSessionUi
 import dev.jcode.workbench.LocalDebugCatalogState
 import dev.jcode.workbench.LocalDebugEditorState
 import dev.jcode.workbench.LocalDebugSession
+import dev.jcode.workbench.LocalExtensionInstallPhases
+import dev.jcode.workbench.LocalSetupTerminalSessionId
 import dev.jcode.design.PerformanceSettings
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.WebPreviewBrowsers
@@ -273,7 +275,6 @@ fun JCodeApp(
     val selectedProject by viewModel.selectedProject.collectAsStateWithLifecycle()
     val editorGroup by viewModel.editorGroup.collectAsStateWithLifecycle()
     val showNewItemDialog by viewModel.showNewItemDialog.collectAsStateWithLifecycle()
-    val scaffoldState by viewModel.scaffoldState.collectAsStateWithLifecycle()
     val templates by viewModel.templates.collectAsStateWithLifecycle()
     val workspaceConfig by viewModel.workspaceConfig.collectAsStateWithLifecycle()
     val projectConfig by viewModel.projectConfig.collectAsStateWithLifecycle()
@@ -324,6 +325,8 @@ fun JCodeApp(
     }
     val marketplaceEntries by viewModel.marketplaceEntries.collectAsStateWithLifecycle()
     val marketplaceBusy by viewModel.marketplaceBusy.collectAsStateWithLifecycle()
+    val extensionInstallPhases by viewModel.extensionInstallPhases.collectAsStateWithLifecycle()
+    val setupTerminalSessionId by viewModel.setupTerminalRunner.sessionId.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val themeBundleId by viewModel.themeBundleId.collectAsStateWithLifecycle()
     val iconBundleId by viewModel.iconBundleId.collectAsStateWithLifecycle()
@@ -554,6 +557,8 @@ fun JCodeApp(
         LocalEnvironmentManager provides environmentManagerActions,
         LocalEditorEmptyActions provides editorEmptyActions,
         LocalDebugCatalogState provides debugCatalogState,
+        LocalExtensionInstallPhases provides extensionInstallPhases,
+        LocalSetupTerminalSessionId provides setupTerminalSessionId,
         LocalDebugSession provides debugSessionUi,
         LocalPerformanceSettings provides performanceSettings,
         LocalWebPreviewBrowsers provides webPreviewBrowsers,
@@ -663,7 +668,6 @@ fun JCodeApp(
     if (showNewItemDialog) {
         NewItemDialog(
             templates = templates,
-            scaffoldState = scaffoldState,
             installedToolchains = sdkCatalogState.installedEntryIds,
             onDismiss = viewModel::dismissNewDialog,
             onConfirm = viewModel::createNewItem,
@@ -953,6 +957,17 @@ private fun JCodeShell(
     fun selectTerminalSession(sessionId: String) {
         selectedTerminalSessionId = sessionId
         terminalSessionManager.switchSession(sessionId)
+    }
+
+    // Surface the background "Setup" terminal (toolchain installs / project scaffolds) as a tab
+    // WITHOUT focusing it or opening the drawer — the unseen-badge is the only attention cue.
+    val setupTerminalSessionId = LocalSetupTerminalSessionId.current
+    LaunchedEffect(setupTerminalSessionId) {
+        val id = setupTerminalSessionId ?: return@LaunchedEffect
+        if (terminalSessionManager.getSession(id) != null && id !in terminalSessionIds) {
+            terminalSessionIds = terminalSessionIds + id
+            if (selectedTerminalSessionId.isEmpty()) selectedTerminalSessionId = id
+        }
     }
 
     // Run state: the URL of the most recent run (for "Open in browser") and whether we're still
@@ -1595,6 +1610,7 @@ private fun JCodeShell(
                                             available = marketplaceEntries,
                                             installedIds = installedExtensions.map { it.id }.toSet(),
                                             busy = marketplaceBusy,
+                                            installPhase = LocalExtensionInstallPhases.current[entry?.id ?: inst?.id],
                                             onInstall = managerActions.onInstallExtension,
                                             onUninstall = managerActions.onUninstallExtension,
                                             onOpenApp = managerActions.onOpenExtensionApp,
@@ -2070,6 +2086,7 @@ private fun WorkspacePanel(
                         installed = installedExtensions,
                         available = marketplaceEntries,
                         busy = marketplaceBusy,
+                        installPhases = LocalExtensionInstallPhases.current,
                         onRefreshMarketplace = managerActions.onRefreshMarketplace,
                         onOpenDetail = managerActions.onOpenExtensionDetail,
                         onOpenPermissions = managerActions.onOpenExtensionPermissions,

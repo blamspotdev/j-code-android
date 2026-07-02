@@ -47,6 +47,7 @@ import dev.jcode.feature.marketplace.ProjectTemplate
 import dev.jcode.feature.marketplace.TemplateCatalog
 import dev.jcode.feature.marketplace.TemplateScaffolder
 import dev.jcode.fs.DEFAULT_SHARED_PROJECTS_ROOT
+import dev.jcode.workbench.SetupTerminalRunner
 import dev.jcode.fs.FsKind
 import dev.jcode.fs.FsNode
 import dev.jcode.fs.FsPath
@@ -118,6 +119,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val extensionInstaller = MarketplaceServiceLocator.extensionInstaller(application)
     val scaffoldState = templateScaffolder.state
 
+    /** Shared "Setup" terminal in the right drawer that runs toolchain installs and scaffolds. */
+    val setupTerminalRunner = SetupTerminalRunner(appContext, distroService)
+
+    init {
+        TerminalSessionHost.manager(appContext).onTaskComplete = setupTerminalRunner::handleTaskComplete
+        distroService.interactiveCatalogRunner = { label, script, timeoutMs ->
+            setupTerminalRunner.run(label, script, workdir = null, asUser = "root", timeoutMs = timeoutMs)
+        }
+        templateScaffolder.interactiveExec = { label, command, workdir, timeoutMs ->
+            setupTerminalRunner.run(
+                label = label,
+                script = command,
+                workdir = workdir,
+                asUser = distroService.environmentState.value.runtime.user,
+                timeoutMs = timeoutMs,
+            )
+        }
+    }
+
     private val _templates = MutableStateFlow<List<ProjectTemplate>>(emptyList())
     val templates: StateFlow<List<ProjectTemplate>> = _templates.asStateFlow()
 
@@ -132,6 +152,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** True while a marketplace fetch / install is in flight. */
     private val _marketplaceBusy = MutableStateFlow(false)
     val marketplaceBusy: StateFlow<Boolean> = _marketplaceBusy.asStateFlow()
+
+    /** Per-extension install phase ("Installing…", "Installing required tools…", "Verifying…"),
+     *  keyed by extension id, shown on the detail chip and list rows while an install runs. */
+    private val _extensionInstallPhases = MutableStateFlow<Map<String, String>>(emptyMap())
+    val extensionInstallPhases: StateFlow<Map<String, String>> = _extensionInstallPhases.asStateFlow()
+
+    private fun setExtensionPhase(id: String, phase: String?) {
+        _extensionInstallPhases.value =
+            if (phase == null) _extensionInstallPhases.value - id
+            else _extensionInstallPhases.value + (id to phase)
+    }
 
     /** Re-scan installed extensions and refresh the available templates. */
     fun refreshInstalledExtensions() {
@@ -162,8 +193,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun installExtension(entry: MarketplaceEntry) {
         viewModelScope.launch {
             _marketplaceBusy.value = true
-            installExtensionResolvingDeps(entry, visiting = mutableSetOf())
-            _marketplaceBusy.value = false
+            try {
+                installExtensionResolvingDeps(entry, visiting = mutableSetOf())
+            } finally {
+                _marketplaceBusy.value = false
+                _extensionInstallPhases.value = emptyMap()
+            }
             refreshInstalledExtensions()
         }
     }
@@ -178,6 +213,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         visiting: MutableSet<String>,
     ): Boolean {
         if (!visiting.add(entry.id)) return true
+
+        if (!entry.requires.isEmpty) setExtensionPhase(entry.id, "Installing required tools…")
 
         for (depId in entry.requires.extensions) {
             if (depId in visiting) continue
@@ -214,10 +251,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        setExtensionPhase(entry.id, "Installing…")
         val result = extensionInstaller.install(entry, BuildConfig.VERSION_NAME)
-            .onSuccess { _messages.tryEmit("Installed ${it.name}") }
             .onFailure { _messages.tryEmit("Install failed: ${it.message ?: "error"}") }
-        return result.isSuccess
+        if (result.isFailure) {
+            setExtensionPhase(entry.id, null)
+            return false
+        }
+
+        setExtensionPhase(entry.id, "Verifying…")
+        val present = runCatching { extensionInstaller.installed() }
+            .getOrDefault(emptyList())
+            .any { it.id == entry.id }
+        setExtensionPhase(entry.id, null)
+        if (!present) {
+            _messages.tryEmit("${entry.name}: installed but not detected on disk — install failed.")
+            return false
+        }
+        _messages.tryEmit("Installed ${entry.name}")
+        return true
     }
 
     private suspend fun installRequiredSdk(entryId: String): Boolean = withContext(Dispatchers.IO) {
@@ -860,8 +912,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
-            // Keep the dialog open to stream scaffold progress. Hold a JOB session so Android
-            // does not kill the long-running npm/dotnet steps while the panel is backgrounded.
+            // The scaffold runs in the background Setup terminal (right drawer) — close the dialog
+            // now instead of blocking on a modal. Hold a JOB session so Android does not kill the
+            // long-running npm/dotnet steps while the app is backgrounded.
+            _showNewItemDialog.value = false
+            emitMessage("Setting up '${project.name}' in the Setup terminal…")
             SessionRegistry.registerSession(
                 appContext,
                 BackendSessionKind.JOB,
@@ -877,8 +932,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 emitMessage(
                     if (ok) "Project '${project.name}' ready."
-                    else "Project '${project.name}' created with errors; see the scaffold log.",
+                    else "Project '${project.name}' scaffold failed: " +
+                        (scaffoldState.value.errorMessage ?: "see the Setup terminal."),
                 )
+                templateScaffolder.reset()
             }
         }
     }
