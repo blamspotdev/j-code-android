@@ -60,7 +60,14 @@ class DebugController(
         }
         session = s
         s.onOutput = { _, text -> pushOutput(text) }
-        s.onTerminated = { _state.value = DebugState.TERMINATED; _location.value = null }
+        s.onTerminated = {
+            _location.value = null
+            // The adapter keeps waiting for another client after the debuggee exits — close the
+            // transport so proot's --kill-on-exit reaps the adapter tree instead of leaking it.
+            s.close()
+            if (session === s) session = null
+            _state.value = DebugState.TERMINATED
+        }
         scope.launch { s.state.collect { _state.value = it } }
         scope.launch { s.stopped.collect { st -> if (st != null) onStopped(st) else clearStoppedView() } }
 
