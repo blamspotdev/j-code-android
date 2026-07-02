@@ -30,6 +30,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import dev.jcode.core.debug.DebugState
 import dev.jcode.core.term.TerminalSessionManager
 import dev.jcode.design.JCodeIcon
@@ -66,12 +69,17 @@ internal fun TaskManagerSidebarContent(
     var processes by remember { mutableStateOf<List<LinuxProc>>(emptyList()) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
-    // Live refresh while the tab is visible: process list + the idle clocks, every 2 seconds.
-    LaunchedEffect(Unit) {
-        while (isActive) {
-            processes = withContext(Dispatchers.IO) { listOwnProcesses() }
-            now = System.currentTimeMillis()
-            delay(2_000L)
+    // Live refresh only while the tab is actually watched: leaving the tab (or closing the drawer)
+    // cancels this effect with the composition, and repeatOnLifecycle pauses it while the app is
+    // backgrounded with the tab still open — no /proc polling unless the panel is on screen.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (isActive) {
+                processes = withContext(Dispatchers.IO) { listOwnProcesses() }
+                now = System.currentTimeMillis()
+                delay(2_000L)
+            }
         }
     }
 
