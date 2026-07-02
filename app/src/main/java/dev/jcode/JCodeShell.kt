@@ -220,6 +220,8 @@ import dev.jcode.workbench.LocalDebugEditorState
 import dev.jcode.workbench.LocalDebugSession
 import dev.jcode.design.PerformanceSettings
 import dev.jcode.design.LocalPerformanceSettings
+import dev.jcode.design.WebPreviewBrowsers
+import dev.jcode.design.LocalWebPreviewBrowsers
 import dev.jcode.workbench.CloseTarget
 import dev.jcode.workbench.IssueActions
 import dev.jcode.workbench.LocalIssueActions
@@ -313,6 +315,17 @@ fun JCodeApp(
             onSetIdleTimeoutMinutes = viewModel::setIdleTimeoutMinutes,
         )
     }
+    val webPreviewBrowserGlobal by viewModel.webPreviewBrowser.collectAsStateWithLifecycle()
+    val webPreviewBrowserProjects by viewModel.webPreviewBrowserProjects.collectAsStateWithLifecycle()
+    val webPreviewBrowsers = remember(webPreviewBrowserGlobal, webPreviewBrowserProjects) {
+        WebPreviewBrowsers(
+            available = viewModel.installedBrowsers,
+            globalChoice = webPreviewBrowserGlobal,
+            projectChoice = { key -> webPreviewBrowserProjects[key] ?: WebPreviewBrowsers.INHERIT },
+            onSetGlobal = viewModel::setWebPreviewBrowser,
+            onSetProject = viewModel::setProjectWebPreviewBrowser,
+        )
+    }
     val hideStatusBarWithKeyboard by viewModel.hideStatusBarWithKeyboard.collectAsStateWithLifecycle()
     val hideTabCloseButton by viewModel.hideTabCloseButton.collectAsStateWithLifecycle()
     // Carried via CompositionLocal (not a JCodeShell param — that composable is at the ART verifier's
@@ -387,7 +400,10 @@ fun JCodeApp(
         onToken = { token ->
             val trimmed = token.trim().trimEnd('.', ',', ')', ']', '}', ';')
             if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-                ProjectRunner.openInBrowser(tapContext, trimmed)
+                ProjectRunner.openInBrowser(
+                    tapContext, trimmed,
+                    webPreviewBrowsers.effective(selectedProject?.id?.toString().orEmpty()),
+                )
             } else {
                 viewModel.openFileByGuestPath(token)
             }
@@ -498,6 +514,7 @@ fun JCodeApp(
         LocalDebugCatalogState provides debugCatalogState,
         LocalDebugSession provides debugSessionUi,
         LocalPerformanceSettings provides performanceSettings,
+        LocalWebPreviewBrowsers provides webPreviewBrowsers,
         LocalIssueActions provides issueActions,
         LocalDebugEditorState provides DebugEditorState(
             breakpoints = breakpoints,
@@ -781,6 +798,9 @@ private fun JCodeShell(
             rightSidebarVisible = true
         }
     }
+    // Read once here so the run handlers below (defined before the settings block) can resolve the
+    // per-project "Open web previews in" choice when opening a dev-server URL.
+    val webPreviewBrowsersLocal = LocalWebPreviewBrowsers.current
     var commandPaletteVisible by rememberSaveable { mutableStateOf(false) }
     var terminalSessionIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var selectedTerminalSessionId by rememberSaveable { mutableStateOf("") }
@@ -992,7 +1012,9 @@ private fun JCodeShell(
                 runInProgress = false
                 if (up) {
                     OutputLog.append("✓ Dev server ready — opening ${plan.url}")
-                    ProjectRunner.openInBrowser(appContext, plan.url)
+                    ProjectRunner.openInBrowser(
+                        appContext, plan.url, webPreviewBrowsersLocal.effective(project.id.toString()),
+                    )
                 } else {
                     OutputLog.append("✗ Dev server didn't start in time; check the run terminals.", OutputKind.Error)
                     snackbarHostState.showSnackbar("Dev server didn't start in time; check the run terminals.")
@@ -1262,7 +1284,13 @@ private fun JCodeShell(
                 onStopRun = ::handleStopRun,
                 runUrl = runUrl,
                 runInProgress = runInProgress,
-                onOpenRunInBrowser = { runUrl?.let { ProjectRunner.openInBrowser(appContext, it) } },
+                onOpenRunInBrowser = {
+                    runUrl?.let { url ->
+                        ProjectRunner.openInBrowser(
+                            appContext, url, webPreviewBrowsersLocal.effective(runningProjectId?.toString().orEmpty()),
+                        )
+                    }
+                },
                 onSnackbar = { message ->
                     scope.launch { snackbarHostState.showSnackbar(message) }
                 },
@@ -1571,7 +1599,13 @@ private fun JCodeShell(
                             onStopRun = ::handleStopRun,
                             runUrl = runUrl,
                             runInProgress = runInProgress,
-                            onOpenRunInBrowser = { runUrl?.let { ProjectRunner.openInBrowser(appContext, it) } },
+                            onOpenRunInBrowser = {
+                    runUrl?.let { url ->
+                        ProjectRunner.openInBrowser(
+                            appContext, url, webPreviewBrowsersLocal.effective(runningProjectId?.toString().orEmpty()),
+                        )
+                    }
+                },
                             onSnackbar = { message ->
                                 scope.launch { snackbarHostState.showSnackbar(message) }
                             },

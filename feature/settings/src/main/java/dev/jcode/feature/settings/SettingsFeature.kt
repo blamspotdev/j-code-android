@@ -58,6 +58,8 @@ import dev.jcode.design.JCodeIcon
 import dev.jcode.design.LocalEditorDragMovesCursor
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.LocalRestoreSession
+import dev.jcode.design.WebPreviewBrowsers
+import dev.jcode.design.LocalWebPreviewBrowsers
 import dev.jcode.design.LocalTabCloseButtonSetting
 import dev.jcode.design.ThemeBundleRegistry
 import dev.jcode.core.distro.DistroEnvironmentState
@@ -103,6 +105,7 @@ object SettingsFeature {
         val editorDragSetting = LocalEditorDragMovesCursor.current
         val restoreSessionSetting = LocalRestoreSession.current
         val perf = LocalPerformanceSettings.current
+        val webPreview = LocalWebPreviewBrowsers.current
         var selectedScope by rememberSaveable(projectOverridesAvailable) {
             mutableStateOf(if (projectOverridesAvailable) ConfigScope.Project else ConfigScope.Workspace)
         }
@@ -245,6 +248,33 @@ object SettingsFeature {
                         value = "${perf.idleTimeoutMinutes} min",
                         onDecrease = { perf.onSetIdleTimeoutMinutes(perf.idleTimeoutMinutes - 5) },
                         onIncrease = { perf.onSetIdleTimeoutMinutes(perf.idleTimeoutMinutes + 5) },
+                    )
+                }
+            }
+
+            SettingsSectionHeader("Web preview")
+            SettingsCard(
+                title = "Open web previews in",
+                description = "The browser used when you open a running dev server (Build & Run) or tap a URL " +
+                    "in the terminal. A project can override this in its Build & Run panel.",
+                keywords = "browser web preview open url chrome firefox default run dev server",
+            ) {
+                val globalOptions = buildList {
+                    add(WebPreviewBrowsers.SYSTEM)
+                    add(WebPreviewBrowsers.ASK)
+                    webPreview.available.forEach { add(it.packageName) }
+                }
+                globalOptions.forEach { choice ->
+                    BundleRow(
+                        name = webPreview.label(choice),
+                        description = when (choice) {
+                            WebPreviewBrowsers.SYSTEM -> "The device's default browser app"
+                            WebPreviewBrowsers.ASK -> "Show the Android app chooser each time"
+                            else -> choice
+                        },
+                        selected = webPreview.globalChoice == choice,
+                        swatch = emptyList(),
+                        onClick = { webPreview.onSetGlobal(choice) },
                     )
                 }
             }

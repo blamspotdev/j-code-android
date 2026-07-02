@@ -184,11 +184,38 @@ object ProjectRunner {
             false
         }
 
-    /** Open [url] in the device's default browser app. */
-    fun openInBrowser(context: Context, url: String) {
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        runCatching { context.startActivity(intent) }
+    /**
+     * Open [url] for a web preview. [browser] selects the target: blank or "SYSTEM" = the device's
+     * default browser (unchanged behaviour), "ASK" = the Android app chooser, otherwise a specific
+     * browser package name (falling back to the default handler if that browser is gone). The
+     * encoding matches [dev.jcode.design.WebPreviewBrowsers].
+     */
+    fun openInBrowser(context: Context, url: String, browser: String = "") {
+        fun viewIntent() = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val specific = browser.isNotBlank() && browser != "SYSTEM" && browser != "ASK"
+        val intent = when {
+            browser == "ASK" -> Intent.createChooser(viewIntent(), "Open web preview in")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            specific -> viewIntent().setPackage(browser)
+            else -> viewIntent()
+        }
+        val ok = runCatching { context.startActivity(intent) }.isSuccess
+        if (!ok && specific) runCatching { context.startActivity(viewIntent()) } // browser uninstalled → default
+    }
+
+    /** Installed apps that can open http(s) URLs, for the "Open web previews in" picker. */
+    fun installedBrowsers(context: Context): List<dev.jcode.design.BrowserApp> {
+        val probe = Intent(Intent.ACTION_VIEW, Uri.parse("http://example.com"))
+        val pm = context.packageManager
+        return runCatching {
+            pm.queryIntentActivities(probe, android.content.pm.PackageManager.MATCH_ALL)
+                .mapNotNull { ri ->
+                    val pkg = ri.activityInfo?.packageName ?: return@mapNotNull null
+                    dev.jcode.design.BrowserApp(pkg, ri.loadLabel(pm).toString())
+                }
+                .distinctBy { it.packageName }
+                .sortedBy { it.label.lowercase() }
+        }.getOrDefault(emptyList())
     }
 
     // --- command builders -------------------------------------------------

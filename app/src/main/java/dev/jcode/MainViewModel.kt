@@ -384,6 +384,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // "Open web previews in" — which browser Build & Run / URL taps use. A global default plus a
+    // per-project override (device-local: which browser apps exist is not portable project config).
+    /** Installed browser apps, discovered once (the set rarely changes within a session). */
+    val installedBrowsers: List<dev.jcode.design.BrowserApp> by lazy { dev.jcode.run.ProjectRunner.installedBrowsers(appContext) }
+
+    private val webPreviewBrowserKey = stringPreferencesKey("web_preview_browser")
+
+    /** Global default: SYSTEM (device default) | ASK (chooser) | a browser package name. */
+    val webPreviewBrowser: StateFlow<String> = uiPreferences.data
+        .map { prefs -> prefs[webPreviewBrowserKey]?.takeIf { it.isNotBlank() } ?: "SYSTEM" }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "SYSTEM")
+
+    fun setWebPreviewBrowser(choice: String) {
+        viewModelScope.launch { uiPreferences.edit { it[webPreviewBrowserKey] = choice } }
+    }
+
+    private val webPreviewBrowserProjectsKey = stringPreferencesKey("web_preview_browser_projects")
+
+    /** Per-project overrides keyed by project id; absent = inherit the global default. */
+    val webPreviewBrowserProjects: StateFlow<Map<String, String>> = uiPreferences.data
+        .map { prefs -> parseStringMap(prefs[webPreviewBrowserProjectsKey]) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    fun setProjectWebPreviewBrowser(projectKey: String, choice: String) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val obj = runCatching { JSONObject(prefs[webPreviewBrowserProjectsKey] ?: "{}") }.getOrDefault(JSONObject())
+                // Blank/INHERIT means "follow the global default" — drop the override to keep the blob minimal.
+                if (choice.isBlank()) obj.remove(projectKey) else obj.put(projectKey, choice)
+                prefs[webPreviewBrowserProjectsKey] = obj.toString()
+            }
+        }
+    }
+
+    private fun parseStringMap(json: String?): Map<String, String> {
+        if (json.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val obj = JSONObject(json)
+            buildMap { obj.keys().forEach { k -> put(k, obj.optString(k)) } }
+        }.getOrDefault(emptyMap())
+    }
+
     // Per-extension activation mode (auto-start / on-demand / manual), keyed by extension id. Stored as a
     // small JSON object (only non-default entries) in one preference, mirroring how SessionStore persists
     // structured data with org.json. Absent id => ExtensionActivation.Default (OnDemand).

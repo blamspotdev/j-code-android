@@ -119,6 +119,44 @@ class PerformanceSettings(
 
 val LocalPerformanceSettings = compositionLocalOf { PerformanceSettings() }
 
+/** An installed app that can open http(s) URLs. */
+data class BrowserApp(val packageName: String, val label: String)
+
+/**
+ * "Open web previews in" preferences, shared (via [LocalWebPreviewBrowsers]) with the settings screen
+ * (global default) and the Build & Run panel (per-project override). A choice is [SYSTEM] (the device
+ * default browser), [ASK] (the Android chooser), a browser package name, or [INHERIT] (per-project only:
+ * fall back to the global default). [available] is the installed-browser list for the picker.
+ */
+class WebPreviewBrowsers(
+    val available: List<BrowserApp> = emptyList(),
+    val globalChoice: String = SYSTEM,
+    /** Per-project raw choice (may be [INHERIT]); keyed by a stable project key. */
+    val projectChoice: (projectKey: String) -> String = { INHERIT },
+    val onSetGlobal: (String) -> Unit = {},
+    val onSetProject: (projectKey: String, choice: String) -> Unit = { _, _ -> },
+) {
+    /** The choice actually used for [projectKey]: its override, or the global default when inheriting. */
+    fun effective(projectKey: String): String =
+        projectChoice(projectKey).let { if (it.isBlank() || it == INHERIT) globalChoice else it }
+
+    /** Human label for a stored choice value. */
+    fun label(choice: String): String = when (choice) {
+        INHERIT -> "Use global default"
+        SYSTEM -> "System default"
+        ASK -> "Always ask"
+        else -> available.firstOrNull { it.packageName == choice }?.label ?: choice
+    }
+
+    companion object {
+        const val SYSTEM = "SYSTEM"
+        const val ASK = "ASK"
+        const val INHERIT = ""
+    }
+}
+
+val LocalWebPreviewBrowsers = compositionLocalOf { WebPreviewBrowsers() }
+
 val JetBrainsMonoFontFamily: FontFamily
     @Composable get() = FontFamily.Monospace
 
