@@ -52,6 +52,7 @@ internal fun ExtensionsPanel(
     installed: List<InstalledExtension>,
     available: List<MarketplaceEntry>,
     busy: Boolean,
+    installPhases: Map<String, String>,
     onRefreshMarketplace: () -> Unit,
     onOpenDetail: (String) -> Unit,
     onOpenPermissions: () -> Unit,
@@ -102,11 +103,14 @@ internal fun ExtensionsPanel(
                 Column {
                     rows.forEachIndexed { index, row ->
                         if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        val phase = installPhases[row.id]
                         ManagerListRow(
                             name = row.name,
                             description = listOfNotNull(authorLabel(row.primaryAuthor, row.otherAuthors), row.description).joinToString(" · "),
                             status = row.status,
                             onClick = { onOpenDetail(row.id) },
+                            checking = phase != null,
+                            checkingLabel = phase ?: "Checking…",
                             leading = {
                                 ExtensionIcon(type = row.type, name = row.name, iconFile = row.iconFile, iconUrl = row.iconUrl)
                             },
@@ -177,6 +181,7 @@ internal fun ExtensionDetailPage(
     available: List<MarketplaceEntry>,
     installedIds: Set<String>,
     busy: Boolean,
+    installPhase: String?,
     onInstall: (MarketplaceEntry) -> Unit,
     onUninstall: (String) -> Unit,
     onOpenApp: (String) -> Unit,
@@ -208,6 +213,7 @@ internal fun ExtensionDetailPage(
         description = description,
         status = status,
         busy = busy,
+        busyLabel = installPhase,
         actionsEnabled = !busy,
         showVerify = false,
         showOutput = false,

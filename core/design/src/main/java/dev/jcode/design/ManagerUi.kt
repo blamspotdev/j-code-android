@@ -50,10 +50,11 @@ enum class ManagerItemStatus { NotInstalled, Installed, UpdateAvailable }
 fun ManagerStatusChip(
     status: ManagerItemStatus,
     checking: Boolean = false,
+    checkingLabel: String = "Checking…",
     modifier: Modifier = Modifier,
 ) {
     val (text, active) = when {
-        checking -> "Checking…" to false
+        checking -> checkingLabel to false
         status == ManagerItemStatus.UpdateAvailable -> "Update available" to true
         status == ManagerItemStatus.Installed -> "Installed" to true
         else -> "Not installed" to false
@@ -262,6 +263,7 @@ fun ManagerListRow(
     status: ManagerItemStatus,
     onClick: () -> Unit,
     checking: Boolean = false,
+    checkingLabel: String = "Checking…",
     modifier: Modifier = Modifier,
     leading: (@Composable () -> Unit)? = null,
 ) {
@@ -290,7 +292,7 @@ fun ManagerListRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        ManagerStatusChip(status = status, checking = checking)
+        ManagerStatusChip(status = status, checking = checking, checkingLabel = checkingLabel)
     }
 }
 
@@ -433,6 +435,7 @@ fun ManagerDetailScreen(
     onUninstall: () -> Unit,
     onVerify: () -> Unit,
     modifier: Modifier = Modifier,
+    busyLabel: String? = null,
     showActions: Boolean = true,
     showVerify: Boolean = true,
     showOutput: Boolean = true,
@@ -455,7 +458,7 @@ fun ManagerDetailScreen(
                     if (subtitle.isNotBlank()) {
                         Text(text = subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    ManagerStatusChip(status = status, checking = busy)
+                    ManagerStatusChip(status = status, checking = busy, checkingLabel = busyLabel ?: "Checking…")
                 }
             }
         }
