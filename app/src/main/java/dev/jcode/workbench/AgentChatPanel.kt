@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -147,6 +148,7 @@ private fun PersistentChatWebView(
     modifier: Modifier,
 ) {
     val appContext = LocalContext.current.applicationContext
+    val backgroundArgb = MaterialTheme.colorScheme.background.toArgb()
     val entry = remember(extension.id, extension.version) {
         val existing = AgentChatWebViewHolder.get(extension.id)
         if (existing != null && existing.version == extension.version) {
@@ -155,7 +157,7 @@ private fun PersistentChatWebView(
             // Version changed (updated extension) — replace any stale WebView.
             AgentChatWebViewHolder.destroy(extension.id)
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-            val webView = createChatWebView(appContext, extension, actions, scope)
+            val webView = createChatWebView(appContext, extension, actions, scope, backgroundArgb)
             AgentChatWebViewHolder.Entry(webView, scope, extension.version)
                 .also { AgentChatWebViewHolder.put(extension.id, it) }
         }
@@ -180,6 +182,7 @@ private fun createChatWebView(
     extension: InstalledExtension,
     actions: AgentChatActions,
     scope: CoroutineScope,
+    backgroundArgb: Int,
 ): WebView {
     lateinit var webView: WebView
     val bridge = ExtensionBridge(
@@ -204,6 +207,7 @@ private fun createChatWebView(
         },
     )
     webView = WebView(context).apply {
+        setBackgroundColor(backgroundArgb)
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         @Suppress("DEPRECATION")

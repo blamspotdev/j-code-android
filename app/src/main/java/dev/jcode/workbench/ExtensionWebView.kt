@@ -97,6 +97,9 @@ fun ExtensionWebViewPage(
     // page load and re-injected here whenever the theme (colors) change while the page is open.
     val colorScheme = MaterialTheme.colorScheme
     val semantic = JCodeTheme.semanticColors
+    // Paint the WebView backdrop with the theme background from creation, so there is no flash of the
+    // WebView's default white before the page's CSS loads and the --jcode-* vars are injected.
+    val backgroundArgb = colorScheme.background.toArgb()
     val themeJs = remember(colorScheme, semantic) {
         fun hex(c: Color): String = String.format("#%06X", 0xFFFFFF and c.toArgb())
         val vars = listOf(
@@ -117,7 +120,9 @@ fun ExtensionWebViewPage(
         "(function(){try{var r=document.documentElement.style;$sets}catch(e){}})()"
     }
     val themeJsState = rememberUpdatedState(themeJs)
-    LaunchedEffect(themeJs) { webView?.post { webView?.evaluateJavascript(themeJs, null) } }
+    LaunchedEffect(themeJs, backgroundArgb) {
+        webView?.post { webView?.setBackgroundColor(backgroundArgb); webView?.evaluateJavascript(themeJs, null) }
+    }
     // Relay host events to the page while this extension's WebView is alive. Pages that care must
     // define window.JCode._onEvent; on (re)load they should pull current state (workbench.activeFile)
     // since events published while the tab was backgrounded are not replayed.
@@ -140,6 +145,7 @@ fun ExtensionWebViewPage(
         modifier = modifier.fillMaxSize(),
         factory = { ctx ->
             WebView(ctx).apply {
+                setBackgroundColor(backgroundArgb)
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 @Suppress("DEPRECATION")
