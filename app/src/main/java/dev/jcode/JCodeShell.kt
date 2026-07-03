@@ -232,6 +232,7 @@ import dev.jcode.workbench.AgentChatActions
 import dev.jcode.workbench.AgentChatSidebarContent
 import dev.jcode.workbench.AgentChatWebViewHolder
 import dev.jcode.workbench.agentChatTabTitle
+import dev.jcode.workbench.hasAgentChatExtension
 import dev.jcode.workbench.LocalAgentChatActions
 import dev.jcode.workbench.CloseTarget
 import dev.jcode.workbench.IssueActions
@@ -847,6 +848,14 @@ private fun JCodeShell(
         if (debugSessionActive) {
             rightPanelTab = RightPanelTab.DebugConsole
             rightSidebarVisible = true
+        }
+    }
+    // The Chat tab only exists while an agent-chat extension is installed; if it goes away (or was
+    // never installed) while selected, fall back to the Terminal tab so the drawer isn't left on it.
+    val chatExtensionAvailable = hasAgentChatExtension()
+    LaunchedEffect(chatExtensionAvailable) {
+        if (!chatExtensionAvailable && rightPanelTab == RightPanelTab.Chat) {
+            rightPanelTab = RightPanelTab.Terminal
         }
     }
     // Read once here so the run handlers below (defined before the settings block) can resolve the
@@ -3004,9 +3013,13 @@ private fun WorkbenchRightSidebar(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // The Chat tab's title tracks the installed agent extension (e.g. "OpenChamber").
+                    // The Chat tab's title tracks the installed agent extension (e.g. "OpenChamber"),
+                    // and the tab is shown only while such an extension is installed.
+                    val chatAvailable = hasAgentChatExtension()
                     val chatTabTitle = agentChatTabTitle()
-                    RightPanelTab.entries.filter { it.enabled }.forEach { tab ->
+                    RightPanelTab.entries
+                        .filter { it.enabled && (it != RightPanelTab.Chat || chatAvailable) }
+                        .forEach { tab ->
                         val selected = tab == selectedTab
                         val tabLabel = if (tab == RightPanelTab.Chat) chatTabTitle else tab.label
                         Surface(

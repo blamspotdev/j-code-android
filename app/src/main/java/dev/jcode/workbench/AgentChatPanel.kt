@@ -52,17 +52,25 @@ val LocalAgentChatActions = compositionLocalOf { AgentChatActions() }
 
 private const val OPENCHAMBER_EXT_ID = "jcode.ext.openchamber"
 
-// Stable fallback so [agentChatTabTitle]'s collectAsState is always called unconditionally.
+// Stable fallback so [installedAgentChatExtension]'s collectAsState is always called unconditionally.
 private val EmptyAgentExtensions = MutableStateFlow<List<InstalledExtension>>(emptyList())
+
+/** The installed agent-chat extension (OpenChamber with a web UI), or null when none is installed. */
+@Composable
+private fun installedAgentChatExtension(): InstalledExtension? {
+    val actions = LocalAgentChatActions.current
+    val extensions by (actions.extensions ?: EmptyAgentExtensions).collectAsState()
+    return extensions.firstOrNull { it.id == OPENCHAMBER_EXT_ID && it.hasWebUi }
+}
+
+/** True when an agent-chat extension is installed, so the right drawer should show the Chat tab. */
+@Composable
+internal fun hasAgentChatExtension(): Boolean = installedAgentChatExtension() != null
 
 /** The right-drawer chat tab's dynamic title: the installed agent extension's name (e.g. its own
  *  "OpenChamber"), or "Chat" when no agent extension with a web UI is installed. */
 @Composable
-internal fun agentChatTabTitle(): String {
-    val actions = LocalAgentChatActions.current
-    val extensions by (actions.extensions ?: EmptyAgentExtensions).collectAsState()
-    return extensions.firstOrNull { it.id == OPENCHAMBER_EXT_ID && it.hasWebUi }?.name ?: "Chat"
-}
+internal fun agentChatTabTitle(): String = installedAgentChatExtension()?.name ?: "Chat"
 
 /**
  * Process-scoped holder for a "keep running in background" chat WebView. The WebView (and its own
@@ -110,8 +118,7 @@ internal object AgentChatWebViewHolder {
 @Composable
 internal fun AgentChatSidebarContent(modifier: Modifier = Modifier) {
     val actions = LocalAgentChatActions.current
-    val extensions by (actions.extensions ?: EmptyAgentExtensions).collectAsState()
-    val ext = extensions.firstOrNull { it.id == OPENCHAMBER_EXT_ID && it.hasWebUi }
+    val ext = installedAgentChatExtension()
     if (ext == null) {
         AgentChatPlaceholder(modifier)
         return
