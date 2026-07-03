@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -159,6 +161,12 @@ private fun StepperScreen(
         if (running) logsExpanded = true
     }
 
+    val context = LocalContext.current
+    // Storage grant gates distro selection: nothing can install into /JCode until it's granted.
+    // When the storage step isn't shown (existing installs), there is nothing to gate on.
+    var storageGranted by remember { mutableStateOf(hasStorageAccess(context)) }
+    val distroStepEnabled = !showStorageStep || storageGranted
+
     val distroStepNumber = if (showStorageStep) 2 else 1
     val selectionSteps: LazyListScope.() -> Unit = {
         if (installedEnvironments.isNotEmpty()) {
@@ -176,7 +184,11 @@ private fun StepperScreen(
                 StorageAccessCard(
                     number = 1,
                     enabled = !running,
-                    onGranted = onStorageAccessGranted,
+                    granted = storageGranted,
+                    onGranted = {
+                        storageGranted = true
+                        onStorageAccessGranted()
+                    },
                 )
             }
         }
@@ -185,6 +197,7 @@ private fun StepperScreen(
                 number = distroStepNumber,
                 environmentState = environmentState,
                 running = running,
+                enabled = distroStepEnabled,
                 onSelectDistro = onSelectDistro,
                 onAutoSetup = onAutoSetup,
                 onRefresh = onRefresh,
@@ -265,22 +278,30 @@ private fun StepperScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DistroSelectionCard(
     number: Int,
     environmentState: DistroEnvironmentState,
     running: Boolean,
+    enabled: Boolean,
     onSelectDistro: (DistroProfile) -> Unit,
     onAutoSetup: () -> Unit,
     onRefresh: () -> Unit,
 ) {
+    // Interactive until the previous step (storage) is done; the whole card also locks while a setup runs.
+    val interactive = enabled && !running
     StepCard(
         number = number,
         title = "Select a distro",
-        active = !running,
+        active = interactive,
     ) {
         Text(
-            text = "Choose the Linux distro J Code should prepare for your embedded environment.",
+            text = if (enabled) {
+                "Choose the Linux distro J Code should prepare for your embedded environment."
+            } else {
+                "Allow storage access above to continue."
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -292,24 +313,28 @@ private fun DistroSelectionCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(10.dp))
-                        .clickable(enabled = !running) { onSelectDistro(profile) }
+                        .clickable(enabled = interactive) { onSelectDistro(profile) }
                         .padding(vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     RadioButton(
                         selected = selected,
                         onClick = { onSelectDistro(profile) },
-                        enabled = !running,
+                        enabled = interactive,
                     )
                     Text(profile.label, style = MaterialTheme.typography.bodyMedium)
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilledTonalButton(onClick = onAutoSetup, enabled = !running) {
+        // FlowRow so the "Use <distro>" + Refresh buttons wrap instead of squishing on narrow portrait.
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilledTonalButton(onClick = onAutoSetup, enabled = interactive) {
                 Text("Use ${environmentState.runtime.selectedDistro.label}")
             }
-            OutlinedButton(onClick = onRefresh, enabled = !running) {
+            OutlinedButton(onClick = onRefresh, enabled = interactive) {
                 Text("Refresh")
             }
         }
@@ -568,10 +593,10 @@ private fun hasStorageAccess(context: Context): Boolean =
 private fun StorageAccessCard(
     number: Int,
     enabled: Boolean,
+    granted: Boolean,
     onGranted: () -> Unit,
 ) {
     val context = LocalContext.current
-    var granted by remember { mutableStateOf(hasStorageAccess(context)) }
     var deniedOnce by rememberSaveable { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -579,7 +604,6 @@ private fun StorageAccessCard(
         val now = hasStorageAccess(context)
         if (now && !granted) onGranted()
         if (!now) deniedOnce = true
-        granted = now
     }
     StepCard(
         number = number,
