@@ -20,6 +20,8 @@ data class LspCatalogEntry(
     val languageIds: List<String> = emptyList(),
     val extensions: List<String> = emptyList(),
     val rootDetectors: List<String> = emptyList(),
+    /** SDK catalog ids this server needs (e.g. csharp-ls needs the dotnet SDK). Installed first. */
+    val requiredSdks: List<String> = emptyList(),
 )
 
 enum class LspCatalogAction(val label: String) {
@@ -71,6 +73,7 @@ object LspServerCatalog {
             languageIds = listOf("typescript", "javascript", "typescriptreact", "javascriptreact"),
             extensions = listOf(".ts", ".tsx", ".js", ".jsx"),
             rootDetectors = listOf("package.json", "tsconfig.json", ".git"),
+            requiredSdks = listOf("nodejs"),
         ),
         LspCatalogEntry(
             id = "csharp-ls",
@@ -90,6 +93,7 @@ object LspServerCatalog {
             languageIds = listOf("csharp"),
             extensions = listOf(".cs"),
             rootDetectors = listOf(".sln", ".csproj", ".git"),
+            requiredSdks = listOf("dotnet"),
         ),
         LspCatalogEntry(
             id = "pyright",
@@ -104,6 +108,7 @@ object LspServerCatalog {
             languageIds = listOf("python"),
             extensions = listOf(".py"),
             rootDetectors = listOf("pyproject.toml", "setup.py", ".git"),
+            requiredSdks = listOf("nodejs"),
         ),
         LspCatalogEntry(
             id = "gopls",
@@ -130,6 +135,7 @@ object LspServerCatalog {
             languageIds = listOf("rust"),
             extensions = listOf(".rs"),
             rootDetectors = listOf("Cargo.toml", ".git"),
+            requiredSdks = listOf("rust"),
         ),
         LspCatalogEntry(
             id = "kotlin-language-server",

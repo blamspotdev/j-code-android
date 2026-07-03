@@ -83,6 +83,7 @@ entries:
     name: Android SDK (platform 34 + Gradle)
     description: Command-line tools, the Android 34 platform, build-tools 34, and Gradle 8.7 — wired with the ARM-native aapt2 so on-device Gradle builds (assembleDebug) produce a real APK. Requires the Android SDK prerequisites. Large download.
     supportedArches: [arm64]
+    requiredSdks: [android-prereqs]
     installScript: |
       set -e
       export ANDROID_HOME="$HOME/android-sdk"

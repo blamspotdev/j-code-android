@@ -25,6 +25,8 @@ data class DebugEngineEntry(
     val updateCheckCommand: String = "",
     val languageIds: List<String> = emptyList(),
     val extensions: List<String> = emptyList(),
+    /** SDK catalog ids this adapter needs (e.g. netcoredbg needs the dotnet SDK). Installed first. */
+    val requiredSdks: List<String> = emptyList(),
 )
 
 enum class DebugEngineAction(val label: String) {
@@ -97,6 +99,7 @@ object DebugEngineCatalog {
             debugType = "coreclr",
             languageIds = listOf("csharp"),
             extensions = listOf(".cs"),
+            requiredSdks = listOf("dotnet"),
         ),
         DebugEngineEntry(
             id = "js-debug",
@@ -113,6 +116,7 @@ object DebugEngineCatalog {
             debugType = "pwa-node",
             languageIds = listOf("javascript", "typescript", "javascriptreact", "typescriptreact"),
             extensions = listOf(".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"),
+            requiredSdks = listOf("nodejs"),
         ),
         DebugEngineEntry(
             id = "java-debug",

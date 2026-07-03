@@ -24,7 +24,9 @@ import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.distro.DistroProfile
 import dev.jcode.core.distro.DistroWizardProgress
 import dev.jcode.core.distro.DebugEngineAction
+import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.core.distro.LspCatalogAction
+import dev.jcode.core.distro.LspServerCatalog
 import dev.jcode.debug.DebugController
 import dev.jcode.core.distro.SdkCatalogAction
 import dev.jcode.core.distro.DistroService
@@ -300,6 +302,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         entryId in distroService.lspCatalogState.value.installedEntryIds
     }
 
+    /**
+     * Install every SDK in [requiredSdks] (and their transitive SDK requirements) before the caller
+     * installs the tool itself. Already-installed SDKs are skipped; the first failure aborts and
+     * returns false so the tool install can be skipped too.
+     */
+    private suspend fun installRequiredSdks(requiredSdks: List<String>, forName: String): Boolean {
+        val visiting = mutableSetOf<String>()
+        for (sdkId in requiredSdks) {
+            if (!resolveAndInstallSdk(sdkId, forName, visiting)) return false
+        }
+        return true
+    }
+
+    private suspend fun resolveAndInstallSdk(
+        sdkId: String,
+        forName: String,
+        visiting: MutableSet<String>,
+    ): Boolean {
+        if (sdkId in distroService.sdkCatalogState.value.installedEntryIds) return true
+        if (!visiting.add(sdkId)) return true
+        val entry = distroService.sdkCatalogState.value.entries.firstOrNull { it.id == sdkId }
+        for (dep in entry?.requiredSdks.orEmpty()) {
+            if (!resolveAndInstallSdk(dep, forName, visiting)) return false
+        }
+        _messages.tryEmit("Installing required toolchain: ${entry?.name ?: sdkId}…")
+        if (!installRequiredSdk(sdkId)) {
+            val reason = distroService.sdkCatalogState.value.errorMessage ?: "install failed"
+            _messages.tryEmit("$forName: required toolchain '${entry?.name ?: sdkId}' — $reason Install aborted.")
+            return false
+        }
+        return true
+    }
+
+    private suspend fun runCatalogInstall(kind: String, entryId: String, block: suspend () -> Unit) {
+        val session = SessionRegistry.registerSession(
+            context = getApplication(),
+            kind = BackendSessionKind.JOB,
+            name = "$kind:install:$entryId",
+        )
+        try {
+            block()
+        } finally {
+            session.close()
+        }
+    }
+
     fun uninstallExtension(id: String) {
         clearExtensionActivation(id)
         viewModelScope.launch(Dispatchers.IO) {
@@ -378,6 +426,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setIdleTimeoutMinutes(minutes: Int) {
         viewModelScope.launch { uiPreferences.edit { it[idleTimeoutMinKey] = minutes.coerceIn(5, 120) } }
+    }
+
+    private val maxTerminalSessionsKey = intPreferencesKey("perf_max_terminal_sessions")
+
+    /** Max concurrent terminal instances the "+" button will open (1…24). Default 12. */
+    val maxTerminalSessions: StateFlow<Int> = uiPreferences.data
+        .map { prefs -> (prefs[maxTerminalSessionsKey] ?: 12).coerceIn(1, 24) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 12)
+
+    fun setMaxTerminalSessions(count: Int) {
+        viewModelScope.launch { uiPreferences.edit { it[maxTerminalSessionsKey] = count.coerceIn(1, 24) } }
     }
 
     private val hideStatusBarWithKeyboardKey = booleanPreferencesKey("hide_status_bar_with_keyboard")
@@ -1219,7 +1278,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun installSdkCatalogEntry(entryId: String) {
-        runSdkCatalogAction(entryId, SdkCatalogAction.Install)
+        viewModelScope.launch(Dispatchers.IO) {
+            val entry = distroService.sdkCatalogState.value.entries.firstOrNull { it.id == entryId }
+            if (entry != null && !installRequiredSdks(entry.requiredSdks, entry.name)) return@launch
+            runCatalogInstall("sdk", entryId) {
+                distroService.runSdkCatalogAction(entryId, SdkCatalogAction.Install)
+            }
+        }
     }
 
     fun verifySdkCatalogEntry(entryId: String) {
@@ -1231,7 +1296,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun installLspCatalogEntry(entryId: String) {
-        runLspCatalogAction(entryId, LspCatalogAction.Install)
+        viewModelScope.launch(Dispatchers.IO) {
+            val entry = LspServerCatalog.findById(entryId)
+            if (entry != null && !installRequiredSdks(entry.requiredSdks, entry.name)) return@launch
+            runCatalogInstall("lsp", entryId) {
+                distroService.runLspCatalogAction(entryId, LspCatalogAction.Install)
+            }
+        }
     }
 
     fun verifyLspCatalogEntry(entryId: String) {
@@ -1243,7 +1314,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun installDebugEngine(entryId: String) {
-        runDebugCatalogAction(entryId, DebugEngineAction.Install)
+        viewModelScope.launch(Dispatchers.IO) {
+            val entry = DebugEngineCatalog.findById(entryId)
+            if (entry != null && !installRequiredSdks(entry.requiredSdks, entry.name)) return@launch
+            runCatalogInstall("debug", entryId) {
+                distroService.runDebugEngineCatalogAction(entryId, DebugEngineAction.Install)
+            }
+        }
     }
 
     fun verifyDebugEngine(entryId: String) {
