@@ -3195,32 +3195,34 @@ private fun TerminalSidebarContent(
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         var menuForId by remember { mutableStateOf<String?>(null) }
-        // Session tab bar
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        // Session tab bar — flat editor-style tabs (see EditorPane.TabItem), sized down for the drawer.
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surface,
         ) {
-            terminalSessionIds.forEach { sessionId ->
-                Box {
-                    Surface(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .combinedClickable(
-                                onClick = { onSelectTerminalSession(sessionId) },
-                                onLongClick = { menuForId = sessionId },
-                            ),
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (sessionId == selectedTerminalSessionId) {
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-                        } else {
-                            MaterialTheme.colorScheme.surface.copy(alpha = 0.75f)
-                        },
-                    ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .height(30.dp),
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                terminalSessionIds.forEach { sessionId ->
+                    val isActive = sessionId == selectedTerminalSessionId
+                    Box {
                         Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier
+                                .combinedClickable(
+                                    onClick = { onSelectTerminalSession(sessionId) },
+                                    onLongClick = { menuForId = sessionId },
+                                )
+                                .background(
+                                    if (isActive) MaterialTheme.colorScheme.surfaceVariant
+                                    else MaterialTheme.colorScheme.surface
+                                )
+                                .height(30.dp)
+                                .padding(horizontal = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
@@ -3229,9 +3231,9 @@ private fun TerminalSidebarContent(
                                     terminalTitleFor(sessionId) ?: terminalSessionFor(sessionId)?.label
                                 ),
                                 maxLines = 1,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (sessionId == selectedTerminalSessionId) {
-                                    MaterialTheme.colorScheme.primary
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isActive) {
+                                    MaterialTheme.colorScheme.onSurface
                                 } else {
                                     MaterialTheme.colorScheme.onSurfaceVariant
                                 },
@@ -3240,60 +3242,51 @@ private fun TerminalSidebarContent(
                             // long-press menu still closes it).
                             if (!LocalTabCloseButtonSetting.current.hidden) {
                                 JcTooltip("Close terminal") {
-                                    Surface(
-                                        modifier = Modifier
-                                            .size(18.dp)
-                                            .clip(CircleShape)
-                                            .clickable { onRemoveTerminalSession(sessionId) },
-                                        shape = CircleShape,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
+                                    IconButton(
+                                        onClick = { onRemoveTerminalSession(sessionId) },
+                                        modifier = Modifier.size(18.dp),
                                     ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Text(
-                                                text = "×",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.padding(top = 1.dp),
-                                            )
-                                        }
+                                        Text(
+                                            text = "×",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
                                     }
                                 }
                             }
                         }
+                        CompactContextMenu(
+                            expanded = menuForId == sessionId,
+                            onDismissRequest = { menuForId = null },
+                            quickActions = listOf(
+                                ContextAction(JCodeIcon.Close, "Close") { onRemoveTerminalSession(sessionId) },
+                            ),
+                            listActions = listOf(
+                                ContextAction(JCodeIcon.Clear, "Clear") {
+                                    terminalSessionFor(sessionId)?.pty?.write(byteArrayOf(0x0C))
+                                },
+                                ContextAction(JCodeIcon.Close, "Close others") {
+                                    terminalSessionIds.filter { it != sessionId }.forEach(onRemoveTerminalSession)
+                                },
+                                ContextAction(JCodeIcon.Close, "Close all") {
+                                    terminalSessionIds.toList().forEach(onRemoveTerminalSession)
+                                },
+                            ),
+                        )
                     }
-                    CompactContextMenu(
-                        expanded = menuForId == sessionId,
-                        onDismissRequest = { menuForId = null },
-                        quickActions = listOf(
-                            ContextAction(JCodeIcon.Close, "Close") { onRemoveTerminalSession(sessionId) },
-                        ),
-                        listActions = listOf(
-                            ContextAction(JCodeIcon.Clear, "Clear") {
-                                terminalSessionFor(sessionId)?.pty?.write(byteArrayOf(0x0C))
-                            },
-                            ContextAction(JCodeIcon.Close, "Close others") {
-                                terminalSessionIds.filter { it != sessionId }.forEach(onRemoveTerminalSession)
-                            },
-                            ContextAction(JCodeIcon.Close, "Close all") {
-                                terminalSessionIds.toList().forEach(onRemoveTerminalSession)
-                            },
-                        ),
-                    )
                 }
-            }
-            Surface(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onAddTerminalSession),
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
-            ) {
-                Text(
-                    text = "+",
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                JcTooltip("New terminal") {
+                    IconButton(
+                        onClick = onAddTerminalSession,
+                        modifier = Modifier.size(width = 32.dp, height = 30.dp),
+                    ) {
+                        Text(
+                            text = "+",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         }
 
