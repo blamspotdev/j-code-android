@@ -878,17 +878,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             combine(
+                currentWorkspace,
                 selectedProject,
                 effectiveConfig.map { it.distro }.distinctUntilChanged(),
-            ) { project, distro ->
-                project to distro
-            }.collectLatest { (project, distro) ->
+            ) { workspace, project, distro ->
+                Triple(workspace, project, distro)
+            }.collectLatest { (workspace, project, distro) ->
                 withContext(Dispatchers.IO) {
                     val projectHostPath = (project?.fsPath as? FsPath.Local)?.file?.absolutePath
+                    // Bind every local project of the workspace so a multi-repo extension (Source Control)
+                    // can reach each repo at its guest target; the selected project stays the primary bind.
+                    val projectBinds = workspace?.projects.orEmpty().mapNotNull { p ->
+                        ((p.fsPath as? FsPath.Local)?.file?.absolutePath)?.let { it to p.distroBindTarget }
+                    }
                     distroService.updateRuntimeConfig(
                         distroConfig = distro,
                         projectHostPath = projectHostPath,
                         projectTargetPath = project?.distroBindTarget,
+                        projectBinds = projectBinds,
                     )
                     distroService.refreshEnvironment()
                 }
@@ -1537,6 +1544,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // Generic per-extension settings (the manifest `settings:` block), keyed extensionId -> {key: value}.
+    // Stored as one nested JSON object; the config.* API + the settings screen read/write through here.
+    private val extensionSettingsKey = stringPreferencesKey("extension_settings")
+
+    val extensionSettings: StateFlow<Map<String, Map<String, String>>> = uiPreferences.data
+        .map { prefs -> parseExtensionSettings(prefs[extensionSettingsKey]) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    private fun parseExtensionSettings(json: String?): Map<String, Map<String, String>> {
+        if (json.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val root = JSONObject(json)
+            buildMap {
+                root.keys().forEach { extId ->
+                    val obj = root.optJSONObject(extId) ?: return@forEach
+                    put(extId, buildMap { obj.keys().forEach { k -> put(k, obj.optString(k)) } })
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    /** A setting's saved value, or its manifest default, or "". Used by config.* (caller-scoped). */
+    private fun resolvedExtensionSetting(ext: InstalledExtension, key: String): String {
+        extensionSettings.value[ext.id]?.get(key)?.let { return it }
+        return ext.settings.firstOrNull { it.key == key }?.default ?: ""
+    }
+
+    /** Same resolution, looked up by id — for the settings screen, which has no [InstalledExtension]. */
+    fun extensionSettingValue(extensionId: String, key: String): String {
+        extensionSettings.value[extensionId]?.get(key)?.let { return it }
+        return installedExtensions.value.firstOrNull { it.id == extensionId }
+            ?.settings?.firstOrNull { it.key == key }?.default ?: ""
+    }
+
+    fun setExtensionSetting(extensionId: String, key: String, value: String) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val root = runCatching { JSONObject(prefs[extensionSettingsKey] ?: "{}") }.getOrDefault(JSONObject())
+                val obj = root.optJSONObject(extensionId) ?: JSONObject()
+                obj.put(key, value)
+                root.put(extensionId, obj)
+                prefs[extensionSettingsKey] = root.toString()
+            }
+            // Notify the live extension WebView so it can reload without a manual refresh.
+            _extensionEvents.tryEmit(
+                "config" to JSONObject().put("extensionId", extensionId).put("key", key).put("value", value).toString(),
+            )
+        }
+    }
+
     /** The `activeFile` event/query payload: guest (/workspace) path of the focused file tab, or {}. */
     private fun activeFileEventJson(): String {
         val tab = _editorGroup.value.tabs.firstOrNull { it.id == _editorGroup.value.activeTabId && !it.isPage }
@@ -1576,6 +1633,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (type == "workbench.openView") {
             openExtensionViewPage(ext.id, payload.optString("view"))
             return apiOk(JSONObject())
+        }
+        // Per-extension settings (config.*) are scoped to the caller — resolved from its declared
+        // `settings:` defaults overlaid with the user's saved values. Also handled here for ext.id.
+        if (family == "config") {
+            return when (type) {
+                "config.all" -> apiOk(
+                    JSONObject().apply {
+                        ext.settings.forEach { s -> put(s.key, resolvedExtensionSetting(ext, s.key)) }
+                    },
+                )
+                "config.get" -> apiOk(JSONObject().put("value", resolvedExtensionSetting(ext, payload.optString("key"))))
+                "config.set" -> {
+                    val key = payload.optString("key")
+                    if (key.isBlank()) apiError("key required")
+                    else {
+                        setExtensionSetting(ext.id, key, payload.opt("value")?.toString().orEmpty())
+                        apiOk(JSONObject())
+                    }
+                }
+                else -> apiError("unknown request type: $type")
+            }
         }
         return runCatching { dispatchExtensionApi(type, payload) }
             .getOrElse { apiError(it.message ?: "internal error") }
@@ -1691,8 +1769,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             JSONObject().apply {
                 selectedProject.value?.let { proj ->
                     put("name", proj.name)
-                    (proj.fsPath as? FsPath.Local)?.file?.let { put("path", hostToGuestPath(it)) }
+                    // distroBindTarget is the guest path the project is actually mounted at for exec.run
+                    // (hostToGuestPath assumes the terminal's whole-root bind, which exec does not use).
+                    if (proj.fsPath is FsPath.Local) put("path", proj.distroBindTarget)
                 }
+                currentWorkspace.value?.let { put("workspace", it.name) }
+            },
+        )
+
+        // Every project folder in the open workspace, as guest mount paths — lets a multi-repo extension
+        // (e.g. Source Control) enumerate and switch between repositories. Each project's guest path is its
+        // distroBindTarget (where the runtime mounts it); SAF projects have no local dir and are skipped.
+        "workbench.workspaceFolders" -> apiOk(
+            JSONObject().apply {
+                val folders = org.json.JSONArray()
+                currentWorkspace.value?.projects.orEmpty().forEach { proj ->
+                    if (proj.fsPath is FsPath.Local) {
+                        folders.put(
+                            JSONObject()
+                                .put("name", proj.name)
+                                .put("path", proj.distroBindTarget),
+                        )
+                    }
+                }
+                put("folders", folders)
                 currentWorkspace.value?.let { put("workspace", it.name) }
             },
         )

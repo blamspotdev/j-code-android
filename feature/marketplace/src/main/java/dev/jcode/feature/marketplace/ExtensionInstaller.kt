@@ -206,6 +206,18 @@ class ExtensionInstaller internal constructor(context: Context) {
         // parse whatever it declares (missing sections resolve to empty).
         val templates = map.listOfAny("templates").mapNotNull { raw -> loadTemplate(dir, raw?.toString()) }
         val languages = parseLanguages(map)
+        val settings = map.listOfAny("settings").mapNotNull { raw ->
+            val s = (raw as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
+            val key = s.str("key") ?: return@mapNotNull null
+            ExtensionSetting(
+                key = key,
+                label = s.str("label") ?: key,
+                type = SettingType.from(s.str("type")),
+                default = s.str("default"),
+                options = s.strList("options"),
+                description = s.str("description"),
+            )
+        }
         return InstalledExtension(
             id = id,
             name = map.str("name") ?: id,
@@ -223,6 +235,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             webUiEntry = findWebUiEntry(dir),
             apiMinVersion = (map["api"] as? Map<*, *>)?.toStringKeyMap()?.str("minApiVersion")?.toIntOrNull() ?: 0,
             apiCapabilities = (map["api"] as? Map<*, *>)?.toStringKeyMap()?.strList("capabilities") ?: emptyList(),
+            settings = settings,
         )
     }
 

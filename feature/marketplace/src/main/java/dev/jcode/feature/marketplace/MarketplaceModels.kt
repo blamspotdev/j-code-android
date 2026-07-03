@@ -172,6 +172,39 @@ data class LanguagePack(
     }
 }
 
+/** The control type for a user-configurable extension setting (from the manifest `settings:` block). */
+enum class SettingType {
+    /** On/off switch. */
+    Bool,
+    /** One of a fixed set of [ExtensionSetting.options]. */
+    Enum,
+    /** Free-form integer. */
+    Int,
+    /** Free-form text. The default when a type is missing or unrecognized. */
+    Str;
+
+    companion object {
+        fun from(raw: String?): SettingType = when (raw?.lowercase()) {
+            "bool", "boolean", "toggle" -> Bool
+            "enum", "select", "choice" -> Enum
+            "int", "integer", "number" -> Int
+            else -> Str
+        }
+    }
+}
+
+/** One user-configurable option an extension declares in its manifest `settings:` block. */
+data class ExtensionSetting(
+    val key: String,
+    val label: String,
+    val type: SettingType,
+    /** Default value (as a string); null when the manifest omits it. */
+    val default: String? = null,
+    /** Allowed values for [SettingType.Enum]. */
+    val options: List<String> = emptyList(),
+    val description: String? = null,
+)
+
 /** An extension that has been downloaded and unpacked under the app's install root. */
 data class InstalledExtension(
     val id: String,
@@ -197,6 +230,8 @@ data class InstalledExtension(
     val apiMinVersion: Int = 0,
     /** Capability families this extension declares it uses (e.g. "exec", "fs", "workbench"). */
     val apiCapabilities: List<String> = emptyList(),
+    /** User-configurable settings this extension declares (surfaced generically in app Settings). */
+    val settings: List<ExtensionSetting> = emptyList(),
 )
 
 /** The first bundled language that claims [fileName] (by file extension), or null. */

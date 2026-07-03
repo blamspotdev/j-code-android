@@ -229,6 +229,10 @@ import dev.jcode.workbench.LocalDebugSession
 import dev.jcode.workbench.LocalExtensionInstallPhases
 import dev.jcode.workbench.LocalSetupTerminalSessionId
 import dev.jcode.design.PerformanceSettings
+import dev.jcode.design.ExtensionSettingSpec
+import dev.jcode.design.ExtensionSettingsGroup
+import dev.jcode.design.ExtensionSettingsUi
+import dev.jcode.design.LocalExtensionSettingsUi
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.LocalSourceControlSettings
 import dev.jcode.design.SourceControlSettings
@@ -328,6 +332,29 @@ fun JCodeApp(
                 // Turning it off tears down the persisted WebView so it can't linger detached.
                 if (!enabled) AgentChatWebViewHolder.destroy(id)
             },
+        )
+    }
+    val extensionSettings by viewModel.extensionSettings.collectAsStateWithLifecycle()
+    val extensionSettingsUi = remember(installedExtensions, extensionSettings) {
+        ExtensionSettingsUi(
+            groups = installedExtensions.filter { it.settings.isNotEmpty() }.map { ext ->
+                ExtensionSettingsGroup(
+                    extensionId = ext.id,
+                    extensionName = ext.name,
+                    specs = ext.settings.map { s ->
+                        ExtensionSettingSpec(
+                            key = s.key,
+                            label = s.label,
+                            type = s.type.name.lowercase(),
+                            options = s.options,
+                            default = s.default ?: "",
+                            description = s.description,
+                        )
+                    },
+                )
+            },
+            valueOf = viewModel::extensionSettingValue,
+            onChange = viewModel::setExtensionSetting,
         )
     }
     val marketplaceEntries by viewModel.marketplaceEntries.collectAsStateWithLifecycle()
@@ -574,6 +601,7 @@ fun JCodeApp(
         LocalSourceControlSettings provides remember {
             SourceControlSettings(ready = true, onLoad = viewModel::getGitIdentity, onSave = viewModel::setGitIdentity)
         },
+        LocalExtensionSettingsUi provides extensionSettingsUi,
         LocalWebPreviewBrowsers provides webPreviewBrowsers,
         LocalIssueActions provides issueActions,
         LocalDebugEditorState provides DebugEditorState(

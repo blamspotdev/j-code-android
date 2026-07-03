@@ -223,6 +223,11 @@ private fun createChatWebView(
     actions.events?.let { events ->
         scope.launch {
             events.collect { (name, json) ->
+                // A `config` event is scoped to the extension whose setting changed — skip others.
+                if (name == "config") {
+                    val target = runCatching { JSONObject(json).optString("extensionId") }.getOrNull()
+                    if (!target.isNullOrEmpty() && target != extension.id) return@collect
+                }
                 val js = "window.JCode && window.JCode._onEvent && " +
                     "window.JCode._onEvent(${JSONObject.quote(name)}, ${JSONObject.quote(json)})"
                 webView.post { webView.evaluateJavascript(js, null) }

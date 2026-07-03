@@ -100,6 +100,7 @@ class DistroService(
         distroConfig: EffectiveDistroConfig,
         projectHostPath: String?,
         projectTargetPath: String?,
+        projectBinds: List<Pair<String, String>> = emptyList(),
     ) {
         val availableDistros = _environmentState.value.availableDistros.ifEmpty { DistroProfile.defaults() }
         val runtime = DistroRuntimeConfig(
@@ -109,6 +110,7 @@ class DistroService(
                 distroBinds = distroConfig.bind,
                 projectHostPath = projectHostPath,
                 projectTargetPath = projectTargetPath,
+                projectBinds = projectBinds,
             ),
         )
         _environmentState.value = _environmentState.value.copy(runtime = runtime)
@@ -1472,9 +1474,17 @@ class DistroService(
         distroBinds: List<dev.jcode.core.config.BindMount>,
         projectHostPath: String?,
         projectTargetPath: String?,
+        projectBinds: List<Pair<String, String>>,
     ): List<DistroBind> {
         return when {
             distroBinds.isNotEmpty() -> distroBinds.map { DistroBind(host = it.host, target = it.target) }
+            // Bind every project of the current workspace (host dir -> its guest target) so a multi-repo
+            // extension can reach them all at once; keep the selected project's bind first (it's the
+            // primary — see primaryBind()). Dedup by target in case two resolve to the same mount.
+            projectBinds.isNotEmpty() ->
+                projectBinds.sortedByDescending { it.second == projectTargetPath }
+                    .distinctBy { it.second }
+                    .map { DistroBind(host = it.first, target = it.second) }
             !projectHostPath.isNullOrBlank() && !projectTargetPath.isNullOrBlank() -> {
                 listOf(DistroBind(projectHostPath, projectTargetPath))
             }

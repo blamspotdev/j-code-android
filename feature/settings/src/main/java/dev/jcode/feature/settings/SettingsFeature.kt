@@ -39,10 +39,12 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -53,10 +55,13 @@ import dev.jcode.core.config.ConfigScope
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.config.ProjectConfig
 import dev.jcode.core.config.WorkspaceConfig
+import dev.jcode.design.ExtensionSettingSpec
+import dev.jcode.design.ExtensionSettingsUi
 import dev.jcode.design.IconBundle
 import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.LocalEditorDragMovesCursor
+import dev.jcode.design.LocalExtensionSettingsUi
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.LocalRestoreSession
 import dev.jcode.design.LocalSourceControlSettings
@@ -250,6 +255,26 @@ object SettingsFeature {
                     ) { Text("Save identity") }
                     if (saved) {
                         Text("Saved", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+
+            val extensionSettings = LocalExtensionSettingsUi.current
+            if (extensionSettings.groups.isNotEmpty()) {
+                SettingsSectionHeader("Extensions")
+                extensionSettings.groups.forEach { group ->
+                    SettingsCard(
+                        title = group.extensionName,
+                        description = "Preferences for the ${group.extensionName} extension.",
+                        keywords = "extension settings " + group.extensionName + " " +
+                            group.specs.joinToString(" ") { "${it.key} ${it.label}" },
+                    ) {
+                        group.specs.forEachIndexed { index, spec ->
+                            if (index > 0) {
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            }
+                            ExtensionSettingControl(group.extensionId, spec, extensionSettings)
+                        }
                     }
                 }
             }
@@ -667,7 +692,14 @@ private fun SettingsSectionHeader(title: String) {
 }
 
 @Composable
-private fun IdentityField(label: String, value: String, placeholder: String, onValueChange: (String) -> Unit) {
+private fun IdentityField(
+    label: String,
+    value: String,
+    placeholder: String,
+    onCommit: (() -> Unit)? = null,
+    onValueChange: (String) -> Unit,
+) {
+    var wasFocused by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
             text = label,
@@ -693,9 +725,71 @@ private fun IdentityField(label: String, value: String, placeholder: String, onV
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (onCommit == null) {
+                                Modifier
+                            } else {
+                                Modifier.onFocusChanged { st ->
+                                    if (wasFocused && !st.isFocused) onCommit()
+                                    wasFocused = st.isFocused
+                                }
+                            },
+                        ),
                 )
             }
+        }
+    }
+}
+
+/** One control for a generic extension setting; shape depends on the declared [ExtensionSettingSpec.type]. */
+@Composable
+private fun ExtensionSettingControl(
+    extensionId: String,
+    spec: ExtensionSettingSpec,
+    ui: ExtensionSettingsUi,
+) {
+    val current = ui.valueOf(extensionId, spec.key)
+    when (spec.type) {
+        "bool" -> ToggleRow(
+            label = spec.label,
+            supporting = spec.description.orEmpty(),
+            checked = current == "true" || current == "1",
+            onCheckedChange = { ui.onChange(extensionId, spec.key, it.toString()) },
+        )
+
+        "enum" -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(spec.label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            spec.description?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            spec.options.forEach { option ->
+                BundleRow(
+                    name = option.replaceFirstChar { c -> c.uppercaseChar() },
+                    description = "",
+                    selected = current == option,
+                    swatch = emptyList(),
+                    onClick = { ui.onChange(extensionId, spec.key, option) },
+                )
+            }
+        }
+
+        else -> {
+            // Buffer edits locally so fast typing isn't clobbered by the async DataStore round-trip,
+            // and persist once on focus loss instead of on every keystroke (avoids a write/reload storm).
+            var text by remember(extensionId, spec.key) { mutableStateOf(current) }
+            LaunchedEffect(current) { if (current != text) text = current }
+            IdentityField(
+                label = spec.label,
+                value = text,
+                placeholder = spec.default,
+                onCommit = { if (text != current) ui.onChange(extensionId, spec.key, text) },
+            ) { text = it }
         }
     }
 }
@@ -796,13 +890,15 @@ private fun BundleRow(
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            if (description.isNotBlank()) {
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         if (selected) {
             Icon(
