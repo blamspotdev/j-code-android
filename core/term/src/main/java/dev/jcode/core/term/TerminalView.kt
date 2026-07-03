@@ -210,6 +210,16 @@ class TerminalView @JvmOverloads constructor(
     // allocating a String per non-blank cell per frame in onDraw.
     private val glyphBuf = CharArray(2)
 
+    // Reused row buffer for VtParser.readRow (main-thread only): one JNI call per row instead of six
+    // per cell. Layout: VtParser.CELL_STRIDE ints per cell.
+    private var rowBuf = IntArray(0)
+
+    private fun rowBufFor(parser: VtParser): IntArray {
+        val needed = parser.cols * VtParser.CELL_STRIDE
+        if (rowBuf.size < needed) rowBuf = IntArray(needed)
+        return rowBuf
+    }
+
     // Coalesces a burst of parser updates (e.g. fast build output) into at most one repaint per frame.
     private val repaintPending = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -356,9 +366,11 @@ class TerminalView @JvmOverloads constructor(
         val logicalRow = viewRow - scrollOffset
         val maxCol = min(cols, parser.cols)
         if (col >= maxCol) return
+        val buf = rowBufFor(parser)
+        val filled = parser.readRow(logicalRow, buf)
         val sb = StringBuilder(maxCol)
-        for (c in 0 until maxCol) {
-            val cp = parser.getCellCodePoint(logicalRow, c)
+        for (c in 0 until min(maxCol, filled)) {
+            val cp = buf[c * VtParser.CELL_STRIDE]
             sb.append(if (cp == 0 || cp == ' '.code) ' ' else cp.toChar())
         }
         val line = sb.toString()
@@ -380,13 +392,15 @@ class TerminalView @JvmOverloads constructor(
         val endCol = if (selectionStartRow <= selectionEndRow) selectionEndCol else selectionStartCol
         
         val sb = StringBuilder()
-        
+        val buf = rowBufFor(parser)
+
         for (row in startRow..endRow) {
+            val filled = parser.readRow(row, buf)
             val rowStartCol = if (row == startRow) startCol else 0
             val rowEndCol = if (row == endRow) endCol else cols - 1
-            
-            for (col in rowStartCol..rowEndCol.coerceAtMost(parser.cols - 1)) {
-                val cp = parser.getCellCodePoint(row, col)
+
+            for (col in rowStartCol..rowEndCol.coerceAtMost(filled - 1)) {
+                val cp = buf[col * VtParser.CELL_STRIDE]
                 if (cp != 0) {
                     sb.appendCodePoint(cp)
                 }
@@ -395,7 +409,7 @@ class TerminalView @JvmOverloads constructor(
                 sb.append('\n')
             }
         }
-        
+
         return sb.toString()
     }
 
@@ -709,9 +723,11 @@ class TerminalView @JvmOverloads constructor(
 
         // Draw cells. When scrolled back, view row N shows logical row (N - scrollOffset);
         // negative logical rows come from the scrollback buffer.
+        val buf = rowBufFor(parser)
         for (row in 0 until min(rows, parser.rows)) {
             val logicalRow = row - scrollOffset
-            for (col in 0 until min(cols, parser.cols)) {
+            val filled = parser.readRow(logicalRow, buf)
+            for (col in 0 until min(min(cols, filled), parser.cols)) {
                 val x = col * cellWidth
                 val y = row * cellHeight
 
@@ -726,13 +742,15 @@ class TerminalView @JvmOverloads constructor(
                 }
 
                 // Get cell attributes
-                val cp = parser.getCellCodePoint(logicalRow, col)
-                val fgColor = parser.getCellFgColor(logicalRow, col)
-                val bgColor = parser.getCellBgColor(logicalRow, col)
-                val fgMode = parser.getCellFgMode(logicalRow, col)
-                val bgMode = parser.getCellBgMode(logicalRow, col)
-                val attrs = parser.getCellAttrs(logicalRow, col)
-                
+                val base = col * VtParser.CELL_STRIDE
+                val cp = buf[base]
+                val fgColor = buf[base + 1]
+                val bgColor = buf[base + 2]
+                val meta = buf[base + 3]
+                val fgMode = VtParser.metaFgMode(meta)
+                val bgMode = VtParser.metaBgMode(meta)
+                val attrs = VtParser.metaAttrs(meta)
+
                 // Draw background if not default and not selected
                 if (bgMode != 0 && !isInSelection) {
                     val bg = when (bgMode) {

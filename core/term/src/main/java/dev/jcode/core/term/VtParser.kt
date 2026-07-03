@@ -125,15 +125,6 @@ class VtParser(rows: Int, cols: Int) : AutoCloseable {
         }
     
     /**
-     * Get the character at a specific cell, truncated to a 16-bit [Char].
-     * Prefer [getCellCodePoint] for correct rendering of non-BMP characters (emoji).
-     */
-    fun getCellChar(row: Int, col: Int): Char {
-        check(nativeHandle != 0L) { "Parser is closed" }
-        return nativeGetCellChar(row, col).toChar()
-    }
-
-    /**
      * Get the full Unicode codepoint at a specific cell. The native parser decodes UTF-8, so this is
      * the real codepoint (may be > 0xFFFF for emoji / supplementary-plane characters).
      */
@@ -141,51 +132,19 @@ class VtParser(rows: Int, cols: Int) : AutoCloseable {
         check(nativeHandle != 0L) { "Parser is closed" }
         return nativeGetCellChar(row, col)
     }
-    
+
     /**
-     * Get the foreground color of a cell.
-     * Returns -1 for default color, 0-255 for indexed color, or RGB value for truecolor.
+     * Read a whole row of cells in a single JNI call — [CELL_STRIDE] ints per cell:
+     * `out[i*4]` = codepoint, `out[i*4+1]` = fg, `out[i*4+2]` = bg (-1 default, 0-255 indexed, packed
+     * RGB truecolor), `out[i*4+3]` = packed meta decoded via [metaFgMode]/[metaBgMode]/[metaAttrs].
+     * Returns the number of cells written (bounded by the screen width and `out.size / 4`).
+     * Row semantics match [getCellCodePoint]: negative rows address scrollback.
      */
-    fun getCellFgColor(row: Int, col: Int): Int {
+    fun readRow(row: Int, out: IntArray): Int {
         check(nativeHandle != 0L) { "Parser is closed" }
-        return nativeGetCellFgColor(row, col)
+        return nativeReadRow(row, out)
     }
-    
-    /**
-     * Get the background color of a cell.
-     * Returns -1 for default color, 0-255 for indexed color, or RGB value for truecolor.
-     */
-    fun getCellBgColor(row: Int, col: Int): Int {
-        check(nativeHandle != 0L) { "Parser is closed" }
-        return nativeGetCellBgColor(row, col)
-    }
-    
-    /**
-     * Get the color mode for foreground.
-     * 0 = default, 1 = indexed (256-color), 2 = truecolor
-     */
-    fun getCellFgMode(row: Int, col: Int): Int {
-        check(nativeHandle != 0L) { "Parser is closed" }
-        return nativeGetCellFgMode(row, col)
-    }
-    
-    /**
-     * Get the color mode for background.
-     * 0 = default, 1 = indexed (256-color), 2 = truecolor
-     */
-    fun getCellBgMode(row: Int, col: Int): Int {
-        check(nativeHandle != 0L) { "Parser is closed" }
-        return nativeGetCellBgMode(row, col)
-    }
-    
-    /**
-     * Get the attributes of a cell (bold, italic, underline, etc.).
-     */
-    fun getCellAttrs(row: Int, col: Int): Int {
-        check(nativeHandle != 0L) { "Parser is closed" }
-        return nativeGetCellAttrs(row, col)
-    }
-    
+
     /**
      * Clear the dirty flag for all rows.
      * Call this after rendering to track which rows need updating.
@@ -238,11 +197,7 @@ class VtParser(rows: Int, cols: Int) : AutoCloseable {
     private external fun nativeIsAlternateScreen(): Boolean
     private external fun nativeGetScrollbackSize(): Int
     private external fun nativeGetCellChar(row: Int, col: Int): Int
-    private external fun nativeGetCellFgColor(row: Int, col: Int): Int
-    private external fun nativeGetCellBgColor(row: Int, col: Int): Int
-    private external fun nativeGetCellFgMode(row: Int, col: Int): Int
-    private external fun nativeGetCellBgMode(row: Int, col: Int): Int
-    private external fun nativeGetCellAttrs(row: Int, col: Int): Int
+    private external fun nativeReadRow(row: Int, out: IntArray): Int
     private external fun nativeClearDirty()
     private external fun nativeIsRowDirty(row: Int): Boolean
     private external fun nativeNeedsFullRefresh(): Boolean
@@ -266,5 +221,11 @@ class VtParser(rows: Int, cols: Int) : AutoCloseable {
         const val ATTR_INVERSE = 1 shl 5
         const val ATTR_HIDDEN = 1 shl 6
         const val ATTR_STRIKETHROUGH = 1 shl 7
+
+        // [readRow] layout: ints per cell, and decoders for the packed meta int at index i*4+3.
+        const val CELL_STRIDE = 4
+        fun metaFgMode(meta: Int): Int = meta and 0x3
+        fun metaBgMode(meta: Int): Int = (meta shr 2) and 0x3
+        fun metaAttrs(meta: Int): Int = meta shr 4
     }
 }
