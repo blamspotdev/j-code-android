@@ -230,6 +230,8 @@ import dev.jcode.workbench.LocalExtensionInstallPhases
 import dev.jcode.workbench.LocalSetupTerminalSessionId
 import dev.jcode.design.PerformanceSettings
 import dev.jcode.design.LocalPerformanceSettings
+import dev.jcode.design.LocalSourceControlSettings
+import dev.jcode.design.SourceControlSettings
 import dev.jcode.design.WebPreviewBrowsers
 import dev.jcode.design.LocalWebPreviewBrowsers
 import dev.jcode.workbench.AgentChatActions
@@ -569,6 +571,9 @@ fun JCodeApp(
         LocalSetupTerminalSessionId provides setupTerminalSessionId,
         LocalDebugSession provides debugSessionUi,
         LocalPerformanceSettings provides performanceSettings,
+        LocalSourceControlSettings provides remember {
+            SourceControlSettings(ready = true, onLoad = viewModel::getGitIdentity, onSave = viewModel::setGitIdentity)
+        },
         LocalWebPreviewBrowsers provides webPreviewBrowsers,
         LocalIssueActions provides issueActions,
         LocalDebugEditorState provides DebugEditorState(
@@ -1663,10 +1668,13 @@ private fun JCodeShell(
                                     modifier = Modifier.fillMaxSize(),
                                 )
                                 EditorPageKind.ExtensionApp -> {
-                                    val appId = tab.id.substringAfter(MainViewModel.EXT_APP_PREFIX)
+                                    // Tab id is EXT_APP_PREFIX + extId, optionally + "#view" for an alternate screen.
+                                    val rest = tab.id.substringAfter(MainViewModel.EXT_APP_PREFIX)
+                                    val appId = rest.substringBefore("#")
+                                    val view = rest.substringAfter("#", "")
                                     installedExtensions.firstOrNull { it.id == appId }?.let { ext ->
-                                        // Key by id so each extension app gets its own WebView (no reuse across tabs).
-                                        key(ext.id) {
+                                        // Key by id+view so each extension app/view gets its own WebView.
+                                        key(ext.id, view) {
                                             ExtensionWebViewPage(
                                                 extension = ext,
                                                 onExec = managerActions.onExtensionExec,
@@ -1674,6 +1682,7 @@ private fun JCodeShell(
                                                     managerActions.onExtensionApiRequest(ext.id, envelope)
                                                 },
                                                 events = managerActions.extensionEvents,
+                                                route = view,
                                                 modifier = Modifier.fillMaxSize(),
                                             )
                                         }

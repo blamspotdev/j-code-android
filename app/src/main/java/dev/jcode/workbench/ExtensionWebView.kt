@@ -6,6 +6,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -13,9 +14,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.viewinterop.AndroidView
+import dev.jcode.design.JCodeTheme
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.webUiFile
 import kotlinx.coroutines.flow.SharedFlow
@@ -55,6 +60,9 @@ fun ExtensionWebViewPage(
     onExec: suspend (command: String, timeoutMs: Long) -> String,
     onApiRequest: suspend (envelopeJson: String) -> String,
     events: SharedFlow<Pair<String, String>>? = null,
+    /** Optional view route appended to the loaded URL as `#route` so an extension can render an
+     *  alternate screen (e.g. a full-page sign-in) from the same bundle. */
+    route: String = "",
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -85,6 +93,31 @@ fun ExtensionWebViewPage(
     DisposableEffect(extension.id) {
         onDispose { webView?.destroy(); webView = null }
     }
+    // JCode's live theme as CSS variables (--jcode-*), so extension UIs match the app. Injected on
+    // page load and re-injected here whenever the theme (colors) change while the page is open.
+    val colorScheme = MaterialTheme.colorScheme
+    val semantic = JCodeTheme.semanticColors
+    val themeJs = remember(colorScheme, semantic) {
+        fun hex(c: Color): String = String.format("#%06X", 0xFFFFFF and c.toArgb())
+        val vars = listOf(
+            "--jcode-background" to hex(colorScheme.background),
+            "--jcode-surface" to hex(colorScheme.surface),
+            "--jcode-surface-variant" to hex(colorScheme.surfaceVariant),
+            "--jcode-on-surface" to hex(colorScheme.onSurface),
+            "--jcode-on-surface-variant" to hex(colorScheme.onSurfaceVariant),
+            "--jcode-outline" to hex(colorScheme.outline),
+            "--jcode-outline-variant" to hex(colorScheme.outlineVariant),
+            "--jcode-primary" to hex(colorScheme.primary),
+            "--jcode-on-primary" to hex(colorScheme.onPrimary),
+            "--jcode-error" to hex(colorScheme.error),
+            "--jcode-success" to hex(semantic.success),
+            "--jcode-warning" to hex(semantic.warning),
+        )
+        val sets = vars.joinToString("") { (k, v) -> "r.setProperty('$k','$v');" }
+        "(function(){try{var r=document.documentElement.style;$sets}catch(e){}})()"
+    }
+    val themeJsState = rememberUpdatedState(themeJs)
+    LaunchedEffect(themeJs) { webView?.post { webView?.evaluateJavascript(themeJs, null) } }
     // Relay host events to the page while this extension's WebView is alive. Pages that care must
     // define window.JCode._onEvent; on (re)load they should pull current state (workbench.activeFile)
     // since events published while the tab was backgrounded are not replayed.
@@ -109,7 +142,11 @@ fun ExtensionWebViewPage(
                 // runtime (opencode on 127.0.0.1); the null origin would otherwise be CORS-blocked.
                 @Suppress("DEPRECATION")
                 settings.allowUniversalAccessFromFileURLs = true
-                webViewClient = WebViewClient()
+                webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView, url: String) {
+                        view.evaluateJavascript(themeJsState.value, null)
+                    }
+                }
                 // Claim touches that start in the WebView so the nav drawer's swipe-to-open can't steal
                 // a scroll/drag (otherwise scrolling the extension UI pops the left drawer). The WebView
                 // still handles the gesture itself (listener returns false).
@@ -122,7 +159,7 @@ fun ExtensionWebViewPage(
                 addJavascriptInterface(bridge, "JCodeNative")
                 val file = extension.webUiFile
                 if (file != null) {
-                    loadUrl("file://${file.absolutePath}")
+                    loadUrl("file://${file.absolutePath}" + if (route.isNotBlank()) "#$route" else "")
                 } else {
                     loadData(NO_UI_HTML, "text/html", "utf-8")
                 }

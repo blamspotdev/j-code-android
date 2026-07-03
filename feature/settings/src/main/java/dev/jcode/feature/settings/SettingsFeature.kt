@@ -1,5 +1,6 @@
 package dev.jcode.feature.settings
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -58,6 +59,7 @@ import dev.jcode.design.JCodeIcon
 import dev.jcode.design.LocalEditorDragMovesCursor
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.LocalRestoreSession
+import dev.jcode.design.LocalSourceControlSettings
 import dev.jcode.design.WebPreviewBrowsers
 import dev.jcode.design.LocalWebPreviewBrowsers
 import dev.jcode.design.LocalTabCloseButtonSetting
@@ -219,6 +221,37 @@ object SettingsFeature {
                     checked = restoreSessionSetting.enabled,
                     onCheckedChange = restoreSessionSetting.onChange,
                 )
+            }
+
+            SettingsSectionHeader("Source Control")
+            SettingsCard(
+                title = "Git identity",
+                description = "The author name and email recorded on your commits. Applies to all git in the " +
+                    "runtime, and is also editable from the Source Control sign-in page.",
+                keywords = "git source control scm identity name email commit author github sign in credentials",
+            ) {
+                val scm = LocalSourceControlSettings.current
+                var name by rememberSaveable { mutableStateOf("") }
+                var email by rememberSaveable { mutableStateOf("") }
+                var loaded by rememberSaveable { mutableStateOf(false) }
+                var saved by rememberSaveable { mutableStateOf(false) }
+                LaunchedEffect(scm) {
+                    if (!loaded) {
+                        val (n, e) = scm.onLoad()
+                        name = n; email = e; loaded = true
+                    }
+                }
+                IdentityField(label = "Name", value = name, placeholder = "Your name") { name = it; saved = false }
+                IdentityField(label = "Email", value = email, placeholder = "you@example.com") { email = it; saved = false }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FilledTonalButton(
+                        onClick = { scm.onSave(name.trim(), email.trim()); saved = true },
+                        enabled = name.isNotBlank() && email.isNotBlank(),
+                    ) { Text("Save identity") }
+                    if (saved) {
+                        Text("Saved", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
             }
 
             SettingsSectionHeader("Performance")
@@ -631,6 +664,40 @@ private fun SettingsSectionHeader(title: String) {
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier.padding(top = 6.dp, start = 2.dp),
     )
+}
+
+@Composable
+private fun IdentityField(label: String, value: String, placeholder: String, onValueChange: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(8.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp)) {
+                if (value.isEmpty()) {
+                    Text(
+                        text = placeholder,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    )
+                }
+                BasicTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+    }
 }
 
 @Composable

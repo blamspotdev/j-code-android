@@ -1422,6 +1422,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Open an extension's web frontend at a named view (loaded as `#view`) as a full editor page and
+     *  bring the editor to front — used by the `workbench.openView` Extension API. */
+    fun openExtensionViewPage(extensionId: String, view: String) {
+        _bringEditorToFront.tryEmit(Unit)
+        val ext = _installedExtensions.value.firstOrNull { it.id == extensionId }
+        val viewLabel = when (view) { "github" -> "GitHub"; "" -> null; else -> view }
+        openDetailPage(EXT_APP_PREFIX + extensionId + "#" + view, EditorPageKind.ExtensionApp) {
+            listOfNotNull(ext?.name, viewLabel).joinToString(" · ").ifBlank { "View" }
+        }
+    }
+
+    /** The current global git identity (name, email) from the runtime, or empty strings. */
+    suspend fun getGitIdentity(): Pair<String, String> {
+        val name = distroService.exec("git config --global --get user.name 2>/dev/null", user = "root").stdout.trim()
+        val email = distroService.exec("git config --global --get user.email 2>/dev/null", user = "root").stdout.trim()
+        return name to email
+    }
+
+    /** Set the global git identity in the runtime (author of all commits). */
+    fun setGitIdentity(name: String, email: String) {
+        viewModelScope.launch {
+            fun q(s: String) = "'" + s.replace("'", "'\\''") + "'"
+            distroService.exec(
+                "git config --global user.name ${q(name)} && git config --global user.email ${q(email)}",
+                user = "root",
+            )
+        }
+    }
+
     /** Run a command in the Linux runtime for an extension frontend; returns a JSON result payload.
      *  Runs as root: manager extensions (SQL Client, VM Manager) need privilege to install/run software. */
     suspend fun runtimeExecJson(command: String, timeoutMs: Long): String {
@@ -1541,6 +1570,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val requiredCapability = if (family == "service") "exec" else family
         if (family != "api" && !capabilityGranted(ext, requiredCapability)) {
             return apiError("capability '$requiredCapability' is not declared by ${ext.id} or was revoked by the user")
+        }
+        // An extension opening one of ITS OWN views in the editor — needs the caller id, which the
+        // stateless dispatch below doesn't have.
+        if (type == "workbench.openView") {
+            openExtensionViewPage(ext.id, payload.optString("view"))
+            return apiOk(JSONObject())
         }
         return runCatching { dispatchExtensionApi(type, payload) }
             .getOrElse { apiError(it.message ?: "internal error") }
