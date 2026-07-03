@@ -125,7 +125,7 @@ internal enum class WorkbenchTool(
 ) {
     Explorer("Explorer", JCodeIcon.Files, "Files"),
     Search("Search", JCodeIcon.Search, "Find"),
-    Scm("SCM", JCodeIcon.Scm, "SCM", available = false),
+    Scm("SCM", JCodeIcon.Scm, "SCM"),
     RunDebug("Run/Debug", JCodeIcon.Run, "Run"),
     Extensions("Extensions", JCodeIcon.Extensions, "Ext"),
     /** SDKs + language servers + debug engines, merged into one searchable/filterable catalog. */

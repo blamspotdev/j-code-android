@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +46,8 @@ import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.isUpdateAvailable
 import dev.jcode.feature.marketplace.otherAuthors
 import dev.jcode.feature.marketplace.primaryAuthor
+import dev.jcode.workbench.ExtensionWebViewPage
+import kotlinx.coroutines.flow.SharedFlow
 import java.io.File
 
 @Composable
@@ -175,6 +178,51 @@ internal fun DbManagerPanel(
                 }
             }
         }
+    }
+}
+
+/** True when a source-control client extension (e.g. Source Control) is installed, so the left-drawer
+ *  "SCM" tool should be shown. */
+internal fun List<InstalledExtension>.hasScmClient(): Boolean =
+    any { it.type == ExtensionType.Scm }
+
+/**
+ * Left-drawer "Source Control" panel: embeds the installed SCM extension's web frontend directly
+ * (VS Code SCM-sidebar style), wired to the Linux runtime so it can drive git via the Extension API.
+ */
+@Composable
+internal fun ScmPanel(
+    installed: List<InstalledExtension>,
+    onExec: suspend (command: String, timeoutMs: Long) -> String,
+    onApiRequest: suspend (extensionId: String, envelopeJson: String) -> String,
+    events: SharedFlow<Pair<String, String>>?,
+    modifier: Modifier = Modifier,
+) {
+    val ext = installed.firstOrNull { it.type == ExtensionType.Scm && it.hasWebUi }
+    if (ext == null) {
+        Column(
+            modifier = modifier.fillMaxSize().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Source Control", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Install a Source Control extension from Extensions to manage git here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
+    // Key by id so the panel owns one WebView for the installed SCM extension; it reloads git state
+    // whenever the user switches back to this tool.
+    key(ext.id) {
+        ExtensionWebViewPage(
+            extension = ext,
+            onExec = onExec,
+            onApiRequest = { envelope -> onApiRequest(ext.id, envelope) },
+            events = events,
+            modifier = modifier.fillMaxSize(),
+        )
     }
 }
 

@@ -106,6 +106,7 @@ private fun fallbackColor(type: ExtensionType): Color = when (type) {
     ExtensionType.Formatter -> Color(0xFFE8912D)
     ExtensionType.App -> Color(0xFF8B5CF6)
     ExtensionType.DbManager -> Color(0xFF0EA5E9)
+    ExtensionType.Scm -> Color(0xFFF05133)
     ExtensionType.Unknown -> Color(0xFF6B7280)
 }
 

@@ -11,6 +11,8 @@ enum class ExtensionType {
     App,
     /** Like [App], but its UI is a database manager surfaced under the "DB Managers" drawer. */
     DbManager,
+    /** Like [App], but its UI is a source-control manager surfaced in the left-drawer "SCM" panel. */
+    Scm,
     Unknown;
 
     companion object {
@@ -20,6 +22,7 @@ enum class ExtensionType {
             "formatter" -> Formatter
             "app", "tool", "runtime" -> App
             "dbmanager", "db-manager", "database" -> DbManager
+            "scm", "source-control", "sourcecontrol", "vcs" -> Scm
             else -> Unknown
         }
     }

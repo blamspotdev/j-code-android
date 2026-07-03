@@ -215,6 +215,8 @@ import dev.jcode.workbench.ExtensionWebViewPage
 import dev.jcode.workbench.SearchToolPanel
 import dev.jcode.workbench.marketplace.DbManagerPanel
 import dev.jcode.workbench.marketplace.hasDbManagerClient
+import dev.jcode.workbench.marketplace.ScmPanel
+import dev.jcode.workbench.marketplace.hasScmClient
 import dev.jcode.workbench.marketplace.ExtensionDetailPage
 import dev.jcode.workbench.marketplace.ExtensionPermissionsPage
 import dev.jcode.workbench.marketplace.LocalExtensionActivation
@@ -795,6 +797,13 @@ private fun JCodeShell(
     val dbManagerAvailable = installedExtensions.hasDbManagerClient()
     LaunchedEffect(dbManagerAvailable) {
         if (!dbManagerAvailable && selectedTool == WorkbenchTool.DbManager) {
+            selectedTool = WorkbenchTool.Explorer
+        }
+    }
+    // The "SCM" tool is likewise hidden until a source-control client extension is installed.
+    val scmAvailable = installedExtensions.hasScmClient()
+    LaunchedEffect(scmAvailable) {
+        if (!scmAvailable && selectedTool == WorkbenchTool.Scm) {
             selectedTool = WorkbenchTool.Explorer
         }
     }
@@ -2003,6 +2012,7 @@ private fun WorkspacePanel(
                 selectedProject = selectedProject,
                 inUserWorkspace = inUserWorkspace,
                 dbManagerAvailable = installedExtensions.hasDbManagerClient(),
+                scmAvailable = installedExtensions.hasScmClient(),
                 onSelectTool = onSelectTool,
                 onCreateProject = onCreateProject,
                 onOpenExternalFolder = onOpenExternalFolder,
@@ -2071,14 +2081,12 @@ private fun WorkspacePanel(
                         modifier = Modifier.fillMaxSize(),
                     )
 
-                    WorkbenchTool.Scm -> ToolPanelPlaceholder(
-                        title = "Source Control",
-                        icon = jcIcon(JCodeIcon.Scm),
-                        lines = listOf(
-                            "Show branch, dirty files, staged changes, and last sync status.",
-                            "A better tablet/desktop layout is a split staged/unstaged list with inline diff preview.",
-                            "The status bar should eventually mirror this panel's active branch and error state.",
-                        ),
+                    WorkbenchTool.Scm -> ScmPanel(
+                        installed = installedExtensions,
+                        onExec = managerActions.onExtensionExec,
+                        onApiRequest = managerActions.onExtensionApiRequest,
+                        events = managerActions.extensionEvents,
+                        modifier = Modifier.fillMaxSize(),
                     )
 
                     WorkbenchTool.RunDebug -> Column(modifier = Modifier.fillMaxSize()) {
@@ -2162,6 +2170,7 @@ private fun WorkspaceHeader(
     selectedProject: Project?,
     inUserWorkspace: Boolean,
     dbManagerAvailable: Boolean,
+    scmAvailable: Boolean,
     onSelectTool: (WorkbenchTool) -> Unit,
     onCreateProject: () -> Unit,
     onOpenExternalFolder: () -> Unit,
@@ -2254,9 +2263,13 @@ private fun WorkspaceHeader(
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            // "DB Managers" only shows once a database-manager client extension is installed.
+            // "DB Managers" and "SCM" only show once a matching client extension is installed.
             WorkbenchTool.entries
-                .filter { it.available && (it != WorkbenchTool.DbManager || dbManagerAvailable) }
+                .filter {
+                    it.available &&
+                        (it != WorkbenchTool.DbManager || dbManagerAvailable) &&
+                        (it != WorkbenchTool.Scm || scmAvailable)
+                }
                 .forEach { tool ->
                     SidebarToolButton(
                         tool = tool,
@@ -2498,51 +2511,6 @@ private fun ProjectRoster(
                 TextButton(onClick = { renameTarget = null }) { Text("Cancel") }
             },
         )
-    }
-}
-
-@Composable
-private fun ToolPanelPlaceholder(
-    title: String,
-    icon: ImageVector,
-    lines: List<String>,
-) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        item {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f))
-                    .padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Column {
-                        Text(title, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            text = "Planned surface",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                lines.forEach { line ->
-                    Text(
-                        text = line,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
     }
 }
 
