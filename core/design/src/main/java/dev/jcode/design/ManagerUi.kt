@@ -51,6 +51,8 @@ fun ManagerStatusChip(
     checking: Boolean = false,
     checkingLabel: String = "Checking…",
     modifier: Modifier = Modifier,
+    /** Show a small progress ring alongside the label while [checking] (detail header only). */
+    spinner: Boolean = false,
 ) {
     val (text, active) = when {
         checking -> checkingLabel to false
@@ -66,14 +68,26 @@ fun ManagerStatusChip(
             MaterialTheme.colorScheme.surface.copy(alpha = 0.65f)
         },
     ) {
-        Text(
-            text = text,
+        Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (checking && spinner) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(11.dp),
+                    strokeWidth = 1.5.dp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -433,7 +447,7 @@ fun ManagerDetailScreen(
                     if (subtitle.isNotBlank()) {
                         Text(text = subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    ManagerStatusChip(status = status, checking = busy, checkingLabel = busyLabel ?: "Checking…")
+                    ManagerStatusChip(status = status, checking = busy, checkingLabel = busyLabel ?: "Checking…", spinner = true)
                 }
             }
         }
