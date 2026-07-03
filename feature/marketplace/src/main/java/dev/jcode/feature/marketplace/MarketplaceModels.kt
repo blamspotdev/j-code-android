@@ -232,6 +232,9 @@ data class InstalledExtension(
     val apiCapabilities: List<String> = emptyList(),
     /** User-configurable settings this extension declares (surfaced generically in app Settings). */
     val settings: List<ExtensionSetting> = emptyList(),
+    /** Toolchains/extensions this extension requires (installed with it) or suggests. */
+    val requires: ExtensionDeps = ExtensionDeps.EMPTY,
+    val suggests: ExtensionDeps = ExtensionDeps.EMPTY,
 )
 
 /** The first bundled language that claims [fileName] (by file extension), or null. */

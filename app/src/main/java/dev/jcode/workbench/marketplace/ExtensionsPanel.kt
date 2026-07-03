@@ -273,7 +273,9 @@ internal fun ExtensionDetailPage(
         onUpdate = { entry?.let(onInstall) },
         onUninstall = { onUninstall(id) },
         onVerify = {},
-        onManage = if (installed?.hasWebUi == true) {
+        // The Source Control UI is embedded in the left-drawer SCM panel, so a full-page "Manage" tab
+        // would just duplicate it. (Other web-UI extensions still get Manage.)
+        onManage = if (installed != null && installed.hasWebUi && installed.type != ExtensionType.Scm) {
             { onOpenApp(installed.id) }
         } else {
             null
@@ -295,13 +297,17 @@ internal fun ExtensionDetailPage(
                     samples.forEach { sample -> SampleBlock(sample) }
                 }
             }
-            if (entry != null && (!entry.requires.isEmpty || !entry.suggests.isEmpty)) {
+            // Prefer the installed manifest's deps (authoritative once installed); fall back to the
+            // marketplace entry so the section also shows before install.
+            val requires = installed?.requires ?: entry?.requires ?: ExtensionDeps.EMPTY
+            val suggests = installed?.suggests ?: entry?.suggests ?: ExtensionDeps.EMPTY
+            if (!requires.isEmpty || !suggests.isEmpty) {
                 ManagerSectionCard(
                     title = "Requirements",
-                    description = "Required items are installed together with this extension.",
+                    description = "Toolchains and extensions this extension needs or suggests.",
                 ) {
-                    RequirementList("Required", entry.requires, available, installedIds, autoInstalled = true)
-                    RequirementList("Suggested", entry.suggests, available, installedIds, autoInstalled = false)
+                    RequirementList("Required", requires, available, installedIds, autoInstalled = true)
+                    RequirementList("Suggested", suggests, available, installedIds, autoInstalled = false)
                 }
             }
         },

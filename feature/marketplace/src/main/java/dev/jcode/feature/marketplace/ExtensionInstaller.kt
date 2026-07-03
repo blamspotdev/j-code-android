@@ -236,6 +236,8 @@ class ExtensionInstaller internal constructor(context: Context) {
             apiMinVersion = (map["api"] as? Map<*, *>)?.toStringKeyMap()?.str("minApiVersion")?.toIntOrNull() ?: 0,
             apiCapabilities = (map["api"] as? Map<*, *>)?.toStringKeyMap()?.strList("capabilities") ?: emptyList(),
             settings = settings,
+            requires = parseDeps(map["requires"]),
+            suggests = parseDeps(map["suggests"]),
         )
     }
 
