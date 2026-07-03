@@ -1,7 +1,10 @@
 package dev.jcode.core.search
 
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flow
 import java.io.File
 import java.util.regex.Pattern
@@ -48,15 +51,44 @@ data class SearchOptions(
 
 /**
  * Search engine that provides text search across project files.
- * Uses ripgrep (rg) when available via distro, falls back to in-process Java search.
+ * Uses the native ripgrep FFI (libripgrep_ffi.so) when available, falling back to an in-process
+ * Kotlin walk when it isn't (CMake stub build / load failure).
  */
 class SearchEngine {
 
     /**
-     * Search for matches in a directory using an in-process Java implementation.
-     * Results are emitted as a flow for progressive display.
+     * Search for matches under [rootDir]. Results stream as a flow for progressive display.
+     * Prefers the native ripgrep engine; transparently falls back to the Kotlin implementation.
      */
-    fun search(rootDir: File, options: SearchOptions): Flow<SearchMatch> = flow {
+    fun search(rootDir: File, options: SearchOptions): Flow<SearchMatch> =
+        if (NativeSearch.isAvailable) nativeSearch(rootDir, options) else javaSearch(rootDir, options)
+
+    private fun nativeSearch(rootDir: File, options: SearchOptions): Flow<SearchMatch> = channelFlow {
+        withContext(Dispatchers.IO) {
+            NativeSearch.search(
+                root = rootDir.absolutePath,
+                query = options.query,
+                flags = NativeSearch.flagsOf(options),
+                includeGlobs = options.includePatterns.toTypedArray(),
+                excludeGlobs = options.excludePatterns.toTypedArray(),
+                maxResults = options.maxResults,
+            ) { filePath, lineNumber, columnStart, columnEnd, lineText ->
+                val matchText =
+                    if (columnStart in 0..columnEnd && columnEnd <= lineText.length) {
+                        lineText.substring(columnStart, columnEnd)
+                    } else {
+                        ""
+                    }
+                // trySendBlocking applies backpressure on the search thread and fails once the
+                // collector cancels/closes the channel, which tells the native side to stop.
+                trySendBlocking(
+                    SearchMatch(filePath, lineNumber, columnStart, columnEnd, lineText, matchText)
+                ).isSuccess
+            }
+        }
+    }.buffer(1024)
+
+    private fun javaSearch(rootDir: File, options: SearchOptions): Flow<SearchMatch> = flow {
         val pattern = compilePattern(options)
         var resultCount = 0
 
@@ -93,38 +125,6 @@ class SearchEngine {
                     // Skip files that can't be read (binary, permission, etc.)
                 }
             }
-    }
-
-    /**
-     * Search using ripgrep via a command executor (PTY or process).
-     * Results are emitted as a flow for progressive display.
-     */
-    fun searchWithRipgrep(
-        rootDir: String,
-        options: SearchOptions,
-        executor: suspend (command: String) -> String,
-    ): Flow<SearchMatch> = flow {
-        val args = buildRipgrepArgs(options)
-        val command = "rg ${args.joinToString(" ")} -- '${escapeForShell(options.query)}' '$rootDir'"
-
-        try {
-            val output = executor(command)
-            var resultCount = 0
-
-            output.lines().forEach { line ->
-                if (resultCount >= options.maxResults || line.isBlank()) return@forEach
-
-                // ripgrep --json format: {"type":"match","data":{...}}
-                // ripgrep default format: filepath:line:col:text
-                val match = parseRipgrepLine(line, rootDir)
-                if (match != null) {
-                    emit(match)
-                    resultCount++
-                }
-            }
-        } catch (e: Exception) {
-            // ripgrep not available or failed
-        }
     }
 
     /**
@@ -244,48 +244,6 @@ class SearchEngine {
         return path.matches(Regex(regex))
     }
 
-    private fun buildRipgrepArgs(options: SearchOptions): List<String> {
-        val args = mutableListOf("--line-number", "--column", "--no-heading")
-
-        if (!options.caseSensitive) args.add("--ignore-case")
-        if (options.isRegex) args.add("--regexp")
-        if (options.wholeWord) args.add("--word-regexp")
-        if (options.includeHidden) args.add("--hidden")
-        if (options.maxResults > 0) args.addAll(listOf("--max-count", "${options.maxResults}"))
-
-        for (pattern in options.includePatterns) {
-            args.addAll(listOf("--glob", pattern))
-        }
-        for (pattern in options.excludePatterns) {
-            args.addAll(listOf("--glob", "!$pattern"))
-        }
-
-        return args
-    }
-
-    private fun parseRipgrepLine(line: String, rootDir: String): SearchMatch? {
-        // Format: filepath:line:col:text
-        val parts = line.split(":", limit = 4)
-        if (parts.size < 4) return null
-
-        val filePath = parts[0].removePrefix(rootDir).removePrefix("/").removePrefix("\\")
-        val lineNumber = parts[1].toIntOrNull()?.minus(1) ?: return null
-        val column = parts[2].toIntOrNull()?.minus(1) ?: return null
-        val lineText = parts[3]
-
-        return SearchMatch(
-            filePath = filePath,
-            lineNumber = lineNumber,
-            columnStart = column,
-            columnEnd = column + lineText.length,
-            lineText = lineText,
-            matchText = lineText,
-        )
-    }
-
-    private fun escapeForShell(text: String): String {
-        return text.replace("'", "'\\''")
-    }
 }
 
 /**
