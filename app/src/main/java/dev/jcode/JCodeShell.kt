@@ -3250,12 +3250,17 @@ private fun TerminalSidebarContent(
                                 },
                             )
                             // Close button (hidden via setting to avoid accidental closes; the tab's
-                            // long-press menu still closes it).
+                            // long-press menu still closes it). A plain clickable Box keeps the touch
+                            // target tight (18dp) — an IconButton's enforced 48dp minimum would spill
+                            // over the title in this compact tab and close it on a title tap.
                             if (!LocalTabCloseButtonSetting.current.hidden) {
                                 JcTooltip("Close terminal") {
-                                    IconButton(
-                                        onClick = { onRemoveTerminalSession(sessionId) },
-                                        modifier = Modifier.size(18.dp),
+                                    Box(
+                                        modifier = Modifier
+                                            .size(18.dp)
+                                            .clip(CircleShape)
+                                            .clickable { onRemoveTerminalSession(sessionId) },
+                                        contentAlignment = Alignment.Center,
                                     ) {
                                         Text(
                                             text = "×",
