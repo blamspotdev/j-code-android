@@ -213,6 +213,7 @@ import dev.jcode.workbench.marketplace.LocalExtensionCapabilities
 import dev.jcode.workbench.marketplace.LocalExtensionKeepAlive
 import dev.jcode.workbench.ExtensionWebViewPage
 import dev.jcode.workbench.marketplace.DbManagerPanel
+import dev.jcode.workbench.marketplace.hasDbManagerClient
 import dev.jcode.workbench.marketplace.ExtensionDetailPage
 import dev.jcode.workbench.marketplace.ExtensionPermissionsPage
 import dev.jcode.workbench.marketplace.LocalExtensionActivation
@@ -782,6 +783,14 @@ private fun JCodeShell(
     var selectedTool by rememberSaveable { mutableStateOf(WorkbenchTool.Explorer) }
     // A previously-persisted selection may point at a now-hidden destination; fall back to Explorer.
     LaunchedEffect(Unit) { if (!selectedTool.available) selectedTool = WorkbenchTool.Explorer }
+    // The "DB Managers" tool is hidden until a DB-manager client extension is installed; if it's
+    // selected when none is present (or the client is removed), fall back to the Explorer.
+    val dbManagerAvailable = installedExtensions.hasDbManagerClient()
+    LaunchedEffect(dbManagerAvailable) {
+        if (!dbManagerAvailable && selectedTool == WorkbenchTool.DbManager) {
+            selectedTool = WorkbenchTool.Explorer
+        }
+    }
 
     // Syntax highlighting for the active file: the installed language pack if one matches, else the
     // built-in Markdown pack (.md) or a generic fallback, so every file gets baseline coloring.
@@ -1978,6 +1987,7 @@ private fun WorkspacePanel(
                 workspace = workspace,
                 selectedProject = selectedProject,
                 inUserWorkspace = inUserWorkspace,
+                dbManagerAvailable = installedExtensions.hasDbManagerClient(),
                 onSelectTool = onSelectTool,
                 onCreateProject = onCreateProject,
                 onOpenExternalFolder = onOpenExternalFolder,
@@ -2139,6 +2149,7 @@ private fun WorkspaceHeader(
     workspace: Workspace?,
     selectedProject: Project?,
     inUserWorkspace: Boolean,
+    dbManagerAvailable: Boolean,
     onSelectTool: (WorkbenchTool) -> Unit,
     onCreateProject: () -> Unit,
     onOpenExternalFolder: () -> Unit,
@@ -2231,13 +2242,16 @@ private fun WorkspaceHeader(
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            WorkbenchTool.entries.filter { it.available }.forEach { tool ->
-                SidebarToolButton(
-                    tool = tool,
-                    selected = selectedTool == tool,
-                    onClick = { onSelectTool(tool) },
-                )
-            }
+            // "DB Managers" only shows once a database-manager client extension is installed.
+            WorkbenchTool.entries
+                .filter { it.available && (it != WorkbenchTool.DbManager || dbManagerAvailable) }
+                .forEach { tool ->
+                    SidebarToolButton(
+                        tool = tool,
+                        selected = selectedTool == tool,
+                        onClick = { onSelectTool(tool) },
+                    )
+                }
         }
     }
 }

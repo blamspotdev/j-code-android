@@ -123,6 +123,11 @@ internal fun ExtensionsPanel(
     }
 }
 
+/** True when a database-manager client extension (e.g. SQL Client) is installed, so the left-drawer
+ *  "DB Managers" tool should be shown. */
+internal fun List<InstalledExtension>.hasDbManagerClient(): Boolean =
+    any { it.type == ExtensionType.DbManager }
+
 /** Left-drawer "DB Managers" panel: installed database-manager extensions; tap to open their UI. */
 @Composable
 internal fun DbManagerPanel(
