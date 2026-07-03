@@ -1256,15 +1256,30 @@ class DistroService(
     /** Long-running catalog actions go through the Setup terminal when wired; verify stays quiet so
      *  its exit code and output remain capturable. */
     private suspend fun execCatalogAction(label: String, script: String, timeoutMs: Long): ExecResult {
+        val prepared = withAptSelfHeal(script)
         val runner = interactiveCatalogRunner
         if (runner != null) {
             val runtime = _environmentState.value.runtime
             val ensure = ensureDistroUser(runtime.selectedDistro.id, runtime.user)
             if (!ensure.succeeded) return ensure
-            runner(label, script, timeoutMs)?.let { return it }
+            runner(label, prepared, timeoutMs)?.let { return it }
         }
-        return execCatalogScript(script, timeoutMs)
+        return execCatalogScript(prepared, timeoutMs)
     }
+
+    /**
+     * apt-based catalog commands fail outright if dpkg was left half-configured by a previously
+     * interrupted install (the app killed / device slept mid-`apt`) — every later install then aborts
+     * with "dpkg was interrupted, you must manually run 'dpkg --configure -a'". Prepend that recovery
+     * so the runtime self-heals. It is a no-op (silent, instant) when dpkg is already clean, and is
+     * only added for scripts that actually use apt/dpkg.
+     */
+    private fun withAptSelfHeal(script: String): String =
+        if (script.contains("apt-get") || script.contains("apt ") || script.contains("dpkg")) {
+            "dpkg --configure -a 2>/dev/null || true\n$script"
+        } else {
+            script
+        }
 
     /**
      * Execute a command inside the distro using proot.
