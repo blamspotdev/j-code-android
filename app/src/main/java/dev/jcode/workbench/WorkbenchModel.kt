@@ -123,7 +123,7 @@ internal enum class WorkbenchTool(
     val available: Boolean = true,
 ) {
     Explorer("Explorer", JCodeIcon.Files, "Files"),
-    Search("Search", JCodeIcon.Search, "Find", available = false),
+    Search("Search", JCodeIcon.Search, "Find"),
     Scm("SCM", JCodeIcon.Scm, "SCM", available = false),
     RunDebug("Run/Debug", JCodeIcon.Run, "Run"),
     Extensions("Extensions", JCodeIcon.Extensions, "Ext"),

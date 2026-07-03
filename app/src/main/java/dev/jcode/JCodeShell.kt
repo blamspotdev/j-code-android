@@ -212,6 +212,7 @@ import dev.jcode.workbench.marketplace.ExtensionKeepAliveSetting
 import dev.jcode.workbench.marketplace.LocalExtensionCapabilities
 import dev.jcode.workbench.marketplace.LocalExtensionKeepAlive
 import dev.jcode.workbench.ExtensionWebViewPage
+import dev.jcode.workbench.SearchToolPanel
 import dev.jcode.workbench.marketplace.DbManagerPanel
 import dev.jcode.workbench.marketplace.hasDbManagerClient
 import dev.jcode.workbench.marketplace.ExtensionDetailPage
@@ -599,6 +600,7 @@ fun JCodeApp(
         onOpenProject = viewModel::openProject,
         onRenameProject = viewModel::renameProject,
         onOpenFile = viewModel::openFile,
+        onOpenPathAtLine = viewModel::openFileByGuestPath,
         onSelectEditorTab = viewModel::selectEditorTab,
         onCloseEditorTab = viewModel::closeEditorTab,
         onSaveActiveTab = viewModel::saveActiveTab,
@@ -725,6 +727,7 @@ private fun JCodeShell(
     onOpenProject: (Project) -> Unit,
     onRenameProject: (Long, String) -> Unit,
     onOpenFile: (dev.jcode.fs.FsNode) -> Unit,
+    onOpenPathAtLine: (String) -> Unit,
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
     onSaveActiveTab: () -> Unit,
@@ -1372,6 +1375,7 @@ private fun JCodeShell(
                 onSelectTool = onSelectWorkbenchTool,
                 onOpenExternalFolder = { openFolderLauncher.launch(null) },
                 onOpenFile = onOpenFile,
+                onOpenPathAtLine = onOpenPathAtLine,
                 onOpenProjectConfig = onOpenProjectConfig,
                 onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                 onAutoSetup = onAutoSetup,
@@ -1691,6 +1695,7 @@ private fun JCodeShell(
                             onSelectTool = onSelectWorkbenchTool,
                             onOpenExternalFolder = { openFolderLauncher.launch(null) },
                             onOpenFile = onOpenFile,
+                            onOpenPathAtLine = onOpenPathAtLine,
                             onOpenProjectConfig = onOpenProjectConfig,
                             onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                             onAutoSetup = onAutoSetup,
@@ -1950,6 +1955,7 @@ private fun WorkspacePanel(
     onSelectTool: (WorkbenchTool) -> Unit,
     onOpenExternalFolder: () -> Unit,
     onOpenFile: (dev.jcode.fs.FsNode) -> Unit,
+    onOpenPathAtLine: (String) -> Unit,
     onOpenProjectConfig: () -> Unit,
     onOpenEnvironmentWizard: () -> Unit,
     onAutoSetup: () -> Unit,
@@ -2050,14 +2056,10 @@ private fun WorkspacePanel(
                         }
                     }
 
-                    WorkbenchTool.Search -> ToolPanelPlaceholder(
-                        title = "Search",
-                        icon = jcIcon(JCodeIcon.Search),
-                        lines = listOf(
-                            "Quick file search, symbol search, and ripgrep results live here.",
-                            "Suggested UI: recent queries, include/exclude globs, and pinned result groups.",
-                            "Best next widgets: match counters, replace preview, and staged search history.",
-                        ),
+                    WorkbenchTool.Search -> SearchToolPanel(
+                        project = selectedProject,
+                        onOpenResult = onOpenPathAtLine,
+                        modifier = Modifier.fillMaxSize(),
                     )
 
                     WorkbenchTool.Scm -> ToolPanelPlaceholder(
