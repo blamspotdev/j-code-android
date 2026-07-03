@@ -2296,7 +2296,10 @@ private fun WorkspaceEmptyState(
         Box(
             modifier = Modifier
                 .size(56.dp)
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                .background(
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(16.dp),
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
