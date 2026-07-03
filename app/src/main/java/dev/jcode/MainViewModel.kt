@@ -1427,7 +1427,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun openExtensionViewPage(extensionId: String, view: String) {
         _bringEditorToFront.tryEmit(Unit)
         val ext = _installedExtensions.value.firstOrNull { it.id == extensionId }
-        val viewLabel = when (view) { "github" -> "GitHub"; "" -> null; else -> view }
+        val viewLabel = when (view) { "github" -> "GitHub"; "" -> null; else -> view.replaceFirstChar { it.uppercaseChar() } }
         openDetailPage(EXT_APP_PREFIX + extensionId + "#" + view, EditorPageKind.ExtensionApp) {
             listOfNotNull(ext?.name, viewLabel).joinToString(" · ").ifBlank { "View" }
         }
