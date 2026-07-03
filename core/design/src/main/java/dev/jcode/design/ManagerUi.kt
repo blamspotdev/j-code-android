@@ -37,7 +37,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -393,33 +392,11 @@ fun CompactOutlinedButton(
     }
 }
 
-/** Monospace rolling output (install/verify logs). */
-@Composable
-fun ManagerOutputLog(lines: List<String>, max: Int = 120) {
-    if (lines.isEmpty()) {
-        Text(
-            text = "No output captured yet.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        return
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        lines.takeLast(max).forEach { line ->
-            Text(
-                text = line,
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
 /**
  * Shared detail-page body for a manager item: header (title + subtitle + status), description,
- * an optional [extra] slot (e.g. Extensions' samples / requirements), the install/update/uninstall
- * actions, and a rolling output log. Rendered full-width as an in-editor page.
+ * an optional [extra] slot (e.g. Extensions' samples / requirements), and the
+ * install/update/uninstall actions. Rendered full-width as an in-editor page. Command output is not
+ * shown here — every install/verify runs in the shared right-drawer Setup terminal.
  */
 @Composable
 fun ManagerDetailScreen(
@@ -429,7 +406,6 @@ fun ManagerDetailScreen(
     status: ManagerItemStatus,
     busy: Boolean,
     actionsEnabled: Boolean,
-    logLines: List<String>,
     onInstall: () -> Unit,
     onUpdate: () -> Unit,
     onUninstall: () -> Unit,
@@ -438,7 +414,6 @@ fun ManagerDetailScreen(
     busyLabel: String? = null,
     showActions: Boolean = true,
     showVerify: Boolean = true,
-    showOutput: Boolean = true,
     leading: (@Composable () -> Unit)? = null,
     onManage: (() -> Unit)? = null,
     manageLabel: String = "Manage",
@@ -492,12 +467,6 @@ fun ManagerDetailScreen(
                     CompactOutlinedButton("Verify", onClick = onVerify, enabled = actionsEnabled, modifier = Modifier.weight(1f))
                 }
                 CompactOutlinedButton("Uninstall", onClick = onUninstall, enabled = installed && actionsEnabled, modifier = Modifier.weight(1f))
-            }
-        }
-
-        if (showOutput) {
-            ManagerSectionCard(title = "Output", description = "Rolling output from the last action.") {
-                ManagerOutputLog(logLines)
             }
         }
     }

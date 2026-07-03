@@ -34,7 +34,6 @@ object DebugEngineManagerFeature {
             status = statusOf(entry.id, state),
             busy = state.checking || state.runningEntryId == entry.id,
             actionsEnabled = environmentReady && state.runningEntryId == null && !state.checking,
-            logLines = state.logLines,
             onInstall = { onInstall(entry.id) },
             onUpdate = { onUpdate(entry.id) },
             onUninstall = { onUninstall(entry.id) },

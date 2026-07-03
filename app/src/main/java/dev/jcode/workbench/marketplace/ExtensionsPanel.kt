@@ -221,8 +221,6 @@ internal fun ExtensionDetailPage(
         busyLabel = installPhase,
         actionsEnabled = !busy,
         showVerify = false,
-        showOutput = false,
-        logLines = emptyList(),
         onInstall = { if (hasDeps) showDeps = true else entry?.let(onInstall) },
         onUpdate = { entry?.let(onInstall) },
         onUninstall = { onUninstall(id) },
