@@ -778,7 +778,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun queueSyntaxCheck(file: File) {
         val projectsRoot = DEFAULT_SHARED_PROJECTS_ROOT.trimEnd('/')
         if (!file.path.startsWith("$projectsRoot/")) return
-        val guest = "/workspace" + file.path.removePrefix(projectsRoot)
+        val guest = hostToGuestPath(file)
         val command = when (file.extension.lowercase()) {
             "py", "pyw" ->
                 "python3 -c \"import sys; compile(open(sys.argv[1]).read(), sys.argv[1], 'exec')\" '$guest'"
@@ -1606,10 +1606,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }.toString()
     }
 
-    /** Host file → guest (/workspace) path where possible, else the raw host path. */
+    /**
+     * Host file → the guest path the runtime actually mounts it at. A file inside a workspace project
+     * resolves through that project's bind (host dir → distroBindTarget), so nested multi-project
+     * workspaces map correctly (e.g. /…/multii/beta/x → /workspace/beta/x, which is where exec.run
+     * mounts it — not hostToGuestPath's whole-root guess). Files outside any project fall back to the
+     * whole projects-root → /workspace mapping (what the interactive terminal binds), else the raw path.
+     */
     private fun hostToGuestPath(file: File): String {
-        val root = DEFAULT_SHARED_PROJECTS_ROOT.trimEnd('/')
         val p = file.absolutePath
+        currentWorkspace.value?.projects.orEmpty().forEach { proj ->
+            val projHost = (proj.fsPath as? FsPath.Local)?.file?.absolutePath?.trimEnd('/') ?: return@forEach
+            if (p == projHost || p.startsWith("$projHost/")) {
+                return proj.distroBindTarget.trimEnd('/') + p.removePrefix(projHost)
+            }
+        }
+        val root = DEFAULT_SHARED_PROJECTS_ROOT.trimEnd('/')
         return if (p.startsWith(root)) "/workspace" + p.removePrefix(root) else p
     }
 
