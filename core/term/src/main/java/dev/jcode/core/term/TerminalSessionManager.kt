@@ -14,6 +14,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+/** Upper bound for the user-configurable session limit (Settings default is 12). */
+private const val MAX_SESSIONS_CAP = 24
+
 /**
  * Manages terminal sessions backed by real PTY processes.
  * Sessions survive app backgrounding via the PTY file descriptors.
@@ -21,7 +24,7 @@ import kotlinx.coroutines.launch
 class TerminalSessionManager(
     private val prootManager: ProotManager,
     private val rootfsManager: RootfsManager,
-    maxSessions: Int = 4,
+    maxSessions: Int = 12,
 ) {
     class Session(
         val id: String,
@@ -100,9 +103,9 @@ class TerminalSessionManager(
     var activeSessionId: String? = null
         private set
 
-    var maxSessions: Int = maxSessions
+    var maxSessions: Int = maxSessions.coerceIn(1, MAX_SESSIONS_CAP)
         set(value) {
-            field = value.coerceIn(1, 8)
+            field = value.coerceIn(1, MAX_SESSIONS_CAP)
         }
 
     val sessionCount: Int

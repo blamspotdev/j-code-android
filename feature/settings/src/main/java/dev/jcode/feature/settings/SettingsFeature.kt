@@ -250,6 +250,12 @@ object SettingsFeature {
                         onIncrease = { perf.onSetIdleTimeoutMinutes(perf.idleTimeoutMinutes + 5) },
                     )
                 }
+                StepperRow(
+                    label = "Max terminal instances",
+                    value = "${perf.maxTerminalSessions}",
+                    onDecrease = { perf.onSetMaxTerminalSessions((perf.maxTerminalSessions - 1).coerceAtLeast(1)) },
+                    onIncrease = { perf.onSetMaxTerminalSessions((perf.maxTerminalSessions + 1).coerceAtMost(24)) },
+                )
             }
 
             SettingsSectionHeader("Web preview")

@@ -338,14 +338,17 @@ fun JCodeApp(
     val confirmCloseRunning by viewModel.confirmCloseRunning.collectAsStateWithLifecycle()
     val autoCloseIdleTerminals by viewModel.autoCloseIdleTerminals.collectAsStateWithLifecycle()
     val idleTimeoutMinutes by viewModel.idleTimeoutMinutes.collectAsStateWithLifecycle()
-    val performanceSettings = remember(confirmCloseRunning, autoCloseIdleTerminals, idleTimeoutMinutes) {
+    val maxTerminalSessions by viewModel.maxTerminalSessions.collectAsStateWithLifecycle()
+    val performanceSettings = remember(confirmCloseRunning, autoCloseIdleTerminals, idleTimeoutMinutes, maxTerminalSessions) {
         PerformanceSettings(
             confirmCloseRunning = confirmCloseRunning,
             autoCloseIdleTerminals = autoCloseIdleTerminals,
             idleTimeoutMinutes = idleTimeoutMinutes,
+            maxTerminalSessions = maxTerminalSessions,
             onSetConfirmCloseRunning = viewModel::setConfirmCloseRunning,
             onSetAutoCloseIdleTerminals = viewModel::setAutoCloseIdleTerminals,
             onSetIdleTimeoutMinutes = viewModel::setIdleTimeoutMinutes,
+            onSetMaxTerminalSessions = viewModel::setMaxTerminalSessions,
         )
     }
     val webPreviewBrowserGlobal by viewModel.webPreviewBrowser.collectAsStateWithLifecycle()
@@ -909,6 +912,11 @@ private fun JCodeShell(
     // Process-lifetime manager so terminal sessions (native PTY processes) survive Activity
     // recreation/backgrounding instead of being orphaned with the composition.
     val terminalSessionManager = remember(appContext) { TerminalSessionHost.manager(appContext) }
+    // Apply the user's configurable instance limit to the process-lifetime manager.
+    val configuredMaxTerminals = LocalPerformanceSettings.current.maxTerminalSessions
+    LaunchedEffect(terminalSessionManager, configuredMaxTerminals) {
+        terminalSessionManager.maxSessions = configuredMaxTerminals
+    }
     val terminalShellCommand = effectiveConfig.terminal.shellLinux?.takeIf { it.isNotBlank() } ?: "/bin/bash --login"
     val terminalReady = environmentState.prootInstalled && environmentState.distroInstalled == true
 

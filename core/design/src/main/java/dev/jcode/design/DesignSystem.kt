@@ -112,9 +112,11 @@ class PerformanceSettings(
     val confirmCloseRunning: Boolean = true,
     val autoCloseIdleTerminals: Boolean = false,
     val idleTimeoutMinutes: Int = 30,
+    val maxTerminalSessions: Int = 12,
     val onSetConfirmCloseRunning: (Boolean) -> Unit = {},
     val onSetAutoCloseIdleTerminals: (Boolean) -> Unit = {},
     val onSetIdleTimeoutMinutes: (Int) -> Unit = {},
+    val onSetMaxTerminalSessions: (Int) -> Unit = {},
 )
 
 val LocalPerformanceSettings = compositionLocalOf { PerformanceSettings() }
