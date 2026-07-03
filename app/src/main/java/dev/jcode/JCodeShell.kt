@@ -2914,27 +2914,30 @@ private fun WorkbenchTopBar(
                 }
             }
             // Run toggles to Stop while a run is active; long-press opens the debug controls.
-            var runMenuOpen by remember { mutableStateOf(false) }
-            Box {
-                WorkbenchIconActionButton(
-                    icon = if (isRunning) jcIcon(JCodeIcon.Stop) else jcIcon(JCodeIcon.Run),
-                    contentDescription = if (isRunning) "Stop" else "Run",
-                    onClick = if (isRunning) onStop else onRun,
-                    active = isRunning,
-                    onLongClick = { runMenuOpen = true },
-                )
-                CompactContextMenu(
-                    expanded = runMenuOpen,
-                    onDismissRequest = { runMenuOpen = false },
-                    quickActions = listOf(
-                        // Step/continue need a debug engine (none yet); shown but disabled.
-                        ContextAction(JCodeIcon.Continue, "Continue", enabled = false) {},
-                        ContextAction(JCodeIcon.Rerun, "Rerun") { onRerun() },
-                        ContextAction(JCodeIcon.StepInto, "Step Into", enabled = false) {},
-                        ContextAction(JCodeIcon.StepOver, "Step Over", enabled = false) {},
-                        ContextAction(JCodeIcon.StepOut, "Step Out", enabled = false) {},
-                    ),
-                )
+            // Only shown when a project is open and focused — there's nothing to run otherwise.
+            if (selectedProject != null) {
+                var runMenuOpen by remember { mutableStateOf(false) }
+                Box {
+                    WorkbenchIconActionButton(
+                        icon = if (isRunning) jcIcon(JCodeIcon.Stop) else jcIcon(JCodeIcon.Run),
+                        contentDescription = if (isRunning) "Stop" else "Run",
+                        onClick = if (isRunning) onStop else onRun,
+                        active = isRunning,
+                        onLongClick = { runMenuOpen = true },
+                    )
+                    CompactContextMenu(
+                        expanded = runMenuOpen,
+                        onDismissRequest = { runMenuOpen = false },
+                        quickActions = listOf(
+                            // Step/continue need a debug engine (none yet); shown but disabled.
+                            ContextAction(JCodeIcon.Continue, "Continue", enabled = false) {},
+                            ContextAction(JCodeIcon.Rerun, "Rerun") { onRerun() },
+                            ContextAction(JCodeIcon.StepInto, "Step Into", enabled = false) {},
+                            ContextAction(JCodeIcon.StepOver, "Step Over", enabled = false) {},
+                            ContextAction(JCodeIcon.StepOut, "Step Out", enabled = false) {},
+                        ),
+                    )
+                }
             }
             // Terminal shimmers while any session is busy; a dot badge flags new background instances;
             // long-press lists the live instances and opens the right drawer on the chosen one.
