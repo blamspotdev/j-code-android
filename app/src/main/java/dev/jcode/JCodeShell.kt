@@ -645,6 +645,7 @@ fun JCodeApp(
             onUninstallLspCatalogEntry = viewModel::uninstallLspCatalogEntry,
             onOpenLspDetail = viewModel::openLspDetailPage,
             onCheckDebugStatuses = viewModel::checkDebugEngineStatuses,
+            onUpdateAllToolchains = viewModel::updateAllToolchains,
             onInstallDebugEngine = viewModel::installDebugEngine,
             onVerifyDebugEngine = viewModel::verifyDebugEngine,
             onUninstallDebugEngine = viewModel::uninstallDebugEngine,
@@ -2132,6 +2133,7 @@ private fun WorkspacePanel(
                             managerActions.onCheckLspStatuses()
                             managerActions.onCheckDebugStatuses()
                         },
+                        onUpdateAll = managerActions.onUpdateAllToolchains,
                         onOpenSdkDetail = managerActions.onOpenSdkDetail,
                         onOpenLspDetail = managerActions.onOpenLspDetail,
                         onOpenDebugDetail = managerActions.onOpenDebugEngineDetail,

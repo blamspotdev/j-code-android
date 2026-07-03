@@ -66,6 +66,20 @@ class DistroService(
     private val _debugCatalogState = MutableStateFlow(DebugEngineCatalogState())
     val debugCatalogState: StateFlow<DebugEngineCatalogState> = _debugCatalogState.asStateFlow()
 
+    // apt-get update is shared across the three catalog update-checks (checkSdk/Lsp/DebugEngineStatuses).
+    // Refresh the package lists at most once per short window so opening the Toolchains panel — which
+    // fires all three checks — runs apt-get update once instead of three times, and results appear faster.
+    @Volatile
+    private var lastAptRefreshMs = 0L
+
+    private fun refreshAptListsIfStale() {
+        val now = System.currentTimeMillis()
+        if (now - lastAptRefreshMs > 180_000L) {
+            execInDistro("sudo apt-get update", timeoutMs = 300_000L)
+            lastAptRefreshMs = now
+        }
+    }
+
     private val _autoSetupProgress = MutableSharedFlow<DistroWizardProgress>(extraBufferCapacity = 64)
     val autoSetupProgress: Flow<DistroWizardProgress> = _autoSetupProgress.asSharedFlow()
 
@@ -432,15 +446,11 @@ class DistroService(
                 )
                 val installed = linkedSetOf<String>()
                 val updatable = linkedSetOf<String>()
-                var aptUpdated = false
                 for (entry in entries) {
                     if (execInDistro(entry.verifyScript, timeoutMs = 120_000L).succeeded) {
                         installed.add(entry.id)
                         if (entry.updateCheckScript.isNotBlank()) {
-                            if (!aptUpdated && entry.updateCheckScript.contains("apt list")) {
-                                execInDistro("sudo apt-get update", timeoutMs = 300_000L)
-                                aptUpdated = true
-                            }
+                            if (entry.updateCheckScript.contains("apt list")) refreshAptListsIfStale()
                             if (execInDistro(entry.updateCheckScript, timeoutMs = 120_000L).succeeded) updatable.add(entry.id)
                         }
                     }
@@ -474,15 +484,11 @@ class DistroService(
                 )
                 val installed = linkedSetOf<String>()
                 val updatable = linkedSetOf<String>()
-                var aptUpdated = false
                 for (entry in entries) {
                     if (execInDistro(entry.verifyCommand, timeoutMs = 120_000L).succeeded) {
                         installed.add(entry.id)
                         if (entry.updateCheckCommand.isNotBlank()) {
-                            if (!aptUpdated && entry.updateCheckCommand.contains("apt list")) {
-                                execInDistro("sudo apt-get update", timeoutMs = 300_000L)
-                                aptUpdated = true
-                            }
+                            if (entry.updateCheckCommand.contains("apt list")) refreshAptListsIfStale()
                             if (execInDistro(entry.updateCheckCommand, timeoutMs = 120_000L).succeeded) updatable.add(entry.id)
                         }
                     }
@@ -621,15 +627,11 @@ class DistroService(
                 )
                 val installed = linkedSetOf<String>()
                 val updatable = linkedSetOf<String>()
-                var aptUpdated = false
                 for (entry in entries) {
                     if (execInDistro(entry.verifyCommand, timeoutMs = 120_000L).succeeded) {
                         installed.add(entry.id)
                         if (entry.updateCheckCommand.isNotBlank()) {
-                            if (!aptUpdated && entry.updateCheckCommand.contains("apt list")) {
-                                execInDistro("sudo apt-get update", timeoutMs = 300_000L)
-                                aptUpdated = true
-                            }
+                            if (entry.updateCheckCommand.contains("apt list")) refreshAptListsIfStale()
                             if (execInDistro(entry.updateCheckCommand, timeoutMs = 120_000L).succeeded) updatable.add(entry.id)
                         }
                     }

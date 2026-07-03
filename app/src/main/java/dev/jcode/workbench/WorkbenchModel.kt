@@ -95,6 +95,7 @@ internal data class WorkbenchManagerActions(
     val onUninstallLspCatalogEntry: (String) -> Unit,
     val onOpenLspDetail: (String) -> Unit,
     val onCheckDebugStatuses: () -> Unit,
+    val onUpdateAllToolchains: () -> Unit,
     val onInstallDebugEngine: (String) -> Unit,
     val onVerifyDebugEngine: (String) -> Unit,
     val onUninstallDebugEngine: (String) -> Unit,
