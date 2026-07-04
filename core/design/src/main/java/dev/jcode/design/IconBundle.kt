@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.DatasetLinked
+import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
@@ -66,7 +67,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 enum class JCodeIcon {
     Run, Stop, Terminal,
     Files, Folder, NewFolder, NewFile,
-    Sdk, Lsp, Scm, Settings, Search, Extensions, Destinations, Code, Database,
+    Sdk, Lsp, Scm, Settings, Search, Extensions, Destinations, Code, Database, Vm,
     Add, Close, Refresh, Paste, Collapse, MoreVert, Save, Undo, Redo, Discard,
     Continue, Rerun, StepInto, StepOver, StepOut,
     Output, Logs, Problems, Radar, Debug, Tasks, Chat, Cursor,
@@ -115,6 +116,7 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.Extensions to Icons.Rounded.Extension,
         JCodeIcon.Destinations to Icons.Rounded.DatasetLinked,
         JCodeIcon.Database to Icons.Rounded.DatasetLinked,
+        JCodeIcon.Vm to Icons.Rounded.Dns,
         JCodeIcon.Code to Icons.Rounded.Code,
         JCodeIcon.Add to Icons.Rounded.Add,
         JCodeIcon.Close to Icons.Rounded.Close,

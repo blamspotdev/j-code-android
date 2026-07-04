@@ -226,6 +226,49 @@ internal fun ScmPanel(
     }
 }
 
+/** True when a VM-manager extension (e.g. VM Manager) is installed, so the left-drawer "VM" tool shows. */
+internal fun List<InstalledExtension>.hasVmManagerClient(): Boolean =
+    any { it.type == ExtensionType.Vm }
+
+/**
+ * Left-drawer "VM" panel: embeds the installed VM-manager extension's web frontend directly (VM list +
+ * create + a QEMU-availability check), wired to the Linux runtime via the Extension API. Tapping a VM
+ * opens its console as an editor tab (workbench.openView).
+ */
+@Composable
+internal fun VmPanel(
+    installed: List<InstalledExtension>,
+    onExec: suspend (command: String, timeoutMs: Long) -> String,
+    onApiRequest: suspend (extensionId: String, envelopeJson: String) -> String,
+    events: SharedFlow<Pair<String, String>>?,
+    modifier: Modifier = Modifier,
+) {
+    val ext = installed.firstOrNull { it.type == ExtensionType.Vm && it.hasWebUi }
+    if (ext == null) {
+        Column(
+            modifier = modifier.fillMaxSize().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("VM Manager", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Install a VM Manager extension from Extensions to run virtual machines here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
+    key(ext.id) {
+        ExtensionWebViewPage(
+            extension = ext,
+            onExec = onExec,
+            onApiRequest = { envelope -> onApiRequest(ext.id, envelope) },
+            events = events,
+            modifier = modifier.fillMaxSize(),
+        )
+    }
+}
+
 /** Full-width detail page for one extension, opened as an in-editor page tab. */
 @Composable
 internal fun ExtensionDetailPage(

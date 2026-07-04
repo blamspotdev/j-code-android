@@ -13,6 +13,8 @@ enum class ExtensionType {
     DbManager,
     /** Like [App], but its UI is a source-control manager surfaced in the left-drawer "SCM" panel. */
     Scm,
+    /** Like [App], but its UI is a virtual-machine manager surfaced in the left-drawer "VM" panel. */
+    Vm,
     Unknown;
 
     companion object {
@@ -23,6 +25,7 @@ enum class ExtensionType {
             "app", "tool", "runtime" -> App
             "dbmanager", "db-manager", "database" -> DbManager
             "scm", "source-control", "sourcecontrol", "vcs" -> Scm
+            "vm", "vmmanager", "vm-manager", "virtualmachine", "virtualization" -> Vm
             else -> Unknown
         }
     }

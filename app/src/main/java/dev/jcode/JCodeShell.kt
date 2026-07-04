@@ -217,6 +217,8 @@ import dev.jcode.workbench.marketplace.DbManagerPanel
 import dev.jcode.workbench.marketplace.hasDbManagerClient
 import dev.jcode.workbench.marketplace.ScmPanel
 import dev.jcode.workbench.marketplace.hasScmClient
+import dev.jcode.workbench.marketplace.VmPanel
+import dev.jcode.workbench.marketplace.hasVmManagerClient
 import dev.jcode.workbench.marketplace.ExtensionDetailPage
 import dev.jcode.workbench.marketplace.ExtensionPermissionsPage
 import dev.jcode.workbench.marketplace.LocalExtensionActivation
@@ -2050,6 +2052,7 @@ private fun WorkspacePanel(
                 inUserWorkspace = inUserWorkspace,
                 dbManagerAvailable = installedExtensions.hasDbManagerClient(),
                 scmAvailable = installedExtensions.hasScmClient(),
+                vmManagerAvailable = installedExtensions.hasVmManagerClient(),
                 onSelectTool = onSelectTool,
                 onCreateProject = onCreateProject,
                 onOpenExternalFolder = onOpenExternalFolder,
@@ -2191,6 +2194,14 @@ private fun WorkspacePanel(
                         modifier = Modifier.fillMaxSize(),
                     )
 
+                    WorkbenchTool.VmManager -> VmPanel(
+                        installed = installedExtensions,
+                        onExec = managerActions.onExtensionExec,
+                        onApiRequest = managerActions.onExtensionApiRequest,
+                        events = managerActions.extensionEvents,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+
                     // Settings opens as an in-editor page (see EditorWorkspace); it is never the
                     // selected side-panel tool, so this branch renders nothing.
                     WorkbenchTool.Settings -> Unit
@@ -2208,6 +2219,7 @@ private fun WorkspaceHeader(
     inUserWorkspace: Boolean,
     dbManagerAvailable: Boolean,
     scmAvailable: Boolean,
+    vmManagerAvailable: Boolean,
     onSelectTool: (WorkbenchTool) -> Unit,
     onCreateProject: () -> Unit,
     onOpenExternalFolder: () -> Unit,
@@ -2300,12 +2312,13 @@ private fun WorkspaceHeader(
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            // "DB Managers" and "SCM" only show once a matching client extension is installed.
+            // "DB Managers", "SCM" and "VM" only show once a matching client extension is installed.
             WorkbenchTool.entries
                 .filter {
                     it.available &&
                         (it != WorkbenchTool.DbManager || dbManagerAvailable) &&
-                        (it != WorkbenchTool.Scm || scmAvailable)
+                        (it != WorkbenchTool.Scm || scmAvailable) &&
+                        (it != WorkbenchTool.VmManager || vmManagerAvailable)
                 }
                 .forEach { tool ->
                     SidebarToolButton(

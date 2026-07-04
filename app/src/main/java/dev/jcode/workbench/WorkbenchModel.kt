@@ -131,6 +131,7 @@ internal enum class WorkbenchTool(
     /** SDKs + language servers + debug engines, merged into one searchable/filterable catalog. */
     ToolchainManager("Toolchains", JCodeIcon.Sdk, "Tools"),
     DbManager("DB Managers", JCodeIcon.Database, "DB"),
+    VmManager("VM Manager", JCodeIcon.Vm, "VM"),
     Settings("Settings", JCodeIcon.Settings, "Settings"),
 }
 
