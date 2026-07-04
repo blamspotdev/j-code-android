@@ -2190,7 +2190,9 @@ private fun WorkspacePanel(
 
                     WorkbenchTool.DbManager -> DbManagerPanel(
                         installed = installedExtensions,
-                        onOpenApp = managerActions.onOpenExtensionApp,
+                        onExec = managerActions.onExtensionExec,
+                        onApiRequest = managerActions.onExtensionApiRequest,
+                        events = managerActions.extensionEvents,
                         modifier = Modifier.fillMaxSize(),
                     )
 

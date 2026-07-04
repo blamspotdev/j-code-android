@@ -131,53 +131,42 @@ internal fun ExtensionsPanel(
 internal fun List<InstalledExtension>.hasDbManagerClient(): Boolean =
     any { it.type == ExtensionType.DbManager }
 
-/** Left-drawer "DB Managers" panel: installed database-manager extensions; tap to open their UI. */
+/**
+ * Left-drawer "DB Managers" panel: embeds the installed database-manager extension's web frontend
+ * directly (database list + connection status), wired to the Linux runtime via the Extension API.
+ * Tapping a database opens its SQL Studio as an editor tab (workbench.openView).
+ */
 @Composable
 internal fun DbManagerPanel(
     installed: List<InstalledExtension>,
-    onOpenApp: (String) -> Unit,
+    onExec: suspend (command: String, timeoutMs: Long) -> String,
+    onApiRequest: suspend (extensionId: String, envelopeJson: String) -> String,
+    events: SharedFlow<Pair<String, String>>?,
     modifier: Modifier = Modifier,
 ) {
-    val dbExtensions = installed.filter { it.type == ExtensionType.DbManager }
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text("DB Managers", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Text(
-            "${dbExtensions.size} installed",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f),
+    val ext = installed.firstOrNull { it.type == ExtensionType.DbManager && it.hasWebUi }
+    if (ext == null) {
+        Column(
+            modifier = modifier.fillMaxSize().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (dbExtensions.isEmpty()) {
-                Text(
-                    text = "No database managers installed. Install one (e.g. SQL Client) from Extensions.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(12.dp),
-                )
-            } else {
-                Column {
-                    dbExtensions.forEachIndexed { index, ext ->
-                        if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-                        ManagerListRow(
-                            name = ext.name,
-                            description = ext.description.ifBlank { "Database manager" },
-                            status = ManagerItemStatus.Installed,
-                            onClick = { onOpenApp(ext.id) },
-                            leading = { ExtensionIcon(type = ext.type, name = ext.name, iconFile = ext.iconFile, iconUrl = null) },
-                        )
-                    }
-                }
-            }
+            Text("DB Managers", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Install a database-manager extension (e.g. SQL Client) from Extensions to browse databases here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
+        return
+    }
+    key(ext.id) {
+        ExtensionWebViewPage(
+            extension = ext,
+            onExec = onExec,
+            onApiRequest = { envelope -> onApiRequest(ext.id, envelope) },
+            events = events,
+            modifier = modifier.fillMaxSize(),
+        )
     }
 }
 
