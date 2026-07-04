@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -25,6 +26,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,6 +34,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.jcode.design.ManagerDetailScreen
+import dev.jcode.design.ManagerFilterChip
 import dev.jcode.design.ManagerItemStatus
 import dev.jcode.design.ManagerListRow
 import dev.jcode.design.ManagerPanelHeader
@@ -132,9 +135,13 @@ internal fun List<InstalledExtension>.hasDbManagerClient(): Boolean =
     any { it.type == ExtensionType.DbManager }
 
 /**
- * Left-drawer "DB Managers" panel: embeds the installed database-manager extension's web frontend
- * directly (database list + connection status), wired to the Linux runtime via the Extension API.
- * Tapping a database opens its SQL Studio as an editor tab (workbench.openView).
+ * Left-drawer "DB Managers" panel: embeds a database-manager extension's web frontend directly
+ * (database list + connection status), wired to the Linux runtime via the Extension API. Tapping a
+ * database opens that client's studio as an editor tab (workbench.openView).
+ *
+ * With a single DB client installed it embeds it directly; with several (e.g. SQL Client + a Postgres
+ * client) it shows a compact selector row so you can switch which client's panel is active. Each
+ * client keeps its own WebView (keyed by id) and opens its own per-extension studio tabs.
  */
 @Composable
 internal fun DbManagerPanel(
@@ -144,8 +151,8 @@ internal fun DbManagerPanel(
     events: SharedFlow<Pair<String, String>>?,
     modifier: Modifier = Modifier,
 ) {
-    val ext = installed.firstOrNull { it.type == ExtensionType.DbManager && it.hasWebUi }
-    if (ext == null) {
+    val dbExtensions = installed.filter { it.type == ExtensionType.DbManager && it.hasWebUi }
+    if (dbExtensions.isEmpty()) {
         Column(
             modifier = modifier.fillMaxSize().padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -159,14 +166,38 @@ internal fun DbManagerPanel(
         }
         return
     }
-    key(ext.id) {
-        ExtensionWebViewPage(
-            extension = ext,
-            onExec = onExec,
-            onApiRequest = { envelope -> onApiRequest(ext.id, envelope) },
-            events = events,
-            modifier = modifier.fillMaxSize(),
-        )
+    // Keep the chosen client across recompositions; reset to the first only if the installed set changes.
+    val idsKey = dbExtensions.joinToString(",") { it.id }
+    var selectedId by rememberSaveable(idsKey) { mutableStateOf(dbExtensions.first().id) }
+    val selected = dbExtensions.firstOrNull { it.id == selectedId } ?: dbExtensions.first()
+    Column(modifier = modifier.fillMaxSize()) {
+        if (dbExtensions.size > 1) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                dbExtensions.forEach { ext ->
+                    ManagerFilterChip(
+                        selected = ext.id == selected.id,
+                        label = ext.name,
+                        onClick = { selectedId = ext.id },
+                    )
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+        }
+        key(selected.id) {
+            ExtensionWebViewPage(
+                extension = selected,
+                onExec = onExec,
+                onApiRequest = { envelope -> onApiRequest(selected.id, envelope) },
+                events = events,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
+        }
     }
 }
 
