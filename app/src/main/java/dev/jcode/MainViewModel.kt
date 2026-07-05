@@ -830,19 +830,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Extensions shipped inside the APK (assets/builtin-extensions/) and installed on first run.
     private val builtinExtensions = listOf(
         BundledExtensionSpec(
-            assetPath = "builtin-extensions/jcode.lang.markup-1.0.0.jext",
+            assetPath = "builtin-extensions/jcode.lang.markup-1.0.1.jext",
             uniqueName = "jcode.lang.markup",
-            version = "1.0.0",
+            version = "1.0.1",
         ),
         BundledExtensionSpec(
-            assetPath = "builtin-extensions/jcode.lang.stylesheet-1.0.0.jext",
+            assetPath = "builtin-extensions/jcode.lang.stylesheet-1.0.1.jext",
             uniqueName = "jcode.lang.stylesheet",
-            version = "1.0.0",
+            version = "1.0.1",
         ),
         BundledExtensionSpec(
-            assetPath = "builtin-extensions/jcode.ext.gitscm-0.4.0.jext",
+            assetPath = "builtin-extensions/jcode.ext.gitscm-0.5.0.jext",
             uniqueName = "jcode.ext.gitscm",
-            version = "0.4.0",
+            version = "0.5.0",
         ),
         // NOTE: manager extensions (SQL Client, VM Manager) are NOT bundled — they pull in
         // libraries/binaries at runtime and are distributed via the marketplace, not baked into the app.
@@ -1436,12 +1436,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Open an extension's web frontend at a named view (loaded as `#view`) as a full editor page and
      *  bring the editor to front — used by the `workbench.openView` Extension API. */
-    fun openExtensionViewPage(extensionId: String, view: String) {
+    fun openExtensionViewPage(extensionId: String, view: String, title: String? = null) {
         _bringEditorToFront.tryEmit(Unit)
         val ext = _installedExtensions.value.firstOrNull { it.id == extensionId }
         val viewLabel = when (view) { "github" -> "GitHub"; "" -> null; else -> view.replaceFirstChar { it.uppercaseChar() } }
         openDetailPage(EXT_APP_PREFIX + extensionId + "#" + view, EditorPageKind.ExtensionApp) {
-            listOfNotNull(ext?.name, viewLabel).joinToString(" · ").ifBlank { "View" }
+            title?.takeIf { it.isNotBlank() } ?: listOfNotNull(ext?.name, viewLabel).joinToString(" · ").ifBlank { "View" }
         }
     }
 
@@ -1648,7 +1648,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // An extension opening one of ITS OWN views in the editor — needs the caller id, which the
         // stateless dispatch below doesn't have.
         if (type == "workbench.openView") {
-            openExtensionViewPage(ext.id, payload.optString("view"))
+            openExtensionViewPage(ext.id, payload.optString("view"), payload.optString("title").ifBlank { null })
             return apiOk(JSONObject())
         }
         // Per-extension settings (config.*) are scoped to the caller — resolved from its declared
@@ -2323,6 +2323,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val targetProj = record.projectId
             if (targetProj != null && workspace?.projects?.any { it.id == targetProj } == true) {
                 _selectedProjectId.value = targetProj
+                // A restored session's tab set is authoritative — even when it's EMPTY because the user
+                // closed every tab. Mark the project as already-bootstrapped so neither the fallback below
+                // nor the composition's bootstrap effect re-opens a starter file on a deliberately-empty
+                // session. (Only a launch with NO saved session still bootstraps a project's starter file.)
+                lastBootstrappedProjectId = targetProj
             }
 
             // Tabs: open each surviving file; recover unsaved buffers where the file (or its folder) remains.
