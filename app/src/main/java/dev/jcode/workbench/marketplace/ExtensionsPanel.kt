@@ -271,6 +271,7 @@ internal fun ScmPanel(
     onExec: suspend (command: String, timeoutMs: Long) -> String,
     onApiRequest: suspend (extensionId: String, envelopeJson: String) -> String,
     events: SharedFlow<Pair<String, String>>?,
+    projectKey: Any? = null,
     modifier: Modifier = Modifier,
 ) {
     val ext = installed.firstOrNull { it.type == ExtensionType.Scm && it.hasWebUi }
@@ -288,9 +289,11 @@ internal fun ScmPanel(
         }
         return
     }
-    // Key by id so the panel owns one WebView for the installed SCM extension; it reloads git state
-    // whenever the user switches back to this tool.
-    key(ext.id) {
+    // Key by (extension id, open project) so the panel owns one WebView for the installed SCM extension
+    // and, critically, re-creates it — re-running the extension's boot()/repo detection — whenever the
+    // selected project changes. Without the project in the key, opening a folder while this panel is
+    // already showing leaves it stuck on the stale "Open a project" screen until a manual Refresh.
+    key(ext.id, projectKey) {
         ExtensionWebViewPage(
             extension = ext,
             onExec = onExec,
