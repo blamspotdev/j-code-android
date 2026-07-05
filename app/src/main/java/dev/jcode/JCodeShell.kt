@@ -2673,7 +2673,6 @@ private fun EditorWorkspace(
                     onTabSelected = onSelectEditorTab,
                     onTabClosed = onCloseEditorTab,
                     onOpenFile = onOpenFileRequest,
-                    onOpenBrowser = { BuiltinBrowser.requestOpen("about:blank") },
                     onSave = onSave,
                     languageActionsEnabled = languageActionsEnabled,
                     onLanguageAction = onEditorLanguageAction,
