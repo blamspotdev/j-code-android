@@ -30,6 +30,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+/** SharedPreferences flag: the environment finished configuring at least once (used to skip the
+ *  first-run setup screen instantly on launch — see [DistroService]'s seededConfigured). */
+private const val KEY_ENV_CONFIGURED = "env_configured"
+
 /**
  * Manages the embedded Linux environment using bundled proot.
  * Replaces the old Termux-dependent implementation.
@@ -54,7 +58,17 @@ class DistroService(
         appContext.preferencesDataStoreFile("distro-environment.preferences_pb")
     }
 
-    private val _environmentState = MutableStateFlow(DistroEnvironmentState())
+    // Fast, synchronous "was the environment configured last time?" flag, read on the main thread at
+    // construction. Lets the UI skip the first-run setup screen instantly on launch instead of flashing
+    // it for the few seconds the async probe (network manifest fetch + proot user check, run on every
+    // onResume) takes to set smokeTestPassed. The probe still runs and re-verifies / self-corrects this
+    // optimistic seed, so a genuinely-broken environment falls back to setup.
+    private val startupPrefs = appContext.getSharedPreferences("jcode-distro-startup", Context.MODE_PRIVATE)
+    private val seededConfigured: Boolean? = if (startupPrefs.getBoolean(KEY_ENV_CONFIGURED, false)) true else null
+
+    private val _environmentState = MutableStateFlow(
+        DistroEnvironmentState(distroInstalled = seededConfigured, smokeTestPassed = seededConfigured),
+    )
     val environmentState: StateFlow<DistroEnvironmentState> = _environmentState.asStateFlow()
 
     private val _sdkCatalogState = MutableStateFlow(SdkCatalogState())
@@ -762,6 +776,9 @@ class DistroService(
             )
         }
 
+        // Remember (fast, synchronous) whether the environment is configured, so the next launch can skip
+        // the first-run setup screen without waiting for this async probe to re-run.
+        startupPrefs.edit().putBoolean(KEY_ENV_CONFIGURED, _environmentState.value.smokeTestPassed == true).apply()
         persistCompletedSteps(completedSteps.toSet())
         syncSdkCatalogSelection(_environmentState.value.runtime.selectedDistro.id)
         syncLspCatalogSelection(_environmentState.value.runtime.selectedDistro.id)
