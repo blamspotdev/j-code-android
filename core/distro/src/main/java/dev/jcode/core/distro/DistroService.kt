@@ -1421,24 +1421,36 @@ class DistroService(
             val stdout = StringBuilder()
             val stderr = StringBuilder()
 
+            // NOTE: the drain loops MUST NOT let any exception escape. When the process is destroyed
+            // (timeout below, or killed while the runtime is under heavy load — e.g. a QEMU VM boot),
+            // the blocked readLine() throws InterruptedIOException / "Stream closed"; on a bare Thread
+            // that would be uncaught and crash the whole app. Swallow it — partial output is kept.
             val stdoutThread = Thread {
-                BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
-                    reader.lineSequence().forEach { line ->
-                        normalizeProcessOutputLine(line)?.let { normalized ->
-                            stdout.appendLine(normalized)
-                            onLine?.invoke(normalized)
+                try {
+                    BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+                        reader.lineSequence().forEach { line ->
+                            normalizeProcessOutputLine(line)?.let { normalized ->
+                                stdout.appendLine(normalized)
+                                onLine?.invoke(normalized)
+                            }
                         }
                     }
+                } catch (_: Throwable) {
+                    // process destroyed / stream closed mid-read — expected on teardown.
                 }
             }
             val stderrThread = Thread {
-                BufferedReader(InputStreamReader(process.errorStream)).use { reader ->
-                    reader.lineSequence().forEach { line ->
-                        normalizeProcessOutputLine(line)?.let { normalized ->
-                            stderr.appendLine(normalized)
-                            onLine?.invoke(normalized)
+                try {
+                    BufferedReader(InputStreamReader(process.errorStream)).use { reader ->
+                        reader.lineSequence().forEach { line ->
+                            normalizeProcessOutputLine(line)?.let { normalized ->
+                                stderr.appendLine(normalized)
+                                onLine?.invoke(normalized)
+                            }
                         }
                     }
+                } catch (_: Throwable) {
+                    // process destroyed / stream closed mid-read — expected on teardown.
                 }
             }
 

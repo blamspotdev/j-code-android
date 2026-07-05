@@ -287,7 +287,16 @@ class ProotManager(private val context: Context) {
         args.addAll(listOf("-b", "/dev"))
         args.addAll(listOf("-b", "/proc"))
         args.addAll(listOf("-b", "/sys"))
-        
+
+        // Shared transfer dir for the extension `file.import` bridge: SAF-picked files are stream-copied
+        // to this host dir by the app so extensions can reach them by a runtime path (/jcode-transfer)
+        // and stream them onward (e.g. scp a .bak into a DB VM) without a base64 round-trip. Bound only
+        // when it exists/creatable on the host so this stays a no-op on devices without the folder.
+        val transferDir = File("/storage/emulated/0/JCode/.jcode-transfer")
+        if (transferDir.exists() || transferDir.mkdirs()) {
+            args.addAll(listOf("-b", "${transferDir.absolutePath}:/jcode-transfer"))
+        }
+
         // Working directory
         args.addAll(listOf("-w", workdir))
         

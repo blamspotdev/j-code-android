@@ -6,12 +6,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -32,9 +36,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.jcode.design.ManagerDetailScreen
-import dev.jcode.design.ManagerFilterChip
 import dev.jcode.design.ManagerItemStatus
 import dev.jcode.design.ManagerListRow
 import dev.jcode.design.ManagerPanelHeader
@@ -135,13 +139,11 @@ internal fun List<InstalledExtension>.hasDbManagerClient(): Boolean =
     any { it.type == ExtensionType.DbManager }
 
 /**
- * Left-drawer "DB Managers" panel: embeds a database-manager extension's web frontend directly
- * (database list + connection status), wired to the Linux runtime via the Extension API. Tapping a
- * database opens that client's studio as an editor tab (workbench.openView).
- *
- * With a single DB client installed it embeds it directly; with several (e.g. SQL Client + a Postgres
- * client) it shows a compact selector row so you can switch which client's panel is active. Each
- * client keeps its own WebView (keyed by id) and opens its own per-extension studio tabs.
+ * Left-drawer "DB Managers" panel. With several DB-manager clients installed (e.g. SQL Client +
+ * Postgres Client) it shows a **list of clients** first; tapping one drills into that client's
+ * embedded web frontend (with a Back header to return to the list). With a single client installed
+ * it opens that client directly. Each client's frontend is wired to the Linux runtime via the
+ * Extension API; a database tapped inside it opens that client's studio as an editor tab.
  */
 @Composable
 internal fun DbManagerPanel(
@@ -166,37 +168,90 @@ internal fun DbManagerPanel(
         }
         return
     }
-    // Keep the chosen client across recompositions; reset to the first only if the installed set changes.
+    // Which client's frontend is open. null = show the client list; a lone client opens directly
+    // (nothing to choose). The selection resets only if the installed set changes.
     val idsKey = dbExtensions.joinToString(",") { it.id }
-    var selectedId by rememberSaveable(idsKey) { mutableStateOf(dbExtensions.first().id) }
-    val selected = dbExtensions.firstOrNull { it.id == selectedId } ?: dbExtensions.first()
-    Column(modifier = modifier.fillMaxSize()) {
-        if (dbExtensions.size > 1) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                dbExtensions.forEach { ext ->
-                    ManagerFilterChip(
-                        selected = ext.id == selected.id,
-                        label = ext.name,
-                        onClick = { selectedId = ext.id },
+    var selectedId by rememberSaveable(idsKey) {
+        mutableStateOf(if (dbExtensions.size == 1) dbExtensions.first().id else null)
+    }
+    val selected = dbExtensions.firstOrNull { it.id == selectedId }
+
+    if (selected == null) {
+        // Master view: the list of installed DB clients; tap one to open its frontend.
+        Column(modifier = modifier.fillMaxSize()) {
+            Text(
+                "DB Managers",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 6.dp),
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            dbExtensions.forEachIndexed { index, ext ->
+                if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { selectedId = ext.id }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    ExtensionIcon(type = ext.type, name = ext.name, iconFile = ext.iconFile, size = 30.dp)
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        Text(
+                            ext.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            ext.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
         }
-        key(selected.id) {
-            ExtensionWebViewPage(
-                extension = selected,
-                onExec = onExec,
-                onApiRequest = { envelope -> onApiRequest(selected.id, envelope) },
-                events = events,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-            )
+    } else {
+        // Detail view: the selected client's embedded frontend, with a Back header (shown only when
+        // there are other clients to return to). Keyed by id so each client owns its WebView.
+        Column(modifier = modifier.fillMaxSize()) {
+            if (dbExtensions.size > 1) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { selectedId = null }
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back to DB Managers",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(selected.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            }
+            key(selected.id) {
+                ExtensionWebViewPage(
+                    extension = selected,
+                    onExec = onExec,
+                    onApiRequest = { envelope -> onApiRequest(selected.id, envelope) },
+                    events = events,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                )
+            }
         }
     }
 }
