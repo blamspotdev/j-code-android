@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -63,6 +64,7 @@ import dev.jcode.design.ContextAction
 import dev.jcode.design.LocalEditorDragMovesCursor
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.JcTooltip
+import dev.jcode.design.jcIcon
 import dev.jcode.design.LocalTabCloseButtonSetting
 /**
  * Editor pane composable that hosts a tab strip and the active EditorView.
@@ -74,6 +76,7 @@ fun EditorPane(
     onTabSelected: (String) -> Unit = {},
     onTabClosed: (String) -> Unit = {},
     onOpenFile: () -> Unit = {},
+    onOpenBrowser: () -> Unit = {},
     onSave: () -> Unit = {},
     languageActionsEnabled: Boolean = false,
     onLanguageAction: (EditorLanguageAction, String) -> Unit = { _, _ -> },
@@ -90,6 +93,7 @@ fun EditorPane(
             onTabSelected = onTabSelected,
             onTabClosed = onTabClosed,
             onOpenFile = onOpenFile,
+            onOpenBrowser = onOpenBrowser,
         )
 
         // Active tab body: a file tab hosts the editor view; a page tab renders host content.
@@ -149,6 +153,7 @@ private fun TabStrip(
     onTabSelected: (String) -> Unit,
     onTabClosed: (String) -> Unit,
     onOpenFile: () -> Unit,
+    onOpenBrowser: () -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -180,6 +185,22 @@ private fun TabStrip(
                         .height(36.dp),
                 ) {
                     Text("+", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+            // Built-in browser
+            JcTooltip("Open browser") {
+                IconButton(
+                    onClick = onOpenBrowser,
+                    modifier = Modifier
+                        .width(36.dp)
+                        .height(36.dp),
+                ) {
+                    Icon(
+                        imageVector = jcIcon(JCodeIcon.Browser),
+                        contentDescription = "Open browser",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

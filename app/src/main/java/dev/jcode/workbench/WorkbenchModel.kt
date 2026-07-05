@@ -145,5 +145,8 @@ internal enum class RightPanelTab(
     Problems("Issues", JCodeIcon.Problems, enabled = true),
     DebugConsole("Debug", JCodeIcon.Debug, enabled = true),
     Tasks("Tasks", JCodeIcon.Tasks, enabled = true),
+    /** Built-in browser DevTools (console / network / elements); only shown once the in-app browser
+     *  has been opened this session (see [dev.jcode.workbench.BuiltinBrowser]). */
+    Devtools("DevTools", JCodeIcon.DevTools, enabled = true),
     Chat("Chat", JCodeIcon.Chat, enabled = true),
 }

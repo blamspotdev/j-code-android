@@ -223,6 +223,7 @@ private fun WebPreviewSelector(projectKey: String) {
         add(WebPreviewBrowsers.INHERIT)
         add(WebPreviewBrowsers.SYSTEM)
         add(WebPreviewBrowsers.ASK)
+        add(WebPreviewBrowsers.BUILTIN)
         webPreview.available.forEach { add(it.packageName) }
     }
     Box {

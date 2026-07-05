@@ -120,6 +120,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -212,6 +213,10 @@ import dev.jcode.workbench.marketplace.ExtensionKeepAliveSetting
 import dev.jcode.workbench.marketplace.LocalExtensionCapabilities
 import dev.jcode.workbench.marketplace.LocalExtensionKeepAlive
 import dev.jcode.workbench.ExtensionWebViewPage
+import dev.jcode.workbench.BrowserPage
+import dev.jcode.workbench.BuiltinBrowser
+import dev.jcode.workbench.DevtoolsSidebarContent
+import dev.jcode.workbench.ImageViewerPage
 import dev.jcode.workbench.SearchToolPanel
 import dev.jcode.workbench.marketplace.DbManagerPanel
 import dev.jcode.workbench.marketplace.hasDbManagerClient
@@ -469,10 +474,9 @@ fun JCodeApp(
         onToken = { token ->
             val trimmed = token.trim().trimEnd('.', ',', ')', ']', '}', ';')
             if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-                ProjectRunner.openInBrowser(
-                    tapContext, trimmed,
-                    webPreviewBrowsers.effective(selectedProject?.id?.toString().orEmpty()),
-                )
+                val choice = webPreviewBrowsers.effective(selectedProject?.id?.toString().orEmpty())
+                if (choice == WebPreviewBrowsers.BUILTIN) BuiltinBrowser.requestOpen(trimmed)
+                else ProjectRunner.openInBrowser(tapContext, trimmed, choice)
             } else {
                 viewModel.openFileByGuestPath(token)
             }
@@ -481,6 +485,12 @@ fun JCodeApp(
     DisposableEffect(viewModel) {
         TerminalSessionHost.setUiOpenFileListener { token -> viewModel.openFileByGuestPath(token) }
         onDispose { TerminalSessionHost.setUiOpenFileListener(null) }
+    }
+    // Surface the built-in browser editor tab whenever something requests it (a "Built-in browser"
+    // preview, or a terminal-URL tap, bumps BuiltinBrowser.revealSignal). Handled here because this is
+    // where the view model is in scope; the inner run handlers only touch the BuiltinBrowser singleton.
+    LaunchedEffect(Unit) {
+        snapshotFlow { BuiltinBrowser.revealSignal.value }.collect { if (it > 0) viewModel.openBrowserTab() }
     }
     val snackbarHostState = remember { SnackbarHostState() }
     val openFolderLauncher = rememberOpenFolderLauncher(
@@ -921,6 +931,16 @@ private fun JCodeShell(
     // Read once here so the run handlers below (defined before the settings block) can resolve the
     // per-project "Open web previews in" choice when opening a dev-server URL.
     val webPreviewBrowsersLocal = LocalWebPreviewBrowsers.current
+    // Reveal + select the DevTools drawer tab whenever the built-in browser is opened (a preview or a
+    // direct open bumps BuiltinBrowser.revealSignal).
+    LaunchedEffect(Unit) {
+        snapshotFlow { BuiltinBrowser.revealSignal.value }.collect { sig ->
+            if (sig > 0) {
+                rightPanelTab = RightPanelTab.Devtools
+                rightSidebarVisible = true
+            }
+        }
+    }
     var commandPaletteVisible by rememberSaveable { mutableStateOf(false) }
     var terminalSessionIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var selectedTerminalSessionId by rememberSaveable { mutableStateOf("") }
@@ -1142,9 +1162,9 @@ private fun JCodeShell(
                 runInProgress = false
                 if (up) {
                     OutputLog.append("✓ Dev server ready — opening ${plan.url}")
-                    ProjectRunner.openInBrowser(
-                        appContext, plan.url, webPreviewBrowsersLocal.effective(project.id.toString()),
-                    )
+                    val choice = webPreviewBrowsersLocal.effective(project.id.toString())
+                    if (choice == WebPreviewBrowsers.BUILTIN) BuiltinBrowser.requestOpen(plan.url)
+                    else ProjectRunner.openInBrowser(appContext, plan.url, choice)
                 } else {
                     OutputLog.append("✗ Dev server didn't start in time; check the run terminals.", OutputKind.Error)
                     snackbarHostState.showSnackbar("Dev server didn't start in time; check the run terminals.")
@@ -1442,9 +1462,9 @@ private fun JCodeShell(
                 runInProgress = runInProgress,
                 onOpenRunInBrowser = {
                     runUrl?.let { url ->
-                        ProjectRunner.openInBrowser(
-                            appContext, url, webPreviewBrowsersLocal.effective(runningProjectId?.toString().orEmpty()),
-                        )
+                        val choice = webPreviewBrowsersLocal.effective(runningProjectId?.toString().orEmpty())
+                        if (choice == WebPreviewBrowsers.BUILTIN) BuiltinBrowser.requestOpen(url)
+                        else ProjectRunner.openInBrowser(appContext, url, choice)
                     }
                 },
                 onSnackbar = { message ->
@@ -1697,6 +1717,16 @@ private fun JCodeShell(
                                     installed = installedExtensions,
                                     modifier = Modifier.fillMaxSize(),
                                 )
+                                EditorPageKind.Browser -> BrowserPage(modifier = Modifier.fillMaxSize())
+                                EditorPageKind.ImageViewer -> key(tab.id) {
+                                    // Key by tab id so switching between image tabs (same call site)
+                                    // recreates the WebView instead of reusing the previous image.
+                                    ImageViewerPage(
+                                        source = tab.id,
+                                        name = tab.title,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                }
                                 EditorPageKind.ExtensionApp -> {
                                     // Tab id is EXT_APP_PREFIX + extId, optionally + "#view" for an alternate screen.
                                     val rest = tab.id.substringAfter(MainViewModel.EXT_APP_PREFIX)
@@ -1766,9 +1796,9 @@ private fun JCodeShell(
                             runInProgress = runInProgress,
                             onOpenRunInBrowser = {
                     runUrl?.let { url ->
-                        ProjectRunner.openInBrowser(
-                            appContext, url, webPreviewBrowsersLocal.effective(runningProjectId?.toString().orEmpty()),
-                        )
+                        val choice = webPreviewBrowsersLocal.effective(runningProjectId?.toString().orEmpty())
+                        if (choice == WebPreviewBrowsers.BUILTIN) BuiltinBrowser.requestOpen(url)
+                        else ProjectRunner.openInBrowser(appContext, url, choice)
                     }
                 },
                             onSnackbar = { message ->
@@ -2642,6 +2672,7 @@ private fun EditorWorkspace(
                     onTabSelected = onSelectEditorTab,
                     onTabClosed = onCloseEditorTab,
                     onOpenFile = onOpenFileRequest,
+                    onOpenBrowser = { BuiltinBrowser.requestOpen("about:blank") },
                     onSave = onSave,
                     languageActionsEnabled = languageActionsEnabled,
                     onLanguageAction = onEditorLanguageAction,
@@ -3070,7 +3101,11 @@ private fun WorkbenchRightSidebar(
                     val chatAvailable = hasAgentChatExtension()
                     val chatTabTitle = agentChatTabTitle()
                     RightPanelTab.entries
-                        .filter { it.enabled && (it != RightPanelTab.Chat || chatAvailable) }
+                        .filter {
+                            it.enabled &&
+                                (it != RightPanelTab.Chat || chatAvailable) &&
+                                (it != RightPanelTab.Devtools || BuiltinBrowser.everOpened.value)
+                        }
                         .forEach { tab ->
                         val selected = tab == selectedTab
                         val tabLabel = if (tab == RightPanelTab.Chat) chatTabTitle else tab.label
@@ -3204,6 +3239,9 @@ private fun WorkbenchRightSidebarBody(
                 onStopRun = onStopRun,
                 modifier = modifier,
             )
+        }
+        RightPanelTab.Devtools -> {
+            DevtoolsSidebarContent(modifier = modifier)
         }
         RightPanelTab.Chat -> {
             AgentChatSidebarContent(modifier = modifier)

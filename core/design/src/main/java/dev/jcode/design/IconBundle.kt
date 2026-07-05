@@ -27,7 +27,9 @@ import androidx.compose.material.icons.rounded.DatasetLinked
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.DeveloperMode
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.FileOpen
 import androidx.compose.material.icons.rounded.FormatAlignLeft
 import androidx.compose.material.icons.rounded.Extension
@@ -41,6 +43,7 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.NoteAdd
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.RestartAlt
@@ -71,6 +74,7 @@ enum class JCodeIcon {
     Add, Close, Refresh, Paste, Collapse, MoreVert, Save, Undo, Redo, Discard,
     Continue, Rerun, StepInto, StepOver, StepOut,
     Output, Logs, Problems, Radar, Debug, Tasks, Chat, Cursor,
+    Browser, DevTools, Image,
     DropDown, ChevronDown, ChevronRight, ArrowUp, MenuToggle, Help,
     Copy, Cut, Delete, Open, Rename, SelectAll, Clear, Definition, References, Format,
 }
@@ -118,6 +122,9 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.Database to Icons.Rounded.DatasetLinked,
         JCodeIcon.Vm to Icons.Rounded.Dns,
         JCodeIcon.Code to Icons.Rounded.Code,
+        JCodeIcon.Browser to Icons.Rounded.Public,
+        JCodeIcon.DevTools to Icons.Rounded.DeveloperMode,
+        JCodeIcon.Image to Icons.Rounded.Image,
         JCodeIcon.Add to Icons.Rounded.Add,
         JCodeIcon.Close to Icons.Rounded.Close,
         JCodeIcon.Refresh to Icons.Rounded.Refresh,

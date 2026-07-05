@@ -326,6 +326,7 @@ object SettingsFeature {
                 val globalOptions = buildList {
                     add(WebPreviewBrowsers.SYSTEM)
                     add(WebPreviewBrowsers.ASK)
+                    add(WebPreviewBrowsers.BUILTIN)
                     webPreview.available.forEach { add(it.packageName) }
                 }
                 globalOptions.forEach { choice ->
@@ -334,6 +335,7 @@ object SettingsFeature {
                         description = when (choice) {
                             WebPreviewBrowsers.SYSTEM -> "The device's default browser app"
                             WebPreviewBrowsers.ASK -> "Show the Android app chooser each time"
+                            WebPreviewBrowsers.BUILTIN -> "J Code's own in-editor browser, with DevTools"
                             else -> choice
                         },
                         selected = webPreview.globalChoice == choice,

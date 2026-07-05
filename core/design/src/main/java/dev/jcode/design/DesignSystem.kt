@@ -195,12 +195,15 @@ class WebPreviewBrowsers(
         INHERIT -> "Use global default"
         SYSTEM -> "System default"
         ASK -> "Always ask"
+        BUILTIN -> "Built-in browser"
         else -> available.firstOrNull { it.packageName == choice }?.label ?: choice
     }
 
     companion object {
         const val SYSTEM = "SYSTEM"
         const val ASK = "ASK"
+        /** Open the preview inside J Code's own in-editor browser (with DevTools) instead of an external app. */
+        const val BUILTIN = "BUILTIN"
         const val INHERIT = ""
     }
 }

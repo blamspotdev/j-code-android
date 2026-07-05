@@ -1899,6 +1899,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _editorGroup.value = group.withTabAdded(EditorTab.page(tabId, title(), kind))
     }
 
+    /**
+     * Open (or focus) the single built-in browser editor tab. The URL is carried by
+     * [dev.jcode.workbench.BuiltinBrowser] (set via its `requestOpen`), so callers that already
+     * requested a navigation only need to surface the tab.
+     */
+    fun openBrowserTab() {
+        val group = _editorGroup.value
+        val existing = group.tabs.firstOrNull { it.id == BROWSER_TAB_ID }
+        _editorGroup.value = if (existing != null) {
+            group.withActiveTabChanged(existing.id)
+        } else {
+            group.withTabAdded(EditorTab.page(BROWSER_TAB_ID, "Browser", EditorPageKind.Browser))
+        }
+    }
+
     /** Full status re-check (installed + update-available) for the SDK catalog; runs async, no-op if already running. */
     fun checkSdkStatuses() {
         viewModelScope.launch(Dispatchers.IO) { distroService.checkSdkStatuses() }
@@ -2220,6 +2235,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        // Images open in the built-in viewer. Checked before the text probe so .svg (which is text)
+        // renders rather than opening as XML source.
+        if (file.extension.lowercase() in IMAGE_EXTENSIONS) {
+            _editorGroup.value = _editorGroup.value.withTabAdded(
+                EditorTab.page(stableId, file.name, EditorPageKind.ImageViewer),
+            )
+            return
+        }
+
         if (!file.isLikelyTextFile()) {
             emitMessage("Binary preview is not implemented yet for ${file.name}.")
             return
@@ -2249,6 +2273,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val existing = _editorGroup.value.tabs.firstOrNull { it.id == stableId }
         if (existing != null) {
             _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
+            return
+        }
+
+        if (node.name.substringAfterLast('.', "").lowercase() in IMAGE_EXTENSIONS) {
+            _editorGroup.value = _editorGroup.value.withTabAdded(
+                EditorTab.page(stableId, node.name, EditorPageKind.ImageViewer),
+            )
             return
         }
 
@@ -2527,5 +2558,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val EXT_APP_PREFIX = "jcode://ext-app/"
         const val EXT_PERMISSIONS_TAB_ID = "jcode://ext-permissions"
         const val RUN_CONFIG_PREFIX = "jcode://run-config/"
+        /** Stable id of the single built-in browser editor tab (see [openBrowserPage]). */
+        const val BROWSER_TAB_ID = "jcode://browser"
+        /** Extensions routed to the built-in image viewer instead of the text editor. */
+        val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico")
     }
 }
