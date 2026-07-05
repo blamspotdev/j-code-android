@@ -165,7 +165,8 @@ if ($rustReady) {
 }
 
 $Version = if (Test-Path 'VERSION.txt') { (Get-Content 'VERSION.txt' -Raw).Trim() } else { '1.0.0' }
-$Code = (git rev-list --count HEAD 2>$null); if (-not $Code) { $Code = 0 }
+# versionCode = MAJOR*10000 + MINOR*100 + PATCH (must match app/build.gradle.kts jcodeVersionCode).
+$Code = if ($Version -match '^(\d+)\.(\d+)\.(\d+)') { [int]$Matches[1] * 10000 + [int]$Matches[2] * 100 + [int]$Matches[3] } else { 10000 }
 Say "Building JCode v$Version ($Code) - this compiles native code and can take a while..."
 
 # Cargo libs build in a separate invocation: assembleRelease's configuration then sees them

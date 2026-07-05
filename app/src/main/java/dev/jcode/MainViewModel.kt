@@ -840,9 +840,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             version = "1.0.1",
         ),
         BundledExtensionSpec(
-            assetPath = "builtin-extensions/jcode.ext.gitscm-0.5.0.jext",
+            assetPath = "builtin-extensions/jcode.ext.gitscm-0.5.1.jext",
             uniqueName = "jcode.ext.gitscm",
-            version = "0.5.0",
+            version = "0.5.1",
         ),
         // NOTE: manager extensions (SQL Client, VM Manager) are NOT bundled — they pull in
         // libraries/binaries at runtime and are distributed via the marketplace, not baked into the app.

@@ -178,7 +178,8 @@ else
 fi
 
 VERSION="$(tr -d '[:space:]' < VERSION.txt 2>/dev/null || echo 1.0.0)"
-CODE="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
+# versionCode = MAJOR*10000 + MINOR*100 + PATCH (must match app/build.gradle.kts jcodeVersionCode).
+CODE="$(echo "$VERSION" | awk -F. '{ c = $1*10000 + $2*100 + $3; printf "%d", (c > 0 ? c : 10000) }')"
 say "Building JCode v$VERSION ($CODE) — this compiles native code and can take a while..."
 
 # Cargo libs build in a separate invocation: assembleRelease's configuration then sees them

@@ -1,5 +1,6 @@
 package dev.jcode.workbench
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -7,18 +8,20 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -30,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -40,6 +44,7 @@ import dev.jcode.core.search.SearchModule
 import dev.jcode.core.search.SearchOptions
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.LocalIconBundle
+import dev.jcode.design.ManagerFilterChip
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
 import kotlinx.coroutines.flow.debounce
@@ -111,28 +116,12 @@ internal fun SearchToolPanel(
     Column(modifier = modifier.fillMaxSize()) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                placeholder = { Text("Search in files") },
-                leadingIcon = {
-                    Icon(LocalIconBundle.current[JCodeIcon.Search], contentDescription = null, modifier = Modifier.size(18.dp))
-                },
-                trailingIcon = {
-                    if (searching) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    }
-                },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SearchToggleChip("Aa", caseSensitive) { caseSensitive = !caseSensitive }
-                SearchToggleChip(".*", regex) { regex = !regex }
+            SearchField(query = query, onQueryChange = { query = it }, searching = searching)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                ManagerFilterChip(selected = caseSensitive, label = "Aa") { caseSensitive = !caseSensitive }
+                ManagerFilterChip(selected = regex, label = ".*") { regex = !regex }
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
@@ -210,13 +199,58 @@ private fun MatchRow(match: SearchMatch, onClick: () -> Unit) {
     }
 }
 
+/** Compact single-line search field (~36dp) matching the manager panels — the default
+ *  OutlinedTextField's 56dp min height is too bulky for this dense left-drawer panel. */
 @Composable
-private fun SearchToggleChip(label: String, selected: Boolean, onToggle: () -> Unit) {
-    FilterChip(
-        selected = selected,
-        onClick = onToggle,
-        label = { Text(label, fontFamily = FontFamily.Monospace) },
-    )
+private fun SearchField(query: String, onQueryChange: (String) -> Unit, searching: Boolean) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.heightIn(min = 36.dp).padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                LocalIconBundle.current[JCodeIcon.Search],
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Box(modifier = Modifier.weight(1f)) {
+                if (query.isEmpty()) {
+                    Text(
+                        "Search in files",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (searching) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+            } else if (query.isNotEmpty()) {
+                Icon(
+                    LocalIconBundle.current[JCodeIcon.Close],
+                    contentDescription = "Clear search",
+                    modifier = Modifier.size(16.dp).clickable { onQueryChange("") },
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
 }
 
 @Composable
