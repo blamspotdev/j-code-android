@@ -115,16 +115,27 @@ class ExtensionInstaller internal constructor(context: Context) {
         expectedFingerprint: String?,
         appVersion: String,
     ): InstalledExtension {
-        val files = readZipEntries(bytes)
+        // Official packages ship signed (Ed25519) + encrypted (AES-256-GCM). Verify + decrypt to the
+        // inner plain-.jext ZIP first; a plain (format-1) ZIP is passed through for backward compatibility.
+        val zipBytes = if (JextCrypto.isSignedJext(bytes)) JextCrypto.openSignedJext(bytes) else bytes
+        val files = readZipEntries(zipBytes)
         val manifestText = files[JEXT_MANIFEST]?.toString(Charsets.UTF_8)
             ?: error("not a .jext package (missing $JEXT_MANIFEST)")
         verifyManifest(JSONObject(manifestText), files, expectedFingerprint)
 
-        val jehmText = files[JEHM_FILE]?.toString(Charsets.UTF_8)
-            ?: error("not a .jext package (missing $JEHM_FILE)")
-        val header = parseJehmHeader(jehmText)
-        val uniqueName = header.str("uniqueName") ?: error("$JEHM_FILE missing uniqueName")
-        requireCompatible(header.str("minJCodeVersion"), appVersion, header.str("name") ?: uniqueName)
+        // The header (install id + minJCodeVersion) now lives in extension.yaml; fall back to a legacy
+        // extension.jehm for packages built before the header merge.
+        val yamlMap = files["extension.yaml"]?.toString(Charsets.UTF_8)
+            ?.let { runCatching { parseYamlMapping(it) }.getOrNull() }
+        val jehmMap = files[JEHM_FILE]?.toString(Charsets.UTF_8)
+            ?.let { runCatching { parseJehmHeader(it) }.getOrNull() }
+        val uniqueName = yamlMap?.str("id") ?: yamlMap?.str("uniqueName") ?: jehmMap?.str("uniqueName")
+            ?: error("package has no extension.yaml id (nor a legacy extension.jehm uniqueName)")
+        requireCompatible(
+            yamlMap?.str("minJCodeVersion") ?: jehmMap?.str("minJCodeVersion"),
+            appVersion,
+            yamlMap?.str("name") ?: jehmMap?.str("name") ?: uniqueName,
+        )
 
         installRoot.mkdirs()
         val dest = File(installRoot, safeDirName(uniqueName))
@@ -241,18 +252,24 @@ class ExtensionInstaller internal constructor(context: Context) {
         )
     }
 
-    // The web-frontend HTML entry the .jehm declares (entry.ui), if any. Used by App/DbManager types.
+    // The extension header (entry, images, …), read from extension.yaml overlaid on a legacy
+    // extension.jehm (yaml wins) so both merged and pre-merge installs resolve correctly.
+    private fun headerMap(dir: File): Map<String, Any?> {
+        val jehm = File(dir, JEHM_FILE).takeIf { it.isFile }
+            ?.let { runCatching { parseJehmHeader(it.readText()) }.getOrNull() } ?: emptyMap()
+        val yaml = File(dir, "extension.yaml").takeIf { it.isFile }
+            ?.let { runCatching { parseYamlMapping(it.readText()) }.getOrNull() } ?: emptyMap()
+        return jehm + yaml
+    }
+
+    // The web-frontend HTML entry the header declares (entry.ui), if any. Used by App/DbManager types.
     private fun findWebUiEntry(dir: File): String? =
-        File(dir, JEHM_FILE).takeIf { it.isFile }
-            ?.let { runCatching { parseJehmHeader(it.readText()) }.getOrNull() }
-            ?.let { (it["entry"] as? Map<*, *>)?.toStringKeyMap()?.str("ui") }
+        (headerMap(dir)["entry"] as? Map<*, *>)?.toStringKeyMap()?.str("ui")
             ?.takeIf { it.isNotBlank() && File(dir, it).isFile }
 
-    // The icon path the .jehm declares (images.icon), else a conventional location; null if absent.
+    // The icon path the header declares (images.icon), else a conventional location; null if absent.
     private fun findIconFile(dir: File): File? {
-        val declared = File(dir, JEHM_FILE).takeIf { it.isFile }
-            ?.let { runCatching { parseJehmHeader(it.readText()) }.getOrNull() }
-            ?.let { (it["images"] as? Map<*, *>)?.toStringKeyMap()?.str("icon") }
+        val declared = (headerMap(dir)["images"] as? Map<*, *>)?.toStringKeyMap()?.str("icon")
         return listOfNotNull(declared, "media/icon.png", "icon.png")
             .map { File(dir, it) }
             .firstOrNull { it.isFile }
