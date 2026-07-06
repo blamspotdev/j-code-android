@@ -23,6 +23,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        setTheme(R.style.Theme_JCode)
         super.onCreate(savedInstanceState)
         // Hardware acceleration is opt-out via Settings → Performance. The manifest disables it for
         // this activity (window level can only ENABLE), so apply the flag here — before setContent,

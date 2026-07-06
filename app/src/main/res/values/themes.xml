@@ -1,15 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- App + launch theme. A dark window background (matching the launcher icon) prevents the white
-         flash before the dark Compose UI draws; on Android 12+ the system splash shows the JCode logo
-         on the same dark background. Parent kept Light so any android-themed component is unchanged. -->
+    <!-- Startup theme used only for the system launch window. Android 11 and below use the centered
+         layer-list icon; Android 12+ uses the platform splash attributes. -->
+    <style name="Theme.JCode.Starting" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@drawable/splash_screen</item>
+        <item name="android:colorBackground">@color/ic_launcher_background</item>
+        <item name="android:statusBarColor">@color/ic_launcher_background</item>
+        <item name="android:navigationBarColor">@color/ic_launcher_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowSplashScreenBackground" tools:targetApi="31">@color/ic_launcher_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon" tools:targetApi="31">@drawable/ic_launcher_foreground</item>
+    </style>
+
+    <!-- Runtime app theme. Keep the dark window background so there is no white flash before Compose
+         draws. Parent kept Light so any android-themed component is unchanged. -->
     <style name="Theme.JCode" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/ic_launcher_background</item>
         <item name="android:colorBackground">@color/ic_launcher_background</item>
         <item name="android:statusBarColor">@color/ic_launcher_background</item>
         <item name="android:navigationBarColor">@color/ic_launcher_background</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowSplashScreenBackground" tools:targetApi="31">@color/ic_launcher_background</item>
-        <item name="android:windowSplashScreenAnimatedIcon" tools:targetApi="31">@mipmap/ic_launcher_foreground</item>
     </style>
 </resources>

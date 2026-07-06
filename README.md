@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="96" alt="J Code icon" />
+  <img src="media/jcode-app-icon.svg" width="96" alt="J Code icon" />
 </p>
 
 <h1 align="center">J Code</h1>
