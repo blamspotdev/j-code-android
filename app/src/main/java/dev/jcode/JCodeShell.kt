@@ -498,7 +498,15 @@ fun JCodeApp(
     )
     val openFolderTypePrompt by viewModel.openFolderTypePrompt.collectAsStateWithLifecycle()
     val environmentNotConfigured = environmentState.smokeTestPassed != true
-    val showFirstRunEnvironmentScreen = environmentNotConfigured && !environmentState.firstRunSetupDeferred
+    // The first-run screen latches once shown and stays up until the user taps "Done" (which defers).
+    // Without this it would vanish the instant setup finishes — smokeTestPassed flips true at the end of
+    // runAllPendingSteps, just before AllDone is emitted — skipping the "Done" confirmation. Saveable so
+    // it survives a rotation mid-setup.
+    var firstRunScreenLatched by rememberSaveable { mutableStateOf(false) }
+    if (environmentNotConfigured && !environmentState.firstRunSetupDeferred) {
+        firstRunScreenLatched = true
+    }
+    val showFirstRunEnvironmentScreen = firstRunScreenLatched && !environmentState.firstRunSetupDeferred
 
     LaunchedEffect(viewModel) {
         viewModel.messages.collectLatest { message ->

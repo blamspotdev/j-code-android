@@ -197,6 +197,7 @@ private fun StepperScreen(
                 number = distroStepNumber,
                 environmentState = environmentState,
                 running = running,
+                completed = completed,
                 enabled = distroStepEnabled,
                 onSelectDistro = onSelectDistro,
                 onAutoSetup = onAutoSetup,
@@ -284,23 +285,26 @@ private fun DistroSelectionCard(
     number: Int,
     environmentState: DistroEnvironmentState,
     running: Boolean,
+    completed: Boolean,
     enabled: Boolean,
     onSelectDistro: (DistroProfile) -> Unit,
     onAutoSetup: () -> Unit,
     onRefresh: () -> Unit,
 ) {
-    // Interactive until the previous step (storage) is done; the whole card also locks while a setup runs.
-    val interactive = enabled && !running
+    // Interactive until the previous step (storage) is done; the whole card also locks while a setup
+    // runs AND stays locked once it has succeeded (Step 3 done) — re-selecting/re-running from here
+    // then makes no sense. A failed run leaves it interactive so the user can retry.
+    val interactive = enabled && !running && !completed
     StepCard(
         number = number,
         title = "Select a distro",
         active = interactive,
     ) {
         Text(
-            text = if (enabled) {
-                "Choose the Linux distro J Code should prepare for your embedded environment."
-            } else {
-                "Allow storage access above to continue."
+            text = when {
+                completed -> "Environment ready — ${environmentState.runtime.selectedDistro.label} is set up."
+                enabled -> "Choose the Linux distro J Code should prepare for your embedded environment."
+                else -> "Allow storage access above to continue."
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
