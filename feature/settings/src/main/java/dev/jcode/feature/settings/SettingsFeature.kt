@@ -55,13 +55,10 @@ import dev.jcode.core.config.ConfigScope
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.config.ProjectConfig
 import dev.jcode.core.config.WorkspaceConfig
-import dev.jcode.design.ExtensionSettingSpec
-import dev.jcode.design.ExtensionSettingsUi
 import dev.jcode.design.IconBundle
 import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.LocalEditorDragMovesCursor
-import dev.jcode.design.LocalExtensionSettingsUi
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.LocalRestoreSession
 import dev.jcode.design.LocalSourceControlSettings
@@ -259,25 +256,8 @@ object SettingsFeature {
                 }
             }
 
-            val extensionSettings = LocalExtensionSettingsUi.current
-            if (extensionSettings.groups.isNotEmpty()) {
-                SettingsSectionHeader("Extensions")
-                extensionSettings.groups.forEach { group ->
-                    SettingsCard(
-                        title = group.extensionName,
-                        description = "Preferences for the ${group.extensionName} extension.",
-                        keywords = "extension settings " + group.extensionName + " " +
-                            group.specs.joinToString(" ") { "${it.key} ${it.label}" },
-                    ) {
-                        group.specs.forEachIndexed { index, spec ->
-                            if (index > 0) {
-                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-                            }
-                            ExtensionSettingControl(group.extensionId, spec, extensionSettings)
-                        }
-                    }
-                }
-            }
+            // Per-extension settings now live on the Extension Settings screen (Extensions list → gear),
+            // alongside each extension's permissions — not here in App Settings.
 
             SettingsSectionHeader("Performance")
             SettingsCard(
@@ -755,57 +735,6 @@ private fun IdentityField(
                         ),
                 )
             }
-        }
-    }
-}
-
-/** One control for a generic extension setting; shape depends on the declared [ExtensionSettingSpec.type]. */
-@Composable
-private fun ExtensionSettingControl(
-    extensionId: String,
-    spec: ExtensionSettingSpec,
-    ui: ExtensionSettingsUi,
-) {
-    val current = ui.valueOf(extensionId, spec.key)
-    when (spec.type) {
-        "bool" -> ToggleRow(
-            label = spec.label,
-            supporting = spec.description.orEmpty(),
-            checked = current == "true" || current == "1",
-            onCheckedChange = { ui.onChange(extensionId, spec.key, it.toString()) },
-        )
-
-        "enum" -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(spec.label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-            spec.description?.takeIf { it.isNotBlank() }?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            spec.options.forEach { option ->
-                BundleRow(
-                    name = option.replaceFirstChar { c -> c.uppercaseChar() },
-                    description = "",
-                    selected = current == option,
-                    swatch = emptyList(),
-                    onClick = { ui.onChange(extensionId, spec.key, option) },
-                )
-            }
-        }
-
-        else -> {
-            // Buffer edits locally so fast typing isn't clobbered by the async DataStore round-trip,
-            // and persist once on focus loss instead of on every keystroke (avoids a write/reload storm).
-            var text by remember(extensionId, spec.key) { mutableStateOf(current) }
-            LaunchedEffect(current) { if (current != text) text = current }
-            IdentityField(
-                label = spec.label,
-                value = text,
-                placeholder = spec.default,
-                onCommit = { if (text != current) ui.onChange(extensionId, spec.key, text) },
-            ) { text = it }
         }
     }
 }

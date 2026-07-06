@@ -1964,14 +1964,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
     }
 
-    /** Open (or focus) the Extension Permissions manager as an in-editor page. */
+    /** Open (or focus) the Extension Settings page (per-extension settings + permissions). */
     fun openExtensionPermissionsPage() {
         val existing = _editorGroup.value.tabs.firstOrNull { it.pageKind == EditorPageKind.ExtensionPermissions }
         if (existing != null) {
             _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
             return
         }
-        val tab = EditorTab.page(EXT_PERMISSIONS_TAB_ID, "Extension Permissions", EditorPageKind.ExtensionPermissions)
+        val tab = EditorTab.page(EXT_PERMISSIONS_TAB_ID, "Extension Settings", EditorPageKind.ExtensionPermissions)
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
     }
 
