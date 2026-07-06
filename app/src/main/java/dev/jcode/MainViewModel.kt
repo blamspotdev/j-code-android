@@ -2414,7 +2414,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (targetWs != null && targetWs != currentWorkspace.value?.id &&
                 workspaceManager.workspaceExists(targetWs)
             ) {
-                workspaceManager.openWorkspace(targetWs)
+                workspaceManager.restoreWorkspace(targetWs)
             }
             // Wait for the workspace (and its project list) to load so the project selection sticks.
             val workspace = withTimeoutOrNull(4_000) {
