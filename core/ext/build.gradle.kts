@@ -29,6 +29,9 @@ dependencies {
     ksp(libs.hilt.compiler)
 }
 
-tasks.named("preBuild").configure {
-    dependsOn(":native:wasmtime-ffi:prepareCargoJniLibs")
+tasks.matching { it.name == "preDebugBuild" }.configureEach {
+    dependsOn(":native:wasmtime-ffi:cargoBuildDebugJniLibs")
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(":native:wasmtime-ffi:cargoBuildReleaseJniLibs")
 }

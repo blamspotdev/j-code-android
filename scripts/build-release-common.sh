@@ -8,13 +8,22 @@ BUILD_TOOLS_PKG="build-tools;34.0.0"
 CMAKE_PKG="cmake;3.22.1"
 
 ASSUME_YES=0
+VARIANT="${JCODE_VARIANT:-}"
+PRERELEASE_LABEL="${JCODE_PRERELEASE_LABEL:-beta}"
 for arg in "$@"; do
     case "$arg" in
         -y|--yes) ASSUME_YES=1 ;;
+        --release) VARIANT="release" ;;
+        --prerelease|--pre) VARIANT="prerelease" ;;
+        --label=*) PRERELEASE_LABEL="${arg#--label=}" ;;
         -h|--help)
-            echo "Usage: $(basename "$0") [-y|--yes]"
+            echo "Usage: $(basename "$0") [-y|--yes] [--release|--prerelease] [--label=<s>]"
             echo "Builds a release APK of JCode into ./builds."
-            echo "  -y, --yes   auto-accept install prompts"
+            echo "  -y, --yes       auto-accept install prompts"
+            echo "  --release       final build (default; version straight from VERSION.txt)"
+            echo "  --prerelease    testing build; appends a pre-release label to the version"
+            echo "  --label=<s>     pre-release label (default: beta -> 1.0.2-beta)"
+            echo "Without --release/--prerelease you're prompted interactively."
             exit 0
             ;;
     esac
@@ -133,6 +142,10 @@ fi
 CARGO_TASKS=""
 rust_ready=1
 if ! have cargo; then
+    # shellcheck disable=SC1091
+    [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+fi
+if ! have cargo; then
     rust_ready=0
     warn "Rust (cargo) not found — the ripgrep/wasmtime native libs will be built as stubs."
     say  "  install with: $RUST_HINT"
@@ -177,10 +190,32 @@ else
     warn "Continuing without Rust — search/wasm features in the APK will use stub libraries."
 fi
 
+# --- Build variant: Release or Pre-release (interactive unless --release/--prerelease/$JCODE_VARIANT) ---
+if [ -z "$VARIANT" ]; then
+    if [ -t 0 ]; then
+        printf '\n'
+        say 'Which build?'
+        printf '  [1] Release      - final build, version straight from VERSION.txt\n'
+        printf '  [2] Pre-release  - testing build, appends a pre-release label to the version\n'
+        read -r -p 'Select [1] ' _sel
+        case "$_sel" in 2|p|P|pre*) VARIANT="prerelease" ;; *) VARIANT="release" ;; esac
+        if [ "$VARIANT" = "prerelease" ]; then
+            read -r -p "Pre-release label [$PRERELEASE_LABEL] " _lbl
+            [ -n "$_lbl" ] && PRERELEASE_LABEL="$(printf '%s' "$_lbl" | tr -cd '0-9A-Za-z.-')"
+        fi
+    else
+        VARIANT="release"
+    fi
+fi
+case "$VARIANT" in prerelease) IS_PRE=1 ;; *) IS_PRE=0; VARIANT="release" ;; esac
+[ "$IS_PRE" = 1 ] && say "Variant: prerelease (label: $PRERELEASE_LABEL)" || say "Variant: release"
+
 VERSION="$(tr -d '[:space:]' < VERSION.txt 2>/dev/null || echo 1.0.0)"
+# Pre-release appends the label to versionName (1.0.2 -> 1.0.2-beta); versionCode ignores the suffix.
+if [ "$IS_PRE" = 1 ]; then VERSION_NAME="$VERSION-$PRERELEASE_LABEL"; else VERSION_NAME="$VERSION"; fi
 # versionCode = MAJOR*10000 + MINOR*100 + PATCH (must match app/build.gradle.kts jcodeVersionCode).
 CODE="$(echo "$VERSION" | awk -F. '{ c = $1*10000 + $2*100 + $3; printf "%d", (c > 0 ? c : 10000) }')"
-say "Building JCode v$VERSION ($CODE) — this compiles native code and can take a while..."
+say "Building JCode v$VERSION_NAME ($CODE) [$VARIANT] — this compiles native code and can take a while..."
 
 # Cargo libs build in a separate invocation: assembleRelease's configuration then sees them
 # and drops the CMake stub for the Rust modules (see root build.gradle.kts).
@@ -188,13 +223,13 @@ if [ -n "$CARGO_TASKS" ]; then
     # shellcheck disable=SC2086
     ./gradlew $CARGO_TASKS || die "Cargo build failed."
 fi
-./gradlew :app:assembleRelease || die "Gradle build failed."
+./gradlew :app:assembleRelease "-PjcodeVersionName=$VERSION_NAME" || die "Gradle build failed."
 
 APK="$(ls app/build/outputs/apk/release/*.apk 2>/dev/null | head -1)"
 [ -n "$APK" ] || die "Build finished but no APK found in app/build/outputs/apk/release/"
 
 mkdir -p builds
-OUT="builds/jcode-v$VERSION-$CODE-release.apk"
+OUT="builds/jcode-v$VERSION_NAME-$CODE-$VARIANT.apk"
 
 latest_build_tools() { ls "$SDK_ROOT/build-tools" | sort -V | tail -1; }
 APKSIGNER="$SDK_ROOT/build-tools/$(latest_build_tools)/apksigner"
@@ -254,11 +289,11 @@ if [ -n "${JCODE_KEYSTORE:-}" ]; then
         --out "$OUT" "$APK"
     SIGN_STATE="release-signed"
 elif [ -f "$HOME/.android/debug.keystore" ] && ask_interactive "No release keystore configured. Sign with the Android debug keystore so the APK is installable?"; then
-    OUT="builds/jcode-v$VERSION-$CODE-release-debugsigned.apk"
+    OUT="builds/jcode-v$VERSION_NAME-$CODE-$VARIANT-debugsigned.apk"
     "$APKSIGNER" sign --ks "$HOME/.android/debug.keystore" --ks-pass pass:android --out "$OUT" "$APK"
     SIGN_STATE="debug-signed"
 else
-    OUT="builds/jcode-v$VERSION-$CODE-release-unsigned.apk"
+    OUT="builds/jcode-v$VERSION_NAME-$CODE-$VARIANT-unsigned.apk"
     cp "$APK" "$OUT"
     warn "APK is UNSIGNED and cannot be installed as-is."
     say  "  sign later: apksigner sign --ks <keystore> --out <signed.apk> $OUT"
