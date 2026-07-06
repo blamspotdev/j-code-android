@@ -92,6 +92,31 @@ internal fun OpenFolderTypeDialog(
     )
 }
 
+/**
+ * After cloning while a User Workspace is open: open the cloned folder as the active project, or keep it
+ * added to the workspace's project list to open later.
+ */
+@Composable
+internal fun PostCloneDialog(
+    projectName: String,
+    onOpen: () -> Unit,
+    onAdd: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onAdd,
+        title = { Text("Cloned '$projectName'") },
+        text = {
+            Text(
+                "It was added to this workspace. Open it now, or keep it in the workspace to open later?",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        confirmButton = { TextButton(onClick = onOpen) { Text("Open folder") } },
+        dismissButton = { TextButton(onClick = onAdd) { Text("Add to workspace") } },
+    )
+}
+
 @Composable
 internal fun NewItemDialog(
     templates: List<ProjectTemplate>,

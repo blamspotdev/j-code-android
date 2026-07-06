@@ -68,6 +68,26 @@ data class ExtensionDeps(
     }
 }
 
+/** A UI action an extension contributes to a host surface (start-editor screen, drawer header). */
+data class ContributedAction(
+    val id: String,
+    val label: String,
+    val icon: String? = null,
+)
+
+/** Actions an extension contributes to host surfaces. Rendered when the extension is active and its
+ *  required toolchains are installed; the host routes known action ids (e.g. clone, remoteRepo). */
+data class ExtensionContributions(
+    val editorStartActions: List<ContributedAction> = emptyList(),
+    val drawerActions: List<ContributedAction> = emptyList(),
+) {
+    val isEmpty: Boolean get() = editorStartActions.isEmpty() && drawerActions.isEmpty()
+
+    companion object {
+        val EMPTY = ExtensionContributions()
+    }
+}
+
 /** A code/config sample shown on an extension's detail page. */
 data class CodeSample(
     val title: String,
@@ -238,6 +258,8 @@ data class InstalledExtension(
     /** Toolchains/extensions this extension requires (installed with it) or suggests. */
     val requires: ExtensionDeps = ExtensionDeps.EMPTY,
     val suggests: ExtensionDeps = ExtensionDeps.EMPTY,
+    /** Actions this extension contributes to host surfaces (start-editor screen, drawer header). */
+    val contributes: ExtensionContributions = ExtensionContributions.EMPTY,
 )
 
 /** The first bundled language that claims [fileName] (by file extension), or null. */

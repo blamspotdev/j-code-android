@@ -58,6 +58,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -205,6 +206,7 @@ import dev.jcode.feature.lspmanager.LspManagerFeature
 import dev.jcode.feature.sdkmanager.SdkManagerFeature
 import dev.jcode.feature.settings.SettingsFeature
 import dev.jcode.workbench.dialog.NewItemDialog
+import dev.jcode.workbench.dialog.PostCloneDialog
 import dev.jcode.workbench.dialog.OpenFolderTypeDialog
 import dev.jcode.feature.marketplace.ExtensionActivation
 import dev.jcode.workbench.marketplace.ExtensionActivationSetting
@@ -293,6 +295,7 @@ fun JCodeApp(
     val selectedProject by viewModel.selectedProject.collectAsStateWithLifecycle()
     val editorGroup by viewModel.editorGroup.collectAsStateWithLifecycle()
     val showNewItemDialog by viewModel.showNewItemDialog.collectAsStateWithLifecycle()
+    val postClonePrompt by viewModel.postClonePrompt.collectAsStateWithLifecycle()
     val templates by viewModel.templates.collectAsStateWithLifecycle()
     val workspaceConfig by viewModel.workspaceConfig.collectAsStateWithLifecycle()
     val projectConfig by viewModel.projectConfig.collectAsStateWithLifecycle()
@@ -548,12 +551,19 @@ fun JCodeApp(
     }
 
     val recents by viewModel.recents.collectAsStateWithLifecycle()
-    val editorEmptyActions = remember(recents) {
+    val contributedStartActions by viewModel.contributedEditorStartActions.collectAsStateWithLifecycle()
+    val contributedDrawerActions by viewModel.contributedDrawerActions.collectAsStateWithLifecycle()
+    val vcsActions = remember(contributedDrawerActions) {
+        VcsActions(drawerActions = contributedDrawerActions, onAction = viewModel::openContributedView)
+    }
+    val editorEmptyActions = remember(recents, contributedStartActions) {
         EditorEmptyActions(
             recents = recents,
             onOpenRecent = viewModel::openRecent,
             onNewProject = viewModel::requestNew,
             onOpenFolder = { openFolderLauncher.launch(null) },
+            startActions = contributedStartActions,
+            onAction = viewModel::openContributedView,
         )
     }
 
@@ -616,6 +626,7 @@ fun JCodeApp(
         LocalCompletionSource provides completionSource,
         LocalEnvironmentManager provides environmentManagerActions,
         LocalEditorEmptyActions provides editorEmptyActions,
+        LocalVcsActions provides vcsActions,
         LocalDebugCatalogState provides debugCatalogState,
         LocalExtensionInstallPhases provides extensionInstallPhases,
         LocalSetupTerminalSessionId provides setupTerminalSessionId,
@@ -740,6 +751,14 @@ fun JCodeApp(
         )
     }
 
+    postClonePrompt?.let { project ->
+        PostCloneDialog(
+            projectName = project.name,
+            onOpen = { viewModel.resolvePostClone(open = true) },
+            onAdd = { viewModel.resolvePostClone(open = false) },
+        )
+    }
+
     openFolderTypePrompt?.let { path ->
         OpenFolderTypeDialog(
             folderName = path.displayName,
@@ -829,6 +848,9 @@ private fun JCodeShell(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    // Resolve the VCS actions here (under the CompositionLocal provider) and capture into closures below;
+    // the editor-page dispatch is invoked in a subcomposition where the local would fall back to default.
+    val vcs = LocalVcsActions.current
     val appContext = LocalContext.current.applicationContext
     val configuration = LocalConfiguration.current
     val focusRequester = remember { FocusRequester() }
@@ -1458,6 +1480,8 @@ private fun JCodeShell(
                 onRenameProject = onRenameProject,
                 onSelectTool = onSelectWorkbenchTool,
                 onOpenExternalFolder = { openFolderLauncher.launch(null) },
+                contributedDrawerActions = vcs.drawerActions,
+                onDrawerAction = vcs.onAction,
                 onOpenFile = onOpenFile,
                 onOpenPathAtLine = onOpenPathAtLine,
                 onOpenProjectConfig = onOpenProjectConfig,
@@ -1792,6 +1816,8 @@ private fun JCodeShell(
                             onRenameProject = onRenameProject,
                             onSelectTool = onSelectWorkbenchTool,
                             onOpenExternalFolder = { openFolderLauncher.launch(null) },
+                            contributedDrawerActions = vcs.drawerActions,
+                            onDrawerAction = vcs.onAction,
                             onOpenFile = onOpenFile,
                             onOpenPathAtLine = onOpenPathAtLine,
                             onOpenProjectConfig = onOpenProjectConfig,
@@ -2052,6 +2078,8 @@ private fun WorkspacePanel(
     onRenameProject: (Long, String) -> Unit,
     onSelectTool: (WorkbenchTool) -> Unit,
     onOpenExternalFolder: () -> Unit,
+    contributedDrawerActions: List<MainViewModel.ShellContribution>,
+    onDrawerAction: (MainViewModel.ShellContribution) -> Unit,
     onOpenFile: (dev.jcode.fs.FsNode) -> Unit,
     onOpenPathAtLine: (String) -> Unit,
     onOpenProjectConfig: () -> Unit,
@@ -2097,6 +2125,8 @@ private fun WorkspacePanel(
                 onSelectTool = onSelectTool,
                 onCreateProject = onCreateProject,
                 onOpenExternalFolder = onOpenExternalFolder,
+                contributedDrawerActions = contributedDrawerActions,
+                onDrawerAction = onDrawerAction,
                 onCloseWorkspace = onCloseWorkspace,
                 onCloseProject = onCloseProject,
             )
@@ -2255,6 +2285,12 @@ private fun WorkspacePanel(
     }
 }
 
+private fun contributedActionIcon(id: String): JCodeIcon = when (id) {
+    "clone" -> JCodeIcon.Scm
+    "remoteRepo" -> JCodeIcon.Browser
+    else -> JCodeIcon.Code
+}
+
 @Composable
 private fun WorkspaceHeader(
     selectedTool: WorkbenchTool,
@@ -2267,6 +2303,8 @@ private fun WorkspaceHeader(
     onSelectTool: (WorkbenchTool) -> Unit,
     onCreateProject: () -> Unit,
     onOpenExternalFolder: () -> Unit,
+    contributedDrawerActions: List<MainViewModel.ShellContribution>,
+    onDrawerAction: (MainViewModel.ShellContribution) -> Unit,
     onCloseWorkspace: () -> Unit,
     onCloseProject: () -> Unit,
 ) {
@@ -2343,11 +2381,26 @@ private fun WorkspaceHeader(
                 contentDescription = "Add project",
                 onClick = onCreateProject,
             )
-            WorkbenchIconActionButton(
-                icon = jcIcon(JCodeIcon.Destinations),
-                contentDescription = "Open external folder",
-                onClick = onOpenExternalFolder,
-            )
+            Box {
+                var openFolderMenu by remember { mutableStateOf(false) }
+                WorkbenchIconActionButton(
+                    icon = jcIcon(JCodeIcon.Destinations),
+                    contentDescription = "Open folder",
+                    onClick = { if (contributedDrawerActions.isEmpty()) onOpenExternalFolder() else openFolderMenu = true },
+                )
+                if (contributedDrawerActions.isNotEmpty()) {
+                    CompactContextMenu(
+                        expanded = openFolderMenu,
+                        onDismissRequest = { openFolderMenu = false },
+                        listActions = buildList {
+                            add(ContextAction(JCodeIcon.Destinations, "Open Folder") { onOpenExternalFolder() })
+                            contributedDrawerActions.forEach { a ->
+                                add(ContextAction(contributedActionIcon(a.id), a.label) { onDrawerAction(a) })
+                            }
+                        },
+                    )
+                }
+            }
         }
 
         Row(
@@ -2709,9 +2762,23 @@ internal data class EditorEmptyActions(
     val onOpenRecent: (RecentEntity) -> Unit = {},
     val onNewProject: () -> Unit = {},
     val onOpenFolder: () -> Unit = {},
+    /** Extension-contributed actions (e.g. Clone, Remote Repo) shown after New/Open Folder. */
+    val startActions: List<MainViewModel.ShellContribution> = emptyList(),
+    val onAction: (MainViewModel.ShellContribution) -> Unit = {},
 )
 
 internal val LocalEditorEmptyActions = compositionLocalOf { EditorEmptyActions() }
+
+/**
+ * Clone / Remote-Repo state + callbacks for the VCS editor pages and the drawer "Open Folder" dropdown.
+ * Provided by [JCodeApp] (which holds the ViewModel) and read by the inner shell via CompositionLocal.
+ */
+internal data class VcsActions(
+    val drawerActions: List<MainViewModel.ShellContribution> = emptyList(),
+    val onAction: (MainViewModel.ShellContribution) -> Unit = {},
+)
+
+internal val LocalVcsActions = compositionLocalOf { VcsActions() }
 
 /**
  * Editor area when no tab is open. With a project open it points at the Explorer; with no project it
@@ -2774,6 +2841,7 @@ private fun EditorEmptyHint(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modifier) {
     Box(modifier = modifier, contentAlignment = Alignment.TopCenter) {
@@ -2796,9 +2864,12 @@ private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modi
                 )
                 Text("Open a project", fontWeight = FontWeight.SemiBold)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 WorkbenchActionButton(text = "New Folder", onClick = actions.onNewProject, active = true)
                 WorkbenchActionButton(text = "Open Folder", onClick = actions.onOpenFolder)
+                actions.startActions.forEach { action ->
+                    WorkbenchActionButton(text = action.label, onClick = { actions.onAction(action) })
+                }
             }
             if (actions.recents.isEmpty()) {
                 Text(

@@ -408,7 +408,7 @@ class WorkspaceManager @Inject constructor(
         return candidate
     }
 
-    private fun sanitizedFolderName(name: String): String {
+    fun sanitizedFolderName(name: String): String {
         return name.lowercase()
             .replace(Regex("[^a-z0-9._-]+"), "-")
             .trim('-')

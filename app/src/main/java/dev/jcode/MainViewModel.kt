@@ -385,6 +385,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _showNewItemDialog = MutableStateFlow(false)
     val showNewItemDialog: StateFlow<Boolean> = _showNewItemDialog.asStateFlow()
 
+    /** After a folder is opened as a project while a User Workspace is open (e.g. from a clone in the
+     *  SCM extension), the registered project awaiting an open-vs-add choice. */
+    private val _postClonePrompt = MutableStateFlow<Project?>(null)
+    val postClonePrompt: StateFlow<Project?> = _postClonePrompt.asStateFlow()
+
     /** An opened folder awaiting a Project/Workspace choice (it has no `.jcode` type yet). */
     private val _openFolderTypePrompt = MutableStateFlow<FsPath?>(null)
     val openFolderTypePrompt: StateFlow<FsPath?> = _openFolderTypePrompt.asStateFlow()
@@ -995,6 +1000,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissNewDialog() {
         _showNewItemDialog.value = false
         templateScaffolder.reset()
+    }
+
+    // ---- Extension-contributed shell actions (e.g. the SCM extension's Clone / Remote Repo) ----
+
+    /** An action an installed extension contributes to a host surface; tapping opens that extension's
+     *  own view (route == the action id) in the editor area. */
+    data class ShellContribution(val extId: String, val id: String, val label: String)
+
+    /** Actions active extensions contribute to the empty-editor start screen (their required tools met). */
+    val contributedEditorStartActions: StateFlow<List<ShellContribution>> =
+        combine(installedExtensions, extensionActivations, distroService.sdkCatalogState) { exts, acts, sdk ->
+            availableContributions(exts, acts, sdk) { it.editorStartActions }
+        }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+    /** Actions active extensions contribute to the left-drawer "Open Folder" dropdown. */
+    val contributedDrawerActions: StateFlow<List<ShellContribution>> =
+        combine(installedExtensions, extensionActivations, distroService.sdkCatalogState) { exts, acts, sdk ->
+            availableContributions(exts, acts, sdk) { it.drawerActions }
+        }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+    private fun availableContributions(
+        exts: List<InstalledExtension>,
+        acts: Map<String, ExtensionActivation>,
+        sdk: dev.jcode.core.distro.SdkCatalogState,
+        surface: (dev.jcode.feature.marketplace.ExtensionContributions) -> List<dev.jcode.feature.marketplace.ContributedAction>,
+    ): List<ShellContribution> =
+        exts.filter { (acts[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual }
+            .filter { ext -> ext.requires.sdks.all { it in sdk.installedEntryIds } }
+            .flatMap { ext -> surface(ext.contributes).map { ShellContribution(ext.id, it.id, it.label) } }
+            .distinctBy { it.extId + ":" + it.id }
+
+    /** Open the extension view a contributed action points at (route == the action id). */
+    fun openContributedView(c: ShellContribution) {
+        openExtensionViewPage(c.extId, c.id, c.label)
+    }
+
+    /** Resolve the post-open prompt shown after a folder was opened inside a User Workspace. */
+    fun resolvePostClone(open: Boolean) {
+        val project = _postClonePrompt.value ?: return
+        _postClonePrompt.value = null
+        if (open) _selectedProjectId.value = project.id
+        else viewModelScope.launch { emitMessage("Added '${project.name}' to the workspace.") }
     }
 
     fun createNewItem(request: NewItemRequest) {
@@ -1797,6 +1844,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             require(url.startsWith("http://") || url.startsWith("https://")) { "http(s) URLs only" }
             ProjectRunner.openInBrowser(appContext, url, "")
             apiOk(JSONObject())
+        }
+
+        // Register a top-level folder under the current workspace (already created on disk, e.g. by a
+        // git clone) as a Project and open it. In a User Workspace it prompts open-vs-add instead.
+        "workbench.openFolder" -> {
+            val name = p.optString("name").trim()
+            require(name.isNotBlank()) { "name required" }
+            val sanitized = workspaceManager.sanitizedFolderName(name)
+            val userWorkspace = workspaceManager.breadcrumb.value.size > 1
+            if (!userWorkspace) resetDefaultWorkspaceProject()
+            val project = workspaceManager.createNode(sanitized, WorkspaceNodeType.Project, null)
+            if (userWorkspace) _postClonePrompt.value = project else _selectedProjectId.value = project.id
+            apiOk(JSONObject().put("name", project.name).put("opened", !userWorkspace))
         }
 
         "service.start" -> {

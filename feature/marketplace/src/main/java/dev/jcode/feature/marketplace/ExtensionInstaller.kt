@@ -249,6 +249,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             settings = settings,
             requires = parseDeps(map["requires"]),
             suggests = parseDeps(map["suggests"]),
+            contributes = parseContributions(map["contributes"]),
         )
     }
 
@@ -328,6 +329,20 @@ class ExtensionInstaller internal constructor(context: Context) {
         fun ids(key: String): List<String> =
             map.listOfAny(key).mapNotNull { it?.toString()?.takeIf(String::isNotBlank) }
         return ExtensionDeps(sdks = ids("sdks"), lsps = ids("lsps"), extensions = ids("extensions"))
+    }
+
+    private fun parseContributions(raw: Any?): ExtensionContributions {
+        val map = (raw as? Map<*, *>)?.toStringKeyMap() ?: return ExtensionContributions.EMPTY
+        fun actions(key: String): List<ContributedAction> =
+            map.listOfAny(key).mapNotNull { item ->
+                val a = (item as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
+                val id = a.str("id")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+                ContributedAction(id = id, label = a.str("label") ?: id, icon = a.str("icon"))
+            }
+        return ExtensionContributions(
+            editorStartActions = actions("editorStartActions"),
+            drawerActions = actions("drawerActions"),
+        )
     }
 
     // A `type: language` extension may declare a single `language:` block (legacy) or a `languages:`
