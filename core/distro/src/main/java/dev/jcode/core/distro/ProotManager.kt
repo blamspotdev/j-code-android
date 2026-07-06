@@ -303,6 +303,15 @@ class ProotManager(private val context: Context) {
         // Run as root (UID 0) inside proot - needed for apt, etc.
         args.add("-0")
 
+        // Emulate hard-links as symlinks. dpkg/apt atomically back up their database by hard-linking
+        // (/var/lib/dpkg/status -> status-old); many Android kernels/filesystems reject link() in the
+        // app data dir (EPERM/EACCES), so without this dpkg dies with "error creating new backup file
+        // '/var/lib/dpkg/status-old': Permission denied" — and every later apt/dpkg (incl. the
+        // `dpkg --configure -a` self-heal) then fails too. Device-dependent: seen on some Android 13
+        // devices, not others. Standard proot option (Termux/proot-distro enable it by default);
+        // required for apt/dpkg to work uniformly across devices.
+        args.add("--link2symlink")
+
         // Report a modern kernel release to reduce false "unknown syscall" warnings.
         args.addAll(listOf("-k", REPORTED_KERNEL_RELEASE))
 

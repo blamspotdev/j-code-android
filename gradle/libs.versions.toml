@@ -27,6 +27,7 @@ activity-compose = "1.10.0"
 documentfile = "1.0.1"
 window = "1.4.0"
 xz = "1.10"
+commonsCompress = "1.27.1"
 
 [libraries]
 # Compose BOM
@@ -80,6 +81,7 @@ activity-compose = { group = "androidx.activity", name = "activity-compose", ver
 documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
 window = { group = "androidx.window", name = "window", version.ref = "window" }
 xz = { group = "org.tukaani", name = "xz", version.ref = "xz" }
+commons-compress = { group = "org.apache.commons", name = "commons-compress", version.ref = "commonsCompress" }
 
 # Test libraries
 androidx-test-core = { group = "androidx.test", name = "core", version.ref = "androidx-test-core" }

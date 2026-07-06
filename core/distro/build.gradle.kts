@@ -28,6 +28,7 @@ dependencies {
     implementation(libs.datastore.preferences)
     implementation(libs.snakeyaml.engine)
     implementation(libs.xz)
+    implementation(libs.commons.compress)
     implementation(project(":core:config"))
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
