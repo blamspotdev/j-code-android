@@ -836,17 +836,22 @@ class TerminalView @JvmOverloads constructor(
         
         return object : BaseInputConnection(this, false) {
             override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
-                text?.toString()?.let { sendInput(it) }
+                // A terminal's Enter is carriage return (0x0D), but IMEs commit it as a newline (LF).
+                // cooked-mode shells accept LF, but raw-mode TUIs (opencode, vim, htop) only recognise
+                // CR as Enter — so map every newline form to CR, matching the hardware-key path.
+                text?.toString()?.let { sendInput(it.replace("\r\n", "\r").replace("\n", "\r")) }
                 return true
             }
-            
+
             override fun sendKeyEvent(event: KeyEvent): Boolean {
                 if (event.action == KeyEvent.ACTION_DOWN) {
-                    if (event.keyCode == KeyEvent.KEYCODE_DEL) {
-                        sendInput(byteArrayOf(0x7F))
-                    } else if (event.unicodeChar != 0) {
-                        val ch = event.unicodeChar.toChar()
-                        sendInput(ch.toString())
+                    when {
+                        event.keyCode == KeyEvent.KEYCODE_ENTER -> sendInput(byteArrayOf(0x0D))
+                        event.keyCode == KeyEvent.KEYCODE_DEL -> sendInput(byteArrayOf(0x7F))
+                        event.unicodeChar != 0 -> {
+                            val ch = event.unicodeChar.toChar()
+                            sendInput(if (ch == '\n' || ch == '\r') "\r" else ch.toString())
+                        }
                     }
                 }
                 return true

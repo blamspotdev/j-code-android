@@ -289,7 +289,17 @@ static void handle_sgr(VtParser* parser) {
 // Handle CSI sequence
 static void handle_csi(VtParser* parser, char final_char) {
     VtScreen* screen = parser->active;
-    
+
+    // CSI sequences with a <, =, or > parameter prefix are private terminal queries/reports
+    // (XTVERSION `>q`, XTMODKEYS `>...m`, secondary DA `>c`, …) that this terminal doesn't answer.
+    // Consume and ignore them so the final byte isn't mis-applied — e.g. `CSI > 4;1 m` must NOT be
+    // treated as SGR. DEC private modes use `?` and fall through to the switch below.
+    if (parser->intermediate_count > 0 &&
+        (parser->intermediates[0] == '<' || parser->intermediates[0] == '=' ||
+         parser->intermediates[0] == '>')) {
+        return;
+    }
+
     switch (final_char) {
         case 'A': { // Cursor Up
             int n = parser->param_count > 0 && parser->params[0] > 0 ? parser->params[0] : 1;
@@ -507,7 +517,8 @@ static void handle_csi(VtParser* parser, char final_char) {
             parser->bg = screen->saved_bg;
             break;
         }
-        case '?': { // Private modes
+        case 'h':   // Mode set   (DEC private when prefixed with `?`)
+        case 'l': { // Mode reset (DEC private when prefixed with `?`)
             if (parser->intermediate_count > 0 && parser->intermediates[0] == '?') {
                 int mode = parser->param_count > 0 ? parser->params[0] : 0;
                 if (mode == 1049 || mode == 47 || mode == 1047) {
@@ -651,14 +662,19 @@ static void parser_transition(VtParser* parser, uint8_t ch) {
                 // Final character
                 handle_csi(parser, ch);
                 parser->state = VT_STATE_GROUND;
-            } else if (ch == '?') {
-                parser->intermediates[parser->intermediate_count++] = ch;
+            } else if (ch >= 0x3C && ch <= 0x3F) {
+                // Private parameter markers: < = > ?  (DEC private modes `?`, XTVERSION `>q`,
+                // XTMODKEYS `>...m`, secondary DA `>c`, …). Store and keep parsing so the whole
+                // sequence is consumed instead of leaking its tail (params + final) as text.
+                if (parser->intermediate_count < 4) {
+                    parser->intermediates[parser->intermediate_count++] = ch;
+                }
                 parser->state = VT_STATE_CSI_PARAM;
             } else {
                 parser->state = VT_STATE_GROUND;
             }
             break;
-            
+
         case VT_STATE_CSI_PARAM:
             if (ch >= '0' && ch <= '9') {
                 parser->current_param = parser->current_param * 10 + (ch - '0');
