@@ -281,6 +281,20 @@ object SettingsFeature {
 
             SettingsSectionHeader("Performance")
             SettingsCard(
+                title = "Rendering",
+                description = "How J Code draws the UI, editor, and terminal.",
+                keywords = "performance rendering hardware acceleration gpu software draw graphics lag smooth",
+            ) {
+                ToggleRow(
+                    label = "Hardware acceleration",
+                    supporting = "Render the UI, editor, and terminal on the GPU. Turn off only to " +
+                        "troubleshoot rendering glitches on this device — software rendering is much " +
+                        "slower. Takes effect the next time the app starts.",
+                    checked = perf.hardwareAcceleration,
+                    onCheckedChange = perf.onSetHardwareAcceleration,
+                )
+            }
+            SettingsCard(
                 title = "Resource management",
                 description = "Keep the Linux runtime lean by stopping work you're done with. Each terminal, " +
                     "run, and debug session holds a proot process tree in memory.",

@@ -1,6 +1,8 @@
 package dev.jcode
 
+import android.content.Context
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -22,10 +24,27 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Hardware acceleration is opt-out via Settings → Performance. The manifest disables it for
+        // this activity (window level can only ENABLE), so apply the flag here — before setContent,
+        // after which it is immutable for this window. Synchronous SharedPreferences (mirrored from
+        // the DataStore pref by MainViewModel) because DataStore can't be read before the UI exists.
+        val hwAccel = getSharedPreferences(UI_STARTUP_PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_HW_ACCELERATION, true)
+        if (hwAccel) {
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            )
+        }
         enableEdgeToEdge()
         setContent {
             JCodeRoot(viewModel = viewModel)
         }
+    }
+
+    companion object {
+        const val UI_STARTUP_PREFS = "jcode-ui-startup"
+        const val KEY_HW_ACCELERATION = "hw_acceleration"
     }
 
     override fun onResume() {

@@ -419,6 +419,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val hardwareAccelerationKey = booleanPreferencesKey("perf_hardware_acceleration")
+
+    /** GPU-accelerated window rendering (default on). Applied by MainActivity at window creation, so
+     *  changes take effect on the next app start. The value is mirrored into synchronous
+     *  SharedPreferences because the window flag must be read before any async storage is available. */
+    val hardwareAcceleration: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[hardwareAccelerationKey] ?: true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    fun setHardwareAcceleration(enabled: Boolean) {
+        getApplication<Application>()
+            .getSharedPreferences(MainActivity.UI_STARTUP_PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean(MainActivity.KEY_HW_ACCELERATION, enabled).apply()
+        viewModelScope.launch { uiPreferences.edit { it[hardwareAccelerationKey] = enabled } }
+    }
+
     private val confirmCloseRunningKey = booleanPreferencesKey("perf_confirm_close_running")
 
     /** When true (default), closing a project/workspace with a running terminal program, an active

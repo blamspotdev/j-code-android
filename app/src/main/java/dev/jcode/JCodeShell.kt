@@ -373,16 +373,19 @@ fun JCodeApp(
     val iconBundleId by viewModel.iconBundleId.collectAsStateWithLifecycle()
     val formatterId by viewModel.formatterId.collectAsStateWithLifecycle()
     val terminalDoubleTapToFocus by viewModel.terminalDoubleTapToFocus.collectAsStateWithLifecycle()
+    val hardwareAcceleration by viewModel.hardwareAcceleration.collectAsStateWithLifecycle()
     val confirmCloseRunning by viewModel.confirmCloseRunning.collectAsStateWithLifecycle()
     val autoCloseIdleTerminals by viewModel.autoCloseIdleTerminals.collectAsStateWithLifecycle()
     val idleTimeoutMinutes by viewModel.idleTimeoutMinutes.collectAsStateWithLifecycle()
     val maxTerminalSessions by viewModel.maxTerminalSessions.collectAsStateWithLifecycle()
-    val performanceSettings = remember(confirmCloseRunning, autoCloseIdleTerminals, idleTimeoutMinutes, maxTerminalSessions) {
+    val performanceSettings = remember(hardwareAcceleration, confirmCloseRunning, autoCloseIdleTerminals, idleTimeoutMinutes, maxTerminalSessions) {
         PerformanceSettings(
+            hardwareAcceleration = hardwareAcceleration,
             confirmCloseRunning = confirmCloseRunning,
             autoCloseIdleTerminals = autoCloseIdleTerminals,
             idleTimeoutMinutes = idleTimeoutMinutes,
             maxTerminalSessions = maxTerminalSessions,
+            onSetHardwareAcceleration = viewModel::setHardwareAcceleration,
             onSetConfirmCloseRunning = viewModel::setConfirmCloseRunning,
             onSetAutoCloseIdleTerminals = viewModel::setAutoCloseIdleTerminals,
             onSetIdleTimeoutMinutes = viewModel::setIdleTimeoutMinutes,

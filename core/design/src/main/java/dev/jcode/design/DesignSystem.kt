@@ -109,10 +109,12 @@ val LocalRestoreSession = compositionLocalOf { RestoreSessionSetting() }
  * terminals idle at the prompt past [idleTimeoutMinutes] to free their proot trees + memory.
  */
 class PerformanceSettings(
+    val hardwareAcceleration: Boolean = true,
     val confirmCloseRunning: Boolean = true,
     val autoCloseIdleTerminals: Boolean = false,
     val idleTimeoutMinutes: Int = 30,
     val maxTerminalSessions: Int = 12,
+    val onSetHardwareAcceleration: (Boolean) -> Unit = {},
     val onSetConfirmCloseRunning: (Boolean) -> Unit = {},
     val onSetAutoCloseIdleTerminals: (Boolean) -> Unit = {},
     val onSetIdleTimeoutMinutes: (Int) -> Unit = {},
