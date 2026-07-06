@@ -24,6 +24,15 @@ internal val LocalTerminalTapConfig = compositionLocalOf { TerminalTapConfig() }
  */
 internal val LocalDebugCatalogState = compositionLocalOf { DebugEngineCatalogState() }
 
+/** Per-extension install phase labels ("Installing…", "Installing required tools…", "Verifying…"),
+ *  keyed by extension id. A CompositionLocal so the giant [dev.jcode.JCodeShell] composable stays
+ *  under the ART register limit. */
+internal val LocalExtensionInstallPhases = compositionLocalOf<Map<String, String>> { emptyMap() }
+
+/** Session id of the background "Setup" terminal (toolchain installs / project scaffolds), or null
+ *  while none has been started. Same register-limit rationale as above. */
+internal val LocalSetupTerminalSessionId = compositionLocalOf<String?> { null }
+
 /** Editor-facing debug state (breakpoints + current stopped location + toggle), provided via a
  *  CompositionLocal so the giant [dev.jcode.JCodeShell] composable stays under the register limit. */
 internal data class DebugEditorState(
@@ -86,6 +95,7 @@ internal data class WorkbenchManagerActions(
     val onUninstallLspCatalogEntry: (String) -> Unit,
     val onOpenLspDetail: (String) -> Unit,
     val onCheckDebugStatuses: () -> Unit,
+    val onUpdateAllToolchains: () -> Unit,
     val onInstallDebugEngine: (String) -> Unit,
     val onVerifyDebugEngine: (String) -> Unit,
     val onUninstallDebugEngine: (String) -> Unit,
@@ -114,13 +124,14 @@ internal enum class WorkbenchTool(
     val available: Boolean = true,
 ) {
     Explorer("Explorer", JCodeIcon.Files, "Files"),
-    Search("Search", JCodeIcon.Search, "Find", available = false),
-    Scm("SCM", JCodeIcon.Scm, "SCM", available = false),
+    Search("Search", JCodeIcon.Search, "Find"),
+    Scm("SCM", JCodeIcon.Scm, "SCM"),
     RunDebug("Run/Debug", JCodeIcon.Run, "Run"),
     Extensions("Extensions", JCodeIcon.Extensions, "Ext"),
     /** SDKs + language servers + debug engines, merged into one searchable/filterable catalog. */
     ToolchainManager("Toolchains", JCodeIcon.Sdk, "Tools"),
     DbManager("DB Managers", JCodeIcon.Database, "DB"),
+    VmManager("VM Manager", JCodeIcon.Vm, "VM"),
     Settings("Settings", JCodeIcon.Settings, "Settings"),
 }
 
@@ -134,5 +145,8 @@ internal enum class RightPanelTab(
     Problems("Issues", JCodeIcon.Problems, enabled = true),
     DebugConsole("Debug", JCodeIcon.Debug, enabled = true),
     Tasks("Tasks", JCodeIcon.Tasks, enabled = true),
+    /** Built-in browser DevTools (console / network / elements); only shown once the in-app browser
+     *  has been opened this session (see [dev.jcode.workbench.BuiltinBrowser]). */
+    Devtools("DevTools", JCodeIcon.DevTools, enabled = true),
     Chat("Chat", JCodeIcon.Chat, enabled = true),
 }

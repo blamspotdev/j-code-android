@@ -18,11 +18,15 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="J Code"
         android:supportsRtl="true"
-        android:theme="@style/Theme.JCode">
+        android:theme="@style/Theme.JCode.Starting">
 
+        <!-- hardwareAccelerated=false so the user's Settings toggle governs it: MainActivity enables
+             acceleration via FLAG_HARDWARE_ACCELERATED (window level can only ENABLE, never disable,
+             so the manifest default must be off for an opt-out to be possible). Default pref is ON. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:hardwareAccelerated="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|locale|layoutDirection"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

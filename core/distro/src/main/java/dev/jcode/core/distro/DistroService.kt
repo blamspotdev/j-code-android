@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,6 +30,10 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+/** SharedPreferences flag: the environment finished configuring at least once (used to skip the
+ *  first-run setup screen instantly on launch — see [DistroService]'s seededConfigured). */
+private const val KEY_ENV_CONFIGURED = "env_configured"
 
 /**
  * Manages the embedded Linux environment using bundled proot.
@@ -54,7 +59,17 @@ class DistroService(
         appContext.preferencesDataStoreFile("distro-environment.preferences_pb")
     }
 
-    private val _environmentState = MutableStateFlow(DistroEnvironmentState())
+    // Fast, synchronous "was the environment configured last time?" flag, read on the main thread at
+    // construction. Lets the UI skip the first-run setup screen instantly on launch instead of flashing
+    // it for the few seconds the async probe (network manifest fetch + proot user check, run on every
+    // onResume) takes to set smokeTestPassed. The probe still runs and re-verifies / self-corrects this
+    // optimistic seed, so a genuinely-broken environment falls back to setup.
+    private val startupPrefs = appContext.getSharedPreferences("jcode-distro-startup", Context.MODE_PRIVATE)
+    private val seededConfigured: Boolean? = if (startupPrefs.getBoolean(KEY_ENV_CONFIGURED, false)) true else null
+
+    private val _environmentState = MutableStateFlow(
+        DistroEnvironmentState(distroInstalled = seededConfigured, smokeTestPassed = seededConfigured),
+    )
     val environmentState: StateFlow<DistroEnvironmentState> = _environmentState.asStateFlow()
 
     private val _sdkCatalogState = MutableStateFlow(SdkCatalogState())
@@ -65,6 +80,20 @@ class DistroService(
 
     private val _debugCatalogState = MutableStateFlow(DebugEngineCatalogState())
     val debugCatalogState: StateFlow<DebugEngineCatalogState> = _debugCatalogState.asStateFlow()
+
+    // apt-get update is shared across the three catalog update-checks (checkSdk/Lsp/DebugEngineStatuses).
+    // Refresh the package lists at most once per short window so opening the Toolchains panel — which
+    // fires all three checks — runs apt-get update once instead of three times, and results appear faster.
+    @Volatile
+    private var lastAptRefreshMs = 0L
+
+    private fun refreshAptListsIfStale() {
+        val now = System.currentTimeMillis()
+        if (now - lastAptRefreshMs > 180_000L) {
+            execInDistro("sudo apt-get update", timeoutMs = 300_000L)
+            lastAptRefreshMs = now
+        }
+    }
 
     private val _autoSetupProgress = MutableSharedFlow<DistroWizardProgress>(extraBufferCapacity = 64)
     val autoSetupProgress: Flow<DistroWizardProgress> = _autoSetupProgress.asSharedFlow()
@@ -86,6 +115,7 @@ class DistroService(
         distroConfig: EffectiveDistroConfig,
         projectHostPath: String?,
         projectTargetPath: String?,
+        projectBinds: List<Pair<String, String>> = emptyList(),
     ) {
         val availableDistros = _environmentState.value.availableDistros.ifEmpty { DistroProfile.defaults() }
         val runtime = DistroRuntimeConfig(
@@ -95,6 +125,7 @@ class DistroService(
                 distroBinds = distroConfig.bind,
                 projectHostPath = projectHostPath,
                 projectTargetPath = projectTargetPath,
+                projectBinds = projectBinds,
             ),
         )
         _environmentState.value = _environmentState.value.copy(runtime = runtime)
@@ -249,9 +280,9 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                SdkCatalogAction.Install -> execCatalogScript(entry.installScript, timeoutMs = 1_800_000L)
+                SdkCatalogAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installScript, timeoutMs = 1_800_000L)
                 SdkCatalogAction.Verify -> execCatalogScript(entry.verifyScript, timeoutMs = 120_000L)
-                SdkCatalogAction.Uninstall -> execCatalogScript(entry.uninstallScript, timeoutMs = 900_000L)
+                SdkCatalogAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", entry.uninstallScript, timeoutMs = 900_000L)
             }
             val verifyResult = when (action) {
                 SdkCatalogAction.Verify -> actionResult
@@ -358,9 +389,9 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                LspCatalogAction.Install -> execCatalogScript(entry.installCommand, timeoutMs = 1_800_000L)
+                LspCatalogAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installCommand, timeoutMs = 1_800_000L)
                 LspCatalogAction.Verify -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
-                LspCatalogAction.Uninstall -> execCatalogScript(entry.uninstallCommand, timeoutMs = 900_000L)
+                LspCatalogAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", entry.uninstallCommand, timeoutMs = 900_000L)
             }
             val verifyResult = when (action) {
                 LspCatalogAction.Verify -> actionResult
@@ -432,15 +463,11 @@ class DistroService(
                 )
                 val installed = linkedSetOf<String>()
                 val updatable = linkedSetOf<String>()
-                var aptUpdated = false
                 for (entry in entries) {
                     if (execInDistro(entry.verifyScript, timeoutMs = 120_000L).succeeded) {
                         installed.add(entry.id)
                         if (entry.updateCheckScript.isNotBlank()) {
-                            if (!aptUpdated && entry.updateCheckScript.contains("apt list")) {
-                                execInDistro("sudo apt-get update", timeoutMs = 300_000L)
-                                aptUpdated = true
-                            }
+                            if (entry.updateCheckScript.contains("apt list")) refreshAptListsIfStale()
                             if (execInDistro(entry.updateCheckScript, timeoutMs = 120_000L).succeeded) updatable.add(entry.id)
                         }
                     }
@@ -474,15 +501,11 @@ class DistroService(
                 )
                 val installed = linkedSetOf<String>()
                 val updatable = linkedSetOf<String>()
-                var aptUpdated = false
                 for (entry in entries) {
                     if (execInDistro(entry.verifyCommand, timeoutMs = 120_000L).succeeded) {
                         installed.add(entry.id)
                         if (entry.updateCheckCommand.isNotBlank()) {
-                            if (!aptUpdated && entry.updateCheckCommand.contains("apt list")) {
-                                execInDistro("sudo apt-get update", timeoutMs = 300_000L)
-                                aptUpdated = true
-                            }
+                            if (entry.updateCheckCommand.contains("apt list")) refreshAptListsIfStale()
                             if (execInDistro(entry.updateCheckCommand, timeoutMs = 120_000L).succeeded) updatable.add(entry.id)
                         }
                     }
@@ -554,9 +577,9 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                DebugEngineAction.Install -> execCatalogScript(entry.installCommand, timeoutMs = 1_800_000L)
+                DebugEngineAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installCommand, timeoutMs = 1_800_000L)
                 DebugEngineAction.Verify -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
-                DebugEngineAction.Uninstall -> execCatalogScript(entry.uninstallCommand, timeoutMs = 900_000L)
+                DebugEngineAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", entry.uninstallCommand, timeoutMs = 900_000L)
             }
             val verifyResult = when (action) {
                 DebugEngineAction.Verify -> actionResult
@@ -621,15 +644,11 @@ class DistroService(
                 )
                 val installed = linkedSetOf<String>()
                 val updatable = linkedSetOf<String>()
-                var aptUpdated = false
                 for (entry in entries) {
                     if (execInDistro(entry.verifyCommand, timeoutMs = 120_000L).succeeded) {
                         installed.add(entry.id)
                         if (entry.updateCheckCommand.isNotBlank()) {
-                            if (!aptUpdated && entry.updateCheckCommand.contains("apt list")) {
-                                execInDistro("sudo apt-get update", timeoutMs = 300_000L)
-                                aptUpdated = true
-                            }
+                            if (entry.updateCheckCommand.contains("apt list")) refreshAptListsIfStale()
                             if (execInDistro(entry.updateCheckCommand, timeoutMs = 120_000L).succeeded) updatable.add(entry.id)
                         }
                     }
@@ -758,6 +777,9 @@ class DistroService(
             )
         }
 
+        // Remember (fast, synchronous) whether the environment is configured, so the next launch can skip
+        // the first-run setup screen without waiting for this async probe to re-run.
+        startupPrefs.edit().putBoolean(KEY_ENV_CONFIGURED, _environmentState.value.smokeTestPassed == true).apply()
         persistCompletedSteps(completedSteps.toSet())
         syncSdkCatalogSelection(_environmentState.value.runtime.selectedDistro.id)
         syncLspCatalogSelection(_environmentState.value.runtime.selectedDistro.id)
@@ -1245,6 +1267,76 @@ class DistroService(
     }
 
     /**
+     * App-provided runner that executes a catalog install/uninstall inside the shared Setup terminal
+     * (visible in the right drawer) instead of a silent in-process exec. Returns null to decline
+     * (e.g. no session slot free), in which case the action falls back to [execCatalogScript].
+     * Scripts run with the same semantics either way: root, with HOME/USER pointing at the jcode user.
+     */
+    @Volatile
+    var interactiveCatalogRunner: (suspend (label: String, script: String, timeoutMs: Long) -> ExecResult?)? = null
+
+    /** Long-running catalog actions go through the Setup terminal when wired; verify stays quiet so
+     *  its exit code and output remain capturable.
+     *
+     *  Self-healing: a failed install is retried up to [CATALOG_INSTALL_MAX_ATTEMPTS] times with a
+     *  linear back-off. The back-off rides out a transient network/mirror blip, and each attempt
+     *  re-runs the apt self-heal preamble (dpkg reconfigure + fix-broken) so a half-installed state
+     *  from the previous attempt is cleaned before retrying. Hard-stops that can't heal by re-running
+     *  — a missing runtime ([ExecResult.internalError]) or a user cancel (SIGINT, exit 130) — break
+     *  out immediately. Retries carry a "retry N/M" label so they're visible in the Setup terminal. */
+    private suspend fun execCatalogAction(label: String, script: String, timeoutMs: Long): ExecResult {
+        val prepared = withAptSelfHeal(script)
+        var last: ExecResult? = null
+        for (attempt in 1..CATALOG_INSTALL_MAX_ATTEMPTS) {
+            val attemptLabel =
+                if (attempt == 1) label else "$label — retry $attempt/$CATALOG_INSTALL_MAX_ATTEMPTS"
+            val result = runCatalogOnce(attemptLabel, prepared, timeoutMs)
+            if (result.succeeded) return result
+            last = result
+            val healable = result.internalError == null && result.exitCode != 130
+            if (!healable || attempt == CATALOG_INSTALL_MAX_ATTEMPTS) break
+            delay(CATALOG_RETRY_BACKOFF_MS * attempt)
+        }
+        return last ?: ExecResult(exitCode = 1)
+    }
+
+    /** One catalog-action attempt: prefer the visible Setup terminal, fall back to a quiet in-process
+     *  exec. [prepared] already carries the apt self-heal preamble. */
+    private suspend fun runCatalogOnce(label: String, prepared: String, timeoutMs: Long): ExecResult {
+        val runner = interactiveCatalogRunner
+        if (runner != null) {
+            val runtime = _environmentState.value.runtime
+            val ensure = ensureDistroUser(runtime.selectedDistro.id, runtime.user)
+            if (!ensure.succeeded) return ensure
+            runner(label, prepared, timeoutMs)?.let { return it }
+        }
+        return execCatalogScript(prepared, timeoutMs)
+    }
+
+    /**
+     * Prepend apt/dpkg self-healing so the runtime recovers from a dirty package state on its own
+     * (only for scripts that actually use apt/dpkg — a no-op otherwise). The preamble:
+     *  - writes an idempotent apt.conf drop-in so *every* apt command retries transient fetch failures
+     *    ([Acquire::Retries]) and waits for a held dpkg/apt lock instead of dying ([DPkg::Lock::Timeout]);
+     *  - runs `dpkg --configure -a` to finish a package left half-configured by a previously
+     *    interrupted install (app killed / device slept mid-`apt`);
+     *  - runs `apt-get install -f -y` to repair broken/partial dependencies from an aborted run.
+     * All three are silent, fast no-ops when the runtime is already clean.
+     */
+    private fun withAptSelfHeal(script: String): String {
+        if (!(script.contains("apt-get") || script.contains("apt ") || script.contains("dpkg"))) {
+            return script
+        }
+        val preamble =
+            "mkdir -p /etc/apt/apt.conf.d 2>/dev/null || true\n" +
+            "printf 'Acquire::Retries \"3\";\\nAcquire::http::Timeout \"30\";\\n" +
+            "DPkg::Lock::Timeout \"180\";\\n' > /etc/apt/apt.conf.d/80-jcode-heal 2>/dev/null || true\n" +
+            "dpkg --configure -a 2>/dev/null || true\n" +
+            "apt-get install -f -y 2>/dev/null || true\n"
+        return preamble + script
+    }
+
+    /**
      * Execute a command inside the distro using proot.
      */
     private fun execInDistro(
@@ -1380,24 +1472,36 @@ class DistroService(
             val stdout = StringBuilder()
             val stderr = StringBuilder()
 
+            // NOTE: the drain loops MUST NOT let any exception escape. When the process is destroyed
+            // (timeout below, or killed while the runtime is under heavy load — e.g. a QEMU VM boot),
+            // the blocked readLine() throws InterruptedIOException / "Stream closed"; on a bare Thread
+            // that would be uncaught and crash the whole app. Swallow it — partial output is kept.
             val stdoutThread = Thread {
-                BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
-                    reader.lineSequence().forEach { line ->
-                        normalizeProcessOutputLine(line)?.let { normalized ->
-                            stdout.appendLine(normalized)
-                            onLine?.invoke(normalized)
+                try {
+                    BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+                        reader.lineSequence().forEach { line ->
+                            normalizeProcessOutputLine(line)?.let { normalized ->
+                                stdout.appendLine(normalized)
+                                onLine?.invoke(normalized)
+                            }
                         }
                     }
+                } catch (_: Throwable) {
+                    // process destroyed / stream closed mid-read — expected on teardown.
                 }
             }
             val stderrThread = Thread {
-                BufferedReader(InputStreamReader(process.errorStream)).use { reader ->
-                    reader.lineSequence().forEach { line ->
-                        normalizeProcessOutputLine(line)?.let { normalized ->
-                            stderr.appendLine(normalized)
-                            onLine?.invoke(normalized)
+                try {
+                    BufferedReader(InputStreamReader(process.errorStream)).use { reader ->
+                        reader.lineSequence().forEach { line ->
+                            normalizeProcessOutputLine(line)?.let { normalized ->
+                                stderr.appendLine(normalized)
+                                onLine?.invoke(normalized)
+                            }
                         }
                     }
+                } catch (_: Throwable) {
+                    // process destroyed / stream closed mid-read — expected on teardown.
                 }
             }
 
@@ -1433,9 +1537,17 @@ class DistroService(
         distroBinds: List<dev.jcode.core.config.BindMount>,
         projectHostPath: String?,
         projectTargetPath: String?,
+        projectBinds: List<Pair<String, String>>,
     ): List<DistroBind> {
         return when {
             distroBinds.isNotEmpty() -> distroBinds.map { DistroBind(host = it.host, target = it.target) }
+            // Bind every project of the current workspace (host dir -> its guest target) so a multi-repo
+            // extension can reach them all at once; keep the selected project's bind first (it's the
+            // primary — see primaryBind()). Dedup by target in case two resolve to the same mount.
+            projectBinds.isNotEmpty() ->
+                projectBinds.sortedByDescending { it.second == projectTargetPath }
+                    .distinctBy { it.second }
+                    .map { DistroBind(host = it.first, target = it.second) }
             !projectHostPath.isNullOrBlank() && !projectTargetPath.isNullOrBlank() -> {
                 listOf(DistroBind(projectHostPath, projectTargetPath))
             }
@@ -1737,5 +1849,9 @@ class DistroService(
         private const val ENSURE_USER_RETRY_MS: Long = 30_000L
         /** Minimum required storage: 2GB */
         private const val MIN_REQUIRED_STORAGE_BYTES: Long = 2L * 1024 * 1024 * 1024
+        /** A failed toolchain install (transient apt/network/dpkg hiccup) is retried this many times. */
+        private const val CATALOG_INSTALL_MAX_ATTEMPTS: Int = 3
+        /** Linear back-off base between install retries (× attempt): 3s, then 6s. */
+        private const val CATALOG_RETRY_BACKOFF_MS: Long = 3_000L
     }
 }

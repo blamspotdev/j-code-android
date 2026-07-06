@@ -19,6 +19,7 @@ androidx-test-runner = "1.6.2"
 androidx-test-espresso = "3.6.1"
 androidx-test-ext-junit = "1.2.1"
 ui-test-junit4 = "1.7.8"
+junit = "4.13.2"
 appcompat = "1.7.0"
 core-ktx = "1.15.0"
 lifecycle = "2.8.7"
@@ -26,6 +27,7 @@ activity-compose = "1.10.0"
 documentfile = "1.0.1"
 window = "1.4.0"
 xz = "1.10"
+commonsCompress = "1.27.1"
 
 [libraries]
 # Compose BOM
@@ -79,11 +81,13 @@ activity-compose = { group = "androidx.activity", name = "activity-compose", ver
 documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
 window = { group = "androidx.window", name = "window", version.ref = "window" }
 xz = { group = "org.tukaani", name = "xz", version.ref = "xz" }
+commons-compress = { group = "org.apache.commons", name = "commons-compress", version.ref = "commonsCompress" }
 
 # Test libraries
 androidx-test-core = { group = "androidx.test", name = "core", version.ref = "androidx-test-core" }
 androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidx-test-runner" }
 androidx-test-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "androidx-test-espresso" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidx-test-ext-junit" }
 ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4", version.ref = "ui-test-junit4" }
 ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }

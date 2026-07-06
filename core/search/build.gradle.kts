@@ -25,6 +25,9 @@ dependencies {
     implementation(libs.coroutines.android)
 }
 
-tasks.named("preBuild").configure {
-    dependsOn(":native:ripgrep-ffi:prepareCargoJniLibs")
+tasks.matching { it.name == "preDebugBuild" }.configureEach {
+    dependsOn(":native:ripgrep-ffi:cargoBuildDebugJniLibs")
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(":native:ripgrep-ffi:cargoBuildReleaseJniLibs")
 }

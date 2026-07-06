@@ -2,6 +2,7 @@ package dev.jcode.feature.debug
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import dev.jcode.core.distro.DebugEngineAction
 import dev.jcode.core.distro.DebugEngineCatalogState
 import dev.jcode.core.distro.DebugEngineEntry
 import dev.jcode.core.distro.DistroEnvironmentState
@@ -27,14 +28,20 @@ object DebugEngineManagerFeature {
         modifier: Modifier = Modifier,
     ) {
         val environmentReady = environmentState.distroInstalled == true && environmentState.jcodeUserReady == true
+        val running = state.runningEntryId == entry.id
         ManagerDetailScreen(
             title = entry.name,
             subtitle = entry.category,
             description = entry.description,
             status = statusOf(entry.id, state),
-            busy = state.checking || state.runningEntryId == entry.id,
+            busy = state.checking || running,
+            busyLabel = when (state.runningAction.takeIf { running }) {
+                DebugEngineAction.Install -> "Installing…"
+                DebugEngineAction.Verify -> "Verifying…"
+                DebugEngineAction.Uninstall -> "Removing…"
+                null -> "Checking…"
+            },
             actionsEnabled = environmentReady && state.runningEntryId == null && !state.checking,
-            logLines = state.logLines,
             onInstall = { onInstall(entry.id) },
             onUpdate = { onUpdate(entry.id) },
             onUninstall = { onUninstall(entry.id) },

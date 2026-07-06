@@ -20,6 +20,8 @@ data class LspCatalogEntry(
     val languageIds: List<String> = emptyList(),
     val extensions: List<String> = emptyList(),
     val rootDetectors: List<String> = emptyList(),
+    /** SDK catalog ids this server needs (e.g. csharp-ls needs the dotnet SDK). Installed first. */
+    val requiredSdks: List<String> = emptyList(),
 )
 
 enum class LspCatalogAction(val label: String) {
@@ -71,19 +73,27 @@ object LspServerCatalog {
             languageIds = listOf("typescript", "javascript", "typescriptreact", "javascriptreact"),
             extensions = listOf(".ts", ".tsx", ".js", ".jsx"),
             rootDetectors = listOf("package.json", "tsconfig.json", ".git"),
+            requiredSdks = listOf("nodejs"),
         ),
         LspCatalogEntry(
             id = "csharp-ls",
             category = ".NET",
             name = "C# (csharp-ls)",
-            description = "Roslyn-based C# language server, installed as a .NET global tool.",
-            installCommand = "dotnet tool install --global csharp-ls",
-            verifyCommand = "csharp-ls --version",
+            description = "Roslyn-based C# language server, installed as a .NET global tool (needs the .NET SDK toolchain).",
+            // dotnet lives behind the /usr/local/bin/dotnet shim (GC heap cap + DOTNET_ROOT — see the
+            // dotnet catalog entry); global tools land in ~/.dotnet/tools, which non-login shells
+            // don't have on PATH, and the tool's apphost needs the same env to find the runtime.
+            // 0.16.0 = the newest release that still runs on the .NET 8 SDK the dotnet toolchain
+            // installs (0.17+ package the tool for a newer runtime and fail with
+            // "DotnetToolSettings.xml was not found in the package"; device-verified).
+            installCommand = "dotnet tool install --global csharp-ls --version 0.16.0",
+            verifyCommand = "env DOTNET_ROOT=\"\$HOME/.dotnet\" DOTNET_GCHeapHardLimit=0x40000000 \"\$HOME/.dotnet/tools/csharp-ls\" --version",
             uninstallCommand = "dotnet tool uninstall --global csharp-ls",
-            runCommand = "csharp-ls",
+            runCommand = "env DOTNET_ROOT=\"\$HOME/.dotnet\" DOTNET_GCHeapHardLimit=0x40000000 \"\$HOME/.dotnet/tools/csharp-ls\"",
             languageIds = listOf("csharp"),
             extensions = listOf(".cs"),
             rootDetectors = listOf(".sln", ".csproj", ".git"),
+            requiredSdks = listOf("dotnet"),
         ),
         LspCatalogEntry(
             id = "pyright",
@@ -98,6 +108,7 @@ object LspServerCatalog {
             languageIds = listOf("python"),
             extensions = listOf(".py"),
             rootDetectors = listOf("pyproject.toml", "setup.py", ".git"),
+            requiredSdks = listOf("nodejs"),
         ),
         LspCatalogEntry(
             id = "gopls",
@@ -124,6 +135,7 @@ object LspServerCatalog {
             languageIds = listOf("rust"),
             extensions = listOf(".rs"),
             rootDetectors = listOf("Cargo.toml", ".git"),
+            requiredSdks = listOf("rust"),
         ),
         LspCatalogEntry(
             id = "kotlin-language-server",

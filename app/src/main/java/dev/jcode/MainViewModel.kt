@@ -24,7 +24,9 @@ import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.distro.DistroProfile
 import dev.jcode.core.distro.DistroWizardProgress
 import dev.jcode.core.distro.DebugEngineAction
+import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.core.distro.LspCatalogAction
+import dev.jcode.core.distro.LspServerCatalog
 import dev.jcode.debug.DebugController
 import dev.jcode.core.distro.SdkCatalogAction
 import dev.jcode.core.distro.DistroService
@@ -39,6 +41,7 @@ import dev.jcode.feature.editor.pane.EditorPageKind
 import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.feature.marketplace.BundledExtensionSpec
 import dev.jcode.feature.marketplace.ExtensionActivation
+import dev.jcode.feature.marketplace.ExtensionDeps
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.languageFor
 import dev.jcode.feature.marketplace.MarketplaceEntry
@@ -47,6 +50,7 @@ import dev.jcode.feature.marketplace.ProjectTemplate
 import dev.jcode.feature.marketplace.TemplateCatalog
 import dev.jcode.feature.marketplace.TemplateScaffolder
 import dev.jcode.fs.DEFAULT_SHARED_PROJECTS_ROOT
+import dev.jcode.workbench.SetupTerminalRunner
 import dev.jcode.fs.FsKind
 import dev.jcode.fs.FsNode
 import dev.jcode.fs.FsPath
@@ -118,6 +122,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val extensionInstaller = MarketplaceServiceLocator.extensionInstaller(application)
     val scaffoldState = templateScaffolder.state
 
+    /** Shared "Setup" terminal in the right drawer that runs toolchain installs and scaffolds. */
+    val setupTerminalRunner = SetupTerminalRunner(appContext, distroService)
+
+    init {
+        TerminalSessionHost.manager(appContext).onTaskComplete = setupTerminalRunner::handleTaskComplete
+        distroService.interactiveCatalogRunner = { label, script, timeoutMs ->
+            setupTerminalRunner.run(label, script, workdir = null, asUser = "root", timeoutMs = timeoutMs)
+        }
+        templateScaffolder.interactiveExec = { label, command, workdir, timeoutMs ->
+            setupTerminalRunner.run(
+                label = label,
+                script = command,
+                workdir = workdir,
+                asUser = distroService.environmentState.value.runtime.user,
+                timeoutMs = timeoutMs,
+            )
+        }
+    }
+
     private val _templates = MutableStateFlow<List<ProjectTemplate>>(emptyList())
     val templates: StateFlow<List<ProjectTemplate>> = _templates.asStateFlow()
 
@@ -132,6 +155,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** True while a marketplace fetch / install is in flight. */
     private val _marketplaceBusy = MutableStateFlow(false)
     val marketplaceBusy: StateFlow<Boolean> = _marketplaceBusy.asStateFlow()
+
+    /** Per-extension install phase ("Installing…", "Installing required tools…", "Verifying…"),
+     *  keyed by extension id, shown on the detail chip and list rows while an install runs. */
+    private val _extensionInstallPhases = MutableStateFlow<Map<String, String>>(emptyMap())
+    val extensionInstallPhases: StateFlow<Map<String, String>> = _extensionInstallPhases.asStateFlow()
+
+    private fun setExtensionPhase(id: String, phase: String?) {
+        _extensionInstallPhases.value =
+            if (phase == null) _extensionInstallPhases.value - id
+            else _extensionInstallPhases.value + (id to phase)
+    }
 
     /** Re-scan installed extensions and refresh the available templates. */
     fun refreshInstalledExtensions() {
@@ -162,8 +196,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun installExtension(entry: MarketplaceEntry) {
         viewModelScope.launch {
             _marketplaceBusy.value = true
-            installExtensionResolvingDeps(entry, visiting = mutableSetOf())
-            _marketplaceBusy.value = false
+            try {
+                installExtensionResolvingDeps(entry, visiting = mutableSetOf())
+            } finally {
+                _marketplaceBusy.value = false
+                _extensionInstallPhases.value = emptyMap()
+            }
             refreshInstalledExtensions()
         }
     }
@@ -179,45 +217,87 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ): Boolean {
         if (!visiting.add(entry.id)) return true
 
-        for (depId in entry.requires.extensions) {
+        if (!entry.requires.isEmpty) setExtensionPhase(entry.id, "Installing required tools…")
+        // Deps the marketplace index declared for this entry — resolved before install; a failure
+        // aborts because the extension asked for them up front.
+        if (!resolveRequires(entry.name, entry.requires, visiting, abortOnFail = true)) return false
+
+        setExtensionPhase(entry.id, "Installing…")
+        val result = extensionInstaller.install(entry, BuildConfig.VERSION_NAME)
+            .onFailure { _messages.tryEmit("Install failed: ${it.message ?: "error"}") }
+        if (result.isFailure) {
+            setExtensionPhase(entry.id, null)
+            return false
+        }
+
+        setExtensionPhase(entry.id, "Verifying…")
+        val installedEntry = runCatching { extensionInstaller.installed() }
+            .getOrDefault(emptyList())
+            .firstOrNull { it.id == entry.id }
+        if (installedEntry == null) {
+            setExtensionPhase(entry.id, null)
+            _messages.tryEmit("${entry.name}: installed but not detected on disk — install failed.")
+            return false
+        }
+        _messages.tryEmit("Installed ${entry.name}")
+
+        // The marketplace index currently omits `requires`, so the pre-install pass above sees nothing
+        // for most extensions. Re-resolve from the freshly-installed manifest (the authoritative
+        // source) to pull chained extensions (e.g. Android Dev Pack → Kotlin) and toolchains the index
+        // left out. Non-fatal: the extension is already installed and usable on its own.
+        if (!installedEntry.requires.isEmpty) {
+            setExtensionPhase(entry.id, "Installing required tools…")
+            resolveRequires(entry.name, installedEntry.requires, visiting, abortOnFail = false)
+        }
+        setExtensionPhase(entry.id, null)
+        return true
+    }
+
+    /**
+     * Install everything [deps] names that isn't already present: required extensions (recursively),
+     * then toolchain SDKs and language servers via the catalogs. With [abortOnFail] true a failure
+     * returns false so the caller rolls back its own install; with false, failures are surfaced but
+     * skipped so an already-installed extension isn't undone over an optional-in-practice dependency.
+     */
+    private suspend fun resolveRequires(
+        sourceName: String,
+        deps: ExtensionDeps,
+        visiting: MutableSet<String>,
+        abortOnFail: Boolean,
+    ): Boolean {
+        for (depId in deps.extensions) {
             if (depId in visiting) continue
             if (_installedExtensions.value.any { it.id == depId }) continue
             val depEntry = _marketplaceEntries.value.firstOrNull { it.id == depId }
             if (depEntry == null) {
-                _messages.tryEmit("${entry.name}: required extension '$depId' isn't in the marketplace — install aborted.")
-                return false
+                _messages.tryEmit("$sourceName: required extension '$depId' isn't in the marketplace.")
+                if (abortOnFail) return false else continue
             }
             _messages.tryEmit("Installing required extension: ${depEntry.name}…")
             if (!installExtensionResolvingDeps(depEntry, visiting)) {
-                _messages.tryEmit("${entry.name}: required extension ${depEntry.name} failed — install aborted.")
-                return false
+                _messages.tryEmit("$sourceName: required extension ${depEntry.name} failed.")
+                if (abortOnFail) return false
             }
         }
-
-        for (sdkId in entry.requires.sdks) {
+        for (sdkId in deps.sdks) {
             if (sdkId in distroService.sdkCatalogState.value.installedEntryIds) continue
             _messages.tryEmit("Installing required toolchain: $sdkId…")
             if (!installRequiredSdk(sdkId)) {
                 val reason = distroService.sdkCatalogState.value.errorMessage ?: "install failed"
-                _messages.tryEmit("${entry.name}: required toolchain '$sdkId' — $reason Install aborted.")
-                return false
+                _messages.tryEmit("$sourceName: required toolchain '$sdkId' — $reason")
+                if (abortOnFail) return false
             }
         }
-
-        for (lspId in entry.requires.lsps) {
+        for (lspId in deps.lsps) {
             if (lspId in distroService.lspCatalogState.value.installedEntryIds) continue
             _messages.tryEmit("Installing required language server: $lspId…")
             if (!installRequiredLsp(lspId)) {
                 val reason = distroService.lspCatalogState.value.errorMessage ?: "install failed"
-                _messages.tryEmit("${entry.name}: required language server '$lspId' — $reason Install aborted.")
-                return false
+                _messages.tryEmit("$sourceName: required language server '$lspId' — $reason")
+                if (abortOnFail) return false
             }
         }
-
-        val result = extensionInstaller.install(entry, BuildConfig.VERSION_NAME)
-            .onSuccess { _messages.tryEmit("Installed ${it.name}") }
-            .onFailure { _messages.tryEmit("Install failed: ${it.message ?: "error"}") }
-        return result.isSuccess
+        return true
     }
 
     private suspend fun installRequiredSdk(entryId: String): Boolean = withContext(Dispatchers.IO) {
@@ -248,6 +328,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         entryId in distroService.lspCatalogState.value.installedEntryIds
     }
 
+    /**
+     * Install every SDK in [requiredSdks] (and their transitive SDK requirements) before the caller
+     * installs the tool itself. Already-installed SDKs are skipped; the first failure aborts and
+     * returns false so the tool install can be skipped too.
+     */
+    private suspend fun installRequiredSdks(requiredSdks: List<String>, forName: String): Boolean {
+        val visiting = mutableSetOf<String>()
+        for (sdkId in requiredSdks) {
+            if (!resolveAndInstallSdk(sdkId, forName, visiting)) return false
+        }
+        return true
+    }
+
+    private suspend fun resolveAndInstallSdk(
+        sdkId: String,
+        forName: String,
+        visiting: MutableSet<String>,
+    ): Boolean {
+        if (sdkId in distroService.sdkCatalogState.value.installedEntryIds) return true
+        if (!visiting.add(sdkId)) return true
+        val entry = distroService.sdkCatalogState.value.entries.firstOrNull { it.id == sdkId }
+        for (dep in entry?.requiredSdks.orEmpty()) {
+            if (!resolveAndInstallSdk(dep, forName, visiting)) return false
+        }
+        _messages.tryEmit("Installing required toolchain: ${entry?.name ?: sdkId}…")
+        if (!installRequiredSdk(sdkId)) {
+            val reason = distroService.sdkCatalogState.value.errorMessage ?: "install failed"
+            _messages.tryEmit("$forName: required toolchain '${entry?.name ?: sdkId}' — $reason Install aborted.")
+            return false
+        }
+        return true
+    }
+
+    private suspend fun runCatalogInstall(kind: String, entryId: String, block: suspend () -> Unit) {
+        val session = SessionRegistry.registerSession(
+            context = getApplication(),
+            kind = BackendSessionKind.JOB,
+            name = "$kind:install:$entryId",
+        )
+        try {
+            block()
+        } finally {
+            session.close()
+        }
+    }
+
     fun uninstallExtension(id: String) {
         clearExtensionActivation(id)
         viewModelScope.launch(Dispatchers.IO) {
@@ -258,6 +384,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _showNewItemDialog = MutableStateFlow(false)
     val showNewItemDialog: StateFlow<Boolean> = _showNewItemDialog.asStateFlow()
+
+    /** After a folder is opened as a project while a User Workspace is open (e.g. from a clone in the
+     *  SCM extension), the registered project awaiting an open-vs-add choice. */
+    private val _postClonePrompt = MutableStateFlow<Project?>(null)
+    val postClonePrompt: StateFlow<Project?> = _postClonePrompt.asStateFlow()
 
     /** An opened folder awaiting a Project/Workspace choice (it has no `.jcode` type yet). */
     private val _openFolderTypePrompt = MutableStateFlow<FsPath?>(null)
@@ -293,6 +424,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val hardwareAccelerationKey = booleanPreferencesKey("perf_hardware_acceleration")
+
+    /** GPU-accelerated window rendering (default on). Applied by MainActivity at window creation, so
+     *  changes take effect on the next app start. The value is mirrored into synchronous
+     *  SharedPreferences because the window flag must be read before any async storage is available. */
+    val hardwareAcceleration: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[hardwareAccelerationKey] ?: true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    fun setHardwareAcceleration(enabled: Boolean) {
+        getApplication<Application>()
+            .getSharedPreferences(MainActivity.UI_STARTUP_PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean(MainActivity.KEY_HW_ACCELERATION, enabled).apply()
+        viewModelScope.launch { uiPreferences.edit { it[hardwareAccelerationKey] = enabled } }
+    }
+
     private val confirmCloseRunningKey = booleanPreferencesKey("perf_confirm_close_running")
 
     /** When true (default), closing a project/workspace with a running terminal program, an active
@@ -326,6 +473,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setIdleTimeoutMinutes(minutes: Int) {
         viewModelScope.launch { uiPreferences.edit { it[idleTimeoutMinKey] = minutes.coerceIn(5, 120) } }
+    }
+
+    private val maxTerminalSessionsKey = intPreferencesKey("perf_max_terminal_sessions")
+
+    /** Max concurrent terminal instances the "+" button will open (1…24). Default 12. */
+    val maxTerminalSessions: StateFlow<Int> = uiPreferences.data
+        .map { prefs -> (prefs[maxTerminalSessionsKey] ?: 12).coerceIn(1, 24) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 12)
+
+    fun setMaxTerminalSessions(count: Int) {
+        viewModelScope.launch { uiPreferences.edit { it[maxTerminalSessionsKey] = count.coerceIn(1, 24) } }
     }
 
     private val hideStatusBarWithKeyboardKey = booleanPreferencesKey("hide_status_bar_with_keyboard")
@@ -667,7 +825,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun queueSyntaxCheck(file: File) {
         val projectsRoot = DEFAULT_SHARED_PROJECTS_ROOT.trimEnd('/')
         if (!file.path.startsWith("$projectsRoot/")) return
-        val guest = "/workspace" + file.path.removePrefix(projectsRoot)
+        val guest = hostToGuestPath(file)
         val command = when (file.extension.lowercase()) {
             "py", "pyw" ->
                 "python3 -c \"import sys; compile(open(sys.argv[1]).read(), sys.argv[1], 'exec')\" '$guest'"
@@ -719,14 +877,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Extensions shipped inside the APK (assets/builtin-extensions/) and installed on first run.
     private val builtinExtensions = listOf(
         BundledExtensionSpec(
-            assetPath = "builtin-extensions/jcode.lang.markup-1.0.0.jext",
+            assetPath = "builtin-extensions/jcode.lang.markup-1.0.1.jext",
             uniqueName = "jcode.lang.markup",
-            version = "1.0.0",
+            version = "1.0.1",
         ),
         BundledExtensionSpec(
-            assetPath = "builtin-extensions/jcode.lang.stylesheet-1.0.0.jext",
+            assetPath = "builtin-extensions/jcode.lang.stylesheet-1.0.1.jext",
             uniqueName = "jcode.lang.stylesheet",
-            version = "1.0.0",
+            version = "1.0.1",
+        ),
+        BundledExtensionSpec(
+            assetPath = "builtin-extensions/jcode.ext.gitscm-0.5.1.jext",
+            uniqueName = "jcode.ext.gitscm",
+            version = "0.5.1",
         ),
         // NOTE: manager extensions (SQL Client, VM Manager) are NOT bundled — they pull in
         // libraries/binaries at runtime and are distributed via the marketplace, not baked into the app.
@@ -767,17 +930,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             combine(
+                currentWorkspace,
                 selectedProject,
                 effectiveConfig.map { it.distro }.distinctUntilChanged(),
-            ) { project, distro ->
-                project to distro
-            }.collectLatest { (project, distro) ->
+            ) { workspace, project, distro ->
+                Triple(workspace, project, distro)
+            }.collectLatest { (workspace, project, distro) ->
                 withContext(Dispatchers.IO) {
                     val projectHostPath = (project?.fsPath as? FsPath.Local)?.file?.absolutePath
+                    // Bind every local project of the workspace so a multi-repo extension (Source Control)
+                    // can reach each repo at its guest target; the selected project stays the primary bind.
+                    val projectBinds = workspace?.projects.orEmpty().mapNotNull { p ->
+                        ((p.fsPath as? FsPath.Local)?.file?.absolutePath)?.let { it to p.distroBindTarget }
+                    }
                     distroService.updateRuntimeConfig(
                         distroConfig = distro,
                         projectHostPath = projectHostPath,
                         projectTargetPath = project?.distroBindTarget,
+                        projectBinds = projectBinds,
                     )
                     distroService.refreshEnvironment()
                 }
@@ -832,6 +1002,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         templateScaffolder.reset()
     }
 
+    // ---- Extension-contributed shell actions (e.g. the SCM extension's Clone / Remote Repo) ----
+
+    /** An action an installed extension contributes to a host surface; tapping opens that extension's
+     *  own view (route == the action id) in the editor area. */
+    data class ShellContribution(val extId: String, val id: String, val label: String)
+
+    /** Actions active extensions contribute to the empty-editor start screen (their required tools met). */
+    val contributedEditorStartActions: StateFlow<List<ShellContribution>> =
+        combine(installedExtensions, extensionActivations, distroService.sdkCatalogState) { exts, acts, sdk ->
+            availableContributions(exts, acts, sdk) { it.editorStartActions }
+        }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+    /** Actions active extensions contribute to the left-drawer "Open Folder" dropdown. */
+    val contributedDrawerActions: StateFlow<List<ShellContribution>> =
+        combine(installedExtensions, extensionActivations, distroService.sdkCatalogState) { exts, acts, sdk ->
+            availableContributions(exts, acts, sdk) { it.drawerActions }
+        }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+    private fun availableContributions(
+        exts: List<InstalledExtension>,
+        acts: Map<String, ExtensionActivation>,
+        sdk: dev.jcode.core.distro.SdkCatalogState,
+        surface: (dev.jcode.feature.marketplace.ExtensionContributions) -> List<dev.jcode.feature.marketplace.ContributedAction>,
+    ): List<ShellContribution> =
+        exts.filter { (acts[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual }
+            .filter { ext -> ext.requires.sdks.all { it in sdk.installedEntryIds } }
+            .flatMap { ext -> surface(ext.contributes).map { ShellContribution(ext.id, it.id, it.label) } }
+            .distinctBy { it.extId + ":" + it.id }
+
+    /** Open the extension view a contributed action points at (route == the action id). */
+    fun openContributedView(c: ShellContribution) {
+        openExtensionViewPage(c.extId, c.id, c.label)
+    }
+
+    /** Resolve the post-open prompt shown after a folder was opened inside a User Workspace. */
+    fun resolvePostClone(open: Boolean) {
+        val project = _postClonePrompt.value ?: return
+        _postClonePrompt.value = null
+        if (open) _selectedProjectId.value = project.id
+        else viewModelScope.launch { emitMessage("Added '${project.name}' to the workspace.") }
+    }
+
     fun createNewItem(request: NewItemRequest) {
         viewModelScope.launch {
             val fallback = if (request.isWorkspace) "untitled-workspace" else "untitled-project"
@@ -860,8 +1072,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
-            // Keep the dialog open to stream scaffold progress. Hold a JOB session so Android
-            // does not kill the long-running npm/dotnet steps while the panel is backgrounded.
+            // The scaffold runs in the background Setup terminal (right drawer) — close the dialog
+            // now instead of blocking on a modal. Hold a JOB session so Android does not kill the
+            // long-running npm/dotnet steps while the app is backgrounded.
+            _showNewItemDialog.value = false
+            emitMessage("Setting up '${project.name}' in the Setup terminal…")
             SessionRegistry.registerSession(
                 appContext,
                 BackendSessionKind.JOB,
@@ -877,8 +1092,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 emitMessage(
                     if (ok) "Project '${project.name}' ready."
-                    else "Project '${project.name}' created with errors; see the scaffold log.",
+                    else "Project '${project.name}' scaffold failed: " +
+                        (scaffoldState.value.errorMessage ?: "see the Setup terminal."),
                 )
+                templateScaffolder.reset()
             }
         }
     }
@@ -1162,7 +1379,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun installSdkCatalogEntry(entryId: String) {
-        runSdkCatalogAction(entryId, SdkCatalogAction.Install)
+        viewModelScope.launch(Dispatchers.IO) {
+            val entry = distroService.sdkCatalogState.value.entries.firstOrNull { it.id == entryId }
+            if (entry != null && !installRequiredSdks(entry.requiredSdks, entry.name)) return@launch
+            runCatalogInstall("sdk", entryId) {
+                distroService.runSdkCatalogAction(entryId, SdkCatalogAction.Install)
+            }
+        }
     }
 
     fun verifySdkCatalogEntry(entryId: String) {
@@ -1174,7 +1397,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun installLspCatalogEntry(entryId: String) {
-        runLspCatalogAction(entryId, LspCatalogAction.Install)
+        viewModelScope.launch(Dispatchers.IO) {
+            val entry = LspServerCatalog.findById(entryId)
+            if (entry != null && !installRequiredSdks(entry.requiredSdks, entry.name)) return@launch
+            runCatalogInstall("lsp", entryId) {
+                distroService.runLspCatalogAction(entryId, LspCatalogAction.Install)
+            }
+        }
     }
 
     fun verifyLspCatalogEntry(entryId: String) {
@@ -1186,7 +1415,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun installDebugEngine(entryId: String) {
-        runDebugCatalogAction(entryId, DebugEngineAction.Install)
+        viewModelScope.launch(Dispatchers.IO) {
+            val entry = DebugEngineCatalog.findById(entryId)
+            if (entry != null && !installRequiredSdks(entry.requiredSdks, entry.name)) return@launch
+            runCatalogInstall("debug", entryId) {
+                distroService.runDebugEngineCatalogAction(entryId, DebugEngineAction.Install)
+            }
+        }
     }
 
     fun verifyDebugEngine(entryId: String) {
@@ -1288,6 +1523,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Open an extension's web frontend at a named view (loaded as `#view`) as a full editor page and
+     *  bring the editor to front — used by the `workbench.openView` Extension API. */
+    fun openExtensionViewPage(extensionId: String, view: String, title: String? = null) {
+        _bringEditorToFront.tryEmit(Unit)
+        val ext = _installedExtensions.value.firstOrNull { it.id == extensionId }
+        val viewLabel = when (view) { "github" -> "GitHub"; "" -> null; else -> view.replaceFirstChar { it.uppercaseChar() } }
+        openDetailPage(EXT_APP_PREFIX + extensionId + "#" + view, EditorPageKind.ExtensionApp) {
+            title?.takeIf { it.isNotBlank() } ?: listOfNotNull(ext?.name, viewLabel).joinToString(" · ").ifBlank { "View" }
+        }
+    }
+
+    /** The current global git identity (name, email) from the runtime, or empty strings. */
+    suspend fun getGitIdentity(): Pair<String, String> {
+        val name = distroService.exec("git config --global --get user.name 2>/dev/null", user = "root").stdout.trim()
+        val email = distroService.exec("git config --global --get user.email 2>/dev/null", user = "root").stdout.trim()
+        return name to email
+    }
+
+    /** Set the global git identity in the runtime (author of all commits). */
+    fun setGitIdentity(name: String, email: String) {
+        viewModelScope.launch {
+            fun q(s: String) = "'" + s.replace("'", "'\\''") + "'"
+            distroService.exec(
+                "git config --global user.name ${q(name)} && git config --global user.email ${q(email)}",
+                user = "root",
+            )
+        }
+    }
+
     /** Run a command in the Linux runtime for an extension frontend; returns a JSON result payload.
      *  Runs as root: manager extensions (SQL Client, VM Manager) need privilege to install/run software. */
     suspend fun runtimeExecJson(command: String, timeoutMs: Long): String {
@@ -1374,6 +1638,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // Generic per-extension settings (the manifest `settings:` block), keyed extensionId -> {key: value}.
+    // Stored as one nested JSON object; the config.* API + the settings screen read/write through here.
+    private val extensionSettingsKey = stringPreferencesKey("extension_settings")
+
+    val extensionSettings: StateFlow<Map<String, Map<String, String>>> = uiPreferences.data
+        .map { prefs -> parseExtensionSettings(prefs[extensionSettingsKey]) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    private fun parseExtensionSettings(json: String?): Map<String, Map<String, String>> {
+        if (json.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val root = JSONObject(json)
+            buildMap {
+                root.keys().forEach { extId ->
+                    val obj = root.optJSONObject(extId) ?: return@forEach
+                    put(extId, buildMap { obj.keys().forEach { k -> put(k, obj.optString(k)) } })
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    /** A setting's saved value, or its manifest default, or "". Used by config.* (caller-scoped). */
+    private fun resolvedExtensionSetting(ext: InstalledExtension, key: String): String {
+        extensionSettings.value[ext.id]?.get(key)?.let { return it }
+        return ext.settings.firstOrNull { it.key == key }?.default ?: ""
+    }
+
+    /** Same resolution, looked up by id — for the settings screen, which has no [InstalledExtension]. */
+    fun extensionSettingValue(extensionId: String, key: String): String {
+        extensionSettings.value[extensionId]?.get(key)?.let { return it }
+        return installedExtensions.value.firstOrNull { it.id == extensionId }
+            ?.settings?.firstOrNull { it.key == key }?.default ?: ""
+    }
+
+    fun setExtensionSetting(extensionId: String, key: String, value: String) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val root = runCatching { JSONObject(prefs[extensionSettingsKey] ?: "{}") }.getOrDefault(JSONObject())
+                val obj = root.optJSONObject(extensionId) ?: JSONObject()
+                obj.put(key, value)
+                root.put(extensionId, obj)
+                prefs[extensionSettingsKey] = root.toString()
+            }
+            // Notify the live extension WebView so it can reload without a manual refresh.
+            _extensionEvents.tryEmit(
+                "config" to JSONObject().put("extensionId", extensionId).put("key", key).put("value", value).toString(),
+            )
+        }
+    }
+
     /** The `activeFile` event/query payload: guest (/workspace) path of the focused file tab, or {}. */
     private fun activeFileEventJson(): String {
         val tab = _editorGroup.value.tabs.firstOrNull { it.id == _editorGroup.value.activeTabId && !it.isPage }
@@ -1386,10 +1700,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }.toString()
     }
 
-    /** Host file → guest (/workspace) path where possible, else the raw host path. */
+    /**
+     * Host file → the guest path the runtime actually mounts it at. A file inside a workspace project
+     * resolves through that project's bind (host dir → distroBindTarget), so nested multi-project
+     * workspaces map correctly (e.g. /…/multii/beta/x → /workspace/beta/x, which is where exec.run
+     * mounts it — not hostToGuestPath's whole-root guess). Files outside any project fall back to the
+     * whole projects-root → /workspace mapping (what the interactive terminal binds), else the raw path.
+     */
     private fun hostToGuestPath(file: File): String {
-        val root = DEFAULT_SHARED_PROJECTS_ROOT.trimEnd('/')
         val p = file.absolutePath
+        currentWorkspace.value?.projects.orEmpty().forEach { proj ->
+            val projHost = (proj.fsPath as? FsPath.Local)?.file?.absolutePath?.trimEnd('/') ?: return@forEach
+            if (p == projHost || p.startsWith("$projHost/")) {
+                return proj.distroBindTarget.trimEnd('/') + p.removePrefix(projHost)
+            }
+        }
+        val root = DEFAULT_SHARED_PROJECTS_ROOT.trimEnd('/')
         return if (p.startsWith(root)) "/workspace" + p.removePrefix(root) else p
     }
 
@@ -1407,6 +1733,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val requiredCapability = if (family == "service") "exec" else family
         if (family != "api" && !capabilityGranted(ext, requiredCapability)) {
             return apiError("capability '$requiredCapability' is not declared by ${ext.id} or was revoked by the user")
+        }
+        // An extension opening one of ITS OWN views in the editor — needs the caller id, which the
+        // stateless dispatch below doesn't have.
+        if (type == "workbench.openView") {
+            openExtensionViewPage(ext.id, payload.optString("view"), payload.optString("title").ifBlank { null })
+            return apiOk(JSONObject())
+        }
+        // Per-extension settings (config.*) are scoped to the caller — resolved from its declared
+        // `settings:` defaults overlaid with the user's saved values. Also handled here for ext.id.
+        if (family == "config") {
+            return when (type) {
+                "config.all" -> apiOk(
+                    JSONObject().apply {
+                        ext.settings.forEach { s -> put(s.key, resolvedExtensionSetting(ext, s.key)) }
+                    },
+                )
+                "config.get" -> apiOk(JSONObject().put("value", resolvedExtensionSetting(ext, payload.optString("key"))))
+                "config.set" -> {
+                    val key = payload.optString("key")
+                    if (key.isBlank()) apiError("key required")
+                    else {
+                        setExtensionSetting(ext.id, key, payload.opt("value")?.toString().orEmpty())
+                        apiOk(JSONObject())
+                    }
+                }
+                else -> apiError("unknown request type: $type")
+            }
         }
         return runCatching { dispatchExtensionApi(type, payload) }
             .getOrElse { apiError(it.message ?: "internal error") }
@@ -1493,6 +1846,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             apiOk(JSONObject())
         }
 
+        // Register a top-level folder under the current workspace (already created on disk, e.g. by a
+        // git clone) as a Project and open it. In a User Workspace it prompts open-vs-add instead.
+        "workbench.openFolder" -> {
+            val name = p.optString("name").trim()
+            require(name.isNotBlank()) { "name required" }
+            val sanitized = workspaceManager.sanitizedFolderName(name)
+            val userWorkspace = workspaceManager.breadcrumb.value.size > 1
+            if (!userWorkspace) resetDefaultWorkspaceProject()
+            val project = workspaceManager.createNode(sanitized, WorkspaceNodeType.Project, null)
+            if (userWorkspace) _postClonePrompt.value = project else _selectedProjectId.value = project.id
+            apiOk(JSONObject().put("name", project.name).put("opened", !userWorkspace))
+        }
+
         "service.start" -> {
             val id = p.optString("id").ifBlank { "service" }
             val command = p.optString("command")
@@ -1522,8 +1888,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             JSONObject().apply {
                 selectedProject.value?.let { proj ->
                     put("name", proj.name)
-                    (proj.fsPath as? FsPath.Local)?.file?.let { put("path", hostToGuestPath(it)) }
+                    // distroBindTarget is the guest path the project is actually mounted at for exec.run
+                    // (hostToGuestPath assumes the terminal's whole-root bind, which exec does not use).
+                    if (proj.fsPath is FsPath.Local) put("path", proj.distroBindTarget)
                 }
+                currentWorkspace.value?.let { put("workspace", it.name) }
+            },
+        )
+
+        // Every project folder in the open workspace, as guest mount paths — lets a multi-repo extension
+        // (e.g. Source Control) enumerate and switch between repositories. Each project's guest path is its
+        // distroBindTarget (where the runtime mounts it); SAF projects have no local dir and are skipped.
+        "workbench.workspaceFolders" -> apiOk(
+            JSONObject().apply {
+                val folders = org.json.JSONArray()
+                currentWorkspace.value?.projects.orEmpty().forEach { proj ->
+                    if (proj.fsPath is FsPath.Local) {
+                        folders.put(
+                            JSONObject()
+                                .put("name", proj.name)
+                                .put("path", proj.distroBindTarget),
+                        )
+                    }
+                }
+                put("folders", folders)
                 currentWorkspace.value?.let { put("workspace", it.name) }
             },
         )
@@ -1613,6 +2001,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _editorGroup.value = group.withTabAdded(EditorTab.page(tabId, title(), kind))
     }
 
+    /**
+     * Open (or focus) the single built-in browser editor tab. The URL is carried by
+     * [dev.jcode.workbench.BuiltinBrowser] (set via its `requestOpen`), so callers that already
+     * requested a navigation only need to surface the tab.
+     */
+    fun openBrowserTab() {
+        val group = _editorGroup.value
+        val existing = group.tabs.firstOrNull { it.id == BROWSER_TAB_ID }
+        _editorGroup.value = if (existing != null) {
+            group.withActiveTabChanged(existing.id)
+        } else {
+            group.withTabAdded(EditorTab.page(BROWSER_TAB_ID, "Browser", EditorPageKind.Browser))
+        }
+    }
+
     /** Full status re-check (installed + update-available) for the SDK catalog; runs async, no-op if already running. */
     fun checkSdkStatuses() {
         viewModelScope.launch(Dispatchers.IO) { distroService.checkSdkStatuses() }
@@ -1625,6 +2028,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun checkDebugEngineStatuses() {
         viewModelScope.launch(Dispatchers.IO) { distroService.checkDebugEngineStatuses() }
+    }
+
+    /**
+     * Re-install (upgrade) every SDK / language server / debug engine the last check flagged as
+     * updatable, then re-check so the "Update available" markers clear. Deps are already present, so
+     * this re-runs each tool's install command directly through the shared Setup terminal.
+     */
+    fun updateAllToolchains() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = SessionRegistry.registerSession(
+                context = getApplication(),
+                kind = BackendSessionKind.JOB,
+                name = "toolchains:update-all",
+            )
+            try {
+                distroService.sdkCatalogState.value.updatableEntryIds.toList().forEach {
+                    distroService.runSdkCatalogAction(it, SdkCatalogAction.Install)
+                }
+                distroService.lspCatalogState.value.updatableEntryIds.toList().forEach {
+                    distroService.runLspCatalogAction(it, LspCatalogAction.Install)
+                }
+                distroService.debugCatalogState.value.updatableEntryIds.toList().forEach {
+                    distroService.runDebugEngineCatalogAction(it, DebugEngineAction.Install)
+                }
+            } finally {
+                session.close()
+            }
+            distroService.checkSdkStatuses()
+            distroService.checkLspStatuses()
+            distroService.checkDebugEngineStatuses()
+        }
     }
 
     /** Open the detail page for a single debug engine. Reuses one debug-detail tab (replaces any other). */
@@ -1903,6 +2337,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        // Images open in the built-in viewer. Checked before the text probe so .svg (which is text)
+        // renders rather than opening as XML source.
+        if (file.extension.lowercase() in IMAGE_EXTENSIONS) {
+            _editorGroup.value = _editorGroup.value.withTabAdded(
+                EditorTab.page(stableId, file.name, EditorPageKind.ImageViewer),
+            )
+            return
+        }
+
         if (!file.isLikelyTextFile()) {
             emitMessage("Binary preview is not implemented yet for ${file.name}.")
             return
@@ -1932,6 +2375,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val existing = _editorGroup.value.tabs.firstOrNull { it.id == stableId }
         if (existing != null) {
             _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
+            return
+        }
+
+        if (node.name.substringAfterLast('.', "").lowercase() in IMAGE_EXTENSIONS) {
+            _editorGroup.value = _editorGroup.value.withTabAdded(
+                EditorTab.page(stableId, node.name, EditorPageKind.ImageViewer),
+            )
             return
         }
 
@@ -1975,6 +2425,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val targetProj = record.projectId
             if (targetProj != null && workspace?.projects?.any { it.id == targetProj } == true) {
                 _selectedProjectId.value = targetProj
+                // A restored session's tab set is authoritative — even when it's EMPTY because the user
+                // closed every tab. Mark the project as already-bootstrapped so neither the fallback below
+                // nor the composition's bootstrap effect re-opens a starter file on a deliberately-empty
+                // session. (Only a launch with NO saved session still bootstraps a project's starter file.)
+                lastBootstrappedProjectId = targetProj
             }
 
             // Tabs: open each surviving file; recover unsaved buffers where the file (or its folder) remains.
@@ -2210,5 +2665,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val EXT_APP_PREFIX = "jcode://ext-app/"
         const val EXT_PERMISSIONS_TAB_ID = "jcode://ext-permissions"
         const val RUN_CONFIG_PREFIX = "jcode://run-config/"
+        /** Stable id of the single built-in browser editor tab (see [openBrowserPage]). */
+        const val BROWSER_TAB_ID = "jcode://browser"
+        /** Extensions routed to the built-in image viewer instead of the text editor. */
+        val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico")
     }
 }

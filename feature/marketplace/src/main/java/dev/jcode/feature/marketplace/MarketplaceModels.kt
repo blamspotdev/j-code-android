@@ -11,6 +11,10 @@ enum class ExtensionType {
     App,
     /** Like [App], but its UI is a database manager surfaced under the "DB Managers" drawer. */
     DbManager,
+    /** Like [App], but its UI is a source-control manager surfaced in the left-drawer "SCM" panel. */
+    Scm,
+    /** Like [App], but its UI is a virtual-machine manager surfaced in the left-drawer "VM" panel. */
+    Vm,
     Unknown;
 
     companion object {
@@ -20,6 +24,8 @@ enum class ExtensionType {
             "formatter" -> Formatter
             "app", "tool", "runtime" -> App
             "dbmanager", "db-manager", "database" -> DbManager
+            "scm", "source-control", "sourcecontrol", "vcs" -> Scm
+            "vm", "vmmanager", "vm-manager", "virtualmachine", "virtualization" -> Vm
             else -> Unknown
         }
     }
@@ -59,6 +65,26 @@ data class ExtensionDeps(
 
     companion object {
         val EMPTY = ExtensionDeps()
+    }
+}
+
+/** A UI action an extension contributes to a host surface (start-editor screen, drawer header). */
+data class ContributedAction(
+    val id: String,
+    val label: String,
+    val icon: String? = null,
+)
+
+/** Actions an extension contributes to host surfaces. Rendered when the extension is active and its
+ *  required toolchains are installed; the host routes known action ids (e.g. clone, remoteRepo). */
+data class ExtensionContributions(
+    val editorStartActions: List<ContributedAction> = emptyList(),
+    val drawerActions: List<ContributedAction> = emptyList(),
+) {
+    val isEmpty: Boolean get() = editorStartActions.isEmpty() && drawerActions.isEmpty()
+
+    companion object {
+        val EMPTY = ExtensionContributions()
     }
 }
 
@@ -169,6 +195,39 @@ data class LanguagePack(
     }
 }
 
+/** The control type for a user-configurable extension setting (from the manifest `settings:` block). */
+enum class SettingType {
+    /** On/off switch. */
+    Bool,
+    /** One of a fixed set of [ExtensionSetting.options]. */
+    Enum,
+    /** Free-form integer. */
+    Int,
+    /** Free-form text. The default when a type is missing or unrecognized. */
+    Str;
+
+    companion object {
+        fun from(raw: String?): SettingType = when (raw?.lowercase()) {
+            "bool", "boolean", "toggle" -> Bool
+            "enum", "select", "choice" -> Enum
+            "int", "integer", "number" -> Int
+            else -> Str
+        }
+    }
+}
+
+/** One user-configurable option an extension declares in its manifest `settings:` block. */
+data class ExtensionSetting(
+    val key: String,
+    val label: String,
+    val type: SettingType,
+    /** Default value (as a string); null when the manifest omits it. */
+    val default: String? = null,
+    /** Allowed values for [SettingType.Enum]. */
+    val options: List<String> = emptyList(),
+    val description: String? = null,
+)
+
 /** An extension that has been downloaded and unpacked under the app's install root. */
 data class InstalledExtension(
     val id: String,
@@ -194,6 +253,13 @@ data class InstalledExtension(
     val apiMinVersion: Int = 0,
     /** Capability families this extension declares it uses (e.g. "exec", "fs", "workbench"). */
     val apiCapabilities: List<String> = emptyList(),
+    /** User-configurable settings this extension declares (surfaced generically in app Settings). */
+    val settings: List<ExtensionSetting> = emptyList(),
+    /** Toolchains/extensions this extension requires (installed with it) or suggests. */
+    val requires: ExtensionDeps = ExtensionDeps.EMPTY,
+    val suggests: ExtensionDeps = ExtensionDeps.EMPTY,
+    /** Actions this extension contributes to host surfaces (start-editor screen, drawer header). */
+    val contributes: ExtensionContributions = ExtensionContributions.EMPTY,
 )
 
 /** The first bundled language that claims [fileName] (by file extension), or null. */

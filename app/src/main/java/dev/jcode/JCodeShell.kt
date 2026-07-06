@@ -58,6 +58,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -120,6 +121,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -204,6 +206,7 @@ import dev.jcode.feature.lspmanager.LspManagerFeature
 import dev.jcode.feature.sdkmanager.SdkManagerFeature
 import dev.jcode.feature.settings.SettingsFeature
 import dev.jcode.workbench.dialog.NewItemDialog
+import dev.jcode.workbench.dialog.PostCloneDialog
 import dev.jcode.workbench.dialog.OpenFolderTypeDialog
 import dev.jcode.feature.marketplace.ExtensionActivation
 import dev.jcode.workbench.marketplace.ExtensionActivationSetting
@@ -212,7 +215,17 @@ import dev.jcode.workbench.marketplace.ExtensionKeepAliveSetting
 import dev.jcode.workbench.marketplace.LocalExtensionCapabilities
 import dev.jcode.workbench.marketplace.LocalExtensionKeepAlive
 import dev.jcode.workbench.ExtensionWebViewPage
+import dev.jcode.workbench.BrowserPage
+import dev.jcode.workbench.BuiltinBrowser
+import dev.jcode.workbench.DevtoolsSidebarContent
+import dev.jcode.workbench.ImageViewerPage
+import dev.jcode.workbench.SearchToolPanel
 import dev.jcode.workbench.marketplace.DbManagerPanel
+import dev.jcode.workbench.marketplace.hasDbManagerClient
+import dev.jcode.workbench.marketplace.ScmPanel
+import dev.jcode.workbench.marketplace.hasScmClient
+import dev.jcode.workbench.marketplace.VmPanel
+import dev.jcode.workbench.marketplace.hasVmManagerClient
 import dev.jcode.workbench.marketplace.ExtensionDetailPage
 import dev.jcode.workbench.marketplace.ExtensionPermissionsPage
 import dev.jcode.workbench.marketplace.LocalExtensionActivation
@@ -222,14 +235,23 @@ import dev.jcode.workbench.DebugSessionUi
 import dev.jcode.workbench.LocalDebugCatalogState
 import dev.jcode.workbench.LocalDebugEditorState
 import dev.jcode.workbench.LocalDebugSession
+import dev.jcode.workbench.LocalExtensionInstallPhases
+import dev.jcode.workbench.LocalSetupTerminalSessionId
 import dev.jcode.design.PerformanceSettings
+import dev.jcode.design.ExtensionSettingSpec
+import dev.jcode.design.ExtensionSettingsGroup
+import dev.jcode.design.ExtensionSettingsUi
+import dev.jcode.design.LocalExtensionSettingsUi
 import dev.jcode.design.LocalPerformanceSettings
+import dev.jcode.design.LocalSourceControlSettings
+import dev.jcode.design.SourceControlSettings
 import dev.jcode.design.WebPreviewBrowsers
 import dev.jcode.design.LocalWebPreviewBrowsers
 import dev.jcode.workbench.AgentChatActions
 import dev.jcode.workbench.AgentChatSidebarContent
 import dev.jcode.workbench.AgentChatWebViewHolder
 import dev.jcode.workbench.agentChatTabTitle
+import dev.jcode.workbench.hasAgentChatExtension
 import dev.jcode.workbench.LocalAgentChatActions
 import dev.jcode.workbench.CloseTarget
 import dev.jcode.workbench.IssueActions
@@ -273,7 +295,7 @@ fun JCodeApp(
     val selectedProject by viewModel.selectedProject.collectAsStateWithLifecycle()
     val editorGroup by viewModel.editorGroup.collectAsStateWithLifecycle()
     val showNewItemDialog by viewModel.showNewItemDialog.collectAsStateWithLifecycle()
-    val scaffoldState by viewModel.scaffoldState.collectAsStateWithLifecycle()
+    val postClonePrompt by viewModel.postClonePrompt.collectAsStateWithLifecycle()
     val templates by viewModel.templates.collectAsStateWithLifecycle()
     val workspaceConfig by viewModel.workspaceConfig.collectAsStateWithLifecycle()
     val projectConfig by viewModel.projectConfig.collectAsStateWithLifecycle()
@@ -322,24 +344,55 @@ fun JCodeApp(
             },
         )
     }
+    val extensionSettings by viewModel.extensionSettings.collectAsStateWithLifecycle()
+    val extensionSettingsUi = remember(installedExtensions, extensionSettings) {
+        ExtensionSettingsUi(
+            groups = installedExtensions.filter { it.settings.isNotEmpty() }.map { ext ->
+                ExtensionSettingsGroup(
+                    extensionId = ext.id,
+                    extensionName = ext.name,
+                    specs = ext.settings.map { s ->
+                        ExtensionSettingSpec(
+                            key = s.key,
+                            label = s.label,
+                            type = s.type.name.lowercase(),
+                            options = s.options,
+                            default = s.default ?: "",
+                            description = s.description,
+                        )
+                    },
+                )
+            },
+            valueOf = viewModel::extensionSettingValue,
+            onChange = viewModel::setExtensionSetting,
+        )
+    }
     val marketplaceEntries by viewModel.marketplaceEntries.collectAsStateWithLifecycle()
     val marketplaceBusy by viewModel.marketplaceBusy.collectAsStateWithLifecycle()
+    val extensionInstallPhases by viewModel.extensionInstallPhases.collectAsStateWithLifecycle()
+    val setupTerminalSessionId by viewModel.setupTerminalRunner.sessionId.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val themeBundleId by viewModel.themeBundleId.collectAsStateWithLifecycle()
     val iconBundleId by viewModel.iconBundleId.collectAsStateWithLifecycle()
     val formatterId by viewModel.formatterId.collectAsStateWithLifecycle()
     val terminalDoubleTapToFocus by viewModel.terminalDoubleTapToFocus.collectAsStateWithLifecycle()
+    val hardwareAcceleration by viewModel.hardwareAcceleration.collectAsStateWithLifecycle()
     val confirmCloseRunning by viewModel.confirmCloseRunning.collectAsStateWithLifecycle()
     val autoCloseIdleTerminals by viewModel.autoCloseIdleTerminals.collectAsStateWithLifecycle()
     val idleTimeoutMinutes by viewModel.idleTimeoutMinutes.collectAsStateWithLifecycle()
-    val performanceSettings = remember(confirmCloseRunning, autoCloseIdleTerminals, idleTimeoutMinutes) {
+    val maxTerminalSessions by viewModel.maxTerminalSessions.collectAsStateWithLifecycle()
+    val performanceSettings = remember(hardwareAcceleration, confirmCloseRunning, autoCloseIdleTerminals, idleTimeoutMinutes, maxTerminalSessions) {
         PerformanceSettings(
+            hardwareAcceleration = hardwareAcceleration,
             confirmCloseRunning = confirmCloseRunning,
             autoCloseIdleTerminals = autoCloseIdleTerminals,
             idleTimeoutMinutes = idleTimeoutMinutes,
+            maxTerminalSessions = maxTerminalSessions,
+            onSetHardwareAcceleration = viewModel::setHardwareAcceleration,
             onSetConfirmCloseRunning = viewModel::setConfirmCloseRunning,
             onSetAutoCloseIdleTerminals = viewModel::setAutoCloseIdleTerminals,
             onSetIdleTimeoutMinutes = viewModel::setIdleTimeoutMinutes,
+            onSetMaxTerminalSessions = viewModel::setMaxTerminalSessions,
         )
     }
     val webPreviewBrowserGlobal by viewModel.webPreviewBrowser.collectAsStateWithLifecycle()
@@ -427,10 +480,9 @@ fun JCodeApp(
         onToken = { token ->
             val trimmed = token.trim().trimEnd('.', ',', ')', ']', '}', ';')
             if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-                ProjectRunner.openInBrowser(
-                    tapContext, trimmed,
-                    webPreviewBrowsers.effective(selectedProject?.id?.toString().orEmpty()),
-                )
+                val choice = webPreviewBrowsers.effective(selectedProject?.id?.toString().orEmpty())
+                if (choice == WebPreviewBrowsers.BUILTIN) BuiltinBrowser.requestOpen(trimmed)
+                else ProjectRunner.openInBrowser(tapContext, trimmed, choice)
             } else {
                 viewModel.openFileByGuestPath(token)
             }
@@ -440,13 +492,27 @@ fun JCodeApp(
         TerminalSessionHost.setUiOpenFileListener { token -> viewModel.openFileByGuestPath(token) }
         onDispose { TerminalSessionHost.setUiOpenFileListener(null) }
     }
+    // Surface the built-in browser editor tab whenever something requests it (a "Built-in browser"
+    // preview, or a terminal-URL tap, bumps BuiltinBrowser.revealSignal). Handled here because this is
+    // where the view model is in scope; the inner run handlers only touch the BuiltinBrowser singleton.
+    LaunchedEffect(Unit) {
+        snapshotFlow { BuiltinBrowser.revealSignal.value }.collect { if (it > 0) viewModel.openBrowserTab() }
+    }
     val snackbarHostState = remember { SnackbarHostState() }
     val openFolderLauncher = rememberOpenFolderLauncher(
         onFolderPicked = viewModel::openExternalFolder,
     )
     val openFolderTypePrompt by viewModel.openFolderTypePrompt.collectAsStateWithLifecycle()
     val environmentNotConfigured = environmentState.smokeTestPassed != true
-    val showFirstRunEnvironmentScreen = environmentNotConfigured && !environmentState.firstRunSetupDeferred
+    // The first-run screen latches once shown and stays up until the user taps "Done" (which defers).
+    // Without this it would vanish the instant setup finishes — smokeTestPassed flips true at the end of
+    // runAllPendingSteps, just before AllDone is emitted — skipping the "Done" confirmation. Saveable so
+    // it survives a rotation mid-setup.
+    var firstRunScreenLatched by rememberSaveable { mutableStateOf(false) }
+    if (environmentNotConfigured && !environmentState.firstRunSetupDeferred) {
+        firstRunScreenLatched = true
+    }
+    val showFirstRunEnvironmentScreen = firstRunScreenLatched && !environmentState.firstRunSetupDeferred
 
     LaunchedEffect(viewModel) {
         viewModel.messages.collectLatest { message ->
@@ -485,12 +551,19 @@ fun JCodeApp(
     }
 
     val recents by viewModel.recents.collectAsStateWithLifecycle()
-    val editorEmptyActions = remember(recents) {
+    val contributedStartActions by viewModel.contributedEditorStartActions.collectAsStateWithLifecycle()
+    val contributedDrawerActions by viewModel.contributedDrawerActions.collectAsStateWithLifecycle()
+    val vcsActions = remember(contributedDrawerActions) {
+        VcsActions(drawerActions = contributedDrawerActions, onAction = viewModel::openContributedView)
+    }
+    val editorEmptyActions = remember(recents, contributedStartActions) {
         EditorEmptyActions(
             recents = recents,
             onOpenRecent = viewModel::openRecent,
             onNewProject = viewModel::requestNew,
             onOpenFolder = { openFolderLauncher.launch(null) },
+            startActions = contributedStartActions,
+            onAction = viewModel::openContributedView,
         )
     }
 
@@ -553,9 +626,16 @@ fun JCodeApp(
         LocalCompletionSource provides completionSource,
         LocalEnvironmentManager provides environmentManagerActions,
         LocalEditorEmptyActions provides editorEmptyActions,
+        LocalVcsActions provides vcsActions,
         LocalDebugCatalogState provides debugCatalogState,
+        LocalExtensionInstallPhases provides extensionInstallPhases,
+        LocalSetupTerminalSessionId provides setupTerminalSessionId,
         LocalDebugSession provides debugSessionUi,
         LocalPerformanceSettings provides performanceSettings,
+        LocalSourceControlSettings provides remember {
+            SourceControlSettings(ready = true, onLoad = viewModel::getGitIdentity, onSave = viewModel::setGitIdentity)
+        },
+        LocalExtensionSettingsUi provides extensionSettingsUi,
         LocalWebPreviewBrowsers provides webPreviewBrowsers,
         LocalIssueActions provides issueActions,
         LocalDebugEditorState provides DebugEditorState(
@@ -592,6 +672,7 @@ fun JCodeApp(
         onOpenProject = viewModel::openProject,
         onRenameProject = viewModel::renameProject,
         onOpenFile = viewModel::openFile,
+        onOpenPathAtLine = viewModel::openFileByGuestPath,
         onSelectEditorTab = viewModel::selectEditorTab,
         onCloseEditorTab = viewModel::closeEditorTab,
         onSaveActiveTab = viewModel::saveActiveTab,
@@ -633,6 +714,7 @@ fun JCodeApp(
             onUninstallLspCatalogEntry = viewModel::uninstallLspCatalogEntry,
             onOpenLspDetail = viewModel::openLspDetailPage,
             onCheckDebugStatuses = viewModel::checkDebugEngineStatuses,
+            onUpdateAllToolchains = viewModel::updateAllToolchains,
             onInstallDebugEngine = viewModel::installDebugEngine,
             onVerifyDebugEngine = viewModel::verifyDebugEngine,
             onUninstallDebugEngine = viewModel::uninstallDebugEngine,
@@ -663,10 +745,17 @@ fun JCodeApp(
     if (showNewItemDialog) {
         NewItemDialog(
             templates = templates,
-            scaffoldState = scaffoldState,
             installedToolchains = sdkCatalogState.installedEntryIds,
             onDismiss = viewModel::dismissNewDialog,
             onConfirm = viewModel::createNewItem,
+        )
+    }
+
+    postClonePrompt?.let { project ->
+        PostCloneDialog(
+            projectName = project.name,
+            onOpen = { viewModel.resolvePostClone(open = true) },
+            onAdd = { viewModel.resolvePostClone(open = false) },
         )
     }
 
@@ -719,6 +808,7 @@ private fun JCodeShell(
     onOpenProject: (Project) -> Unit,
     onRenameProject: (Long, String) -> Unit,
     onOpenFile: (dev.jcode.fs.FsNode) -> Unit,
+    onOpenPathAtLine: (String) -> Unit,
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
     onSaveActiveTab: () -> Unit,
@@ -758,6 +848,9 @@ private fun JCodeShell(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    // Resolve the VCS actions here (under the CompositionLocal provider) and capture into closures below;
+    // the editor-page dispatch is invoked in a subcomposition where the local would fall back to default.
+    val vcs = LocalVcsActions.current
     val appContext = LocalContext.current.applicationContext
     val configuration = LocalConfiguration.current
     val focusRequester = remember { FocusRequester() }
@@ -777,6 +870,21 @@ private fun JCodeShell(
     var selectedTool by rememberSaveable { mutableStateOf(WorkbenchTool.Explorer) }
     // A previously-persisted selection may point at a now-hidden destination; fall back to Explorer.
     LaunchedEffect(Unit) { if (!selectedTool.available) selectedTool = WorkbenchTool.Explorer }
+    // The "DB Managers" tool is hidden until a DB-manager client extension is installed; if it's
+    // selected when none is present (or the client is removed), fall back to the Explorer.
+    val dbManagerAvailable = installedExtensions.hasDbManagerClient()
+    LaunchedEffect(dbManagerAvailable) {
+        if (!dbManagerAvailable && selectedTool == WorkbenchTool.DbManager) {
+            selectedTool = WorkbenchTool.Explorer
+        }
+    }
+    // The "SCM" tool is likewise hidden until a source-control client extension is installed.
+    val scmAvailable = installedExtensions.hasScmClient()
+    LaunchedEffect(scmAvailable) {
+        if (!scmAvailable && selectedTool == WorkbenchTool.Scm) {
+            selectedTool = WorkbenchTool.Explorer
+        }
+    }
 
     // Syntax highlighting for the active file: the installed language pack if one matches, else the
     // built-in Markdown pack (.md) or a generic fallback, so every file gets baseline coloring.
@@ -845,9 +953,27 @@ private fun JCodeShell(
             rightSidebarVisible = true
         }
     }
+    // The Chat tab only exists while an agent-chat extension is installed; if it goes away (or was
+    // never installed) while selected, fall back to the Terminal tab so the drawer isn't left on it.
+    val chatExtensionAvailable = hasAgentChatExtension()
+    LaunchedEffect(chatExtensionAvailable) {
+        if (!chatExtensionAvailable && rightPanelTab == RightPanelTab.Chat) {
+            rightPanelTab = RightPanelTab.Terminal
+        }
+    }
     // Read once here so the run handlers below (defined before the settings block) can resolve the
     // per-project "Open web previews in" choice when opening a dev-server URL.
     val webPreviewBrowsersLocal = LocalWebPreviewBrowsers.current
+    // Reveal + select the DevTools drawer tab whenever the built-in browser is opened (a preview or a
+    // direct open bumps BuiltinBrowser.revealSignal).
+    LaunchedEffect(Unit) {
+        snapshotFlow { BuiltinBrowser.revealSignal.value }.collect { sig ->
+            if (sig > 0) {
+                rightPanelTab = RightPanelTab.Devtools
+                rightSidebarVisible = true
+            }
+        }
+    }
     var commandPaletteVisible by rememberSaveable { mutableStateOf(false) }
     var terminalSessionIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var selectedTerminalSessionId by rememberSaveable { mutableStateOf("") }
@@ -884,6 +1010,11 @@ private fun JCodeShell(
     // Process-lifetime manager so terminal sessions (native PTY processes) survive Activity
     // recreation/backgrounding instead of being orphaned with the composition.
     val terminalSessionManager = remember(appContext) { TerminalSessionHost.manager(appContext) }
+    // Apply the user's configurable instance limit to the process-lifetime manager.
+    val configuredMaxTerminals = LocalPerformanceSettings.current.maxTerminalSessions
+    LaunchedEffect(terminalSessionManager, configuredMaxTerminals) {
+        terminalSessionManager.maxSessions = configuredMaxTerminals
+    }
     val terminalShellCommand = effectiveConfig.terminal.shellLinux?.takeIf { it.isNotBlank() } ?: "/bin/bash --login"
     val terminalReady = environmentState.prootInstalled && environmentState.distroInstalled == true
 
@@ -953,6 +1084,17 @@ private fun JCodeShell(
     fun selectTerminalSession(sessionId: String) {
         selectedTerminalSessionId = sessionId
         terminalSessionManager.switchSession(sessionId)
+    }
+
+    // Surface the background "Setup" terminal (toolchain installs / project scaffolds) as a tab
+    // WITHOUT focusing it or opening the drawer — the unseen-badge is the only attention cue.
+    val setupTerminalSessionId = LocalSetupTerminalSessionId.current
+    LaunchedEffect(setupTerminalSessionId) {
+        val id = setupTerminalSessionId ?: return@LaunchedEffect
+        if (terminalSessionManager.getSession(id) != null && id !in terminalSessionIds) {
+            terminalSessionIds = terminalSessionIds + id
+            if (selectedTerminalSessionId.isEmpty()) selectedTerminalSessionId = id
+        }
     }
 
     // Run state: the URL of the most recent run (for "Open in browser") and whether we're still
@@ -1053,9 +1195,9 @@ private fun JCodeShell(
                 runInProgress = false
                 if (up) {
                     OutputLog.append("✓ Dev server ready — opening ${plan.url}")
-                    ProjectRunner.openInBrowser(
-                        appContext, plan.url, webPreviewBrowsersLocal.effective(project.id.toString()),
-                    )
+                    val choice = webPreviewBrowsersLocal.effective(project.id.toString())
+                    if (choice == WebPreviewBrowsers.BUILTIN) BuiltinBrowser.requestOpen(plan.url)
+                    else ProjectRunner.openInBrowser(appContext, plan.url, choice)
                 } else {
                     OutputLog.append("✗ Dev server didn't start in time; check the run terminals.", OutputKind.Error)
                     snackbarHostState.showSnackbar("Dev server didn't start in time; check the run terminals.")
@@ -1338,7 +1480,10 @@ private fun JCodeShell(
                 onRenameProject = onRenameProject,
                 onSelectTool = onSelectWorkbenchTool,
                 onOpenExternalFolder = { openFolderLauncher.launch(null) },
+                contributedDrawerActions = vcs.drawerActions,
+                onDrawerAction = vcs.onAction,
                 onOpenFile = onOpenFile,
+                onOpenPathAtLine = onOpenPathAtLine,
                 onOpenProjectConfig = onOpenProjectConfig,
                 onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                 onAutoSetup = onAutoSetup,
@@ -1352,9 +1497,9 @@ private fun JCodeShell(
                 runInProgress = runInProgress,
                 onOpenRunInBrowser = {
                     runUrl?.let { url ->
-                        ProjectRunner.openInBrowser(
-                            appContext, url, webPreviewBrowsersLocal.effective(runningProjectId?.toString().orEmpty()),
-                        )
+                        val choice = webPreviewBrowsersLocal.effective(runningProjectId?.toString().orEmpty())
+                        if (choice == WebPreviewBrowsers.BUILTIN) BuiltinBrowser.requestOpen(url)
+                        else ProjectRunner.openInBrowser(appContext, url, choice)
                     }
                 },
                 onSnackbar = { message ->
@@ -1595,6 +1740,7 @@ private fun JCodeShell(
                                             available = marketplaceEntries,
                                             installedIds = installedExtensions.map { it.id }.toSet(),
                                             busy = marketplaceBusy,
+                                            installPhase = LocalExtensionInstallPhases.current[entry?.id ?: inst?.id],
                                             onInstall = managerActions.onInstallExtension,
                                             onUninstall = managerActions.onUninstallExtension,
                                             onOpenApp = managerActions.onOpenExtensionApp,
@@ -1606,11 +1752,24 @@ private fun JCodeShell(
                                     installed = installedExtensions,
                                     modifier = Modifier.fillMaxSize(),
                                 )
+                                EditorPageKind.Browser -> BrowserPage(modifier = Modifier.fillMaxSize())
+                                EditorPageKind.ImageViewer -> key(tab.id) {
+                                    // Key by tab id so switching between image tabs (same call site)
+                                    // recreates the WebView instead of reusing the previous image.
+                                    ImageViewerPage(
+                                        source = tab.id,
+                                        name = tab.title,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                }
                                 EditorPageKind.ExtensionApp -> {
-                                    val appId = tab.id.substringAfter(MainViewModel.EXT_APP_PREFIX)
+                                    // Tab id is EXT_APP_PREFIX + extId, optionally + "#view" for an alternate screen.
+                                    val rest = tab.id.substringAfter(MainViewModel.EXT_APP_PREFIX)
+                                    val appId = rest.substringBefore("#")
+                                    val view = rest.substringAfter("#", "")
                                     installedExtensions.firstOrNull { it.id == appId }?.let { ext ->
-                                        // Key by id so each extension app gets its own WebView (no reuse across tabs).
-                                        key(ext.id) {
+                                        // Key by id+view so each extension app/view gets its own WebView.
+                                        key(ext.id, view) {
                                             ExtensionWebViewPage(
                                                 extension = ext,
                                                 onExec = managerActions.onExtensionExec,
@@ -1618,6 +1777,7 @@ private fun JCodeShell(
                                                     managerActions.onExtensionApiRequest(ext.id, envelope)
                                                 },
                                                 events = managerActions.extensionEvents,
+                                                route = view,
                                                 modifier = Modifier.fillMaxSize(),
                                             )
                                         }
@@ -1656,7 +1816,10 @@ private fun JCodeShell(
                             onRenameProject = onRenameProject,
                             onSelectTool = onSelectWorkbenchTool,
                             onOpenExternalFolder = { openFolderLauncher.launch(null) },
+                            contributedDrawerActions = vcs.drawerActions,
+                            onDrawerAction = vcs.onAction,
                             onOpenFile = onOpenFile,
+                            onOpenPathAtLine = onOpenPathAtLine,
                             onOpenProjectConfig = onOpenProjectConfig,
                             onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                             onAutoSetup = onAutoSetup,
@@ -1670,9 +1833,9 @@ private fun JCodeShell(
                             runInProgress = runInProgress,
                             onOpenRunInBrowser = {
                     runUrl?.let { url ->
-                        ProjectRunner.openInBrowser(
-                            appContext, url, webPreviewBrowsersLocal.effective(runningProjectId?.toString().orEmpty()),
-                        )
+                        val choice = webPreviewBrowsersLocal.effective(runningProjectId?.toString().orEmpty())
+                        if (choice == WebPreviewBrowsers.BUILTIN) BuiltinBrowser.requestOpen(url)
+                        else ProjectRunner.openInBrowser(appContext, url, choice)
                     }
                 },
                             onSnackbar = { message ->
@@ -1915,7 +2078,10 @@ private fun WorkspacePanel(
     onRenameProject: (Long, String) -> Unit,
     onSelectTool: (WorkbenchTool) -> Unit,
     onOpenExternalFolder: () -> Unit,
+    contributedDrawerActions: List<MainViewModel.ShellContribution>,
+    onDrawerAction: (MainViewModel.ShellContribution) -> Unit,
     onOpenFile: (dev.jcode.fs.FsNode) -> Unit,
+    onOpenPathAtLine: (String) -> Unit,
     onOpenProjectConfig: () -> Unit,
     onOpenEnvironmentWizard: () -> Unit,
     onAutoSetup: () -> Unit,
@@ -1953,9 +2119,14 @@ private fun WorkspacePanel(
                 workspace = workspace,
                 selectedProject = selectedProject,
                 inUserWorkspace = inUserWorkspace,
+                dbManagerAvailable = installedExtensions.hasDbManagerClient(),
+                scmAvailable = installedExtensions.hasScmClient(),
+                vmManagerAvailable = installedExtensions.hasVmManagerClient(),
                 onSelectTool = onSelectTool,
                 onCreateProject = onCreateProject,
                 onOpenExternalFolder = onOpenExternalFolder,
+                contributedDrawerActions = contributedDrawerActions,
+                onDrawerAction = onDrawerAction,
                 onCloseWorkspace = onCloseWorkspace,
                 onCloseProject = onCloseProject,
             )
@@ -2015,24 +2186,19 @@ private fun WorkspacePanel(
                         }
                     }
 
-                    WorkbenchTool.Search -> ToolPanelPlaceholder(
-                        title = "Search",
-                        icon = jcIcon(JCodeIcon.Search),
-                        lines = listOf(
-                            "Quick file search, symbol search, and ripgrep results live here.",
-                            "Suggested UI: recent queries, include/exclude globs, and pinned result groups.",
-                            "Best next widgets: match counters, replace preview, and staged search history.",
-                        ),
+                    WorkbenchTool.Search -> SearchToolPanel(
+                        project = selectedProject,
+                        onOpenResult = onOpenPathAtLine,
+                        modifier = Modifier.fillMaxSize(),
                     )
 
-                    WorkbenchTool.Scm -> ToolPanelPlaceholder(
-                        title = "Source Control",
-                        icon = jcIcon(JCodeIcon.Scm),
-                        lines = listOf(
-                            "Show branch, dirty files, staged changes, and last sync status.",
-                            "A better tablet/desktop layout is a split staged/unstaged list with inline diff preview.",
-                            "The status bar should eventually mirror this panel's active branch and error state.",
-                        ),
+                    WorkbenchTool.Scm -> ScmPanel(
+                        installed = installedExtensions,
+                        onExec = managerActions.onExtensionExec,
+                        onApiRequest = managerActions.onExtensionApiRequest,
+                        events = managerActions.extensionEvents,
+                        projectKey = selectedProject?.id,
+                        modifier = Modifier.fillMaxSize(),
                     )
 
                     WorkbenchTool.RunDebug -> Column(modifier = Modifier.fillMaxSize()) {
@@ -2070,6 +2236,7 @@ private fun WorkspacePanel(
                         installed = installedExtensions,
                         available = marketplaceEntries,
                         busy = marketplaceBusy,
+                        installPhases = LocalExtensionInstallPhases.current,
                         onRefreshMarketplace = managerActions.onRefreshMarketplace,
                         onOpenDetail = managerActions.onOpenExtensionDetail,
                         onOpenPermissions = managerActions.onOpenExtensionPermissions,
@@ -2086,6 +2253,7 @@ private fun WorkspacePanel(
                             managerActions.onCheckLspStatuses()
                             managerActions.onCheckDebugStatuses()
                         },
+                        onUpdateAll = managerActions.onUpdateAllToolchains,
                         onOpenSdkDetail = managerActions.onOpenSdkDetail,
                         onOpenLspDetail = managerActions.onOpenLspDetail,
                         onOpenDebugDetail = managerActions.onOpenDebugEngineDetail,
@@ -2094,7 +2262,17 @@ private fun WorkspacePanel(
 
                     WorkbenchTool.DbManager -> DbManagerPanel(
                         installed = installedExtensions,
-                        onOpenApp = managerActions.onOpenExtensionApp,
+                        onExec = managerActions.onExtensionExec,
+                        onApiRequest = managerActions.onExtensionApiRequest,
+                        events = managerActions.extensionEvents,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+
+                    WorkbenchTool.VmManager -> VmPanel(
+                        installed = installedExtensions,
+                        onExec = managerActions.onExtensionExec,
+                        onApiRequest = managerActions.onExtensionApiRequest,
+                        events = managerActions.extensionEvents,
                         modifier = Modifier.fillMaxSize(),
                     )
 
@@ -2107,15 +2285,26 @@ private fun WorkspacePanel(
     }
 }
 
+private fun contributedActionIcon(id: String): JCodeIcon = when (id) {
+    "clone" -> JCodeIcon.Scm
+    "remoteRepo" -> JCodeIcon.Browser
+    else -> JCodeIcon.Code
+}
+
 @Composable
 private fun WorkspaceHeader(
     selectedTool: WorkbenchTool,
     workspace: Workspace?,
     selectedProject: Project?,
     inUserWorkspace: Boolean,
+    dbManagerAvailable: Boolean,
+    scmAvailable: Boolean,
+    vmManagerAvailable: Boolean,
     onSelectTool: (WorkbenchTool) -> Unit,
     onCreateProject: () -> Unit,
     onOpenExternalFolder: () -> Unit,
+    contributedDrawerActions: List<MainViewModel.ShellContribution>,
+    onDrawerAction: (MainViewModel.ShellContribution) -> Unit,
     onCloseWorkspace: () -> Unit,
     onCloseProject: () -> Unit,
 ) {
@@ -2192,11 +2381,26 @@ private fun WorkspaceHeader(
                 contentDescription = "Add project",
                 onClick = onCreateProject,
             )
-            WorkbenchIconActionButton(
-                icon = jcIcon(JCodeIcon.Destinations),
-                contentDescription = "Open external folder",
-                onClick = onOpenExternalFolder,
-            )
+            Box {
+                var openFolderMenu by remember { mutableStateOf(false) }
+                WorkbenchIconActionButton(
+                    icon = jcIcon(JCodeIcon.Destinations),
+                    contentDescription = "Open folder",
+                    onClick = { if (contributedDrawerActions.isEmpty()) onOpenExternalFolder() else openFolderMenu = true },
+                )
+                if (contributedDrawerActions.isNotEmpty()) {
+                    CompactContextMenu(
+                        expanded = openFolderMenu,
+                        onDismissRequest = { openFolderMenu = false },
+                        listActions = buildList {
+                            add(ContextAction(JCodeIcon.Destinations, "Open Folder") { onOpenExternalFolder() })
+                            contributedDrawerActions.forEach { a ->
+                                add(ContextAction(contributedActionIcon(a.id), a.label) { onDrawerAction(a) })
+                            }
+                        },
+                    )
+                }
+            }
         }
 
         Row(
@@ -2205,13 +2409,21 @@ private fun WorkspaceHeader(
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            WorkbenchTool.entries.filter { it.available }.forEach { tool ->
-                SidebarToolButton(
-                    tool = tool,
-                    selected = selectedTool == tool,
-                    onClick = { onSelectTool(tool) },
-                )
-            }
+            // "DB Managers", "SCM" and "VM" only show once a matching client extension is installed.
+            WorkbenchTool.entries
+                .filter {
+                    it.available &&
+                        (it != WorkbenchTool.DbManager || dbManagerAvailable) &&
+                        (it != WorkbenchTool.Scm || scmAvailable) &&
+                        (it != WorkbenchTool.VmManager || vmManagerAvailable)
+                }
+                .forEach { tool ->
+                    SidebarToolButton(
+                        tool = tool,
+                        selected = selectedTool == tool,
+                        onClick = { onSelectTool(tool) },
+                    )
+                }
         }
     }
 }
@@ -2270,7 +2482,10 @@ private fun WorkspaceEmptyState(
         Box(
             modifier = Modifier
                 .size(56.dp)
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                .background(
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(16.dp),
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -2447,51 +2662,6 @@ private fun ProjectRoster(
 }
 
 @Composable
-private fun ToolPanelPlaceholder(
-    title: String,
-    icon: ImageVector,
-    lines: List<String>,
-) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        item {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f))
-                    .padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Column {
-                        Text(title, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            text = "Planned surface",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                lines.forEach { line ->
-                    Text(
-                        text = line,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun EditorWorkspace(
     windowInfo: JCodeWindowInfo,
     workspace: Workspace?,
@@ -2592,9 +2762,23 @@ internal data class EditorEmptyActions(
     val onOpenRecent: (RecentEntity) -> Unit = {},
     val onNewProject: () -> Unit = {},
     val onOpenFolder: () -> Unit = {},
+    /** Extension-contributed actions (e.g. Clone, Remote Repo) shown after New/Open Folder. */
+    val startActions: List<MainViewModel.ShellContribution> = emptyList(),
+    val onAction: (MainViewModel.ShellContribution) -> Unit = {},
 )
 
 internal val LocalEditorEmptyActions = compositionLocalOf { EditorEmptyActions() }
+
+/**
+ * Clone / Remote-Repo state + callbacks for the VCS editor pages and the drawer "Open Folder" dropdown.
+ * Provided by [JCodeApp] (which holds the ViewModel) and read by the inner shell via CompositionLocal.
+ */
+internal data class VcsActions(
+    val drawerActions: List<MainViewModel.ShellContribution> = emptyList(),
+    val onAction: (MainViewModel.ShellContribution) -> Unit = {},
+)
+
+internal val LocalVcsActions = compositionLocalOf { VcsActions() }
 
 /**
  * Editor area when no tab is open. With a project open it points at the Explorer; with no project it
@@ -2657,6 +2841,7 @@ private fun EditorEmptyHint(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modifier) {
     Box(modifier = modifier, contentAlignment = Alignment.TopCenter) {
@@ -2679,9 +2864,12 @@ private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modi
                 )
                 Text("Open a project", fontWeight = FontWeight.SemiBold)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 WorkbenchActionButton(text = "New Folder", onClick = actions.onNewProject, active = true)
                 WorkbenchActionButton(text = "Open Folder", onClick = actions.onOpenFolder)
+                actions.startActions.forEach { action ->
+                    WorkbenchActionButton(text = action.label, onClick = { actions.onAction(action) })
+                }
             }
             if (actions.recents.isEmpty()) {
                 Text(
@@ -2861,27 +3049,30 @@ private fun WorkbenchTopBar(
                 }
             }
             // Run toggles to Stop while a run is active; long-press opens the debug controls.
-            var runMenuOpen by remember { mutableStateOf(false) }
-            Box {
-                WorkbenchIconActionButton(
-                    icon = if (isRunning) jcIcon(JCodeIcon.Stop) else jcIcon(JCodeIcon.Run),
-                    contentDescription = if (isRunning) "Stop" else "Run",
-                    onClick = if (isRunning) onStop else onRun,
-                    active = isRunning,
-                    onLongClick = { runMenuOpen = true },
-                )
-                CompactContextMenu(
-                    expanded = runMenuOpen,
-                    onDismissRequest = { runMenuOpen = false },
-                    quickActions = listOf(
-                        // Step/continue need a debug engine (none yet); shown but disabled.
-                        ContextAction(JCodeIcon.Continue, "Continue", enabled = false) {},
-                        ContextAction(JCodeIcon.Rerun, "Rerun") { onRerun() },
-                        ContextAction(JCodeIcon.StepInto, "Step Into", enabled = false) {},
-                        ContextAction(JCodeIcon.StepOver, "Step Over", enabled = false) {},
-                        ContextAction(JCodeIcon.StepOut, "Step Out", enabled = false) {},
-                    ),
-                )
+            // Only shown when a project is open and focused — there's nothing to run otherwise.
+            if (selectedProject != null) {
+                var runMenuOpen by remember { mutableStateOf(false) }
+                Box {
+                    WorkbenchIconActionButton(
+                        icon = if (isRunning) jcIcon(JCodeIcon.Stop) else jcIcon(JCodeIcon.Run),
+                        contentDescription = if (isRunning) "Stop" else "Run",
+                        onClick = if (isRunning) onStop else onRun,
+                        active = isRunning,
+                        onLongClick = { runMenuOpen = true },
+                    )
+                    CompactContextMenu(
+                        expanded = runMenuOpen,
+                        onDismissRequest = { runMenuOpen = false },
+                        quickActions = listOf(
+                            // Step/continue need a debug engine (none yet); shown but disabled.
+                            ContextAction(JCodeIcon.Continue, "Continue", enabled = false) {},
+                            ContextAction(JCodeIcon.Rerun, "Rerun") { onRerun() },
+                            ContextAction(JCodeIcon.StepInto, "Step Into", enabled = false) {},
+                            ContextAction(JCodeIcon.StepOver, "Step Over", enabled = false) {},
+                            ContextAction(JCodeIcon.StepOut, "Step Out", enabled = false) {},
+                        ),
+                    )
+                }
             }
             // Terminal shimmers while any session is busy; a dot badge flags new background instances;
             // long-press lists the live instances and opens the right drawer on the chosen one.
@@ -2987,9 +3178,17 @@ private fun WorkbenchRightSidebar(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // The Chat tab's title tracks the installed agent extension (e.g. "OpenChamber").
+                    // The Chat tab's title tracks the installed agent extension (e.g. "OpenChamber"),
+                    // and the tab is shown only while such an extension is installed.
+                    val chatAvailable = hasAgentChatExtension()
                     val chatTabTitle = agentChatTabTitle()
-                    RightPanelTab.entries.filter { it.enabled }.forEach { tab ->
+                    RightPanelTab.entries
+                        .filter {
+                            it.enabled &&
+                                (it != RightPanelTab.Chat || chatAvailable) &&
+                                (it != RightPanelTab.Devtools || BuiltinBrowser.everOpened.value)
+                        }
+                        .forEach { tab ->
                         val selected = tab == selectedTab
                         val tabLabel = if (tab == RightPanelTab.Chat) chatTabTitle else tab.label
                         Surface(
@@ -3123,6 +3322,9 @@ private fun WorkbenchRightSidebarBody(
                 modifier = modifier,
             )
         }
+        RightPanelTab.Devtools -> {
+            DevtoolsSidebarContent(modifier = modifier)
+        }
         RightPanelTab.Chat -> {
             AgentChatSidebarContent(modifier = modifier)
         }
@@ -3146,32 +3348,34 @@ private fun TerminalSidebarContent(
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         var menuForId by remember { mutableStateOf<String?>(null) }
-        // Session tab bar
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        // Session tab bar — flat editor-style tabs (see EditorPane.TabItem), sized down for the drawer.
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surface,
         ) {
-            terminalSessionIds.forEach { sessionId ->
-                Box {
-                    Surface(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .combinedClickable(
-                                onClick = { onSelectTerminalSession(sessionId) },
-                                onLongClick = { menuForId = sessionId },
-                            ),
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (sessionId == selectedTerminalSessionId) {
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-                        } else {
-                            MaterialTheme.colorScheme.surface.copy(alpha = 0.75f)
-                        },
-                    ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .height(30.dp),
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                terminalSessionIds.forEach { sessionId ->
+                    val isActive = sessionId == selectedTerminalSessionId
+                    Box {
                         Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier
+                                .combinedClickable(
+                                    onClick = { onSelectTerminalSession(sessionId) },
+                                    onLongClick = { menuForId = sessionId },
+                                )
+                                .background(
+                                    if (isActive) MaterialTheme.colorScheme.surfaceVariant
+                                    else MaterialTheme.colorScheme.surface
+                                )
+                                .height(30.dp)
+                                .padding(horizontal = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
@@ -3180,71 +3384,67 @@ private fun TerminalSidebarContent(
                                     terminalTitleFor(sessionId) ?: terminalSessionFor(sessionId)?.label
                                 ),
                                 maxLines = 1,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (sessionId == selectedTerminalSessionId) {
-                                    MaterialTheme.colorScheme.primary
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isActive) {
+                                    MaterialTheme.colorScheme.onSurface
                                 } else {
                                     MaterialTheme.colorScheme.onSurfaceVariant
                                 },
                             )
                             // Close button (hidden via setting to avoid accidental closes; the tab's
-                            // long-press menu still closes it).
+                            // long-press menu still closes it). A plain clickable Box keeps the touch
+                            // target tight (18dp) — an IconButton's enforced 48dp minimum would spill
+                            // over the title in this compact tab and close it on a title tap.
                             if (!LocalTabCloseButtonSetting.current.hidden) {
                                 JcTooltip("Close terminal") {
-                                    Surface(
+                                    Box(
                                         modifier = Modifier
                                             .size(18.dp)
                                             .clip(CircleShape)
                                             .clickable { onRemoveTerminalSession(sessionId) },
-                                        shape = CircleShape,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
+                                        contentAlignment = Alignment.Center,
                                     ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Text(
-                                                text = "×",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.padding(top = 1.dp),
-                                            )
-                                        }
+                                        Text(
+                                            text = "×",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
                                     }
                                 }
                             }
                         }
+                        CompactContextMenu(
+                            expanded = menuForId == sessionId,
+                            onDismissRequest = { menuForId = null },
+                            quickActions = listOf(
+                                ContextAction(JCodeIcon.Close, "Close") { onRemoveTerminalSession(sessionId) },
+                            ),
+                            listActions = listOf(
+                                ContextAction(JCodeIcon.Clear, "Clear") {
+                                    terminalSessionFor(sessionId)?.pty?.write(byteArrayOf(0x0C))
+                                },
+                                ContextAction(JCodeIcon.Close, "Close others") {
+                                    terminalSessionIds.filter { it != sessionId }.forEach(onRemoveTerminalSession)
+                                },
+                                ContextAction(JCodeIcon.Close, "Close all") {
+                                    terminalSessionIds.toList().forEach(onRemoveTerminalSession)
+                                },
+                            ),
+                        )
                     }
-                    CompactContextMenu(
-                        expanded = menuForId == sessionId,
-                        onDismissRequest = { menuForId = null },
-                        quickActions = listOf(
-                            ContextAction(JCodeIcon.Close, "Close") { onRemoveTerminalSession(sessionId) },
-                        ),
-                        listActions = listOf(
-                            ContextAction(JCodeIcon.Clear, "Clear") {
-                                terminalSessionFor(sessionId)?.pty?.write(byteArrayOf(0x0C))
-                            },
-                            ContextAction(JCodeIcon.Close, "Close others") {
-                                terminalSessionIds.filter { it != sessionId }.forEach(onRemoveTerminalSession)
-                            },
-                            ContextAction(JCodeIcon.Close, "Close all") {
-                                terminalSessionIds.toList().forEach(onRemoveTerminalSession)
-                            },
-                        ),
-                    )
                 }
-            }
-            Surface(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onAddTerminalSession),
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
-            ) {
-                Text(
-                    text = "+",
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                JcTooltip("New terminal") {
+                    IconButton(
+                        onClick = onAddTerminalSession,
+                        modifier = Modifier.size(width = 32.dp, height = 30.dp),
+                    ) {
+                        Text(
+                            text = "+",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         }
 

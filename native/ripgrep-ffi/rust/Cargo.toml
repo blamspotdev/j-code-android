@@ -10,4 +10,4 @@ crate-type = ["cdylib"]
 [dependencies]
 grep = "0.3"
 ignore = "0.4"
-regex = "1"
+jni = "0.21"

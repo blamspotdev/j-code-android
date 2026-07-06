@@ -1,14 +1,20 @@
 package dev.jcode.core.distro
 
 import android.content.Context
+import android.system.ErrnoException
+import android.system.Os
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.InputStream
+import java.util.zip.GZIPInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 import org.tukaani.xz.XZInputStream
 
 /**
@@ -206,10 +212,22 @@ class RootfsManager(
     }
 
     /**
-     * Extract a rootfs tarball to the target directory.
-     * Uses tar command (available on Android) for extraction.
+     * Extract a rootfs tarball to the target directory. The native `tar` is the fast path, but some
+     * devices' app-data filesystems reject hard links (`link()` → EACCES) — and Ubuntu rootfs tarballs
+     * are full of hard links, so `tar` fails there with no partial recovery. On failure we fall back to
+     * a Java extractor that turns each hard link into a (relative) symlink, which those filesystems DO
+     * allow. See [extractRootfsJava].
      */
     fun extractRootfs(tarball: File, targetDir: File): Boolean {
+        if (extractRootfsNative(tarball, targetDir)) return true
+        android.util.Log.w(
+            "RootfsManager",
+            "native tar extraction failed (likely hard-link-restricted filesystem) — retrying with the Java hard-link-tolerant extractor",
+        )
+        return extractRootfsJava(tarball, targetDir)
+    }
+
+    private fun extractRootfsNative(tarball: File, targetDir: File): Boolean {
         return try {
             targetDir.mkdirs()
             
@@ -252,7 +270,83 @@ class RootfsManager(
             false
         }
     }
-    
+
+    /**
+     * Hard-link-tolerant tar extraction (fallback for filesystems that reject `link()`). Extracts each
+     * entry with [android.system.Os]; a hard link is created for real when possible, otherwise as a
+     * *relative* symlink to its target (already extracted earlier in the stream) — which such
+     * filesystems allow, and which resolves correctly both on the host and inside proot.
+     */
+    private fun extractRootfsJava(tarball: File, targetDir: File): Boolean {
+        return try {
+            // The failed native pass may have left a partial tree; start clean.
+            if (targetDir.exists()) targetDir.deleteRecursively()
+            targetDir.mkdirs()
+            val name = tarball.name.lowercase()
+            val raw = FileInputStream(tarball).buffered(1 shl 16)
+            val decompressed: InputStream = when {
+                name.endsWith(".tar.xz") || name.endsWith(".txz") -> XZInputStream(raw)
+                name.endsWith(".tar.bz2") || name.endsWith(".tbz2") -> BZip2CompressorInputStream(raw)
+                name.endsWith(".tar.gz") || name.endsWith(".tgz") -> GZIPInputStream(raw)
+                name.endsWith(".tar") -> raw
+                else -> GZIPInputStream(raw)
+            }
+            var hardlinks = 0
+            var symlinkedLinks = 0
+            TarArchiveInputStream(decompressed).use { tin ->
+                var entry = tin.nextTarEntry
+                while (entry != null) {
+                    val e = entry
+                    val out = File(targetDir, e.name)
+                    when {
+                        e.isDirectory -> out.mkdirs()
+                        e.isSymbolicLink -> {
+                            out.parentFile?.mkdirs()
+                            out.delete()
+                            Os.symlink(e.linkName, out.absolutePath)
+                        }
+                        e.isLink -> { // hard link — target already extracted earlier in the stream
+                            out.parentFile?.mkdirs()
+                            out.delete()
+                            hardlinks++
+                            val target = File(targetDir, e.linkName)
+                            if (!tryHardLink(target, out)) {
+                                // This filesystem rejects hard links: use a relative symlink instead.
+                                val rel = out.parentFile!!.toPath().relativize(target.toPath()).toString()
+                                Os.symlink(rel, out.absolutePath)
+                                symlinkedLinks++
+                            }
+                        }
+                        e.isFile -> {
+                            out.parentFile?.mkdirs()
+                            out.delete()
+                            FileOutputStream(out).use { fos -> tin.copyTo(fos, 1 shl 16) }
+                            // Preserve the executable bit (any-execute); other bits don't matter under proot -0.
+                            if ((e.mode and 0b1001001) != 0) out.setExecutable(true, false)
+                        }
+                        // char/block/fifo device nodes: skip (proot fakes /dev; app can't mknod).
+                    }
+                    entry = tin.nextTarEntry
+                }
+            }
+            android.util.Log.d(
+                "RootfsManager",
+                "extractRootfsJava: OK ($hardlinks hard links, $symlinkedLinks converted to symlinks)",
+            )
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("RootfsManager", "extractRootfsJava: failed", e)
+            false
+        }
+    }
+
+    private fun tryHardLink(target: File, link: File): Boolean = try {
+        Os.link(target.absolutePath, link.absolutePath)
+        true
+    } catch (e: ErrnoException) {
+        false
+    }
+
     private fun tryDecompressXz(input: File, output: File): Boolean {
         return try {
             FileInputStream(input).use { fileIn ->

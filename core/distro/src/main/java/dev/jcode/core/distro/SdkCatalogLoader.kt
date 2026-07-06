@@ -47,6 +47,7 @@ internal class SdkCatalogLoader(
                 updateCheckScript = updateCheckScript,
                 supportedDistros = entry.stringList("supportedDistros"),
                 supportedArches = entry.stringList("supportedArches"),
+                requiredSdks = entry.stringList("requiredSdks"),
             )
         }
     }

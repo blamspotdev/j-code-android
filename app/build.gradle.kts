@@ -4,22 +4,24 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// Auto-versioning (no CI): versionName is the semver in /VERSION.txt (start 1.0.0);
-// versionCode is the git commit count (monotonic, deterministic, offline). Both
-// degrade to safe fallbacks when VERSION.txt or git is unavailable.
-val jcodeVersionName: String = runCatching {
-    rootProject.file("VERSION.txt").readText().trim()
-}.getOrNull()?.takeIf { it.isNotBlank() } ?: "1.0.0"
+// Auto-versioning (no CI): versionName is the semver in /VERSION.txt (start 1.0.0), or an override
+// passed as `-PjcodeVersionName=…` (the release script uses this to tag a pre-release, e.g. 1.0.2-beta).
+// versionCode is derived from that semver as MAJOR*10000 + MINOR*100 + PATCH — monotonic,
+// deterministic, offline, and independent of git history (a squash-merge collapsed the old
+// git-commit-count scheme and produced downgrades). Pre-release suffixes (e.g. -rc1) are
+// ignored. Both degrade to safe fallbacks when VERSION.txt is missing/unparseable. This must
+// match the same formula in scripts/build-release.ps1 ($Code) and build-release-common.sh (CODE).
+val jcodeVersionName: String =
+    (project.findProperty("jcodeVersionName") as? String)?.trim()?.takeIf { it.isNotBlank() }
+        ?: runCatching { rootProject.file("VERSION.txt").readText().trim() }
+            .getOrNull()?.takeIf { it.isNotBlank() }
+        ?: "1.0.0"
 
 val jcodeVersionCode: Int = runCatching {
-    val p = ProcessBuilder("git", "rev-list", "--count", "HEAD")
-        .directory(rootProject.projectDir)
-        .redirectErrorStream(true)
-        .start()
-    val out = p.inputStream.bufferedReader().readText().trim()
-    p.waitFor()
-    out.toIntOrNull()
-}.getOrNull()?.takeIf { it > 0 } ?: 1
+    val (major, minor, patch) = Regex("""^(\d+)\.(\d+)\.(\d+)""")
+        .find(jcodeVersionName)!!.destructured
+    major.toInt() * 10000 + minor.toInt() * 100 + patch.toInt()
+}.getOrNull()?.takeIf { it > 0 } ?: 10000
 
 android {
     namespace = "dev.jcode"

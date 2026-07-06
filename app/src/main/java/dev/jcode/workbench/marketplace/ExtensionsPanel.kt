@@ -6,11 +6,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -21,14 +26,17 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.jcode.design.ManagerDetailScreen
 import dev.jcode.design.ManagerItemStatus
@@ -45,6 +53,8 @@ import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.isUpdateAvailable
 import dev.jcode.feature.marketplace.otherAuthors
 import dev.jcode.feature.marketplace.primaryAuthor
+import dev.jcode.workbench.ExtensionWebViewPage
+import kotlinx.coroutines.flow.SharedFlow
 import java.io.File
 
 @Composable
@@ -52,6 +62,7 @@ internal fun ExtensionsPanel(
     installed: List<InstalledExtension>,
     available: List<MarketplaceEntry>,
     busy: Boolean,
+    installPhases: Map<String, String>,
     onRefreshMarketplace: () -> Unit,
     onOpenDetail: (String) -> Unit,
     onOpenPermissions: () -> Unit,
@@ -102,11 +113,14 @@ internal fun ExtensionsPanel(
                 Column {
                     rows.forEachIndexed { index, row ->
                         if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        val phase = installPhases[row.id]
                         ManagerListRow(
                             name = row.name,
                             description = listOfNotNull(authorLabel(row.primaryAuthor, row.otherAuthors), row.description).joinToString(" · "),
                             status = row.status,
                             onClick = { onOpenDetail(row.id) },
+                            checking = phase != null,
+                            checkingLabel = phase ?: "Checking…",
                             leading = {
                                 ExtensionIcon(type = row.type, name = row.name, iconFile = row.iconFile, iconUrl = row.iconUrl)
                             },
@@ -119,53 +133,217 @@ internal fun ExtensionsPanel(
     }
 }
 
-/** Left-drawer "DB Managers" panel: installed database-manager extensions; tap to open their UI. */
+/** True when a database-manager client extension (e.g. SQL Client) is installed, so the left-drawer
+ *  "DB Managers" tool should be shown. */
+internal fun List<InstalledExtension>.hasDbManagerClient(): Boolean =
+    any { it.type == ExtensionType.DbManager }
+
+/**
+ * Left-drawer "DB Managers" panel. With several DB-manager clients installed (e.g. SQL Client +
+ * Postgres Client) it shows a **list of clients** first; tapping one drills into that client's
+ * embedded web frontend (with a Back header to return to the list). With a single client installed
+ * it opens that client directly. Each client's frontend is wired to the Linux runtime via the
+ * Extension API; a database tapped inside it opens that client's studio as an editor tab.
+ */
 @Composable
 internal fun DbManagerPanel(
     installed: List<InstalledExtension>,
-    onOpenApp: (String) -> Unit,
+    onExec: suspend (command: String, timeoutMs: Long) -> String,
+    onApiRequest: suspend (extensionId: String, envelopeJson: String) -> String,
+    events: SharedFlow<Pair<String, String>>?,
     modifier: Modifier = Modifier,
 ) {
-    val dbExtensions = installed.filter { it.type == ExtensionType.DbManager }
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text("DB Managers", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Text(
-            "${dbExtensions.size} installed",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f),
+    val dbExtensions = installed.filter { it.type == ExtensionType.DbManager && it.hasWebUi }
+    if (dbExtensions.isEmpty()) {
+        Column(
+            modifier = modifier.fillMaxSize().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (dbExtensions.isEmpty()) {
-                Text(
-                    text = "No database managers installed. Install one (e.g. SQL Client) from Extensions.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(12.dp),
-                )
-            } else {
-                Column {
-                    dbExtensions.forEachIndexed { index, ext ->
-                        if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-                        ManagerListRow(
-                            name = ext.name,
-                            description = ext.description.ifBlank { "Database manager" },
-                            status = ManagerItemStatus.Installed,
-                            onClick = { onOpenApp(ext.id) },
-                            leading = { ExtensionIcon(type = ext.type, name = ext.name, iconFile = ext.iconFile, iconUrl = null) },
+            Text("DB Managers", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Install a database-manager extension (e.g. SQL Client) from Extensions to browse databases here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
+    // Which client's frontend is open. null = show the client list; a lone client opens directly
+    // (nothing to choose). The selection resets only if the installed set changes.
+    val idsKey = dbExtensions.joinToString(",") { it.id }
+    var selectedId by rememberSaveable(idsKey) {
+        mutableStateOf(if (dbExtensions.size == 1) dbExtensions.first().id else null)
+    }
+    val selected = dbExtensions.firstOrNull { it.id == selectedId }
+
+    if (selected == null) {
+        // Master view: the list of installed DB clients; tap one to open its frontend.
+        Column(modifier = modifier.fillMaxSize()) {
+            Text(
+                "DB Managers",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 6.dp),
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            dbExtensions.forEachIndexed { index, ext ->
+                if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { selectedId = ext.id }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    ExtensionIcon(type = ext.type, name = ext.name, iconFile = ext.iconFile, size = 30.dp)
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        Text(
+                            ext.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            ext.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
+    } else {
+        // Detail view: the selected client's embedded frontend, with a Back header (shown only when
+        // there are other clients to return to). Keyed by id so each client owns its WebView.
+        Column(modifier = modifier.fillMaxSize()) {
+            if (dbExtensions.size > 1) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { selectedId = null }
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back to DB Managers",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(selected.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            }
+            key(selected.id) {
+                ExtensionWebViewPage(
+                    extension = selected,
+                    onExec = onExec,
+                    onApiRequest = { envelope -> onApiRequest(selected.id, envelope) },
+                    events = events,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                )
+            }
+        }
+    }
+}
+
+/** True when a source-control client extension (e.g. Source Control) is installed, so the left-drawer
+ *  "SCM" tool should be shown. */
+internal fun List<InstalledExtension>.hasScmClient(): Boolean =
+    any { it.type == ExtensionType.Scm }
+
+/**
+ * Left-drawer "Source Control" panel: embeds the installed SCM extension's web frontend directly
+ * (VS Code SCM-sidebar style), wired to the Linux runtime so it can drive git via the Extension API.
+ */
+@Composable
+internal fun ScmPanel(
+    installed: List<InstalledExtension>,
+    onExec: suspend (command: String, timeoutMs: Long) -> String,
+    onApiRequest: suspend (extensionId: String, envelopeJson: String) -> String,
+    events: SharedFlow<Pair<String, String>>?,
+    projectKey: Any? = null,
+    modifier: Modifier = Modifier,
+) {
+    val ext = installed.firstOrNull { it.type == ExtensionType.Scm && it.hasWebUi }
+    if (ext == null) {
+        Column(
+            modifier = modifier.fillMaxSize().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Source Control", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Install a Source Control extension from Extensions to manage git here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
+    // Key by (extension id, open project) so the panel owns one WebView for the installed SCM extension
+    // and, critically, re-creates it — re-running the extension's boot()/repo detection — whenever the
+    // selected project changes. Without the project in the key, opening a folder while this panel is
+    // already showing leaves it stuck on the stale "Open a project" screen until a manual Refresh.
+    key(ext.id, projectKey) {
+        ExtensionWebViewPage(
+            extension = ext,
+            onExec = onExec,
+            onApiRequest = { envelope -> onApiRequest(ext.id, envelope) },
+            events = events,
+            modifier = modifier.fillMaxSize(),
+        )
+    }
+}
+
+/** True when a VM-manager extension (e.g. VM Manager) is installed, so the left-drawer "VM" tool shows. */
+internal fun List<InstalledExtension>.hasVmManagerClient(): Boolean =
+    any { it.type == ExtensionType.Vm }
+
+/**
+ * Left-drawer "VM" panel: embeds the installed VM-manager extension's web frontend directly (VM list +
+ * create + a QEMU-availability check), wired to the Linux runtime via the Extension API. Tapping a VM
+ * opens its console as an editor tab (workbench.openView).
+ */
+@Composable
+internal fun VmPanel(
+    installed: List<InstalledExtension>,
+    onExec: suspend (command: String, timeoutMs: Long) -> String,
+    onApiRequest: suspend (extensionId: String, envelopeJson: String) -> String,
+    events: SharedFlow<Pair<String, String>>?,
+    modifier: Modifier = Modifier,
+) {
+    val ext = installed.firstOrNull { it.type == ExtensionType.Vm && it.hasWebUi }
+    if (ext == null) {
+        Column(
+            modifier = modifier.fillMaxSize().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("VM Manager", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Install a VM Manager extension from Extensions to run virtual machines here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
+    key(ext.id) {
+        ExtensionWebViewPage(
+            extension = ext,
+            onExec = onExec,
+            onApiRequest = { envelope -> onApiRequest(ext.id, envelope) },
+            events = events,
+            modifier = modifier.fillMaxSize(),
+        )
     }
 }
 
@@ -177,6 +355,7 @@ internal fun ExtensionDetailPage(
     available: List<MarketplaceEntry>,
     installedIds: Set<String>,
     busy: Boolean,
+    installPhase: String?,
     onInstall: (MarketplaceEntry) -> Unit,
     onUninstall: (String) -> Unit,
     onOpenApp: (String) -> Unit,
@@ -208,15 +387,16 @@ internal fun ExtensionDetailPage(
         description = description,
         status = status,
         busy = busy,
+        busyLabel = installPhase,
         actionsEnabled = !busy,
         showVerify = false,
-        showOutput = false,
-        logLines = emptyList(),
         onInstall = { if (hasDeps) showDeps = true else entry?.let(onInstall) },
         onUpdate = { entry?.let(onInstall) },
         onUninstall = { onUninstall(id) },
         onVerify = {},
-        onManage = if (installed?.hasWebUi == true) {
+        // The Source Control UI is embedded in the left-drawer SCM panel, so a full-page "Manage" tab
+        // would just duplicate it. (Other web-UI extensions still get Manage.)
+        onManage = if (installed != null && installed.hasWebUi && installed.type != ExtensionType.Scm) {
             { onOpenApp(installed.id) }
         } else {
             null
@@ -238,13 +418,17 @@ internal fun ExtensionDetailPage(
                     samples.forEach { sample -> SampleBlock(sample) }
                 }
             }
-            if (entry != null && (!entry.requires.isEmpty || !entry.suggests.isEmpty)) {
+            // Prefer the installed manifest's deps (authoritative once installed); fall back to the
+            // marketplace entry so the section also shows before install.
+            val requires = installed?.requires ?: entry?.requires ?: ExtensionDeps.EMPTY
+            val suggests = installed?.suggests ?: entry?.suggests ?: ExtensionDeps.EMPTY
+            if (!requires.isEmpty || !suggests.isEmpty) {
                 ManagerSectionCard(
                     title = "Requirements",
-                    description = "Required items are installed together with this extension.",
+                    description = "Toolchains and extensions this extension needs or suggests.",
                 ) {
-                    RequirementList("Required", entry.requires, available, installedIds, autoInstalled = true)
-                    RequirementList("Suggested", entry.suggests, available, installedIds, autoInstalled = false)
+                    RequirementList("Required", requires, available, installedIds, autoInstalled = true)
+                    RequirementList("Suggested", suggests, available, installedIds, autoInstalled = false)
                 }
             }
         },

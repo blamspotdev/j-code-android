@@ -109,15 +109,67 @@ val LocalRestoreSession = compositionLocalOf { RestoreSessionSetting() }
  * terminals idle at the prompt past [idleTimeoutMinutes] to free their proot trees + memory.
  */
 class PerformanceSettings(
+    val hardwareAcceleration: Boolean = true,
     val confirmCloseRunning: Boolean = true,
     val autoCloseIdleTerminals: Boolean = false,
     val idleTimeoutMinutes: Int = 30,
+    val maxTerminalSessions: Int = 12,
+    val onSetHardwareAcceleration: (Boolean) -> Unit = {},
     val onSetConfirmCloseRunning: (Boolean) -> Unit = {},
     val onSetAutoCloseIdleTerminals: (Boolean) -> Unit = {},
     val onSetIdleTimeoutMinutes: (Int) -> Unit = {},
+    val onSetMaxTerminalSessions: (Int) -> Unit = {},
 )
 
 val LocalPerformanceSettings = compositionLocalOf { PerformanceSettings() }
+
+/**
+ * Source-control (git) preferences, shared (via [LocalSourceControlSettings]) with the settings screen.
+ * [onLoad] reads the current global git identity (name, email) from the Linux runtime; [onSave] writes
+ * it. This identity is the author on every commit and is also editable from the SCM extension's sign-in
+ * page. [ready] is false until the runtime/git is available.
+ */
+class SourceControlSettings(
+    val ready: Boolean = false,
+    val onLoad: suspend () -> Pair<String, String> = { "" to "" },
+    val onSave: (name: String, email: String) -> Unit = { _, _ -> },
+)
+
+val LocalSourceControlSettings = compositionLocalOf { SourceControlSettings() }
+
+/**
+ * A single user-configurable option an extension declares in its manifest, surfaced generically on the
+ * settings screen. [type] is one of "bool" | "enum" | "int" | "str"; [options] applies to enums only.
+ */
+data class ExtensionSettingSpec(
+    val key: String,
+    val label: String,
+    val type: String,
+    val options: List<String> = emptyList(),
+    val default: String = "",
+    val description: String? = null,
+)
+
+/** One installed extension's declared settings, grouped for the settings screen. */
+data class ExtensionSettingsGroup(
+    val extensionId: String,
+    val extensionName: String,
+    val specs: List<ExtensionSettingSpec>,
+)
+
+/**
+ * Generic extension-settings platform, shared (via [LocalExtensionSettingsUi]) with the settings screen.
+ * Each installed extension that declares a `settings:` block contributes a [ExtensionSettingsGroup];
+ * [valueOf] reads the current (or default) value for a key, [onChange] persists a new value (and
+ * notifies the live extension via a `config` event so its UI can react).
+ */
+class ExtensionSettingsUi(
+    val groups: List<ExtensionSettingsGroup> = emptyList(),
+    val valueOf: (extensionId: String, key: String) -> String = { _, _ -> "" },
+    val onChange: (extensionId: String, key: String, value: String) -> Unit = { _, _, _ -> },
+)
+
+val LocalExtensionSettingsUi = compositionLocalOf { ExtensionSettingsUi() }
 
 /** An installed app that can open http(s) URLs. */
 data class BrowserApp(val packageName: String, val label: String)
@@ -145,12 +197,15 @@ class WebPreviewBrowsers(
         INHERIT -> "Use global default"
         SYSTEM -> "System default"
         ASK -> "Always ask"
+        BUILTIN -> "Built-in browser"
         else -> available.firstOrNull { it.packageName == choice }?.label ?: choice
     }
 
     companion object {
         const val SYSTEM = "SYSTEM"
         const val ASK = "ASK"
+        /** Open the preview inside J Code's own in-editor browser (with DevTools) instead of an external app. */
+        const val BUILTIN = "BUILTIN"
         const val INHERIT = ""
     }
 }

@@ -1,5 +1,6 @@
 package dev.jcode.feature.settings
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -38,10 +39,12 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -52,12 +55,16 @@ import dev.jcode.core.config.ConfigScope
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.config.ProjectConfig
 import dev.jcode.core.config.WorkspaceConfig
+import dev.jcode.design.ExtensionSettingSpec
+import dev.jcode.design.ExtensionSettingsUi
 import dev.jcode.design.IconBundle
 import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.LocalEditorDragMovesCursor
+import dev.jcode.design.LocalExtensionSettingsUi
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.LocalRestoreSession
+import dev.jcode.design.LocalSourceControlSettings
 import dev.jcode.design.WebPreviewBrowsers
 import dev.jcode.design.LocalWebPreviewBrowsers
 import dev.jcode.design.LocalTabCloseButtonSetting
@@ -221,7 +228,72 @@ object SettingsFeature {
                 )
             }
 
+            SettingsSectionHeader("Source Control")
+            SettingsCard(
+                title = "Git identity",
+                description = "The author name and email recorded on your commits. Applies to all git in the " +
+                    "runtime, and is also editable from the Source Control sign-in page.",
+                keywords = "git source control scm identity name email commit author github sign in credentials",
+            ) {
+                val scm = LocalSourceControlSettings.current
+                var name by rememberSaveable { mutableStateOf("") }
+                var email by rememberSaveable { mutableStateOf("") }
+                var loaded by rememberSaveable { mutableStateOf(false) }
+                var saved by rememberSaveable { mutableStateOf(false) }
+                LaunchedEffect(scm) {
+                    if (!loaded) {
+                        val (n, e) = scm.onLoad()
+                        name = n; email = e; loaded = true
+                    }
+                }
+                IdentityField(label = "Name", value = name, placeholder = "Your name") { name = it; saved = false }
+                IdentityField(label = "Email", value = email, placeholder = "you@example.com") { email = it; saved = false }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FilledTonalButton(
+                        onClick = { scm.onSave(name.trim(), email.trim()); saved = true },
+                        enabled = name.isNotBlank() && email.isNotBlank(),
+                    ) { Text("Save identity") }
+                    if (saved) {
+                        Text("Saved", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+
+            val extensionSettings = LocalExtensionSettingsUi.current
+            if (extensionSettings.groups.isNotEmpty()) {
+                SettingsSectionHeader("Extensions")
+                extensionSettings.groups.forEach { group ->
+                    SettingsCard(
+                        title = group.extensionName,
+                        description = "Preferences for the ${group.extensionName} extension.",
+                        keywords = "extension settings " + group.extensionName + " " +
+                            group.specs.joinToString(" ") { "${it.key} ${it.label}" },
+                    ) {
+                        group.specs.forEachIndexed { index, spec ->
+                            if (index > 0) {
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            }
+                            ExtensionSettingControl(group.extensionId, spec, extensionSettings)
+                        }
+                    }
+                }
+            }
+
             SettingsSectionHeader("Performance")
+            SettingsCard(
+                title = "Rendering",
+                description = "How J Code draws the UI, editor, and terminal.",
+                keywords = "performance rendering hardware acceleration gpu software draw graphics lag smooth",
+            ) {
+                ToggleRow(
+                    label = "Hardware acceleration",
+                    supporting = "Render the UI, editor, and terminal on the GPU. Turn off only to " +
+                        "troubleshoot rendering glitches on this device — software rendering is much " +
+                        "slower. Takes effect the next time the app starts.",
+                    checked = perf.hardwareAcceleration,
+                    onCheckedChange = perf.onSetHardwareAcceleration,
+                )
+            }
             SettingsCard(
                 title = "Resource management",
                 description = "Keep the Linux runtime lean by stopping work you're done with. Each terminal, " +
@@ -250,6 +322,12 @@ object SettingsFeature {
                         onIncrease = { perf.onSetIdleTimeoutMinutes(perf.idleTimeoutMinutes + 5) },
                     )
                 }
+                StepperRow(
+                    label = "Max terminal instances",
+                    value = "${perf.maxTerminalSessions}",
+                    onDecrease = { perf.onSetMaxTerminalSessions((perf.maxTerminalSessions - 1).coerceAtLeast(1)) },
+                    onIncrease = { perf.onSetMaxTerminalSessions((perf.maxTerminalSessions + 1).coerceAtMost(24)) },
+                )
             }
 
             SettingsSectionHeader("Web preview")
@@ -262,6 +340,7 @@ object SettingsFeature {
                 val globalOptions = buildList {
                     add(WebPreviewBrowsers.SYSTEM)
                     add(WebPreviewBrowsers.ASK)
+                    add(WebPreviewBrowsers.BUILTIN)
                     webPreview.available.forEach { add(it.packageName) }
                 }
                 globalOptions.forEach { choice ->
@@ -270,6 +349,7 @@ object SettingsFeature {
                         description = when (choice) {
                             WebPreviewBrowsers.SYSTEM -> "The device's default browser app"
                             WebPreviewBrowsers.ASK -> "Show the Android app chooser each time"
+                            WebPreviewBrowsers.BUILTIN -> "J Code's own in-editor browser, with DevTools"
                             else -> choice
                         },
                         selected = webPreview.globalChoice == choice,
@@ -628,6 +708,109 @@ private fun SettingsSectionHeader(title: String) {
 }
 
 @Composable
+private fun IdentityField(
+    label: String,
+    value: String,
+    placeholder: String,
+    onCommit: (() -> Unit)? = null,
+    onValueChange: (String) -> Unit,
+) {
+    var wasFocused by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(8.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp)) {
+                if (value.isEmpty()) {
+                    Text(
+                        text = placeholder,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    )
+                }
+                BasicTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (onCommit == null) {
+                                Modifier
+                            } else {
+                                Modifier.onFocusChanged { st ->
+                                    if (wasFocused && !st.isFocused) onCommit()
+                                    wasFocused = st.isFocused
+                                }
+                            },
+                        ),
+                )
+            }
+        }
+    }
+}
+
+/** One control for a generic extension setting; shape depends on the declared [ExtensionSettingSpec.type]. */
+@Composable
+private fun ExtensionSettingControl(
+    extensionId: String,
+    spec: ExtensionSettingSpec,
+    ui: ExtensionSettingsUi,
+) {
+    val current = ui.valueOf(extensionId, spec.key)
+    when (spec.type) {
+        "bool" -> ToggleRow(
+            label = spec.label,
+            supporting = spec.description.orEmpty(),
+            checked = current == "true" || current == "1",
+            onCheckedChange = { ui.onChange(extensionId, spec.key, it.toString()) },
+        )
+
+        "enum" -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(spec.label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            spec.description?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            spec.options.forEach { option ->
+                BundleRow(
+                    name = option.replaceFirstChar { c -> c.uppercaseChar() },
+                    description = "",
+                    selected = current == option,
+                    swatch = emptyList(),
+                    onClick = { ui.onChange(extensionId, spec.key, option) },
+                )
+            }
+        }
+
+        else -> {
+            // Buffer edits locally so fast typing isn't clobbered by the async DataStore round-trip,
+            // and persist once on focus loss instead of on every keystroke (avoids a write/reload storm).
+            var text by remember(extensionId, spec.key) { mutableStateOf(current) }
+            LaunchedEffect(current) { if (current != text) text = current }
+            IdentityField(
+                label = spec.label,
+                value = text,
+                placeholder = spec.default,
+                onCommit = { if (text != current) ui.onChange(extensionId, spec.key, text) },
+            ) { text = it }
+        }
+    }
+}
+
+@Composable
 private fun SettingsCard(
     title: String,
     description: String,
@@ -723,13 +906,15 @@ private fun BundleRow(
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            if (description.isNotBlank()) {
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         if (selected) {
             Icon(

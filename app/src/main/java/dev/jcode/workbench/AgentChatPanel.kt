@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -52,17 +53,25 @@ val LocalAgentChatActions = compositionLocalOf { AgentChatActions() }
 
 private const val OPENCHAMBER_EXT_ID = "jcode.ext.openchamber"
 
-// Stable fallback so [agentChatTabTitle]'s collectAsState is always called unconditionally.
+// Stable fallback so [installedAgentChatExtension]'s collectAsState is always called unconditionally.
 private val EmptyAgentExtensions = MutableStateFlow<List<InstalledExtension>>(emptyList())
+
+/** The installed agent-chat extension (OpenChamber with a web UI), or null when none is installed. */
+@Composable
+private fun installedAgentChatExtension(): InstalledExtension? {
+    val actions = LocalAgentChatActions.current
+    val extensions by (actions.extensions ?: EmptyAgentExtensions).collectAsState()
+    return extensions.firstOrNull { it.id == OPENCHAMBER_EXT_ID && it.hasWebUi }
+}
+
+/** True when an agent-chat extension is installed, so the right drawer should show the Chat tab. */
+@Composable
+internal fun hasAgentChatExtension(): Boolean = installedAgentChatExtension() != null
 
 /** The right-drawer chat tab's dynamic title: the installed agent extension's name (e.g. its own
  *  "OpenChamber"), or "Chat" when no agent extension with a web UI is installed. */
 @Composable
-internal fun agentChatTabTitle(): String {
-    val actions = LocalAgentChatActions.current
-    val extensions by (actions.extensions ?: EmptyAgentExtensions).collectAsState()
-    return extensions.firstOrNull { it.id == OPENCHAMBER_EXT_ID && it.hasWebUi }?.name ?: "Chat"
-}
+internal fun agentChatTabTitle(): String = installedAgentChatExtension()?.name ?: "Chat"
 
 /**
  * Process-scoped holder for a "keep running in background" chat WebView. The WebView (and its own
@@ -110,8 +119,7 @@ internal object AgentChatWebViewHolder {
 @Composable
 internal fun AgentChatSidebarContent(modifier: Modifier = Modifier) {
     val actions = LocalAgentChatActions.current
-    val extensions by (actions.extensions ?: EmptyAgentExtensions).collectAsState()
-    val ext = extensions.firstOrNull { it.id == OPENCHAMBER_EXT_ID && it.hasWebUi }
+    val ext = installedAgentChatExtension()
     if (ext == null) {
         AgentChatPlaceholder(modifier)
         return
@@ -140,6 +148,7 @@ private fun PersistentChatWebView(
     modifier: Modifier,
 ) {
     val appContext = LocalContext.current.applicationContext
+    val backgroundArgb = MaterialTheme.colorScheme.background.toArgb()
     val entry = remember(extension.id, extension.version) {
         val existing = AgentChatWebViewHolder.get(extension.id)
         if (existing != null && existing.version == extension.version) {
@@ -148,7 +157,7 @@ private fun PersistentChatWebView(
             // Version changed (updated extension) — replace any stale WebView.
             AgentChatWebViewHolder.destroy(extension.id)
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-            val webView = createChatWebView(appContext, extension, actions, scope)
+            val webView = createChatWebView(appContext, extension, actions, scope, backgroundArgb)
             AgentChatWebViewHolder.Entry(webView, scope, extension.version)
                 .also { AgentChatWebViewHolder.put(extension.id, it) }
         }
@@ -173,6 +182,7 @@ private fun createChatWebView(
     extension: InstalledExtension,
     actions: AgentChatActions,
     scope: CoroutineScope,
+    backgroundArgb: Int,
 ): WebView {
     lateinit var webView: WebView
     val bridge = ExtensionBridge(
@@ -197,6 +207,7 @@ private fun createChatWebView(
         },
     )
     webView = WebView(context).apply {
+        setBackgroundColor(backgroundArgb)
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         @Suppress("DEPRECATION")
@@ -216,6 +227,11 @@ private fun createChatWebView(
     actions.events?.let { events ->
         scope.launch {
             events.collect { (name, json) ->
+                // A `config` event is scoped to the extension whose setting changed — skip others.
+                if (name == "config") {
+                    val target = runCatching { JSONObject(json).optString("extensionId") }.getOrNull()
+                    if (!target.isNullOrEmpty() && target != extension.id) return@collect
+                }
                 val js = "window.JCode && window.JCode._onEvent && " +
                     "window.JCode._onEvent(${JSONObject.quote(name)}, ${JSONObject.quote(json)})"
                 webView.post { webView.evaluateJavascript(js, null) }

@@ -118,47 +118,44 @@ Java_dev_jcode_core_term_VtParser_nativeGetCellChar(JNIEnv* env, jobject thiz, j
     return cell ? (jint)cell->ch : ' ';
 }
 
+// Packs a whole row of cells into `out` in one JNI crossing — 4 jints per cell:
+// [codepoint, fg, bg, fgMode | bgMode<<2 | attrs<<4]. fg/bg use the same encoding as the old
+// per-cell getters (-1 default, 0-255 indexed, packed RGB truecolor). Returns cells written.
 JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_VtParser_nativeGetCellFgColor(JNIEnv* env, jobject thiz, jint row, jint col) {
+Java_dev_jcode_core_term_VtParser_nativeReadRow(JNIEnv* env, jobject thiz, jint row, jintArray out) {
     VtParser* parser = get_parser(env, thiz);
-    const VtCell* cell = vt_parser_cell_at(parser, row, col);
-    if (!cell) return -1;
-    if (cell->fg.mode == 0) return -1;  // Default
-    if (cell->fg.mode == 1) return cell->fg.index;  // 256-color
-    if (cell->fg.mode == 2) return (cell->fg.r << 16) | (cell->fg.g << 8) | cell->fg.b;  // Truecolor
-    return -1;
-}
+    if (!parser || !out) return 0;
+    const VtScreen* screen = vt_parser_get_screen(parser);
+    if (!screen) return 0;
 
-JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_VtParser_nativeGetCellBgColor(JNIEnv* env, jobject thiz, jint row, jint col) {
-    VtParser* parser = get_parser(env, thiz);
-    const VtCell* cell = vt_parser_cell_at(parser, row, col);
-    if (!cell) return -1;
-    if (cell->bg.mode == 0) return -1;  // Default
-    if (cell->bg.mode == 1) return cell->bg.index;  // 256-color
-    if (cell->bg.mode == 2) return (cell->bg.r << 16) | (cell->bg.g << 8) | cell->bg.b;  // Truecolor
-    return -1;
-}
+    int cols = screen->cols;
+    jint capacity = (*env)->GetArrayLength(env, out);
+    if (cols * 4 > capacity) cols = capacity / 4;
+    if (cols <= 0) return 0;
 
-JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_VtParser_nativeGetCellFgMode(JNIEnv* env, jobject thiz, jint row, jint col) {
-    VtParser* parser = get_parser(env, thiz);
-    const VtCell* cell = vt_parser_cell_at(parser, row, col);
-    return cell ? cell->fg.mode : 0;
-}
-
-JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_VtParser_nativeGetCellBgMode(JNIEnv* env, jobject thiz, jint row, jint col) {
-    VtParser* parser = get_parser(env, thiz);
-    const VtCell* cell = vt_parser_cell_at(parser, row, col);
-    return cell ? cell->bg.mode : 0;
-}
-
-JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_VtParser_nativeGetCellAttrs(JNIEnv* env, jobject thiz, jint row, jint col) {
-    VtParser* parser = get_parser(env, thiz);
-    const VtCell* cell = vt_parser_cell_at(parser, row, col);
-    return cell ? cell->attrs : 0;
+    jint* buf = (*env)->GetIntArrayElements(env, out, NULL);
+    if (!buf) return 0;
+    for (int col = 0; col < cols; col++) {
+        const VtCell* cell = vt_parser_cell_at(parser, row, col);
+        jint* dst = buf + col * 4;
+        if (!cell) {
+            dst[0] = ' ';
+            dst[1] = -1;
+            dst[2] = -1;
+            dst[3] = 0;
+            continue;
+        }
+        dst[0] = (jint)cell->ch;
+        dst[1] = cell->fg.mode == 1 ? cell->fg.index
+               : cell->fg.mode == 2 ? ((cell->fg.r << 16) | (cell->fg.g << 8) | cell->fg.b)
+               : -1;
+        dst[2] = cell->bg.mode == 1 ? cell->bg.index
+               : cell->bg.mode == 2 ? ((cell->bg.r << 16) | (cell->bg.g << 8) | cell->bg.b)
+               : -1;
+        dst[3] = (cell->fg.mode & 0x3) | ((cell->bg.mode & 0x3) << 2) | ((jint)cell->attrs << 4);
+    }
+    (*env)->ReleaseIntArrayElements(env, out, buf, 0);
+    return cols;
 }
 
 JNIEXPORT jint JNICALL

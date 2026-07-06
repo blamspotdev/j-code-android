@@ -37,7 +37,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -50,10 +49,13 @@ enum class ManagerItemStatus { NotInstalled, Installed, UpdateAvailable }
 fun ManagerStatusChip(
     status: ManagerItemStatus,
     checking: Boolean = false,
+    checkingLabel: String = "Checking…",
     modifier: Modifier = Modifier,
+    /** Show a small progress ring alongside the label while [checking] (detail header only). */
+    spinner: Boolean = false,
 ) {
     val (text, active) = when {
-        checking -> "Checking…" to false
+        checking -> checkingLabel to false
         status == ManagerItemStatus.UpdateAvailable -> "Update available" to true
         status == ManagerItemStatus.Installed -> "Installed" to true
         else -> "Not installed" to false
@@ -66,14 +68,26 @@ fun ManagerStatusChip(
             MaterialTheme.colorScheme.surface.copy(alpha = 0.65f)
         },
     ) {
-        Text(
-            text = text,
+        Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (checking && spinner) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(11.dp),
+                    strokeWidth = 1.5.dp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -262,6 +276,7 @@ fun ManagerListRow(
     status: ManagerItemStatus,
     onClick: () -> Unit,
     checking: Boolean = false,
+    checkingLabel: String = "Checking…",
     modifier: Modifier = Modifier,
     leading: (@Composable () -> Unit)? = null,
 ) {
@@ -290,7 +305,7 @@ fun ManagerListRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        ManagerStatusChip(status = status, checking = checking)
+        ManagerStatusChip(status = status, checking = checking, checkingLabel = checkingLabel)
     }
 }
 
@@ -391,33 +406,11 @@ fun CompactOutlinedButton(
     }
 }
 
-/** Monospace rolling output (install/verify logs). */
-@Composable
-fun ManagerOutputLog(lines: List<String>, max: Int = 120) {
-    if (lines.isEmpty()) {
-        Text(
-            text = "No output captured yet.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        return
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        lines.takeLast(max).forEach { line ->
-            Text(
-                text = line,
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
 /**
  * Shared detail-page body for a manager item: header (title + subtitle + status), description,
- * an optional [extra] slot (e.g. Extensions' samples / requirements), the install/update/uninstall
- * actions, and a rolling output log. Rendered full-width as an in-editor page.
+ * an optional [extra] slot (e.g. Extensions' samples / requirements), and the
+ * install/update/uninstall actions. Rendered full-width as an in-editor page. Command output is not
+ * shown here — every install/verify runs in the shared right-drawer Setup terminal.
  */
 @Composable
 fun ManagerDetailScreen(
@@ -427,15 +420,14 @@ fun ManagerDetailScreen(
     status: ManagerItemStatus,
     busy: Boolean,
     actionsEnabled: Boolean,
-    logLines: List<String>,
     onInstall: () -> Unit,
     onUpdate: () -> Unit,
     onUninstall: () -> Unit,
     onVerify: () -> Unit,
     modifier: Modifier = Modifier,
+    busyLabel: String? = null,
     showActions: Boolean = true,
     showVerify: Boolean = true,
-    showOutput: Boolean = true,
     leading: (@Composable () -> Unit)? = null,
     onManage: (() -> Unit)? = null,
     manageLabel: String = "Manage",
@@ -455,7 +447,7 @@ fun ManagerDetailScreen(
                     if (subtitle.isNotBlank()) {
                         Text(text = subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    ManagerStatusChip(status = status, checking = busy)
+                    ManagerStatusChip(status = status, checking = busy, checkingLabel = busyLabel ?: "Checking…", spinner = true)
                 }
             }
         }
@@ -489,12 +481,6 @@ fun ManagerDetailScreen(
                     CompactOutlinedButton("Verify", onClick = onVerify, enabled = actionsEnabled, modifier = Modifier.weight(1f))
                 }
                 CompactOutlinedButton("Uninstall", onClick = onUninstall, enabled = installed && actionsEnabled, modifier = Modifier.weight(1f))
-            }
-        }
-
-        if (showOutput) {
-            ManagerSectionCard(title = "Output", description = "Rolling output from the last action.") {
-                ManagerOutputLog(logLines)
             }
         }
     }

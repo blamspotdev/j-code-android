@@ -1,7 +1,14 @@
 # Build a release APK of JCode on Windows (pwsh). Output: .\builds
-#   -Yes : auto-accept install prompts
+#   -Yes                          : auto-accept install prompts
+#   -Variant release|prerelease   : pick the build variant non-interactively (else you're prompted)
+#   -PreReleaseLabel <label>      : label appended to a pre-release version (default: beta -> 1.0.2-beta)
 [CmdletBinding()]
-param([switch]$Yes)
+param(
+    [switch]$Yes,
+    [ValidateSet('release', 'prerelease')]
+    [string]$Variant,
+    [string]$PreReleaseLabel = 'beta'
+)
 
 $ErrorActionPreference = 'Stop'
 $NdkVersion = '27.2.12479018'
@@ -48,6 +55,25 @@ function Require-Tool([string]$Tool, [string]$Hint, [string]$InstallCmd) {
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 Say "JCode release build (Windows) - repo: $RepoRoot"
+
+# --- Build variant: Release or Pre-release (interactive unless -Variant was given) ---
+$IsPre = $false
+if ($Variant) {
+    $IsPre = ($Variant -eq 'prerelease')
+} elseif (-not [Console]::IsInputRedirected) {
+    Write-Host ''
+    Say 'Which build?'
+    Write-Host '  [1] Release      - final build, version straight from VERSION.txt' -ForegroundColor Gray
+    Write-Host '  [2] Pre-release  - testing build, appends a pre-release label to the version' -ForegroundColor Gray
+    $sel = Read-Host 'Select [1]'
+    $IsPre = ($sel -match '^(2|p)')
+    if ($IsPre) {
+        $lbl = Read-Host "Pre-release label [$PreReleaseLabel]"
+        if ($lbl) { $PreReleaseLabel = ($lbl.Trim() -replace '[^0-9A-Za-z.\-]', '') }
+    }
+}
+$VariantTag = if ($IsPre) { 'prerelease' } else { 'release' }
+Say "Variant: $VariantTag$(if ($IsPre) { " (label: $PreReleaseLabel)" })"
 
 if ($RepoRoot.Length -gt 50) {
     Warn "Repo path is $($RepoRoot.Length) chars - the native (tree-sitter) build can hit the Win32 MAX_PATH limit."
@@ -124,6 +150,9 @@ if (-not (Test-Path "$SdkRoot\build-tools") -or -not (Get-ChildItem "$SdkRoot\bu
 
 $CargoTasks = @()
 $rustReady = $true
+if (-not (Have cargo) -and (Test-Path "$env:USERPROFILE\.cargo\bin\cargo.exe")) {
+    $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+}
 if (-not (Have cargo)) {
     $rustReady = $false
     Warn 'Rust (cargo) not found - the ripgrep/wasmtime native libs will be built as stubs.'
@@ -165,8 +194,11 @@ if ($rustReady) {
 }
 
 $Version = if (Test-Path 'VERSION.txt') { (Get-Content 'VERSION.txt' -Raw).Trim() } else { '1.0.0' }
-$Code = (git rev-list --count HEAD 2>$null); if (-not $Code) { $Code = 0 }
-Say "Building JCode v$Version ($Code) - this compiles native code and can take a while..."
+# Pre-release appends the label to versionName (1.0.2 -> 1.0.2-beta); versionCode ignores the suffix.
+$VersionName = if ($IsPre) { "$Version-$PreReleaseLabel" } else { $Version }
+# versionCode = MAJOR*10000 + MINOR*100 + PATCH (must match app/build.gradle.kts jcodeVersionCode).
+$Code = if ($Version -match '^(\d+)\.(\d+)\.(\d+)') { [int]$Matches[1] * 10000 + [int]$Matches[2] * 100 + [int]$Matches[3] } else { 10000 }
+Say "Building JCode v$VersionName ($Code) [$VariantTag] - this compiles native code and can take a while..."
 
 # Cargo libs build in a separate invocation: assembleRelease's configuration then sees them
 # and drops the CMake stub for the Rust modules (see root build.gradle.kts).
@@ -174,14 +206,14 @@ if ($CargoTasks.Count -gt 0) {
     & .\gradlew.bat @CargoTasks
     if ($LASTEXITCODE -ne 0) { Fail 'Cargo build failed.' }
 }
-& .\gradlew.bat ':app:assembleRelease'
+& .\gradlew.bat ':app:assembleRelease' "-PjcodeVersionName=$VersionName"
 if ($LASTEXITCODE -ne 0) { Fail 'Gradle build failed.' }
 
 $Apk = Get-ChildItem 'app\build\outputs\apk\release\*.apk' -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $Apk) { Fail 'Build finished but no APK found in app\build\outputs\apk\release\' }
 
 New-Item -ItemType Directory -Force 'builds' | Out-Null
-$Out = "builds\jcode-v$Version-$Code-release.apk"
+$Out = "builds\jcode-v$VersionName-$Code-$VariantTag.apk"
 
 $LatestBuildTools = Get-ChildItem "$SdkRoot\build-tools" -Directory | Sort-Object { [version]($_.Name -replace '[^\d.].*$', '') } | Select-Object -Last 1
 $ApkSigner = Join-Path $LatestBuildTools.FullName 'apksigner.bat'
@@ -244,12 +276,12 @@ if ($Keystore) {
     $signState = 'release-signed'
 } elseif ((Test-Path "$env:USERPROFILE\.android\debug.keystore") -and
           (Ask-Interactive 'No release keystore configured. Sign with the Android debug keystore so the APK is installable?')) {
-    $Out = "builds\jcode-v$Version-$Code-release-debugsigned.apk"
+    $Out = "builds\jcode-v$VersionName-$Code-$VariantTag-debugsigned.apk"
     & $ApkSigner sign --ks "$env:USERPROFILE\.android\debug.keystore" --ks-pass pass:android --out $Out $Apk.FullName
     if ($LASTEXITCODE -ne 0) { Fail 'apksigner failed.' }
     $signState = 'debug-signed'
 } else {
-    $Out = "builds\jcode-v$Version-$Code-release-unsigned.apk"
+    $Out = "builds\jcode-v$VersionName-$Code-$VariantTag-unsigned.apk"
     Copy-Item $Apk.FullName $Out -Force
     Warn 'APK is UNSIGNED and cannot be installed as-is.'
     Say  "  sign later: apksigner sign --ks <keystore> --out <signed.apk> $Out"

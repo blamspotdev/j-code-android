@@ -68,7 +68,8 @@ object TerminalSessionHost {
                     context.applicationContext,
                     RootfsDownloader(tmpDir = File(context.applicationContext.filesDir, "tmp")),
                 ),
-                maxSessions = 4,
+                // Matches the Settings default; JCodeShell keeps it in sync with the user's preference.
+                maxSessions = 12,
             ).also { mgr ->
                 manager = mgr
                 // When a shell exits on its own (e.g. a finished build, or `exit`), the manager reaps

@@ -3,6 +3,7 @@ package dev.jcode.feature.lspmanager
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import dev.jcode.core.distro.DistroEnvironmentState
+import dev.jcode.core.distro.LspCatalogAction
 import dev.jcode.core.distro.LspCatalogEntry
 import dev.jcode.core.distro.LspCatalogState
 import dev.jcode.design.ManagerDetailScreen
@@ -27,14 +28,20 @@ object LspManagerFeature {
         modifier: Modifier = Modifier,
     ) {
         val environmentReady = environmentState.distroInstalled == true && environmentState.jcodeUserReady == true
+        val running = state.runningEntryId == entry.id
         ManagerDetailScreen(
             title = entry.name,
             subtitle = entry.category,
             description = entry.description,
             status = statusOf(entry.id, state),
-            busy = state.checking || state.runningEntryId == entry.id,
+            busy = state.checking || running,
+            busyLabel = when (state.runningAction.takeIf { running }) {
+                LspCatalogAction.Install -> "Installing…"
+                LspCatalogAction.Verify -> "Verifying…"
+                LspCatalogAction.Uninstall -> "Removing…"
+                null -> "Checking…"
+            },
             actionsEnabled = environmentReady && state.runningEntryId == null && !state.checking,
-            logLines = state.logLines,
             onInstall = { onInstall(entry.id) },
             onUpdate = { onUpdate(entry.id) },
             onUninstall = { onUninstall(entry.id) },

@@ -14,6 +14,8 @@ data class SdkCatalogEntry(
     val supportedDistros: List<String> = emptyList(),
     /** Arch keys (Arch.rootfsKey: "arm64"/"amd64") this entry supports. Empty = every arch. */
     val supportedArches: List<String> = emptyList(),
+    /** Other SDK catalog ids that must be installed first (e.g. android-sdk requires android-prereqs). */
+    val requiredSdks: List<String> = emptyList(),
 ) {
     /** Whether this entry should be offered on the given environment. */
     fun isSupportedOn(distroId: String, arch: Arch): Boolean =

@@ -287,12 +287,30 @@ class ProotManager(private val context: Context) {
         args.addAll(listOf("-b", "/dev"))
         args.addAll(listOf("-b", "/proc"))
         args.addAll(listOf("-b", "/sys"))
-        
+
+        // Shared transfer dir for the extension `file.import` bridge: SAF-picked files are stream-copied
+        // to this host dir by the app so extensions can reach them by a runtime path (/jcode-transfer)
+        // and stream them onward (e.g. scp a .bak into a DB VM) without a base64 round-trip. Bound only
+        // when it exists/creatable on the host so this stays a no-op on devices without the folder.
+        val transferDir = File("/storage/emulated/0/JCode/.jcode-transfer")
+        if (transferDir.exists() || transferDir.mkdirs()) {
+            args.addAll(listOf("-b", "${transferDir.absolutePath}:/jcode-transfer"))
+        }
+
         // Working directory
         args.addAll(listOf("-w", workdir))
         
         // Run as root (UID 0) inside proot - needed for apt, etc.
         args.add("-0")
+
+        // Emulate hard-links as symlinks. dpkg/apt atomically back up their database by hard-linking
+        // (/var/lib/dpkg/status -> status-old); many Android kernels/filesystems reject link() in the
+        // app data dir (EPERM/EACCES), so without this dpkg dies with "error creating new backup file
+        // '/var/lib/dpkg/status-old': Permission denied" — and every later apt/dpkg (incl. the
+        // `dpkg --configure -a` self-heal) then fails too. Device-dependent: seen on some Android 13
+        // devices, not others. Standard proot option (Termux/proot-distro enable it by default);
+        // required for apt/dpkg to work uniformly across devices.
+        args.add("--link2symlink")
 
         // Report a modern kernel release to reduce false "unknown syscall" warnings.
         args.addAll(listOf("-k", REPORTED_KERNEL_RELEASE))

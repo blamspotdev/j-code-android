@@ -29,14 +29,29 @@ entries:
     category: languages
     name: Node.js and npm
     description: Installs Node.js and npm for TypeScript, JavaScript, and frontend tooling.
+    # Ubuntu's apt "npm" (Debian-patched) fails under proot with a phantom
+    # `mkdir '/home' ENOENT` inside Arborist, breaking all `npm install`/`npm create`.
+    # Ship upstream Node (unpatched npm) into /usr/local so it shadows any distro node on PATH.
     installScript: |
-      sudo apt-get update
-      sudo apt-get install -y nodejs npm
+      set -e
+      NODE_VERSION=v20.18.1
+      case "$(uname -m)" in
+        aarch64|arm64) NODE_ARCH=arm64 ;;
+        x86_64|amd64)  NODE_ARCH=x64 ;;
+        *) echo "Unsupported architecture: $(uname -m)"; exit 1 ;;
+      esac
+      command -v curl >/dev/null 2>&1 || sudo apt-get install -y curl ca-certificates
+      TARBALL="node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz"
+      curl -fsSL -o "/tmp/${TARBALL}" "https://nodejs.org/dist/${NODE_VERSION}/${TARBALL}"
+      sudo tar -xzf "/tmp/${TARBALL}" -C /usr/local --strip-components=1
+      rm -f "/tmp/${TARBALL}"
+      node --version && npm --version
     verifyScript: |
       command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 && echo ready
     uninstallScript: |
-      sudo apt-get remove -y nodejs npm
-    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(nodejs|npm)/'"
+      sudo rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+      sudo rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack
+    updateCheckScript: "false"
 
   - id: rust
     category: build-tools
@@ -83,6 +98,7 @@ entries:
     name: Android SDK (platform 34 + Gradle)
     description: Command-line tools, the Android 34 platform, build-tools 34, and Gradle 8.7 — wired with the ARM-native aapt2 so on-device Gradle builds (assembleDebug) produce a real APK. Requires the Android SDK prerequisites. Large download.
     supportedArches: [arm64]
+    requiredSdks: [android-prereqs]
     installScript: |
       set -e
       export ANDROID_HOME="$HOME/android-sdk"
@@ -129,10 +145,17 @@ entries:
       mkdir -p "$HOME/.dotnet"
       curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
       bash /tmp/dotnet-install.sh --channel 8.0 --install-dir "$HOME/.dotnet"
+      # CoreCLR over-reserves for the whole device RAM inside proot's ptrace-constrained address
+      # space and gets killed on first start; every dotnet call needs the 1 GB GC cap. The shim
+      # also puts dotnet + installed global tools on PATH for non-login shells.
+      printf '#!/bin/sh\nexport DOTNET_GCHeapHardLimit=0x40000000\nexport DOTNET_CLI_TELEMETRY_OPTOUT=1\nexport DOTNET_ROOT="%s/.dotnet"\ncase "$TMPDIR" in /data/*) export TMPDIR=/tmp ;; esac\nexport PATH="$PATH:%s/.dotnet/tools"\nexec "%s/.dotnet/dotnet" "$@"\n' "$HOME" "$HOME" "$HOME" | sudo tee /usr/local/bin/dotnet >/dev/null
+      sudo chmod 755 /usr/local/bin/dotnet
+      printf 'export DOTNET_GCHeapHardLimit=0x40000000\nexport DOTNET_CLI_TELEMETRY_OPTOUT=1\nexport DOTNET_ROOT="%s/.dotnet"\nexport PATH="$PATH:%s/.dotnet/tools"\n' "$HOME" "$HOME" | sudo tee /etc/profile.d/jcode-dotnet.sh >/dev/null
     verifyScript: |
-      [ -x "$HOME/.dotnet/dotnet" ] && "$HOME/.dotnet/dotnet" --info >/dev/null 2>&1 && echo ready
+      [ -x "$HOME/.dotnet/dotnet" ] && /usr/local/bin/dotnet --list-sdks 2>/dev/null | grep -q . && echo ready
     uninstallScript: |
       rm -rf "$HOME/.dotnet"
+      sudo rm -f /usr/local/bin/dotnet /etc/profile.d/jcode-dotnet.sh
 
   - id: arm-none-eabi
     category: embedded

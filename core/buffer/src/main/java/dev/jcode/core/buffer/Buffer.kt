@@ -2,17 +2,15 @@ package dev.jcode.core.buffer
 
 import java.lang.ref.Cleaner
 import java.nio.charset.StandardCharsets
-import kotlin.math.max
-import kotlin.math.min
 
 /**
  * In-memory piece-tree buffer backing store.
  * Uses C++ JNI implementation when available for optimal performance,
- * falls back to pure Kotlin implementation otherwise.
+ * falls back to a pure Kotlin piece table otherwise.
  * All mutable state lives behind a single writer thread concept (EditorDispatcher) at the editor layer.
  */
 class Buffer internal constructor(
-    private var content: ByteArray,
+    initialContent: ByteArray,
     useNative: Boolean = nativeAvailable,
 ) : AutoCloseable {
 
@@ -24,9 +22,13 @@ class Buffer internal constructor(
     @Volatile
     internal var nativeHandle: Long = 0L
 
+    private val table: PieceTable? = if (useNative) null else PieceTable(initialContent)
+    // Reused between edits so repeated snapshot()/read calls don't re-copy the piece list.
+    private var cachedSnapshot: PieceSnapshot? = null
+
     init {
         if (useNativeImpl) {
-            nativeHandle = nativeOpenFromBytes(content)
+            nativeHandle = nativeOpenFromBytes(initialContent)
         }
         // The cleanup action must capture ONLY the primitive handle, never `this` — capturing the
         // tracked object keeps it strongly reachable and permanently defeats the Cleaner.
@@ -34,12 +36,16 @@ class Buffer internal constructor(
         cleanable = cleaner.register(this) { if (handle != 0L) nativeCloseByHandle(handle) }
     }
 
+    private fun tableSnapshot(): PieceSnapshot = synchronized(this) {
+        cachedSnapshot ?: table!!.snapshot().also { cachedSnapshot = it }
+    }
+
     /** Total byte length of the buffer (UTF-8). */
     val byteLength: Int
         get() = if (useNativeImpl && nativeHandle != 0L) {
             snapshot().use { it.byteLength }
         } else {
-            synchronized(this) { content.size }
+            synchronized(this) { table!!.length }
         }
 
     /** Number of lines (at least 1 for empty buffer). */
@@ -47,7 +53,7 @@ class Buffer internal constructor(
         get() = if (useNativeImpl && nativeHandle != 0L) {
             snapshot().use { it.lineCount }
         } else {
-            synchronized(this) { countLines(content) + 1 }
+            synchronized(this) { table!!.newlineTotal + 1 }
         }
 
     /** Take an immutable snapshot of current buffer state. */
@@ -57,8 +63,7 @@ class Buffer internal constructor(
             val nativeSnapshotHandle = nativeSnapshot()
             Snapshot(nativeHandle = nativeSnapshotHandle)
         } else {
-            val copy = synchronized(this) { content.copyOf() }
-            Snapshot(content = copy)
+            Snapshot(pieces = tableSnapshot())
         }
     }
 
@@ -83,32 +88,19 @@ class Buffer internal constructor(
                     )
                 }
             }.toTypedArray()
-            
+
             val nativeSnapshotHandle = nativeApplyEdits(nativeOps)
             Snapshot(nativeHandle = nativeSnapshotHandle)
         } else {
             synchronized(this) {
-                var current = content
+                val t = table!!
                 for (op in tx.ops) {
-                    current = when (op) {
-                        is EditOp.Insert -> {
-                            val bytes = op.text.toByteArray(StandardCharsets.UTF_8)
-                            val before = current.copyOfRange(0, min(op.offset, current.size))
-                            val after = current.copyOfRange(min(op.offset, current.size), current.size)
-                            before + bytes + after
-                        }
-                        is EditOp.Delete -> {
-                            val start = min(op.start, current.size)
-                            val end = min(op.end, current.size)
-                            if (start >= end) current else {
-                                val before = current.copyOfRange(0, start)
-                                val after = current.copyOfRange(end, current.size)
-                                before + after
-                            }
-                        }
+                    when (op) {
+                        is EditOp.Insert -> t.insert(op.offset, op.text.toByteArray(StandardCharsets.UTF_8))
+                        is EditOp.Delete -> t.delete(op.start, op.end)
                     }
                 }
-                content = current
+                cachedSnapshot = null
             }
             snapshot()
         }
@@ -120,12 +112,7 @@ class Buffer internal constructor(
         return if (useNativeImpl && nativeHandle != 0L) {
             snapshot().use { it.readRange(start, end) }
         } else {
-            synchronized(this) {
-                content.copyOfRange(
-                    max(0, min(start, content.size)),
-                    max(0, min(end, content.size)),
-                )
-            }
+            tableSnapshot().readRange(start, end)
         }
     }
 
@@ -141,9 +128,7 @@ class Buffer internal constructor(
         return if (useNativeImpl && nativeHandle != 0L) {
             snapshot().use { it.offsetToLineColumn(offset) }
         } else {
-            synchronized(this) {
-                offsetToLineColumnLocked(content, offset)
-            }
+            tableSnapshot().offsetToLineColumn(offset)
         }
     }
 
@@ -153,9 +138,7 @@ class Buffer internal constructor(
         return if (useNativeImpl && nativeHandle != 0L) {
             snapshot().use { it.lineColumnToOffset(line, column) }
         } else {
-            synchronized(this) {
-                lineColumnToOffsetLocked(content, line, column)
-            }
+            tableSnapshot().lineColumnToOffset(line, column)
         }
     }
 
@@ -165,9 +148,7 @@ class Buffer internal constructor(
         return if (useNativeImpl && nativeHandle != 0L) {
             snapshot().use { it.lineAt(line) }
         } else {
-            synchronized(this) {
-                lineRangeLocked(content, line)
-            }
+            tableSnapshot().lineAt(line)
         }
     }
 
@@ -200,9 +181,9 @@ class Buffer internal constructor(
         // The native piece-tree (native/buffer/piece_tree.cpp) is an unfinished skeleton: its
         // insert/split orphans the inserted text and leaves the original piece in place (duplicating
         // content), and the red-black balancing + remove are empty stubs. It corrupts the buffer on
-        // the first edit. Until it is correctly implemented we use the pure-Kotlin array-splice path,
-        // which is correct (and fast enough for the file sizes edited on-device). Flip this back on
-        // once the native tree is fixed and tested.
+        // the first edit. Until it is correctly implemented we use the pure-Kotlin piece table
+        // (PieceTable.kt), which is correct and edits in O(pieces) rather than O(file size). Flip
+        // this back on once the native tree is fixed and tested.
         private const val USE_NATIVE_BUFFER = false
 
         // Check if native library is available
@@ -227,72 +208,12 @@ class Buffer internal constructor(
         /** Create a buffer from initial text. */
         fun fromText(text: String): Buffer =
             Buffer(text.toByteArray(StandardCharsets.UTF_8), useNative = nativeAvailable)
-
-        private fun countLines(bytes: ByteArray): Int {
-            var count = 0
-            for (b in bytes) {
-                if (b == '\n'.code.toByte()) count++
-            }
-            return count
-        }
-
-        internal fun offsetToLineColumnLocked(content: ByteArray, offset: Int): Pair<Int, Int> {
-            val clamped = max(0, min(offset, content.size))
-            var line = 0
-            var colStart = 0
-            var i = 0
-            while (i < clamped) {
-                if (content[i] == '\n'.code.toByte()) {
-                    line++
-                    colStart = i + 1
-                }
-                i++
-            }
-            // Handle \r\n: if we're right after \r, column should account for it
-            val col = clamped - colStart
-            return line to col
-        }
-
-        internal fun lineColumnToOffsetLocked(content: ByteArray, line: Int, column: Int): Int {
-            var currentLine = 0
-            var i = 0
-            while (i < content.size && currentLine < line) {
-                if (content[i] == '\n'.code.toByte()) currentLine++
-                i++
-            }
-            return i + column
-        }
-
-        internal fun lineRangeLocked(content: ByteArray, line: Int): Pair<Int, Int> {
-            var currentLine = 0
-            var start = 0
-            var i = 0
-            // Find start of the line
-            while (i < content.size && currentLine < line) {
-                if (content[i] == '\n'.code.toByte()) {
-                    currentLine++
-                    if (currentLine == line) {
-                        start = i + 1
-                        break
-                    }
-                }
-                i++
-            }
-            if (currentLine < line) return content.size to content.size // past end
-
-            // Find end of the line
-            var end = start
-            while (end < content.size && content[end] != '\n'.code.toByte()) {
-                end++
-            }
-            return start to end
-        }
     }
 }
 
 /** Immutable snapshot of buffer content at a point in time. */
 class Snapshot internal constructor(
-    internal val content: ByteArray? = null,
+    internal val pieces: PieceSnapshot? = null,
     // Must be named `nativeHandle`: the native JNI (jni_buffer.cpp getSnapshot/setSnapshot) looks up
     // the field "nativeHandle" on this class and writes it on close. A name mismatch aborts the VM
     // with NoSuchFieldError the moment any native Snapshot method runs (e.g. opening a file).
@@ -309,22 +230,18 @@ class Snapshot internal constructor(
         cleanable = cleaner.register(this) { if (handle != 0L) nativeCloseByHandle(handle) }
     }
 
-    val byteLength: Int 
+    val byteLength: Int
         get() = if (useNativeImpl) {
             nativeByteLength().toInt()
         } else {
-            content?.size ?: 0
+            pieces?.length ?: 0
         }
 
     val lineCount: Int
         get() = if (useNativeImpl) {
             nativeLineCount().toInt()
         } else {
-            var count = 1
-            content?.forEach { b ->
-                if (b == '\n'.code.toByte()) count++
-            }
-            count
+            pieces?.lineCount ?: 1
         }
 
     fun readRange(start: Int, end: Int): ByteArray {
@@ -334,10 +251,7 @@ class Snapshot internal constructor(
             val read = nativeReadRange(start.toLong(), end.toLong(), out)
             if (read < size) out.copyOf(read) else out
         } else {
-            content?.copyOfRange(
-                max(0, min(start, content.size)),
-                max(0, min(end, content.size)),
-            ) ?: ByteArray(0)
+            pieces?.readRange(start, end) ?: ByteArray(0)
         }
     }
 
@@ -350,7 +264,7 @@ class Snapshot internal constructor(
             val end = nativeLineEnd(line.toLong()).toInt()
             start to end
         } else {
-            content?.let { Buffer.lineRangeLocked(it, line) } ?: (0 to 0)
+            pieces?.lineAt(line) ?: (0 to 0)
         }
     }
 
@@ -360,7 +274,7 @@ class Snapshot internal constructor(
             val col = nativeOffsetToColumn(offset.toLong()).toInt()
             line to col
         } else {
-            content?.let { Buffer.offsetToLineColumnLocked(it, offset) } ?: (0 to 0)
+            pieces?.offsetToLineColumn(offset) ?: (0 to 0)
         }
     }
 
@@ -368,7 +282,7 @@ class Snapshot internal constructor(
         return if (useNativeImpl) {
             nativeLineColumnToOffset(line.toLong(), column.toLong()).toInt()
         } else {
-            content?.let { Buffer.lineColumnToOffsetLocked(it, line, column) } ?: 0
+            pieces?.lineColumnToOffset(line, column) ?: 0
         }
     }
 

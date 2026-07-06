@@ -2,6 +2,7 @@ package dev.jcode.feature.editor.pane
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -17,7 +18,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -230,7 +230,16 @@ private fun TabItem(
                 }
                 !LocalTabCloseButtonSetting.current.hidden -> {
                     JcTooltip("Close tab") {
-                        IconButton(onClick = onClosed, modifier = Modifier.size(20.dp)) {
+                        // Plain clickable Box (not IconButton) so the touch target stays a tight 20dp;
+                        // an IconButton's enforced 48dp minimum spills over the title and closes the
+                        // tab on a title tap.
+                        Box(
+                            modifier = Modifier
+                                .size(20.dp)
+                                .clip(CircleShape)
+                                .clickable(onClick = onClosed),
+                            contentAlignment = Alignment.Center,
+                        ) {
                             Text(
                                 text = "×",
                                 style = MaterialTheme.typography.bodySmall,

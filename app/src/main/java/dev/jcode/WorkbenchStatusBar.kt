@@ -89,8 +89,12 @@ internal fun WorkbenchStatusBar(
             if (activeTab?.isPage != true) {
                 StatusCell("${metrics.line}:${metrics.column}", icon = jcIcon(JCodeIcon.Cursor))
                 StatusCell("lang: ${metrics.language}")
-                EncodingCell(metrics.encoding)
-                LineEndingCell(metrics.lineEnding, activeTab?.editorState)
+                // Encoding + line-ending apply to an actual open file; hide them when none is focused.
+                val editorState = activeTab?.editorState
+                if (editorState != null) {
+                    EncodingCell(metrics.encoding)
+                    LineEndingCell(metrics.lineEnding, editorState)
+                }
             }
             StatusCell("distro: ${distro.ifBlank { "--" }}")
         }

@@ -20,12 +20,10 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -45,7 +43,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import dev.jcode.MainViewModel
 import dev.jcode.feature.marketplace.ProjectTemplate
-import dev.jcode.feature.marketplace.ScaffoldState
 import dev.jcode.feature.marketplace.TemplateInput
 
 @Composable
@@ -95,19 +92,38 @@ internal fun OpenFolderTypeDialog(
     )
 }
 
+/**
+ * After cloning while a User Workspace is open: open the cloned folder as the active project, or keep it
+ * added to the workspace's project list to open later.
+ */
+@Composable
+internal fun PostCloneDialog(
+    projectName: String,
+    onOpen: () -> Unit,
+    onAdd: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onAdd,
+        title = { Text("Cloned '$projectName'") },
+        text = {
+            Text(
+                "It was added to this workspace. Open it now, or keep it in the workspace to open later?",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        confirmButton = { TextButton(onClick = onOpen) { Text("Open folder") } },
+        dismissButton = { TextButton(onClick = onAdd) { Text("Add to workspace") } },
+    )
+}
+
 @Composable
 internal fun NewItemDialog(
     templates: List<ProjectTemplate>,
-    scaffoldState: ScaffoldState,
     installedToolchains: Set<String>,
     onDismiss: () -> Unit,
     onConfirm: (MainViewModel.NewItemRequest) -> Unit,
 ) {
-    if (scaffoldState.templateId != null) {
-        ScaffoldProgressDialog(state = scaffoldState, onDismiss = onDismiss)
-        return
-    }
-
     var isWorkspace by rememberSaveable { mutableStateOf(false) }
     var name by rememberSaveable { mutableStateOf("") }
     var selectedTemplateId by rememberSaveable(templates) {
@@ -357,69 +373,3 @@ private fun TemplateOption(
     }
 }
 
-@Composable
-private fun ScaffoldProgressDialog(
-    state: ScaffoldState,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = { if (state.finished) onDismiss() },
-        title = {
-            Text(
-                when {
-                    state.errorMessage != null -> "Scaffold failed"
-                    state.finished -> "Project ready"
-                    else -> "Scaffolding…"
-                },
-            )
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (state.running) {
-                    if (state.totalSteps > 0) {
-                        LinearProgressIndicator(
-                            progress = { state.currentStep.toFloat() / state.totalSteps.toFloat() },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    } else {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    }
-                    val counter = if (state.totalSteps > 0) " (${state.currentStep}/${state.totalSteps})" else ""
-                    Text(
-                        "${state.currentLabel ?: "Working…"}$counter",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                state.errorMessage?.let { message ->
-                    Text(
-                        message,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                if (state.logLines.isNotEmpty()) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            text = state.logLines.takeLast(120).joinToString("\n"),
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier
-                                .heightIn(max = 220.dp)
-                                .fillMaxWidth()
-                                .verticalScroll(rememberScrollState())
-                                .padding(8.dp),
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(if (state.finished) "Close" else "Hide")
-            }
-        },
-    )
-}

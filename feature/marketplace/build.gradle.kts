@@ -24,5 +24,8 @@ android {
 dependencies {
     implementation(libs.coroutines.android)
     implementation(libs.snakeyaml.engine)
+    // Ed25519 signature verification for official (signed) .jext packages — used via BC's lightweight
+    // crypto API (Ed25519Signer), no JCA provider registration needed. Works down to minSdk 28.
+    implementation(libs.bouncycastle.provider)
     implementation(project(":core:distro"))
 }

@@ -34,6 +34,25 @@ class TemplateScaffolder internal constructor(
     private val _state = MutableStateFlow(ScaffoldState())
     val state: StateFlow<ScaffoldState> = _state.asStateFlow()
 
+    /**
+     * App-provided runner that executes a recipe step inside the shared Setup terminal (visible in
+     * the right drawer) instead of a silent in-process exec. Returns null to decline (e.g. no
+     * session slot free), in which case the step falls back to [DistroService.exec]. Output then
+     * lives in the terminal, so [ScaffoldState.logLines] only carries step markers and errors.
+     */
+    @Volatile
+    var interactiveExec: (suspend (label: String, command: String, workdir: String, timeoutMs: Long) -> dev.jcode.core.distro.ExecResult?)? = null
+
+    private suspend fun execStep(label: String, command: String, workdir: String): dev.jcode.core.distro.ExecResult {
+        interactiveExec?.invoke(label, command, workdir, STEP_TIMEOUT_MS)?.let { return it }
+        return distroService.exec(
+            command = command,
+            workdir = workdir,
+            timeoutMs = STEP_TIMEOUT_MS,
+            onLine = ::appendLog,
+        )
+    }
+
     data class Request(
         val template: ProjectTemplate,
         /** Sanitized project name (also the staging-dir name). */
@@ -90,12 +109,7 @@ class TemplateScaffolder internal constructor(
         }
 
         val prep = "rm -rf \"$staging\" && mkdir -p \"$staging\" && mkdir -p \"${request.projectDir}\""
-        val prepResult = distroService.exec(
-            command = prep,
-            workdir = request.projectDir,
-            timeoutMs = STEP_TIMEOUT_MS,
-            onLine = ::appendLog,
-        )
+        val prepResult = execStep("Prepare ${request.projectName}", prep, request.projectDir)
         if (!prepResult.succeeded) {
             return fail(prepResult.internalError ?: "Failed to prepare staging directory.")
         }
@@ -112,12 +126,7 @@ class TemplateScaffolder internal constructor(
                 currentLabel = step.label,
                 logLines = (_state.value.logLines + "== ${step.label} ==").takeLast(LOG_LIMIT),
             )
-            val result = distroService.exec(
-                command = command,
-                workdir = request.projectDir,
-                timeoutMs = STEP_TIMEOUT_MS,
-                onLine = ::appendLog,
-            )
+            val result = execStep(step.label, command, request.projectDir)
             if (!result.succeeded) {
                 val reason = result.internalError
                     ?: result.stderr.lineSequence().firstOrNull { it.isNotBlank() }
@@ -128,11 +137,7 @@ class TemplateScaffolder internal constructor(
         }
 
         // Best-effort cleanup of the ext4 staging copy; failure here does not fail the scaffold.
-        distroService.exec(
-            command = "rm -rf \"$staging\"",
-            workdir = request.projectDir,
-            timeoutMs = STEP_TIMEOUT_MS,
-        )
+        execStep("Clean up", "rm -rf \"$staging\"", request.projectDir)
 
         _state.value = _state.value.copy(
             running = false,
