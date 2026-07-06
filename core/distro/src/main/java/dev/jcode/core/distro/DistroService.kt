@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -1275,9 +1276,33 @@ class DistroService(
     var interactiveCatalogRunner: (suspend (label: String, script: String, timeoutMs: Long) -> ExecResult?)? = null
 
     /** Long-running catalog actions go through the Setup terminal when wired; verify stays quiet so
-     *  its exit code and output remain capturable. */
+     *  its exit code and output remain capturable.
+     *
+     *  Self-healing: a failed install is retried up to [CATALOG_INSTALL_MAX_ATTEMPTS] times with a
+     *  linear back-off. The back-off rides out a transient network/mirror blip, and each attempt
+     *  re-runs the apt self-heal preamble (dpkg reconfigure + fix-broken) so a half-installed state
+     *  from the previous attempt is cleaned before retrying. Hard-stops that can't heal by re-running
+     *  — a missing runtime ([ExecResult.internalError]) or a user cancel (SIGINT, exit 130) — break
+     *  out immediately. Retries carry a "retry N/M" label so they're visible in the Setup terminal. */
     private suspend fun execCatalogAction(label: String, script: String, timeoutMs: Long): ExecResult {
         val prepared = withAptSelfHeal(script)
+        var last: ExecResult? = null
+        for (attempt in 1..CATALOG_INSTALL_MAX_ATTEMPTS) {
+            val attemptLabel =
+                if (attempt == 1) label else "$label — retry $attempt/$CATALOG_INSTALL_MAX_ATTEMPTS"
+            val result = runCatalogOnce(attemptLabel, prepared, timeoutMs)
+            if (result.succeeded) return result
+            last = result
+            val healable = result.internalError == null && result.exitCode != 130
+            if (!healable || attempt == CATALOG_INSTALL_MAX_ATTEMPTS) break
+            delay(CATALOG_RETRY_BACKOFF_MS * attempt)
+        }
+        return last ?: ExecResult(exitCode = 1)
+    }
+
+    /** One catalog-action attempt: prefer the visible Setup terminal, fall back to a quiet in-process
+     *  exec. [prepared] already carries the apt self-heal preamble. */
+    private suspend fun runCatalogOnce(label: String, prepared: String, timeoutMs: Long): ExecResult {
         val runner = interactiveCatalogRunner
         if (runner != null) {
             val runtime = _environmentState.value.runtime
@@ -1289,18 +1314,27 @@ class DistroService(
     }
 
     /**
-     * apt-based catalog commands fail outright if dpkg was left half-configured by a previously
-     * interrupted install (the app killed / device slept mid-`apt`) — every later install then aborts
-     * with "dpkg was interrupted, you must manually run 'dpkg --configure -a'". Prepend that recovery
-     * so the runtime self-heals. It is a no-op (silent, instant) when dpkg is already clean, and is
-     * only added for scripts that actually use apt/dpkg.
+     * Prepend apt/dpkg self-healing so the runtime recovers from a dirty package state on its own
+     * (only for scripts that actually use apt/dpkg — a no-op otherwise). The preamble:
+     *  - writes an idempotent apt.conf drop-in so *every* apt command retries transient fetch failures
+     *    ([Acquire::Retries]) and waits for a held dpkg/apt lock instead of dying ([DPkg::Lock::Timeout]);
+     *  - runs `dpkg --configure -a` to finish a package left half-configured by a previously
+     *    interrupted install (app killed / device slept mid-`apt`);
+     *  - runs `apt-get install -f -y` to repair broken/partial dependencies from an aborted run.
+     * All three are silent, fast no-ops when the runtime is already clean.
      */
-    private fun withAptSelfHeal(script: String): String =
-        if (script.contains("apt-get") || script.contains("apt ") || script.contains("dpkg")) {
-            "dpkg --configure -a 2>/dev/null || true\n$script"
-        } else {
-            script
+    private fun withAptSelfHeal(script: String): String {
+        if (!(script.contains("apt-get") || script.contains("apt ") || script.contains("dpkg"))) {
+            return script
         }
+        val preamble =
+            "mkdir -p /etc/apt/apt.conf.d 2>/dev/null || true\n" +
+            "printf 'Acquire::Retries \"3\";\\nAcquire::http::Timeout \"30\";\\n" +
+            "DPkg::Lock::Timeout \"180\";\\n' > /etc/apt/apt.conf.d/80-jcode-heal 2>/dev/null || true\n" +
+            "dpkg --configure -a 2>/dev/null || true\n" +
+            "apt-get install -f -y 2>/dev/null || true\n"
+        return preamble + script
+    }
 
     /**
      * Execute a command inside the distro using proot.
@@ -1815,5 +1849,9 @@ class DistroService(
         private const val ENSURE_USER_RETRY_MS: Long = 30_000L
         /** Minimum required storage: 2GB */
         private const val MIN_REQUIRED_STORAGE_BYTES: Long = 2L * 1024 * 1024 * 1024
+        /** A failed toolchain install (transient apt/network/dpkg hiccup) is retried this many times. */
+        private const val CATALOG_INSTALL_MAX_ATTEMPTS: Int = 3
+        /** Linear back-off base between install retries (× attempt): 3s, then 6s. */
+        private const val CATALOG_RETRY_BACKOFF_MS: Long = 3_000L
     }
 }

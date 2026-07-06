@@ -41,6 +41,7 @@ import dev.jcode.feature.editor.pane.EditorPageKind
 import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.feature.marketplace.BundledExtensionSpec
 import dev.jcode.feature.marketplace.ExtensionActivation
+import dev.jcode.feature.marketplace.ExtensionDeps
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.languageFor
 import dev.jcode.feature.marketplace.MarketplaceEntry
@@ -217,41 +218,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!visiting.add(entry.id)) return true
 
         if (!entry.requires.isEmpty) setExtensionPhase(entry.id, "Installing required tools…")
-
-        for (depId in entry.requires.extensions) {
-            if (depId in visiting) continue
-            if (_installedExtensions.value.any { it.id == depId }) continue
-            val depEntry = _marketplaceEntries.value.firstOrNull { it.id == depId }
-            if (depEntry == null) {
-                _messages.tryEmit("${entry.name}: required extension '$depId' isn't in the marketplace — install aborted.")
-                return false
-            }
-            _messages.tryEmit("Installing required extension: ${depEntry.name}…")
-            if (!installExtensionResolvingDeps(depEntry, visiting)) {
-                _messages.tryEmit("${entry.name}: required extension ${depEntry.name} failed — install aborted.")
-                return false
-            }
-        }
-
-        for (sdkId in entry.requires.sdks) {
-            if (sdkId in distroService.sdkCatalogState.value.installedEntryIds) continue
-            _messages.tryEmit("Installing required toolchain: $sdkId…")
-            if (!installRequiredSdk(sdkId)) {
-                val reason = distroService.sdkCatalogState.value.errorMessage ?: "install failed"
-                _messages.tryEmit("${entry.name}: required toolchain '$sdkId' — $reason Install aborted.")
-                return false
-            }
-        }
-
-        for (lspId in entry.requires.lsps) {
-            if (lspId in distroService.lspCatalogState.value.installedEntryIds) continue
-            _messages.tryEmit("Installing required language server: $lspId…")
-            if (!installRequiredLsp(lspId)) {
-                val reason = distroService.lspCatalogState.value.errorMessage ?: "install failed"
-                _messages.tryEmit("${entry.name}: required language server '$lspId' — $reason Install aborted.")
-                return false
-            }
-        }
+        // Deps the marketplace index declared for this entry — resolved before install; a failure
+        // aborts because the extension asked for them up front.
+        if (!resolveRequires(entry.name, entry.requires, visiting, abortOnFail = true)) return false
 
         setExtensionPhase(entry.id, "Installing…")
         val result = extensionInstaller.install(entry, BuildConfig.VERSION_NAME)
@@ -262,15 +231,72 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         setExtensionPhase(entry.id, "Verifying…")
-        val present = runCatching { extensionInstaller.installed() }
+        val installedEntry = runCatching { extensionInstaller.installed() }
             .getOrDefault(emptyList())
-            .any { it.id == entry.id }
-        setExtensionPhase(entry.id, null)
-        if (!present) {
+            .firstOrNull { it.id == entry.id }
+        if (installedEntry == null) {
+            setExtensionPhase(entry.id, null)
             _messages.tryEmit("${entry.name}: installed but not detected on disk — install failed.")
             return false
         }
         _messages.tryEmit("Installed ${entry.name}")
+
+        // The marketplace index currently omits `requires`, so the pre-install pass above sees nothing
+        // for most extensions. Re-resolve from the freshly-installed manifest (the authoritative
+        // source) to pull chained extensions (e.g. Android Dev Pack → Kotlin) and toolchains the index
+        // left out. Non-fatal: the extension is already installed and usable on its own.
+        if (!installedEntry.requires.isEmpty) {
+            setExtensionPhase(entry.id, "Installing required tools…")
+            resolveRequires(entry.name, installedEntry.requires, visiting, abortOnFail = false)
+        }
+        setExtensionPhase(entry.id, null)
+        return true
+    }
+
+    /**
+     * Install everything [deps] names that isn't already present: required extensions (recursively),
+     * then toolchain SDKs and language servers via the catalogs. With [abortOnFail] true a failure
+     * returns false so the caller rolls back its own install; with false, failures are surfaced but
+     * skipped so an already-installed extension isn't undone over an optional-in-practice dependency.
+     */
+    private suspend fun resolveRequires(
+        sourceName: String,
+        deps: ExtensionDeps,
+        visiting: MutableSet<String>,
+        abortOnFail: Boolean,
+    ): Boolean {
+        for (depId in deps.extensions) {
+            if (depId in visiting) continue
+            if (_installedExtensions.value.any { it.id == depId }) continue
+            val depEntry = _marketplaceEntries.value.firstOrNull { it.id == depId }
+            if (depEntry == null) {
+                _messages.tryEmit("$sourceName: required extension '$depId' isn't in the marketplace.")
+                if (abortOnFail) return false else continue
+            }
+            _messages.tryEmit("Installing required extension: ${depEntry.name}…")
+            if (!installExtensionResolvingDeps(depEntry, visiting)) {
+                _messages.tryEmit("$sourceName: required extension ${depEntry.name} failed.")
+                if (abortOnFail) return false
+            }
+        }
+        for (sdkId in deps.sdks) {
+            if (sdkId in distroService.sdkCatalogState.value.installedEntryIds) continue
+            _messages.tryEmit("Installing required toolchain: $sdkId…")
+            if (!installRequiredSdk(sdkId)) {
+                val reason = distroService.sdkCatalogState.value.errorMessage ?: "install failed"
+                _messages.tryEmit("$sourceName: required toolchain '$sdkId' — $reason")
+                if (abortOnFail) return false
+            }
+        }
+        for (lspId in deps.lsps) {
+            if (lspId in distroService.lspCatalogState.value.installedEntryIds) continue
+            _messages.tryEmit("Installing required language server: $lspId…")
+            if (!installRequiredLsp(lspId)) {
+                val reason = distroService.lspCatalogState.value.errorMessage ?: "install failed"
+                _messages.tryEmit("$sourceName: required language server '$lspId' — $reason")
+                if (abortOnFail) return false
+            }
+        }
         return true
     }
 
