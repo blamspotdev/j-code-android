@@ -452,6 +452,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { uiPreferences.edit { it[confirmCloseRunningKey] = enabled } }
     }
 
+    private val exitOnSwipeAwayKey = booleanPreferencesKey(EXIT_ON_SWIPE_AWAY_KEY)
+
+    /** When true (default off), swiping JCode off the Android recents screen tears down the Linux
+     *  runtime (terminals, runs, VMs) and exits the process entirely — handled in
+     *  [BackendService.onTaskRemoved], which reads the mirrored [exitOnSwipeAwayEnabled]. */
+    val exitOnSwipeAway: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[exitOnSwipeAwayKey] ?: false }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setExitOnSwipeAway(enabled: Boolean) {
+        exitOnSwipeAwayEnabled = enabled
+        viewModelScope.launch { uiPreferences.edit { it[exitOnSwipeAwayKey] = enabled } }
+    }
+
+    init {
+        // Keep the static mirror BackendService reads in sync, and register the runtime teardown it
+        // runs on a swipe-away exit. (Placed after the property declarations it references.)
+        runtimeTeardown = { runCatching { stopAllRuntimeServices() } }
+        viewModelScope.launch { exitOnSwipeAway.collect { exitOnSwipeAwayEnabled = it } }
+    }
+
     private val autoCloseIdleKey = booleanPreferencesKey("perf_auto_close_idle_terminals")
 
     /** When true, terminals sitting idle at the prompt (no foreground program, no I/O) past
@@ -2655,6 +2676,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
+        /** DataStore key + a synchronous mirror of "close app on swipe-away", so [BackendService]
+         *  can decide in onTaskRemoved without a blocking DataStore read. */
+        const val EXIT_ON_SWIPE_AWAY_KEY = "exit_on_swipe_away"
+
+        @Volatile
+        var exitOnSwipeAwayEnabled: Boolean = false
+
+        /** Runtime teardown (destroy proot run/VM/LSP/DAP service procs) invoked on a swipe-away exit;
+         *  set by the live ViewModel. Terminals are reaped separately via [TerminalSessionHost]. */
+        @Volatile
+        var runtimeTeardown: (() -> Unit)? = null
+
         private const val RELOAD_NOTICE_THROTTLE_MS = 4_000L
         const val SETTINGS_TAB_ID = "jcode://settings"
         const val ENVIRONMENT_TAB_ID = "jcode://environment"

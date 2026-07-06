@@ -288,6 +288,13 @@ object SettingsFeature {
                     onCheckedChange = perf.onSetConfirmCloseRunning,
                 )
                 ToggleRow(
+                    label = "Close app fully on swipe-away",
+                    supporting = "When you swipe JCode off the Android recents screen, stop the Linux runtime " +
+                        "(terminals, runs, VMs) and exit completely instead of leaving it running in the background.",
+                    checked = perf.exitOnSwipeAway,
+                    onCheckedChange = perf.onSetExitOnSwipeAway,
+                )
+                ToggleRow(
                     label = "Auto-close idle terminals",
                     supporting = "Automatically close terminals left idle at the prompt (no running program) to " +
                         "free their process tree and memory. Terminals running a command are never auto-closed.",
