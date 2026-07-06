@@ -41,6 +41,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +58,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.jcode.core.distro.Arch
 import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.core.distro.DistroProfile
@@ -165,6 +169,20 @@ private fun StepperScreen(
     // Storage grant gates distro selection: nothing can install into /JCode until it's granted.
     // When the storage step isn't shown (existing installs), there is nothing to gate on.
     var storageGranted by remember { mutableStateOf(hasStorageAccess(context)) }
+    // The grant can also happen OUTSIDE the in-app dialog — the user flips File access in Android
+    // Settings (before or during onboarding) and comes back. That path never fires the permission
+    // launcher's callback, so re-check on every resume; otherwise Step 1 stays unchecked forever.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && !storageGranted && hasStorageAccess(context)) {
+                storageGranted = true
+                onStorageAccessGranted()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val distroStepEnabled = !showStorageStep || storageGranted
 
     val distroStepNumber = if (showStorageStep) 2 else 1
@@ -589,8 +607,12 @@ private fun Header() {
     }
 }
 
+// Either grant works for /JCode: the legacy Files & media permission (the one our in-app dialog
+// requests, honored via requestLegacyExternalStorage) OR "All files access" — which users often
+// flip manually in Android Settings and which never shows up as WRITE_EXTERNAL_STORAGE.
 private fun hasStorageAccess(context: Context): Boolean =
-    context.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+    context.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED ||
+        (android.os.Build.VERSION.SDK_INT >= 30 && android.os.Environment.isExternalStorageManager())
 
 /** Runtime storage grant so projects can live in the shared /storage/emulated/0/JCode folder. */
 @Composable

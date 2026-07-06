@@ -33,6 +33,7 @@ dependencies {
     implementation(libs.activity.compose)
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
+    implementation(libs.lifecycle.runtime.compose)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
     implementation(project(":core:distro"))
