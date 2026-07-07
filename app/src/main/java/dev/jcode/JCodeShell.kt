@@ -381,18 +381,21 @@ fun JCodeApp(
     val autoCloseIdleTerminals by viewModel.autoCloseIdleTerminals.collectAsStateWithLifecycle()
     val idleTimeoutMinutes by viewModel.idleTimeoutMinutes.collectAsStateWithLifecycle()
     val maxTerminalSessions by viewModel.maxTerminalSessions.collectAsStateWithLifecycle()
-    val performanceSettings = remember(hardwareAcceleration, confirmCloseRunning, autoCloseIdleTerminals, idleTimeoutMinutes, maxTerminalSessions) {
+    val exitOnSwipeAway by viewModel.exitOnSwipeAway.collectAsStateWithLifecycle()
+    val performanceSettings = remember(hardwareAcceleration, confirmCloseRunning, autoCloseIdleTerminals, idleTimeoutMinutes, maxTerminalSessions, exitOnSwipeAway) {
         PerformanceSettings(
             hardwareAcceleration = hardwareAcceleration,
             confirmCloseRunning = confirmCloseRunning,
             autoCloseIdleTerminals = autoCloseIdleTerminals,
             idleTimeoutMinutes = idleTimeoutMinutes,
             maxTerminalSessions = maxTerminalSessions,
+            exitOnSwipeAway = exitOnSwipeAway,
             onSetHardwareAcceleration = viewModel::setHardwareAcceleration,
             onSetConfirmCloseRunning = viewModel::setConfirmCloseRunning,
             onSetAutoCloseIdleTerminals = viewModel::setAutoCloseIdleTerminals,
             onSetIdleTimeoutMinutes = viewModel::setIdleTimeoutMinutes,
             onSetMaxTerminalSessions = viewModel::setMaxTerminalSessions,
+            onSetExitOnSwipeAway = viewModel::setExitOnSwipeAway,
         )
     }
     val webPreviewBrowserGlobal by viewModel.webPreviewBrowser.collectAsStateWithLifecycle()

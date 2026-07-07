@@ -31,6 +31,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.jcode.design.JCodeTheme
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.webUiFile
@@ -231,6 +234,22 @@ fun ExtensionWebViewPage(
     }
     DisposableEffect(extension.id) {
         onDispose { webView?.destroy(); webView = null }
+    }
+    // Stop the WebView re-rendering while the app is backgrounded — the user isn't looking, so drawing
+    // off-screen just burns GPU/battery. onPause() halts rendering/animations but NOT JavaScript, so any
+    // allowed background work keeps running; onResume() re-renders on-demand when the app returns.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, webView) {
+        val wv = webView
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> wv?.onPause()
+                Lifecycle.Event.ON_START -> wv?.onResume()
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     // JCode's live theme as CSS variables (--jcode-*), so extension UIs match the app. Injected on
     // page load and re-injected here whenever the theme (colors) change while the page is open.

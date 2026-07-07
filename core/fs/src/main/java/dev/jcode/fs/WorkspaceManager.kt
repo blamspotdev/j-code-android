@@ -95,6 +95,29 @@ class WorkspaceManager @Inject constructor(
         currentWorkspaceId.value = workspaceId
     }
 
+    /**
+     * Reopen [workspaceId] on launch (session restore) and rebuild the breadcrumb trail. Restore
+     * bypasses the navigation entry points ([enterWorkspaceFolder] / [navigateToWorkspace]) that push
+     * crumbs, so the trail is reconstructed here: the Default Workspace as the root crumb, plus the
+     * restored workspace when it isn't the Default one. Without this the trail keeps boot's single
+     * `[Default]` crumb while [currentWorkspaceId] points at a User Workspace, and every
+     * `breadcrumb.size > 1` check (Close Workspace vs Close Project, project roster, single-slot reset)
+     * misreads it as the Default Workspace.
+     */
+    suspend fun restoreWorkspace(workspaceId: Long) {
+        val default = ensureDefaultWorkspace()
+        _breadcrumb.value = buildList {
+            add(WorkspaceCrumb(default.id, default.name))
+            if (workspaceId != default.id) {
+                val name = withContext(Dispatchers.IO) {
+                    workspaceDao.observeWorkspace(workspaceId).first()?.workspace?.name
+                }
+                if (name != null) add(WorkspaceCrumb(workspaceId, name))
+            }
+        }
+        openWorkspace(workspaceId)
+    }
+
     /** True if a workspace row with this id still exists (it may have been deleted since last session). */
     suspend fun workspaceExists(workspaceId: Long): Boolean = withContext(Dispatchers.IO) {
         workspaceDao.observeWorkspace(workspaceId).first() != null

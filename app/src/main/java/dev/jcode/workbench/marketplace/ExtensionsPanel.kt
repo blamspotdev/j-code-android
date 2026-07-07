@@ -17,6 +17,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -34,10 +36,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.jcode.design.LocalExtensionSettingsUi
 import dev.jcode.design.ManagerDetailScreen
 import dev.jcode.design.ManagerItemStatus
 import dev.jcode.design.ManagerListRow
@@ -91,7 +95,7 @@ internal fun ExtensionsPanel(
             onQueryChange = { query = it },
             searchPlaceholder = "Search extensions",
             onManage = onOpenPermissions,
-            manageContentDescription = "Extension permissions",
+            manageContentDescription = "Extension settings",
         )
 
         Surface(
@@ -447,7 +451,12 @@ internal fun ExtensionDetailPage(
     }
 }
 
-/** Full-width Extension Permissions manager page: every installed extension + its activation mode. */
+/**
+ * Full-width **Extension Settings** page (opened from the Extensions-list gear): one card per installed
+ * extension holding its own settings (from the manifest `settings:` block) plus its permissions —
+ * activation mode, API-capability grants, and keep-alive. Replaces the per-extension section that used
+ * to live in App Settings.
+ */
 @Composable
 internal fun ExtensionPermissionsPage(
     installed: List<InstalledExtension>,
@@ -461,7 +470,8 @@ internal fun ExtensionPermissionsPage(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(
-            text = "Choose when each installed extension's features turn on. Manual disables an extension.",
+            text = "Per-extension settings and permissions. Activation controls when an extension turns " +
+                "on; Manual disables it.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -480,6 +490,7 @@ internal fun ExtensionPermissionsPage(
                         ext.type.name.lowercase(),
                     ).joinToString(" · "),
                 ) {
+                    ExtensionSettingsControls(extensionId = ext.id)
                     ActivationSelector(extensionId = ext.id)
                     if (ext.apiCapabilities.isNotEmpty()) {
                         CapabilityToggles(extensionId = ext.id, capabilities = ext.apiCapabilities)
@@ -488,6 +499,92 @@ internal fun ExtensionPermissionsPage(
                         KeepAliveToggle(extensionId = ext.id)
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * The extension's declared settings (manifest `settings:` block), rendered inline in its Extension
+ * Settings card. Reads/writes through [LocalExtensionSettingsUi]; renders nothing when the extension
+ * declares no settings.
+ */
+@Composable
+private fun ExtensionSettingsControls(extensionId: String) {
+    val ui = LocalExtensionSettingsUi.current
+    val group = ui.groups.firstOrNull { it.extensionId == extensionId } ?: return
+    if (group.specs.isEmpty()) return
+    Text(
+        text = "Settings",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    group.specs.forEach { spec ->
+        val current = ui.valueOf(extensionId, spec.key)
+        when (spec.type) {
+            "bool" -> Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(spec.label, style = MaterialTheme.typography.bodyMedium)
+                    spec.description?.takeIf { it.isNotBlank() }?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Switch(
+                    checked = current == "true" || current == "1",
+                    onCheckedChange = { ui.onChange(extensionId, spec.key, it.toString()) },
+                )
+            }
+
+            "enum" -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(spec.label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                spec.description?.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                spec.options.forEach { option ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { ui.onChange(extensionId, spec.key, option) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = current == option,
+                            onClick = { ui.onChange(extensionId, spec.key, option) },
+                        )
+                        Text(
+                            option.replaceFirstChar { c -> c.uppercaseChar() },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+            }
+
+            else -> {
+                // Buffer edits locally and persist on focus loss — the async DataStore round-trip would
+                // otherwise clobber fast typing, and per-keystroke writes cause a save/reload storm.
+                var text by remember(extensionId, spec.key) { mutableStateOf(current) }
+                LaunchedEffect(current) { if (current != text) text = current }
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text(spec.label) },
+                    placeholder = { if (spec.default.isNotBlank()) Text(spec.default) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { if (!it.isFocused && text != current) ui.onChange(extensionId, spec.key, text) },
+                )
             }
         }
     }
@@ -710,6 +807,7 @@ private fun RequirementList(
     }
     deps.sdks.forEach { id -> DependencyRow(name = id, kind = "toolchain · $pendingSuffix") }
     deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server · $pendingSuffix") }
+    deps.dbg.forEach { id -> DependencyRow(name = id, kind = "debugger · $pendingSuffix") }
 }
 
 @Composable
@@ -765,6 +863,7 @@ private fun RequiredGroup(
     }
     deps.sdks.forEach { id -> DependencyRow(name = id, kind = "toolchain") { status(false) } }
     deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server") { status(false) } }
+    deps.dbg.forEach { id -> DependencyRow(name = id, kind = "debugger") { status(false) } }
 }
 
 @Composable
@@ -797,6 +896,7 @@ private fun SuggestedGroup(
     }
     deps.sdks.forEach { id -> DependencyRow(name = id, kind = "toolchain · install via Toolchains") {} }
     deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server · install via Toolchains") {} }
+    deps.dbg.forEach { id -> DependencyRow(name = id, kind = "debugger · install via Toolchains") {} }
 }
 
 @Composable

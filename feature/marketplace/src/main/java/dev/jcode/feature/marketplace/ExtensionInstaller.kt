@@ -328,7 +328,12 @@ class ExtensionInstaller internal constructor(context: Context) {
         val map = (raw as? Map<*, *>)?.toStringKeyMap() ?: return ExtensionDeps.EMPTY
         fun ids(key: String): List<String> =
             map.listOfAny(key).mapNotNull { it?.toString()?.takeIf(String::isNotBlank) }
-        return ExtensionDeps(sdks = ids("sdks"), lsps = ids("lsps"), extensions = ids("extensions"))
+        return ExtensionDeps(
+            sdks = ids("sdks"),
+            lsps = ids("lsps"),
+            dbg = ids("dbg") + ids("debuggers"),
+            extensions = ids("extensions"),
+        )
     }
 
     private fun parseContributions(raw: Any?): ExtensionContributions {

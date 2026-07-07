@@ -43,6 +43,24 @@ class BackendService : Service() {
         return START_NOT_STICKY
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        if (MainViewModel.exitOnSwipeAwayEnabled) {
+            // User opted to fully close on swipe-away: reap every proot tree (terminals + runs / VMs /
+            // language servers / debug adapters) so nothing lingers in the background, then stop the
+            // foreground service and kill the process. Without this the runtime keeps running headless.
+            runCatching { TerminalSessionHost.manager(applicationContext).closeAll() }
+            runCatching { MainViewModel.runtimeTeardown?.invoke() }
+            if (isForegroundActive) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                isForegroundActive = false
+            }
+            stopSelf()
+            android.os.Process.killProcess(android.os.Process.myPid())
+        } else {
+            super.onTaskRemoved(rootIntent)
+        }
+    }
+
     override fun onDestroy() {
         SessionRegistry.onServiceDestroyed()
         if (isForegroundActive) {

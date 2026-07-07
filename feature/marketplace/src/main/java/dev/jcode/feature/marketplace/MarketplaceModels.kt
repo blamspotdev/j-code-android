@@ -55,13 +55,15 @@ enum class ExtensionActivation {
     }
 }
 
-/** Things an extension requires or suggests be installed (ids). */
+/** Things an extension requires or suggests be installed (ids): toolchains, language servers, debug
+ *  engines (dbg), and other extensions. */
 data class ExtensionDeps(
     val sdks: List<String> = emptyList(),
     val lsps: List<String> = emptyList(),
+    val dbg: List<String> = emptyList(),
     val extensions: List<String> = emptyList(),
 ) {
-    val isEmpty: Boolean get() = sdks.isEmpty() && lsps.isEmpty() && extensions.isEmpty()
+    val isEmpty: Boolean get() = sdks.isEmpty() && lsps.isEmpty() && dbg.isEmpty() && extensions.isEmpty()
 
     companion object {
         val EMPTY = ExtensionDeps()
