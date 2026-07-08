@@ -5,6 +5,13 @@
     android:height="108dp"
     android:viewportWidth="6000"
     android:viewportHeight="6000">
+    <group
+        android:scaleX="0.8"
+        android:scaleY="0.8"
+        android:pivotX="3044"
+        android:pivotY="2975"
+        android:translateX="-44"
+        android:translateY="25">
     <path android:pathData="M1880,2073 c-25,12 -97,63 -160,112 -63,48 -144,111 -180,139 -94,73 -581,450 -672,519 -100,77 -138,145 -138,246 0,124 27,160 267,354 65,52 273,221 461,376 343,280 344,281 391,281 63,0 76,-15 140,-163 52,-120 59,-153 41,-187 -7,-13 -733,-602 -809,-657 -3,-2 5,-10 16,-18 12,-8 192,-147 400,-307 208,-161 404,-313 435,-336 73,-55 98,-105 98,-192 0,-128 -61,-190 -186,-190 -41,1 -73,8 -104,23Z">
         <aapt:attr name="android:fillColor">
             <gradient
@@ -59,4 +66,5 @@
             </gradient>
         </aapt:attr>
     </path>
+    </group>
 </vector>
