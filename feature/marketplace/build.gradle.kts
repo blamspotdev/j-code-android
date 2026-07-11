@@ -8,7 +8,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        minSdk = 28
+        minSdk = 33
     }
 
     compileOptions {
@@ -25,7 +25,7 @@ dependencies {
     implementation(libs.coroutines.android)
     implementation(libs.snakeyaml.engine)
     // Ed25519 signature verification for official (signed) .jext packages — used via BC's lightweight
-    // crypto API (Ed25519Signer), no JCA provider registration needed. Works down to minSdk 28.
+    // crypto API (Ed25519Signer), no JCA provider registration needed.
     implementation(libs.bouncycastle.provider)
     implementation(project(":core:distro"))
 }

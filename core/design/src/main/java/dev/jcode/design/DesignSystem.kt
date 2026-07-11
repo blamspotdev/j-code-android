@@ -114,7 +114,7 @@ class PerformanceSettings(
     val autoCloseIdleTerminals: Boolean = false,
     val idleTimeoutMinutes: Int = 30,
     val maxTerminalSessions: Int = 12,
-    val exitOnSwipeAway: Boolean = false,
+    val exitOnSwipeAway: Boolean = true,
     val onSetHardwareAcceleration: (Boolean) -> Unit = {},
     val onSetConfirmCloseRunning: (Boolean) -> Unit = {},
     val onSetAutoCloseIdleTerminals: (Boolean) -> Unit = {},

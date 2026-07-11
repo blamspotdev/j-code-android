@@ -1,7 +1,10 @@
 package dev.jcode.editor
 
+import dev.jcode.core.buffer.NativeHighlighter
+import dev.jcode.core.buffer.Snapshot
 import dev.jcode.core.editor.decor.ColoredSpan
 import dev.jcode.feature.marketplace.LanguagePack
+import java.util.WeakHashMap
 
 /** Token colors for syntax highlighting; chosen per light/dark theme. */
 data class TokenPalette(
@@ -69,6 +72,94 @@ object SyntaxHighlighter {
             lang != null -> highlight(text, lang, palette)
             else -> highlightGeneric(text, palette)
         }
+
+    /**
+     * Snapshot-based fast path: on the native buffer path the C++ tokenizers (highlight.cpp) read
+     * the snapshot's bytes directly — no full-file JNI copy, no UTF-16 decode, no byte-offset
+     * remapping, and one int array instead of thousands of boxed spans. Falls back to the Kotlin
+     * tokenizers (the reference implementation, kept verbatim above/below) when the snapshot is
+     * not native.
+     */
+    fun highlightFor(snapshot: Snapshot, fileName: String, lang: LanguagePack?, palette: TokenPalette): List<ColoredSpan> {
+        nativeSpans(snapshot, fileName, lang, palette)?.let { return it }
+        val text = runCatching { snapshot.readRangeAsUtf16(0, snapshot.byteLength) }.getOrDefault("")
+        return highlightFor(text, fileName, lang, palette)
+    }
+
+    // Internal (not private) so the on-device differential test can assert the native path ran
+    // rather than silently comparing the Kotlin fallback against itself.
+    internal fun nativeSpans(
+        snapshot: Snapshot,
+        fileName: String,
+        lang: LanguagePack?,
+        palette: TokenPalette,
+    ): List<ColoredSpan>? {
+        val (mode, profile) = when {
+            isMarkdownFile(fileName) -> NativeHighlighter.MODE_MARKDOWN to null
+            isJsonFile(fileName) -> NativeHighlighter.MODE_JSON to null
+            lang == null -> NativeHighlighter.MODE_TOKENIZE to genericProfile
+            isMarkupLanguage(lang) -> NativeHighlighter.MODE_MARKUP to null
+            isKeyValueLanguage(lang) -> NativeHighlighter.MODE_KEYVALUE to profileFor(lang)
+            else -> NativeHighlighter.MODE_TOKENIZE to profileFor(lang)
+        }
+        val packed = runCatching {
+            NativeHighlighter.highlight(snapshot, profile, mode, palette.toIntArray())
+        }.getOrNull() ?: return null
+        val spans = ArrayList<ColoredSpan>(packed.size / 4)
+        var i = 0
+        while (i < packed.size) {
+            spans.add(ColoredSpan(packed[i], packed[i + 1], packed[i + 2], packed[i + 3]))
+            i += 4
+        }
+        return spans
+    }
+
+    private fun TokenPalette.toIntArray(): IntArray = intArrayOf(
+        keyword, type, string, comment, number, function, variable, constant, property, operator, annotation,
+    )
+
+    private val genericProfile: NativeHighlighter.Profile by lazy {
+        NativeHighlighter.createProfile(
+            lineComments = GENERIC_LINE_COMMENTS,
+            blockStart = "/*",
+            blockEnd = "*/",
+            delimiters = GENERIC_STRING_DELIMS,
+            keywords = GENERIC_KEYWORDS,
+            types = GENERIC_TYPES,
+        )
+    }
+
+    // One marshalled native profile per pack; weak keys let replaced packs (extension updates)
+    // drop their profile, which the Profile Cleaner then frees.
+    private val packProfiles = WeakHashMap<LanguagePack, NativeHighlighter.Profile>()
+
+    private fun profileFor(lang: LanguagePack): NativeHighlighter.Profile = synchronized(packProfiles) {
+        packProfiles.getOrPut(lang) {
+            if (isKeyValueLanguage(lang)) {
+                val yaml = lang.languageId.lowercase() in YAML_LANGS
+                NativeHighlighter.createProfile(
+                    lineComments = listOfNotNull(lang.lineComment) +
+                        (if (lang.languageId.equals("ini", true)) listOf(";") else emptyList()),
+                    blockStart = null,
+                    blockEnd = null,
+                    delimiters = lang.stringDelimiters,
+                    keywords = lang.keywords,
+                    types = emptyList(),
+                    sep = if (yaml) ':' else '=',
+                    sections = !yaml,
+                )
+            } else {
+                NativeHighlighter.createProfile(
+                    lineComments = listOfNotNull(lang.lineComment),
+                    blockStart = lang.blockCommentStart,
+                    blockEnd = lang.blockCommentEnd,
+                    delimiters = lang.stringDelimiters,
+                    keywords = lang.keywords,
+                    types = lang.types,
+                )
+            }
+        }
+    }
 
     fun isMarkdownFile(name: String): Boolean {
         val l = name.lowercase()

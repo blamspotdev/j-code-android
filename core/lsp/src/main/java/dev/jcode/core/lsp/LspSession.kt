@@ -237,14 +237,20 @@ class LspSession(
 
         while (scope.isActive && _state.value != LspState.DISCONNECTED) {
             val pty = this.pty ?: break
-            val n = pty.read(buffer)
+            val n = try {
+                pty.read(buffer)
+            } catch (e: Exception) {
+                -1
+            }
             if (n > 0) {
                 accumulated += String(buffer, 0, n)
                 accumulated = processAccumulated(accumulated)
             } else if (n < 0) {
                 break
             } else {
-                delay(10)
+                // Idle: block in poll until the server writes (scope is Dispatchers.IO); the 1s
+                // timeout bounds teardown notice since close() doesn't wake an in-flight poll.
+                pty.awaitReadable(1000)
             }
         }
     }

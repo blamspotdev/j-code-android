@@ -15,7 +15,6 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import dev.jcode.core.buffer.EditTx
-import dev.jcode.core.resource.ResourceManagerLocator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.launchIn
@@ -83,6 +82,38 @@ class EditorView @JvmOverloads constructor(
 
     // sp→px factor; RenderConfig.fontSizeSp is in sp but Paint.textSize / layout math need px.
     private val density: Float get() = resources.displayMetrics.density
+
+    // One shared measurement paint for hit-testing / layout math, reconfigured only when the text size
+    // or typeface changes. Allocating a TextPaint per tap/measure showed up on the hit-test hot path.
+    private val measurePaint = android.text.TextPaint()
+    private var measurePaintSize = -1f
+    private var measurePaintTypeface: Typeface? = null
+
+    private fun measurePaintFor(config: RenderConfig): android.text.TextPaint {
+        val size = config.fontSizeSp * density
+        if (measurePaintSize != size || measurePaintTypeface !== typeface) {
+            measurePaint.textSize = size
+            measurePaint.typeface = typeface
+            measurePaintSize = size
+            measurePaintTypeface = typeface
+            measureAdvanceSize = -1f // typeface/size changed: force the advance cache to recompute
+        }
+        return measurePaint
+    }
+
+    // Monospace ASCII advance for the current measure-paint size; measureText("M") is exact for every
+    // ASCII glyph in a monospace font, so an all-ASCII line's column is a single division (mirrors
+    // Renderer.asciiAdvance).
+    private var measureAdvanceSize = -1f
+    private var measureAdvance = 0f
+
+    private fun asciiAdvance(paint: android.text.TextPaint): Float {
+        if (measureAdvanceSize != paint.textSize) {
+            measureAdvance = paint.measureText("M")
+            measureAdvanceSize = paint.textSize
+        }
+        return measureAdvance
+    }
 
     /** Invoked on long-press after the word under the finger is selected, so the host can show a
      *  context menu. [EditorContextRequest.word] is empty when the press wasn't on a word. */
@@ -176,8 +207,7 @@ class EditorView @JvmOverloads constructor(
         }
         observationScope?.cancel()
         this.editorState = editorState
-        val resourceManager = runCatching { ResourceManagerLocator.resourceManager(context) }.getOrNull()
-        this.renderer = Renderer(typeface, density, resourceManager)
+        this.renderer = Renderer(typeface, density)
         val scope = MainScope()
         observationScope = scope
 
@@ -351,17 +381,26 @@ class EditorView @JvmOverloads constructor(
         val (lineStart, lineEnd) = snapshot.lineAt(lineIndex)
         val lineText = snapshot.readRangeAsUtf16(lineStart, lineEnd)
         val xInText = x - gutterWidth - 8f
-        var col = 0
-        var measured = 0f
-        val paint = android.text.TextPaint().apply {
-            textSize = config.fontSizeSp * density
-            typeface = this@EditorView.typeface
-        }
+        val paint = measurePaintFor(config)
+        // Fast path: an all-printable-ASCII line advances by a constant amount in a monospace font, so
+        // the column is a single division. Non-ASCII (tabs, wide glyphs) falls back to per-char measure.
+        var allAscii = true
         for (i in lineText.indices) {
-            val charWidth = paint.measureText(lineText[i].toString())
-            if (measured + charWidth > xInText) break
-            measured += charWidth
-            col++
+            if (lineText[i].code !in 0x20..0x7E) { allAscii = false; break }
+        }
+        val col = if (allAscii) {
+            val advance = asciiAdvance(paint)
+            if (advance <= 0f) 0 else (xInText / advance).toInt().coerceIn(0, lineText.length)
+        } else {
+            var c = 0
+            var measured = 0f
+            for (i in lineText.indices) {
+                val charWidth = paint.measureText(lineText[i].toString())
+                if (measured + charWidth > xInText) break
+                measured += charWidth
+                c++
+            }
+            c
         }
         return snapshot.lineColumnToOffset(lineIndex, col)
     }
@@ -420,12 +459,8 @@ class EditorView @JvmOverloads constructor(
         val lineHeight = (config.fontSizeSp * density * config.lineHeightMultiplier).toInt().coerceAtLeast(1)
         val (lineStart, _) = snapshot.lineAt(line)
         val prefixText = snapshot.readRangeAsUtf16(lineStart, offset)
-        val paint = android.text.TextPaint().apply {
-            textSize = config.fontSizeSp * density
-            typeface = this@EditorView.typeface
-        }
         val gutter = computeGutterWidth(snapshot, config)
-        val x = gutter + 8f + paint.measureText(prefixText)
+        val x = gutter + 8f + measurePaintFor(config).measureText(prefixText)
         val y = ((line + 1) * lineHeight - state.viewport.value.scrollY).toFloat()
         return x to y
     }
@@ -635,10 +670,7 @@ class EditorView @JvmOverloads constructor(
     private fun moveCaretByDrag(state: EditorState, distanceX: Float, distanceY: Float) {
         val cfg = state.renderConfig.value
         val lineHeight = (cfg.fontSizeSp * density * cfg.lineHeightMultiplier).toInt().coerceAtLeast(1)
-        val charWidth = android.text.TextPaint().apply {
-            textSize = cfg.fontSizeSp * density
-            typeface = this@EditorView.typeface
-        }.measureText("0").coerceAtLeast(1f)
+        val charWidth = measurePaintFor(cfg).measureText("0").coerceAtLeast(1f)
         val vStep = (lineHeight * dragStepScale(cursorDragVerticalLevel)).coerceAtLeast(1f)
         val hStep = (charWidth * dragStepScale(cursorDragHorizontalLevel)).coerceAtLeast(1f)
         // onScroll distance is (previous - current); negate so a down/right drag advances the caret.
@@ -718,11 +750,7 @@ class EditorView @JvmOverloads constructor(
         val lineCount = snapshot.lineCount
         val digits = lineCount.toString().length.coerceAtLeast(3)
         val sample = "9".repeat(digits)
-        val paint = android.text.TextPaint().apply {
-            textSize = config.fontSizeSp * density
-            typeface = this@EditorView.typeface
-        }
-        return (paint.measureText(sample) + 24).toInt()
+        return (measurePaintFor(config).measureText(sample) + 24).toInt()
     }
 
     private companion object {

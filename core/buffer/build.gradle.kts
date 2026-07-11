@@ -8,7 +8,8 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        minSdk = 28
+        minSdk = 33
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -24,4 +25,10 @@ android {
 dependencies {
     implementation(libs.coroutines.core)
     testImplementation(libs.junit)
+    // The differential fuzz needs internal access to Buffer(useNative=) plus libjcodebuffer.so
+    // in the test APK — the app gets the .so via :native:buffer, so the androidTest must too.
+    androidTestImplementation(project(":native:buffer"))
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
 }

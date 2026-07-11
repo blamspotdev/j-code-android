@@ -2,53 +2,33 @@ package dev.jcode.core.editor
 
 import android.graphics.Canvas
 import android.graphics.Paint
-import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.TextPaint
+import dev.jcode.core.buffer.LineWindow
 import dev.jcode.core.buffer.Snapshot
 import dev.jcode.core.editor.decor.ColoredSpan
+import dev.jcode.core.editor.decor.Decoration
 import dev.jcode.core.editor.decor.DecorationSet
 import dev.jcode.core.editor.decor.GutterMarkerDecoration
+import dev.jcode.core.editor.decor.Layer
 import dev.jcode.core.editor.decor.LineHighlightDecoration
 import dev.jcode.core.editor.decor.SquiggleDecoration
-import dev.jcode.core.resource.LruManagedCache
-import dev.jcode.core.resource.ResourceManager
-import java.nio.charset.StandardCharsets
-
-/**
- * Key for the line shape cache.
- */
-private data class LineShapeKey(
-    val lineContent: String,
-    val fontSize: Float,
-    val tabWidth: Int,
-)
-
-/**
- * Pre-shaped line data for rendering.
- */
-private data class ShapedLine(
-    val text: String,
-    val widthPx: Float,
-    val tabOffsets: List<Float> = emptyList(),
-)
 
 /**
  * Renderer for the EditorView. Handles visible line computation, shaping,
  * and layered drawing (selection, glyphs, carets, gutter).
+ *
+ * Per-frame costs are kept flat in file size: the visible lines arrive as ONE batched native
+ * read ([Snapshot.readLines]) instead of two JNI calls + an allocation per line, and syntax
+ * coloring sweeps the byte-sorted span list with a cursor instead of scanning the whole file's
+ * spans per character.
  */
 class Renderer(
     private val typeface: Typeface,
     // Display density (px per dp). fontSizeSp (sp) must be multiplied by this to get the px that
     // Paint.textSize expects; without it, text renders ~density× too small on high-DPI screens.
     private val density: Float = 1f,
-    resourceManager: ResourceManager? = null,
 ) {
-    private val lineShapeCache = LruManagedCache<LineShapeKey, ShapedLine>(
-        name = "EditorLineShapeCache",
-        maxSize = 5000,
-    ).also { resourceManager?.registerCache(it) }
-
     private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         isSubpixelText = true
         this.typeface = this@Renderer.typeface
@@ -77,6 +57,11 @@ class Renderer(
         strokeWidth = 2f
     }
 
+    // The GLYPH_COLOR layer list is stable per DecorationSet instance, so the filterIsInstance
+    // pass (O(spans) + a list copy) runs once per decoration change, not once per frame.
+    private var cachedSpanSource: List<Decoration>? = null
+    private var cachedSpans: List<ColoredSpan> = emptyList()
+
     fun draw(canvas: Canvas, snapshot: Snapshot, viewport: Viewport, config: RenderConfig, carets: List<Caret>, decorations: DecorationSet = DecorationSet.EMPTY, theme: EditorTheme = EditorTheme.DARK) {
         // Configure paint for current config. fontSizeSp is in sp; Paint.textSize is in px, so convert
         // via the display density (a missing conversion renders text ~density× too small).
@@ -93,18 +78,26 @@ class Renderer(
 
         val visibleTop = viewport.visibleLineTop
         val visibleBottom = snapshot.lineCount.coerceAtMost(viewport.visibleLineBottom + 1)
+        val window = snapshot.readLines(visibleTop, (visibleBottom - visibleTop).coerceAtLeast(0))
 
         val gutterWidth = computeGutterWidth(snapshot, config)
 
         // Get colored spans for syntax highlighting
-        val coloredSpans = decorations.atLayer(dev.jcode.core.editor.decor.Layer.GLYPH_COLOR)
-            .filterIsInstance<ColoredSpan>()
+        val spanSource = decorations.atLayer(Layer.GLYPH_COLOR)
+        if (spanSource !== cachedSpanSource) {
+            cachedSpans = spanSource.filterIsInstance<ColoredSpan>()
+            cachedSpanSource = spanSource
+        }
+        val coloredSpans = cachedSpans
+
+        // Caret lines, computed once — the per-line loop below only does set lookups.
+        val caretLines = carets.mapTo(HashSet()) { snapshot.offsetToLineColumn(it.head).first }
 
         // Draw gutter background
         canvas.drawRect(0f, 0f, gutterWidth.toFloat(), viewport.heightPx.toFloat(), gutterBgPaint)
 
         // Full-line background highlights (e.g. the current stopped line while debugging).
-        val lineHighlights = decorations.atLayer(dev.jcode.core.editor.decor.Layer.BACKGROUND)
+        val lineHighlights = decorations.atLayer(Layer.BACKGROUND)
             .filterIsInstance<LineHighlightDecoration>()
         for (hl in lineHighlights) {
             if (hl.line in visibleTop until visibleBottom) {
@@ -119,13 +112,16 @@ class Renderer(
             if (caret.isSelection) {
                 val startLine = snapshot.offsetToLineColumn(caret.start).first
                 val endLine = snapshot.offsetToLineColumn(caret.end).first
-                for (line in startLine..endLine) {
-                    if (line in visibleTop until visibleBottom) {
-                        val (lineStart, lineEnd) = snapshot.lineAt(line)
+                // Clamp the iteration to the visible slice so a huge selection costs O(visible), not
+                // O(selection); the bounds cover exactly the lines that passed the in-body check before.
+                for (line in maxOf(startLine, visibleTop) until minOf(endLine + 1, visibleBottom)) {
+                    if (window.contains(line)) {
+                        val lineStart = window.byteStart(line)
+                        val lineEnd = window.byteEnd(line)
                         val selStart = if (line == startLine) (caret.start - lineStart).coerceAtLeast(0) else 0
                         val selEnd = if (line == endLine) (caret.end - lineStart).coerceAtMost(lineEnd - lineStart) else (lineEnd - lineStart)
                         if (selStart < selEnd) {
-                            val lineText = snapshot.readRangeAsUtf16(lineStart, lineEnd)
+                            val lineText = window.text(line)
                             val xStart = gutterWidth + measureTextWidth(lineText.substring(0, selEnd), config)
                             val xEnd = gutterWidth + measureTextWidth(lineText.substring(0, selStart), config)
                             val y = (line - visibleTop) * lineHeightPx + viewport.scrollY % lineHeightPx
@@ -138,14 +134,13 @@ class Renderer(
 
         // Draw lines
         for (line in visibleTop until visibleBottom) {
-            if (line >= snapshot.lineCount) break
+            if (!window.contains(line)) break
 
             val y = (line - visibleTop) * lineHeightPx + viewport.scrollY % lineHeightPx
-            val (lineStart, lineEnd) = snapshot.lineAt(line)
-            val lineText = snapshot.readRangeAsUtf16(lineStart, lineEnd)
+            val lineText = window.text(line)
 
             // Draw line number
-            lineNumberPaint.color = if (carets.any { snapshot.offsetToLineColumn(it.head).first == line }) {
+            lineNumberPaint.color = if (line in caretLines) {
                 theme.lineNumberActive.toInt()
             } else {
                 theme.lineNumber.toInt()
@@ -159,7 +154,7 @@ class Renderer(
 
             // Draw line text with syntax highlighting
             if (coloredSpans.isNotEmpty()) {
-                drawLineWithSpans(canvas, lineText, lineStart, lineEnd, coloredSpans, gutterWidth + 8f, y + lineHeightPx * 0.7f, config)
+                drawLineWithSpans(canvas, lineText, window.byteStart(line), coloredSpans, gutterWidth + 8f, y + lineHeightPx * 0.7f, config)
             } else {
                 textPaint.color = theme.foreground.toInt()
                 canvas.drawText(lineText, gutterWidth + 8f, y + lineHeightPx * 0.7f, textPaint)
@@ -167,17 +162,20 @@ class Renderer(
         }
 
         // Squiggly diagnostic underlines, drawn just below each affected line's text baseline.
-        val squiggles = decorations.atLayer(dev.jcode.core.editor.decor.Layer.SQUIGGLY)
+        val squiggles = decorations.atLayer(Layer.SQUIGGLY)
             .filterIsInstance<SquiggleDecoration>()
         for (sq in squiggles) {
             val sqStart = sq.startByte.coerceAtLeast(0)
             val sqEnd = sq.endByte.coerceAtLeast(sqStart)
             val startLine = snapshot.offsetToLineColumn(sqStart).first
             val endLine = snapshot.offsetToLineColumn(sqEnd).first
-            for (line in startLine..endLine) {
-                if (line !in visibleTop until visibleBottom) continue
-                val (lineStart, lineEnd) = snapshot.lineAt(line)
-                val lineText = snapshot.readRangeAsUtf16(lineStart, lineEnd)
+            // Clamp to the visible slice so a file-spanning diagnostic costs O(visible), not O(range);
+            // the bounds cover exactly the lines that passed the in-body visibility check before.
+            for (line in maxOf(startLine, visibleTop) until minOf(endLine + 1, visibleBottom)) {
+                if (!window.contains(line)) continue
+                val lineStart = window.byteStart(line)
+                val lineEnd = window.byteEnd(line)
+                val lineText = window.text(line)
                 val c0 = (if (line == startLine) sqStart - lineStart else 0)
                     .coerceIn(0, lineText.length)
                 val c1 = (if (line == endLine) sqEnd - lineStart else lineEnd - lineStart)
@@ -192,7 +190,7 @@ class Renderer(
         }
 
         // Gutter markers: breakpoint dots + the current-execution marker, drawn in the gutter's left inset.
-        val gutterMarkers = decorations.atLayer(dev.jcode.core.editor.decor.Layer.GUTTER)
+        val gutterMarkers = decorations.atLayer(Layer.GUTTER)
             .filterIsInstance<GutterMarkerDecoration>()
         for (marker in gutterMarkers) {
             if (marker.line in visibleTop until visibleBottom) {
@@ -216,9 +214,8 @@ class Renderer(
         // Draw cursors
         for (caret in carets) {
             val (line, col) = snapshot.offsetToLineColumn(caret.head)
-            if (line in visibleTop until visibleBottom) {
-                val (lineStart, lineEnd) = snapshot.lineAt(line)
-                val lineText = snapshot.readRangeAsUtf16(lineStart, lineEnd)
+            if (line in visibleTop until visibleBottom && window.contains(line)) {
+                val lineText = window.text(line)
                 val visibleText = lineText.substring(0, col.coerceAtMost(lineText.length))
                 val x = gutterWidth + 8f + measureTextWidth(visibleText, config)
                 val y = (line - visibleTop) * lineHeightPx + viewport.scrollY % lineHeightPx
@@ -231,27 +228,36 @@ class Renderer(
         canvas: Canvas,
         lineText: String,
         lineStartByte: Int,
-        lineEndByte: Int,
         spans: List<ColoredSpan>,
         x: Float,
         y: Float,
         config: RenderConfig,
     ) {
+        // Spans are byte-sorted and non-overlapping (one tokenizer produces the layer), so a
+        // single forward cursor resolves every character's color: seed with a binary search,
+        // then advance while walking the line.
+        var spanIndex = ColoredSpan.firstSpanIndexFor(spans, lineStartByte)
+        val defaultColor = 0xFFCDD6F4.toInt()
+
+        fun colorFor(byteOffset: Int): Int {
+            while (spanIndex < spans.size && spans[spanIndex].endByte <= byteOffset) spanIndex++
+            val span = spans.getOrNull(spanIndex) ?: return defaultColor
+            return if (byteOffset >= span.startByte) span.color else defaultColor
+        }
+
         var currentX = x
         var charIndex = 0
-
         while (charIndex < lineText.length) {
-            val byteOffset = lineStartByte + charIndex
-
-            // Find the color for this position
-            val color = ColoredSpan.colorAt(spans, byteOffset) ?: 0xFFCDD6F4.toInt()
+            val color = colorFor(lineStartByte + charIndex)
 
             // Find how far this color extends
             var endChar = charIndex + 1
             while (endChar < lineText.length) {
-                val nextByteOffset = lineStartByte + endChar
-                val nextColor = ColoredSpan.colorAt(spans, nextByteOffset) ?: 0xFFCDD6F4.toInt()
-                if (nextColor != color) break
+                val savedIndex = spanIndex
+                if (colorFor(lineStartByte + endChar) != color) {
+                    spanIndex = savedIndex
+                    break
+                }
                 endChar++
             }
 
@@ -271,16 +277,29 @@ class Renderer(
         return (measureTextWidth(sample, config) + 24).toInt()
     }
 
-    private fun getShapedLine(text: String, config: RenderConfig): ShapedLine {
-        val key = LineShapeKey(text, config.fontSizeSp, config.tabWidth)
-        return lineShapeCache.get(key) ?: run {
-            val width = measureTextWidth(text, config)
-            ShapedLine(text, width).also { lineShapeCache.put(key, it) }
+    // Monospace advance for the current text size; measureText("M") is exact for every ASCII glyph
+    // in a monospace font (JetBrains Mono), so an all-ASCII run's width is just count × advance —
+    // no minikin call per span run per line per frame, which is the scroll hot path on slow SoCs.
+    private var cachedAdvanceSize = -1f
+    private var cachedAdvance = 0f
+
+    private fun asciiAdvance(): Float {
+        if (textPaint.textSize != cachedAdvanceSize) {
+            cachedAdvance = textPaint.measureText("M")
+            cachedAdvanceSize = textPaint.textSize
         }
+        return cachedAdvance
     }
 
     private fun measureTextWidth(text: String, config: RenderConfig): Float {
         if (text.isEmpty()) return 0f
+        // Fast path: a run of printable ASCII advances by a constant amount in a monospace font.
+        // Tabs (0x09) and non-ASCII fall through to exact measurement.
+        var allAscii = true
+        for (i in text.indices) {
+            if (text[i].code !in 0x20..0x7E) { allAscii = false; break }
+        }
+        if (allAscii) return text.length * asciiAdvance()
         return textPaint.measureText(text)
     }
 }

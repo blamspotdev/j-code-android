@@ -49,7 +49,7 @@ on arm64 (AYN Odin2). Honest gaps, not yet wired:
 ## Build
 
 Requirements: **JDK 21**, the Android SDK (`compileSdk 36`), **NDK r27c**
-(`27.2.12479018`), and CMake 3.28+. `minSdk 28`. AGP 8.7.x / Gradle 8.11.x.
+(`27.2.12479018`), and CMake 3.28+. `minSdk`/`targetSdk` 33 (Android 13+). AGP 8.13.x / Gradle 8.14.x.
 
 ```bash
 git clone https://github.com/blamspotdev/j-code-android.git

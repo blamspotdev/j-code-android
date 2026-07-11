@@ -12,12 +12,17 @@ import java.io.FileOutputStream
 class ProotManager(private val context: Context) {
     companion object {
         private const val REPORTED_KERNEL_RELEASE = "6.1.0"
+
+        // Bump when the bundled support-lib assets (libtalloc, libandroid-shmem) change, so
+        // existing installs re-extract them on the next runtime prep. v2 = memfd libandroid-shmem
+        // (see native/proot/libandroid-shmem/README.md).
+        private const val SUPPORT_LIBS_VERSION = 2
     }
 
     
     private val appContext = context.applicationContext
     
-    /** Directory where proot and its libraries are extracted */
+    /** Directory where proot's support libraries are extracted */
     private val prootDir: File
         get() = File(appContext.filesDir, "bin/proot")
 
@@ -41,23 +46,31 @@ class ProotManager(private val context: Context) {
     val prootTmpPath: String
         get() = prootTmpDir.absolutePath
 
+    @Volatile
+    private var runtimePrepared = false
+
+    @Volatile
+    private var transferDirReady = false
+
     /**
-     * Ensure the proot temp directory exists and is writable.
-     * Called before every proot invocation to handle cases where
-     * the directory was cleared or never created.
+     * Ensure the proot temp directory exists and is writable. Called before every proot
+     * invocation; after the first successful prep it costs a single stat (recovers with a full
+     * re-prep if the directory was cleared). The one-time prep also deletes proot/loader
+     * binaries extracted by pre-jniLibs app versions — dead weight that W^X forbids exec'ing —
+     * and re-extracts the support libs when an app update shipped newer ones.
      */
     fun ensureProotTmpDir(): Boolean {
+        if (runtimePrepared && prootTmpDir.isDirectory) return true
         return try {
-            // Use app's own filesDir which is always writable
-            val created = prootTmpDir.mkdirs()
-            
-            // Verify it exists and is writable
-            val exists = prootTmpDir.exists()
-            val canWrite = prootTmpDir.canWrite()
-            
-            android.util.Log.d("ProotManager", "ensureProotTmpDir: path=${prootTmpDir.absolutePath}, created=$created, exists=$exists, canWrite=$canWrite")
-            
-            exists && canWrite
+            listOf("proot", "loader", "loader32").forEach { File(prootDir, it).delete() }
+            if (!supportLibsFresh()) extractSupportLibs()
+            prootTmpDir.mkdirs()
+            val ok = prootTmpDir.exists() && prootTmpDir.canWrite()
+            if (!ok) {
+                android.util.Log.e("ProotManager", "ensureProotTmpDir: ${prootTmpDir.absolutePath} missing or not writable")
+            }
+            runtimePrepared = ok
+            ok
         } catch (e: Exception) {
             android.util.Log.e("ProotManager", "ensureProotTmpDir: failed", e)
             false
@@ -68,29 +81,71 @@ class ProotManager(private val context: Context) {
     private val libtallocBinary: File
         get() = File(libtallocDir, "libtalloc.so.2")
 
-    /** Path to libandroid-shmem (NEEDED by the proot binary for SysV shared memory). */
+    /** Path to libandroid-shmem (NEEDED by the proot binary; backs the --sysvipc extension). */
     private val shmemBinary: File
         get() = File(libtallocDir, "libandroid-shmem.so")
 
-    /** Path to the extracted proot binary */
+    /** Marker recording which SUPPORT_LIBS_VERSION the extracted libs came from. */
+    private val supportLibsMarker: File
+        get() = File(libtallocDir, ".version")
+
+    private fun supportLibsFresh(): Boolean =
+        libtallocBinary.exists() && shmemBinary.exists() &&
+            runCatching { supportLibsMarker.readText().trim() }.getOrNull() == SUPPORT_LIBS_VERSION.toString()
+
+    private fun extractSupportLibs(): Boolean = try {
+        val abi = detectAbi()
+        libtallocDir.mkdirs()
+        listOf(
+            "bin/libtalloc-$abi.so" to libtallocBinary,
+            "bin/libandroid-shmem-$abi.so" to shmemBinary,
+        ).forEach { (asset, target) ->
+            android.util.Log.d("ProotManager", "extractSupportLibs: extracting $asset")
+            appContext.assets.open(asset).use { input ->
+                FileOutputStream(target).use { output -> input.copyTo(output) }
+            }
+            target.setReadable(true, false)
+            target.setExecutable(true, false)
+        }
+        supportLibsMarker.writeText(SUPPORT_LIBS_VERSION.toString())
+        true
+    } catch (e: Exception) {
+        android.util.Log.e("ProotManager", "extractSupportLibs: failed", e)
+        false
+    }
+
+    /**
+     * proot and its loaders ship as jniLibs and are exec'd from the app's native library dir:
+     * at targetSdk >= 29 SELinux (W^X) denies execve() on anything under filesDir, and the
+     * native library dir is the only app-owned location exec is still allowed from. The
+     * mmap-only libraries (libtalloc, libandroid-shmem) stay asset-extracted under filesDir,
+     * which W^X permits.
+     */
+    private val nativeLibDir: File
+        get() = File(appContext.applicationInfo.nativeLibraryDir)
+
+    /** Path to the proot binary (a jniLib, exec'd in place). */
     val prootBinary: File
-        get() = File(prootDir, "proot")
+        get() = File(nativeLibDir, "libproot.so")
 
     /** proot's helper loader (maps guest ELFs); referenced via the PROOT_LOADER env var. */
     val loaderBinary: File
-        get() = File(prootDir, "loader")
+        get() = File(nativeLibDir, "libproot-loader.so")
 
     /** proot's 32-bit helper loader; referenced via PROOT_LOADER_32. */
     val loader32Binary: File
-        get() = File(prootDir, "loader32")
+        get() = File(nativeLibDir, "libproot-loader32.so")
 
     /**
-     * Whether proot has been fully extracted. Requires the loader too: an older install that only
-     * has proot+libtalloc (no loader) is treated as not-installed so it re-extracts the full set.
+     * Whether the proot runtime is usable: jniLib binaries present + support libs extracted.
+     * Deliberately NOT gated on [supportLibsFresh]: outdated-but-present support libs still mean
+     * "installed" (otherwise upgraded installs would bounce back to setup); they are refreshed
+     * by the pre-spawn prep in [ensureProotTmpDir].
      */
     val isProotInstalled: Boolean
         get() = prootBinary.exists() && prootBinary.canExecute() &&
-            libtallocBinary.exists() && loaderBinary.exists() && loaderBinary.canExecute()
+            loaderBinary.exists() && loaderBinary.canExecute() &&
+            libtallocBinary.exists() && shmemBinary.exists()
     
     /**
      * Detect the current device's primary ABI.
@@ -131,6 +186,10 @@ class ProotManager(private val context: Context) {
      * NOTE: shipping/sourcing a working static `qemu-x86_64` for Android arm64 is an external task —
      * see the migration plan. Until the asset exists this returns false and emulated environments
      * cannot start; native (same-arch) environments are unaffected.
+     *
+     * W^X WARNING (targetSdk >= 29): proot execve()s the `--qemu` binary on the host, so an
+     * asset extracted to filesDir can no longer be exec'd. At qemu bring-up, ship it as a jniLib
+     * (e.g. libqemu-x86_64.so) and point this at nativeLibraryDir, like proot itself.
      */
     suspend fun ensureQemuInstalled(rootfsArch: Arch): Boolean {
         if (isQemuInstalled(rootfsArch)) return true
@@ -171,78 +230,17 @@ class ProotManager(private val context: Context) {
     }
     
     /**
-     * Extract the proot binary and libtalloc from assets to app-private storage.
-     * Safe to call multiple times - skips if already extracted and valid.
+     * Extract proot's support libraries (libtalloc, libandroid-shmem) from assets to
+     * app-private storage. The exec'able binaries (proot + loaders) need no extraction —
+     * they ship as jniLibs. Safe to call multiple times - skips if already extracted and valid.
      */
     suspend fun ensureProotInstalled(): Boolean {
-        // Check if already installed
         if (isProotInstalled) return true
-        
-        val abi = detectAbi()
-        android.util.Log.d("ProotManager", "ensureProotInstalled: abi=$abi")
-        
-        return try {
-            prootDir.mkdirs()
-
-            // Extract proot binary (dynamically linked, requires libtalloc)
-            val prootAsset = "bin/proot-$abi"
-            android.util.Log.d("ProotManager", "ensureProotInstalled: extracting $prootAsset")
-            appContext.assets.open(prootAsset).use { input ->
-                FileOutputStream(prootBinary).use { output ->
-                    input.copyTo(output)
-                }
-            }
-            prootBinary.setExecutable(true, false)
-            prootBinary.setReadable(true, false)
-
-            // Extract libtalloc shared library
-            libtallocDir.mkdirs()
-            val libtallocAsset = "bin/libtalloc-$abi.so"
-            android.util.Log.d("ProotManager", "ensureProotInstalled: extracting $libtallocAsset")
-            appContext.assets.open(libtallocAsset).use { input ->
-                FileOutputStream(libtallocBinary).use { output ->
-                    input.copyTo(output)
-                }
-            }
-            libtallocBinary.setReadable(true, false)
-            libtallocBinary.setExecutable(true, false)
-
-            // Extract libandroid-shmem (NEEDED by the proot binary for SysV shared memory).
-            val shmemAsset = "bin/libandroid-shmem-$abi.so"
-            android.util.Log.d("ProotManager", "ensureProotInstalled: extracting $shmemAsset")
-            appContext.assets.open(shmemAsset).use { input ->
-                FileOutputStream(shmemBinary).use { output -> input.copyTo(output) }
-            }
-            shmemBinary.setReadable(true, false)
-            shmemBinary.setExecutable(true, false)
-
-            // Extract proot's helper loaders. proot cannot map any guest ELF without these
-            // (referenced via PROOT_LOADER / PROOT_LOADER_32); without them every guest execve
-            // fails with ENOENT.
-            val loaderAsset = "bin/loader-$abi"
-            android.util.Log.d("ProotManager", "ensureProotInstalled: extracting $loaderAsset")
-            appContext.assets.open(loaderAsset).use { input ->
-                FileOutputStream(loaderBinary).use { output -> input.copyTo(output) }
-            }
-            loaderBinary.setExecutable(true, false)
-            loaderBinary.setReadable(true, false)
-
-            val loader32Asset = "bin/loader32-$abi"
-            appContext.assets.open(loader32Asset).use { input ->
-                FileOutputStream(loader32Binary).use { output -> input.copyTo(output) }
-            }
-            loader32Binary.setExecutable(true, false)
-            loader32Binary.setReadable(true, false)
-
-            // Create proot temp directory (for glue rootfs, f2fs probe, etc.)
-            prootTmpDir.mkdirs()
-
-            android.util.Log.d("ProotManager", "ensureProotInstalled: prootBinary.exists=${prootBinary.exists()}, canExecute=${prootBinary.canExecute()}")
-            isProotInstalled
-        } catch (e: Exception) {
-            android.util.Log.e("ProotManager", "ensureProotInstalled: failed", e)
-            false
-        }
+        extractSupportLibs()
+        // Create proot temp directory (for glue rootfs, f2fs probe, etc.)
+        prootTmpDir.mkdirs()
+        android.util.Log.d("ProotManager", "ensureProotInstalled: prootBinary.exists=${prootBinary.exists()}, canExecute=${prootBinary.canExecute()}")
+        return isProotInstalled
     }
     
     /**
@@ -254,7 +252,6 @@ class ProotManager(private val context: Context) {
         binds: List<DistroBind> = emptyList(),
         workdir: String = DEFAULT_DISTRO_WORKDIR,
         rootfsArch: Arch = Arch.ARM64,
-        noSeccomp: Boolean = false,
     ): List<String> {
         // Ensure temp directory exists before building command
         ensureProotTmpDir()
@@ -291,9 +288,12 @@ class ProotManager(private val context: Context) {
         // Shared transfer dir for the extension `file.import` bridge: SAF-picked files are stream-copied
         // to this host dir by the app so extensions can reach them by a runtime path (/jcode-transfer)
         // and stream them onward (e.g. scp a .bak into a DB VM) without a base64 round-trip. Bound only
-        // when it exists/creatable on the host so this stays a no-op on devices without the folder.
+        // when it exists/creatable on the host so this stays a no-op on devices without the folder
+        // (e.g. All-files access not granted). Once available it can't silently vanish mid-run, so a
+        // positive result is cached to skip the per-spawn stat on (slow) emulated storage.
         val transferDir = File("/storage/emulated/0/JCode/.jcode-transfer")
-        if (transferDir.exists() || transferDir.mkdirs()) {
+        if (transferDirReady || transferDir.exists() || transferDir.mkdirs()) {
+            transferDirReady = true
             args.addAll(listOf("-b", "${transferDir.absolutePath}:/jcode-transfer"))
         }
 
@@ -311,6 +311,13 @@ class ProotManager(private val context: Context) {
         // devices, not others. Standard proot option (Termux/proot-distro enable it by default);
         // required for apt/dpkg to work uniformly across devices.
         args.add("--link2symlink")
+
+        // Emulate SysV IPC (shmget/shmat/...) for guests. Android kernels ship with
+        // CONFIG_SYSVIPC off, so without this extension those syscalls return ENOSYS; with it,
+        // proot backs segments via the bundled memfd libandroid-shmem
+        // (native/proot/libandroid-shmem/README.md). Device-verified: single- and
+        // cross-process shm attach both work.
+        args.add("--sysvipc")
 
         // Report a modern kernel release to reduce false "unknown syscall" warnings.
         args.addAll(listOf("-k", REPORTED_KERNEL_RELEASE))
@@ -347,7 +354,6 @@ class ProotManager(private val context: Context) {
         workdir: String = DEFAULT_DISTRO_WORKDIR,
         user: String = DEFAULT_DISTRO_USER,
         rootfsArch: Arch = Arch.ARM64,
-        noSeccomp: Boolean = false,
     ): List<String> {
         val defaultEnv = if (user == "root") {
             mapOf(
@@ -390,7 +396,6 @@ class ProotManager(private val context: Context) {
             binds = binds,
             workdir = workdir,
             rootfsArch = rootfsArch,
-            noSeccomp = noSeccomp,
         )
     }
     
@@ -404,7 +409,6 @@ class ProotManager(private val context: Context) {
         workdir: String = DEFAULT_DISTRO_WORKDIR,
         user: String = DEFAULT_DISTRO_USER,
         rootfsArch: Arch = Arch.ARM64,
-        noSeccomp: Boolean = false,
     ): List<String> {
         return buildProotCommand(
             rootfsPath = rootfsPath,
@@ -412,7 +416,6 @@ class ProotManager(private val context: Context) {
             binds = binds,
             workdir = workdir,
             rootfsArch = rootfsArch,
-            noSeccomp = noSeccomp,
         )
     }
 

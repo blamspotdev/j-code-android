@@ -1,8 +1,9 @@
 package dev.jcode.feature.onboarding
 
-import android.Manifest
-import android.content.Context
-import android.content.pm.PackageManager
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -132,7 +133,7 @@ object OnboardingFeature {
             shape = RoundedCornerShape(0.dp),
             // Surface the storage step here too so existing installs (which never see the
             // first-run screen again) still get a path to grant shared-storage access.
-            showStorageStep = remember { !hasStorageAccess(context) },
+            showStorageStep = remember { !hasStorageAccess() },
             onStorageAccessGranted = manager.onStorageAccessGranted,
             installedEnvironments = manager.environments,
             onSwitchEnvironment = manager.onSwitch,
@@ -168,14 +169,14 @@ private fun StepperScreen(
     val context = LocalContext.current
     // Storage grant gates distro selection: nothing can install into /JCode until it's granted.
     // When the storage step isn't shown (existing installs), there is nothing to gate on.
-    var storageGranted by remember { mutableStateOf(hasStorageAccess(context)) }
+    var storageGranted by remember { mutableStateOf(hasStorageAccess()) }
     // The grant can also happen OUTSIDE the in-app dialog — the user flips File access in Android
     // Settings (before or during onboarding) and comes back. That path never fires the permission
     // launcher's callback, so re-check on every resume; otherwise Step 1 stays unchecked forever.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME && !storageGranted && hasStorageAccess(context)) {
+            if (event == Lifecycle.Event.ON_RESUME && !storageGranted && hasStorageAccess()) {
                 storageGranted = true
                 onStorageAccessGranted()
             }
@@ -607,12 +608,10 @@ private fun Header() {
     }
 }
 
-// Either grant works for /JCode: the legacy Files & media permission (the one our in-app dialog
-// requests, honored via requestLegacyExternalStorage) OR "All files access" — which users often
-// flip manually in Android Settings and which never shows up as WRITE_EXTERNAL_STORAGE.
-private fun hasStorageAccess(context: Context): Boolean =
-    context.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED ||
-        (android.os.Build.VERSION.SDK_INT >= 30 && android.os.Environment.isExternalStorageManager())
+// /JCode lives on shared storage; at targetSdk 33 the only grant that gives raw file-path access
+// to it is "All files access" (MANAGE_EXTERNAL_STORAGE) — a system-settings toggle, not a runtime
+// permission dialog.
+private fun hasStorageAccess(): Boolean = android.os.Environment.isExternalStorageManager()
 
 /** Runtime storage grant so projects can live in the shared /storage/emulated/0/JCode folder. */
 @Composable
@@ -625,9 +624,9 @@ private fun StorageAccessCard(
     val context = LocalContext.current
     var deniedOnce by rememberSaveable { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions(),
+        ActivityResultContracts.StartActivityForResult(),
     ) {
-        val now = hasStorageAccess(context)
+        val now = hasStorageAccess()
         if (now && !granted) onGranted()
         if (!now) deniedOnce = true
     }
@@ -653,22 +652,24 @@ private fun StorageAccessCard(
         } else {
             FilledTonalButton(
                 onClick = {
-                    launcher.launch(
-                        arrayOf(
-                            Manifest.permission.READ_EXTERNAL_STORAGE,
-                            Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                        ),
-                    )
+                    val packageUri = Uri.fromParts("package", context.packageName, null)
+                    try {
+                        launcher.launch(
+                            Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, packageUri),
+                        )
+                    } catch (_: ActivityNotFoundException) {
+                        launcher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                    }
                 },
                 enabled = enabled,
             ) {
-                Text("Grant storage access")
+                Text("Allow \"All files access\"")
             }
             if (deniedOnce) {
                 Text(
                     text = "Without it, projects fall back to app-private storage and are removed " +
-                        "when the app is uninstalled. If no dialog appears, enable Storage for " +
-                        "J Code in Android Settings → Apps.",
+                        "when the app is uninstalled. In the settings screen that opens, turn on " +
+                        "\"Allow access to manage all files\" for J Code, then return here.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

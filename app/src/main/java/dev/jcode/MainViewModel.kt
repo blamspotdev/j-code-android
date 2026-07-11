@@ -80,6 +80,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
@@ -96,6 +97,17 @@ const val EXTENSION_API_VERSION = 1
  * exactly once per file per process; constructing a second one (e.g. when MainViewModel is rebuilt
  * after the Activity is recreated) throws "multiple DataStores active for the same file".
  */
+/** (lastModified, size) fingerprint used to detect external edits to an open file. */
+private data class DiskSignature(val lastModified: Long, val size: Long)
+
+/** Result of probing + preparing a file to open, computed off the main thread (see openLocalFile). */
+private sealed interface OpenPrep {
+    data object Missing : OpenPrep
+    data object Image : OpenPrep
+    data object Binary : OpenPrep
+    data class Text(val tab: EditorTab, val signature: DiskSignature?) : OpenPrep
+}
+
 private object UiPreferencesStore {
     @Volatile
     private var instance: DataStore<Preferences>? = null
@@ -454,12 +466,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val exitOnSwipeAwayKey = booleanPreferencesKey(EXIT_ON_SWIPE_AWAY_KEY)
 
-    /** When true (default off), swiping JCode off the Android recents screen tears down the Linux
+    /** When true (default on), swiping JCode off the Android recents screen tears down the Linux
      *  runtime (terminals, runs, VMs) and exits the process entirely — handled in
      *  [BackendService.onTaskRemoved], which reads the mirrored [exitOnSwipeAwayEnabled]. */
     val exitOnSwipeAway: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs -> prefs[exitOnSwipeAwayKey] ?: false }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+        .map { prefs -> prefs[exitOnSwipeAwayKey] ?: true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
 
     fun setExitOnSwipeAway(enabled: Boolean) {
         exitOnSwipeAwayEnabled = enabled
@@ -470,6 +482,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Keep the static mirror BackendService reads in sync, and register the runtime teardown it
         // runs on a swipe-away exit. (Placed after the property declarations it references.)
         runtimeTeardown = { runCatching { stopAllRuntimeServices() } }
+        sessionFlushBlocking = { runCatching { runBlocking { persistSession() } } }
         viewModelScope.launch { exitOnSwipeAway.collect { exitOnSwipeAwayEnabled = it } }
     }
 
@@ -2167,8 +2180,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * inotify, but [File.lastModified]/[File.length] still reflect the ext4 inode. The signature is
      * captured at open and after every save/discard, so our own writes never trigger a reload.
      */
-    private data class DiskSignature(val lastModified: Long, val size: Long)
-
     private val diskSignatures = ConcurrentHashMap<String, DiskSignature>()
     private val syncMutex = Mutex()
     private var lastReloadNoticeAt = 0L
@@ -2334,7 +2345,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         when (val path = project.fsPath) {
             is FsPath.Local -> {
                 val root = path.file
-                val bootstrapFile = findBootstrapFile(root)
+                val bootstrapFile = withContext(Dispatchers.IO) { findBootstrapFile(root) }
                 if (bootstrapFile != null) {
                     openLocalFile(bootstrapFile)
                 }
@@ -2353,33 +2364,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        if (!file.exists() || !file.isFile) {
-            emitMessage("File no longer exists: ${file.name}")
-            return
+        // Probe the file, read it, and build the buffer OFF the main thread — for a large file (or
+        // a burst of restored tabs at launch) the read + piece-table build is the jank. The buffer
+        // isn't shared until the tab is published below, so building it on IO is safe.
+        val prep = withContext(Dispatchers.IO) {
+            when {
+                !file.exists() || !file.isFile -> OpenPrep.Missing
+                // Images open in the built-in viewer. Checked before the text probe so .svg (which
+                // is text) renders rather than opening as XML source.
+                file.extension.lowercase() in IMAGE_EXTENSIONS -> OpenPrep.Image
+                !file.isLikelyTextFile() -> OpenPrep.Binary
+                else -> OpenPrep.Text(EditorTab.create(file, stableId), file.diskSignatureOrNull())
+            }
         }
-
-        // Images open in the built-in viewer. Checked before the text probe so .svg (which is text)
-        // renders rather than opening as XML source.
-        if (file.extension.lowercase() in IMAGE_EXTENSIONS) {
-            _editorGroup.value = _editorGroup.value.withTabAdded(
+        when (prep) {
+            OpenPrep.Missing -> emitMessage("File no longer exists: ${file.name}")
+            OpenPrep.Image -> _editorGroup.value = _editorGroup.value.withTabAdded(
                 EditorTab.page(stableId, file.name, EditorPageKind.ImageViewer),
             )
-            return
+            OpenPrep.Binary -> emitMessage("Binary preview is not implemented yet for ${file.name}.")
+            is OpenPrep.Text -> {
+                val tab = prep.tab
+                applyConfigToTab(tab, effectiveConfig.value)
+                // Set the reveal before the tab is shown so the view applies it on attach.
+                tab.editorState?.requestRevealAt(line, column)
+                trackDirty(tab)
+                prep.signature?.let { diskSignatures[stableId] = it }
+                _editorGroup.value = _editorGroup.value.withTabAdded(tab)
+                queueSyntaxCheck(file)
+            }
         }
-
-        if (!file.isLikelyTextFile()) {
-            emitMessage("Binary preview is not implemented yet for ${file.name}.")
-            return
-        }
-
-        val tab = EditorTab.create(file, stableId)
-        applyConfigToTab(tab, effectiveConfig.value)
-        // Set the reveal before the tab is shown so the view applies it as soon as it attaches.
-        tab.editorState?.requestRevealAt(line, column)
-        trackDirty(tab)
-        file.diskSignatureOrNull()?.let { diskSignatures[stableId] = it }
-        _editorGroup.value = _editorGroup.value.withTabAdded(tab)
-        queueSyntaxCheck(file)
     }
 
     /** Convert a 1-based (line, optional column) to the editor's 0-based reveal request. */
@@ -2568,11 +2582,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         return root.walkTopDown()
             .maxDepth(4)
+            // Prune heavy/irrelevant trees instead of walking into them and filtering each file —
+            // .git and node_modules can hold tens of thousands of entries that all get stat'd.
+            .onEnter { it.name != ".git" && it.name != "node_modules" }
             .firstOrNull { file ->
                 file.isFile &&
                     file.length() <= 2_000_000L &&
-                    file.name !in setOf(".DS_Store") &&
-                    !file.absolutePath.contains("${File.separator}.git${File.separator}")
+                    file.name != ".DS_Store"
             }
     }
 
@@ -2681,12 +2697,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val EXIT_ON_SWIPE_AWAY_KEY = "exit_on_swipe_away"
 
         @Volatile
-        var exitOnSwipeAwayEnabled: Boolean = false
+        var exitOnSwipeAwayEnabled: Boolean = true
 
         /** Runtime teardown (destroy proot run/VM/LSP/DAP service procs) invoked on a swipe-away exit;
          *  set by the live ViewModel. Terminals are reaped separately via [TerminalSessionHost]. */
         @Volatile
         var runtimeTeardown: (() -> Unit)? = null
+
+        /** Blocking session persist invoked right before the process is killed on a swipe-away / "Stop &
+         *  close" exit, so unsaved editor buffers reach disk before [android.os.Process.killProcess]
+         *  races the async [flushSessionNow]. Set by the live ViewModel; no-op if the UI never started. */
+        @Volatile
+        var sessionFlushBlocking: (() -> Unit)? = null
 
         private const val RELOAD_NOTICE_THROTTLE_MS = 4_000L
         const val SETTINGS_TAB_ID = "jcode://settings"

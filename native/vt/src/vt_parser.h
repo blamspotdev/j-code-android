@@ -12,6 +12,20 @@ extern "C" {
 // Maximum parameters in a CSI sequence
 #define VT_MAX_PARAMS 16
 
+// OSC accumulation capacity (code + ';' + payload + NUL). Sized to match the 4096-byte MAX_PAYLOAD
+// of the Kotlin OscScanner whose event extraction was folded into this parser.
+#define VT_OSC_BUFFER_CAP 4096
+
+// Bounded queue of JCode shell-integration OSC events (7711 open-file, 7712 tab title, 7713 task
+// complete) awaiting a host drain. The oldest event is dropped when the queue is full.
+#define VT_OSC_EVENT_CAP 32
+
+// A queued shell-integration OSC event.
+typedef struct {
+    int code;
+    char* payload;  // heap copy owned by the parser, NUL-terminated
+} VtOscEvent;
+
 // Cell attributes
 typedef enum {
     VT_ATTR_BOLD = 1 << 0,
@@ -97,9 +111,15 @@ typedef struct {
     int intermediate_count;
     
     // OSC string buffer
-    char osc_buffer[256];
+    char osc_buffer[VT_OSC_BUFFER_CAP];
     int osc_length;
-    
+
+    // Queued shell-integration OSC events (ring indexed from osc_event_head; see VT_OSC_EVENT_CAP)
+    VtOscEvent osc_events[VT_OSC_EVENT_CAP];
+    int osc_event_head;
+    int osc_event_count;
+
+
     // Current text attributes
     uint16_t attrs;
     VtColor fg;
@@ -154,6 +174,16 @@ bool vt_parser_is_alternate_screen(const VtParser* parser);
 
 // Clear dirty flags after rendering
 void vt_parser_clear_dirty(VtParser* parser);
+
+// Number of queued shell-integration OSC events (7711-7713).
+int vt_parser_osc_event_count(const VtParser* parser);
+
+// Read queued OSC event `index` (0 = oldest) without removing it. The payload pointer is owned by
+// the parser and only valid until the next feed/clear/destroy. Returns false if out of range.
+bool vt_parser_osc_event_at(const VtParser* parser, int index, int* code, const char** payload);
+
+// Drop (and free) all queued OSC events.
+void vt_parser_osc_clear(VtParser* parser);
 
 // Reset parser to initial state
 void vt_parser_reset(VtParser* parser);

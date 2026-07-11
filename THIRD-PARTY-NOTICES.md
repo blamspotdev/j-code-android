@@ -13,17 +13,19 @@ frameworks) are not redistributed and are omitted.
 
 ## 1. Bundled executables and shared libraries (assets)
 
-These are pre-compiled binaries shipped under `native/proot/src/main/assets/bin/`
-and extracted to app-private storage at runtime. PRoot and its loaders run as
-**separate processes** (spawned via a PTY); they are not linked into the
-application. libtalloc and libandroid-shmem are loaded by the PRoot process via
-`LD_LIBRARY_PATH`, not by J Code's own code.
+These are pre-compiled binaries. PRoot and its ELF loaders ship as jniLibs under
+`native/proot/src/main/jniLibs/` (installed by Android to the app's native library
+directory and executed in place); the support libraries ship under
+`native/proot/src/main/assets/bin/` and are extracted to app-private storage at
+runtime. PRoot and its loaders run as **separate processes** (spawned via a PTY);
+they are not linked into the application. libtalloc and libandroid-shmem are
+loaded by the PRoot process via `LD_LIBRARY_PATH`, not by J Code's own code.
 
 | Component | Version | License | Source |
 |---|---|---|---|
 | PRoot (incl. `loader` / `loader32`) | 5.1.107.76 (Termux build) | **GPL-2.0** | https://github.com/termux/proot |
 | libtalloc | 2.4.3 | **LGPL-3.0** | https://talloc.samba.org/ |
-| libandroid-shmem | (Termux build) | MIT | https://github.com/termux/libandroid-shmem |
+| libandroid-shmem | upstream `7f0bd7e2` + J Code memfd modifications (modified source: `native/proot/libandroid-shmem/`) | BSD-3-Clause | https://github.com/termux/libandroid-shmem |
 
 ### Written offer for corresponding source (GPL-2.0 / LGPL-3.0)
 

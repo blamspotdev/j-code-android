@@ -71,8 +71,9 @@ subprojects {
 
             lint {
                 // NullSafeMutableLiveData crashes lintVitalRelease (androidx.lifecycle detector vs
-                // Kotlin 2.1 analysis API). ExpiredTargetSdkVersion is a Play-Store rule; targetSdk
-                // stays 28 deliberately so the proot runtime may exec binaries from app storage.
+                // Kotlin 2.1 analysis API). ExpiredTargetSdkVersion is a Play-Store rule (wants 34+);
+                // we distribute outside Play and hold targetSdk at 33 until the 34+ gates
+                // (FGS types, receiver export flags) are handled.
                 disable += setOf("NullSafeMutableLiveData", "ExpiredTargetSdkVersion")
             }
         }
@@ -86,7 +87,7 @@ subprojects {
                 compileSdk = 36
 
                 defaultConfig {
-                    minSdk = 28
+                    minSdk = 33
 
                     externalNativeBuild {
                         cmake {

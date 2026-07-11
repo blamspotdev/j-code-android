@@ -29,8 +29,8 @@ android {
 
     defaultConfig {
         applicationId = "dev.jcode"
-        minSdk = 28
-        targetSdk = 28
+        minSdk = 33
+        targetSdk = 33
         versionCode = jcodeVersionCode
         versionName = jcodeVersionName
 
@@ -59,6 +59,18 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    packaging {
+        jniLibs {
+            // proot + its loaders are exec'd as files from nativeLibraryDir (the only app-owned
+            // location W^X allows execve from at targetSdk >= 29), so native libs must be
+            // extracted to disk rather than loaded from the APK.
+            useLegacyPackaging = true
+            // Prebuilt Termux binaries, not JNI libraries — llvm-strip could corrupt them
+            // (the loader is a hand-rolled minimal ELF).
+            keepDebugSymbols += "**/libproot*.so"
+        }
     }
 
     ndkVersion = "27.2.12479018"

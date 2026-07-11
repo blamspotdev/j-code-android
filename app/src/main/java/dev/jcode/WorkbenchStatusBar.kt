@@ -56,12 +56,15 @@ internal data class EditorMetrics(
 
 @Composable
 internal fun WorkbenchStatusBar(
-    metrics: EditorMetrics,
     activeTab: EditorTab?,
     selectedProject: Project?,
     effectiveConfig: EffectiveConfig,
     activeDistroId: String,
 ) {
+    // Collected here (not hoisted into JCodeShell): the caret/snapshot flows emit on every
+    // keystroke and caret move, so reading them in this bottomBar scope keeps a keystroke from
+    // recomposing the whole workbench body — only this 20dp status row invalidates.
+    val metrics = rememberEditorMetrics(activeTab)
     val branch = rememberGitBranch(selectedProject)
     val issueCount by LspModule.diagnosticsBus.totalCount.collectAsStateWithLifecycle()
     // A project's effective distro can be overridden in its `.jcode`; otherwise fall back to the
@@ -243,9 +246,11 @@ internal fun rememberEditorMetrics(activeTab: EditorTab?): EditorMetrics {
     val (line, column) = remember(snapshot, offset) {
         snapshot.offsetToLineColumn(offset)
     }
-    // Detect the dominant line ending from a bounded prefix (cheap even for large files).
-    val lineEnding = remember(snapshot) {
-        val sample = snapshot.readRangeAsUtf16(0, minOf(snapshot.byteLength, 8192))
+    // Detect the dominant line ending once per open document (keyed on the tab, not the snapshot):
+    // it effectively never changes mid-session, so re-reading an 8 KB prefix + scanning it on every
+    // keystroke was pure churn. The initial snapshot is read the first time this tab is shown.
+    val lineEnding = remember(activeTab) {
+        val sample = editorState.snapshot.value.readRangeAsUtf16(0, minOf(editorState.snapshot.value.byteLength, 8192))
         when {
             sample.contains("\r\n") -> "CRLF"
             sample.contains('\r') -> "CR"

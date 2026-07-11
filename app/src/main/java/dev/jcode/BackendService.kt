@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.IBinder
 import androidx.core.content.ContextCompat
@@ -39,26 +40,40 @@ class BackendService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            // The notification's "Stop & close" action: an explicit user request to fully close, so
+            // tear down regardless of the swipe-away preference.
+            shutdownRuntimeAndExit()
+            return START_NOT_STICKY
+        }
         applyRegistryState(SessionRegistry.state.value, startId)
         return START_NOT_STICKY
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         if (MainViewModel.exitOnSwipeAwayEnabled) {
-            // User opted to fully close on swipe-away: reap every proot tree (terminals + runs / VMs /
-            // language servers / debug adapters) so nothing lingers in the background, then stop the
-            // foreground service and kill the process. Without this the runtime keeps running headless.
-            runCatching { TerminalSessionHost.manager(applicationContext).closeAll() }
-            runCatching { MainViewModel.runtimeTeardown?.invoke() }
-            if (isForegroundActive) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                isForegroundActive = false
-            }
-            stopSelf()
-            android.os.Process.killProcess(android.os.Process.myPid())
+            shutdownRuntimeAndExit()
         } else {
             super.onTaskRemoved(rootIntent)
         }
+    }
+
+    /** Reap every proot tree (terminals + runs / VMs / language servers / debug adapters) so nothing
+     *  lingers in the background, then drop the foreground notification and kill the process. Without
+     *  this the runtime keeps running headless after the task is gone. */
+    private fun shutdownRuntimeAndExit() {
+        // Flush unsaved editor buffers to disk before anything else — killProcess below would otherwise
+        // race the async onStop flush and drop the latest edits (esp. the "Stop & close" action, which
+        // fires from the notification shade without the Activity reaching onStop).
+        runCatching { MainViewModel.sessionFlushBlocking?.invoke() }
+        runCatching { TerminalSessionHost.manager(applicationContext).closeAll() }
+        runCatching { MainViewModel.runtimeTeardown?.invoke() }
+        if (isForegroundActive) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            isForegroundActive = false
+        }
+        stopSelf()
+        android.os.Process.killProcess(android.os.Process.myPid())
     }
 
     override fun onDestroy() {
@@ -133,6 +148,18 @@ class BackendService : Service() {
             activeCount,
         )
 
+        val stopIntent = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, BackendService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val stopAction = Notification.Action.Builder(
+            Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+            getString(R.string.backend_service_stop_action),
+            stopIntent,
+        ).build()
+
         return Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle(getString(R.string.backend_service_notification_title))
@@ -144,12 +171,14 @@ class BackendService : Service() {
             .setShowWhen(false)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             .setContentIntent(contentIntent)
+            .addAction(stopAction)
             .build()
     }
 
     companion object {
         private const val NOTIFICATION_CHANNEL_ID = "dev.jcode.backend.sessions"
         private const val NOTIFICATION_ID = 7_601
+        private const val ACTION_STOP = "dev.jcode.backend.action.STOP"
 
         internal fun start(context: android.content.Context) {
             ContextCompat.startForegroundService(

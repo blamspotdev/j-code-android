@@ -247,6 +247,15 @@ import dev.jcode.design.LocalSourceControlSettings
 import dev.jcode.design.SourceControlSettings
 import dev.jcode.design.WebPreviewBrowsers
 import dev.jcode.design.LocalWebPreviewBrowsers
+import dev.jcode.workbench.TerminalInstance
+import dev.jcode.workbench.WorkbenchTopBar
+import dev.jcode.workbench.WorkspaceHeader
+import dev.jcode.workbench.ProjectRoster
+import dev.jcode.workbench.WelcomeCard
+import dev.jcode.workbench.WorkspaceEmptyState
+import dev.jcode.workbench.SidebarToolButton
+import dev.jcode.workbench.WorkbenchActionButton
+import dev.jcode.workbench.WorkbenchIconActionButton
 import dev.jcode.workbench.AgentChatActions
 import dev.jcode.workbench.AgentChatSidebarContent
 import dev.jcode.workbench.AgentChatWebViewHolder
@@ -461,21 +470,26 @@ fun JCodeApp(
     }
     val canDebug = activeDebugEngine != null &&
         activeDebugEngine.id in debugCatalogState.installedEntryIds
-    val debugSessionUi = DebugSessionUi(
-        state = debugState,
-        callStack = debugCallStack,
-        variables = debugVariables,
-        output = debugOutput,
-        debugTargetName = activeDebugFile?.name,
-        canDebug = canDebug,
-        onDebug = { activeDebugFile?.let { viewModel.startDebug(it.path) } },
-        onContinue = viewModel::debugContinue,
-        onStepOver = viewModel::debugStepOver,
-        onStepInto = viewModel::debugStepInto,
-        onStepOut = viewModel::debugStepOut,
-        onStop = viewModel::debugStop,
-        onEvaluate = viewModel::debugEvaluate,
-    )
+    // remember-ed so the holder is stable across recompositions (its callbacks are bound viewModel
+    // refs, which allocate a fresh — thus unequal — instance every pass; an unremembered holder
+    // provided as a CompositionLocal invalidates every reader on any JCodeApp recomposition).
+    val debugSessionUi = remember(debugState, debugCallStack, debugVariables, debugOutput, activeDebugFile, canDebug) {
+        DebugSessionUi(
+            state = debugState,
+            callStack = debugCallStack,
+            variables = debugVariables,
+            output = debugOutput,
+            debugTargetName = activeDebugFile?.name,
+            canDebug = canDebug,
+            onDebug = { activeDebugFile?.let { viewModel.startDebug(it.path) } },
+            onContinue = viewModel::debugContinue,
+            onStepOver = viewModel::debugStepOver,
+            onStepInto = viewModel::debugStepInto,
+            onStepOut = viewModel::debugStepOut,
+            onStop = viewModel::debugStop,
+            onEvaluate = viewModel::debugEvaluate,
+        )
+    }
     StatusBarKeyboardController(enabled = hideStatusBarWithKeyboard)
     val tapContext = LocalContext.current
     val terminalTapConfig = TerminalTapConfig(
@@ -641,12 +655,14 @@ fun JCodeApp(
         LocalExtensionSettingsUi provides extensionSettingsUi,
         LocalWebPreviewBrowsers provides webPreviewBrowsers,
         LocalIssueActions provides issueActions,
-        LocalDebugEditorState provides DebugEditorState(
-            breakpoints = breakpoints,
-            stoppedPath = debugLocation?.hostPath,
-            stoppedLine = debugLocation?.line,
-            onToggleBreakpoint = viewModel::toggleBreakpoint,
-        ),
+        LocalDebugEditorState provides remember(breakpoints, debugLocation) {
+            DebugEditorState(
+                breakpoints = breakpoints,
+                stoppedPath = debugLocation?.hostPath,
+                stoppedLine = debugLocation?.line,
+                onToggleBreakpoint = viewModel::toggleBreakpoint,
+            )
+        },
     ) {
     JCodeShell(
         modifier = modifier,
@@ -705,7 +721,7 @@ fun JCodeApp(
         onConfigureRun = viewModel::openRunConfigPage,
         onSaveRunConfig = viewModel::saveRunConfig,
         runConfigVersion = runConfigVersion,
-        managerActions = WorkbenchManagerActions(
+        managerActions = remember(viewModel) { WorkbenchManagerActions(
             onCheckSdkStatuses = viewModel::checkSdkStatuses,
             onInstallSdkCatalogEntry = viewModel::installSdkCatalogEntry,
             onVerifySdkCatalogEntry = viewModel::verifySdkCatalogEntry,
@@ -735,7 +751,7 @@ fun JCodeApp(
                 else viewModel.extensionApiRequest(ext, envelope)
             },
             extensionEvents = viewModel.extensionEvents,
-        ),
+        ) },
         onOpenSettingsPage = viewModel::openSettingsPage,
         terminalDoubleTapToFocus = terminalDoubleTapToFocus,
         onUpdateTerminalDoubleTapToFocus = viewModel::setTerminalDoubleTapToFocus,
@@ -867,7 +883,6 @@ private fun JCodeShell(
     val leftSidebarWidth = if (windowInfo.widthClass == JCodeWindowWidthClass.Expanded) 284.dp else 236.dp
     val rightSidebarWidth = (configuration.screenWidthDp * 0.75f).dp
     val activeTab = editorGroup.activeTab
-    val metrics = rememberEditorMetrics(activeTab)
     val portraitRightSidebarTabs = remember { RightPanelTab.entries.filter { it.enabled }.toSet() }
 
     var selectedTool by rememberSaveable { mutableStateOf(WorkbenchTool.Explorer) }
@@ -909,10 +924,17 @@ private fun JCodeShell(
         val lang = activeLanguageExtensions.firstNotNullOfOrNull { ext -> ext.languageFor(fileName) }
         val palette = if (editorDark) TokenPalette.DARK else TokenPalette.LIGHT
         state.snapshot.collectLatest { snap ->
+            // Debounce: collectLatest cancels this wait on the next keystroke, so a typing burst
+            // pays for one highlight pass of the final text instead of one per keystroke.
+            kotlinx.coroutines.delay(30)
+            val startedAt = android.os.SystemClock.uptimeMillis()
             val spans = withContext(Dispatchers.Default) {
-                val text = runCatching { snap.readRangeAsUtf16(0, snap.byteLength) }.getOrDefault("")
-                SyntaxHighlighter.highlightFor(text, fileName, lang, palette)
+                SyntaxHighlighter.highlightFor(snap, fileName, lang, palette)
             }
+            android.util.Log.d(
+                "SyntaxHighlight",
+                "pass=${android.os.SystemClock.uptimeMillis() - startedAt}ms spans=${spans.size} bytes=${snap.byteLength}",
+            )
             state.updateDecorations { it.replaceLayer(Layer.GLYPH_COLOR, spans) }
         }
     }
@@ -1541,7 +1563,6 @@ private fun JCodeShell(
             snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
                 WorkbenchStatusBar(
-                    metrics = metrics,
                     activeTab = activeTab,
                     selectedProject = selectedProject,
                     effectiveConfig = effectiveConfig,
@@ -1949,116 +1970,6 @@ private fun JCodeShell(
 }
 
 @Composable
-private fun WorkbenchIconActionButton(
-    icon: ImageVector,
-    contentDescription: String,
-    onClick: () -> Unit,
-    active: Boolean = false,
-    onLongClick: (() -> Unit)? = null,
-    shimmer: Boolean = false,
-    badge: Boolean = false,
-) {
-    val containerColor = if (active) {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f)
-    }
-    val contentColor = if (active) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    // Pulse the icon while a background terminal is busy (a foreground process is running). The
-    // transition is created unconditionally (Rules of Composition); its value is only read — and so
-    // only drives recomposition — when [shimmer] is true.
-    val shimmerTransition = rememberInfiniteTransition(label = "shimmer")
-    val shimmerAlpha by shimmerTransition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
-        label = "shimmerAlpha",
-    )
-    val iconAlpha = if (shimmer) shimmerAlpha else 1f
-
-    JcTooltip(contentDescription) {
-        Box {
-        Surface(
-            modifier = Modifier
-                .size(32.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .then(
-                    if (onLongClick != null) {
-                        Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
-                    } else {
-                        Modifier.clickable(onClick = onClick)
-                    }
-                ),
-            shape = RoundedCornerShape(10.dp),
-            color = containerColor,
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = contentDescription,
-                    modifier = Modifier.size(16.dp).alpha(iconAlpha),
-                    tint = contentColor,
-                )
-            }
-        }
-            if (badge) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun WorkbenchActionButton(
-    text: String,
-    onClick: () -> Unit,
-    active: Boolean = false,
-) {
-    val containerColor = if (active) {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f)
-    }
-    val contentColor = if (active) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
-
-    Surface(
-        modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(10.dp),
-        color = containerColor,
-    ) {
-        Box(
-            modifier = Modifier
-                .height(32.dp)
-                .padding(horizontal = 10.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.labelMedium,
-                color = contentColor,
-                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
-            )
-        }
-    }
-}
-
-@Composable
 private fun WorkspacePanel(
     selectedTool: WorkbenchTool,
     workspace: Workspace?,
@@ -2285,382 +2196,6 @@ private fun WorkspacePanel(
                 }
             }
         }
-    }
-}
-
-private fun contributedActionIcon(id: String): JCodeIcon = when (id) {
-    "clone" -> JCodeIcon.Scm
-    "remoteRepo" -> JCodeIcon.Browser
-    else -> JCodeIcon.Code
-}
-
-@Composable
-private fun WorkspaceHeader(
-    selectedTool: WorkbenchTool,
-    workspace: Workspace?,
-    selectedProject: Project?,
-    inUserWorkspace: Boolean,
-    dbManagerAvailable: Boolean,
-    scmAvailable: Boolean,
-    vmManagerAvailable: Boolean,
-    onSelectTool: (WorkbenchTool) -> Unit,
-    onCreateProject: () -> Unit,
-    onOpenExternalFolder: () -> Unit,
-    contributedDrawerActions: List<MainViewModel.ShellContribution>,
-    onDrawerAction: (MainViewModel.ShellContribution) -> Unit,
-    onCloseWorkspace: () -> Unit,
-    onCloseProject: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            // The title doubles as a menu anchor: a User Workspace can be closed (Close workspace),
-            // and the Default Workspace can close its open project (Close project). With nothing open
-            // in the Default Workspace there is nothing to close, so it stays a plain label.
-            val canCloseProject = !inUserWorkspace && selectedProject != null
-            val hasCloseAction = inUserWorkspace || canCloseProject
-            Box(modifier = Modifier.weight(1f)) {
-                var menuExpanded by remember { mutableStateOf(false) }
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .then(
-                            if (hasCloseAction) Modifier.clickable { menuExpanded = true } else Modifier,
-                        )
-                        .padding(vertical = 2.dp),
-                    verticalArrangement = Arrangement.spacedBy(1.dp),
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        Text(
-                            text = workspace?.name ?: "Default Workspace",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        if (hasCloseAction) {
-                            Icon(
-                                imageVector = jcIcon(JCodeIcon.DropDown),
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                    }
-                    Text(
-                        text = selectedProject?.distroBindTarget ?: "No bind target yet",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                CompactContextMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                    listActions = listOf(
-                        ContextAction(
-                            JCodeIcon.Close,
-                            if (inUserWorkspace) "Close workspace" else "Close project",
-                        ) { if (inUserWorkspace) onCloseWorkspace() else onCloseProject() },
-                    ),
-                )
-            }
-
-            WorkbenchIconActionButton(
-                icon = jcIcon(JCodeIcon.Add),
-                contentDescription = "Add project",
-                onClick = onCreateProject,
-            )
-            Box {
-                var openFolderMenu by remember { mutableStateOf(false) }
-                WorkbenchIconActionButton(
-                    icon = jcIcon(JCodeIcon.Destinations),
-                    contentDescription = "Open folder",
-                    onClick = { if (contributedDrawerActions.isEmpty()) onOpenExternalFolder() else openFolderMenu = true },
-                )
-                if (contributedDrawerActions.isNotEmpty()) {
-                    CompactContextMenu(
-                        expanded = openFolderMenu,
-                        onDismissRequest = { openFolderMenu = false },
-                        listActions = buildList {
-                            add(ContextAction(JCodeIcon.Destinations, "Open Folder") { onOpenExternalFolder() })
-                            contributedDrawerActions.forEach { a ->
-                                add(ContextAction(contributedActionIcon(a.id), a.label) { onDrawerAction(a) })
-                            }
-                        },
-                    )
-                }
-            }
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            // "DB Managers", "SCM" and "VM" only show once a matching client extension is installed.
-            WorkbenchTool.entries
-                .filter {
-                    it.available &&
-                        (it != WorkbenchTool.DbManager || dbManagerAvailable) &&
-                        (it != WorkbenchTool.Scm || scmAvailable) &&
-                        (it != WorkbenchTool.VmManager || vmManagerAvailable)
-                }
-                .forEach { tool ->
-                    SidebarToolButton(
-                        tool = tool,
-                        selected = selectedTool == tool,
-                        onClick = { onSelectTool(tool) },
-                    )
-                }
-        }
-    }
-}
-
-@Composable
-private fun SidebarToolButton(
-    tool: WorkbenchTool,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    Surface(
-        modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(10.dp),
-        color = if (selected) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f)
-        },
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Icon(
-                imageVector = jcIcon(tool.icon),
-                contentDescription = tool.label,
-                modifier = Modifier.size(14.dp),
-                tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = tool.compactLabel,
-                style = MaterialTheme.typography.labelMedium,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
-        }
-    }
-}
-
-@Composable
-private fun WorkspaceEmptyState(
-    workspace: Workspace?,
-    onCreateProject: () -> Unit,
-    onOpenExternalFolder: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(56.dp)
-                .background(
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                    shape = RoundedCornerShape(16.dp),
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = jcIcon(JCodeIcon.Files),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-            )
-        }
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = workspace?.name ?: "J Code",
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = "Start with a new folder or open an existing one.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            WorkbenchActionButton(text = "New Folder", onClick = onCreateProject, active = true)
-            WorkbenchActionButton(text = "Open Folder", onClick = onOpenExternalFolder)
-        }
-    }
-}
-
-@Composable
-private fun ProjectRoster(
-    projects: List<Project>,
-    selectedProjectId: Long,
-    onOpenProject: (Project) -> Unit,
-    onRenameProject: (Long, String) -> Unit,
-    onRemoveProject: (Long) -> Unit,
-    onOpenProjectSettings: (Long) -> Unit,
-    onCreateProject: () -> Unit,
-) {
-    var renameTarget by remember { mutableStateOf<Project?>(null) }
-    var openMenuId by remember { mutableStateOf<Long?>(null) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 3.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = "PROJECTS",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            WorkbenchIconActionButton(
-                icon = jcIcon(JCodeIcon.Add),
-                contentDescription = "New project in this workspace",
-                onClick = onCreateProject,
-            )
-        }
-
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            projects.forEach { project ->
-                val selected = project.id == selectedProjectId
-                val isWorkspace = project.nodeType == WorkspaceNodeType.Workspace
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { onOpenProject(project) },
-                    color = if (selected) {
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.16f)
-                    },
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 8.dp, top = 4.dp, bottom = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Surface(
-                            modifier = Modifier.size(24.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (selected) {
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
-                            } else {
-                                MaterialTheme.colorScheme.surfaceVariant
-                            },
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = if (isWorkspace) jcIcon(JCodeIcon.Files) else jcIcon(JCodeIcon.Code),
-                                    contentDescription = null,
-                                    modifier = Modifier.size(15.dp),
-                                    tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = project.name,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                            )
-                            Text(
-                                text = project.distroBindTarget,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        Box {
-                            JcTooltip("Project actions") {
-                                IconButton(onClick = { openMenuId = project.id }, modifier = Modifier.size(32.dp)) {
-                                    Icon(
-                                        imageVector = jcIcon(JCodeIcon.MoreVert),
-                                        contentDescription = "Project actions",
-                                        modifier = Modifier.size(18.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
-                            CompactContextMenu(
-                                expanded = openMenuId == project.id,
-                                onDismissRequest = { openMenuId = null },
-                                quickActions = listOf(
-                                    ContextAction(JCodeIcon.Rename, "Rename") { renameTarget = project },
-                                    ContextAction(JCodeIcon.Delete, "Remove", destructive = true) { onRemoveProject(project.id) },
-                                ),
-                                listActions = listOf(
-                                    ContextAction(JCodeIcon.Open, if (isWorkspace) "Open workspace" else "Open") { onOpenProject(project) },
-                                    ContextAction(JCodeIcon.Settings, "Project settings") { onOpenProjectSettings(project.id) },
-                                ),
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    renameTarget?.let { target ->
-        var newName by remember(target.id) { mutableStateOf(target.name) }
-        AlertDialog(
-            onDismissRequest = { renameTarget = null },
-            title = { Text("Rename") },
-            text = {
-                TextField(
-                    value = newName,
-                    onValueChange = { newName = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Name") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { onRenameProject(target.id, newName); renameTarget = null },
-                    enabled = newName.isNotBlank() && newName.trim() != target.name,
-                ) { Text("Rename") }
-            },
-            dismissButton = {
-                TextButton(onClick = { renameTarget = null }) { Text("Cancel") }
-            },
-        )
     }
 }
 
@@ -2956,185 +2491,10 @@ private fun recentSubtitle(recent: RecentEntity): String = when (recent.kind) {
 }
 
 /** A live terminal instance shown in the Terminal-button long-press list. */
-private data class TerminalInstance(val id: String, val label: String)
-
 /** Terminal tab/instance label, capped at 8 characters (the OSC title can be a long command line). */
 private fun terminalTabLabel(raw: String?): String {
     val s = (raw ?: "terminal").ifBlank { "terminal" }
     return if (s.length > 8) s.take(7) + "…" else s
-}
-
-@Composable
-private fun WorkbenchTopBar(
-    workspace: Workspace?,
-    selectedProject: Project?,
-    activeTab: EditorTab?,
-    leftSidebarExpanded: Boolean,
-    canShowRightSidebar: Boolean,
-    rightSidebarVisible: Boolean,
-    onToggleLeftSidebar: () -> Unit,
-    onToggleRightSidebar: () -> Unit,
-    onShowTerminal: () -> Unit,
-    onRun: () -> Unit,
-    onStop: () -> Unit,
-    onRerun: () -> Unit,
-    isRunning: Boolean,
-    terminalBusy: Boolean,
-    terminalHasUnseen: Boolean,
-    terminalSessions: List<TerminalInstance>,
-    onOpenTerminalSession: (String) -> Unit,
-    onSave: () -> Unit,
-) {
-    // Single row: navigation + title + quick actions. Per-file metrics (cursor, language, distro)
-    // live in the bottom status bar, so this header no longer carries a redundant second chip row.
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            WorkbenchIconActionButton(
-                icon = jcIcon(JCodeIcon.MenuToggle),
-                contentDescription = if (leftSidebarExpanded) "Hide left sidebar" else "Show left sidebar",
-                onClick = onToggleLeftSidebar,
-                active = leftSidebarExpanded,
-            )
-
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(1.dp),
-            ) {
-                Text(
-                    text = activeTab?.title ?: selectedProject?.name ?: "J Code",
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = listOfNotNull(
-                        workspace?.name,
-                        selectedProject?.name,
-                        activeTab?.title,
-                    ).joinToString(" / ").ifBlank { "Editor workspace" },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-
-            if (activeTab?.editorState != null) {
-                val saveActions = LocalEditorSaveActions.current
-                var saveMenuOpen by remember { mutableStateOf(false) }
-                Box {
-                    WorkbenchIconActionButton(
-                        icon = jcIcon(JCodeIcon.Save),
-                        contentDescription = if (activeTab.isDirty) "Save (unsaved changes)" else "Save",
-                        onClick = onSave,
-                        active = activeTab.isDirty,
-                        onLongClick = { saveMenuOpen = true },
-                    )
-                    CompactContextMenu(
-                        expanded = saveMenuOpen,
-                        onDismissRequest = { saveMenuOpen = false },
-                        quickActions = listOf(
-                            ContextAction(JCodeIcon.Undo, "Undo") { saveActions.onUndo() },
-                            ContextAction(JCodeIcon.Redo, "Redo") { saveActions.onRedo() },
-                            ContextAction(JCodeIcon.Discard, "Discard", destructive = true) { saveActions.onDiscard() },
-                            ContextAction(JCodeIcon.Save, "Save all") { saveActions.onSaveAll() },
-                        ),
-                    )
-                }
-            }
-            // Run toggles to Stop while a run is active; long-press opens the debug controls.
-            // Only shown when a project is open and focused — there's nothing to run otherwise.
-            if (selectedProject != null) {
-                var runMenuOpen by remember { mutableStateOf(false) }
-                Box {
-                    WorkbenchIconActionButton(
-                        icon = if (isRunning) jcIcon(JCodeIcon.Stop) else jcIcon(JCodeIcon.Run),
-                        contentDescription = if (isRunning) "Stop" else "Run",
-                        onClick = if (isRunning) onStop else onRun,
-                        active = isRunning,
-                        onLongClick = { runMenuOpen = true },
-                    )
-                    CompactContextMenu(
-                        expanded = runMenuOpen,
-                        onDismissRequest = { runMenuOpen = false },
-                        quickActions = listOf(
-                            // Step/continue need a debug engine (none yet); shown but disabled.
-                            ContextAction(JCodeIcon.Continue, "Continue", enabled = false) {},
-                            ContextAction(JCodeIcon.Rerun, "Rerun") { onRerun() },
-                            ContextAction(JCodeIcon.StepInto, "Step Into", enabled = false) {},
-                            ContextAction(JCodeIcon.StepOver, "Step Over", enabled = false) {},
-                            ContextAction(JCodeIcon.StepOut, "Step Out", enabled = false) {},
-                        ),
-                    )
-                }
-            }
-            // Terminal shimmers while any session is busy; a dot badge flags new background instances;
-            // long-press lists the live instances and opens the right drawer on the chosen one.
-            var terminalMenuOpen by remember { mutableStateOf(false) }
-            Box {
-                WorkbenchIconActionButton(
-                    icon = jcIcon(JCodeIcon.Terminal),
-                    contentDescription = "Terminal",
-                    onClick = onShowTerminal,
-                    shimmer = terminalBusy,
-                    badge = terminalHasUnseen,
-                    onLongClick = { terminalMenuOpen = true },
-                )
-                CompactContextMenu(
-                    expanded = terminalMenuOpen && terminalSessions.isNotEmpty(),
-                    onDismissRequest = { terminalMenuOpen = false },
-                    listActions = terminalSessions.map { session ->
-                        ContextAction(JCodeIcon.Terminal, session.label) { onOpenTerminalSession(session.id) }
-                    },
-                )
-            }
-            WorkbenchIconActionButton(
-                icon = jcIcon(JCodeIcon.Logs),
-                contentDescription = "Toggle right sidebar",
-                onClick = onToggleRightSidebar,
-                active = canShowRightSidebar && rightSidebarVisible,
-            )
-        }
-    }
-}
-
-@Composable
-private fun WelcomeCard(
-    title: String,
-    icon: ImageVector,
-    lines: List<String>,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f))
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Text(title, fontWeight = FontWeight.SemiBold)
-        }
-        lines.forEach { line ->
-            Text(
-                text = line,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
 }
 
 @Composable

@@ -13,6 +13,7 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.util.Locale
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
@@ -30,6 +31,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /** SharedPreferences flag: the environment finished configuring at least once (used to skip the
  *  first-run setup screen instantly on launch — see [DistroService]'s seededConfigured). */
@@ -55,6 +57,12 @@ class DistroService(
     private val lspCheckInProgress = AtomicBoolean(false)
     private val debugCheckInProgress = AtomicBoolean(false)
     private val activityLogLock = Any()
+
+    // Shared daemon pool that drains each exec'd process's stdout/stderr. Reused across execs instead of
+    // spawning two bare Threads per call (the old approach churned threads on the toolchain/probe paths).
+    private val drainPool = Executors.newCachedThreadPool { r ->
+        Thread(r, "jcode-drain").apply { isDaemon = true }
+    }
     private val dataStore = PreferenceDataStoreFactory.create {
         appContext.preferencesDataStoreFile("distro-environment.preferences_pb")
     }
@@ -446,6 +454,76 @@ class DistroService(
         }
     }
 
+    private data class CatalogProbe(val id: String, val verifyScript: String, val updateCheckScript: String)
+
+    /**
+     * Run every entry's verify (and, for verified entries, its update-check) in ONE proot exec
+     * instead of one spawn per script: each probe is wrapped in a subshell that prints a
+     * `JCODE_VERIFY <id> OK|FAIL` / `JCODE_UPDATE <id> YES` marker line, and the markers are parsed
+     * back into per-entry results. The scripts are arbitrary multi-line shell from the catalogs, so
+     * the generated script is written into the rootfs and run with `bash <file>` — no inline
+     * quoting. Runs under the same user/env as the old per-entry path (login shell paid once, not
+     * N times). Falls back to the sequential per-entry pass if the batch produced no markers.
+     * Returns (installed ids, updatable ids).
+     */
+    private fun runCatalogProbes(probes: List<CatalogProbe>): Pair<Set<String>, Set<String>> {
+        val installed = linkedSetOf<String>()
+        val updatable = linkedSetOf<String>()
+        if (probes.isEmpty()) return installed to updatable
+        val startedAt = System.currentTimeMillis()
+        if (probes.any { it.updateCheckScript.contains("apt list") }) refreshAptListsIfStale()
+
+        val distroId = _environmentState.value.runtime.selectedDistro.id
+        val scriptFile = File(rootfsManager.getRootfsPath(distroId), "tmp/.jcode-verify-${System.nanoTime()}.sh")
+        val batch = runCatching {
+            scriptFile.parentFile?.mkdirs()
+            scriptFile.writeText(
+                buildString {
+                    for (p in probes) {
+                        append("if (\n").append(p.verifyScript).append("\n) >/dev/null 2>&1; then\n")
+                        append("echo \"JCODE_VERIFY ${p.id} OK\"\n")
+                        if (p.updateCheckScript.isNotBlank()) {
+                            append("if (\n").append(p.updateCheckScript)
+                                .append("\n) >/dev/null 2>&1; then echo \"JCODE_UPDATE ${p.id} YES\"; fi\n")
+                        }
+                        append("else\necho \"JCODE_VERIFY ${p.id} FAIL\"\nfi\n")
+                    }
+                },
+            )
+            execInDistro("bash /tmp/${scriptFile.name}", timeoutMs = 300_000L)
+        }.getOrNull()
+        runCatching { scriptFile.delete() }
+
+        if (batch != null && batch.stdout.lineSequence().any { it.startsWith("JCODE_VERIFY ") }) {
+            for (line in batch.stdout.lineSequence()) {
+                val parts = line.trim().split(' ')
+                if (parts.size != 3) continue
+                when {
+                    parts[0] == "JCODE_VERIFY" && parts[2] == "OK" -> installed.add(parts[1])
+                    parts[0] == "JCODE_UPDATE" && parts[2] == "YES" -> updatable.add(parts[1])
+                }
+            }
+        } else {
+            android.util.Log.w("DistroService", "runCatalogProbes: batch produced no markers, falling back to per-entry probes")
+            for (p in probes) {
+                if (execInDistro(p.verifyScript, timeoutMs = 120_000L).succeeded) {
+                    installed.add(p.id)
+                    if (p.updateCheckScript.isNotBlank() &&
+                        execInDistro(p.updateCheckScript, timeoutMs = 120_000L).succeeded
+                    ) {
+                        updatable.add(p.id)
+                    }
+                }
+            }
+        }
+        android.util.Log.d(
+            "DistroService",
+            "runCatalogProbes: ${probes.size} entries in ${System.currentTimeMillis() - startedAt}ms " +
+                "(${installed.size} installed, ${updatable.size} updatable)",
+        )
+        return installed to updatable
+    }
+
     /** Re-check installed + update-available status for every SDK entry. Full check, run async; no-op if already running. */
     suspend fun checkSdkStatuses() {
         val ready = _environmentState.value.distroInstalled == true && _environmentState.value.jcodeUserReady == true
@@ -461,23 +539,12 @@ class DistroService(
                 _sdkCatalogState.value = _sdkCatalogState.value.copy(
                     entries = entries, checking = true, selectedDistroId = distroId, errorMessage = null,
                 )
-                val installed = linkedSetOf<String>()
-                val updatable = linkedSetOf<String>()
-                for (entry in entries) {
-                    if (execInDistro(entry.verifyScript, timeoutMs = 120_000L).succeeded) {
-                        installed.add(entry.id)
-                        if (entry.updateCheckScript.isNotBlank()) {
-                            if (entry.updateCheckScript.contains("apt list")) refreshAptListsIfStale()
-                            if (execInDistro(entry.updateCheckScript, timeoutMs = 120_000L).succeeded) updatable.add(entry.id)
-                        }
-                    }
-                    _sdkCatalogState.value = _sdkCatalogState.value.copy(
-                        installedEntryIds = installed.toSet(), updatableEntryIds = updatable.toSet(),
-                    )
-                }
-                persistInstalledCatalogEntries(distroId, installed.toSet())
+                val (installed, updatable) = runCatalogProbes(
+                    entries.map { CatalogProbe(it.id, it.verifyScript, it.updateCheckScript) },
+                )
+                persistInstalledCatalogEntries(distroId, installed)
                 _sdkCatalogState.value = _sdkCatalogState.value.copy(
-                    installedEntryIds = installed.toSet(), updatableEntryIds = updatable.toSet(),
+                    installedEntryIds = installed, updatableEntryIds = updatable,
                     checking = false, selectedDistroId = distroId,
                 )
             }
@@ -499,23 +566,12 @@ class DistroService(
                 _lspCatalogState.value = _lspCatalogState.value.copy(
                     entries = entries, checking = true, selectedDistroId = distroId, errorMessage = null,
                 )
-                val installed = linkedSetOf<String>()
-                val updatable = linkedSetOf<String>()
-                for (entry in entries) {
-                    if (execInDistro(entry.verifyCommand, timeoutMs = 120_000L).succeeded) {
-                        installed.add(entry.id)
-                        if (entry.updateCheckCommand.isNotBlank()) {
-                            if (entry.updateCheckCommand.contains("apt list")) refreshAptListsIfStale()
-                            if (execInDistro(entry.updateCheckCommand, timeoutMs = 120_000L).succeeded) updatable.add(entry.id)
-                        }
-                    }
-                    _lspCatalogState.value = _lspCatalogState.value.copy(
-                        installedEntryIds = installed.toSet(), updatableEntryIds = updatable.toSet(),
-                    )
-                }
-                persistInstalledLspEntries(distroId, installed.toSet())
+                val (installed, updatable) = runCatalogProbes(
+                    entries.map { CatalogProbe(it.id, it.verifyCommand, it.updateCheckCommand) },
+                )
+                persistInstalledLspEntries(distroId, installed)
                 _lspCatalogState.value = _lspCatalogState.value.copy(
-                    installedEntryIds = installed.toSet(), updatableEntryIds = updatable.toSet(),
+                    installedEntryIds = installed, updatableEntryIds = updatable,
                     checking = false, selectedDistroId = distroId,
                 )
             }
@@ -642,23 +698,12 @@ class DistroService(
                 _debugCatalogState.value = _debugCatalogState.value.copy(
                     entries = entries, checking = true, selectedDistroId = distroId, errorMessage = null,
                 )
-                val installed = linkedSetOf<String>()
-                val updatable = linkedSetOf<String>()
-                for (entry in entries) {
-                    if (execInDistro(entry.verifyCommand, timeoutMs = 120_000L).succeeded) {
-                        installed.add(entry.id)
-                        if (entry.updateCheckCommand.isNotBlank()) {
-                            if (entry.updateCheckCommand.contains("apt list")) refreshAptListsIfStale()
-                            if (execInDistro(entry.updateCheckCommand, timeoutMs = 120_000L).succeeded) updatable.add(entry.id)
-                        }
-                    }
-                    _debugCatalogState.value = _debugCatalogState.value.copy(
-                        installedEntryIds = installed.toSet(), updatableEntryIds = updatable.toSet(),
-                    )
-                }
-                persistInstalledDebugEntries(distroId, installed.toSet())
+                val (installed, updatable) = runCatalogProbes(
+                    entries.map { CatalogProbe(it.id, it.verifyCommand, it.updateCheckCommand) },
+                )
+                persistInstalledDebugEntries(distroId, installed)
                 _debugCatalogState.value = _debugCatalogState.value.copy(
-                    installedEntryIds = installed.toSet(), updatableEntryIds = updatable.toSet(),
+                    installedEntryIds = installed, updatableEntryIds = updatable,
                     checking = false, selectedDistroId = distroId,
                 )
             }
@@ -995,8 +1040,10 @@ class DistroService(
         timeoutMs: Long = 60_000L,
         onLine: ((String) -> Unit)? = null,
         user: String = _environmentState.value.runtime.user,
-    ): ExecResult {
-        return execInDistro(
+    ): ExecResult = withContext(Dispatchers.IO) {
+        // The bridge (extension WebView) invokes this on its caller's thread; the proot round-trip
+        // (ProcessBuilder + waitFor) blocks, so it must run on the IO dispatcher, never the main thread.
+        execInDistro(
             command = command,
             workdir = workdir,
             env = env,
@@ -1474,9 +1521,9 @@ class DistroService(
 
             // NOTE: the drain loops MUST NOT let any exception escape. When the process is destroyed
             // (timeout below, or killed while the runtime is under heavy load — e.g. a QEMU VM boot),
-            // the blocked readLine() throws InterruptedIOException / "Stream closed"; on a bare Thread
-            // that would be uncaught and crash the whole app. Swallow it — partial output is kept.
-            val stdoutThread = Thread {
+            // the blocked readLine() throws InterruptedIOException / "Stream closed"; uncaught on a
+            // pool thread that would crash the whole app. Swallow it — partial output is kept.
+            val stdoutTask = drainPool.submit(Runnable {
                 try {
                     BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
                         reader.lineSequence().forEach { line ->
@@ -1489,8 +1536,8 @@ class DistroService(
                 } catch (_: Throwable) {
                     // process destroyed / stream closed mid-read — expected on teardown.
                 }
-            }
-            val stderrThread = Thread {
+            })
+            val stderrTask = drainPool.submit(Runnable {
                 try {
                     BufferedReader(InputStreamReader(process.errorStream)).use { reader ->
                         reader.lineSequence().forEach { line ->
@@ -1503,10 +1550,7 @@ class DistroService(
                 } catch (_: Throwable) {
                     // process destroyed / stream closed mid-read — expected on teardown.
                 }
-            }
-
-            stdoutThread.start()
-            stderrThread.start()
+            })
 
             val completed = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
 
@@ -1520,8 +1564,10 @@ class DistroService(
                 )
             }
 
-            stdoutThread.join(5000)
-            stderrThread.join(5000)
+            // Same 5s best-effort bound as the old join(5000): wait for the drains to reach EOF, but
+            // don't propagate a timeout/interrupt — partial output is acceptable on a stuck stream.
+            runCatching { stdoutTask.get(5000, TimeUnit.MILLISECONDS) }
+            runCatching { stderrTask.get(5000, TimeUnit.MILLISECONDS) }
 
             ExecResult(
                 stdout = stdout.toString(),

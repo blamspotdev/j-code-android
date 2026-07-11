@@ -186,6 +186,9 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                     wv.setBackgroundColor(Color.White.toArgb())
                     wv.settings.javaScriptEnabled = true
                     wv.settings.domStorageEnabled = true
+                    // BuiltinBrowser.normalizeUrl accepts file:// URLs; the WebView default
+                    // flipped to no-file-access at targetSdk 30.
+                    wv.settings.allowFileAccess = true
                     wv.settings.useWideViewPort = true
                     wv.settings.loadWithOverviewMode = true
                     wv.settings.builtInZoomControls = true

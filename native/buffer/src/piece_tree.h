@@ -1,153 +1,183 @@
 #pragma once
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <string>
+#include <utility>
 #include <vector>
-#include <atomic>
-#include <functional>
 
 namespace jcode {
 
 /**
- * Source buffer: either the original (mmap'd) or added (append-only).
+ * Piece-table text buffer, the native mirror of core/buffer PieceTable.kt — it must reproduce
+ * that implementation's semantics exactly (all offsets are UTF-8 bytes; "column" is bytes since
+ * line start; ranges are end-exclusive and coerced into [0, length]).
+ *
+ * Content is a sequence of pieces referencing two byte stores: the immutable original the buffer
+ * was opened with, and an append-only add store receiving every insertion. Edits only split/trim
+ * the piece list; newline positions are indexed once per store, so line/offset conversions are
+ * binary searches, never byte scans.
+ *
+ * Concurrency contract (single writer, lock-free readers): a byte or newline entry once written
+ * is never moved or changed. The add store is fixed-size chunks (no reallocation), the newline
+ * index grows copy-on-write, and a Snapshot captures shared ownership plus the lengths at capture
+ * time — later appends only touch bytes/entries beyond what any existing snapshot reads. Buffer
+ * close/destruction cannot dangle a live Snapshot: everything is shared_ptr-owned.
  */
-struct SourceBuffer {
-    const uint8_t* data;
-    size_t length;
-    bool is_original;  // true if mmap'd, false if heap-allocated
-};
 
-/**
- * A piece in the piece tree: a view into a source buffer.
- */
-struct Piece {
-    size_t source_index;  // index into Buffer::sources_
-    size_t start;         // byte offset in source
-    size_t length;        // byte length
-    size_t line_count;    // number of \n in this piece
-    size_t line_start;    // byte offset of first line start in piece (relative to piece start)
-};
-
-/**
- * Red-black tree node containing a piece.
- */
-struct Node {
-    Piece piece;
-    bool is_red;
-    Node* left;
-    Node* right;
-    Node* parent;
-
-    // Subtree metadata for O(log n) lookups
-    size_t subtree_length;  // total byte length in subtree
-    size_t subtree_lines;   // total line count in subtree
-
-    Node(Piece p)
-        : piece(p), is_red(true), left(nullptr), right(nullptr), parent(nullptr),
-          subtree_length(p.length), subtree_lines(p.line_count) {}
-};
-
-/**
- * Snapshot: a ref-counted root pointer for lock-free reads.
- */
-class Snapshot {
+/** Append-only byte storage addressed by a global offset; bytes never move once written. */
+class AddBuffer {
 public:
-    Snapshot(Node* root, std::shared_ptr<std::vector<SourceBuffer>> sources)
-        : root_(root), sources_(sources), ref_count_(1) {}
+    static constexpr size_t kChunkSize = 64 * 1024;
+    struct Chunk {
+        uint8_t bytes[kChunkSize];
+    };
+    using ChunkList = std::vector<std::shared_ptr<Chunk>>;
 
-    ~Snapshot();
+    size_t length() const { return len_; }
 
-    void incRef() { ref_count_.fetch_add(1, std::memory_order_relaxed); }
-    void decRef();
+    /** Appends n bytes, returns the global offset of the first appended byte. */
+    size_t append(const uint8_t* data, size_t n);
 
-    Node* root() const { return root_; }
-    const std::vector<SourceBuffer>& sources() const { return *sources_; }
+    /** Copies the global range [start, start + n) into out; the range may span chunks. */
+    static void copyOut(const ChunkList& chunks, size_t start, size_t n, uint8_t* out);
 
-    size_t byteLength() const;
-    size_t lineCount() const;
-
-    // Read bytes [start, end) into output buffer
-    void readRange(size_t start, size_t end, uint8_t* out) const;
-
-    // Convert byte offset to (line, column)
-    std::pair<size_t, size_t> offsetToLineColumn(size_t offset) const;
-
-    // Convert (line, column) to byte offset
-    size_t lineColumnToOffset(size_t line, size_t column) const;
-
-    // Get byte range for a line (returns [start, end))
-    std::pair<size_t, size_t> lineAt(size_t line) const;
+    ChunkList shareChunks() const { return chunks_; }
 
 private:
-    void freeTree(Node* node);
-    Node* root_;
-    std::shared_ptr<std::vector<SourceBuffer>> sources_;
-    std::atomic<int> ref_count_;
+    ChunkList chunks_;
+    size_t len_ = 0;
 };
 
 /**
- * Edit operation: insert or delete bytes.
+ * Growable sorted index of newline byte offsets. Growth is copy-on-write (a snapshot holding the
+ * old array keeps reading its captured prefix); in-place appends only write entries beyond any
+ * snapshot's captured count.
  */
+class NewlineIndex {
+public:
+    void push(size_t offset);
+    size_t count() const { return count_; }
+    const size_t* data() const { return arr_ ? arr_->data() : nullptr; }
+    std::shared_ptr<std::vector<size_t>> share() const { return arr_; }
+
+private:
+    std::shared_ptr<std::vector<size_t>> arr_;
+    size_t count_ = 0;
+};
+
+/** The original content the buffer was opened with (heap copy or mmap), shared with snapshots. */
+struct OriginalSource {
+    std::shared_ptr<void> owner;
+    const uint8_t* data = nullptr;
+    size_t length = 0;
+};
+
+/** A run of [length] bytes at [start] in either the original store or the add store. */
+struct Piece {
+    bool from_add;
+    size_t start;
+    size_t length;
+    /** Index into the owning store's newline array of the first newline at/after start. */
+    size_t newline_from;
+    /** Newlines inside [start, start + length). */
+    size_t newline_count;
+};
+
+/** Edit operation: insert or delete bytes. */
 struct EditOp {
     enum Type { INSERT, DELETE };
     Type type;
-    size_t offset;        // byte offset for insert/delete start
-    size_t length;        // bytes to delete (DELETE only)
+    size_t offset;              // byte offset for insert / delete start
+    size_t length;              // bytes to delete (DELETE only)
     std::vector<uint8_t> data;  // bytes to insert (INSERT only)
 };
 
 /**
- * Piece tree text buffer.
- * Thread-safe for single writer, multiple readers via RCU snapshots.
+ * Immutable view of the buffer at a point in time. Ref-counted for the JNI layer (the Kotlin
+ * Snapshot's Cleaner calls decRef exactly once). Reads are binary searches over piece prefix
+ * sums — O(log pieces) + copy.
  */
+class Snapshot {
+public:
+    void incRef() { ref_count_.fetch_add(1, std::memory_order_relaxed); }
+    void decRef();
+
+    size_t byteLength() const { return length_; }
+    size_t lineCount() const { return newline_total_ + 1; }
+
+    /** Copies [start, end) (coerced into [0, length]) into out, at most cap bytes; returns bytes written. */
+    size_t readRange(int64_t start, int64_t end, uint8_t* out, size_t cap) const;
+
+    /** Byte offset (coerced) -> 0-based (line, byte column). */
+    std::pair<size_t, size_t> offsetToLineColumn(int64_t offset) const;
+
+    /** 0-based (line, byte column) -> byte offset, clamped to [0, length]. */
+    size_t lineColumnToOffset(int64_t line, int64_t column) const;
+
+    /** Byte range [start, end) of a 0-based line, excluding the newline. Past-end lines -> (length, length). */
+    std::pair<size_t, size_t> lineAt(int64_t line) const;
+
+private:
+    friend class PieceTreeBuffer;
+    Snapshot() = default;
+
+    /** Global byte offset of the k-th newline (k in 1..newline_total_). */
+    size_t newlineGlobalOffset(size_t k) const;
+    const size_t* newlineArray(const Piece& p) const;
+    /** Newlines in [0, off); off must be <= length_. */
+    size_t linesBeforeOffset(size_t off) const;
+
+    OriginalSource original_;
+    std::shared_ptr<const std::vector<size_t>> original_newlines_;
+    AddBuffer::ChunkList chunks_;
+    std::shared_ptr<std::vector<size_t>> add_newlines_owner_;
+    const size_t* add_newlines_ = nullptr;
+    size_t add_newline_count_ = 0;
+
+    std::vector<Piece> pieces_;
+    std::vector<size_t> byte_start_;  // size pieces+1; byte_start_[i] = global offset of piece i, sentinel = length_
+    std::vector<size_t> nl_before_;   // size pieces+1; newlines before piece i, sentinel = newline_total_
+    size_t length_ = 0;
+    size_t newline_total_ = 0;
+    std::atomic<int> ref_count_{1};
+};
+
+/** The live, single-writer buffer. */
 class PieceTreeBuffer {
 public:
-    PieceTreeBuffer();
-    ~PieceTreeBuffer();
-
-    // Open from file descriptor (mmap) or byte array
-    static PieceTreeBuffer* openFromFd(int fd);
     static PieceTreeBuffer* openFromBytes(const uint8_t* data, size_t length);
+    static PieceTreeBuffer* openFromFd(int fd);
 
-    // Create a snapshot (caller must decRef when done)
-    Snapshot* snapshot();
+    size_t byteLength() const { return length_; }
+    size_t lineCount() const { return newline_total_ + 1; }
 
-    // Apply edits and return new snapshot
+    /** New immutable snapshot with ref-count 1 (caller decRefs when done). */
+    Snapshot* snapshot() const;
+
+    /** Applies ops in order, returns a fresh snapshot of the result. */
     Snapshot* applyEdits(const std::vector<EditOp>& ops);
 
-    // Close and free all resources
+    /** Releases the live table's shares early; kept for JNI symmetry (snapshots stay valid). */
     void close();
 
 private:
-    // Piece tree operations
-    Node* insert(Node* root, size_t offset, const uint8_t* data, size_t length);
-    Node* remove(Node* root, size_t start, size_t end);
-    void splitPiece(Node* node, size_t offset, Node*& left, Node*& right);
+    PieceTreeBuffer() = default;
+    void initFromOriginal(OriginalSource original);
 
-    // Red-black tree balancing
-    Node* insertFixup(Node* root, Node* node);
-    Node* deleteFixup(Node* root, Node* node, Node* parent);
-    void rotateLeft(Node* node);
-    void rotateRight(Node* node);
-    void transplant(Node* u, Node* v);
-    Node* minimum(Node* node);
-    void updateSubtree(Node* node);
+    void insert(int64_t offset, const uint8_t* data, size_t n);
+    void erase(int64_t start_offset, int64_t end_offset);
+    Piece makePiece(bool from_add, size_t start, size_t len) const;
+    size_t newlinesInPieceRange(const Piece& p, size_t from_local, size_t to_local) const;
 
-    // Line counting
-    size_t countLines(const uint8_t* data, size_t length);
-    size_t findLineStart(const uint8_t* data, size_t length);
-
-    // Memory management
-    void freeTree(Node* node);
-    size_t addSourceBuffer(const uint8_t* data, size_t length, bool is_original);
-
-    std::vector<SourceBuffer> sources_;
-    std::shared_ptr<std::vector<SourceBuffer>> sources_shared_;
-    Node* root_;
-    int fd_;
-    void* mmap_addr_;
-    size_t mmap_length_;
+    OriginalSource original_;
+    std::shared_ptr<const std::vector<size_t>> original_newlines_;
+    AddBuffer add_;
+    NewlineIndex add_newlines_;
+    std::vector<Piece> pieces_;
+    size_t length_ = 0;
+    size_t newline_total_ = 0;
 };
 
 }  // namespace jcode

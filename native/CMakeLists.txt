@@ -146,12 +146,17 @@ if(JCODE_NATIVE_MODULE STREQUAL "buffer")
     add_library(jcode_native_buffer SHARED
         "${CMAKE_CURRENT_LIST_DIR}/buffer/src/piece_tree.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/buffer/src/jni_buffer.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/buffer/src/highlight.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/buffer/src/jni_highlight.cpp"
         "${JCODE_STUB_SOURCE}"
     )
     target_include_directories(jcode_native_buffer PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}/buffer/src"
     )
     target_link_libraries(jcode_native_buffer PRIVATE log)
+    # The text buffer is on the per-keystroke path; keep it optimized even in debug builds,
+    # where the AGP default -O0 makes it slower than the Kotlin fallback it replaces.
+    target_compile_options(jcode_native_buffer PRIVATE -O2)
     jcode_configure_target(jcode_native_buffer jcodebuffer)
 elseif(JCODE_NATIVE_MODULE STREQUAL "editor-render")
     jcode_add_stub_library(jcode_native_editor_render jcodernd)
@@ -197,6 +202,9 @@ elseif(JCODE_NATIVE_MODULE STREQUAL "pty")
         "${CMAKE_CURRENT_LIST_DIR}/pty/src"
     )
     target_link_libraries(jcode_native_pty PRIVATE log)
+    # The PTY shim sits on the same per-chunk terminal drain path as the VT parser; keep it
+    # optimized even in debug builds, where the AGP default -O0 cripples per-byte native code.
+    target_compile_options(jcode_native_pty PRIVATE -O2)
     jcode_configure_target(jcode_native_pty pty)
 elseif(JCODE_NATIVE_MODULE STREQUAL "vt")
     add_library(jcode_native_vt SHARED
@@ -208,6 +216,9 @@ elseif(JCODE_NATIVE_MODULE STREQUAL "vt")
         "${CMAKE_CURRENT_LIST_DIR}/vt/src"
     )
     target_link_libraries(jcode_native_vt PRIVATE log)
+    # The VT parser walks every PTY output byte; keep it optimized even in debug builds, where the
+    # AGP default -O0 cripples per-byte native parsers.
+    target_compile_options(jcode_native_vt PRIVATE -O2)
     jcode_configure_target(jcode_native_vt jcode_vt)
 elseif(JCODE_NATIVE_MODULE STREQUAL "wasmtime-ffi")
     jcode_add_stub_library(jcode_native_wasmtime jcode_wasm)
