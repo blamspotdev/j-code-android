@@ -259,8 +259,6 @@ import dev.jcode.design.ExtensionSettingsGroup
 import dev.jcode.design.ExtensionSettingsUi
 import dev.jcode.design.LocalExtensionSettingsUi
 import dev.jcode.design.LocalPerformanceSettings
-import dev.jcode.design.LocalSourceControlSettings
-import dev.jcode.design.SourceControlSettings
 import dev.jcode.design.WebPreviewBrowsers
 import dev.jcode.design.LocalWebPreviewBrowsers
 import dev.jcode.workbench.TerminalInstance
@@ -403,7 +401,6 @@ fun JCodeApp(
     val themeBundleId by viewModel.themeBundleId.collectAsStateWithLifecycle()
     val iconBundleId by viewModel.iconBundleId.collectAsStateWithLifecycle()
     val formatterId by viewModel.formatterId.collectAsStateWithLifecycle()
-    val terminalDoubleTapToFocus by viewModel.terminalDoubleTapToFocus.collectAsStateWithLifecycle()
     val hardwareAcceleration by viewModel.hardwareAcceleration.collectAsStateWithLifecycle()
     val confirmCloseRunning by viewModel.confirmCloseRunning.collectAsStateWithLifecycle()
     val autoCloseIdleTerminals by viewModel.autoCloseIdleTerminals.collectAsStateWithLifecycle()
@@ -543,22 +540,32 @@ fun JCodeApp(
     }
     StatusBarKeyboardController(enabled = hideStatusBarWithKeyboard)
     val tapContext = LocalContext.current
+    // Routing for a URL surfaced by the terminal — a tapped link, or a guest CLI's xdg-open/$BROWSER
+    // (OSC 7714). Both honor the same web-preview browser choice as Build & Run. rememberUpdatedState
+    // keeps the long-lived OSC listener pointed at the latest choice/project without re-registering.
+    val openTerminalUrl by rememberUpdatedState<(String) -> Unit> { url ->
+        val trimmed = url.trim().trimEnd('.', ',', ')', ']', '}', ';')
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            val choice = webPreviewBrowsers.effective(selectedProject?.id?.toString().orEmpty())
+            if (choice == WebPreviewBrowsers.BUILTIN) BuiltinBrowser.requestOpen(trimmed)
+            else ProjectRunner.openInBrowser(tapContext, trimmed, choice)
+        }
+    }
     val terminalTapConfig = TerminalTapConfig(
-        doubleTapToFocus = terminalDoubleTapToFocus,
         onToken = { token ->
             val trimmed = token.trim().trimEnd('.', ',', ')', ']', '}', ';')
-            if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-                val choice = webPreviewBrowsers.effective(selectedProject?.id?.toString().orEmpty())
-                if (choice == WebPreviewBrowsers.BUILTIN) BuiltinBrowser.requestOpen(trimmed)
-                else ProjectRunner.openInBrowser(tapContext, trimmed, choice)
-            } else {
-                viewModel.openFileByGuestPath(token)
-            }
+            if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) openTerminalUrl(trimmed)
+            else viewModel.openFileByGuestPath(token)
         },
+        onPasteImage = { uri -> viewModel.savePastedImage(uri) },
     )
     DisposableEffect(viewModel) {
         TerminalSessionHost.setUiOpenFileListener { token -> viewModel.openFileByGuestPath(token) }
-        onDispose { TerminalSessionHost.setUiOpenFileListener(null) }
+        TerminalSessionHost.setUiOpenUrlListener { url -> openTerminalUrl(url) }
+        onDispose {
+            TerminalSessionHost.setUiOpenFileListener(null)
+            TerminalSessionHost.setUiOpenUrlListener(null)
+        }
     }
     // Surface the built-in browser editor tab whenever something requests it (a "Built-in browser"
     // preview, or a terminal-URL tap, bumps BuiltinBrowser.revealSignal). Handled here because this is
@@ -743,9 +750,6 @@ fun JCodeApp(
         LocalSetupTerminalSessionId provides setupTerminalSessionId,
         LocalDebugSession provides debugSessionUi,
         LocalPerformanceSettings provides performanceSettings,
-        LocalSourceControlSettings provides remember {
-            SourceControlSettings(ready = true, onLoad = viewModel::getGitIdentity, onSave = viewModel::setGitIdentity)
-        },
         LocalExtensionSettingsUi provides extensionSettingsUi,
         LocalWebPreviewBrowsers provides webPreviewBrowsers,
         LocalIssueActions provides issueActions,
@@ -846,8 +850,6 @@ fun JCodeApp(
             extensionEvents = viewModel.extensionEvents,
         ) },
         onOpenSettingsPage = viewModel::openSettingsPage,
-        terminalDoubleTapToFocus = terminalDoubleTapToFocus,
-        onUpdateTerminalDoubleTapToFocus = viewModel::setTerminalDoubleTapToFocus,
         hideStatusBarWithKeyboard = hideStatusBarWithKeyboard,
         onUpdateHideStatusBarWithKeyboard = viewModel::setHideStatusBarWithKeyboard,
         bringEditorToFront = viewModel.bringEditorToFront,
@@ -860,6 +862,7 @@ fun JCodeApp(
             installedToolchains = sdkCatalogState.installedEntryIds,
             onDismiss = viewModel::dismissNewDialog,
             onConfirm = viewModel::createNewItem,
+            resolveDynamicOptions = viewModel::runTemplateOptionsCommand,
         )
     }
 
@@ -963,8 +966,6 @@ private fun JCodeShell(
     onSaveRunConfig: (Project, RunConfig) -> Unit,
     runConfigVersion: Int,
     onOpenSettingsPage: () -> Unit,
-    terminalDoubleTapToFocus: Boolean,
-    onUpdateTerminalDoubleTapToFocus: (Boolean) -> Unit,
     hideStatusBarWithKeyboard: Boolean,
     onUpdateHideStatusBarWithKeyboard: (Boolean) -> Unit,
     bringEditorToFront: SharedFlow<Unit>,
@@ -1825,8 +1826,6 @@ private fun JCodeShell(
                                             .filter { it.type == ExtensionType.Formatter }
                                             .map { it.id to it.name },
                                     onSelectFormatter = onSelectFormatter,
-                                    terminalDoubleTapToFocus = terminalDoubleTapToFocus,
-                                    onUpdateTerminalDoubleTapToFocus = onUpdateTerminalDoubleTapToFocus,
                                     hideStatusBarWithKeyboard = hideStatusBarWithKeyboard,
                                     onUpdateHideStatusBarWithKeyboard = onUpdateHideStatusBarWithKeyboard,
                                     isUserWorkspace = breadcrumb.size > 1,
@@ -3174,18 +3173,18 @@ private fun TerminalSidebarContent(
                                 TerminalView(ctx).apply {
                                     setFontSize(30f)
                                     setTypeface(terminalTypeface)
-                                    doubleTapToFocus = tapConfig.doubleTapToFocus
                                     onTapToken = tapConfig.onToken
                                     onContextMenu = { x, y -> termMenu = TerminalMenuRequest(x, y, this) }
+                                    onPasteImage = tapConfig.onPasteImage
                                     wireExtraKeys(this)
                                     bind(session)
                                 }
                             },
                             update = { view ->
                                 view.setTypeface(terminalTypeface)
-                                view.doubleTapToFocus = tapConfig.doubleTapToFocus
                                 view.onTapToken = tapConfig.onToken
                                 view.onContextMenu = { x, y -> termMenu = TerminalMenuRequest(x, y, view) }
+                                view.onPasteImage = tapConfig.onPasteImage
                                 view.bind(session) // no-op if already bound to this session
                                 view.setActive(isActive)
                             },

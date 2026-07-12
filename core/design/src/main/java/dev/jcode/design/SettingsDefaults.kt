@@ -3,7 +3,6 @@ package dev.jcode.design
 /** Factory defaults for the app-level (Global) settings. Single source of truth shared by the
  *  ViewModel's DataStore fallbacks and the Settings screen's modified/reset-to-default logic. */
 object SettingsDefaults {
-    const val TERMINAL_DOUBLE_TAP_TO_FOCUS = true
     const val HARDWARE_ACCELERATION = true
     const val CONFIRM_CLOSE_RUNNING = true
     const val EXIT_ON_SWIPE_AWAY = true

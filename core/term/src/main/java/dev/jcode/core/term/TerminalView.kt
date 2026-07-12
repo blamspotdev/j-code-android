@@ -54,15 +54,15 @@ class TerminalView @JvmOverloads constructor(
     // Set by the "Select text" menu action so the next touch-drag begins a selection.
     private var selectionArmed = false
 
-    // When true (default): single tap opens a link/path under the finger; double tap focuses + shows
-    // the keyboard. When false: single tap focuses + shows the keyboard (legacy). Driven by app settings.
-    var doubleTapToFocus = true
     // Invoked on the main thread with the contiguous token under a confirmed single tap, so the host
     // can open it as a URL (browser) or file path (editor).
     var onTapToken: ((String) -> Unit)? = null
     // Invoked (with the touch point in view pixels) when a long-press requests the action menu, so the
     // host can render the shared compact context menu instead of a native PopupMenu.
     var onContextMenu: ((Float, Float) -> Unit)? = null
+    // Invoked on paste when the clipboard holds an image: the host saves it into the active project and
+    // returns the guest path to paste (a raw terminal can't render an image). Null / null-return = skip.
+    var onPasteImage: ((android.net.Uri) -> String?)? = null
     // Focus reporting for the extra-keys row: the host points the row at whichever surface owns the IME.
     var onFocusStateChanged: ((Boolean) -> Unit)? = null
 
@@ -105,32 +105,21 @@ class TerminalView @JvmOverloads constructor(
         }
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            // Legacy mode: a single tap focuses + raises the keyboard immediately.
-            if (!doubleTapToFocus) {
-                requestFocus()
-                showSoftKeyboard()
-                return true
-            }
-            return false // new mode: wait for onSingleTapConfirmed (link) / onDoubleTap (keyboard)
+            // Defer to onSingleTapConfirmed (opens a link/path) or onDoubleTap (shows the keyboard).
+            return false
         }
 
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-            // New mode: a confirmed single tap opens a link/path under the finger (never the keyboard).
-            if (doubleTapToFocus) {
-                handleTokenTap(e.x, e.y)
-                return true
-            }
-            return false
+            // A confirmed single tap opens a link/path under the finger (never the keyboard).
+            handleTokenTap(e.x, e.y)
+            return true
         }
 
         override fun onDoubleTap(e: MotionEvent): Boolean {
-            // New mode: double tap is the deliberate "interact" gesture that focuses + shows the keyboard.
-            if (doubleTapToFocus) {
-                requestFocus()
-                showSoftKeyboard()
-                return true
-            }
-            return false
+            // Double tap is the deliberate gesture that focuses + shows the keyboard.
+            requestFocus()
+            showSoftKeyboard()
+            return true
         }
     })
 
@@ -354,16 +343,29 @@ class TerminalView @JvmOverloads constructor(
 
     fun contextClear() = clearScreen()
 
-    /** Paste clipboard text into the terminal (written to the PTY as keyboard input). */
+    /** Paste the clipboard into the terminal. An image is saved into the project and its (shell-quoted)
+     *  path is pasted — a raw terminal can't render an image, and CLIs accept an image file path.
+     *  Otherwise the clipboard text is written to the PTY as keyboard input. */
     private fun pasteFromClipboard() {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-        val text = clipboard?.primaryClip
-            ?.takeIf { it.itemCount > 0 }
-            ?.getItemAt(0)
-            ?.coerceToText(context)
-            ?.toString()
+        val clip = clipboard?.primaryClip?.takeIf { it.itemCount > 0 } ?: return
+        val item = clip.getItemAt(0)
+        val uri = item.uri
+        if (uri != null) {
+            val type = runCatching { context.contentResolver.getType(uri) }.getOrNull()
+            val isImage = type?.startsWith("image/") == true || clip.description?.hasMimeType("image/*") == true
+            if (isImage) {
+                val guestPath = onPasteImage?.invoke(uri)
+                if (guestPath != null) sendInput(shellQuote(guestPath) + " ") else toast("Couldn't paste image")
+                return
+            }
+        }
+        val text = item.coerceToText(context)?.toString()
         if (!text.isNullOrEmpty()) sendInput(text)
     }
+
+    /** Single-quote a path for the shell so any spaces or specials in it are treated literally. */
+    private fun shellQuote(s: String): String = "'" + s.replace("'", "'\\''") + "'"
 
     /** Select the whole visible screen and copy it to the clipboard. */
     private fun selectAllAndCopy() {
@@ -505,12 +507,11 @@ class TerminalView @JvmOverloads constructor(
         if (active) {
             // Post so focus is requested after this view is laid out/attached — requesting it
             // synchronously right after creation (new session tab) is too early and silently fails,
-            // which would leave input going to whatever held focus before. In double-tap mode we only
-            // take focus (so output/scroll work); the keyboard waits for a deliberate double tap so it
-            // never pops up just from opening/switching a terminal.
+            // which would leave input going to whatever held focus before. We only take focus (so
+            // output/scroll work); the keyboard waits for a deliberate double tap so it never pops up
+            // just from opening/switching a terminal.
             post {
                 requestFocus()
-                if (!doubleTapToFocus) showSoftKeyboard()
             }
         } else {
             clearFocus()

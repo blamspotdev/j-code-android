@@ -64,7 +64,6 @@ import dev.jcode.design.LocalEditorDragMovesCursor
 import dev.jcode.design.LocalExtraKeysSetting
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.LocalRestoreSession
-import dev.jcode.design.LocalSourceControlSettings
 import dev.jcode.design.WebPreviewBrowsers
 import dev.jcode.design.LocalWebPreviewBrowsers
 import dev.jcode.design.LocalTabCloseButtonSetting
@@ -106,8 +105,6 @@ object SettingsFeature {
         formatterId: String,
         formatterOptions: List<Pair<String, String>>,
         onSelectFormatter: (String) -> Unit,
-        terminalDoubleTapToFocus: Boolean,
-        onUpdateTerminalDoubleTapToFocus: (Boolean) -> Unit,
         hideStatusBarWithKeyboard: Boolean,
         onUpdateHideStatusBarWithKeyboard: (Boolean) -> Unit,
         isUserWorkspace: Boolean = false,
@@ -365,37 +362,6 @@ object SettingsFeature {
                 )
             }
 
-            SettingsSectionHeader("Source Control")
-            SettingsCard(
-                title = "Git identity",
-                description = "The author name and email recorded on your commits. Applies to all git in the " +
-                    "runtime, and is also editable from the Source Control sign-in page.",
-                keywords = "git source control scm identity name email commit author github sign in credentials",
-            ) {
-                val scm = LocalSourceControlSettings.current
-                var name by rememberSaveable { mutableStateOf("") }
-                var email by rememberSaveable { mutableStateOf("") }
-                var loaded by rememberSaveable { mutableStateOf(false) }
-                var saved by rememberSaveable { mutableStateOf(false) }
-                LaunchedEffect(scm) {
-                    if (!loaded) {
-                        val (n, e) = scm.onLoad()
-                        name = n; email = e; loaded = true
-                    }
-                }
-                SettingsTextFieldRow(label = "Name", value = name, onValueChange = { name = it; saved = false }, placeholder = "Your name")
-                SettingsTextFieldRow(label = "Email", value = email, onValueChange = { email = it; saved = false }, placeholder = "you@example.com")
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    FilledTonalButton(
-                        onClick = { scm.onSave(name.trim(), email.trim()); saved = true },
-                        enabled = name.isNotBlank() && email.isNotBlank(),
-                    ) { Text("Save identity") }
-                    if (saved) {
-                        Text("Saved", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                    }
-                }
-            }
-
             // Per-extension settings now live on the Extension Settings screen (Extensions list → gear),
             // alongside each extension's permissions — not here in App Settings.
 
@@ -631,21 +597,6 @@ object SettingsFeature {
                 }
             }
 
-            SettingsSectionHeader("Terminal")
-            SettingsCard(
-                title = "Terminal",
-                description = "How tapping the terminal behaves. Applies app-wide.",
-                keywords = "terminal double tap type focus keyboard links urls paths single",
-            ) {
-                ToggleRow(
-                    label = "Double-tap to type",
-                    supporting = "Double-tap focuses the terminal and shows the keyboard; a single tap opens URLs and file paths. Turn off to focus with a single tap (links disabled).",
-                    checked = terminalDoubleTapToFocus,
-                    onCheckedChange = onUpdateTerminalDoubleTapToFocus,
-                    modified = terminalDoubleTapToFocus != SettingsDefaults.TERMINAL_DOUBLE_TAP_TO_FOCUS,
-                    onReset = { onUpdateTerminalDoubleTapToFocus(SettingsDefaults.TERMINAL_DOUBLE_TAP_TO_FOCUS) },
-                )
-            }
             } // end Global tab
 
             if (showScopedTab) {

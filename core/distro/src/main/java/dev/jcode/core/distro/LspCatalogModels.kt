@@ -141,14 +141,22 @@ object LspServerCatalog {
             id = "kotlin-language-server",
             category = "JVM",
             name = "Kotlin Language Server",
-            description = "Language server for Kotlin. Install manually via SDKMAN or a release archive.",
-            installCommand = "echo 'Install kotlin-language-server via SDKMAN or a release archive, then re-run Verify.'",
+            description = "Language server for Kotlin (needs a JDK). Installed from the fwcd release archive.",
+            // fwcd/kotlin-language-server ships a `server.zip` on each release; /releases/latest/download
+            // always resolves to the newest asset, so no version needs pinning. It's a JVM app, so `jdk`
+            // (which provides `java`) is required first.
+            installCommand = "set -e; sudo apt-get install -y curl unzip; " +
+                "curl -fsSL -o /tmp/kls.zip https://github.com/fwcd/kotlin-language-server/releases/latest/download/server.zip; " +
+                "sudo rm -rf /opt/kotlin-language-server; sudo unzip -q -o /tmp/kls.zip -d /opt/kotlin-language-server; " +
+                "sudo ln -sf /opt/kotlin-language-server/server/bin/kotlin-language-server /usr/local/bin/kotlin-language-server; " +
+                "rm -f /tmp/kls.zip",
             verifyCommand = "kotlin-language-server --version",
-            uninstallCommand = "echo 'Remove kotlin-language-server from the location it was installed to.'",
+            uninstallCommand = "sudo rm -rf /opt/kotlin-language-server /usr/local/bin/kotlin-language-server",
             runCommand = "kotlin-language-server",
             languageIds = listOf("kotlin"),
             extensions = listOf(".kt", ".kts"),
             rootDetectors = listOf("build.gradle.kts", "settings.gradle.kts", ".git"),
+            requiredSdks = listOf("jdk"),
         ),
         // vscode-langservers-extracted bundles the HTML, CSS and JSON servers in one npm package; each
         // entry installs the same package but runs its own binary (needs Node.js).

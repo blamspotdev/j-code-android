@@ -126,6 +126,8 @@ fun MarkdownPreviewPage(
         "(function(){try{var r=document.documentElement.style;$sets}catch(e){}})()"
     }
     val themeJsState = rememberUpdatedState(themeJs)
+    // Markdown link taps honor the user's global web-preview browser choice (was hardcoded to SYSTEM).
+    val webBrowserChoice by rememberUpdatedState(dev.jcode.design.LocalWebPreviewBrowsers.current.globalChoice)
     LaunchedEffect(themeJs, backgroundArgb, webView) {
         webView?.post {
             webView?.setBackgroundColor(backgroundArgb)
@@ -189,7 +191,11 @@ fun MarkdownPreviewPage(
                             ): Boolean {
                                 val url = request.url?.toString().orEmpty()
                                 if (url.startsWith("http://") || url.startsWith("https://")) {
-                                    ProjectRunner.openInBrowser(view.context, url, "")
+                                    if (webBrowserChoice == dev.jcode.design.WebPreviewBrowsers.BUILTIN) {
+                                        BuiltinBrowser.requestOpen(url)
+                                    } else {
+                                        ProjectRunner.openInBrowser(view.context, url, webBrowserChoice)
+                                    }
                                 }
                                 return true
                             }

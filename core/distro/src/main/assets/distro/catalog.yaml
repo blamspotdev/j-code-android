@@ -1,7 +1,7 @@
 entries:
   - id: clangd
     category: languages
-    name: C and C++ tools
+    name: C/C++
     description: Installs clang, clangd, lldb, and gdb for C-family projects.
     installScript: |
       sudo apt-get update
@@ -14,7 +14,7 @@ entries:
 
   - id: python
     category: languages
-    name: Python tooling
+    name: Python
     description: Installs Python 3, venv support, and pip for app and script projects.
     installScript: |
       sudo apt-get update
@@ -52,6 +52,24 @@ entries:
       sudo rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
       sudo rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack
     updateCheckScript: "false"
+
+  - id: jdk
+    category: languages
+    name: Java (JDK)
+    description: OpenJDK 21 plus ktlint — the JVM runtime and formatter that Kotlin/Java language servers and the Kotlin formatter need.
+    installScript: |
+      set -e
+      sudo apt-get update
+      sudo apt-get install -y openjdk-21-jdk-headless curl ca-certificates
+      curl -fsSL -o /tmp/ktlint https://github.com/pinterest/ktlint/releases/latest/download/ktlint
+      sudo install -m 0755 /tmp/ktlint /usr/local/bin/ktlint
+      rm -f /tmp/ktlint
+    verifyScript: |
+      command -v java >/dev/null 2>&1 && command -v ktlint >/dev/null 2>&1 && echo ready
+    uninstallScript: |
+      sudo apt-get remove -y openjdk-21-jdk-headless
+      sudo rm -f /usr/local/bin/ktlint
+    updateCheckScript: ""
 
   - id: rust
     category: build-tools
@@ -95,7 +113,7 @@ entries:
 
   - id: android-sdk
     category: android
-    name: Android SDK (platform 34 + Gradle)
+    name: Android SDK
     description: Command-line tools, the Android 34 platform, build-tools 34, and Gradle 8.7 — wired with the ARM-native aapt2 so on-device Gradle builds (assembleDebug) produce a real APK. Requires the Android SDK prerequisites. Large download.
     supportedArches: [arm64]
     requiredSdks: [android-prereqs]
@@ -137,14 +155,21 @@ entries:
 
   - id: dotnet
     category: dotnet
-    name: .NET SDK bootstrap
-    description: Installs the dotnet installer script into the jcode user's home directory and bootstraps the current 8.0 channel.
+    name: .NET SDK
+    description: Installs the currently-supported .NET SDKs (LTS + STS channels, resolved at install time — .NET 10 + 9 today) into $HOME/.dotnet, plus a pinned .NET 8 runtime floor that csharp-ls and netcoredbg need. A new .NET release needs no JCode update.
     installScript: |
       sudo apt-get update
       sudo apt-get install -y curl ca-certificates
       mkdir -p "$HOME/.dotnet"
       curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
-      bash /tmp/dotnet-install.sh --channel 8.0 --install-dir "$HOME/.dotnet"
+      # Currently-supported SDK lines, resolved dynamically so a new .NET release needs no change here.
+      # LTS installs first so the newest host owns the unversioned `dotnet` muxer; every later (older)
+      # install gets --skip-non-versioned-files so it can't overwrite that newer host.
+      bash /tmp/dotnet-install.sh --channel LTS --install-dir "$HOME/.dotnet"
+      bash /tmp/dotnet-install.sh --channel STS --install-dir "$HOME/.dotnet" --skip-non-versioned-files
+      # Pinned .NET 8 runtime floor (runtime-only): csharp-ls 0.16.0 targets net8.0 and netcoredbg is
+      # built against .NET 8; both need the 8.x shared runtime even once .NET 8's SDK is EOL.
+      bash /tmp/dotnet-install.sh --channel 8.0 --runtime dotnet --install-dir "$HOME/.dotnet" --skip-non-versioned-files
       # CoreCLR over-reserves for the whole device RAM inside proot's ptrace-constrained address
       # space and gets killed on first start; every dotnet call needs the 1 GB GC cap. The shim
       # also puts dotnet + installed global tools on PATH for non-login shells.
@@ -249,7 +274,7 @@ entries:
 
   - id: qemu-system-x86
     category: virtualization
-    name: x86 Virtualization (QEMU)
+    name: QEMU (x86)
     description: Full-system QEMU to run x86/x86_64 virtual machines on this ARM device, for software with no ARM build (e.g. Microsoft SQL Server). Pure software emulation (no KVM on device) — VMs are slow but fully compatible. Drives the VM Manager extension.
     supportedArches: [arm64]
     installScript: |
@@ -262,7 +287,7 @@ entries:
     updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(qemu-system-x86|qemu-utils)/'"
   - id: opencode
     category: ai
-    name: opencode AI agent
+    name: opencode
     description: >-
       The opencode AI coding agent (single self-contained binary, no Node.js needed). Powers the
       Chat tab in the right drawer via the OpenChamber extension, and briefs the agent on JCode's
@@ -296,4 +321,38 @@ entries:
     uninstallScript: |
       rm -rf "$HOME/.opencode"
       sudo rm -f /usr/local/bin/opencode
+    updateCheckScript: ""
+  - id: claude
+    category: ai
+    name: Claude Code
+    description: >-
+      Anthropic's Claude Code CLI coding agent. Installed globally via npm (needs Node.js). Bring an
+      API key or a Claude subscription, then run `claude` in the terminal.
+    supportedArches: [arm64]
+    requiredSdks: [nodejs]
+    installScript: |
+      set -e
+      sudo npm install -g @anthropic-ai/claude-code
+      echo "installed: claude $(claude --version 2>/dev/null | tail -1)"
+    verifyScript: |
+      command -v claude >/dev/null 2>&1 && echo ready
+    uninstallScript: |
+      sudo npm rm -g @anthropic-ai/claude-code
+    updateCheckScript: ""
+  - id: codex
+    category: ai
+    name: Codex
+    description: >-
+      OpenAI's Codex CLI coding agent. Installed globally via npm (needs Node.js). Bring an OpenAI API
+      key, then run `codex` in the terminal.
+    supportedArches: [arm64]
+    requiredSdks: [nodejs]
+    installScript: |
+      set -e
+      sudo npm install -g @openai/codex
+      echo "installed: codex $(codex --version 2>/dev/null | tail -1)"
+    verifyScript: |
+      command -v codex >/dev/null 2>&1 && echo ready
+    uninstallScript: |
+      sudo npm rm -g @openai/codex
     updateCheckScript: ""

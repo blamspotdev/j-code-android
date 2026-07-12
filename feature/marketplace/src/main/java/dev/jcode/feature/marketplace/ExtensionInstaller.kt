@@ -297,6 +297,7 @@ class ExtensionInstaller internal constructor(context: Context) {
                 label = input.str("label") ?: inputId,
                 type = input.str("type") ?: "select",
                 options = input.listOfAny("options").mapNotNull { it?.toString() },
+                optionsCommand = input.str("optionsCommand")?.trim().orEmpty(),
                 default = input.str("default"),
             )
         }

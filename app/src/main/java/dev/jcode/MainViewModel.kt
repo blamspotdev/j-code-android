@@ -318,6 +318,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (abortOnFail) return false
             }
         }
+        for (dbgId in deps.dbg) {
+            if (dbgId in distroService.debugCatalogState.value.installedEntryIds) continue
+            _messages.tryEmit("Installing required debugger: $dbgId…")
+            if (!installRequiredDbg(dbgId)) {
+                val reason = distroService.debugCatalogState.value.errorMessage ?: "install failed"
+                _messages.tryEmit("$sourceName: required debugger '$dbgId' — $reason")
+                if (abortOnFail) return false
+            }
+        }
         return true
     }
 
@@ -347,6 +356,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             session.close()
         }
         entryId in distroService.lspCatalogState.value.installedEntryIds
+    }
+
+    private suspend fun installRequiredDbg(entryId: String): Boolean = withContext(Dispatchers.IO) {
+        val entry = DebugEngineCatalog.findById(entryId)
+        if (entry != null && !installRequiredSdks(entry.requiredSdks, entry.name)) return@withContext false
+        val session = SessionRegistry.registerSession(
+            context = getApplication(),
+            kind = BackendSessionKind.JOB,
+            name = "dbg:install:$entryId",
+        )
+        try {
+            distroService.runDebugEngineCatalogAction(entryId, DebugEngineAction.Install)
+        } finally {
+            session.close()
+        }
+        entryId in distroService.debugCatalogState.value.installedEntryIds
     }
 
     /**
@@ -431,19 +456,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // DataStore for the same file (e.g. when a new MainViewModel is built after Activity recreation)
     // crashes with "multiple DataStores active for the same file".
     private val uiPreferences = UiPreferencesStore.get(appContext)
-
-    private val terminalDoubleTapKey = booleanPreferencesKey("terminal_double_tap_focus")
-
-    /** When true (default), a single terminal tap opens links/paths and a double tap shows the keyboard. */
-    val terminalDoubleTapToFocus: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs -> prefs[terminalDoubleTapKey] ?: SettingsDefaults.TERMINAL_DOUBLE_TAP_TO_FOCUS }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.TERMINAL_DOUBLE_TAP_TO_FOCUS)
-
-    fun setTerminalDoubleTapToFocus(enabled: Boolean) {
-        viewModelScope.launch {
-            uiPreferences.edit { prefs -> prefs[terminalDoubleTapKey] = enabled }
-        }
-    }
 
     private val hardwareAccelerationKey = booleanPreferencesKey("perf_hardware_acceleration")
 
@@ -1651,6 +1663,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Save a clipboard image pasted into the terminal under the active project and return its guest
+     *  /workspace path (or null if there's no open project or the write fails). Called on the main
+     *  thread from the terminal paste action; images are small (screenshots) so the write is inline. */
+    fun savePastedImage(uri: android.net.Uri): String? {
+        val projectDir = (selectedProject.value?.fsPath as? FsPath.Local)?.file ?: return null
+        return runCatching {
+            val dir = File(projectDir, ".jcode/pasted-images").apply { mkdirs() }
+            val file = File(dir, "paste-${System.currentTimeMillis()}.png")
+            appContext.contentResolver.openInputStream(uri)?.use { input ->
+                val bitmap = android.graphics.BitmapFactory.decodeStream(input) ?: return null
+                file.outputStream().use { out ->
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+                }
+            } ?: return null
+            dev.jcode.core.distro.WorkspaceHostPaths.hostToGuest(file.absolutePath)
+        }.getOrNull()
+    }
+
+    /** Resolve a template input's live options by running its optionsCommand in the runtime; returns
+     *  the distinct non-blank stdout lines (e.g. installed .NET SDK monikers), or empty on any failure
+     *  or when the runtime isn't ready — the caller then falls back to the template's static options. */
+    suspend fun runTemplateOptionsCommand(command: String): List<String> {
+        if (command.isBlank() || !distroService.isRuntimeReady()) return emptyList()
+        return runCatching {
+            distroService.exec(command, user = "root", raw = true).stdout
+                .lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.distinct().toList()
+        }.getOrDefault(emptyList())
+    }
+
     /** Open (or focus) the in-editor Settings page as an editor tab. */
     fun openSettingsPage() {
         val existing = _editorGroup.value.tabs.firstOrNull { it.pageKind == EditorPageKind.Settings }
@@ -1687,24 +1728,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val viewLabel = when (view) { "github" -> "GitHub"; "" -> null; else -> view.replaceFirstChar { it.uppercaseChar() } }
         openDetailPage(EXT_APP_PREFIX + extensionId + "#" + view, EditorPageKind.ExtensionApp) {
             title?.takeIf { it.isNotBlank() } ?: listOfNotNull(ext?.name, viewLabel).joinToString(" · ").ifBlank { "View" }
-        }
-    }
-
-    /** The current global git identity (name, email) from the runtime, or empty strings. */
-    suspend fun getGitIdentity(): Pair<String, String> {
-        val name = distroService.exec("git config --global --get user.name 2>/dev/null", user = "root").stdout.trim()
-        val email = distroService.exec("git config --global --get user.email 2>/dev/null", user = "root").stdout.trim()
-        return name to email
-    }
-
-    /** Set the global git identity in the runtime (author of all commits). */
-    fun setGitIdentity(name: String, email: String) {
-        viewModelScope.launch {
-            fun q(s: String) = "'" + s.replace("'", "'\\''") + "'"
-            distroService.exec(
-                "git config --global user.name ${q(name)} && git config --global user.email ${q(email)}",
-                user = "root",
-            )
         }
     }
 
@@ -1945,9 +1968,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 ?.let { o -> buildMap { o.keys().forEach { put(it, o.optString(it)) } } }
                 .orEmpty()
             val r = if (workdir != null) {
-                distroService.exec(command, workdir = workdir, env = env, timeoutMs = timeout, user = user)
+                distroService.exec(command, workdir = workdir, env = env, timeoutMs = timeout, user = user, raw = true)
             } else {
-                distroService.exec(command, env = env, timeoutMs = timeout, user = user)
+                distroService.exec(command, env = env, timeoutMs = timeout, user = user, raw = true)
             }
             apiOk(
                 JSONObject().apply {
@@ -2005,7 +2028,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         "workbench.openUrl" -> {
             val url = p.optString("url")
             require(url.startsWith("http://") || url.startsWith("https://")) { "http(s) URLs only" }
-            ProjectRunner.openInBrowser(appContext, url, "")
+            // Honor the user's global web-preview browser choice (was hardcoded to SYSTEM).
+            val choice = webPreviewBrowser.value
+            if (choice == dev.jcode.design.WebPreviewBrowsers.BUILTIN) {
+                dev.jcode.workbench.BuiltinBrowser.requestOpen(url)
+            } else {
+                ProjectRunner.openInBrowser(appContext, url, choice)
+            }
             apiOk(JSONObject())
         }
 

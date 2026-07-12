@@ -13,10 +13,11 @@ internal data class TerminalInstance(val id: String, val label: String)
 
 /** Terminal tap behavior, provided to the deeply-nested terminal view without prop-drilling. */
 internal data class TerminalTapConfig(
-    /** True: single tap opens a link/path, double tap shows the keyboard. False: single tap = keyboard. */
-    val doubleTapToFocus: Boolean = true,
     /** Invoked with the tapped token (a URL is opened in the browser; a path in the editor). */
     val onToken: (String) -> Unit = {},
+    /** Invoked on paste when the clipboard holds an image: saves it into the active project and
+     *  returns the guest path to paste (or null to skip). */
+    val onPasteImage: (android.net.Uri) -> String? = { null },
 )
 
 internal val LocalTerminalTapConfig = compositionLocalOf { TerminalTapConfig() }

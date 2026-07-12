@@ -1048,6 +1048,7 @@ class DistroService(
         timeoutMs: Long = 60_000L,
         onLine: ((String) -> Unit)? = null,
         user: String = _environmentState.value.runtime.user,
+        raw: Boolean = false,
     ): ExecResult = withContext(Dispatchers.IO) {
         // The bridge (extension WebView) invokes this on its caller's thread; the proot round-trip
         // (ProcessBuilder + waitFor) blocks, so it must run on the IO dispatcher, never the main thread.
@@ -1058,6 +1059,7 @@ class DistroService(
             timeoutMs = timeoutMs,
             onLine = onLine,
             user = user,
+            raw = raw,
         )
     }
 
@@ -1401,6 +1403,7 @@ class DistroService(
         timeoutMs: Long = 60_000L,
         onLine: ((String) -> Unit)? = null,
         user: String = _environmentState.value.runtime.user,
+        raw: Boolean = false,
     ): ExecResult {
         val runtime = _environmentState.value.runtime
         val distroId = runtime.selectedDistro.id
@@ -1450,7 +1453,7 @@ class DistroService(
             rootfsArch = arch,
         )
 
-        return executeProcess(prootArgs, timeoutMs, onLine = onLine, rootfsArch = arch)
+        return executeProcess(prootArgs, timeoutMs, onLine = onLine, rootfsArch = arch, raw = raw)
     }
 
     /**
@@ -1513,6 +1516,7 @@ class DistroService(
         timeoutMs: Long,
         onLine: ((String) -> Unit)? = null,
         rootfsArch: Arch = Arch.ARM64,
+        raw: Boolean = false,
     ): ExecResult {
         return try {
             val builder = ProcessBuilder(command)
@@ -1535,7 +1539,7 @@ class DistroService(
                 try {
                     BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
                         reader.lineSequence().forEach { line ->
-                            normalizeProcessOutputLine(line)?.let { normalized ->
+                            (if (raw) rawProcessOutputLine(line) else normalizeProcessOutputLine(line))?.let { normalized ->
                                 stdout.appendLine(normalized)
                                 onLine?.invoke(normalized)
                             }
@@ -1549,7 +1553,7 @@ class DistroService(
                 try {
                     BufferedReader(InputStreamReader(process.errorStream)).use { reader ->
                         reader.lineSequence().forEach { line ->
-                            normalizeProcessOutputLine(line)?.let { normalized ->
+                            (if (raw) rawProcessOutputLine(line) else normalizeProcessOutputLine(line))?.let { normalized ->
                                 stderr.appendLine(normalized)
                                 onLine?.invoke(normalized)
                             }
@@ -1702,6 +1706,16 @@ class DistroService(
         if (normalized.isBlank()) return null
         if (normalized.startsWith("proot warning: unknown syscall ")) return null
         return normalized
+    }
+
+    /**
+     * Byte-accurate variant for programmatic consumers (the extension exec.run bridge). Preserves
+     * leading/trailing whitespace and blank lines so column- and indent-sensitive output — git
+     * status --porcelain, unified diffs, ls -l — is not corrupted. Only strips proot's syscall noise.
+     */
+    private fun rawProcessOutputLine(line: String): String? {
+        if (line.startsWith("proot warning: unknown syscall ")) return null
+        return line
     }
 
     private fun summarizeResult(result: ExecResult): String {

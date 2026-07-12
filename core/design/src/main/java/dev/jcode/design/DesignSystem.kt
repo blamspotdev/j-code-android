@@ -172,20 +172,6 @@ class PerformanceSettings(
 val LocalPerformanceSettings = compositionLocalOf { PerformanceSettings() }
 
 /**
- * Source-control (git) preferences, shared (via [LocalSourceControlSettings]) with the settings screen.
- * [onLoad] reads the current global git identity (name, email) from the Linux runtime; [onSave] writes
- * it. This identity is the author on every commit and is also editable from the SCM extension's sign-in
- * page. [ready] is false until the runtime/git is available.
- */
-class SourceControlSettings(
-    val ready: Boolean = false,
-    val onLoad: suspend () -> Pair<String, String> = { "" to "" },
-    val onSave: (name: String, email: String) -> Unit = { _, _ -> },
-)
-
-val LocalSourceControlSettings = compositionLocalOf { SourceControlSettings() }
-
-/**
  * A single user-configurable option an extension declares in its manifest, surfaced generically on the
  * settings screen. [type] is one of "bool" | "enum" | "int" | "str"; [options] applies to enums only.
  */
