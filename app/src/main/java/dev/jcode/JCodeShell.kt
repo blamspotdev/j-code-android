@@ -293,7 +293,7 @@ import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.workbench.LocalTerminalTapConfig
 import dev.jcode.workbench.TerminalExtraKeysTarget
 import dev.jcode.workbench.WorkbenchExtraKeysBar
-import dev.jcode.workbench.rememberBottomStatusBarVisible
+import dev.jcode.workbench.BottomStatusBarSlot
 import dev.jcode.workbench.RightPanelTab
 import dev.jcode.workbench.WorkbenchManagerActions
 import dev.jcode.workbench.TerminalTapConfig
@@ -1782,7 +1782,7 @@ private fun JCodeShell(
                     // Sits above the status bar so Scaffold's innerPadding reserves space for it and
                     // the editor/terminal content shrinks instead of being covered while typing.
                     WorkbenchExtraKeysBar()
-                    if (rememberBottomStatusBarVisible()) {
+                    BottomStatusBarSlot {
                         WorkbenchStatusBar(
                             activeTab = activeTab,
                             selectedProject = selectedProject,
@@ -3563,18 +3563,27 @@ private fun Context.findActivity(): Activity? {
 private fun StatusBarKeyboardController(enabled: Boolean) {
     val activity = LocalContext.current.findActivity() ?: return
     val imeVisible = WindowInsets.isImeVisible
-    DisposableEffect(enabled, imeVisible) {
+    // Hiding the system bar kicks off a second insets animation + relayout wave; delay it until the
+    // IME animation has settled so the two don't overlap (the delay also drops the pending hide for
+    // free when the keyboard closes again quickly). Showing stays immediate so closing the keyboard
+    // never leaves the bar hidden.
+    LaunchedEffect(enabled, imeVisible) {
         val window = activity.window
         val controller = WindowCompat.getInsetsController(window, window.decorView)
         if (enabled && imeVisible) {
+            delay(300)
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             controller.hide(WindowInsetsCompat.Type.statusBars())
         } else {
             controller.show(WindowInsetsCompat.Type.statusBars())
         }
+    }
+    DisposableEffect(Unit) {
         onDispose {
-            WindowCompat.getInsetsController(window, window.decorView)
-                .show(WindowInsetsCompat.Type.statusBars())
+            activity.window?.let { window ->
+                WindowCompat.getInsetsController(window, window.decorView)
+                    .show(WindowInsetsCompat.Type.statusBars())
+            }
         }
     }
 }

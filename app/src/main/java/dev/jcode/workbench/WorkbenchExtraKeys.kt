@@ -2,10 +2,18 @@ package dev.jcode.workbench
 
 import android.content.res.Configuration
 import android.view.KeyEvent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import dev.jcode.core.term.TerminalView
@@ -33,9 +41,22 @@ fun WorkbenchExtraKeysBar(modifier: Modifier = Modifier) {
     val mode = if (landscape) setting.landscape else setting.portrait
     if (mode == ExtraKeysVisibility.Hidden) return
     val state = LocalExtraKeysState.current
-    val target = state.target ?: return
-    if (mode == ExtraKeysVisibility.WithKeyboard && !WindowInsets.isImeVisible) return
-    ExtraKeysRow(target = target, state = state, modifier = modifier)
+    // Animate the row's height instead of mount/unmount: a single-frame bottom-bar height jump
+    // forces the Scaffold to relayout the whole editor/terminal area in one frame at each keyboard
+    // toggle (a visible hitch on top of the already-per-frame IME relayout). Render from the last
+    // non-null target so a focus loss (target -> null) animates out too instead of unmounting; the
+    // 200ms tweens keep both bar animations inside the IME animation window (the default spring's
+    // settle tail would keep resizing the terminal after the keyboard stops).
+    var lastTarget by remember { mutableStateOf<ExtraKeysTarget?>(null) }
+    state.target?.let { if (lastTarget !== it) lastTarget = it }
+    val target = lastTarget ?: return
+    AnimatedVisibility(
+        visible = state.target != null && (mode != ExtraKeysVisibility.WithKeyboard || WindowInsets.isImeVisible),
+        enter = expandVertically(tween(200)),
+        exit = shrinkVertically(tween(200)),
+    ) {
+        ExtraKeysRow(target = target, state = state, modifier = modifier)
+    }
 }
 
 /** Whether the workbench's bottom status bar should render, per its visibility setting and the IME. */
@@ -45,6 +66,23 @@ fun rememberBottomStatusBarVisible(): Boolean = when (LocalBottomBarSetting.curr
     BottomBarVisibility.Hidden -> false
     BottomBarVisibility.HideOnKeyboard -> !WindowInsets.isImeVisible
     BottomBarVisibility.AlwaysShow -> true
+}
+
+/**
+ * Hosts the bottom status bar behind [rememberBottomStatusBarVisible]. A restartable slot so the
+ * helper's IME-inset read recomposes only this composable (value-returning composables invalidate
+ * their CALLER — previously the whole Scaffold bottomBar), and the bar's height animates with the
+ * keyboard instead of popping in a single frame.
+ */
+@Composable
+fun BottomStatusBarSlot(content: @Composable () -> Unit) {
+    AnimatedVisibility(
+        visible = rememberBottomStatusBarVisible(),
+        enter = expandVertically(tween(200)),
+        exit = shrinkVertically(tween(200)),
+    ) {
+        content()
+    }
 }
 
 /** Routes extra-keys presses to a [TerminalView] as VT escape bytes. */

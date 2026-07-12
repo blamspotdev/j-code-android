@@ -338,6 +338,9 @@ class EditorView @JvmOverloads constructor(
             return
         }
         cancelFling()
+        // A caret-visibility debounce armed under the previous state must not fire against this one
+        // (the view is reused across tab switches).
+        removeCallbacks(ensureCaretAfterResize)
         observationScope?.cancel()
         this.editorState = editorState
         this.renderer = Renderer(typeface, density)
@@ -459,6 +462,7 @@ class EditorView @JvmOverloads constructor(
     /** Detach the current EditorState. */
     fun detach() {
         cancelFling()
+        removeCallbacks(ensureCaretAfterResize)
         observationScope?.cancel()
         observationScope = null
         editorState = null
@@ -472,6 +476,8 @@ class EditorView @JvmOverloads constructor(
         setMeasuredDimension(width, height)
     }
 
+    private val ensureCaretAfterResize = Runnable { if (hasFocus()) ensureCaretVisible() }
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         editorState?.updateViewport { vp ->
@@ -481,7 +487,12 @@ class EditorView @JvmOverloads constructor(
             )
         }
         // The IME (or any layout change) shrank the editor: keep the caret above the keyboard.
-        if (h in 1 until oldh && hasFocus()) ensureCaretVisible()
+        // The keyboard animates over many frames, so debounce to one scroll at the settled height
+        // instead of measuring the caret line on every frame.
+        if (h in 1 until oldh && hasFocus()) {
+            removeCallbacks(ensureCaretAfterResize)
+            postDelayed(ensureCaretAfterResize, 80)
+        }
     }
 
     override fun onDraw(canvas: Canvas) {

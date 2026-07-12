@@ -738,9 +738,17 @@ class TerminalView @JvmOverloads constructor(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        // The cached grid node is sized to the old bounds; force a re-record even when the cell
-        // grid (cols/rows) is unchanged, or the replay would clip to the previous size.
-        gridDirty = true
+        // The IME animation resizes this view every frame; re-recording the whole grid each time
+        // (readRow JNI + per-run drawText) is the main keyboard-toggle jank. On SHRINK keep the
+        // cached node and just clamp its bounds — RenderNode.clipToBounds (default true) then clips
+        // the replay, so no re-record per frame. Only a GROW leaves the node covering less than the
+        // view. The debounced resizeTerminal ends in invalidateGrid() for the final cell-grid change
+        // either way.
+        if (w > oldw || h > oldh) {
+            gridDirty = true
+        } else if (gridRenderNode.hasDisplayList()) {
+            gridRenderNode.setPosition(0, 0, w, h)
+        }
         if (w > 0 && h > 0 && cellWidth > 0f && cellHeight > 0f) {
             val newCols = (w / cellWidth).toInt().coerceAtLeast(1)
             val newRows = (h / cellHeight).toInt().coerceAtLeast(1)
@@ -753,8 +761,13 @@ class TerminalView @JvmOverloads constructor(
     // leaving a stack of duplicate prompts. Debounce so a keyboard toggle applies a single final resize.
     private var pendingResize: Runnable? = null
     private fun scheduleResize(cols: Int, rows: Int) {
+        // Always cancel first: a size oscillation that returns to the current grid within the window
+        // must drop the stale pending resize, not leave it to fire under an already-correct view.
+        pendingResize?.let {
+            blinkHandler.removeCallbacks(it)
+            pendingResize = null
+        }
         if (cols == this.cols && rows == this.rows) return
-        pendingResize?.let { blinkHandler.removeCallbacks(it) }
         val r = Runnable {
             pendingResize = null
             resizeTerminal(cols, rows)
