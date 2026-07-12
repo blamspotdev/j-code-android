@@ -35,7 +35,11 @@ import dev.jcode.core.lsp.Diagnostic as LspDiagnostic
 import dev.jcode.core.lsp.DiagnosticSeverity as LspDiagnosticSeverity
 import dev.jcode.core.resource.ResourceManager
 import dev.jcode.core.resource.ResourceManagerLocator
+import dev.jcode.design.BottomBarVisibility
+import dev.jcode.design.ExtraKeysVisibility
+import dev.jcode.design.SettingsDefaults
 import dev.jcode.design.ThemeMode
+import dev.jcode.editor.SyntaxHighlighter
 import dev.jcode.feature.editor.pane.EditorGroup
 import dev.jcode.feature.editor.pane.EditorPageKind
 import dev.jcode.feature.editor.pane.EditorTab
@@ -49,7 +53,6 @@ import dev.jcode.feature.marketplace.MarketplaceServiceLocator
 import dev.jcode.feature.marketplace.ProjectTemplate
 import dev.jcode.feature.marketplace.TemplateCatalog
 import dev.jcode.feature.marketplace.TemplateScaffolder
-import dev.jcode.fs.DEFAULT_SHARED_PROJECTS_ROOT
 import dev.jcode.workbench.SetupTerminalRunner
 import dev.jcode.fs.FsKind
 import dev.jcode.fs.FsNode
@@ -80,6 +83,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
@@ -96,6 +100,17 @@ const val EXTENSION_API_VERSION = 1
  * exactly once per file per process; constructing a second one (e.g. when MainViewModel is rebuilt
  * after the Activity is recreated) throws "multiple DataStores active for the same file".
  */
+/** (lastModified, size) fingerprint used to detect external edits to an open file. */
+private data class DiskSignature(val lastModified: Long, val size: Long)
+
+/** Result of probing + preparing a file to open, computed off the main thread (see openLocalFile). */
+private sealed interface OpenPrep {
+    data object Missing : OpenPrep
+    data object Image : OpenPrep
+    data object Binary : OpenPrep
+    data class Text(val tab: EditorTab, val signature: DiskSignature?) : OpenPrep
+}
+
 private object UiPreferencesStore {
     @Volatile
     private var instance: DataStore<Preferences>? = null
@@ -107,6 +122,12 @@ private object UiPreferencesStore {
             }.also { instance = it }
         }
 }
+
+/** The user's choice in the "unsaved changes" prompt shown when closing editor tabs. */
+enum class EditorCloseChoice { SAVE, DISCARD, CLOSE_SAVED, CANCEL }
+
+/** Drives the editor "unsaved changes" dialog: the titles of the dirty tabs about to be closed. */
+data class PendingEditorClose(val dirtyTitles: List<String>)
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     val workspaceManager: WorkspaceManager = WorkspaceServiceLocator.workspaceManager(application)
@@ -415,8 +436,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** When true (default), a single terminal tap opens links/paths and a double tap shows the keyboard. */
     val terminalDoubleTapToFocus: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs -> prefs[terminalDoubleTapKey] ?: true }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+        .map { prefs -> prefs[terminalDoubleTapKey] ?: SettingsDefaults.TERMINAL_DOUBLE_TAP_TO_FOCUS }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.TERMINAL_DOUBLE_TAP_TO_FOCUS)
 
     fun setTerminalDoubleTapToFocus(enabled: Boolean) {
         viewModelScope.launch {
@@ -430,8 +451,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *  changes take effect on the next app start. The value is mirrored into synchronous
      *  SharedPreferences because the window flag must be read before any async storage is available. */
     val hardwareAcceleration: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs -> prefs[hardwareAccelerationKey] ?: true }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+        .map { prefs -> prefs[hardwareAccelerationKey] ?: SettingsDefaults.HARDWARE_ACCELERATION }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.HARDWARE_ACCELERATION)
 
     fun setHardwareAcceleration(enabled: Boolean) {
         getApplication<Application>()
@@ -445,8 +466,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** When true (default), closing a project/workspace with a running terminal program, an active
      *  Build & Run, or a live debug session prompts for confirmation before killing them. */
     val confirmCloseRunning: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs -> prefs[confirmCloseRunningKey] ?: true }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+        .map { prefs -> prefs[confirmCloseRunningKey] ?: SettingsDefaults.CONFIRM_CLOSE_RUNNING }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.CONFIRM_CLOSE_RUNNING)
 
     fun setConfirmCloseRunning(enabled: Boolean) {
         viewModelScope.launch { uiPreferences.edit { it[confirmCloseRunningKey] = enabled } }
@@ -454,12 +475,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val exitOnSwipeAwayKey = booleanPreferencesKey(EXIT_ON_SWIPE_AWAY_KEY)
 
-    /** When true (default off), swiping JCode off the Android recents screen tears down the Linux
+    /** When true (default on), swiping JCode off the Android recents screen tears down the Linux
      *  runtime (terminals, runs, VMs) and exits the process entirely — handled in
      *  [BackendService.onTaskRemoved], which reads the mirrored [exitOnSwipeAwayEnabled]. */
     val exitOnSwipeAway: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs -> prefs[exitOnSwipeAwayKey] ?: false }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+        .map { prefs -> prefs[exitOnSwipeAwayKey] ?: SettingsDefaults.EXIT_ON_SWIPE_AWAY }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.EXIT_ON_SWIPE_AWAY)
 
     fun setExitOnSwipeAway(enabled: Boolean) {
         exitOnSwipeAwayEnabled = enabled
@@ -470,6 +491,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Keep the static mirror BackendService reads in sync, and register the runtime teardown it
         // runs on a swipe-away exit. (Placed after the property declarations it references.)
         runtimeTeardown = { runCatching { stopAllRuntimeServices() } }
+        sessionFlushBlocking = { runCatching { runBlocking { persistSession() } } }
         viewModelScope.launch { exitOnSwipeAway.collect { exitOnSwipeAwayEnabled = it } }
     }
 
@@ -478,8 +500,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** When true, terminals sitting idle at the prompt (no foreground program, no I/O) past
      *  [idleTimeoutMinutes] are closed automatically to free their proot process trees + memory. */
     val autoCloseIdleTerminals: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs -> prefs[autoCloseIdleKey] ?: false }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+        .map { prefs -> prefs[autoCloseIdleKey] ?: SettingsDefaults.AUTO_CLOSE_IDLE_TERMINALS }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.AUTO_CLOSE_IDLE_TERMINALS)
 
     fun setAutoCloseIdleTerminals(enabled: Boolean) {
         viewModelScope.launch { uiPreferences.edit { it[autoCloseIdleKey] = enabled } }
@@ -489,8 +511,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Idle-terminal auto-close threshold in minutes (5…120). Default 30. */
     val idleTimeoutMinutes: StateFlow<Int> = uiPreferences.data
-        .map { prefs -> (prefs[idleTimeoutMinKey] ?: 30).coerceIn(5, 120) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 30)
+        .map { prefs -> (prefs[idleTimeoutMinKey] ?: SettingsDefaults.IDLE_TIMEOUT_MINUTES).coerceIn(5, 120) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.IDLE_TIMEOUT_MINUTES)
 
     fun setIdleTimeoutMinutes(minutes: Int) {
         viewModelScope.launch { uiPreferences.edit { it[idleTimeoutMinKey] = minutes.coerceIn(5, 120) } }
@@ -500,8 +522,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Max concurrent terminal instances the "+" button will open (1…24). Default 12. */
     val maxTerminalSessions: StateFlow<Int> = uiPreferences.data
-        .map { prefs -> (prefs[maxTerminalSessionsKey] ?: 12).coerceIn(1, 24) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 12)
+        .map { prefs -> (prefs[maxTerminalSessionsKey] ?: SettingsDefaults.MAX_TERMINAL_SESSIONS).coerceIn(1, 24) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.MAX_TERMINAL_SESSIONS)
 
     fun setMaxTerminalSessions(count: Int) {
         viewModelScope.launch { uiPreferences.edit { it[maxTerminalSessionsKey] = count.coerceIn(1, 24) } }
@@ -511,12 +533,78 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** When true, the system status bar is hidden while the soft keyboard is up (more room to edit). */
     val hideStatusBarWithKeyboard: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs -> prefs[hideStatusBarWithKeyboardKey] ?: false }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+        .map { prefs -> prefs[hideStatusBarWithKeyboardKey] ?: SettingsDefaults.HIDE_STATUS_BAR_WITH_KEYBOARD }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.HIDE_STATUS_BAR_WITH_KEYBOARD)
 
     fun setHideStatusBarWithKeyboard(enabled: Boolean) {
         viewModelScope.launch {
             uiPreferences.edit { prefs -> prefs[hideStatusBarWithKeyboardKey] = enabled }
+        }
+    }
+
+    private val extraKeysPortraitKey = stringPreferencesKey("extra_keys_portrait")
+    private val extraKeysLandscapeKey = stringPreferencesKey("extra_keys_landscape")
+
+    /** Per-orientation visibility of the Termux-style extra-keys row (Esc/Tab/Ctrl/arrows…) shown
+     *  above the keyboard while the terminal or editor is focused. Defaults: portrait = with the
+     *  soft keyboard, landscape = hidden (little vertical room). */
+    val extraKeysPortrait: StateFlow<ExtraKeysVisibility> = uiPreferences.data
+        .map { prefs -> prefs[extraKeysPortraitKey].toExtraKeysVisibility(SettingsDefaults.EXTRA_KEYS_PORTRAIT) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.EXTRA_KEYS_PORTRAIT)
+
+    val extraKeysLandscape: StateFlow<ExtraKeysVisibility> = uiPreferences.data
+        .map { prefs -> prefs[extraKeysLandscapeKey].toExtraKeysVisibility(SettingsDefaults.EXTRA_KEYS_LANDSCAPE) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.EXTRA_KEYS_LANDSCAPE)
+
+    fun setExtraKeysPortrait(mode: ExtraKeysVisibility) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[extraKeysPortraitKey] = mode.name }
+        }
+    }
+
+    fun setExtraKeysLandscape(mode: ExtraKeysVisibility) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[extraKeysLandscapeKey] = mode.name }
+        }
+    }
+
+    private fun String?.toExtraKeysVisibility(default: ExtraKeysVisibility): ExtraKeysVisibility =
+        this?.let { runCatching { ExtraKeysVisibility.valueOf(it) }.getOrNull() } ?: default
+
+    private val editorFontKey = stringPreferencesKey("editor_font")
+    private val terminalFontKey = stringPreferencesKey("terminal_font")
+
+    /** Selected monospace font id for the editor / terminal (see [MonoFontCatalog]). */
+    val editorFontId: StateFlow<String> = uiPreferences.data
+        .map { prefs -> prefs[editorFontKey]?.ifBlank { null } ?: MonoFontCatalog.EDITOR_DEFAULT }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MonoFontCatalog.EDITOR_DEFAULT)
+
+    val terminalFontId: StateFlow<String> = uiPreferences.data
+        .map { prefs -> prefs[terminalFontKey]?.ifBlank { null } ?: MonoFontCatalog.TERMINAL_DEFAULT }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MonoFontCatalog.TERMINAL_DEFAULT)
+
+    fun setEditorFont(id: String) {
+        viewModelScope.launch { uiPreferences.edit { it[editorFontKey] = id } }
+    }
+
+    fun setTerminalFont(id: String) {
+        viewModelScope.launch { uiPreferences.edit { it[terminalFontKey] = id } }
+    }
+
+    private val bottomStatusBarKey = stringPreferencesKey("bottom_status_bar")
+
+    /** Visibility of the workbench's bottom status bar (branch/distro/caret). Default: hide it while
+     *  the soft keyboard is up. */
+    val bottomStatusBar: StateFlow<BottomBarVisibility> = uiPreferences.data
+        .map { prefs ->
+            prefs[bottomStatusBarKey]?.let { runCatching { BottomBarVisibility.valueOf(it) }.getOrNull() }
+                ?: SettingsDefaults.BOTTOM_STATUS_BAR
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.BOTTOM_STATUS_BAR)
+
+    fun setBottomStatusBar(mode: BottomBarVisibility) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[bottomStatusBarKey] = mode.name }
         }
     }
 
@@ -525,8 +613,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** When true, the "×" close button is hidden on editor + terminal tabs to avoid accidental
      *  closes; a tab is then closed via its long-press menu. */
     val hideTabCloseButton: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs -> prefs[hideTabCloseButtonKey] ?: false }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+        .map { prefs -> prefs[hideTabCloseButtonKey] ?: SettingsDefaults.HIDE_TAB_CLOSE_BUTTON }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.HIDE_TAB_CLOSE_BUTTON)
 
     fun setHideTabCloseButton(enabled: Boolean) {
         viewModelScope.launch {
@@ -539,8 +627,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** When true, a one-finger drag on the editor moves the text cursor (the view follows) instead of
      *  scrolling the content; long-press text selection is unaffected. */
     val editorDragMovesCursor: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs -> prefs[editorDragMovesCursorKey] ?: false }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+        .map { prefs -> prefs[editorDragMovesCursorKey] ?: SettingsDefaults.EDITOR_DRAG_MOVES_CURSOR }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.EDITOR_DRAG_MOVES_CURSOR)
 
     fun setEditorDragMovesCursor(enabled: Boolean) {
         viewModelScope.launch {
@@ -553,12 +641,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** "Drag to move cursor" sensitivity per axis: 1 (slow/precise) … 5 (fast). Default 2. */
     val editorCursorDragVerticalLevel: StateFlow<Int> = uiPreferences.data
-        .map { prefs -> (prefs[editorCursorDragVerticalKey] ?: 2).coerceIn(1, 5) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 2)
+        .map { prefs -> (prefs[editorCursorDragVerticalKey] ?: SettingsDefaults.CURSOR_DRAG_LEVEL).coerceIn(1, 5) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.CURSOR_DRAG_LEVEL)
 
     val editorCursorDragHorizontalLevel: StateFlow<Int> = uiPreferences.data
-        .map { prefs -> (prefs[editorCursorDragHorizontalKey] ?: 2).coerceIn(1, 5) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 2)
+        .map { prefs -> (prefs[editorCursorDragHorizontalKey] ?: SettingsDefaults.CURSOR_DRAG_LEVEL).coerceIn(1, 5) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.CURSOR_DRAG_LEVEL)
 
     fun setEditorCursorDragVerticalLevel(level: Int) {
         viewModelScope.launch {
@@ -577,8 +665,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** When true (default), the last open workspace/project + editor tabs (with unsaved changes) are
      *  reopened on launch, surviving a force-close or swipe-away from Recents. */
     val restoreLastSession: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs -> prefs[restoreLastSessionKey] ?: true }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+        .map { prefs -> prefs[restoreLastSessionKey] ?: SettingsDefaults.RESTORE_LAST_SESSION }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.RESTORE_LAST_SESSION)
 
     fun setRestoreLastSession(enabled: Boolean) {
         viewModelScope.launch {
@@ -844,7 +932,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * runtime isn't ready, the file lives outside /workspace, or the language has no checker.
      */
     private fun queueSyntaxCheck(file: File) {
-        val projectsRoot = DEFAULT_SHARED_PROJECTS_ROOT.trimEnd('/')
+        val projectsRoot = dev.jcode.core.distro.WorkspaceHostPaths.projectsRoot.trimEnd('/')
         if (!file.path.startsWith("$projectsRoot/")) return
         val guest = hostToGuestPath(file)
         val command = when (file.extension.lowercase()) {
@@ -1027,7 +1115,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** An action an installed extension contributes to a host surface; tapping opens that extension's
      *  own view (route == the action id) in the editor area. */
-    data class ShellContribution(val extId: String, val id: String, val label: String)
+    data class ShellContribution(
+        val extId: String,
+        val id: String,
+        val label: String,
+        val icon: String? = null,
+        val fileExtensions: List<String> = emptyList(),
+    )
 
     /** Actions active extensions contribute to the empty-editor start screen (their required tools met). */
     val contributedEditorStartActions: StateFlow<List<ShellContribution>> =
@@ -1041,6 +1135,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             availableContributions(exts, acts, sdk) { it.drawerActions }
         }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
 
+    /** Actions active extensions contribute to the editor's long-press context menu. The shell filters
+     *  them per active file via [ShellContribution.fileExtensions]. */
+    val contributedEditorContextActions: StateFlow<List<ShellContribution>> =
+        combine(installedExtensions, extensionActivations, distroService.sdkCatalogState) { exts, acts, sdk ->
+            availableContributions(exts, acts, sdk) { it.editorContextActions }
+        }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
+
     private fun availableContributions(
         exts: List<InstalledExtension>,
         acts: Map<String, ExtensionActivation>,
@@ -1049,11 +1150,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ): List<ShellContribution> =
         exts.filter { (acts[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual }
             .filter { ext -> ext.requires.sdks.all { it in sdk.installedEntryIds } }
-            .flatMap { ext -> surface(ext.contributes).map { ShellContribution(ext.id, it.id, it.label) } }
+            .flatMap { ext ->
+                surface(ext.contributes).map { ShellContribution(ext.id, it.id, it.label, it.icon, it.fileExtensions) }
+            }
             .distinctBy { it.extId + ":" + it.id }
 
     /** Open the extension view a contributed action points at (route == the action id). */
     fun openContributedView(c: ShellContribution) {
+        openExtensionViewPage(c.extId, c.id, c.label)
+    }
+
+    /** The last editor context-menu tap per extension, pulled (once) by a freshly-opened extension
+     *  page via `workbench.pendingContextAction` — WebViews created by the tap miss the pushed event. */
+    private val pendingContextActions = ConcurrentHashMap<String, String>()
+
+    /** Deliver an editor context-menu tap exactly once, then open/focus the extension's view at the
+     *  action's route: if that view is already open its live WebView gets a pushed `contextAction`
+     *  event; otherwise the payload is stashed for the freshly-created page to pull on boot. */
+    fun handleEditorContextAction(c: ShellContribution, word: String) {
+        val group = _editorGroup.value
+        val tab = group.tabs.firstOrNull { it.id == group.activeTabId && !it.isPage }
+        val json = JSONObject().apply {
+            put("extensionId", c.extId)
+            put("actionId", c.id)
+            put("word", word)
+            if (tab != null) {
+                put("path", hostToGuestPath(tab.filePath))
+                put("name", tab.filePath.name)
+                put("dirty", tab.isDirty)
+            }
+        }.toString()
+        val viewTabId = EXT_APP_PREFIX + c.extId + "#" + c.id
+        if (group.tabs.any { it.id == viewTabId }) {
+            _extensionEvents.tryEmit("contextAction" to json)
+        } else {
+            pendingContextActions[c.extId] = json
+        }
         openExtensionViewPage(c.extId, c.id, c.label)
     }
 
@@ -1258,49 +1390,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateEditorFontSize(scope: ConfigScope, fontSize: Float) {
+    // A null value clears the override: the field is dropped from the scope's .jcode YAML and the
+    // effective value falls back down the project -> workspace -> defaults chain.
+    fun updateEditorFontSize(scope: ConfigScope, fontSize: Float?) {
         viewModelScope.launch {
             if (!ensureScopeAvailable(scope)) return@launch
-            configService.updateEditorConfig(scope) { it.copy(fontSize = fontSize.coerceIn(8f, 72f)) }
+            configService.updateEditorConfig(scope) { it.copy(fontSize = fontSize?.coerceIn(8f, 72f)) }
         }
     }
 
-    fun updateEditorTabSize(scope: ConfigScope, tabSize: Int) {
+    fun updateEditorTabSize(scope: ConfigScope, tabSize: Int?) {
         viewModelScope.launch {
             if (!ensureScopeAvailable(scope)) return@launch
-            configService.updateEditorConfig(scope) { it.copy(tabSize = tabSize.coerceIn(1, 16)) }
+            configService.updateEditorConfig(scope) { it.copy(tabSize = tabSize?.coerceIn(1, 16)) }
         }
     }
 
-    fun updateEditorWordWrap(scope: ConfigScope, enabled: Boolean) {
-        viewModelScope.launch {
-            if (!ensureScopeAvailable(scope)) return@launch
-            configService.updateEditorConfig(scope) { it.copy(wordWrap = enabled) }
-        }
-    }
-
-    fun updateEditorMinimap(scope: ConfigScope, enabled: Boolean) {
+    fun updateEditorMinimap(scope: ConfigScope, enabled: Boolean?) {
         viewModelScope.launch {
             if (!ensureScopeAvailable(scope)) return@launch
             configService.updateEditorConfig(scope) { it.copy(minimap = enabled) }
         }
     }
 
-    fun updateEditorLigatures(scope: ConfigScope, enabled: Boolean) {
+    fun updateEditorLigatures(scope: ConfigScope, enabled: Boolean?) {
         viewModelScope.launch {
             if (!ensureScopeAvailable(scope)) return@launch
             configService.updateEditorConfig(scope) { it.copy(ligatures = enabled) }
         }
     }
 
-    fun setThemeMode(mode: ThemeMode, scope: ConfigScope = ConfigScope.Workspace) {
+    fun setThemeMode(mode: ThemeMode?, scope: ConfigScope = ConfigScope.Workspace) {
         viewModelScope.launch {
             if (!ensureScopeAvailable(scope)) return@launch
-            configService.updateThemeConfig(scope) { it.copy(id = mode.configId) }
+            configService.updateThemeConfig(scope) { it.copy(id = mode?.configId) }
+            // A reset must clear the override wherever it lives: a (hand-written) project
+            // theme.id wins the effective resolution, so leaving it would make the reset a
+            // visible no-op. Only touched when present, so no project .jcode is created.
+            if (mode == null && scope == ConfigScope.Workspace &&
+                projectConfig.value?.theme?.id != null && ensureScopeAvailable(ConfigScope.Project)
+            ) {
+                configService.updateThemeConfig(ConfigScope.Project) { it.copy(id = null) }
+            }
         }
     }
 
-    fun updateExplorerViewMode(scope: ConfigScope, viewMode: String) {
+    fun updateExplorerViewMode(scope: ConfigScope, viewMode: String?) {
         viewModelScope.launch {
             if (!ensureScopeAvailable(scope)) return@launch
             configService.updateExplorerConfig(scope) { it.copy(viewMode = viewMode) }
@@ -1504,7 +1639,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun resolveHostFile(path: String): File? {
-        val projectsRoot = DEFAULT_SHARED_PROJECTS_ROOT.trimEnd('/')
+        val projectsRoot = dev.jcode.core.distro.WorkspaceHostPaths.projectsRoot.trimEnd('/')
         return when {
             path == "/workspace" -> null
             path.startsWith("/workspace/") -> File(projectsRoot + path.removePrefix("/workspace"))
@@ -1736,8 +1871,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return proj.distroBindTarget.trimEnd('/') + p.removePrefix(projHost)
             }
         }
-        val root = DEFAULT_SHARED_PROJECTS_ROOT.trimEnd('/')
-        return if (p.startsWith(root)) "/workspace" + p.removePrefix(root) else p
+        // Whole projects-root -> /workspace (prefix-boundary safe: won't rewrite a sibling like
+        // "<root>X"); returns p unchanged if it isn't under the projects root.
+        return dev.jcode.core.distro.WorkspaceHostPaths.hostToGuest(p)
     }
 
     /** Entry point for JCodeNative.request — validates the envelope, version, and capability. */
@@ -1760,6 +1896,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (type == "workbench.openView") {
             openExtensionViewPage(ext.id, payload.optString("view"), payload.optString("title").ifBlank { null })
             return apiOk(JSONObject())
+        }
+        // The last editor context-menu tap targeting this extension, if any — consumed on read. Pages
+        // opened BY the tap pull it on boot; already-open pages get the pushed `contextAction` event.
+        if (type == "workbench.pendingContextAction") {
+            val pending = pendingContextActions.remove(ext.id)
+            return apiOk(JSONObject().apply { if (pending != null) put("action", JSONObject(pending)) })
         }
         // Per-extension settings (config.*) are scoped to the caller — resolved from its declared
         // `settings:` defaults overlaid with the user's saved values. Also handled here for ext.id.
@@ -2124,12 +2266,99 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         requestSyncOpenFilesFromDisk()
     }
 
-    fun closeEditorTab(tabId: String) {
-        val existing = _editorGroup.value.tabs.firstOrNull { it.id == tabId }
-        existing?.editorState?.close()
-        untrackDirty(tabId)
-        diskSignatures.remove(tabId)
-        _editorGroup.value = _editorGroup.value.withTabRemoved(tabId)
+    /** Flip a file tab between the source editor and its rendered preview (Markdown). */
+    fun toggleTabPreview(tabId: String) {
+        val current = _editorGroup.value.tabs.firstOrNull { it.id == tabId } ?: return
+        if (current.editorState == null) return
+        _editorGroup.value = _editorGroup.value.withTabUpdated(current.copy(previewMode = !current.previewMode))
+    }
+
+    // Closing tabs with unsaved changes routes through a Save/Discard/Close-Saved prompt first; the
+    // dialog (shown in JCodeApp) reads this and calls back into [resolveEditorClose].
+    private val _pendingEditorClose = MutableStateFlow<PendingEditorClose?>(null)
+    val pendingEditorClose: StateFlow<PendingEditorClose?> = _pendingEditorClose.asStateFlow()
+    // The (target tab ids, tab to activate afterward) captured while the prompt is up.
+    private var pendingEditorCloseTargets: Pair<Set<String>, String?>? = null
+
+    fun closeEditorTab(tabId: String) = requestCloseEditorTabs(setOf(tabId), activate = null)
+
+    /** Toggle a tab's pinned flag and re-sort so pinned tabs lead (stable — relative order kept). */
+    fun toggleEditorTabPinned(tabId: String) {
+        val group = _editorGroup.value
+        val tab = group.tabs.firstOrNull { it.id == tabId } ?: return
+        val reordered = group.tabs
+            .map { if (it.id == tabId) it.copy(pinned = !tab.pinned) else it }
+            .sortedBy { !it.pinned }
+        _editorGroup.value = group.copy(tabs = reordered)
+    }
+
+    /** Close every tab except [tabId] and any pinned tabs; [tabId] becomes active. */
+    fun closeOtherEditorTabs(tabId: String) {
+        val targets = _editorGroup.value.tabs.filter { it.id != tabId && !it.pinned }.mapTo(HashSet()) { it.id }
+        requestCloseEditorTabs(targets, activate = tabId)
+    }
+
+    /** Close every unpinned tab positioned to the right of [tabId]; [tabId] becomes active. */
+    fun closeEditorTabsToRight(tabId: String) {
+        val tabs = _editorGroup.value.tabs
+        val anchor = tabs.indexOfFirst { it.id == tabId }
+        if (anchor < 0) return
+        val targets = tabs.filterIndexed { index, tab -> index > anchor && !tab.pinned }.mapTo(HashSet()) { it.id }
+        requestCloseEditorTabs(targets, activate = tabId)
+    }
+
+    /** Close [ids] immediately unless some carry unsaved changes, in which case raise the prompt. */
+    private fun requestCloseEditorTabs(ids: Set<String>, activate: String?) {
+        val targets = _editorGroup.value.tabs.filter { it.id in ids }
+        if (targets.isEmpty()) return
+        val dirty = targets.filter { it.isDirty }
+        if (dirty.isEmpty()) {
+            closeTabsNow(ids, activate)
+            return
+        }
+        pendingEditorCloseTargets = ids to activate
+        _pendingEditorClose.value = PendingEditorClose(dirtyTitles = dirty.map { it.title })
+    }
+
+    /** Resolve the unsaved-changes prompt for the pending tab-close set. */
+    fun resolveEditorClose(choice: EditorCloseChoice) {
+        val (ids, activate) = pendingEditorCloseTargets ?: run { _pendingEditorClose.value = null; return }
+        _pendingEditorClose.value = null
+        pendingEditorCloseTargets = null
+        when (choice) {
+            EditorCloseChoice.CANCEL -> Unit // keep everything open
+            EditorCloseChoice.DISCARD -> closeTabsNow(ids, activate)
+            EditorCloseChoice.CLOSE_SAVED -> {
+                val clean = _editorGroup.value.tabs.filter { it.id in ids && !it.isDirty }.mapTo(HashSet()) { it.id }
+                closeTabsNow(clean, activate)
+            }
+            EditorCloseChoice.SAVE -> viewModelScope.launch {
+                val dirty = _editorGroup.value.tabs.filter { it.id in ids && it.isDirty && it.editorState != null }
+                dirty.forEach { saveTabAwait(it) }
+                // Close every target tab now clean; any that couldn't be saved (e.g. no path) stay open.
+                val closable = _editorGroup.value.tabs.filter { it.id in ids && !it.isDirty }.mapTo(HashSet()) { it.id }
+                closeTabsNow(closable, activate)
+            }
+        }
+    }
+
+    private fun closeTabsNow(ids: Set<String>, activate: String?) {
+        if (ids.isEmpty()) return
+        val group = _editorGroup.value
+        val doomed = group.tabs.filter { it.id in ids }
+        if (doomed.isEmpty()) return
+        doomed.forEach { tab ->
+            tab.editorState?.close()
+            untrackDirty(tab.id)
+            diskSignatures.remove(tab.id)
+        }
+        val remaining = group.tabs.filterNot { it.id in ids }
+        val newActive = when {
+            activate != null && remaining.any { it.id == activate } -> activate
+            remaining.any { it.id == group.activeTabId } -> group.activeTabId
+            else -> remaining.lastOrNull()?.id
+        }
+        _editorGroup.value = group.copy(tabs = remaining, activeTabId = newActive)
     }
 
     /** Per-tab collectors that mirror each editor's dirty flag onto its [EditorTab] for the tab dot. */
@@ -2167,8 +2396,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * inotify, but [File.lastModified]/[File.length] still reflect the ext4 inode. The signature is
      * captured at open and after every save/discard, so our own writes never trigger a reload.
      */
-    private data class DiskSignature(val lastModified: Long, val size: Long)
-
     private val diskSignatures = ConcurrentHashMap<String, DiskSignature>()
     private val syncMutex = Mutex()
     private var lastReloadNoticeAt = 0L
@@ -2306,35 +2533,62 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun saveTab(tab: EditorTab) {
-        val state = tab.editorState ?: return // page tab: nothing to persist
+        if (tab.editorState == null) return // page tab: nothing to persist
+        viewModelScope.launch { if (saveTabAwait(tab)) emitMessage("Saved ${tab.title}") }
+    }
+
+    /**
+     * Write [tab] to disk, suspending until the write finishes; returns true if the tab is now clean.
+     * Emits only on failure so callers can report success as a per-file toast or a batch summary.
+     */
+    private suspend fun saveTabAwait(tab: EditorTab): Boolean {
+        val state = tab.editorState ?: return false // page tab: nothing to persist
         val file = tab.filePath
         if (file.path.isBlank()) {
-            viewModelScope.launch { emitMessage("Can't save \"${tab.title}\": unsupported file source") }
-            return
+            emitMessage("Can't save \"${tab.title}\": unsupported file source")
+            return false
         }
         // Snapshots are immutable, so capturing the reference now lets us both write its bytes and
-        // detect whether newer edits landed during the async write (so we don't clear a stale dirty).
+        // detect whether newer edits landed during the write (so we don't clear a stale dirty).
         val snapshot = state.snapshot.value
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
+        return runCatching {
+            withContext(Dispatchers.IO) {
                 val bytes = snapshot.readRange(0, snapshot.byteLength)
                 workspaceManager.fsFor(FsPath.Local(file)).write(FsPath.Local(file), bytes)
-            }.onSuccess {
-                if (state.snapshot.value === snapshot) state.markClean()
-                file.diskSignatureOrNull()?.let { diskSignatures[tab.id] = it }
-                emitMessage("Saved ${tab.title}")
-                queueSyntaxCheck(file)
-            }.onFailure {
-                emitMessage("Failed to save ${tab.title}: ${it.message ?: "error"}")
             }
+            // A keystroke landing mid-write mints a newer snapshot: the write succeeded but the tab is
+            // dirty again, so don't clear dirty and report the tab as still-unsaved (not a false "Saved").
+            val clean = state.snapshot.value === snapshot
+            if (clean) state.markClean()
+            withContext(Dispatchers.IO) { file.diskSignatureOrNull() }?.let { diskSignatures[tab.id] = it }
+            queueSyntaxCheck(file)
+            clean
+        }.getOrElse {
+            emitMessage("Failed to save ${tab.title}: ${it.message ?: "error"}")
+            false
         }
+    }
+
+    /**
+     * Save every dirty tab and suspend until all writes finish — the close-guard uses this so a
+     * workspace/project switch only proceeds once unsaved buffers are safely on disk. Returns true only
+     * if every tab is now clean; false if any couldn't be saved (e.g. a SAF/blank-path tab) so the
+     * caller can avoid discarding unsaved work.
+     */
+    suspend fun saveAllDirtyAwait(): Boolean {
+        val dirty = _editorGroup.value.tabs.filter { it.isDirty && it.editorState != null }
+        if (dirty.isEmpty()) return true
+        var saved = 0
+        dirty.forEach { if (saveTabAwait(it)) saved++ }
+        if (saved > 0) emitMessage(if (saved == 1) "Saved 1 file" else "Saved $saved files")
+        return saved == dirty.size
     }
 
     private suspend fun openBootstrapFile(project: Project) {
         when (val path = project.fsPath) {
             is FsPath.Local -> {
                 val root = path.file
-                val bootstrapFile = findBootstrapFile(root)
+                val bootstrapFile = withContext(Dispatchers.IO) { findBootstrapFile(root) }
                 if (bootstrapFile != null) {
                     openLocalFile(bootstrapFile)
                 }
@@ -2353,33 +2607,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        if (!file.exists() || !file.isFile) {
-            emitMessage("File no longer exists: ${file.name}")
-            return
+        // Probe the file, read it, and build the buffer OFF the main thread — for a large file (or
+        // a burst of restored tabs at launch) the read + piece-table build is the jank. The buffer
+        // isn't shared until the tab is published below, so building it on IO is safe.
+        val prep = withContext(Dispatchers.IO) {
+            when {
+                !file.exists() || !file.isFile -> OpenPrep.Missing
+                // Images open in the built-in viewer. Checked before the text probe so .svg (which
+                // is text) renders rather than opening as XML source.
+                file.extension.lowercase() in IMAGE_EXTENSIONS -> OpenPrep.Image
+                !file.isLikelyTextFile() -> OpenPrep.Binary
+                else -> OpenPrep.Text(EditorTab.create(file, stableId), file.diskSignatureOrNull())
+            }
         }
-
-        // Images open in the built-in viewer. Checked before the text probe so .svg (which is text)
-        // renders rather than opening as XML source.
-        if (file.extension.lowercase() in IMAGE_EXTENSIONS) {
-            _editorGroup.value = _editorGroup.value.withTabAdded(
+        when (prep) {
+            OpenPrep.Missing -> emitMessage("File no longer exists: ${file.name}")
+            OpenPrep.Image -> _editorGroup.value = _editorGroup.value.withTabAdded(
                 EditorTab.page(stableId, file.name, EditorPageKind.ImageViewer),
             )
-            return
+            OpenPrep.Binary -> emitMessage("Binary preview is not implemented yet for ${file.name}.")
+            is OpenPrep.Text -> {
+                val tab = prep.tab
+                applyConfigToTab(tab, effectiveConfig.value)
+                // Set the reveal before the tab is shown so the view applies it on attach.
+                tab.editorState?.requestRevealAt(line, column)
+                trackDirty(tab)
+                prep.signature?.let { diskSignatures[stableId] = it }
+                _editorGroup.value = _editorGroup.value.withTabAdded(tab)
+                queueSyntaxCheck(file)
+            }
         }
-
-        if (!file.isLikelyTextFile()) {
-            emitMessage("Binary preview is not implemented yet for ${file.name}.")
-            return
-        }
-
-        val tab = EditorTab.create(file, stableId)
-        applyConfigToTab(tab, effectiveConfig.value)
-        // Set the reveal before the tab is shown so the view applies it as soon as it attaches.
-        tab.editorState?.requestRevealAt(line, column)
-        trackDirty(tab)
-        file.diskSignatureOrNull()?.let { diskSignatures[stableId] = it }
-        _editorGroup.value = _editorGroup.value.withTabAdded(tab)
-        queueSyntaxCheck(file)
     }
 
     /** Convert a 1-based (line, optional column) to the editor's 0-based reveal request. */
@@ -2465,6 +2722,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } else if (file.isFile) {
                     openLocalFile(file)
                 }
+                if (t.preview) {
+                    val restored = _editorGroup.value.tabs.firstOrNull { it.id == t.id }
+                    if (restored?.editorState != null && SyntaxHighlighter.isMarkdownFile(restored.filePath.name)) {
+                        _editorGroup.value = _editorGroup.value.withTabUpdated(restored.copy(previewMode = true))
+                    }
+                }
+                if (t.pinned) {
+                    val restored = _editorGroup.value.tabs.firstOrNull { it.id == t.id }
+                    if (restored != null) {
+                        _editorGroup.value = _editorGroup.value.withTabUpdated(restored.copy(pinned = true))
+                    }
+                }
             }
 
             // Active tab (only if it survived as one of the restored tabs).
@@ -2515,9 +2784,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (tab.isDirty) {
                     val snap = state.snapshot.value
                     val name = sessionStore.writeBuffer(tab.id, snap.readRangeAsUtf16(0, snap.byteLength))
-                    SessionTabRecord(tab.id, tab.filePath.absolutePath, dirty = true, bufferFileName = name)
+                    SessionTabRecord(
+                        tab.id, tab.filePath.absolutePath,
+                        dirty = true, bufferFileName = name, preview = tab.previewMode, pinned = tab.pinned,
+                    )
                 } else {
-                    SessionTabRecord(tab.id, tab.filePath.absolutePath, dirty = false, bufferFileName = null)
+                    SessionTabRecord(
+                        tab.id, tab.filePath.absolutePath,
+                        dirty = false, bufferFileName = null, preview = tab.previewMode, pinned = tab.pinned,
+                    )
                 }
             }
             sessionStore.saveManifest(
@@ -2568,11 +2843,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         return root.walkTopDown()
             .maxDepth(4)
+            // Prune heavy/irrelevant trees instead of walking into them and filtering each file —
+            // .git and node_modules can hold tens of thousands of entries that all get stat'd.
+            .onEnter { it.name != ".git" && it.name != "node_modules" }
             .firstOrNull { file ->
                 file.isFile &&
                     file.length() <= 2_000_000L &&
-                    file.name !in setOf(".DS_Store") &&
-                    !file.absolutePath.contains("${File.separator}.git${File.separator}")
+                    file.name != ".DS_Store"
             }
     }
 
@@ -2681,12 +2958,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val EXIT_ON_SWIPE_AWAY_KEY = "exit_on_swipe_away"
 
         @Volatile
-        var exitOnSwipeAwayEnabled: Boolean = false
+        var exitOnSwipeAwayEnabled: Boolean = true
 
         /** Runtime teardown (destroy proot run/VM/LSP/DAP service procs) invoked on a swipe-away exit;
          *  set by the live ViewModel. Terminals are reaped separately via [TerminalSessionHost]. */
         @Volatile
         var runtimeTeardown: (() -> Unit)? = null
+
+        /** Blocking session persist invoked right before the process is killed on a swipe-away / "Stop &
+         *  close" exit, so unsaved editor buffers reach disk before [android.os.Process.killProcess]
+         *  races the async [flushSessionNow]. Set by the live ViewModel; no-op if the UI never started. */
+        @Volatile
+        var sessionFlushBlocking: (() -> Unit)? = null
 
         private const val RELOAD_NOTICE_THROTTLE_MS = 4_000L
         const val SETTINGS_TAB_ID = "jcode://settings"

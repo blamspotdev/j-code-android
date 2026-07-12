@@ -1,7 +1,6 @@
 package dev.jcode.core.term
 
 import java.lang.ref.Cleaner
-import java.nio.ByteBuffer
 
 /**
  * VT100/xterm terminal emulator parser.
@@ -25,24 +24,31 @@ class VtParser(rows: Int, cols: Int) : AutoCloseable {
     }
     
     /**
-     * Feed input data to the parser.
-     * The parser will process escape sequences and update the screen state.
+     * Feed the first [length] bytes of [data] to the parser (defaults to the whole array).
+     * The parser will process escape sequences and update the screen state. The array is not
+     * retained, so callers can pass a reused read buffer without copying it per chunk.
      */
-    fun feed(data: ByteArray) {
+    fun feed(data: ByteArray, length: Int = data.size) {
         check(nativeHandle != 0L) { "Parser is closed" }
-        nativeFeed(data)
+        nativeFeed(nativeHandle, data, length)
     }
-    
+
     /**
-     * Feed input data from a ByteBuffer.
+     * Drain the JCode shell-integration OSC events (7711 open-file, 7712 tab-title, 7713
+     * task-complete) queued by the native parser during [feed]. Each native entry is encoded
+     * "<code>;<payload>" and split at the FIRST ';' — payloads may themselves contain ';'
+     * (7713's is "<token>;<exitCode>"). Returns an empty list when nothing is queued.
      */
-    fun feed(buffer: ByteBuffer, length: Int) {
+    fun drainOsc(): List<Pair<Int, String>> {
         check(nativeHandle != 0L) { "Parser is closed" }
-        val data = ByteArray(length)
-        buffer.get(data, 0, length)
-        nativeFeed(data)
+        val events = nativeDrainOsc(nativeHandle) ?: return emptyList()
+        return events.mapNotNull { entry ->
+            val sep = entry.indexOf(';')
+            val code = if (sep > 0) entry.substring(0, sep).toIntOrNull() else null
+            code?.let { it to entry.substring(sep + 1) }
+        }
     }
-    
+
     /**
      * Resize the terminal.
      */
@@ -65,43 +71,43 @@ class VtParser(rows: Int, cols: Int) : AutoCloseable {
     val rows: Int
         get() {
             check(nativeHandle != 0L) { "Parser is closed" }
-            return nativeGetRows()
+            return nativeGetRows(nativeHandle)
         }
-    
+
     /**
      * Get the number of columns in the terminal.
      */
     val cols: Int
         get() {
             check(nativeHandle != 0L) { "Parser is closed" }
-            return nativeGetCols()
+            return nativeGetCols(nativeHandle)
         }
-    
+
     /**
      * Get the current cursor row (0-indexed).
      */
     val cursorRow: Int
         get() {
             check(nativeHandle != 0L) { "Parser is closed" }
-            return nativeGetCursorRow()
+            return nativeGetCursorRow(nativeHandle)
         }
-    
+
     /**
      * Get the current cursor column (0-indexed).
      */
     val cursorCol: Int
         get() {
             check(nativeHandle != 0L) { "Parser is closed" }
-            return nativeGetCursorCol()
+            return nativeGetCursorCol(nativeHandle)
         }
-    
+
     /**
      * Check if the cursor is visible.
      */
     val isCursorVisible: Boolean
         get() {
             check(nativeHandle != 0L) { "Parser is closed" }
-            return nativeIsCursorVisible()
+            return nativeIsCursorVisible(nativeHandle)
         }
     
     /**
@@ -121,16 +127,16 @@ class VtParser(rows: Int, cols: Int) : AutoCloseable {
     val scrollbackSize: Int
         get() {
             check(nativeHandle != 0L) { "Parser is closed" }
-            return nativeGetScrollbackSize()
+            return nativeGetScrollbackSize(nativeHandle)
         }
-    
+
     /**
      * Get the full Unicode codepoint at a specific cell. The native parser decodes UTF-8, so this is
      * the real codepoint (may be > 0xFFFF for emoji / supplementary-plane characters).
      */
     fun getCellCodePoint(row: Int, col: Int): Int {
         check(nativeHandle != 0L) { "Parser is closed" }
-        return nativeGetCellChar(row, col)
+        return nativeGetCellChar(nativeHandle, row, col)
     }
 
     /**
@@ -142,7 +148,7 @@ class VtParser(rows: Int, cols: Int) : AutoCloseable {
      */
     fun readRow(row: Int, out: IntArray): Int {
         check(nativeHandle != 0L) { "Parser is closed" }
-        return nativeReadRow(row, out)
+        return nativeReadRow(nativeHandle, row, out)
     }
 
     /**
@@ -184,24 +190,15 @@ class VtParser(rows: Int, cols: Int) : AutoCloseable {
         }
     }
 
-    // Native methods
+    // Native methods (rarely-called; still resolved through the instance's nativeHandle field)
     private external fun nativeCreate(rows: Int, cols: Int): Long
-    private external fun nativeFeed(data: ByteArray)
     private external fun nativeResize(rows: Int, cols: Int)
     private external fun nativeReset()
-    private external fun nativeGetRows(): Int
-    private external fun nativeGetCols(): Int
-    private external fun nativeGetCursorRow(): Int
-    private external fun nativeGetCursorCol(): Int
-    private external fun nativeIsCursorVisible(): Boolean
     private external fun nativeIsAlternateScreen(): Boolean
-    private external fun nativeGetScrollbackSize(): Int
-    private external fun nativeGetCellChar(row: Int, col: Int): Int
-    private external fun nativeReadRow(row: Int, out: IntArray): Int
     private external fun nativeClearDirty()
     private external fun nativeIsRowDirty(row: Int): Boolean
     private external fun nativeNeedsFullRefresh(): Boolean
-    
+
     companion object {
         private val cleaner = Cleaner.create()
 
@@ -211,6 +208,29 @@ class VtParser(rows: Int, cols: Int) : AutoCloseable {
 
         @JvmStatic
         private external fun nativeCloseByHandle(handle: Long)
+
+        // Hot-path natives are STATIC and take the parser handle directly, so the JNI side never
+        // resolves the nativeHandle field reflectively (GetObjectClass+GetFieldID) per call.
+        @JvmStatic
+        private external fun nativeFeed(handle: Long, data: ByteArray, length: Int)
+        @JvmStatic
+        private external fun nativeDrainOsc(handle: Long): Array<String>?
+        @JvmStatic
+        private external fun nativeGetRows(handle: Long): Int
+        @JvmStatic
+        private external fun nativeGetCols(handle: Long): Int
+        @JvmStatic
+        private external fun nativeGetCursorRow(handle: Long): Int
+        @JvmStatic
+        private external fun nativeGetCursorCol(handle: Long): Int
+        @JvmStatic
+        private external fun nativeIsCursorVisible(handle: Long): Boolean
+        @JvmStatic
+        private external fun nativeGetScrollbackSize(handle: Long): Int
+        @JvmStatic
+        private external fun nativeGetCellChar(handle: Long, row: Int, col: Int): Int
+        @JvmStatic
+        private external fun nativeReadRow(handle: Long, row: Int, out: IntArray): Int
 
         // Cell attribute flags
         const val ATTR_BOLD = 1 shl 0

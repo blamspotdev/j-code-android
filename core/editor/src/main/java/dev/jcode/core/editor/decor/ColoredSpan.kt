@@ -36,24 +36,19 @@ data class ColoredSpan(
         const val STYLE_STRIKETHROUGH = 1 shl 3
 
         /**
-         * Find all colored spans that overlap a given byte range.
+         * Index of the first span in the startByte-sorted, non-overlapping [spans] list that could
+         * cover or follow [byteOffset] (i.e. the first with endByte > byteOffset). The renderer
+         * seeds a per-line sweep with this instead of scanning the whole file's span list per
+         * character.
          */
-        fun findOverlapping(spans: List<ColoredSpan>, startByte: Int, endByte: Int): List<ColoredSpan> {
-            return spans.filter { it.startByte < endByte && it.endByte > startByte }
-        }
-
-        /**
-         * Get the color at a specific byte offset, or null if no span covers it.
-         * Returns the innermost (last added) span's color.
-         */
-        fun colorAt(spans: List<ColoredSpan>, byteOffset: Int): Int? {
-            for (i in spans.indices.reversed()) {
-                val span = spans[i]
-                if (byteOffset >= span.startByte && byteOffset < span.endByte) {
-                    return span.color
-                }
+        fun firstSpanIndexFor(spans: List<ColoredSpan>, byteOffset: Int): Int {
+            var lo = 0
+            var hi = spans.size
+            while (lo < hi) {
+                val mid = (lo + hi) ushr 1
+                if (spans[mid].endByte <= byteOffset) lo = mid + 1 else hi = mid
             }
-            return null
+            return lo
         }
     }
 }

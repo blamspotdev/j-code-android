@@ -14,16 +14,17 @@ for arg in "$@"; do
     case "$arg" in
         -y|--yes) ASSUME_YES=1 ;;
         --release) VARIANT="release" ;;
-        --prerelease|--pre) VARIANT="prerelease" ;;
+        --beta|--prerelease|--pre) VARIANT="beta" ;;
         --label=*) PRERELEASE_LABEL="${arg#--label=}" ;;
         -h|--help)
-            echo "Usage: $(basename "$0") [-y|--yes] [--release|--prerelease] [--label=<s>]"
+            echo "Usage: $(basename "$0") [-y|--yes] [--release|--beta] [--label=<s>]"
             echo "Builds a release APK of JCode into ./builds."
             echo "  -y, --yes       auto-accept install prompts"
-            echo "  --release       final build (default; version straight from VERSION.txt)"
-            echo "  --prerelease    testing build; appends a pre-release label to the version"
-            echo "  --label=<s>     pre-release label (default: beta -> 1.0.2-beta)"
-            echo "Without --release/--prerelease you're prompted interactively."
+            echo "  --release       final build (default; dev.jcode / \"J Code\"; version from VERSION.txt)"
+            echo "  --beta          side-by-side testing build (dev.jcode.beta / \"JCode (beta)\") that"
+            echo "                  installs ALONGSIDE the release app; versionName gets a -label suffix"
+            echo "  --label=<s>     beta version label (default: beta -> 1.0.2-beta)"
+            echo "Without --release/--beta you're prompted interactively."
             exit 0
             ;;
     esac
@@ -190,16 +191,17 @@ else
     warn "Continuing without Rust — search/wasm features in the APK will use stub libraries."
 fi
 
-# --- Build variant: Release or Pre-release (interactive unless --release/--prerelease/$JCODE_VARIANT) ---
+# --- Build variant: Release or Beta (interactive unless --release/--beta/$JCODE_VARIANT) ---
 if [ -z "$VARIANT" ]; then
     if [ -t 0 ]; then
         printf '\n'
         say 'Which build?'
-        printf '  [1] Release      - final build, version straight from VERSION.txt\n'
-        printf '  [2] Pre-release  - testing build, appends a pre-release label to the version\n'
+        printf '  [1] Release  - final build (dev.jcode / "J Code"), version straight from VERSION.txt\n'
+        printf '  [2] Beta     - side-by-side build (dev.jcode.beta / "JCode (beta)"): installs ALONGSIDE\n'
+        printf '                 the release app, own data, versionName gets a -label suffix\n'
         read -r -p 'Select [1] ' _sel
-        case "$_sel" in 2|p|P|pre*) VARIANT="prerelease" ;; *) VARIANT="release" ;; esac
-        if [ "$VARIANT" = "prerelease" ]; then
+        case "$_sel" in 2|p|P|b|B|pre*|beta) VARIANT="beta" ;; *) VARIANT="release" ;; esac
+        if [ "$VARIANT" = "beta" ]; then
             read -r -p "Pre-release label [$PRERELEASE_LABEL] " _lbl
             [ -n "$_lbl" ] && PRERELEASE_LABEL="$(printf '%s' "$_lbl" | tr -cd '0-9A-Za-z.-')"
         fi
@@ -207,11 +209,13 @@ if [ -z "$VARIANT" ]; then
         VARIANT="release"
     fi
 fi
-case "$VARIANT" in prerelease) IS_PRE=1 ;; *) IS_PRE=0; VARIANT="release" ;; esac
-[ "$IS_PRE" = 1 ] && say "Variant: prerelease (label: $PRERELEASE_LABEL)" || say "Variant: release"
+case "$VARIANT" in beta|prerelease) IS_PRE=1; VARIANT="beta" ;; *) IS_PRE=0; VARIANT="release" ;; esac
+# Beta = a separate app id (fixed ".beta", one beta slot) so it never overwrites the release build.
+ID_SUFFIX=""; APP_LABEL="J Code"; [ "$IS_PRE" = 1 ] && { ID_SUFFIX=".beta"; APP_LABEL="JCode (beta)"; }
+[ "$IS_PRE" = 1 ] && say "Variant: beta -> app id dev.jcode$ID_SUFFIX, label '$APP_LABEL', version label: $PRERELEASE_LABEL" || say "Variant: release"
 
 VERSION="$(tr -d '[:space:]' < VERSION.txt 2>/dev/null || echo 1.0.0)"
-# Pre-release appends the label to versionName (1.0.2 -> 1.0.2-beta); versionCode ignores the suffix.
+# Beta appends the label to versionName (1.0.2 -> 1.0.2-beta); versionCode ignores the suffix.
 if [ "$IS_PRE" = 1 ]; then VERSION_NAME="$VERSION-$PRERELEASE_LABEL"; else VERSION_NAME="$VERSION"; fi
 # versionCode = MAJOR*10000 + MINOR*100 + PATCH (must match app/build.gradle.kts jcodeVersionCode).
 CODE="$(echo "$VERSION" | awk -F. '{ c = $1*10000 + $2*100 + $3; printf "%d", (c > 0 ? c : 10000) }')"
@@ -223,7 +227,10 @@ if [ -n "$CARGO_TASKS" ]; then
     # shellcheck disable=SC2086
     ./gradlew $CARGO_TASKS || die "Cargo build failed."
 fi
-./gradlew :app:assembleRelease "-PjcodeVersionName=$VERSION_NAME" || die "Gradle build failed."
+# -PjcodeIdSuffix makes the Beta build a separate app id + label (see app/build.gradle.kts).
+GRADLE_ARGS=(:app:assembleRelease "-PjcodeVersionName=$VERSION_NAME")
+[ -n "$ID_SUFFIX" ] && GRADLE_ARGS+=("-PjcodeIdSuffix=$ID_SUFFIX")
+./gradlew "${GRADLE_ARGS[@]}" || die "Gradle build failed."
 
 APK="$(ls app/build/outputs/apk/release/*.apk 2>/dev/null | head -1)"
 [ -n "$APK" ] || die "Build finished but no APK found in app/build/outputs/apk/release/"
@@ -302,4 +309,5 @@ fi
 if have sha256sum; then SHA="$(sha256sum "$OUT" | cut -d' ' -f1)"; else SHA="$(shasum -a 256 "$OUT" | cut -d' ' -f1)"; fi
 SIZE="$(du -h "$OUT" | cut -f1)"
 say "Done: $OUT ($SIZE, $SIGN_STATE)"
+[ -n "$ID_SUFFIX" ] && say "Installs as a SEPARATE app: dev.jcode$ID_SUFFIX ('$APP_LABEL') — won't overwrite the release build."
 say "sha256: $SHA"

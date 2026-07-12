@@ -1,6 +1,8 @@
 #include <jni.h>
 #include "pty.h"
 #include <android/log.h>
+#include <errno.h>
+#include <poll.h>
 #include <vector>
 #include <string>
 
@@ -70,11 +72,38 @@ Java_dev_jcode_core_term_PtyProcess_nativeRead(JNIEnv* env, jobject thiz,
     Pty* pty = getPty(env, thiz);
     if (!pty) return -1;
 
-    jbyte* buf = env->GetByteArrayElements(buffer, nullptr);
+    // Critical access gives ART a direct pointer (its arrays are non-movable), so nothing is
+    // copied — the old GetByteArrayElements/Release(..., 0) pair copied the full 8 KB buffer
+    // back to the JVM on every read. No JNI calls may happen between Get and Release.
+    jbyte* buf = reinterpret_cast<jbyte*>(env->GetPrimitiveArrayCritical(buffer, nullptr));
+    if (!buf) return -1;
     int n = pty->read(reinterpret_cast<uint8_t*>(buf + offset), length);
-    env->ReleaseByteArrayElements(buffer, buf, 0);
+    env->ReleasePrimitiveArrayCritical(buffer, buf, n > 0 ? 0 : JNI_ABORT);
 
     return n;
+}
+
+JNIEXPORT jint JNICALL
+Java_dev_jcode_core_term_PtyProcess_nativeGetMasterFd(JNIEnv* env, jobject thiz) {
+    Pty* pty = getPty(env, thiz);
+    return pty ? pty->masterFd() : -1;
+}
+
+// Raw-fd poll deliberately NOT dereferencing the Pty object: the reader thread may race a
+// concurrent close()/delete, so it only ever touches the fd captured at session start. A poll
+// already blocked in the kernel holds its own reference to the file description, and callers
+// bound the wait with a timeout and re-check session state on every wakeup.
+JNIEXPORT jint JNICALL
+Java_dev_jcode_core_term_PtyProcess_nativePoll(JNIEnv* env, jclass clazz, jint fd, jint timeoutMs) {
+    if (fd < 0) return -1;
+    struct pollfd pfd;
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    int r = poll(&pfd, 1, timeoutMs);
+    if (r < 0) return errno == EINTR ? 0 : -1;
+    if (r == 0) return 0;
+    return 1;  // readable, HUP, ERR, or NVAL — the caller's read() disambiguates
 }
 
 JNIEXPORT jint JNICALL

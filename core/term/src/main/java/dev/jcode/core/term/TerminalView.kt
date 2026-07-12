@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.RenderNode
 import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
@@ -62,6 +63,16 @@ class TerminalView @JvmOverloads constructor(
     // Invoked (with the touch point in view pixels) when a long-press requests the action menu, so the
     // host can render the shared compact context menu instead of a native PopupMenu.
     var onContextMenu: ((Float, Float) -> Unit)? = null
+    // Focus reporting for the extra-keys row: the host points the row at whichever surface owns the IME.
+    var onFocusStateChanged: ((Boolean) -> Unit)? = null
+
+    // One-shot sticky modifiers armed by the extra-keys row (Termux-style): applied to the NEXT
+    // typed character, then cleared. CTRL turns a letter into its control byte; ALT prefixes ESC.
+    var pendingCtrl = false
+    var pendingAlt = false
+    // Notified after an armed modifier is consumed (or discarded) by typed input, so the row can
+    // un-highlight its CTRL/ALT chips.
+    var onPendingModifiersConsumed: (() -> Unit)? = null
     private var selectionStartRow = 0
     private var selectionStartCol = 0
     private var selectionEndRow = 0
@@ -164,10 +175,13 @@ class TerminalView @JvmOverloads constructor(
         }
     }
 
+    private val selectionColorArgb = Color.argb(100, 59, 130, 246) // Blue selection highlight
     private val selectionBgPaint = Paint().apply {
-        color = Color.argb(100, 59, 130, 246) // Blue selection highlight
+        color = selectionColorArgb
         style = Paint.Style.FILL
     }
+    // Reused per background/selection run so a row of same-colored cells is one drawRect.
+    private val runBgPaint = Paint().apply { style = Paint.Style.FILL }
 
     // 256-color palette (standard xterm colors)
     private val colorPalette = IntArray(256).apply {
@@ -220,6 +234,23 @@ class TerminalView @JvmOverloads constructor(
         return rowBuf
     }
 
+    // Reused buffer for a batched glyph run: consecutive same-colour/same-attr ASCII cells are drawn
+    // with one canvas.drawText(char[]) call instead of one per cell.
+    private var runGlyphs = CharArray(0)
+
+    // The cell grid is recorded into this RenderNode and only re-recorded when content actually
+    // changes (new output, scroll, selection, resize). Cursor blink and focus changes replay the
+    // cached node instead of re-running the whole cell loop + readRow JNI + per-cell drawText — which
+    // is what made an idle, focused terminal burn ~12% of a core twice a second.
+    private val gridRenderNode = RenderNode("jcode-terminal-grid")
+    private var gridDirty = true
+
+    /** Mark the cell grid stale so the next draw re-records it; use for any content change. */
+    private fun invalidateGrid() {
+        gridDirty = true
+        invalidate()
+    }
+
     // Coalesces a burst of parser updates (e.g. fast build output) into at most one repaint per frame.
     private val repaintPending = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -248,7 +279,6 @@ class TerminalView @JvmOverloads constructor(
                 MotionEvent.ACTION_MOVE -> {
                     if (isSelecting) {
                         updateSelectionEnd(event.x, event.y)
-                        invalidate()
                         true
                     } else {
                         gestureHandled
@@ -259,7 +289,7 @@ class TerminalView @JvmOverloads constructor(
                         copySelectionToClipboard()
                         isSelecting = false
                         selectionArmed = false
-                        invalidate()
+                        invalidateGrid()
                         true
                     } else {
                         selectionArmed = false
@@ -293,7 +323,7 @@ class TerminalView @JvmOverloads constructor(
         selectionStartCol = col
         selectionEndRow = row
         selectionEndCol = col
-        invalidate()
+        invalidateGrid()
     }
 
     private fun updateSelectionEnd(x: Float, y: Float) {
@@ -301,7 +331,7 @@ class TerminalView @JvmOverloads constructor(
         val col = (x / cellWidth).toInt().coerceIn(0, cols - 1)
         selectionEndRow = row
         selectionEndCol = col
-        invalidate()
+        invalidateGrid()
     }
 
     private fun copySelectionToClipboard() {
@@ -431,6 +461,7 @@ class TerminalView @JvmOverloads constructor(
         scrollOffset = 0
         scrollAccumY = 0f
         lastScrollbackSize = session.parser.scrollbackSize
+        gridDirty = true  // new session's content must be re-recorded, not the previous grid replayed
         // Repaint whenever the session parses new output. Called off the main thread by the session
         // reader, so hop to main; only the visible session repaints, and a scrolled-back view stays
         // anchored as new lines push into scrollback.
@@ -446,13 +477,13 @@ class TerminalView @JvmOverloads constructor(
                             scrollOffset = (scrollOffset + (sb - lastScrollbackSize)).coerceAtMost(sb)
                         }
                         lastScrollbackSize = sb
-                        invalidate()
+                        invalidateGrid()
                         resetBlink()
                     }
                 }
             }
         }
-        invalidate()
+        invalidateGrid()
     }
 
     /** Stop rendering the bound session (without killing it — the session keeps running). */
@@ -536,7 +567,7 @@ class TerminalView @JvmOverloads constructor(
         val clamped = offset.coerceIn(0, parser.scrollbackSize)
         if (clamped != scrollOffset) {
             scrollOffset = clamped
-            invalidate()
+            invalidateGrid()
         }
     }
 
@@ -545,7 +576,7 @@ class TerminalView @JvmOverloads constructor(
         if (scrollOffset != 0) {
             scrollOffset = 0
             scrollAccumY = 0f
-            invalidate()
+            invalidateGrid()
         }
     }
 
@@ -628,7 +659,8 @@ class TerminalView @JvmOverloads constructor(
         if (!event.isCtrlPressed && !event.isAltPressed) {
             val uch = event.unicodeChar
             if (uch != 0) {
-                sendInput(uch.toChar().toString())
+                val text = uch.toChar().toString()
+                if (!sendWithPendingModifiers(text)) sendInput(text)
                 return true
             }
         }
@@ -648,7 +680,7 @@ class TerminalView @JvmOverloads constructor(
             val newRows = (height / cellHeight).toInt().coerceAtLeast(1)
             resizeTerminal(newCols, newRows)
         } else {
-            invalidate()
+            invalidateGrid()
         }
     }
 
@@ -656,6 +688,24 @@ class TerminalView @JvmOverloads constructor(
      * Get the current font size.
      */
     fun getFontSize(): Float = textPaint.textSize
+
+    /**
+     * Set the terminal font (typeface). Re-measures the monospace cell metrics and re-records the grid.
+     */
+    fun setTypeface(tf: Typeface) {
+        if (textPaint.typeface === tf) return
+        textPaint.typeface = tf
+        cellWidth = textPaint.measureText("M")
+        cellHeight = textPaint.fontSpacing
+        if (width > 0 && height > 0) {
+            val newCols = (width / cellWidth).toInt().coerceAtLeast(1)
+            val newRows = (height / cellHeight).toInt().coerceAtLeast(1)
+            resizeTerminal(newCols, newRows)
+        }
+        // Unconditionally re-record: resizeTerminal early-returns when cols/rows are unchanged (common
+        // for a same-metrics font swap), which would otherwise replay the old font from the cached node.
+        invalidateGrid()
+    }
 
     /**
      * Resize the terminal.
@@ -676,11 +726,14 @@ class TerminalView @JvmOverloads constructor(
         scrollAccumY = 0f
         lastScrollbackSize = vtParser?.scrollbackSize ?: 0
 
-        invalidate()
+        invalidateGrid()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
+        // The cached grid node is sized to the old bounds; force a re-record even when the cell
+        // grid (cols/rows) is unchanged, or the replay would clip to the previous size.
+        gridDirty = true
         if (w > 0 && h > 0 && cellWidth > 0f && cellHeight > 0f) {
             val newCols = (w / cellWidth).toInt().coerceAtLeast(1)
             val newRows = (h / cellHeight).toInt().coerceAtLeast(1)
@@ -711,6 +764,31 @@ class TerminalView @JvmOverloads constructor(
         // queued invalidate and this draw — bail rather than touch a destroyed native parser.
         if (!parser.isOpen) return
 
+        // Cache the grid in a RenderNode: cursor-blink and focus repaints replay it (one GPU op)
+        // instead of re-running the whole cell loop + readRow JNI + per-cell drawText — the work that
+        // made an idle, focused terminal burn ~12% of a core twice a second. Software canvases (the
+        // app exposes a hardware-acceleration toggle) can't replay a RenderNode, so draw directly.
+        if (canvas.isHardwareAccelerated) {
+            if (gridDirty || !gridRenderNode.hasDisplayList()) {
+                gridRenderNode.setPosition(0, 0, width, height)
+                val recording = gridRenderNode.beginRecording()
+                try {
+                    drawGrid(recording, parser)
+                } finally {
+                    gridRenderNode.endRecording()
+                }
+                gridDirty = false
+            }
+            canvas.drawRenderNode(gridRenderNode)
+        } else {
+            drawGrid(canvas, parser)
+        }
+
+        drawCursor(canvas, parser)
+    }
+
+    /** Draw the cell grid (backgrounds + glyphs), batching same-attribute cells into single ops. */
+    private fun drawGrid(canvas: Canvas, parser: VtParser) {
         // Draw background
         bgPaint.color = Color.BLACK
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
@@ -720,76 +798,111 @@ class TerminalView @JvmOverloads constructor(
         val selEndRow = max(selectionStartRow, selectionEndRow)
         val selStartCol = if (selectionStartRow <= selectionEndRow) selectionStartCol else selectionEndCol
         val selEndCol = if (selectionStartRow <= selectionEndRow) selectionEndCol else selectionStartCol
+        val selectionActive = scrollOffset == 0 && isSelecting
+
+        val buf = rowBufFor(parser)
+        val stride = VtParser.CELL_STRIDE
+
+        // Effective background of a cell (0 = none): selection tint wins, else the SGR background.
+        fun cellBg(row: Int, col: Int): Int {
+            if (selectionActive && row in selStartRow..selEndRow &&
+                (row != selStartRow || col >= selStartCol) && (row != selEndRow || col <= selEndCol)
+            ) {
+                return selectionColorArgb
+            }
+            val base = col * stride
+            return when (VtParser.metaBgMode(buf[base + 3])) {
+                1 -> buf[base + 2].let { if (it in 0..255) colorPalette[it] else Color.BLACK }
+                2 -> buf[base + 2].let { Color.rgb((it shr 16) and 0xFF, (it shr 8) and 0xFF, it and 0xFF) }
+                else -> 0
+            }
+        }
+
+        fun cellFg(base: Int): Int = when (VtParser.metaFgMode(buf[base + 3])) {
+            1 -> buf[base + 1].let { if (it in 0..255) colorPalette[it] else Color.WHITE }
+            2 -> buf[base + 1].let { Color.rgb((it shr 16) and 0xFF, (it shr 8) and 0xFF, it and 0xFF) }
+            else -> Color.WHITE
+        }
 
         // Draw cells. When scrolled back, view row N shows logical row (N - scrollOffset);
         // negative logical rows come from the scrollback buffer.
-        val buf = rowBufFor(parser)
         for (row in 0 until min(rows, parser.rows)) {
             val logicalRow = row - scrollOffset
             val filled = parser.readRow(logicalRow, buf)
-            for (col in 0 until min(min(cols, filled), parser.cols)) {
-                val x = col * cellWidth
-                val y = row * cellHeight
+            val colBound = min(min(cols, filled), parser.cols)
+            val yTop = row * cellHeight
 
-                // Check if cell is in selection (only meaningful at the live bottom)
-                val isInSelection = scrollOffset == 0 && isSelecting && row in selStartRow..selEndRow &&
-                    (row != selStartRow || col >= selStartCol) &&
-                    (row != selEndRow || col <= selEndCol)
+            // Background / selection runs: merge adjacent cells sharing an effective colour.
+            var c = 0
+            while (c < colBound) {
+                val bg = cellBg(row, c)
+                if (bg == 0) { c++; continue }
+                var e = c + 1
+                while (e < colBound && cellBg(row, e) == bg) e++
+                runBgPaint.color = bg
+                canvas.drawRect(c * cellWidth, yTop, e * cellWidth, yTop + cellHeight, runBgPaint)
+                c = e
+            }
 
-                // Draw selection highlight
-                if (isInSelection) {
-                    canvas.drawRect(x, y, x + cellWidth, y + cellHeight, selectionBgPaint)
-                }
-
-                // Get cell attributes
-                val base = col * VtParser.CELL_STRIDE
+            // Glyph runs: consecutive printable-ASCII cells with the same fg colour + attrs draw with
+            // one drawText(char[]) call (monospace advance == cellWidth, so positions stay exact). Any
+            // non-ASCII / wide cell draws on its own at its exact x, matching the prior per-cell path.
+            val baseY = yTop + cellHeight * 0.8f
+            val runs = runGlyphsFor(colBound)
+            c = 0
+            while (c < colBound) {
+                val base = c * stride
                 val cp = buf[base]
-                val fgColor = buf[base + 1]
-                val bgColor = buf[base + 2]
-                val meta = buf[base + 3]
-                val fgMode = VtParser.metaFgMode(meta)
-                val bgMode = VtParser.metaBgMode(meta)
-                val attrs = VtParser.metaAttrs(meta)
-
-                // Draw background if not default and not selected
-                if (bgMode != 0 && !isInSelection) {
-                    val bg = when (bgMode) {
-                        1 -> if (bgColor in 0..255) colorPalette[bgColor] else Color.BLACK
-                        2 -> Color.rgb((bgColor shr 16) and 0xFF, (bgColor shr 8) and 0xFF, bgColor and 0xFF)
-                        else -> Color.BLACK
+                if (cp == 0 || cp == ' '.code) { c++; continue }
+                val fg = cellFg(base)
+                val attrs = VtParser.metaAttrs(buf[base + 3])
+                if (cp in 0x20..0x7E) {
+                    var e = c
+                    var len = 0
+                    while (e < colBound) {
+                        val b2 = e * stride
+                        val cp2 = buf[b2]
+                        if (cp2 !in 0x20..0x7E || cellFg(b2) != fg || VtParser.metaAttrs(buf[b2 + 3]) != attrs) break
+                        runs[len++] = cp2.toChar()
+                        e++
                     }
-                    bgPaint.color = bg
-                    canvas.drawRect(x, y, x + cellWidth, y + cellHeight, bgPaint)
-                }
-                
-                // Draw character
-                if (cp != ' '.code && cp != 0) {
-                    textPaint.color = when (fgMode) {
-                        1 -> if (fgColor in 0..255) colorPalette[fgColor] else Color.WHITE
-                        2 -> Color.rgb((fgColor shr 16) and 0xFF, (fgColor shr 8) and 0xFF, fgColor and 0xFF)
-                        else -> Color.WHITE
-                    }
-
-                    // Apply attributes
-                    textPaint.isFakeBoldText = (attrs and VtParser.ATTR_BOLD) != 0
-                    textPaint.textSkewX = if ((attrs and VtParser.ATTR_ITALIC) != 0) -0.25f else 0f
-
+                    applyGlyphPaint(fg, attrs)
+                    canvas.drawText(runs, 0, len, c * cellWidth, baseY, textPaint)
+                    drawRunDecorations(canvas, attrs, c * cellWidth, e * cellWidth, yTop)
+                    c = e
+                } else {
+                    applyGlyphPaint(fg, attrs)
+                    val x = c * cellWidth
                     val glyphLen = Character.toChars(cp, glyphBuf, 0)
-                    canvas.drawText(glyphBuf, 0, glyphLen, x, y + cellHeight * 0.8f, textPaint)
-                    
-                    // Draw underline
-                    if ((attrs and VtParser.ATTR_UNDERLINE) != 0) {
-                        canvas.drawLine(x, y + cellHeight * 0.9f, x + cellWidth, y + cellHeight * 0.9f, textPaint)
-                    }
-                    
-                    // Draw strikethrough
-                    if ((attrs and VtParser.ATTR_STRIKETHROUGH) != 0) {
-                        canvas.drawLine(x, y + cellHeight * 0.5f, x + cellWidth, y + cellHeight * 0.5f, textPaint)
-                    }
+                    canvas.drawText(glyphBuf, 0, glyphLen, x, baseY, textPaint)
+                    drawRunDecorations(canvas, attrs, x, x + cellWidth, yTop)
+                    c++
                 }
             }
         }
-        
+    }
+
+    private fun applyGlyphPaint(fg: Int, attrs: Int) {
+        textPaint.color = fg
+        textPaint.isFakeBoldText = (attrs and VtParser.ATTR_BOLD) != 0
+        textPaint.textSkewX = if ((attrs and VtParser.ATTR_ITALIC) != 0) -0.25f else 0f
+    }
+
+    private fun drawRunDecorations(canvas: Canvas, attrs: Int, xStart: Float, xEnd: Float, yTop: Float) {
+        if ((attrs and VtParser.ATTR_UNDERLINE) != 0) {
+            canvas.drawLine(xStart, yTop + cellHeight * 0.9f, xEnd, yTop + cellHeight * 0.9f, textPaint)
+        }
+        if ((attrs and VtParser.ATTR_STRIKETHROUGH) != 0) {
+            canvas.drawLine(xStart, yTop + cellHeight * 0.5f, xEnd, yTop + cellHeight * 0.5f, textPaint)
+        }
+    }
+
+    private fun runGlyphsFor(cols: Int): CharArray {
+        if (runGlyphs.size < cols) runGlyphs = CharArray(cols)
+        return runGlyphs
+    }
+
+    private fun drawCursor(canvas: Canvas, parser: VtParser) {
         // Draw cursor (only at the live bottom; hidden while scrolled back into history).
         // Focused: a solid block that blinks (with the glyph under it inverted so it stays readable).
         // Unfocused: a hollow outline, like a real terminal.
@@ -839,7 +952,10 @@ class TerminalView @JvmOverloads constructor(
                 // A terminal's Enter is carriage return (0x0D), but IMEs commit it as a newline (LF).
                 // cooked-mode shells accept LF, but raw-mode TUIs (opencode, vim, htop) only recognise
                 // CR as Enter — so map every newline form to CR, matching the hardware-key path.
-                text?.toString()?.let { sendInput(it.replace("\r\n", "\r").replace("\n", "\r")) }
+                text?.toString()?.let {
+                    val mapped = it.replace("\r\n", "\r").replace("\n", "\r")
+                    if (!sendWithPendingModifiers(mapped)) sendInput(mapped)
+                }
                 return true
             }
 
@@ -850,7 +966,8 @@ class TerminalView @JvmOverloads constructor(
                         event.keyCode == KeyEvent.KEYCODE_DEL -> sendInput(byteArrayOf(0x7F))
                         event.unicodeChar != 0 -> {
                             val ch = event.unicodeChar.toChar()
-                            sendInput(if (ch == '\n' || ch == '\r') "\r" else ch.toString())
+                            val mapped = if (ch == '\n' || ch == '\r') "\r" else ch.toString()
+                            if (!sendWithPendingModifiers(mapped)) sendInput(mapped)
                         }
                     }
                 }
@@ -892,6 +1009,36 @@ class TerminalView @JvmOverloads constructor(
     override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
         if (gainFocus) startBlink() else stopBlink()
+        onFocusStateChanged?.invoke(gainFocus)
+    }
+
+    /**
+     * Applies (and clears) the one-shot [pendingCtrl]/[pendingAlt] modifiers to typed input.
+     * Returns true when the transformed bytes were sent; false when the caller should send [text]
+     * unmodified. The modifiers are consumed either way — they are one-shot, like Termux's.
+     */
+    private fun sendWithPendingModifiers(text: String): Boolean {
+        if (!pendingCtrl && !pendingAlt) return false
+        val ctrl = pendingCtrl
+        val alt = pendingAlt
+        pendingCtrl = false
+        pendingAlt = false
+        onPendingModifiersConsumed?.invoke()
+        if (text.length != 1) return false
+        val ch = text[0]
+        val ctrlByte: Byte? = if (ctrl) {
+            val c = ch.uppercaseChar()
+            when {
+                c in '@'..'_' -> (c.code and 0x1F).toByte()
+                ch == ' ' -> 0
+                ch == '/' -> 0x1F
+                else -> null
+            }
+        } else null
+        if (ctrl && ctrlByte == null && !alt) return false
+        val body = ctrlByte?.let { byteArrayOf(it) } ?: text.toByteArray(Charsets.UTF_8)
+        sendInput(if (alt) byteArrayOf(0x1B) + body else body)
+        return true
     }
 
     override fun onAttachedToWindow() {

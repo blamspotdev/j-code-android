@@ -13,17 +13,19 @@ frameworks) are not redistributed and are omitted.
 
 ## 1. Bundled executables and shared libraries (assets)
 
-These are pre-compiled binaries shipped under `native/proot/src/main/assets/bin/`
-and extracted to app-private storage at runtime. PRoot and its loaders run as
-**separate processes** (spawned via a PTY); they are not linked into the
-application. libtalloc and libandroid-shmem are loaded by the PRoot process via
-`LD_LIBRARY_PATH`, not by J Code's own code.
+These are pre-compiled binaries. PRoot and its ELF loaders ship as jniLibs under
+`native/proot/src/main/jniLibs/` (installed by Android to the app's native library
+directory and executed in place); the support libraries ship under
+`native/proot/src/main/assets/bin/` and are extracted to app-private storage at
+runtime. PRoot and its loaders run as **separate processes** (spawned via a PTY);
+they are not linked into the application. libtalloc and libandroid-shmem are
+loaded by the PRoot process via `LD_LIBRARY_PATH`, not by J Code's own code.
 
 | Component | Version | License | Source |
 |---|---|---|---|
 | PRoot (incl. `loader` / `loader32`) | 5.1.107.76 (Termux build) | **GPL-2.0** | https://github.com/termux/proot |
 | libtalloc | 2.4.3 | **LGPL-3.0** | https://talloc.samba.org/ |
-| libandroid-shmem | (Termux build) | MIT | https://github.com/termux/libandroid-shmem |
+| libandroid-shmem | upstream `7f0bd7e2` + J Code memfd modifications (modified source: `native/proot/libandroid-shmem/`) | BSD-3-Clause | https://github.com/termux/libandroid-shmem |
 
 ### Written offer for corresponding source (GPL-2.0 / LGPL-3.0)
 
@@ -99,7 +101,27 @@ Bundled into the APK (`classes.dex` / merged resources). Unless noted, each is
 
 ---
 
-## 4. J Code's own native and JVM code
+## 4. Bundled fonts
+
+Shipped as Android font resources and rendered by J Code's own views (the code
+editor). The font files are unmodified upstream releases; per the OFL's Reserved
+Font Name rules they must not be subset or otherwise modified without renaming.
+
+| Component | Version | License | Source |
+|---|---|---|---|
+| JetBrains Mono (`JetBrainsMono-Regular.ttf`, shipped as `core/editor/src/main/res/font/jetbrains_mono_regular.ttf`) | 2.304 | OFL-1.1 | https://github.com/JetBrains/JetBrainsMono |
+
+Copyright 2020 The JetBrains Mono Project Authors
+(https://github.com/JetBrains/JetBrainsMono). Licensed under the SIL Open Font
+License, Version 1.1 — the full license text ships in this repository at
+[`licenses/OFL-1.1-JetBrainsMono.txt`](licenses/OFL-1.1-JetBrainsMono.txt)
+(upstream `OFL.txt`, verbatim); the font file's own metadata carries the
+copyright notice and a license pointer. The OFL applies to the font files only —
+it does not extend to J Code's code or to documents rendered with the font.
+
+---
+
+## 5. J Code's own native and JVM code
 
 All first-party modules — `:app`, `:core:*`, `:feature:*`, and the native
 libraries `jcodebuffer`, `jcode_core`, `pty`, `jcode_vt`, and the

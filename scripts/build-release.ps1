@@ -1,11 +1,13 @@
 # Build a release APK of JCode on Windows (pwsh). Output: .\builds
-#   -Yes                          : auto-accept install prompts
-#   -Variant release|prerelease   : pick the build variant non-interactively (else you're prompted)
-#   -PreReleaseLabel <label>      : label appended to a pre-release version (default: beta -> 1.0.2-beta)
+#   -Yes                             : auto-accept install prompts
+#   -Variant release|beta            : pick the build variant non-interactively (else you're prompted).
+#                                      beta = side-by-side app (dev.jcode.beta / "JCode (beta)") that
+#                                      installs ALONGSIDE the release build instead of replacing it.
+#   -PreReleaseLabel <label>         : label appended to a beta versionName (default: beta -> 1.0.2-beta)
 [CmdletBinding()]
 param(
     [switch]$Yes,
-    [ValidateSet('release', 'prerelease')]
+    [ValidateSet('release', 'beta', 'prerelease')]
     [string]$Variant,
     [string]$PreReleaseLabel = 'beta'
 )
@@ -59,21 +61,26 @@ Say "JCode release build (Windows) - repo: $RepoRoot"
 # --- Build variant: Release or Pre-release (interactive unless -Variant was given) ---
 $IsPre = $false
 if ($Variant) {
-    $IsPre = ($Variant -eq 'prerelease')
+    $IsPre = ($Variant -eq 'beta' -or $Variant -eq 'prerelease')
 } elseif (-not [Console]::IsInputRedirected) {
     Write-Host ''
     Say 'Which build?'
-    Write-Host '  [1] Release      - final build, version straight from VERSION.txt' -ForegroundColor Gray
-    Write-Host '  [2] Pre-release  - testing build, appends a pre-release label to the version' -ForegroundColor Gray
+    Write-Host '  [1] Release  - final build (dev.jcode / "J Code"), version straight from VERSION.txt' -ForegroundColor Gray
+    Write-Host '  [2] Beta     - side-by-side testing build (dev.jcode.beta / "JCode (beta)"): installs' -ForegroundColor Gray
+    Write-Host '                 ALONGSIDE the release app, own data, versionName gets a -label suffix' -ForegroundColor Gray
     $sel = Read-Host 'Select [1]'
-    $IsPre = ($sel -match '^(2|p)')
+    $IsPre = ($sel -match '^(2|p|b)')
     if ($IsPre) {
         $lbl = Read-Host "Pre-release label [$PreReleaseLabel]"
         if ($lbl) { $PreReleaseLabel = ($lbl.Trim() -replace '[^0-9A-Za-z.\-]', '') }
     }
 }
-$VariantTag = if ($IsPre) { 'prerelease' } else { 'release' }
-Say "Variant: $VariantTag$(if ($IsPre) { " (label: $PreReleaseLabel)" })"
+# Beta = a separate app id so it doesn't overwrite the installed release. Fixed ".beta" (one beta
+# slot) regardless of the version label, so successive betas replace each other, never the release.
+$IdSuffix = if ($IsPre) { '.beta' } else { '' }
+$AppLabel = if ($IsPre) { 'JCode (beta)' } else { 'J Code' }
+$VariantTag = if ($IsPre) { 'beta' } else { 'release' }
+Say "Variant: $VariantTag$(if ($IsPre) { " -> app id dev.jcode$IdSuffix, label '$AppLabel', version label: $PreReleaseLabel" })"
 
 if ($RepoRoot.Length -gt 50) {
     Warn "Repo path is $($RepoRoot.Length) chars - the native (tree-sitter) build can hit the Win32 MAX_PATH limit."
@@ -206,7 +213,10 @@ if ($CargoTasks.Count -gt 0) {
     & .\gradlew.bat @CargoTasks
     if ($LASTEXITCODE -ne 0) { Fail 'Cargo build failed.' }
 }
-& .\gradlew.bat ':app:assembleRelease' "-PjcodeVersionName=$VersionName"
+# -PjcodeIdSuffix makes the Beta build a separate app id + label (see app/build.gradle.kts).
+$GradleArgs = @(':app:assembleRelease', "-PjcodeVersionName=$VersionName")
+if ($IdSuffix) { $GradleArgs += "-PjcodeIdSuffix=$IdSuffix" }
+& .\gradlew.bat @GradleArgs
 if ($LASTEXITCODE -ne 0) { Fail 'Gradle build failed.' }
 
 $Apk = Get-ChildItem 'app\build\outputs\apk\release\*.apk' -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -290,4 +300,5 @@ if ($Keystore) {
 $Sha = (Get-FileHash $Out -Algorithm SHA256).Hash.ToLower()
 $SizeMb = [math]::Round((Get-Item $Out).Length / 1MB, 1)
 Say "Done: $Out ($SizeMb MB, $signState)"
+if ($IdSuffix) { Say "Installs as a SEPARATE app: dev.jcode$IdSuffix ('$AppLabel') - won't overwrite the release build." }
 Say "sha256: $Sha"

@@ -8,4 +8,5 @@
         <item quantity="one">%d active session</item>
         <item quantity="other">%d active sessions</item>
     </plurals>
+    <string name="backend_service_stop_action">Stop &amp; close</string>
 </resources>

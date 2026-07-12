@@ -10,7 +10,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -39,9 +38,6 @@ class TerminalSessionManager(
          *  producing output (the PTY is drained) instead of blocking on a full buffer. */
         val parser: VtParser = VtParser(rows, cols)
         internal var readerJob: Job? = null
-
-        /** Parses J Code OSC escapes in this session's output: open-file (7711) and tab-title (7712). */
-        internal val oscScanner = OscScanner()
 
         /** The foreground program reported via OSC 7712 (see GUEST_SHELL_INTEGRATION), or null while the
          *  shell sits at its prompt ("terminal"). Lets the UI warn before closing a busy terminal. */
@@ -244,13 +240,22 @@ class TerminalSessionManager(
                 when {
                     n > 0 -> {
                         session.lastActivityAt = System.currentTimeMillis()
-                        synchronized(session) { session.parser.feed(buffer.copyOf(n)) }
-                        session.oscScanner.feed(buffer, n, oscHandler)
+                        // Feed straight from the reused read buffer (the native feed is length-aware,
+                        // so no per-chunk copy), then collect the shell-integration OSC events the
+                        // parser queued from this chunk and dispatch them outside the lock.
+                        val oscEvents = synchronized(session) {
+                            session.parser.feed(buffer, n)
+                            session.parser.drainOsc()
+                        }
+                        oscEvents.forEach { (code, payload) -> oscHandler(code, payload) }
                         onOutput?.invoke(session.id, buffer, n)
                         session.onUpdate?.invoke()
                     }
                     n < 0 -> { exited = true; break }   // EOF: the shell/process exited
-                    else -> delay(8)                    // no data available yet
+                    // No data yet: park in the kernel until output arrives (readerScope is
+                    // Dispatchers.IO, so blocking is fine). The 1s timeout bounds how long a
+                    // cancelled/closed session's reader can linger before it re-checks isActive.
+                    else -> session.pty.awaitReadable(1000)
                 }
             }
             // Reap a session that ended on its own (EOF) so its PTY fd + parser are freed and the
@@ -372,65 +377,6 @@ class TerminalSessionManager(
             it.pty.close()
         }
         activeSessionId = null
-    }
-}
-
-/**
- * Scans a terminal output stream for OSC escapes (`ESC ] <code> ; <payload> (BEL|ST)`) and reports
- * each as (code, payload). J Code uses two private codes — 7711 (open file) and 7712 (tab title) —
- * but any OSC is parsed; the caller filters. Stateful across [feed] calls so a sequence split across
- * PTY reads is still recognized. The same bytes also reach the VT parser, which consumes the
- * (unknown) OSC without printing it.
- */
-internal class OscScanner {
-    private var state = 0
-    private val code = StringBuilder()
-    private val payload = StringBuilder()
-
-    fun feed(data: ByteArray, length: Int, onOsc: (Int, String) -> Unit) {
-        var i = 0
-        while (i < length) {
-            val b = data[i].toInt() and 0xFF
-            when (state) {
-                0 -> if (b == ESC) state = 1
-                1 -> when (b) {
-                    OSC -> { state = 2; code.setLength(0); payload.setLength(0) }
-                    ESC -> {}
-                    else -> state = 0
-                }
-                2 -> when {
-                    b == SEMI -> state = 3
-                    b in DIGIT_0..DIGIT_9 && code.length < MAX_CODE -> code.append(b.toChar())
-                    b == ESC -> state = 1
-                    else -> state = 0
-                }
-                else -> when (b) { // 3: collecting payload until BEL or ST (ESC \)
-                    BEL -> { dispatch(onOsc); state = 0 }
-                    ESC -> { dispatch(onOsc); state = 1 }
-                    else -> if (payload.length < MAX_PAYLOAD) payload.append(b.toChar())
-                }
-            }
-            i++
-        }
-    }
-
-    private fun dispatch(onOsc: (Int, String) -> Unit) {
-        val c = code.toString().toIntOrNull()
-        val p = payload.toString()
-        code.setLength(0)
-        payload.setLength(0)
-        if (c != null) onOsc(c, p)
-    }
-
-    private companion object {
-        const val ESC = 0x1b
-        const val OSC = 0x5d  // ']'
-        const val SEMI = 0x3b // ';'
-        const val BEL = 0x07
-        const val DIGIT_0 = 0x30
-        const val DIGIT_9 = 0x39
-        const val MAX_CODE = 6
-        const val MAX_PAYLOAD = 4096
     }
 }
 

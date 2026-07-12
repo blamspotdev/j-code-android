@@ -542,6 +542,24 @@ static void handle_csi(VtParser* parser, char final_char) {
     }
 }
 
+// Queue a JCode shell-integration OSC event for the host to drain (bounded ring; oldest dropped).
+static void osc_event_push(VtParser* parser, int code, const char* payload) {
+    size_t len = strlen(payload);
+    char* copy = (char*)malloc(len + 1);
+    if (!copy) return;
+    memcpy(copy, payload, len + 1);
+    if (parser->osc_event_count == VT_OSC_EVENT_CAP) {
+        free(parser->osc_events[parser->osc_event_head].payload);
+        parser->osc_events[parser->osc_event_head].payload = NULL;
+        parser->osc_event_head = (parser->osc_event_head + 1) % VT_OSC_EVENT_CAP;
+        parser->osc_event_count--;
+    }
+    int slot = (parser->osc_event_head + parser->osc_event_count) % VT_OSC_EVENT_CAP;
+    parser->osc_events[slot].code = code;
+    parser->osc_events[slot].payload = copy;
+    parser->osc_event_count++;
+}
+
 // Handle OSC (Operating System Command)
 static void handle_osc(VtParser* parser) {
     // Parse command number
@@ -564,6 +582,11 @@ static void handle_osc(VtParser* parser) {
         if (parser->on_title_change) {
             parser->on_title_change(parser->userdata, title);
         }
+    } else if (cmd >= 7711 && cmd <= 7713) {
+        // JCode shell-integration events (7711 open-file, 7712 tab title, 7713 task complete):
+        // queued for the host to drain after each feed (see vt_parser_osc_event_at), replacing the
+        // Kotlin-side per-byte re-scan of the same output.
+        osc_event_push(parser, cmd, &parser->osc_buffer[i]);
     }
 }
 
@@ -729,7 +752,7 @@ static void parser_transition(VtParser* parser, uint8_t ch) {
                 parser->osc_buffer[parser->osc_length] = '\0';
                 handle_osc(parser);
                 parser->state = (ch == 0x1B) ? VT_STATE_ESCAPE : VT_STATE_GROUND;
-            } else if (parser->osc_length < 255) {
+            } else if (parser->osc_length < VT_OSC_BUFFER_CAP - 1) {
                 parser->osc_buffer[parser->osc_length++] = ch;
             }
             break;
@@ -821,11 +844,35 @@ VtParser* vt_parser_create(int rows, int cols) {
 void vt_parser_destroy(VtParser* parser) {
     if (!parser) return;
 
+    vt_parser_osc_clear(parser);
     free(parser->primary.cells);
     free(parser->alternate.cells);
     free(parser->dirty_rows);
     free(parser->scrollback);
     free(parser);
+}
+
+int vt_parser_osc_event_count(const VtParser* parser) {
+    return parser ? parser->osc_event_count : 0;
+}
+
+bool vt_parser_osc_event_at(const VtParser* parser, int index, int* code, const char** payload) {
+    if (!parser || index < 0 || index >= parser->osc_event_count) return false;
+    int idx = (parser->osc_event_head + index) % VT_OSC_EVENT_CAP;
+    if (code) *code = parser->osc_events[idx].code;
+    if (payload) *payload = parser->osc_events[idx].payload;
+    return true;
+}
+
+void vt_parser_osc_clear(VtParser* parser) {
+    if (!parser) return;
+    for (int k = 0; k < parser->osc_event_count; k++) {
+        int idx = (parser->osc_event_head + k) % VT_OSC_EVENT_CAP;
+        free(parser->osc_events[idx].payload);
+        parser->osc_events[idx].payload = NULL;
+    }
+    parser->osc_event_count = 0;
+    parser->osc_event_head = 0;
 }
 
 int vt_parser_scrollback_count(const VtParser* parser) {
@@ -999,6 +1046,7 @@ void vt_parser_reset(VtParser* parser) {
     parser->current_param = 0;
     parser->intermediate_count = 0;
     parser->osc_length = 0;
+    vt_parser_osc_clear(parser);
     parser->utf8_acc = 0;
     parser->utf8_left = 0;
     parser->attrs = 0;

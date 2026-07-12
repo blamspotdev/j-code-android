@@ -287,11 +287,15 @@ fun ExtensionWebViewPage(
     if (events != null) {
         LaunchedEffect(extension.id) {
             events.collect { (name, json) ->
-                // A `config` event is scoped to the extension whose setting changed — skip other
-                // extensions' WebViews so they don't reload their own config needlessly.
-                if (name == "config") {
-                    val target = runCatching { JSONObject(json).optString("extensionId") }.getOrNull()
+                // `config` / `contextAction` events are scoped to one extension — skip other
+                // extensions' WebViews so they don't react to traffic that isn't theirs. A
+                // `contextAction` is further targeted at the view showing the action's route, so a
+                // tap is handled exactly once (drawer embeds and other views never see it).
+                if (name == "config" || name == "contextAction") {
+                    val o = runCatching { JSONObject(json) }.getOrNull()
+                    val target = o?.optString("extensionId")
                     if (!target.isNullOrEmpty() && target != extension.id) return@collect
+                    if (name == "contextAction" && o?.optString("actionId") != route) return@collect
                 }
                 val js = "window.JCode && window.JCode._onEvent && " +
                     "window.JCode._onEvent(${JSONObject.quote(name)}, ${JSONObject.quote(json)})"
@@ -315,6 +319,18 @@ fun ExtensionWebViewPage(
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView, url: String) {
                         view.evaluateJavascript(themeJsState.value, null)
+                    }
+
+                    // A crashed renderer must not take the app down (the default). Drop the dead
+                    // view; the user reopens the page to get a fresh one.
+                    override fun onRenderProcessGone(
+                        view: WebView,
+                        detail: android.webkit.RenderProcessGoneDetail,
+                    ): Boolean {
+                        (view.parent as? android.view.ViewGroup)?.removeView(view)
+                        view.destroy()
+                        if (webView === view) webView = null
+                        return true
                     }
                 }
                 // Route `<input type="file">` to the SAF picker so extensions can select a file from

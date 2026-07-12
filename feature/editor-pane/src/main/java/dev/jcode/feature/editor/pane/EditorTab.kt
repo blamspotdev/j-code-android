@@ -23,6 +23,11 @@ data class EditorTab(
     val isDirty: Boolean = false,
     val languageDescriptor: LanguageDescriptor? = null,
     val pageKind: EditorPageKind = EditorPageKind.None,
+    /** File tab showing its rendered preview (e.g. Markdown) instead of the source editor. */
+    val previewMode: Boolean = false,
+    /** Pinned tabs sort to the front, hide their close "×" (close via the long-press menu), and are
+     *  skipped by "Close others" / "Close to the right". */
+    val pinned: Boolean = false,
 ) {
     val isPage: Boolean get() = pageKind != EditorPageKind.None
 

@@ -13,15 +13,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -36,7 +31,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -47,6 +41,8 @@ import dev.jcode.design.ManagerItemStatus
 import dev.jcode.design.ManagerListRow
 import dev.jcode.design.ManagerPanelHeader
 import dev.jcode.design.ManagerSectionCard
+import dev.jcode.design.SettingsDropdownRow
+import dev.jcode.design.SettingsTextFieldRow
 import dev.jcode.feature.marketplace.CodeSample
 import dev.jcode.feature.marketplace.ExtensionActivation
 import dev.jcode.feature.marketplace.ExtensionDeps
@@ -542,7 +538,17 @@ private fun ExtensionSettingsControls(extensionId: String) {
                 )
             }
 
-            "enum" -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            // More than two options standardizes to a dropdown; two options stay a radio pair.
+            "enum" -> if (spec.options.size > 2) {
+                SettingsDropdownRow(
+                    label = spec.label,
+                    supporting = spec.description,
+                    options = spec.options,
+                    selected = current,
+                    onSelect = { ui.onChange(extensionId, spec.key, it) },
+                    optionLabel = { it.replaceFirstChar { c -> c.uppercaseChar() } },
+                )
+            } else Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(spec.label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                 spec.description?.takeIf { it.isNotBlank() }?.let {
                     Text(
@@ -575,15 +581,13 @@ private fun ExtensionSettingsControls(extensionId: String) {
                 // otherwise clobber fast typing, and per-keystroke writes cause a save/reload storm.
                 var text by remember(extensionId, spec.key) { mutableStateOf(current) }
                 LaunchedEffect(current) { if (current != text) text = current }
-                OutlinedTextField(
+                SettingsTextFieldRow(
+                    label = spec.label,
+                    supporting = spec.description,
                     value = text,
                     onValueChange = { text = it },
-                    label = { Text(spec.label) },
-                    placeholder = { if (spec.default.isNotBlank()) Text(spec.default) },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onFocusChanged { if (!it.isFocused && text != current) ui.onChange(extensionId, spec.key, text) },
+                    placeholder = spec.default,
+                    onCommit = { if (text != current) ui.onChange(extensionId, spec.key, text) },
                 )
             }
         }
@@ -649,22 +653,19 @@ private fun KeepAliveToggle(extensionId: String) {
     }
 }
 
-/** Per-extension activation-mode selector (auto-start / on-demand / manual). */
-@OptIn(ExperimentalMaterial3Api::class)
+/** Per-extension activation-mode selector (auto-start / on-demand / manual). Three options, so it
+ *  follows the app's >2-options-become-a-dropdown standard; the current mode's blurb sits below. */
 @Composable
 private fun ActivationSelector(extensionId: String) {
     val activation = LocalExtensionActivation.current
     val mode = activation.modeFor(extensionId)
-    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-        ExtensionActivation.entries.forEachIndexed { index, m ->
-            SegmentedButton(
-                shape = SegmentedButtonDefaults.itemShape(index = index, count = ExtensionActivation.entries.size),
-                selected = mode == m,
-                onClick = { activation.onChange(extensionId, m) },
-                label = { Text(m.label) },
-            )
-        }
-    }
+    SettingsDropdownRow(
+        label = "Activation",
+        options = ExtensionActivation.entries.map { it.name },
+        selected = mode.name,
+        onSelect = { activation.onChange(extensionId, ExtensionActivation.valueOf(it)) },
+        optionLabel = { ExtensionActivation.valueOf(it).label },
+    )
     Text(
         text = mode.blurb,
         style = MaterialTheme.typography.bodySmall,

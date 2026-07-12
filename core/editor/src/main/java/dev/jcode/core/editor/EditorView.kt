@@ -12,10 +12,10 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.widget.OverScroller
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import dev.jcode.core.buffer.EditTx
-import dev.jcode.core.resource.ResourceManagerLocator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.launchIn
@@ -64,11 +64,19 @@ class EditorView @JvmOverloads constructor(
     private var inputConnection: EditorInputConnection? = null
     private var observationScope: CoroutineScope? = null
 
-    private var typeface: Typeface = Typeface.MONOSPACE
+    // JetBrains Mono ships in-module (res/font) for programming ligatures. Its ligature glyphs keep
+    // per-character advances, so the uniform-advance measurement math below stays exact whether
+    // ligatures render or not.
+    private var typeface: Typeface = runCatching { resources.getFont(R.font.jetbrains_mono_regular) }
+        .getOrDefault(Typeface.MONOSPACE)
 
     // Suppresses the post-edit completion-anchor refresh while we programmatically accept a completion
     // (otherwise inserting the accepted text would immediately re-open the popup on the new word).
     private var suppressAnchorUpdate = false
+
+    // Whether a completion anchor was last delivered (popup likely open) — lets a caret-follow scroll
+    // re-anchor the popup without spuriously re-opening it after a completion is accepted.
+    private var completionAnchorActive = false
 
     /** When true (app setting), a one-finger drag moves the caret (view follows) instead of scrolling. */
     var dragMovesCursor: Boolean = false
@@ -81,12 +89,73 @@ class EditorView @JvmOverloads constructor(
     private var dragAccumX = 0f
     private var dragAccumY = 0f
 
+    // Sub-pixel scroll remainders (onScroll consumes whole pixels); reset at the start of each drag.
+    private var scrollRemX = 0f
+    private var scrollRemY = 0f
+
     // sp→px factor; RenderConfig.fontSizeSp is in sp but Paint.textSize / layout math need px.
     private val density: Float get() = resources.displayMetrics.density
+
+    // One shared measurement paint for hit-testing / layout math, reconfigured only when the text size
+    // or typeface changes. Allocating a TextPaint per tap/measure showed up on the hit-test hot path.
+    private val measurePaint = android.text.TextPaint()
+    private var measurePaintSize = -1f
+    private var measurePaintTypeface: Typeface? = null
+    private var measurePaintLigatures: Boolean? = null
+
+    private fun measurePaintFor(config: RenderConfig): android.text.TextPaint {
+        val size = config.fontSizeSp * density
+        if (measurePaintSize != size || measurePaintTypeface !== typeface || measurePaintLigatures != config.ligatures) {
+            measurePaint.textSize = size
+            measurePaint.typeface = typeface
+            // Kept in sync with Renderer's textPaint so measurement always matches what is drawn.
+            measurePaint.fontFeatureSettings = if (config.ligatures) null else FONT_FEATURES_NO_LIGATURES
+            measurePaintSize = size
+            measurePaintTypeface = typeface
+            measurePaintLigatures = config.ligatures
+            measureAdvanceSize = -1f // typeface/size changed: force the advance cache to recompute
+        }
+        return measurePaint
+    }
+
+    // Monospace ASCII advance for the current measure-paint size; measureText("M") is exact for every
+    // ASCII glyph in a monospace font, so an all-ASCII line's column is a single division (mirrors
+    // Renderer.asciiAdvance).
+    private var measureAdvanceSize = -1f
+    private var measureAdvance = 0f
+
+    private fun asciiAdvance(paint: android.text.TextPaint): Float {
+        if (measureAdvanceSize != paint.textSize) {
+            measureAdvance = paint.measureText("M")
+            measureAdvanceSize = paint.textSize
+        }
+        return measureAdvance
+    }
+
+    /** Swap the editor font. Propagates to the renderer's paints and the measure paint, invalidating
+     *  the advance caches (which key on textSize alone), then repaints. Safe before [attach] — the
+     *  fresh Renderer picks up [typeface] at construction. */
+    fun setEditorTypeface(tf: Typeface) {
+        if (typeface === tf) return
+        typeface = tf
+        // Force measurePaintFor to reconfigure (it also resets measureAdvanceSize); belt-and-suspenders.
+        measurePaintTypeface = null
+        measureAdvanceSize = -1f
+        renderer?.setTypeface(tf)
+        invalidate()
+    }
 
     /** Invoked on long-press after the word under the finger is selected, so the host can show a
      *  context menu. [EditorContextRequest.word] is empty when the press wasn't on a word. */
     var onContextRequest: ((EditorContextRequest) -> Unit)? = null
+
+    /** Focus reporting for the extra-keys row: the host points the row at the surface owning the IME. */
+    var onFocusStateChanged: ((Boolean) -> Unit)? = null
+
+    override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
+        super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
+        onFocusStateChanged?.invoke(gainFocus)
+    }
 
     /** Invoked when the user requests a save (Ctrl+S); the host writes the buffer to disk. */
     var onSaveRequest: (() -> Unit)? = null
@@ -135,15 +204,37 @@ class EditorView @JvmOverloads constructor(
                     return true
                 }
                 val vp = state.viewport.value
-                val cfg = state.renderConfig.value
-                val lineHeight = (cfg.fontSizeSp * density * cfg.lineHeightMultiplier).toInt().coerceAtLeast(1)
-                val maxScrollY = (state.snapshot.value.lineCount * lineHeight - vp.heightPx).coerceAtLeast(0)
-                val newScrollY = (vp.scrollY + distanceY.toInt()).coerceIn(0, maxScrollY)
-                if (newScrollY != vp.scrollY) {
-                    state.updateViewport { it.copy(scrollY = newScrollY) }
+                // Accumulate float deltas and consume whole pixels so slow drags don't lose the
+                // sub-pixel remainder every event (which reads as sluggish tracking).
+                scrollRemX += distanceX
+                scrollRemY += distanceY
+                val dx = scrollRemX.toInt()
+                val dy = scrollRemY.toInt()
+                scrollRemX -= dx
+                scrollRemY -= dy
+                val newScrollY = (vp.scrollY + dy).coerceIn(0, maxScrollY(state))
+                // The X bound never undercuts the current offset: maxScrollX tracks only the VISIBLE
+                // window, and a vertical drag past the widest line must not yank scrollX back to 0.
+                val newScrollX = (vp.scrollX + dx).coerceIn(0, maxOf(maxScrollX(state), vp.scrollX))
+                if (newScrollY != vp.scrollY || newScrollX != vp.scrollX) {
+                    state.updateViewport { it.copy(scrollX = newScrollX, scrollY = newScrollY) }
                     return true
                 }
                 return false
+            }
+
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+                val state = editorState ?: return false
+                if (dragMovesCursor) return false
+                val vp = state.viewport.value
+                scroller.forceFinished(true)
+                scroller.fling(
+                    vp.scrollX, vp.scrollY,
+                    -velocityX.toInt(), -velocityY.toInt(),
+                    0, maxOf(maxScrollX(state), vp.scrollX), 0, maxScrollY(state),
+                )
+                postOnAnimation(flingRunnable)
+                return true
             }
 
             override fun onLongPress(e: MotionEvent) {
@@ -163,6 +254,69 @@ class EditorView @JvmOverloads constructor(
         },
     )
 
+    // Fling animation: the OverScroller decays the lift-off velocity and each frame publishes the new
+    // offsets to the viewport (whose observer invalidates) until it settles, a touch lands, or the
+    // state detaches. Without this the content stops dead the instant the finger lifts.
+    private val scroller = OverScroller(context)
+    private val flingRunnable = object : Runnable {
+        override fun run() {
+            val state = editorState ?: return
+            if (!scroller.computeScrollOffset()) return
+            val vp = state.viewport.value
+            // Re-clamp Y each frame against the DOCUMENT max so an edit that removes lines mid-coast
+            // can't strand the viewport past the content. X is NOT window-re-clamped here — that would
+            // yank an established offset left whenever the widest line coasts out of view.
+            val x = scroller.currX.coerceAtLeast(0)
+            val y = scroller.currY.coerceIn(0, maxScrollY(state))
+            if (x != vp.scrollX || y != vp.scrollY) {
+                state.updateViewport { it.copy(scrollX = x, scrollY = y) }
+            }
+            postOnAnimation(this)
+        }
+    }
+
+    private fun cancelFling() {
+        scroller.forceFinished(true)
+        removeCallbacks(flingRunnable)
+    }
+
+    private fun lineHeightPx(state: EditorState): Int {
+        val cfg = state.renderConfig.value
+        return (cfg.fontSizeSp * density * cfg.lineHeightMultiplier).toInt().coerceAtLeast(1)
+    }
+
+    private fun maxScrollY(state: EditorState): Int {
+        val vp = state.viewport.value
+        return (state.snapshot.value.lineCount * lineHeightPx(state) - vp.heightPx).coerceAtLeast(0)
+    }
+
+    /** How far the widest VISIBLE line allows scrolling right. Cheap (one batched line read) and
+     *  stable while dragging; longer off-screen lines extend the range as they scroll into view. */
+    private fun maxScrollX(state: EditorState): Int {
+        val vp = state.viewport.value
+        val snapshot = state.snapshot.value
+        val cfg = state.renderConfig.value
+        val top = vp.visibleLineTop
+        val count = (snapshot.lineCount.coerceAtMost(vp.visibleLineBottom + 1) - top).coerceAtLeast(0)
+        if (count == 0 || vp.widthPx <= 0) return 0
+        val window = snapshot.readLines(top, count)
+        val paint = measurePaintFor(cfg)
+        val advance = asciiAdvance(paint)
+        var maxWidth = 0f
+        for (line in top until top + count) {
+            if (!window.contains(line)) break
+            val text = window.text(line)
+            var allAscii = true
+            for (i in text.indices) {
+                if (text[i].code !in 0x20..0x7E) { allAscii = false; break }
+            }
+            val w = if (allAscii) text.length * advance else paint.measureText(text)
+            if (w > maxWidth) maxWidth = w
+        }
+        val textArea = vp.widthPx - computeGutterWidth(snapshot, cfg) - 8
+        return (maxWidth + advance * 2 - textArea).toInt().coerceAtLeast(0)
+    }
+
     init {
         isFocusable = true
         isFocusableInTouchMode = true
@@ -174,10 +328,10 @@ class EditorView @JvmOverloads constructor(
         if (this.editorState === editorState && renderer != null) {
             return
         }
+        cancelFling()
         observationScope?.cancel()
         this.editorState = editorState
-        val resourceManager = runCatching { ResourceManagerLocator.resourceManager(context) }.getOrNull()
-        this.renderer = Renderer(typeface, density, resourceManager)
+        this.renderer = Renderer(typeface, density)
         val scope = MainScope()
         observationScope = scope
 
@@ -188,8 +342,14 @@ class EditorView @JvmOverloads constructor(
             editorState.updateViewport { it.copy(widthPx = width, heightPx = height) }
         }
 
-        // Observe state changes
-        editorState.snapshot.onEach { invalidate() }.launchIn(scope)
+        // Observe state changes. An edit that removes lines (or a smaller reloaded file) can leave
+        // scrollY past the new content; pull it back so the viewport never shows a stranded void.
+        editorState.snapshot.onEach {
+            val vp = editorState.viewport.value
+            val clampedY = vp.scrollY.coerceIn(0, maxScrollY(editorState))
+            if (clampedY != vp.scrollY) editorState.updateViewport { it.copy(scrollY = clampedY) }
+            invalidate()
+        }.launchIn(scope)
         editorState.viewport.onEach { invalidate() }.launchIn(scope)
         // Keep the viewport's line height in sync with the render config so the visible-line range
         // (and scroll/caret math) matches what the renderer actually draws; otherwise the default
@@ -217,6 +377,8 @@ class EditorView @JvmOverloads constructor(
     /** Move the caret to a 0-based (line, column), scroll it into view, and focus the editor. */
     private fun revealLineColumn(line: Int, column: Int) {
         val state = editorState ?: return
+        // A coasting fling would overwrite the reveal on its next frame.
+        cancelFling()
         val snapshot = state.snapshot.value
         val targetLine = line.coerceIn(0, max(0, snapshot.lineCount - 1))
         val offset = snapshot.lineColumnToOffset(targetLine, column.coerceAtLeast(0))
@@ -225,8 +387,8 @@ class EditorView @JvmOverloads constructor(
         val lineHeight = (cfg.fontSizeSp * density * cfg.lineHeightMultiplier).toInt().coerceAtLeast(1)
         runBlocking { state.setSelection(listOf(Caret(offset, offset))) }
         // Park the target a couple of lines below the top so there's context above it.
-        val targetScrollY = (targetLine * lineHeight - lineHeight * 2).coerceAtLeast(0)
-        state.updateViewport { it.copy(scrollY = targetScrollY) }
+        val targetScrollY = (targetLine * lineHeight - lineHeight * 2).coerceIn(0, maxScrollY(state))
+        state.updateViewport { it.copy(scrollX = 0, scrollY = targetScrollY) }
         state.clearReveal()
         requestFocus()
         invalidate()
@@ -254,16 +416,40 @@ class EditorView @JvmOverloads constructor(
         val newScrollY = when {
             caretBottom + margin > vp.scrollY + vp.heightPx -> caretBottom + margin - vp.heightPx
             caretTop - margin < vp.scrollY -> caretTop - margin
-            else -> return
+            else -> vp.scrollY
+        }.coerceIn(0, maxScrollY(state))
+
+        // Horizontal: follow the caret past either edge of the text area (typing along a long line).
+        val (lineStart, _) = snapshot.lineAt(caretLine)
+        val prefix = snapshot.readRangeAsUtf16(lineStart, caret.head)
+        val paint = measurePaintFor(cfg)
+        var allAscii = true
+        for (i in prefix.indices) {
+            if (prefix[i].code !in 0x20..0x7E) { allAscii = false; break }
+        }
+        val caretX = if (allAscii) prefix.length * asciiAdvance(paint) else paint.measureText(prefix)
+        val textArea = (vp.widthPx - computeGutterWidth(snapshot, cfg) - 8).coerceAtLeast(1)
+        val xMargin = asciiAdvance(paint) * 2
+        val newScrollX = when {
+            caretX - vp.scrollX > textArea - xMargin -> (caretX - textArea + xMargin).toInt()
+            caretX < vp.scrollX + xMargin -> (caretX - xMargin).toInt()
+            else -> vp.scrollX
         }.coerceAtLeast(0)
-        if (newScrollY != vp.scrollY) {
-            state.updateViewport { it.copy(scrollY = newScrollY) }
+
+        if (newScrollY != vp.scrollY || newScrollX != vp.scrollX) {
+            // Cancel only when actually moving, so a no-op caret emission can't kill a live fling;
+            // without the cancel, the fling's next frame would overwrite this follow-scroll.
+            cancelFling()
+            state.updateViewport { it.copy(scrollX = newScrollX, scrollY = newScrollY) }
             invalidate()
+            // The follow-scroll moved the text under an open completion popup; re-anchor it.
+            if (completionAnchorActive) updateCompletionAnchor()
         }
     }
 
     /** Detach the current EditorState. */
     fun detach() {
+        cancelFling()
         observationScope?.cancel()
         observationScope = null
         editorState = null
@@ -313,8 +499,12 @@ class EditorView @JvmOverloads constructor(
         // Caret placement happens in the detector's onSingleTapUp, so dragging only scrolls.
         if (event.action == MotionEvent.ACTION_DOWN) {
             requestFocus()
+            // A touch grabs a coasting fling, exactly like every scrolling surface on Android.
+            cancelFling()
             dragAccumX = 0f
             dragAccumY = 0f
+            scrollRemX = 0f
+            scrollRemY = 0f
             // Claim the whole gesture: a touch that starts inside the editor belongs to the editor
             // (drag-scroll, or drag-to-move-caret when enabled). Otherwise an ancestor — the navigation
             // drawer's swipe-to-open — steals the left/right drag and pops the drawer mid-scroll.
@@ -332,8 +522,9 @@ class EditorView @JvmOverloads constructor(
         val gutterWidth = computeGutterWidth(snapshot, config)
         if (x >= gutterWidth) return null
         val lineHeightPx = (config.fontSizeSp * density * config.lineHeightMultiplier).toInt().coerceAtLeast(1)
+        // Screen y of line L is (L - visibleLineTop)*lineHeight - scrollY % lineHeight (see Renderer).
         val lineIndex = state.viewport.value.visibleLineTop +
-            ((y - state.viewport.value.scrollY % lineHeightPx) / lineHeightPx).toInt()
+            ((y + state.viewport.value.scrollY % lineHeightPx) / lineHeightPx).toInt()
         if (lineIndex < 0 || lineIndex >= snapshot.lineCount) return null
         return lineIndex
     }
@@ -346,22 +537,31 @@ class EditorView @JvmOverloads constructor(
         val lineHeightPx = (config.fontSizeSp * density * config.lineHeightMultiplier).toInt().coerceAtLeast(1)
         val gutterWidth = computeGutterWidth(snapshot, config)
         val lineIndex = state.viewport.value.visibleLineTop +
-            ((y - state.viewport.value.scrollY % lineHeightPx) / lineHeightPx).toInt()
+            ((y + state.viewport.value.scrollY % lineHeightPx) / lineHeightPx).toInt()
         if (lineIndex < 0 || lineIndex >= snapshot.lineCount) return null
         val (lineStart, lineEnd) = snapshot.lineAt(lineIndex)
         val lineText = snapshot.readRangeAsUtf16(lineStart, lineEnd)
-        val xInText = x - gutterWidth - 8f
-        var col = 0
-        var measured = 0f
-        val paint = android.text.TextPaint().apply {
-            textSize = config.fontSizeSp * density
-            typeface = this@EditorView.typeface
-        }
+        val xInText = x - gutterWidth - 8f + state.viewport.value.scrollX
+        val paint = measurePaintFor(config)
+        // Fast path: an all-printable-ASCII line advances by a constant amount in a monospace font, so
+        // the column is a single division. Non-ASCII (tabs, wide glyphs) falls back to per-char measure.
+        var allAscii = true
         for (i in lineText.indices) {
-            val charWidth = paint.measureText(lineText[i].toString())
-            if (measured + charWidth > xInText) break
-            measured += charWidth
-            col++
+            if (lineText[i].code !in 0x20..0x7E) { allAscii = false; break }
+        }
+        val col = if (allAscii) {
+            val advance = asciiAdvance(paint)
+            if (advance <= 0f) 0 else (xInText / advance).toInt().coerceIn(0, lineText.length)
+        } else {
+            var c = 0
+            var measured = 0f
+            for (i in lineText.indices) {
+                val charWidth = paint.measureText(lineText[i].toString())
+                if (measured + charWidth > xInText) break
+                measured += charWidth
+                c++
+            }
+            c
         }
         return snapshot.lineColumnToOffset(lineIndex, col)
     }
@@ -396,8 +596,12 @@ class EditorView @JvmOverloads constructor(
     fun updateCompletionAnchor() {
         val cb = onCompletionAnchorChanged ?: return
         val state = editorState ?: return
+        fun dismiss() {
+            completionAnchorActive = false
+            cb(null)
+        }
         val caretObj = state.carets.value.firstOrNull()
-        if (caretObj == null || caretObj.isSelection) { cb(null); return }
+        if (caretObj == null || caretObj.isSelection) { dismiss(); return }
         val caret = caretObj.head
         val snapshot = state.snapshot.value
         val (line, _) = snapshot.offsetToLineColumn(caret)
@@ -406,9 +610,10 @@ class EditorView @JvmOverloads constructor(
         var i = before.length
         while (i > 0 && (before[i - 1].isLetterOrDigit() || before[i - 1] == '_')) i--
         val prefix = before.substring(i)
-        if (prefix.isEmpty()) { cb(null); return }
+        if (prefix.isEmpty()) { dismiss(); return }
         val replaceStart = caret - prefix.toByteArray(Charsets.UTF_8).size
-        val pixel = anchorPixel(replaceStart, line) ?: run { cb(null); return }
+        val pixel = anchorPixel(replaceStart, line) ?: run { dismiss(); return }
+        completionAnchorActive = true
         cb(CompletionAnchor(prefix, replaceStart, caret, pixel.first, pixel.second))
     }
 
@@ -420,12 +625,8 @@ class EditorView @JvmOverloads constructor(
         val lineHeight = (config.fontSizeSp * density * config.lineHeightMultiplier).toInt().coerceAtLeast(1)
         val (lineStart, _) = snapshot.lineAt(line)
         val prefixText = snapshot.readRangeAsUtf16(lineStart, offset)
-        val paint = android.text.TextPaint().apply {
-            textSize = config.fontSizeSp * density
-            typeface = this@EditorView.typeface
-        }
         val gutter = computeGutterWidth(snapshot, config)
-        val x = gutter + 8f + paint.measureText(prefixText)
+        val x = gutter + 8f + measurePaintFor(config).measureText(prefixText) - state.viewport.value.scrollX
         val y = ((line + 1) * lineHeight - state.viewport.value.scrollY).toFloat()
         return x to y
     }
@@ -445,6 +646,7 @@ class EditorView @JvmOverloads constructor(
         suppressAnchorUpdate = true
         updateImeCursor()
         imm().restartInput(this)
+        completionAnchorActive = false
         onCompletionAnchorChanged?.invoke(null)
         suppressAnchorUpdate = false
     }
@@ -531,6 +733,11 @@ class EditorView @JvmOverloads constructor(
                 KeyEvent.KEYCODE_DPAD_RIGHT -> moveCaret(state, 1)
                 KeyEvent.KEYCODE_DPAD_UP -> moveCaretLine(state, -1)
                 KeyEvent.KEYCODE_DPAD_DOWN -> moveCaretLine(state, 1)
+                KeyEvent.KEYCODE_MOVE_HOME -> moveCaretLineEdge(state, toStart = true)
+                KeyEvent.KEYCODE_MOVE_END -> moveCaretLineEdge(state, toStart = false)
+                KeyEvent.KEYCODE_PAGE_UP -> moveCaretLine(state, -visiblePageLines(state))
+                KeyEvent.KEYCODE_PAGE_DOWN -> moveCaretLine(state, visiblePageLines(state))
+                KeyEvent.KEYCODE_ESCAPE -> collapseSelection(state)
                 else -> insertAtCaret(state, event.unicodeChar.toChar().toString())
             }
             return true
@@ -616,6 +823,39 @@ class EditorView @JvmOverloads constructor(
         updateImeCursor()
     }
 
+    private fun moveCaretLineEdge(state: EditorState, toStart: Boolean) {
+        val caret = caretOrNull(state) ?: return
+        val snapshot = state.snapshot.value
+        val (line, _) = snapshot.offsetToLineColumn(caret.head)
+        val newPos = if (toStart) {
+            snapshot.lineColumnToOffset(line, 0)
+        } else {
+            // Line end = the byte before the next line's start (the newline), or EOF on the last line.
+            if (line + 1 < snapshot.lineCount) {
+                max(snapshot.lineColumnToOffset(line, 0), snapshot.lineColumnToOffset(line + 1, 0) - 1)
+            } else {
+                snapshot.byteLength
+            }
+        }
+        runBlocking { state.setSelection(listOf(Caret(newPos, newPos))) }
+        invalidate()
+        updateImeCursor()
+    }
+
+    /** One "page" for PgUp/PgDn caret moves = the count of fully visible lines. */
+    private fun visiblePageLines(state: EditorState): Int {
+        val vp = state.viewport.value
+        return (vp.visibleLineBottom - vp.visibleLineTop).coerceAtLeast(1)
+    }
+
+    private fun collapseSelection(state: EditorState) {
+        val caret = caretOrNull(state) ?: return
+        if (!caret.isSelection) return
+        runBlocking { state.setSelection(listOf(Caret(caret.head, caret.head))) }
+        invalidate()
+        updateImeCursor()
+    }
+
     /**
      * "Drag moves cursor" gesture: translate a one-finger drag into caret movement (lines vertically,
      * columns horizontally) and collapse to a single caret. The carets observer scrolls the view to
@@ -635,10 +875,7 @@ class EditorView @JvmOverloads constructor(
     private fun moveCaretByDrag(state: EditorState, distanceX: Float, distanceY: Float) {
         val cfg = state.renderConfig.value
         val lineHeight = (cfg.fontSizeSp * density * cfg.lineHeightMultiplier).toInt().coerceAtLeast(1)
-        val charWidth = android.text.TextPaint().apply {
-            textSize = cfg.fontSizeSp * density
-            typeface = this@EditorView.typeface
-        }.measureText("0").coerceAtLeast(1f)
+        val charWidth = measurePaintFor(cfg).measureText("0").coerceAtLeast(1f)
         val vStep = (lineHeight * dragStepScale(cursorDragVerticalLevel)).coerceAtLeast(1f)
         val hStep = (charWidth * dragStepScale(cursorDragHorizontalLevel)).coerceAtLeast(1f)
         // onScroll distance is (previous - current); negate so a down/right drag advances the caret.
@@ -718,11 +955,7 @@ class EditorView @JvmOverloads constructor(
         val lineCount = snapshot.lineCount
         val digits = lineCount.toString().length.coerceAtLeast(3)
         val sample = "9".repeat(digits)
-        val paint = android.text.TextPaint().apply {
-            textSize = config.fontSizeSp * density
-            typeface = this@EditorView.typeface
-        }
-        return (paint.measureText(sample) + 24).toInt()
+        return (measurePaintFor(config).measureText(sample) + 24).toInt()
     }
 
     private companion object {
@@ -736,6 +969,11 @@ class EditorView @JvmOverloads constructor(
             KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_UP,
             KeyEvent.KEYCODE_DPAD_DOWN,
+            KeyEvent.KEYCODE_MOVE_HOME,
+            KeyEvent.KEYCODE_MOVE_END,
+            KeyEvent.KEYCODE_PAGE_UP,
+            KeyEvent.KEYCODE_PAGE_DOWN,
+            KeyEvent.KEYCODE_ESCAPE,
         )
     }
 }

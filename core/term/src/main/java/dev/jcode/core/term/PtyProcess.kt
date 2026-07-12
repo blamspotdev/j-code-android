@@ -26,6 +26,9 @@ class PtyProcess private constructor(
         }
     }
 
+    /** Master fd captured at creation, for [awaitReadable]'s raw poll. */
+    private val masterFd: Int = if (nativeHandle != 0L) nativeGetMasterFd() else -1
+
     /**
      * Read bytes from the PTY (non-blocking).
      * @return Number of bytes read, 0 if no data available, -1 on error/EOF
@@ -33,6 +36,17 @@ class PtyProcess private constructor(
     fun read(buffer: ByteArray, offset: Int = 0, length: Int = buffer.size): Int {
         check(nativeHandle != 0L) { "PTY is closed" }
         return nativeRead(buffer, offset, length)
+    }
+
+    /**
+     * Park in the kernel until the PTY has data (or EOF/error) to read, up to [timeoutMs].
+     * Returns true if a [read] would make progress. Lets idle reader loops block instead of
+     * busy-polling. Linux poll() is NOT woken by a concurrent close() of the same fd, so the
+     * timeout is the teardown-notice bound — callers re-check session state on each wakeup.
+     */
+    fun awaitReadable(timeoutMs: Int): Boolean {
+        if (nativeHandle == 0L || masterFd < 0) return false
+        return nativePoll(masterFd, timeoutMs) > 0
     }
 
     /**
@@ -89,6 +103,7 @@ class PtyProcess private constructor(
     private external fun nativeResize(cols: Int, rows: Int): Boolean
     private external fun nativeWaitForExit(): Int
     private external fun nativeIsOpen(): Boolean
+    private external fun nativeGetMasterFd(): Int
 
     companion object {
         private val cleaner = Cleaner.create()
@@ -137,5 +152,8 @@ class PtyProcess private constructor(
 
         @JvmStatic
         private external fun nativeCloseByHandle(handle: Long)
+
+        @JvmStatic
+        private external fun nativePoll(fd: Int, timeoutMs: Int): Int
     }
 }

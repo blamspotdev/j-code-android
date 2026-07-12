@@ -8,6 +8,9 @@ import dev.jcode.debug.VariableRow
 import dev.jcode.design.JCodeIcon
 import dev.jcode.feature.marketplace.MarketplaceEntry
 
+/** A live terminal session's id + display label, listed in the top-bar terminal menu. */
+internal data class TerminalInstance(val id: String, val label: String)
+
 /** Terminal tap behavior, provided to the deeply-nested terminal view without prop-drilling. */
 internal data class TerminalTapConfig(
     /** True: single tap opens a link/path, double tap shows the keyboard. False: single tap = keyboard. */

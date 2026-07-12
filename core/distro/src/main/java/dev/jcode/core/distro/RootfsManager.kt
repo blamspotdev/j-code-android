@@ -212,74 +212,15 @@ class RootfsManager(
     }
 
     /**
-     * Extract a rootfs tarball to the target directory. The native `tar` is the fast path, but some
-     * devices' app-data filesystems reject hard links (`link()` → EACCES) — and Ubuntu rootfs tarballs
-     * are full of hard links, so `tar` fails there with no partial recovery. On failure we fall back to
-     * a Java extractor that turns each hard link into a (relative) symlink, which those filesystems DO
-     * allow. See [extractRootfsJava].
+     * Extract a rootfs tarball to the target directory. Extraction is pure Kotlin: SELinux denies
+     * hard-link creation in app data at targetSdk >= 30, and Ubuntu rootfs tarballs are full of
+     * hard links, so a system `tar` pass always fails — each hard link is instead created for real
+     * when possible and otherwise degraded to a *relative* symlink to its target (already extracted
+     * earlier in the stream), which resolves correctly both on the host and inside proot.
      */
     fun extractRootfs(tarball: File, targetDir: File): Boolean {
-        if (extractRootfsNative(tarball, targetDir)) return true
-        android.util.Log.w(
-            "RootfsManager",
-            "native tar extraction failed (likely hard-link-restricted filesystem) — retrying with the Java hard-link-tolerant extractor",
-        )
-        return extractRootfsJava(tarball, targetDir)
-    }
-
-    private fun extractRootfsNative(tarball: File, targetDir: File): Boolean {
         return try {
-            targetDir.mkdirs()
-            
-            val isXz = tarball.name.endsWith(".tar.xz") || tarball.name.endsWith(".txz")
-            
-            if (isXz) {
-                // Try multiple methods for XZ decompression
-                val tarFile = File(tarball.parentFile, tarball.name.removeSuffix(".xz"))
-                android.util.Log.d("RootfsManager", "extractRootfs: decompressing xz to ${tarFile.name}")
-                
-                var xzOk = tryDecompressXz(tarball, tarFile)
-                
-                if (!xzOk || !tarFile.exists() || tarFile.length() == 0L) {
-                    android.util.Log.e("RootfsManager", "extractRootfs: all xz methods failed")
-                    return false
-                }
-                
-                // Extract the tar file
-                val process = ProcessBuilder(
-                    "tar", "-xf", tarFile.absolutePath, "-C", targetDir.absolutePath
-                ).redirectErrorStream(true).start()
-                
-                val exitCode = process.waitFor()
-                tarFile.delete()
-                exitCode == 0
-            } else {
-                val compressFlag = when {
-                    tarball.name.endsWith(".tar.bz2") || tarball.name.endsWith(".tbz2") -> "-xjf"
-                    else -> "-xzf"
-                }
-                
-                val process = ProcessBuilder(
-                    "tar", compressFlag, tarball.absolutePath, "-C", targetDir.absolutePath
-                ).redirectErrorStream(true).start()
-                
-                process.waitFor() == 0
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("RootfsManager", "extractRootfs: exception", e)
-            false
-        }
-    }
-
-    /**
-     * Hard-link-tolerant tar extraction (fallback for filesystems that reject `link()`). Extracts each
-     * entry with [android.system.Os]; a hard link is created for real when possible, otherwise as a
-     * *relative* symlink to its target (already extracted earlier in the stream) — which such
-     * filesystems allow, and which resolves correctly both on the host and inside proot.
-     */
-    private fun extractRootfsJava(tarball: File, targetDir: File): Boolean {
-        return try {
-            // The failed native pass may have left a partial tree; start clean.
+            // A previous interrupted pass may have left a partial tree; start clean.
             if (targetDir.exists()) targetDir.deleteRecursively()
             targetDir.mkdirs()
             val name = tarball.name.lowercase()
@@ -331,11 +272,11 @@ class RootfsManager(
             }
             android.util.Log.d(
                 "RootfsManager",
-                "extractRootfsJava: OK ($hardlinks hard links, $symlinkedLinks converted to symlinks)",
+                "extractRootfs: OK ($hardlinks hard links, $symlinkedLinks converted to symlinks)",
             )
             true
         } catch (e: Exception) {
-            android.util.Log.e("RootfsManager", "extractRootfsJava: failed", e)
+            android.util.Log.e("RootfsManager", "extractRootfs: failed", e)
             false
         }
     }
@@ -345,24 +286,6 @@ class RootfsManager(
         true
     } catch (e: ErrnoException) {
         false
-    }
-
-    private fun tryDecompressXz(input: File, output: File): Boolean {
-        return try {
-            FileInputStream(input).use { fileIn ->
-                XZInputStream(fileIn).use { xzIn ->
-                    FileOutputStream(output).use { out ->
-                        xzIn.copyTo(out, 64 * 1024)
-                    }
-                }
-            }
-            val ok = output.exists() && output.length() > 0L
-            android.util.Log.d("RootfsManager", "tryDecompressXz: kotlin xz result=$ok size=${output.length()}")
-            ok
-        } catch (e: Exception) {
-            android.util.Log.e("RootfsManager", "tryDecompressXz: kotlin xz failed", e)
-            false
-        }
     }
 
     /**

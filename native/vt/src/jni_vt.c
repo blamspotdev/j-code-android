@@ -2,12 +2,16 @@
 #include <jni.h>
 #include <android/log.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 
 #define LOG_TAG "VtParser"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// Helper to get native pointer from Java object
+// Helper to get native pointer from Java object. Only the rarely-called instance natives
+// (resize/reset/dirty bookkeeping) pay this reflective lookup; hot-path natives are STATIC and take
+// the handle long directly, so the per-call GetObjectClass+GetFieldID never runs at PTY-drain rates.
 static VtParser* get_parser(JNIEnv* env, jobject thiz) {
     jclass clazz = (*env)->GetObjectClass(env, thiz);
     jfieldID fid = (*env)->GetFieldID(env, clazz, "nativeHandle", "J");
@@ -16,6 +20,7 @@ static VtParser* get_parser(JNIEnv* env, jobject thiz) {
 
 JNIEXPORT jlong JNICALL
 Java_dev_jcode_core_term_VtParser_nativeCreate(JNIEnv* env, jobject thiz, jint rows, jint cols) {
+    (void)env; (void)thiz;
     VtParser* parser = vt_parser_create(rows, cols);
     if (!parser) {
         LOGE("Failed to create VT parser");
@@ -29,22 +34,78 @@ Java_dev_jcode_core_term_VtParser_nativeCreate(JNIEnv* env, jobject thiz, jint r
 // never needs (or retains) the VtParser object. Replaces the previous instance-based nativeDestroy.
 JNIEXPORT void JNICALL
 Java_dev_jcode_core_term_VtParser_nativeCloseByHandle(JNIEnv* env, jclass clazz, jlong handle) {
+    (void)env; (void)clazz;
     if (handle == 0) return;
     vt_parser_destroy((VtParser*)handle);
     LOGI("VT parser destroyed");
 }
 
+// Length-aware zero-copy feed: the Kotlin reader passes its reused read buffer plus the byte count,
+// so no per-chunk copyOf is needed. Critical access pins the array; no JNI calls happen between
+// get and release, and JNI_ABORT skips the (pointless) write-back copy.
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_term_VtParser_nativeFeed(JNIEnv* env, jobject thiz, jbyteArray data) {
-    VtParser* parser = get_parser(env, thiz);
-    if (!parser || !data) return;
-    
-    jsize len = (*env)->GetArrayLength(env, data);
-    jbyte* bytes = (*env)->GetByteArrayElements(env, data, NULL);
+Java_dev_jcode_core_term_VtParser_nativeFeed(JNIEnv* env, jclass clazz, jlong handle, jbyteArray data, jint length) {
+    (void)clazz;
+    VtParser* parser = (VtParser*)handle;
+    if (!parser || !data || length <= 0) return;
+
+    jsize capacity = (*env)->GetArrayLength(env, data);
+    if (length > capacity) length = capacity;
+
+    jbyte* bytes = (jbyte*)(*env)->GetPrimitiveArrayCritical(env, data, NULL);
     if (bytes) {
-        vt_parser_feed(parser, (const uint8_t*)bytes, len);
-        (*env)->ReleaseByteArrayElements(env, data, bytes, JNI_ABORT);
+        vt_parser_feed(parser, (const uint8_t*)bytes, (size_t)length);
+        (*env)->ReleasePrimitiveArrayCritical(env, data, bytes, JNI_ABORT);
     }
+}
+
+// Drains the queued shell-integration OSC events (7711-7713) in one call, clearing the queue.
+// Returns NULL when nothing is queued — the common case, so the per-feed poll costs one cheap
+// native call. Each element is "<code>;<payload>", split at the FIRST ';' by VtParser.drainOsc
+// (payloads may themselves contain ';'). Payload bytes are widened 1:1 to UTF-16 chars (Latin-1),
+// matching what the replaced Kotlin OscScanner produced for non-ASCII output.
+JNIEXPORT jobjectArray JNICALL
+Java_dev_jcode_core_term_VtParser_nativeDrainOsc(JNIEnv* env, jclass clazz, jlong handle) {
+    (void)clazz;
+    VtParser* parser = (VtParser*)handle;
+    if (!parser) return NULL;
+    int count = vt_parser_osc_event_count(parser);
+    if (count == 0) return NULL;
+
+    jclass string_class = (*env)->FindClass(env, "java/lang/String");
+    jobjectArray result = string_class ? (*env)->NewObjectArray(env, count, string_class, NULL) : NULL;
+    if (!result) {
+        vt_parser_osc_clear(parser);
+        return NULL;
+    }
+
+    // One scratch buffer reused for every event: "<code>;" prefix + payload.
+    jchar* chars = (jchar*)malloc((VT_OSC_BUFFER_CAP + 16) * sizeof(jchar));
+    if (!chars) {
+        vt_parser_osc_clear(parser);
+        return NULL;
+    }
+    for (int idx = 0; idx < count; idx++) {
+        int code = 0;
+        const char* payload = "";
+        if (!vt_parser_osc_event_at(parser, idx, &code, &payload)) break;
+        char prefix[16];
+        int n = snprintf(prefix, sizeof(prefix), "%d;", code);
+        if (n < 0) n = 0;
+        if (n > (int)sizeof(prefix) - 1) n = (int)sizeof(prefix) - 1;
+        int total = 0;
+        for (int k = 0; k < n; k++) chars[total++] = (jchar)prefix[k];
+        for (const char* p = payload; *p && total < VT_OSC_BUFFER_CAP + 16; p++) {
+            chars[total++] = (jchar)(uint8_t)*p;
+        }
+        jstring s = (*env)->NewString(env, chars, total);
+        if (!s) break;  // OOM: the pending exception surfaces when this native returns
+        (*env)->SetObjectArrayElement(env, result, idx, s);
+        (*env)->DeleteLocalRef(env, s);
+    }
+    free(chars);
+    vt_parser_osc_clear(parser);
+    return result;
 }
 
 JNIEXPORT void JNICALL
@@ -64,42 +125,37 @@ Java_dev_jcode_core_term_VtParser_nativeReset(JNIEnv* env, jobject thiz) {
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_VtParser_nativeGetRows(JNIEnv* env, jobject thiz) {
-    VtParser* parser = get_parser(env, thiz);
-    if (!parser) return 0;
-    const VtScreen* screen = vt_parser_get_screen(parser);
+Java_dev_jcode_core_term_VtParser_nativeGetRows(JNIEnv* env, jclass clazz, jlong handle) {
+    (void)env; (void)clazz;
+    const VtScreen* screen = vt_parser_get_screen((VtParser*)handle);
     return screen ? screen->rows : 0;
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_VtParser_nativeGetCols(JNIEnv* env, jobject thiz) {
-    VtParser* parser = get_parser(env, thiz);
-    if (!parser) return 0;
-    const VtScreen* screen = vt_parser_get_screen(parser);
+Java_dev_jcode_core_term_VtParser_nativeGetCols(JNIEnv* env, jclass clazz, jlong handle) {
+    (void)env; (void)clazz;
+    const VtScreen* screen = vt_parser_get_screen((VtParser*)handle);
     return screen ? screen->cols : 0;
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_VtParser_nativeGetCursorRow(JNIEnv* env, jobject thiz) {
-    VtParser* parser = get_parser(env, thiz);
-    if (!parser) return 0;
-    const VtScreen* screen = vt_parser_get_screen(parser);
+Java_dev_jcode_core_term_VtParser_nativeGetCursorRow(JNIEnv* env, jclass clazz, jlong handle) {
+    (void)env; (void)clazz;
+    const VtScreen* screen = vt_parser_get_screen((VtParser*)handle);
     return screen ? screen->cursor_row : 0;
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_VtParser_nativeGetCursorCol(JNIEnv* env, jobject thiz) {
-    VtParser* parser = get_parser(env, thiz);
-    if (!parser) return 0;
-    const VtScreen* screen = vt_parser_get_screen(parser);
+Java_dev_jcode_core_term_VtParser_nativeGetCursorCol(JNIEnv* env, jclass clazz, jlong handle) {
+    (void)env; (void)clazz;
+    const VtScreen* screen = vt_parser_get_screen((VtParser*)handle);
     return screen ? screen->cursor_col : 0;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_dev_jcode_core_term_VtParser_nativeIsCursorVisible(JNIEnv* env, jobject thiz) {
-    VtParser* parser = get_parser(env, thiz);
-    if (!parser) return JNI_FALSE;
-    const VtScreen* screen = vt_parser_get_screen(parser);
+Java_dev_jcode_core_term_VtParser_nativeIsCursorVisible(JNIEnv* env, jclass clazz, jlong handle) {
+    (void)env; (void)clazz;
+    const VtScreen* screen = vt_parser_get_screen((VtParser*)handle);
     return screen && screen->cursor_visible ? JNI_TRUE : JNI_FALSE;
 }
 
@@ -112,9 +168,9 @@ Java_dev_jcode_core_term_VtParser_nativeIsAlternateScreen(JNIEnv* env, jobject t
 // row >= 0 addresses the live screen; row < 0 addresses scrollback (-1 = newest scrolled-off line).
 
 JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_VtParser_nativeGetCellChar(JNIEnv* env, jobject thiz, jint row, jint col) {
-    VtParser* parser = get_parser(env, thiz);
-    const VtCell* cell = vt_parser_cell_at(parser, row, col);
+Java_dev_jcode_core_term_VtParser_nativeGetCellChar(JNIEnv* env, jclass clazz, jlong handle, jint row, jint col) {
+    (void)env; (void)clazz;
+    const VtCell* cell = vt_parser_cell_at((VtParser*)handle, row, col);
     return cell ? (jint)cell->ch : ' ';
 }
 
@@ -122,8 +178,9 @@ Java_dev_jcode_core_term_VtParser_nativeGetCellChar(JNIEnv* env, jobject thiz, j
 // [codepoint, fg, bg, fgMode | bgMode<<2 | attrs<<4]. fg/bg use the same encoding as the old
 // per-cell getters (-1 default, 0-255 indexed, packed RGB truecolor). Returns cells written.
 JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_VtParser_nativeReadRow(JNIEnv* env, jobject thiz, jint row, jintArray out) {
-    VtParser* parser = get_parser(env, thiz);
+Java_dev_jcode_core_term_VtParser_nativeReadRow(JNIEnv* env, jclass clazz, jlong handle, jint row, jintArray out) {
+    (void)clazz;
+    VtParser* parser = (VtParser*)handle;
     if (!parser || !out) return 0;
     const VtScreen* screen = vt_parser_get_screen(parser);
     if (!screen) return 0;
@@ -159,9 +216,9 @@ Java_dev_jcode_core_term_VtParser_nativeReadRow(JNIEnv* env, jobject thiz, jint 
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_VtParser_nativeGetScrollbackSize(JNIEnv* env, jobject thiz) {
-    VtParser* parser = get_parser(env, thiz);
-    return parser ? vt_parser_scrollback_count(parser) : 0;
+Java_dev_jcode_core_term_VtParser_nativeGetScrollbackSize(JNIEnv* env, jclass clazz, jlong handle) {
+    (void)env; (void)clazz;
+    return vt_parser_scrollback_count((VtParser*)handle);
 }
 
 JNIEXPORT void JNICALL
@@ -191,6 +248,7 @@ Java_dev_jcode_core_term_VtParser_nativeNeedsFullRefresh(JNIEnv* env, jobject th
 
 JNIEXPORT jint JNICALL
 Java_dev_jcode_native_vt_VtNativeModule_nativeInit(JNIEnv* env, jobject thiz) {
+    (void)env; (void)thiz;
     LOGI("VT parser JNI initialized");
     return 1;
 }

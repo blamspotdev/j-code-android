@@ -1,5 +1,6 @@
 package dev.jcode.design
 
+import android.graphics.Typeface
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -84,9 +85,54 @@ class EditorSaveActions(
     val onDiscard: () -> Unit = {},
     val onSaveAll: () -> Unit = {},
     val onFormat: () -> Unit = {},
+    /** Save every dirty tab and suspend until the writes finish — used by the close-guard so a switch
+     *  only proceeds once the buffers are safely on disk. Returns true only if every tab is now clean
+     *  (false if any couldn't be saved, so the caller can avoid tearing down unsaved work). */
+    val onSaveAllAwait: suspend () -> Boolean = { true },
 )
 
 val LocalEditorSaveActions = compositionLocalOf { EditorSaveActions() }
+
+/**
+ * Per-tab actions for the editor tab strip's long-press menu, shared (via [LocalEditorTabActions])
+ * so the pin / close-others / close-to-the-right handlers reach the tab UI without threading params
+ * through JCodeShell (which is at the ART verifier's register limit). Each takes the tab's id.
+ */
+class EditorTabActions(
+    val onTogglePin: (String) -> Unit = {},
+    val onCloseOthers: (String) -> Unit = {},
+    val onCloseToRight: (String) -> Unit = {},
+)
+
+val LocalEditorTabActions = compositionLocalOf { EditorTabActions() }
+
+/** One selectable monospace font: a stable [id] and a display [name]. The id→Typeface resolution
+ *  (and the built-in catalog) lives in the app; extensions can contribute more fonts later. */
+data class FontOption(val id: String, val name: String)
+
+/**
+ * Editor + terminal font-family selection, shared (via [LocalFontSettings]) with the settings screen
+ * so the dropdowns need no JCodeShell param (ART register limit). Ids are opaque; [options] maps them
+ * to display names. The resolved [Typeface]s reach the views via [LocalEditorTypeface] /
+ * [LocalTerminalTypeface].
+ */
+class FontSettings(
+    val options: List<FontOption> = emptyList(),
+    val editorFontId: String = "",
+    val terminalFontId: String = "",
+    val editorDefaultId: String = "",
+    val terminalDefaultId: String = "",
+    val onSelectEditorFont: (String) -> Unit = {},
+    val onSelectTerminalFont: (String) -> Unit = {},
+)
+
+val LocalFontSettings = compositionLocalOf { FontSettings() }
+
+/** The resolved editor font, pushed to the EditorView; defaults to the system monospace. */
+val LocalEditorTypeface = compositionLocalOf { Typeface.MONOSPACE }
+
+/** The resolved terminal font, pushed to the TerminalView; defaults to the system monospace. */
+val LocalTerminalTypeface = compositionLocalOf { Typeface.MONOSPACE }
 
 /**
  * "Restore last session" preference, shared (via [LocalRestoreSession]) with the settings screen without
@@ -114,7 +160,7 @@ class PerformanceSettings(
     val autoCloseIdleTerminals: Boolean = false,
     val idleTimeoutMinutes: Int = 30,
     val maxTerminalSessions: Int = 12,
-    val exitOnSwipeAway: Boolean = false,
+    val exitOnSwipeAway: Boolean = true,
     val onSetHardwareAcceleration: (Boolean) -> Unit = {},
     val onSetConfirmCloseRunning: (Boolean) -> Unit = {},
     val onSetAutoCloseIdleTerminals: (Boolean) -> Unit = {},

@@ -1,11 +1,14 @@
 package dev.jcode
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -21,6 +24,9 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by lazy {
         ViewModelProvider(this)[MainViewModel::class.java]
     }
+
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     override fun onCreate(savedInstanceState: Bundle?) {
         setTheme(R.style.Theme_JCode)
@@ -38,6 +44,12 @@ class MainActivity : ComponentActivity() {
             )
         }
         enableEdgeToEdge()
+        // POST_NOTIFICATIONS is a runtime permission at targetSdk 33 and the backend FGS
+        // notification ("Stop & close", session status) starts with the first terminal/run
+        // session — so ask right away rather than dropping notifications silently.
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
         setContent {
             JCodeRoot(viewModel = viewModel)
         }

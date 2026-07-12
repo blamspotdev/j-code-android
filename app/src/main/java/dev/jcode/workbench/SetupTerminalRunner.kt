@@ -6,7 +6,6 @@ import dev.jcode.core.distro.DistroBind
 import dev.jcode.core.distro.DistroService
 import dev.jcode.core.distro.ExecResult
 import dev.jcode.core.term.TerminalSessionManager
-import dev.jcode.fs.DEFAULT_SHARED_PROJECTS_ROOT
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -147,7 +146,7 @@ class SetupTerminalRunner(
         val runtime = environment.runtime
         val session = manager.createSession(
             distroId = runtime.selectedDistro.id,
-            binds = listOf(DistroBind(host = DEFAULT_SHARED_PROJECTS_ROOT, target = "/workspace")),
+            binds = listOf(DistroBind(host = dev.jcode.core.distro.WorkspaceHostPaths.projectsRoot, target = "/workspace")),
             workdir = "/workspace",
             user = "root",
             rootfsArch = runtime.selectedDistro.arch,
