@@ -41,6 +41,7 @@ import dev.jcode.design.BottomBarVisibility
 import dev.jcode.design.ExtraKeysVisibility
 import dev.jcode.design.SettingsDefaults
 import dev.jcode.design.TabColoring
+import dev.jcode.design.TabMaxSize
 import dev.jcode.design.ThemeMode
 import dev.jcode.design.VolumeKeyAction
 import dev.jcode.design.randomTabColor
@@ -531,6 +532,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setTabColoringMode(mode: TabColoring) {
         viewModelScope.launch { uiPreferences.edit { it[tabColoringKey] = mode.name } }
+    }
+
+    private val tabMaxSizeKey = stringPreferencesKey("tab_max_size")
+
+    /** Max width of editor/terminal tabs before the title middle-ellipsizes (Small/Medium/Large). */
+    val tabMaxSize: StateFlow<TabMaxSize> = uiPreferences.data
+        .map { prefs ->
+            prefs[tabMaxSizeKey]?.let { runCatching { TabMaxSize.valueOf(it) }.getOrNull() }
+                ?: SettingsDefaults.TAB_MAX_SIZE
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.TAB_MAX_SIZE)
+
+    fun setTabMaxSize(size: TabMaxSize) {
+        viewModelScope.launch { uiPreferences.edit { it[tabMaxSizeKey] = size.name } }
     }
 
     private val confirmCloseRunningKey = booleanPreferencesKey("perf_confirm_close_running")

@@ -261,8 +261,11 @@ import dev.jcode.design.CutoutSetting
 import dev.jcode.design.EditorTabColors
 import dev.jcode.design.LocalEditorTabColors
 import dev.jcode.design.LocalTabColoringSetting
+import dev.jcode.design.LocalTabMaxSize
+import dev.jcode.design.MiddleEllipsisText
 import dev.jcode.design.TabColoring
 import dev.jcode.design.TabColoringSetting
+import dev.jcode.design.TabMaxSizeSetting
 import dev.jcode.design.ExplorerHiddenMode
 import dev.jcode.design.ExplorerHiddenSetting
 import dev.jcode.design.ExtraKey
@@ -540,6 +543,8 @@ fun JCodeApp(
     val editorTabColors = remember(editorTabColorMap, effectiveTabColoring) {
         EditorTabColors({ path -> editorTabColorMap[path] }, effectiveTabColoring != TabColoring.Disabled)
     }
+    val tabMaxSize by viewModel.tabMaxSize.collectAsStateWithLifecycle()
+    val tabMaxSizeSetting = remember(tabMaxSize) { TabMaxSizeSetting(tabMaxSize, viewModel::setTabMaxSize) }
     val editorFontId by viewModel.editorFontId.collectAsStateWithLifecycle()
     val terminalFontId by viewModel.terminalFontId.collectAsStateWithLifecycle()
     val fontContext = LocalContext.current
@@ -795,6 +800,7 @@ fun JCodeApp(
         },
         LocalTabColoringSetting provides tabColoringSetting,
         LocalEditorTabColors provides editorTabColors,
+        LocalTabMaxSize provides tabMaxSizeSetting,
         LocalEditorDragMovesCursor provides editorDragSetting,
         LocalRestoreSession provides restoreSessionSetting,
         LocalExtensionActivation provides extensionActivationSetting,
@@ -3128,11 +3134,11 @@ private fun TerminalSidebarContent(
                                     modifier = Modifier.size(12.dp),
                                 )
                             }
-                            Text(
+                            MiddleEllipsisText(
                                 text = terminalTabLabel(
                                     terminalTitleFor(sessionId) ?: terminalSessionFor(sessionId)?.label
                                 ),
-                                maxLines = 1,
+                                maxWidth = LocalTabMaxSize.current.size.titleMaxWidth,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (isActive) {
                                     MaterialTheme.colorScheme.onSurface

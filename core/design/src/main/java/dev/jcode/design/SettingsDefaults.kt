@@ -25,4 +25,5 @@ object SettingsDefaults {
     // Default to ephemeral Random so the feature is visible out of the box WITHOUT silently writing
     // a .jcode on first file open; persistence (RandomRemember / DirectoryBased) is opt-in.
     val TAB_COLORING = TabColoring.Random
+    val TAB_MAX_SIZE = TabMaxSize.Medium
 }

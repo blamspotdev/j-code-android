@@ -63,6 +63,8 @@ import dev.jcode.core.editor.completion.LocalCompletionSource
 import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
 import dev.jcode.design.LocalEditorTabColors
+import dev.jcode.design.LocalTabMaxSize
+import dev.jcode.design.MiddleEllipsisText
 import dev.jcode.design.TabColorDialog
 import dev.jcode.design.tabColorToHex
 import dev.jcode.design.ExtraKey
@@ -240,10 +242,10 @@ private fun TabItem(
                     modifier = Modifier.size(13.dp),
                 )
             }
-            Text(
+            MiddleEllipsisText(
                 text = tab.title,
+                maxWidth = LocalTabMaxSize.current.size.titleMaxWidth,
                 style = MaterialTheme.typography.labelMedium,
-                maxLines = 1,
             )
 
             // Trailing slot: a dirty tab shows the unsaved-changes dot; the "×" appears on the active,

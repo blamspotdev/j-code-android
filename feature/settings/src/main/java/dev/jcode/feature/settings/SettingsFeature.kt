@@ -67,7 +67,9 @@ import dev.jcode.design.ExplorerHiddenMode
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalTabColoringSetting
+import dev.jcode.design.LocalTabMaxSize
 import dev.jcode.design.TabColoring
+import dev.jcode.design.TabMaxSize
 import dev.jcode.design.LocalVolumeKeysSetting
 import dev.jcode.design.VolumeKeyAction
 import dev.jcode.design.LocalRestoreSession
@@ -125,6 +127,7 @@ object SettingsFeature {
         val cutoutSetting = LocalCutoutSetting.current
         val volumeKeysSetting = LocalVolumeKeysSetting.current
         val tabColoringSetting = LocalTabColoringSetting.current
+        val tabMaxSizeSetting = LocalTabMaxSize.current
         val extraKeysSetting = LocalExtraKeysSetting.current
         val bottomBarSetting = LocalBottomBarSetting.current
         val fontSettings = LocalFontSettings.current
@@ -628,7 +631,7 @@ object SettingsFeature {
             SettingsCard(
                 title = "Tabs",
                 description = "How editor and terminal tabs behave. Applies app-wide.",
-                keywords = "tabs tab close button hide editor terminal accidental coloring color accent random directory",
+                keywords = "tabs tab close button hide editor terminal accidental coloring color accent random directory width size small medium large shorten ellipsis truncate",
             ) {
                 ToggleRow(
                     label = "Hide tab close button",
@@ -637,6 +640,16 @@ object SettingsFeature {
                     onCheckedChange = tabCloseSetting.onChange,
                     modified = tabCloseSetting.hidden != SettingsDefaults.HIDE_TAB_CLOSE_BUTTON,
                     onReset = { tabCloseSetting.onChange(SettingsDefaults.HIDE_TAB_CLOSE_BUTTON) },
+                )
+                SettingsDropdownRow(
+                    label = "Tab width",
+                    supporting = "The most an editor or terminal tab widens before its name is shortened " +
+                        "in the middle (e.g. \"build.gradle.kts\" → \"build.g…kts\").",
+                    options = TabMaxSize.entries.map { it.name },
+                    selected = tabMaxSizeSetting.size.name,
+                    onSelect = { tabMaxSizeSetting.onChange(TabMaxSize.valueOf(it)) },
+                    modified = tabMaxSizeSetting.size != SettingsDefaults.TAB_MAX_SIZE,
+                    onReset = { tabMaxSizeSetting.onChange(SettingsDefaults.TAB_MAX_SIZE) },
                 )
                 SettingsDropdownRow(
                     label = "Tab coloring",
