@@ -66,10 +66,93 @@ class WorkspaceManager @Inject constructor(
 
     init {
         scope.launch {
+            // Must run BEFORE ensureDefaultWorkspace(): it looks the Default Workspace up by rootPath,
+            // so if the root has flipped to ext4 without first re-anchoring workspaces.rootPath, it
+            // would create a NEW empty Default Workspace and orphan every existing project.
+            migrateProjectsToExt4IfNeeded()
             val workspace = ensureDefaultWorkspace()
             _breadcrumb.value = listOf(WorkspaceCrumb(workspace.id, workspace.name))
             currentWorkspaceId.value = workspace.id
         }
+    }
+
+    /**
+     * One-time move of existing Local projects/workspaces from shared storage (/storage/emulated/0/JCode,
+     * or the old app-external fallback) to the app-private ext4 root ([StorageRoots], filesDir/workspace).
+     * COPIES the trees (the shared originals stay as a backup — nothing is lost if this half-completes)
+     * and re-anchors the absolute host paths in the DB (workspaces.rootPath, projects.location, and Local
+     * recents.uri). Guarded by a marker file so it runs once. SAF rows (content:// URIs) are untouched.
+     */
+    private suspend fun migrateProjectsToExt4IfNeeded() = withContext(Dispatchers.IO) {
+        val newBase = File(context.filesDir, "workspace")
+        val marker = File(newBase, ".migrated-ext4")
+        if (marker.exists()) return@withContext
+
+        val oldBases = listOfNotNull(
+            File(DEFAULT_SHARED_PROJECTS_ROOT).parentFile,                 // /storage/emulated/0/JCode
+            context.getExternalFilesDir(null)?.let { File(it, "JCode") },  // legacy app-external fallback
+        ).map { it.absolutePath }.distinct()
+
+        fun remap(p: String): String? {
+            for (ob in oldBases) {
+                if (p == ob) return newBase.absolutePath
+                if (p.startsWith("$ob/")) return newBase.absolutePath + p.removePrefix(ob)
+            }
+            return null
+        }
+
+        runCatching {
+            newBase.mkdirs()
+            // 1) Copy the project + workspace trees. overwrite=false + SKIP-on-error so a re-run after
+            // an interrupted/partial copy RESUMES (skips already-copied files, never clobbers ext4
+            // work the user has since done there) instead of aborting on the first existing file. The
+            // FUSE source has no symlinks, so a plain copy is faithful.
+            for (ob in oldBases) {
+                for (sub in listOf("projects", "workspaces")) {
+                    val src = File(ob, sub)
+                    if (src.isDirectory) {
+                        runCatching {
+                            src.copyRecursively(File(newBase, sub), overwrite = false) { _, _ ->
+                                kotlin.io.OnErrorAction.SKIP
+                            }
+                        }
+                    }
+                }
+            }
+            // 2) Re-anchor DB rows (Local only) onto the ext4 paths, but ONLY when the destination
+            // actually exists (its files copied). A row whose copy was skipped/failed keeps pointing
+            // at the still-readable shared original — never orphaned to an empty ext4 dir.
+            workspaceDao.getAllWorkspaces().forEach { w ->
+                remap(w.rootPath)?.let { if (File(it).exists()) workspaceDao.updateWorkspaceRootPath(w.id, it) }
+            }
+            workspaceDao.getAllProjects().forEach { p ->
+                if (p.kind == ProjectKind.Local) remap(p.location)?.let {
+                    if (File(it).exists()) workspaceDao.updateProject(p.id, p.name, it)
+                }
+            }
+            workspaceDao.getAllRecents().forEach { r ->
+                if (r.kind == ProjectKind.Local) remap(r.uri)?.let { newUri ->
+                    if (File(newUri).exists()) {
+                        workspaceDao.deleteRecent(r.uri)
+                        workspaceDao.upsertRecent(r.copy(uri = newUri))
+                    }
+                }
+            }
+        }
+        // Mark done only when NOTHING still points at a legacy root (every Local row re-anchored, or
+        // there was nothing to migrate). If some rows couldn't be copied yet — e.g. All-files access
+        // isn't granted so the shared source is unreadable — leave the marker off so the migration
+        // retries on the next launch (and on the storage grant, via refreshStorageRoots), and the app
+        // keeps resolving to the shared root meanwhile (StorageRoots / WorkspaceHostPaths).
+        val stillLegacy = runCatching {
+            workspaceDao.getAllProjects().any { it.kind == ProjectKind.Local && remap(it.location) != null } ||
+                workspaceDao.getAllWorkspaces().any { remap(it.rootPath) != null }
+        }.getOrDefault(true)
+        if (!stillLegacy) {
+            runCatching { newBase.mkdirs(); marker.writeText("1") }
+            storageRootsCache = null // re-resolve to the ext4 root now that migration is complete
+        }
+        Unit
     }
 
     /**
@@ -78,6 +161,10 @@ class WorkspaceManager @Inject constructor(
      * fallback won); this re-anchors the Default Workspace on the shared location.
      */
     suspend fun refreshStorageRoots() {
+        // This is also the ext4-migration retry hook: it's called when the user grants All-files
+        // access, which is exactly when the shared source becomes readable. The migration is
+        // marker-guarded + idempotent, so re-running it is a no-op once it has completed.
+        migrateProjectsToExt4IfNeeded()
         val old = storageRootsCache
         val fresh = resolveStorageRoots(context)
         storageRootsCache = fresh

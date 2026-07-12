@@ -205,9 +205,7 @@ class LspSession(
      * Translate a host path to a distro URI.
      */
     fun hostToDistroUri(hostPath: String): String {
-        val distroPath = hostPath
-            .replace("/storage/emulated/0/JCode/projects/", "/workspace/")
-            .replace("\\", "/")
+        val distroPath = dev.jcode.core.distro.WorkspaceHostPaths.hostToGuest(hostPath).replace("\\", "/")
         return "file://$distroPath"
     }
 
@@ -216,8 +214,7 @@ class LspSession(
      */
     fun distroToHostPath(distroUri: String): String {
         val path = distroUri.removePrefix("file://")
-        return path
-            .replace("/workspace/", "/storage/emulated/0/JCode/projects/")
+        return dev.jcode.core.distro.WorkspaceHostPaths.guestToHost(path)
             .replace("/", java.io.File.separator)
     }
 

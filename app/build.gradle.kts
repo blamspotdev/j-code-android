@@ -23,6 +23,15 @@ val jcodeVersionCode: Int = runCatching {
     major.toInt() * 10000 + minor.toInt() * 100 + patch.toInt()
 }.getOrNull()?.takeIf { it > 0 } ?: 10000
 
+// A non-empty `-PjcodeIdSuffix` (e.g. ".beta") gives this build its own applicationId AND launcher
+// label so it installs ALONGSIDE the normal release app instead of replacing it (the release script
+// passes ".beta" for a Beta build). Its private data (Linux rootfs, settings, sessions) is isolated
+// under the suffixed package; only the shared /storage/emulated/0/JCode projects folder is common.
+// Empty (the default) keeps the normal dev.jcode / "J Code" release identity. namespace is unchanged
+// (compile-time R/BuildConfig package), so no source references break.
+val jcodeIdSuffix: String =
+    (project.findProperty("jcodeIdSuffix") as? String)?.trim().orEmpty()
+
 android {
     namespace = "dev.jcode"
     compileSdk = 36
@@ -34,16 +43,32 @@ android {
         versionCode = jcodeVersionCode
         versionName = jcodeVersionName
 
+        // Launcher name (AndroidManifest android:label="${appLabel}"). The Beta build overrides this
+        // to "J Code.beta" in the release block below.
+        manifestPlaceholders["appLabel"] = "J Code"
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
+        debug {
+            // Dev builds install as a separate app (dev.jcode.debug / "JCode (debug)") so an
+            // `installDebug` never overwrites an installed release or beta build.
+            applicationIdSuffix = ".debug"
+            manifestPlaceholders["appLabel"] = "JCode (debug)"
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Side-by-side Beta: a distinct applicationId (dev.jcode.beta) + launcher label
+            // ("JCode (beta)") so the Beta APK never overwrites an installed release build.
+            if (jcodeIdSuffix.isNotEmpty()) {
+                applicationIdSuffix = jcodeIdSuffix
+                manifestPlaceholders["appLabel"] = "JCode (${jcodeIdSuffix.removePrefix(".")})"
+            }
         }
     }
 

@@ -25,7 +25,10 @@ data class DistroEnvironmentState(
 data class DistroRuntimeConfig(
     val selectedDistro: DistroProfile = DistroProfile.defaultProfile(),
     val user: String = DEFAULT_DISTRO_USER,
-    val binds: List<DistroBind> = listOf(DistroBind(DEFAULT_PROJECTS_HOST_PATH, DEFAULT_DISTRO_WORKDIR)),
+    // Empty by default so the projects->/workspace bind is always derived at runtime from
+    // WorkspaceHostPaths (via DistroService.resolveBinds/primaryBind), never from a compile-time
+    // path that could point at the legacy shared root before the ext4 migration completes.
+    val binds: List<DistroBind> = emptyList(),
     val workdir: String = DEFAULT_DISTRO_WORKDIR,
 )
 
@@ -157,6 +160,58 @@ data class DistroProfile(
 internal const val DEFAULT_PROJECTS_HOST_PATH: String = "/storage/emulated/0/JCode/projects"
 internal const val DEFAULT_DISTRO_WORKDIR: String = "/workspace"
 internal const val DEFAULT_DISTRO_USER: String = "jcode"
+
+/**
+ * The host directory bound to the guest [DEFAULT_DISTRO_WORKDIR] ("/workspace"). Projects live on
+ * app-private INTERNAL storage (`context.filesDir/workspace/projects`) — an ext4 volume that supports
+ * symlinks/hardlinks (npm's `node_modules/.bin`) and is exec-capable, unlike the shared `/storage`
+ * FUSE mount, and needs no runtime permission. The path is runtime-resolved (filesDir varies by
+ * package/user), so it can't be a compile-time const; it is set once at startup via [init] and read by
+ * every host<->guest path translator so they all move together. Defaults to the legacy shared path so
+ * any read before [init] still resolves to something sane.
+ *
+ * The "workspace/projects" segment MUST stay in sync with core:fs `StorageRoots` (which computes the
+ * same path independently — the two modules don't depend on each other).
+ */
+object WorkspaceHostPaths {
+    @Volatile
+    private var filesDir: java.io.File? = null
+
+    // Latches true once the one-time move to ext4 has completed (WorkspaceManager writes the marker).
+    // Until then projectsRoot stays on the legacy shared path so the app and the DB agree on where
+    // projects physically live (avoids binding /workspace to an ext4 tree the files haven't reached).
+    @Volatile
+    private var migrated = false
+
+    fun init(filesDir: java.io.File) {
+        this.filesDir = filesDir
+    }
+
+    /** Host directory bound to guest "/workspace": ext4 once migrated, else the legacy shared path. */
+    val projectsRoot: String
+        get() {
+            val fd = filesDir ?: return DEFAULT_PROJECTS_HOST_PATH
+            if (!migrated && java.io.File(fd, "workspace/.migrated-ext4").exists()) migrated = true
+            return if (migrated) java.io.File(fd, "workspace/projects").absolutePath else DEFAULT_PROJECTS_HOST_PATH
+        }
+
+    /** Host absolute path -> guest /workspace path (returned unchanged if not under the projects root). */
+    fun hostToGuest(hostPath: String): String {
+        val root = projectsRoot
+        return when {
+            hostPath == root -> DEFAULT_DISTRO_WORKDIR
+            hostPath.startsWith("$root/") -> DEFAULT_DISTRO_WORKDIR + hostPath.removePrefix(root)
+            else -> hostPath
+        }
+    }
+
+    /** Guest /workspace path -> host absolute path (returned unchanged if not under /workspace). */
+    fun guestToHost(guestPath: String): String = when {
+        guestPath == DEFAULT_DISTRO_WORKDIR -> projectsRoot
+        guestPath.startsWith("$DEFAULT_DISTRO_WORKDIR/") -> projectsRoot + guestPath.removePrefix(DEFAULT_DISTRO_WORKDIR)
+        else -> guestPath
+    }
+}
 
 internal val DEFAULT_BOOTSTRAP_PACKAGES: List<String> = listOf(
     "build-essential",

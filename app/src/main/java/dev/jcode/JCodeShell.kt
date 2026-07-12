@@ -15,6 +15,18 @@ import dev.jcode.design.EditorDragSetting
 import dev.jcode.design.LocalEditorDragMovesCursor
 import dev.jcode.design.LocalRestoreSession
 import dev.jcode.design.LocalTabCloseButtonSetting
+import dev.jcode.design.BottomBarSetting
+import dev.jcode.design.EditorTabActions
+import dev.jcode.design.FontSettings
+import dev.jcode.design.LocalEditorTabActions
+import dev.jcode.design.LocalEditorTypeface
+import dev.jcode.design.LocalFontSettings
+import dev.jcode.design.LocalTerminalTypeface
+import dev.jcode.design.ExtraKeysSetting
+import dev.jcode.design.ExtraKeysState
+import dev.jcode.design.LocalBottomBarSetting
+import dev.jcode.design.LocalExtraKeysSetting
+import dev.jcode.design.LocalExtraKeysState
 import dev.jcode.design.RestoreSessionSetting
 import dev.jcode.design.TabCloseButtonSetting
 import dev.jcode.editor.SyntaxHighlighter
@@ -186,9 +198,12 @@ import dev.jcode.core.term.TerminalView
 import dev.jcode.design.CommandRegistry
 import dev.jcode.design.ThemeMode
 import dev.jcode.feature.editor.pane.EditorGroup
+import dev.jcode.feature.editor.pane.EditorMenuContribution
+import dev.jcode.feature.editor.pane.EditorMenuExtras
 import dev.jcode.feature.editor.pane.EditorPageKind
 import dev.jcode.feature.editor.pane.EditorPane
 import dev.jcode.feature.editor.pane.EditorTab
+import dev.jcode.feature.editor.pane.LocalEditorMenuExtras
 import dev.jcode.feature.explorer.ExplorerFeature
 import dev.jcode.feature.explorer.ExplorerViewMode
 import dev.jcode.feature.marketplace.ExtensionType
@@ -219,6 +234,7 @@ import dev.jcode.workbench.BrowserPage
 import dev.jcode.workbench.BuiltinBrowser
 import dev.jcode.workbench.DevtoolsSidebarContent
 import dev.jcode.workbench.ImageViewerPage
+import dev.jcode.workbench.MarkdownPreviewPage
 import dev.jcode.workbench.SearchToolPanel
 import dev.jcode.workbench.marketplace.DbManagerPanel
 import dev.jcode.workbench.marketplace.hasDbManagerClient
@@ -268,11 +284,13 @@ import dev.jcode.workbench.LocalIssueActions
 import dev.jcode.core.debug.DebugState
 import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.workbench.LocalTerminalTapConfig
+import dev.jcode.workbench.TerminalExtraKeysTarget
+import dev.jcode.workbench.WorkbenchExtraKeysBar
+import dev.jcode.workbench.rememberBottomStatusBarVisible
 import dev.jcode.workbench.RightPanelTab
 import dev.jcode.workbench.WorkbenchManagerActions
 import dev.jcode.workbench.TerminalTapConfig
 import dev.jcode.workbench.WorkbenchTool
-import dev.jcode.fs.DEFAULT_SHARED_PROJECTS_ROOT
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
 import dev.jcode.fs.ProjectKind
@@ -303,6 +321,7 @@ fun JCodeApp(
     val breadcrumb by viewModel.breadcrumb.collectAsStateWithLifecycle()
     val selectedProject by viewModel.selectedProject.collectAsStateWithLifecycle()
     val editorGroup by viewModel.editorGroup.collectAsStateWithLifecycle()
+    val pendingEditorClose by viewModel.pendingEditorClose.collectAsStateWithLifecycle()
     val showNewItemDialog by viewModel.showNewItemDialog.collectAsStateWithLifecycle()
     val postClonePrompt by viewModel.postClonePrompt.collectAsStateWithLifecycle()
     val templates by viewModel.templates.collectAsStateWithLifecycle()
@@ -442,6 +461,37 @@ fun JCodeApp(
     val restoreSessionSetting = remember(restoreLastSession) {
         RestoreSessionSetting(restoreLastSession, viewModel::setRestoreLastSession)
     }
+    val extraKeysPortrait by viewModel.extraKeysPortrait.collectAsStateWithLifecycle()
+    val extraKeysLandscape by viewModel.extraKeysLandscape.collectAsStateWithLifecycle()
+    val extraKeysSetting = remember(extraKeysPortrait, extraKeysLandscape) {
+        ExtraKeysSetting(
+            portrait = extraKeysPortrait,
+            landscape = extraKeysLandscape,
+            onChangePortrait = viewModel::setExtraKeysPortrait,
+            onChangeLandscape = viewModel::setExtraKeysLandscape,
+        )
+    }
+    val extraKeysState = remember { ExtraKeysState() }
+    val bottomStatusBar by viewModel.bottomStatusBar.collectAsStateWithLifecycle()
+    val bottomBarSetting = remember(bottomStatusBar) {
+        BottomBarSetting(bottomStatusBar, viewModel::setBottomStatusBar)
+    }
+    val editorFontId by viewModel.editorFontId.collectAsStateWithLifecycle()
+    val terminalFontId by viewModel.terminalFontId.collectAsStateWithLifecycle()
+    val fontContext = LocalContext.current
+    val editorTypeface = remember(editorFontId) { MonoFontCatalog.resolve(fontContext, editorFontId) }
+    val terminalTypeface = remember(terminalFontId) { MonoFontCatalog.resolve(fontContext, terminalFontId) }
+    val fontSettings = remember(editorFontId, terminalFontId) {
+        FontSettings(
+            options = MonoFontCatalog.options,
+            editorFontId = editorFontId,
+            terminalFontId = terminalFontId,
+            editorDefaultId = MonoFontCatalog.EDITOR_DEFAULT,
+            terminalDefaultId = MonoFontCatalog.TERMINAL_DEFAULT,
+            onSelectEditorFont = viewModel::setEditorFont,
+            onSelectTerminalFont = viewModel::setTerminalFont,
+        )
+    }
     val editorSaveActions = remember(viewModel) {
         EditorSaveActions(
             onUndo = viewModel::undoActiveTab,
@@ -449,6 +499,7 @@ fun JCodeApp(
             onDiscard = viewModel::discardActiveTab,
             onSaveAll = viewModel::saveAllTabs,
             onFormat = viewModel::formatActiveTab,
+            onSaveAllAwait = viewModel::saveAllDirtyAwait,
         )
     }
     // Completion items for the focused file, resolved from its installed language pack (if any).
@@ -570,6 +621,34 @@ fun JCodeApp(
     val recents by viewModel.recents.collectAsStateWithLifecycle()
     val contributedStartActions by viewModel.contributedEditorStartActions.collectAsStateWithLifecycle()
     val contributedDrawerActions by viewModel.contributedDrawerActions.collectAsStateWithLifecycle()
+    val contributedContextActions by viewModel.contributedEditorContextActions.collectAsStateWithLifecycle()
+    // Extra items for the editor's long-press context menu, computed for the ACTIVE tab: the built-in
+    // Markdown "Preview" toggle plus extension-contributed actions matching the file's extension.
+    val menuTab = editorGroup.activeTab
+    val menuTabId = menuTab?.id
+    val menuIsFileTab = menuTab?.editorState != null
+    val menuFileName = menuTab?.let { t -> t.filePath.name.ifBlank { t.title } }.orEmpty()
+    val editorMenuExtras = remember(viewModel, menuTabId, menuIsFileTab, menuFileName, contributedContextActions) {
+        val fileExt = menuFileName.substringAfterLast('.', "").lowercase()
+        EditorMenuExtras(
+            previewToggle = if (menuIsFileTab && menuTabId != null && SyntaxHighlighter.isMarkdownFile(menuFileName)) {
+                { viewModel.toggleTabPreview(menuTabId) }
+            } else {
+                null
+            },
+            contributions = if (menuIsFileTab) {
+                contributedContextActions
+                    .filter { it.fileExtensions.isEmpty() || fileExt in it.fileExtensions }
+                    .map { EditorMenuContribution("${it.extId}:${it.id}", it.label, contributedMenuIcon(it.icon)) }
+            } else {
+                emptyList()
+            },
+            onContribution = { c, word ->
+                contributedContextActions.firstOrNull { "${it.extId}:${it.id}" == c.key }
+                    ?.let { viewModel.handleEditorContextAction(it, word) }
+            },
+        )
+    }
     val vcsActions = remember(contributedDrawerActions) {
         VcsActions(drawerActions = contributedDrawerActions, onAction = viewModel::openContributedView)
     }
@@ -592,8 +671,9 @@ fun JCodeApp(
     // resolved against the current snapshot; they drift with unsaved edits until the next check runs.
     val allDiagnostics by dev.jcode.core.lsp.LspModule.diagnosticsBus.allDiagnostics.collectAsStateWithLifecycle()
     val activeDiagTab = editorGroup.activeTab
-    LaunchedEffect(activeDiagTab?.id, allDiagnostics) {
+    LaunchedEffect(activeDiagTab?.id, activeDiagTab?.previewMode, allDiagnostics) {
         val state = activeDiagTab?.editorState ?: return@LaunchedEffect
+        if (activeDiagTab.previewMode) return@LaunchedEffect
         val diags = allDiagnostics[activeDiagTab.filePath.path].orEmpty()
         val snap = state.snapshot.value
         val decos = if (snap.lineCount == 0) emptyList() else diags.mapIndexed { i, d ->
@@ -624,6 +704,19 @@ fun JCodeApp(
     CompositionLocalProvider(
         LocalTerminalTapConfig provides terminalTapConfig,
         LocalTabCloseButtonSetting provides tabCloseSetting,
+        LocalExtraKeysSetting provides extraKeysSetting,
+        LocalExtraKeysState provides extraKeysState,
+        LocalBottomBarSetting provides bottomBarSetting,
+        LocalFontSettings provides fontSettings,
+        LocalEditorTypeface provides editorTypeface,
+        LocalTerminalTypeface provides terminalTypeface,
+        LocalEditorTabActions provides remember {
+            EditorTabActions(
+                onTogglePin = viewModel::toggleEditorTabPinned,
+                onCloseOthers = viewModel::closeOtherEditorTabs,
+                onCloseToRight = viewModel::closeEditorTabsToRight,
+            )
+        },
         LocalEditorDragMovesCursor provides editorDragSetting,
         LocalRestoreSession provides restoreSessionSetting,
         LocalExtensionActivation provides extensionActivationSetting,
@@ -640,6 +733,7 @@ fun JCodeApp(
             )
         },
         LocalEditorSaveActions provides editorSaveActions,
+        LocalEditorMenuExtras provides editorMenuExtras,
         LocalCompletionSource provides completionSource,
         LocalEnvironmentManager provides environmentManagerActions,
         LocalEditorEmptyActions provides editorEmptyActions,
@@ -697,7 +791,6 @@ fun JCodeApp(
         onSaveActiveTab = viewModel::saveActiveTab,
         onUpdateEditorFontSize = viewModel::updateEditorFontSize,
         onUpdateEditorTabSize = viewModel::updateEditorTabSize,
-        onUpdateEditorWordWrap = viewModel::updateEditorWordWrap,
         onUpdateEditorMinimap = viewModel::updateEditorMinimap,
         onUpdateEditorLigatures = viewModel::updateEditorLigatures,
         onUpdateExplorerViewMode = viewModel::updateExplorerViewMode,
@@ -786,6 +879,18 @@ fun JCodeApp(
         )
     }
 
+    // Closing tabs with unsaved changes: Save / Discard / Close Saved (dismiss = keep everything).
+    pendingEditorClose?.let { pending ->
+        UnsavedChangesDialog(
+            titles = pending.dirtyTitles,
+            thirdLabel = "Close Saved",
+            onSave = { viewModel.resolveEditorClose(EditorCloseChoice.SAVE) },
+            onDiscard = { viewModel.resolveEditorClose(EditorCloseChoice.DISCARD) },
+            onThird = { viewModel.resolveEditorClose(EditorCloseChoice.CLOSE_SAVED) },
+            onDismiss = { viewModel.resolveEditorClose(EditorCloseChoice.CANCEL) },
+        )
+    }
+
     if (showFirstRunEnvironmentScreen) {
         OnboardingFeature.FirstRunEnvironmentScreen(
             environmentState = environmentState,
@@ -831,14 +936,13 @@ private fun JCodeShell(
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
     onSaveActiveTab: () -> Unit,
-    onUpdateEditorFontSize: (ConfigScope, Float) -> Unit,
-    onUpdateEditorTabSize: (ConfigScope, Int) -> Unit,
-    onUpdateEditorWordWrap: (ConfigScope, Boolean) -> Unit,
-    onUpdateEditorMinimap: (ConfigScope, Boolean) -> Unit,
-    onUpdateEditorLigatures: (ConfigScope, Boolean) -> Unit,
-    onUpdateExplorerViewMode: (ConfigScope, String) -> Unit,
+    onUpdateEditorFontSize: (ConfigScope, Float?) -> Unit,
+    onUpdateEditorTabSize: (ConfigScope, Int?) -> Unit,
+    onUpdateEditorMinimap: (ConfigScope, Boolean?) -> Unit,
+    onUpdateEditorLigatures: (ConfigScope, Boolean?) -> Unit,
+    onUpdateExplorerViewMode: (ConfigScope, String?) -> Unit,
     themeMode: ThemeMode,
-    onUpdateThemeMode: (ThemeMode) -> Unit,
+    onUpdateThemeMode: (ThemeMode?) -> Unit,
     themeBundleId: String,
     onUpdateThemeBundle: (String) -> Unit,
     iconBundleId: String,
@@ -918,8 +1022,11 @@ private fun JCodeShell(
         LocalExtensionActivation.current.modeFor(it.id) != ExtensionActivation.Manual
     }
     val highlightTab = editorGroup.activeTab
-    LaunchedEffect(highlightTab?.id, activeLanguageExtensions, editorDark) {
+    // previewMode is a key (not just a guard) so flipping back to source restarts the effect and
+    // re-runs one highlight pass over whatever the buffer holds by then.
+    LaunchedEffect(highlightTab?.id, highlightTab?.previewMode, activeLanguageExtensions, editorDark) {
         val state = highlightTab?.editorState ?: return@LaunchedEffect
+        if (highlightTab.previewMode) return@LaunchedEffect
         val fileName = highlightTab.filePath.name
         val lang = activeLanguageExtensions.firstNotNullOfOrNull { ext -> ext.languageFor(fileName) }
         val palette = if (editorDark) TokenPalette.DARK else TokenPalette.LIGHT
@@ -1060,7 +1167,7 @@ private fun JCodeShell(
         //   /workspace/{workspace}                (User Workspace, no project)
         //   /workspace/{workspace}/{project}      (User Workspace, project open)
         // A SAF project lives outside the projects root, so it falls back to /workspace.
-        val projectsRoot = DEFAULT_SHARED_PROJECTS_ROOT.trimEnd('/')
+        val projectsRoot = dev.jcode.core.distro.WorkspaceHostPaths.projectsRoot.trimEnd('/')
         fun guestPathFor(hostPath: String?): String? = when {
             hostPath.isNullOrBlank() -> null
             hostPath == projectsRoot -> "/workspace"
@@ -1074,7 +1181,7 @@ private fun JCodeShell(
             ?: "/workspace"
         val session = terminalSessionManager.createSession(
             distroId = environmentState.runtime.selectedDistro.id,
-            binds = listOf(DistroBind(host = DEFAULT_SHARED_PROJECTS_ROOT, target = "/workspace")),
+            binds = listOf(DistroBind(host = dev.jcode.core.distro.WorkspaceHostPaths.projectsRoot, target = "/workspace")),
             workdir = terminalWorkdir,
             user = "root", // Use root since jcode user may not exist in minimal rootfs
             shellCommand = terminalShellCommand,
@@ -1291,7 +1398,9 @@ private fun JCodeShell(
     val perf = LocalPerformanceSettings.current
     val debugSessionUiLocal = LocalDebugSession.current
     val agentChatActionsLocal = LocalAgentChatActions.current
+    val editorSaveActionsLocal = LocalEditorSaveActions.current
     var pendingCloseTarget by remember { mutableStateOf<CloseTarget?>(null) }
+    var pendingUnsavedSwitch by remember { mutableStateOf<CloseTarget?>(null) }
 
     fun runningItems(): List<String> = buildList {
         terminalSessionManager.foregroundSessions().forEach { (_, prog) -> add("Terminal: $prog") }
@@ -1336,9 +1445,16 @@ private fun JCodeShell(
         }
     }
 
-    fun requestClose(target: CloseTarget) {
+    fun proceedClose(target: CloseTarget) {
         if (perf.confirmCloseRunning && runningItems().isNotEmpty()) pendingCloseTarget = target
         else performClose(target)
+    }
+
+    fun requestClose(target: CloseTarget) {
+        // Unsaved editor buffers are dropped on a workspace/project switch — prompt before anything is
+        // torn down (so Cancel is a true no-op), then fall through to the running-process guard.
+        if (editorGroup.tabs.any { !it.isPage && it.isDirty }) pendingUnsavedSwitch = target
+        else proceedClose(target)
     }
 
     val handleCloseProject: () -> Unit = { requestClose(CloseTarget.Project) }
@@ -1363,6 +1479,30 @@ private fun JCodeShell(
             dismissButton = {
                 TextButton(onClick = { pendingCloseTarget = null }) { Text("Cancel") }
             },
+        )
+    }
+
+    // Unsaved editor buffers about to be dropped by a workspace/project switch: Save / Discard / Cancel.
+    // Keeping the dirty tabs open isn't an option here (the whole context is going away), so the third
+    // button is Cancel. Save awaits the writes, then falls through to the running-process guard.
+    pendingUnsavedSwitch?.let { target ->
+        val titles = editorGroup.tabs.filter { !it.isPage && it.isDirty }.map { it.title }
+        UnsavedChangesDialog(
+            titles = titles,
+            thirdLabel = "Cancel",
+            onSave = {
+                pendingUnsavedSwitch = null
+                scope.launch {
+                    // Only proceed once everything is on disk; if some tab couldn't be saved (e.g. a
+                    // SAF/blank-path file), re-raise the prompt so the user can Discard or Cancel
+                    // instead of the switch silently dropping the still-unsaved buffers.
+                    if (editorSaveActionsLocal.onSaveAllAwait()) proceedClose(target)
+                    else pendingUnsavedSwitch = target
+                }
+            },
+            onDiscard = { pendingUnsavedSwitch = null; proceedClose(target) },
+            onThird = { pendingUnsavedSwitch = null },
+            onDismiss = { pendingUnsavedSwitch = null },
         )
     }
 
@@ -1562,12 +1702,19 @@ private fun JCodeShell(
                 },
             snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
-                WorkbenchStatusBar(
-                    activeTab = activeTab,
-                    selectedProject = selectedProject,
-                    effectiveConfig = effectiveConfig,
-                    activeDistroId = environmentState.runtime.selectedDistro.id,
-                )
+                Column {
+                    // Sits above the status bar so Scaffold's innerPadding reserves space for it and
+                    // the editor/terminal content shrinks instead of being covered while typing.
+                    WorkbenchExtraKeysBar()
+                    if (rememberBottomStatusBarVisible()) {
+                        WorkbenchStatusBar(
+                            activeTab = activeTab,
+                            selectedProject = selectedProject,
+                            effectiveConfig = effectiveConfig,
+                            activeDistroId = environmentState.runtime.selectedDistro.id,
+                        )
+                    }
+                }
             },
             containerColor = MaterialTheme.colorScheme.background,
         ) { innerPadding ->
@@ -1663,7 +1810,6 @@ private fun JCodeShell(
                                     onRefreshEnvironment = onRefreshEnvironment,
                                     onUpdateFontSize = onUpdateEditorFontSize,
                                     onUpdateTabSize = onUpdateEditorTabSize,
-                                    onUpdateWordWrap = onUpdateEditorWordWrap,
                                     onUpdateMinimap = onUpdateEditorMinimap,
                                     onUpdateLigatures = onUpdateEditorLigatures,
                                     onUpdateExplorerViewMode = onUpdateExplorerViewMode,
@@ -1683,6 +1829,7 @@ private fun JCodeShell(
                                     onUpdateTerminalDoubleTapToFocus = onUpdateTerminalDoubleTapToFocus,
                                     hideStatusBarWithKeyboard = hideStatusBarWithKeyboard,
                                     onUpdateHideStatusBarWithKeyboard = onUpdateHideStatusBarWithKeyboard,
+                                    isUserWorkspace = breadcrumb.size > 1,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                                 EditorPageKind.Environment -> OnboardingFeature.EnvironmentSetupPage(
@@ -1807,7 +1954,20 @@ private fun JCodeShell(
                                         }
                                     }
                                 }
-                                EditorPageKind.None -> Unit
+                                EditorPageKind.None -> if (tab.previewMode && tab.editorState != null) {
+                                    // Key by tab id so switching between two previewed files (same call
+                                    // site) recreates the WebView instead of reusing the previous content.
+                                    key(tab.id) {
+                                        MarkdownPreviewPage(
+                                            tab = tab,
+                                            dark = editorDark,
+                                            languagePacks = activeLanguageExtensions,
+                                            modifier = Modifier.fillMaxSize(),
+                                        )
+                                    }
+                                } else {
+                                    Unit
+                                }
                             }
                         },
                     )
@@ -1930,33 +2090,42 @@ private fun JCodeShell(
                             .background(Color.Black.copy(alpha = 0.36f))
                             .clickable { rightSidebarVisible = false },
                     )
-                    WorkbenchRightSidebar(
-                        selectedTab = rightPanelTab.takeIf { it in portraitRightSidebarTabs } ?: RightPanelTab.Terminal,
-                        selectedProject = selectedProject,
-                        terminalSessionIds = terminalSessionIds,
-                        selectedTerminalSessionId = selectedTerminalSessionId,
-                        activeTerminalPty = terminalSessionManager.getSession(selectedTerminalSessionId)?.pty,
-                        terminalSessionFor = { id -> terminalSessionManager.getSession(id) },
-                        terminalTitleFor = { id -> terminalTitles[id] },
-                        terminalReady = terminalReady,
-                        onOpenEnvironmentWizard = onOpenEnvironmentWizard,
+                    Column(
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
                             .fillMaxHeight()
                             .fillMaxWidth()
                             .statusBarsPadding()
                             .navigationBarsPadding(),
-                        onTabSelected = { rightPanelTab = it },
-                        onSelectTerminalSession = ::selectTerminalSession,
-                        onAddTerminalSession = ::createTerminalSession,
-                        onRemoveTerminalSession = ::closeTerminalSession,
-                        onHide = { rightSidebarVisible = false },
-                        runningProjectName = runningProjectId?.let { id ->
-                            workspace?.projects?.firstOrNull { it.id == id }?.name ?: selectedProject?.name
-                        },
-                        runInProgress = runInProgress,
-                        onStopRun = ::handleStopRun,
-                    )
+                    ) {
+                        WorkbenchRightSidebar(
+                            selectedTab = rightPanelTab.takeIf { it in portraitRightSidebarTabs } ?: RightPanelTab.Terminal,
+                            selectedProject = selectedProject,
+                            terminalSessionIds = terminalSessionIds,
+                            selectedTerminalSessionId = selectedTerminalSessionId,
+                            activeTerminalPty = terminalSessionManager.getSession(selectedTerminalSessionId)?.pty,
+                            terminalSessionFor = { id -> terminalSessionManager.getSession(id) },
+                            terminalTitleFor = { id -> terminalTitles[id] },
+                            terminalReady = terminalReady,
+                            onOpenEnvironmentWizard = onOpenEnvironmentWizard,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            onTabSelected = { rightPanelTab = it },
+                            onSelectTerminalSession = ::selectTerminalSession,
+                            onAddTerminalSession = ::createTerminalSession,
+                            onRemoveTerminalSession = ::closeTerminalSession,
+                            onHide = { rightSidebarVisible = false },
+                            runningProjectName = runningProjectId?.let { id ->
+                                workspace?.projects?.firstOrNull { it.id == id }?.name ?: selectedProject?.name
+                            },
+                            runInProgress = runInProgress,
+                            onStopRun = ::handleStopRun,
+                        )
+                        // The modal sidebar covers the Scaffold's bottom bar, so it hosts its own
+                        // copy; as a Column child it pushes the terminal up rather than covering it.
+                        WorkbenchExtraKeysBar()
+                    }
                 }
             }
         }
@@ -2694,6 +2863,81 @@ private fun WorkbenchRightSidebarBody(
     }
 }
 
+/**
+ * Prompt for closing editor tab(s) that have unsaved changes. Save persists then closes; Discard closes
+ * and loses the edits; the third action differs by context — "Close Saved" for a tab close (keep the
+ * dirty tabs open, close the already-saved ones) or "Cancel" for a workspace/project switch (where the
+ * tabs can't be kept). Dismissing keeps everything as-is.
+ */
+@Composable
+private fun UnsavedChangesDialog(
+    titles: List<String>,
+    thirdLabel: String,
+    onSave: () -> Unit,
+    onDiscard: () -> Unit,
+    onThird: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Unsaved changes") },
+        text = {
+            Text(
+                if (titles.size == 1) "\"${titles.first()}\" has unsaved changes."
+                else "These files have unsaved changes:\n" + titles.joinToString("\n") { "•  $it" },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        // Destructive "Discard" is kept out of the rightmost (reflexive-tap) slot; "Save" is the safe
+        // primary at the end.
+        confirmButton = {
+            TextButton(onClick = onDiscard) {
+                Text("Discard", color = MaterialTheme.colorScheme.error)
+            }
+            TextButton(onClick = onThird) { Text(thirdLabel) }
+            TextButton(onClick = onSave) { Text("Save") }
+        },
+        dismissButton = {},
+    )
+}
+
+/**
+ * Prompt for closing terminal tab(s) with a running foreground program. Kill ends the program(s) and
+ * closes them; Close Unbusy closes only the idle terminals and keeps the busy ones (disabled when the
+ * set is entirely busy); Cancel keeps everything.
+ */
+@Composable
+private fun TerminalRunningDialog(
+    runningNames: List<String>,
+    closeUnbusyEnabled: Boolean,
+    onKill: () -> Unit,
+    onCloseUnbusy: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text(if (runningNames.size == 1) "Running process" else "Running processes") },
+        text = {
+            Text(
+                "Still running:\n" + runningNames.joinToString("\n") { "•  $it" },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        // Destructive "Kill" is kept out of the rightmost (reflexive-tap) slot; "Cancel" is the safe
+        // default at the end.
+        confirmButton = {
+            TextButton(onClick = onKill) {
+                Text("Kill", color = MaterialTheme.colorScheme.error)
+            }
+            TextButton(onClick = onCloseUnbusy, enabled = closeUnbusyEnabled) { Text("Close Unbusy") }
+            TextButton(onClick = onCancel) { Text("Cancel") }
+        },
+        dismissButton = {},
+    )
+}
+
 @Composable
 private fun TerminalSidebarContent(
     selectedProject: Project?,
@@ -2711,6 +2955,40 @@ private fun TerminalSidebarContent(
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         var menuForId by remember { mutableStateOf<String?>(null) }
+        // Pinned terminals sort to the front, hide their "×", and are skipped by Close others/all.
+        // Terminals are ephemeral (never persisted), so this pin state is UI-local too.
+        var pinnedTerminalIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
+        // Drop pins for sessions that have gone away so the set can't leak stale ids.
+        LaunchedEffect(terminalSessionIds) {
+            val live = pinnedTerminalIds.filter { it in terminalSessionIds }
+            if (live.size != pinnedTerminalIds.size) pinnedTerminalIds = live
+        }
+        val orderedSessionIds = terminalSessionIds.sortedBy { it !in pinnedTerminalIds }
+        // Closing a terminal running a foreground program prompts first (Kill / Close Unbusy / Cancel).
+        // "Unbusy" = idle at the prompt (Session.foreground == null). Honors the same confirm-close
+        // preference as the project/workspace close guard.
+        val perf = LocalPerformanceSettings.current
+        var pendingTerminalClose by remember { mutableStateOf<List<String>?>(null) }
+        fun terminalBusy(id: String) = terminalSessionFor(id)?.foreground != null
+        fun requestCloseTerminals(ids: List<String>) {
+            val targets = ids.filter { it in terminalSessionIds }
+            if (targets.isEmpty()) return
+            if (perf.confirmCloseRunning && targets.any(::terminalBusy)) pendingTerminalClose = targets
+            else targets.forEach(onRemoveTerminalSession)
+        }
+        pendingTerminalClose?.let { ids ->
+            val runningNames = ids.filter(::terminalBusy).map { terminalSessionFor(it)?.foreground ?: "a process" }
+            TerminalRunningDialog(
+                runningNames = runningNames,
+                closeUnbusyEnabled = ids.any { !terminalBusy(it) },
+                onKill = { pendingTerminalClose = null; ids.forEach(onRemoveTerminalSession) },
+                onCloseUnbusy = {
+                    pendingTerminalClose = null
+                    ids.filterNot(::terminalBusy).forEach(onRemoveTerminalSession)
+                },
+                onCancel = { pendingTerminalClose = null },
+            )
+        }
         // Session tab bar — flat editor-style tabs (see EditorPane.TabItem), sized down for the drawer.
         Surface(
             modifier = Modifier.fillMaxWidth(),
@@ -2724,8 +3002,9 @@ private fun TerminalSidebarContent(
                 horizontalArrangement = Arrangement.spacedBy(0.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                terminalSessionIds.forEach { sessionId ->
+                orderedSessionIds.forEach { sessionId ->
                     val isActive = sessionId == selectedTerminalSessionId
+                    val isPinned = sessionId in pinnedTerminalIds
                     Box {
                         Row(
                             modifier = Modifier
@@ -2742,6 +3021,15 @@ private fun TerminalSidebarContent(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
+                            // Pinned terminal shows a leading pin instead of a "×" (close via long-press).
+                            if (isPinned) {
+                                Icon(
+                                    imageVector = jcIcon(JCodeIcon.Pin),
+                                    contentDescription = "Pinned",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(12.dp),
+                                )
+                            }
                             Text(
                                 text = terminalTabLabel(
                                     terminalTitleFor(sessionId) ?: terminalSessionFor(sessionId)?.label
@@ -2754,17 +3042,16 @@ private fun TerminalSidebarContent(
                                     MaterialTheme.colorScheme.onSurfaceVariant
                                 },
                             )
-                            // Close button (hidden via setting to avoid accidental closes; the tab's
-                            // long-press menu still closes it). A plain clickable Box keeps the touch
-                            // target tight (18dp) — an IconButton's enforced 48dp minimum would spill
-                            // over the title in this compact tab and close it on a title tap.
-                            if (!LocalTabCloseButtonSetting.current.hidden) {
+                            // The "×" appears ONLY on the active, unpinned tab (so tapping a background
+                            // tab to switch can't close it). A plain clickable Box keeps the touch target
+                            // tight (18dp) — an IconButton's 48dp minimum would spill over the title.
+                            if (isActive && !isPinned && !LocalTabCloseButtonSetting.current.hidden) {
                                 JcTooltip("Close terminal") {
                                     Box(
                                         modifier = Modifier
                                             .size(18.dp)
                                             .clip(CircleShape)
-                                            .clickable { onRemoveTerminalSession(sessionId) },
+                                            .clickable { requestCloseTerminals(listOf(sessionId)) },
                                         contentAlignment = Alignment.Center,
                                     ) {
                                         Text(
@@ -2780,17 +3067,24 @@ private fun TerminalSidebarContent(
                             expanded = menuForId == sessionId,
                             onDismissRequest = { menuForId = null },
                             quickActions = listOf(
-                                ContextAction(JCodeIcon.Close, "Close") { onRemoveTerminalSession(sessionId) },
+                                ContextAction(JCodeIcon.Close, "Close") { requestCloseTerminals(listOf(sessionId)) },
                             ),
                             listActions = listOf(
+                                ContextAction(JCodeIcon.Pin, if (isPinned) "Unpin" else "Pin") {
+                                    pinnedTerminalIds = if (isPinned) {
+                                        pinnedTerminalIds - sessionId
+                                    } else {
+                                        pinnedTerminalIds + sessionId
+                                    }
+                                },
                                 ContextAction(JCodeIcon.Clear, "Clear") {
                                     terminalSessionFor(sessionId)?.pty?.write(byteArrayOf(0x0C))
                                 },
                                 ContextAction(JCodeIcon.Close, "Close others") {
-                                    terminalSessionIds.filter { it != sessionId }.forEach(onRemoveTerminalSession)
+                                    requestCloseTerminals(terminalSessionIds.filter { it != sessionId && it !in pinnedTerminalIds })
                                 },
                                 ContextAction(JCodeIcon.Close, "Close all") {
-                                    terminalSessionIds.toList().forEach(onRemoveTerminalSession)
+                                    requestCloseTerminals(terminalSessionIds.filter { it !in pinnedTerminalIds })
                                 },
                             ),
                         )
@@ -2851,7 +3145,25 @@ private fun TerminalSidebarContent(
             // stay attached (still reading their output) but transparent and behind it. Switching tabs
             // is instant and every session keeps its own independent content.
             val tapConfig = LocalTerminalTapConfig.current
+            val extraKeys = LocalExtraKeysState.current
+            val terminalTypeface = LocalTerminalTypeface.current
             var termMenu by remember { mutableStateOf<TerminalMenuRequest?>(null) }
+            // Points the extra-keys row at whichever terminal owns the IME; cleared on focus loss so
+            // the row never acts on (or shows for) a surface that isn't being typed into.
+            val wireExtraKeys: (TerminalView) -> Unit = { view ->
+                val adapter = TerminalExtraKeysTarget(view)
+                view.onFocusStateChanged = { focused ->
+                    if (focused) {
+                        extraKeys.clearModifiers()
+                        extraKeys.target = adapter
+                    } else if (extraKeys.target === adapter) {
+                        extraKeys.clearModifiers()
+                        extraKeys.target = null
+                    }
+                }
+                view.onPendingModifiersConsumed = { extraKeys.clearModifiers() }
+                if (view.isFocused) extraKeys.target = adapter
+            }
             Box(modifier = Modifier.fillMaxSize()) {
                 terminalSessionIds.forEach { sessionId ->
                     val session = terminalSessionFor(sessionId) ?: return@forEach
@@ -2861,13 +3173,16 @@ private fun TerminalSidebarContent(
                             factory = { ctx ->
                                 TerminalView(ctx).apply {
                                     setFontSize(30f)
+                                    setTypeface(terminalTypeface)
                                     doubleTapToFocus = tapConfig.doubleTapToFocus
                                     onTapToken = tapConfig.onToken
                                     onContextMenu = { x, y -> termMenu = TerminalMenuRequest(x, y, this) }
+                                    wireExtraKeys(this)
                                     bind(session)
                                 }
                             },
                             update = { view ->
+                                view.setTypeface(terminalTypeface)
                                 view.doubleTapToFocus = tapConfig.doubleTapToFocus
                                 view.onTapToken = tapConfig.onToken
                                 view.onContextMenu = { x, y -> termMenu = TerminalMenuRequest(x, y, view) }
@@ -3265,3 +3580,22 @@ private data class TerminalMenuRequest(
     val y: Float,
     val view: dev.jcode.core.term.TerminalView,
 )
+
+/** Map an extension-contributed action's manifest `icon` name onto a semantic icon slot. */
+private fun contributedMenuIcon(name: String?): JCodeIcon = when (name?.lowercase()) {
+    "scm", "source-control", "git" -> JCodeIcon.Scm
+    "database", "db" -> JCodeIcon.Database
+    "vm" -> JCodeIcon.Vm
+    "run" -> JCodeIcon.Run
+    "debug" -> JCodeIcon.Debug
+    "terminal" -> JCodeIcon.Terminal
+    "browser", "web" -> JCodeIcon.Browser
+    "search" -> JCodeIcon.Search
+    "settings", "gear" -> JCodeIcon.Settings
+    "chat" -> JCodeIcon.Chat
+    "image" -> JCodeIcon.Image
+    "code" -> JCodeIcon.Code
+    "preview", "eye" -> JCodeIcon.Preview
+    "format" -> JCodeIcon.Format
+    else -> JCodeIcon.Extensions
+}

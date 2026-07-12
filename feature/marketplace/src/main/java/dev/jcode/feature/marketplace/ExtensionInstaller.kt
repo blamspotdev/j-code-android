@@ -342,11 +342,18 @@ class ExtensionInstaller internal constructor(context: Context) {
             map.listOfAny(key).mapNotNull { item ->
                 val a = (item as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
                 val id = a.str("id")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
-                ContributedAction(id = id, label = a.str("label") ?: id, icon = a.str("icon"))
+                ContributedAction(
+                    id = id,
+                    label = a.str("label") ?: id,
+                    icon = a.str("icon"),
+                    fileExtensions = a.listOfAny("fileExtensions")
+                        .mapNotNull { it?.toString()?.trim()?.removePrefix(".")?.lowercase()?.takeIf(String::isNotBlank) },
+                )
             }
         return ExtensionContributions(
             editorStartActions = actions("editorStartActions"),
             drawerActions = actions("drawerActions"),
+            editorContextActions = actions("editorContextActions"),
         )
     }
 

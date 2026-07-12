@@ -44,6 +44,7 @@ import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.NoteAdd
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.RestartAlt
@@ -57,6 +58,7 @@ import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.SyncProblem
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.UnfoldLess
+import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -77,6 +79,7 @@ enum class JCodeIcon {
     Browser, DevTools, Image,
     DropDown, ChevronDown, ChevronRight, ArrowUp, MenuToggle, Help,
     Copy, Cut, Delete, Open, Rename, SelectAll, Clear, Definition, References, Format,
+    Preview, Pin,
 }
 
 /**
@@ -163,6 +166,8 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.Definition to Icons.Rounded.MyLocation,
         JCodeIcon.References to Icons.Rounded.ManageSearch,
         JCodeIcon.Format to Icons.Rounded.FormatAlignLeft,
+        JCodeIcon.Preview to Icons.Rounded.Visibility,
+        JCodeIcon.Pin to Icons.Rounded.PushPin,
     ),
 )
 

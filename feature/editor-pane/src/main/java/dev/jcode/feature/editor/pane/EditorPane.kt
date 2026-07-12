@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -59,10 +60,16 @@ import dev.jcode.core.editor.completion.EditorCompletionModule
 import dev.jcode.core.editor.completion.LocalCompletionSource
 import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
+import dev.jcode.design.ExtraKey
+import dev.jcode.design.ExtraKeysTarget
 import dev.jcode.design.LocalEditorDragMovesCursor
+import dev.jcode.design.LocalEditorTabActions
+import dev.jcode.design.LocalEditorTypeface
+import dev.jcode.design.LocalExtraKeysState
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.JcTooltip
 import dev.jcode.design.LocalTabCloseButtonSetting
+import dev.jcode.design.jcIcon
 /**
  * Editor pane composable that hosts a tab strip and the active EditorView.
  */
@@ -100,7 +107,7 @@ fun EditorPane(
                     .clipToBounds(),
             ) {
                 val editorState = activeTab.editorState
-                if (editorState != null) {
+                if (editorState != null && !activeTab.previewMode) {
                     EditorViewHost(
                         editorState = editorState,
                         onSave = onSave,
@@ -197,11 +204,12 @@ private fun TabItem(
     onClosed: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    val tabActions = LocalEditorTabActions.current
     Box {
         Row(
             modifier = Modifier
                 // Long-press always offers Close, so the tab stays closeable even when the "×" is
-                // hidden via the avoid-accidental-close setting.
+                // hidden (pinned tab, or the avoid-accidental-close setting).
                 .combinedClickable(onClick = onSelected, onLongClick = { menuOpen = true })
                 .background(
                     if (isActive) MaterialTheme.colorScheme.surfaceVariant
@@ -212,39 +220,56 @@ private fun TabItem(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            // A pinned tab shows a leading pin instead of a close "×": it sorts to the front and is
+            // protected from accidental close (close it via the long-press menu).
+            if (tab.pinned) {
+                Icon(
+                    imageVector = jcIcon(JCodeIcon.Pin),
+                    contentDescription = "Pinned",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(13.dp),
+                )
+            }
             Text(
                 text = tab.title,
                 style = MaterialTheme.typography.labelMedium,
                 maxLines = 1,
             )
 
-            // Trailing slot: a round dot marks unsaved changes (taking the "×" spot, editor-style);
-            // a clean, closeable tab shows the "×". Closing is done from the tab's long-press menu.
-            when {
-                tab.isDirty -> {
-                    JcTooltip("Unsaved changes") {
-                        Box(modifier = Modifier.size(20.dp), contentAlignment = Alignment.Center) {
-                            ModifiedDot()
+            // Trailing slot: a dirty tab shows the unsaved-changes dot; the "×" appears on the active,
+            // unpinned tab. An active dirty tab shows BOTH (dot + ×) so it stays one-tap closeable —
+            // the close then routes through the "unsaved changes" prompt.
+            val showClose = isActive && !tab.pinned && !LocalTabCloseButtonSetting.current.hidden
+            if (tab.isDirty || showClose) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    if (tab.isDirty) {
+                        JcTooltip("Unsaved changes") {
+                            Box(modifier = Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+                                ModifiedDot()
+                            }
                         }
                     }
-                }
-                !LocalTabCloseButtonSetting.current.hidden -> {
-                    JcTooltip("Close tab") {
-                        // Plain clickable Box (not IconButton) so the touch target stays a tight 20dp;
-                        // an IconButton's enforced 48dp minimum spills over the title and closes the
-                        // tab on a title tap.
-                        Box(
-                            modifier = Modifier
-                                .size(20.dp)
-                                .clip(CircleShape)
-                                .clickable(onClick = onClosed),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "×",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                    if (showClose) {
+                        JcTooltip("Close tab") {
+                            // Plain clickable Box (not IconButton) so the touch target stays a tight 20dp;
+                            // an IconButton's enforced 48dp minimum spills over the title and closes the
+                            // tab on a title tap.
+                            Box(
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .clip(CircleShape)
+                                    .clickable(onClick = onClosed),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = "×",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
                 }
@@ -254,7 +279,10 @@ private fun TabItem(
             expanded = menuOpen,
             onDismissRequest = { menuOpen = false },
             listActions = listOf(
+                ContextAction(JCodeIcon.Pin, if (tab.pinned) "Unpin" else "Pin") { tabActions.onTogglePin(tab.id) },
                 ContextAction(JCodeIcon.Close, "Close") { onClosed() },
+                ContextAction(JCodeIcon.Close, "Close others") { tabActions.onCloseOthers(tab.id) },
+                ContextAction(JCodeIcon.Close, "Close to the right") { tabActions.onCloseToRight(tab.id) },
             ),
         )
     }
@@ -302,10 +330,13 @@ fun EditorViewHost(
         }
     }
     val completionSource = LocalCompletionSource.current
+    val menuExtras = LocalEditorMenuExtras.current
     val dragSetting = LocalEditorDragMovesCursor.current
     val dragCursorEnabled = dragSetting.enabled
     val dragCursorVLevel = dragSetting.verticalLevel
     val dragCursorHLevel = dragSetting.horizontalLevel
+    val extraKeys = LocalExtraKeysState.current
+    val editorTypeface = LocalEditorTypeface.current
 
     // A completion popup belongs to its file; clear it when the active editor (tab) changes.
     LaunchedEffect(editorState) { completionAnchor = null }
@@ -349,6 +380,7 @@ fun EditorViewHost(
         AndroidView(
             factory = { context ->
                 EditorView(context).apply {
+                    setEditorTypeface(editorTypeface)
                     attach(editorState)
                     onContextRequest = { menu = it }
                     onSaveRequest = { onSave() }
@@ -358,11 +390,24 @@ fun EditorViewHost(
                     dragMovesCursor = dragCursorEnabled
                     cursorDragVerticalLevel = dragCursorVLevel
                     cursorDragHorizontalLevel = dragCursorHLevel
+                    // Points the extra-keys row at this editor while it owns the IME.
+                    val keysAdapter = EditorExtraKeysTarget(this)
+                    onFocusStateChanged = { focused ->
+                        if (focused) {
+                            extraKeys.clearModifiers()
+                            extraKeys.target = keysAdapter
+                        } else if (extraKeys.target === keysAdapter) {
+                            extraKeys.clearModifiers()
+                            extraKeys.target = null
+                        }
+                    }
+                    if (isFocused) extraKeys.target = keysAdapter
                     view = this
                 }
             },
             modifier = Modifier.fillMaxSize(),
             update = { v ->
+                v.setEditorTypeface(editorTypeface)
                 v.attach(editorState)
                 v.onContextRequest = { menu = it }
                 v.onSaveRequest = { onSave() }
@@ -425,10 +470,16 @@ fun EditorViewHost(
                 ),
                 listActions = buildList {
                     add(ContextAction(JCodeIcon.SelectAll, "Select all") { view?.selectAll() })
+                    menuExtras.previewToggle?.let { toggle ->
+                        add(ContextAction(JCodeIcon.Preview, "Preview") { toggle() })
+                    }
                     if (languageActionsEnabled) {
                         EditorLanguageAction.entries.forEach { action ->
                             add(ContextAction(action.menuIcon(), action.label) { onLanguageAction(action, req.word) })
                         }
+                    }
+                    menuExtras.contributions.forEach { c ->
+                        add(ContextAction(c.icon, c.label) { menuExtras.onContribution(c, req.word) })
                     }
                 },
             )
@@ -507,4 +558,32 @@ private fun EditorLanguageAction.menuIcon(): JCodeIcon = when (this) {
     EditorLanguageAction.FindReferences -> JCodeIcon.References
     EditorLanguageAction.RenameSymbol -> JCodeIcon.Rename
     EditorLanguageAction.FormatDocument -> JCodeIcon.Format
+}
+
+/** Routes extra-keys row presses to the editor as synthesized key events ([EditorView.dispatchKeyEvent]
+ *  handles them against the attached state without needing focus or an IME session). */
+private class EditorExtraKeysTarget(private val view: EditorView) : ExtraKeysTarget {
+
+    override val keys = listOf(
+        ExtraKey.Esc, ExtraKey.Tab,
+        ExtraKey.Left, ExtraKey.Up, ExtraKey.Down, ExtraKey.Right,
+        ExtraKey.Home, ExtraKey.End, ExtraKey.PageUp, ExtraKey.PageDown,
+    )
+
+    override fun onExtraKey(key: ExtraKey, ctrl: Boolean, alt: Boolean) {
+        val keyCode = when (key) {
+            ExtraKey.Esc -> android.view.KeyEvent.KEYCODE_ESCAPE
+            ExtraKey.Tab -> android.view.KeyEvent.KEYCODE_TAB
+            ExtraKey.Left -> android.view.KeyEvent.KEYCODE_DPAD_LEFT
+            ExtraKey.Up -> android.view.KeyEvent.KEYCODE_DPAD_UP
+            ExtraKey.Down -> android.view.KeyEvent.KEYCODE_DPAD_DOWN
+            ExtraKey.Right -> android.view.KeyEvent.KEYCODE_DPAD_RIGHT
+            ExtraKey.Home -> android.view.KeyEvent.KEYCODE_MOVE_HOME
+            ExtraKey.End -> android.view.KeyEvent.KEYCODE_MOVE_END
+            ExtraKey.PageUp -> android.view.KeyEvent.KEYCODE_PAGE_UP
+            ExtraKey.PageDown -> android.view.KeyEvent.KEYCODE_PAGE_DOWN
+            else -> return
+        }
+        view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, keyCode))
+    }
 }

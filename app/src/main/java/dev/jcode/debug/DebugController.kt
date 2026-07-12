@@ -338,7 +338,7 @@ class DebugController(
     }
 
     private fun hostToDistro(p: String): String =
-        p.replace("/storage/emulated/0/JCode/projects/", "/workspace/").replace("\\", "/")
+        dev.jcode.core.distro.WorkspaceHostPaths.hostToGuest(p).replace("\\", "/")
 }
 
 /** Adapts a proot child process's stdio pipes to [DapTransport] (blocking reads, no PTY echo). */

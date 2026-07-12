@@ -63,6 +63,16 @@ class TerminalView @JvmOverloads constructor(
     // Invoked (with the touch point in view pixels) when a long-press requests the action menu, so the
     // host can render the shared compact context menu instead of a native PopupMenu.
     var onContextMenu: ((Float, Float) -> Unit)? = null
+    // Focus reporting for the extra-keys row: the host points the row at whichever surface owns the IME.
+    var onFocusStateChanged: ((Boolean) -> Unit)? = null
+
+    // One-shot sticky modifiers armed by the extra-keys row (Termux-style): applied to the NEXT
+    // typed character, then cleared. CTRL turns a letter into its control byte; ALT prefixes ESC.
+    var pendingCtrl = false
+    var pendingAlt = false
+    // Notified after an armed modifier is consumed (or discarded) by typed input, so the row can
+    // un-highlight its CTRL/ALT chips.
+    var onPendingModifiersConsumed: (() -> Unit)? = null
     private var selectionStartRow = 0
     private var selectionStartCol = 0
     private var selectionEndRow = 0
@@ -649,7 +659,8 @@ class TerminalView @JvmOverloads constructor(
         if (!event.isCtrlPressed && !event.isAltPressed) {
             val uch = event.unicodeChar
             if (uch != 0) {
-                sendInput(uch.toChar().toString())
+                val text = uch.toChar().toString()
+                if (!sendWithPendingModifiers(text)) sendInput(text)
                 return true
             }
         }
@@ -677,6 +688,24 @@ class TerminalView @JvmOverloads constructor(
      * Get the current font size.
      */
     fun getFontSize(): Float = textPaint.textSize
+
+    /**
+     * Set the terminal font (typeface). Re-measures the monospace cell metrics and re-records the grid.
+     */
+    fun setTypeface(tf: Typeface) {
+        if (textPaint.typeface === tf) return
+        textPaint.typeface = tf
+        cellWidth = textPaint.measureText("M")
+        cellHeight = textPaint.fontSpacing
+        if (width > 0 && height > 0) {
+            val newCols = (width / cellWidth).toInt().coerceAtLeast(1)
+            val newRows = (height / cellHeight).toInt().coerceAtLeast(1)
+            resizeTerminal(newCols, newRows)
+        }
+        // Unconditionally re-record: resizeTerminal early-returns when cols/rows are unchanged (common
+        // for a same-metrics font swap), which would otherwise replay the old font from the cached node.
+        invalidateGrid()
+    }
 
     /**
      * Resize the terminal.
@@ -923,7 +952,10 @@ class TerminalView @JvmOverloads constructor(
                 // A terminal's Enter is carriage return (0x0D), but IMEs commit it as a newline (LF).
                 // cooked-mode shells accept LF, but raw-mode TUIs (opencode, vim, htop) only recognise
                 // CR as Enter — so map every newline form to CR, matching the hardware-key path.
-                text?.toString()?.let { sendInput(it.replace("\r\n", "\r").replace("\n", "\r")) }
+                text?.toString()?.let {
+                    val mapped = it.replace("\r\n", "\r").replace("\n", "\r")
+                    if (!sendWithPendingModifiers(mapped)) sendInput(mapped)
+                }
                 return true
             }
 
@@ -934,7 +966,8 @@ class TerminalView @JvmOverloads constructor(
                         event.keyCode == KeyEvent.KEYCODE_DEL -> sendInput(byteArrayOf(0x7F))
                         event.unicodeChar != 0 -> {
                             val ch = event.unicodeChar.toChar()
-                            sendInput(if (ch == '\n' || ch == '\r') "\r" else ch.toString())
+                            val mapped = if (ch == '\n' || ch == '\r') "\r" else ch.toString()
+                            if (!sendWithPendingModifiers(mapped)) sendInput(mapped)
                         }
                     }
                 }
@@ -976,6 +1009,36 @@ class TerminalView @JvmOverloads constructor(
     override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
         if (gainFocus) startBlink() else stopBlink()
+        onFocusStateChanged?.invoke(gainFocus)
+    }
+
+    /**
+     * Applies (and clears) the one-shot [pendingCtrl]/[pendingAlt] modifiers to typed input.
+     * Returns true when the transformed bytes were sent; false when the caller should send [text]
+     * unmodified. The modifiers are consumed either way — they are one-shot, like Termux's.
+     */
+    private fun sendWithPendingModifiers(text: String): Boolean {
+        if (!pendingCtrl && !pendingAlt) return false
+        val ctrl = pendingCtrl
+        val alt = pendingAlt
+        pendingCtrl = false
+        pendingAlt = false
+        onPendingModifiersConsumed?.invoke()
+        if (text.length != 1) return false
+        val ch = text[0]
+        val ctrlByte: Byte? = if (ctrl) {
+            val c = ch.uppercaseChar()
+            when {
+                c in '@'..'_' -> (c.code and 0x1F).toByte()
+                ch == ' ' -> 0
+                ch == '/' -> 0x1F
+                else -> null
+            }
+        } else null
+        if (ctrl && ctrlByte == null && !alt) return false
+        val body = ctrlByte?.let { byteArrayOf(it) } ?: text.toByteArray(Charsets.UTF_8)
+        sendInput(if (alt) byteArrayOf(0x1B) + body else body)
+        return true
     }
 
     override fun onAttachedToWindow() {

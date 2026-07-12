@@ -101,7 +101,27 @@ Bundled into the APK (`classes.dex` / merged resources). Unless noted, each is
 
 ---
 
-## 4. J Code's own native and JVM code
+## 4. Bundled fonts
+
+Shipped as Android font resources and rendered by J Code's own views (the code
+editor). The font files are unmodified upstream releases; per the OFL's Reserved
+Font Name rules they must not be subset or otherwise modified without renaming.
+
+| Component | Version | License | Source |
+|---|---|---|---|
+| JetBrains Mono (`JetBrainsMono-Regular.ttf`, shipped as `core/editor/src/main/res/font/jetbrains_mono_regular.ttf`) | 2.304 | OFL-1.1 | https://github.com/JetBrains/JetBrainsMono |
+
+Copyright 2020 The JetBrains Mono Project Authors
+(https://github.com/JetBrains/JetBrainsMono). Licensed under the SIL Open Font
+License, Version 1.1 — the full license text ships in this repository at
+[`licenses/OFL-1.1-JetBrainsMono.txt`](licenses/OFL-1.1-JetBrainsMono.txt)
+(upstream `OFL.txt`, verbatim); the font file's own metadata carries the
+copyright notice and a license pointer. The OFL applies to the font files only —
+it does not extend to J Code's code or to documents rendered with the font.
+
+---
+
+## 5. J Code's own native and JVM code
 
 All first-party modules — `:app`, `:core:*`, `:feature:*`, and the native
 libraries `jcodebuffer`, `jcode_core`, `pty`, `jcode_vt`, and the

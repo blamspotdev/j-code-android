@@ -11,6 +11,8 @@ data class SessionTabRecord(
     val filePath: String,
     val dirty: Boolean,
     val bufferFileName: String?,
+    val preview: Boolean = false,
+    val pinned: Boolean = false,
 )
 
 /** A persisted workbench session: the open workspace/project plus the editor's open tabs. */
@@ -42,6 +44,8 @@ class SessionStore(context: Context) {
                 filePath = t.getString("path"),
                 dirty = t.optBoolean("dirty", false),
                 bufferFileName = t.optString("buffer", "").ifBlank { null },
+                preview = t.optBoolean("preview", false),
+                pinned = t.optBoolean("pinned", false),
             )
         }
         SessionRecord(
@@ -66,6 +70,8 @@ class SessionStore(context: Context) {
                         put("path", t.filePath)
                         put("dirty", t.dirty)
                         t.bufferFileName?.let { put("buffer", it) }
+                        if (t.preview) put("preview", true)
+                        if (t.pinned) put("pinned", true)
                     })
                 }
             })

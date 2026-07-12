@@ -23,6 +23,10 @@ import dev.jcode.core.editor.decor.SquiggleDecoration
  * coloring sweeps the byte-sorted span list with a cursor instead of scanning the whole file's
  * spans per character.
  */
+/** Disables programming ligatures (JetBrains Mono implements them via `calt`, which text shaping
+ *  enables by default). Applied to a Paint's fontFeatureSettings; null restores font defaults. */
+internal const val FONT_FEATURES_NO_LIGATURES = "'liga' off, 'calt' off"
+
 class Renderer(
     private val typeface: Typeface,
     // Display density (px per dp). fontSizeSp (sp) must be multiplied by this to get the px that
@@ -57,6 +61,15 @@ class Renderer(
         strokeWidth = 2f
     }
 
+    /** Swap the text font. The two text paints copy the typeface only in their initializers, so both
+     *  must be updated directly, and the "M"-advance cache invalidated (it keys on textSize alone,
+     *  so a same-size font change would otherwise leave it stale). Caller repaints. */
+    fun setTypeface(tf: Typeface) {
+        textPaint.typeface = tf
+        lineNumberPaint.typeface = tf
+        cachedAdvanceSize = -1f
+    }
+
     // The GLYPH_COLOR layer list is stable per DecorationSet instance, so the filterIsInstance
     // pass (O(spans) + a list copy) runs once per decoration change, not once per frame.
     private var cachedSpanSource: List<Decoration>? = null
@@ -68,6 +81,8 @@ class Renderer(
         val fontSizePx = config.fontSizeSp * density
         textPaint.textSize = fontSizePx
         textPaint.color = theme.foreground.toInt()
+        val fontFeatures = if (config.ligatures) null else FONT_FEATURES_NO_LIGATURES
+        if (textPaint.fontFeatureSettings != fontFeatures) textPaint.fontFeatureSettings = fontFeatures
         lineNumberPaint.textSize = fontSizePx * 0.85f
         lineNumberPaint.color = theme.lineNumber.toInt()
         selectionPaint.color = theme.selection.toInt()
@@ -96,16 +111,27 @@ class Renderer(
         // Draw gutter background
         canvas.drawRect(0f, 0f, gutterWidth.toFloat(), viewport.heightPx.toFloat(), gutterBgPaint)
 
+        // Sub-line scroll remainder. visibleLineTop floors scrollY, so line L's screen top is
+        // (L - visibleTop)*lineHeightPx MINUS the remainder — content shifts up as scrollY grows.
+        val yRem = viewport.scrollY % lineHeightPx
+        // Left edge of column 0, shifted by the horizontal scroll.
+        val textLeft = gutterWidth + 8f - viewport.scrollX
+
         // Full-line background highlights (e.g. the current stopped line while debugging).
         val lineHighlights = decorations.atLayer(Layer.BACKGROUND)
             .filterIsInstance<LineHighlightDecoration>()
         for (hl in lineHighlights) {
             if (hl.line in visibleTop until visibleBottom) {
-                val y = (hl.line - visibleTop) * lineHeightPx + viewport.scrollY % lineHeightPx
+                val y = (hl.line - visibleTop) * lineHeightPx - yRem
                 lineHighlightPaint.color = hl.color
                 canvas.drawRect(gutterWidth.toFloat(), y.toFloat(), canvas.width.toFloat(), (y + lineHeightPx).toFloat(), lineHighlightPaint)
             }
         }
+
+        // Everything that scrolls horizontally (selection, text, squiggles, carets) is clipped to the
+        // text area so content dragged left can never overpaint the gutter.
+        canvas.save()
+        canvas.clipRect(gutterWidth.toFloat(), 0f, canvas.width.toFloat(), canvas.height.toFloat())
 
         // Draw selection rects
         for (caret in carets) {
@@ -122,42 +148,27 @@ class Renderer(
                         val selEnd = if (line == endLine) (caret.end - lineStart).coerceAtMost(lineEnd - lineStart) else (lineEnd - lineStart)
                         if (selStart < selEnd) {
                             val lineText = window.text(line)
-                            val xStart = gutterWidth + measureTextWidth(lineText.substring(0, selEnd), config)
-                            val xEnd = gutterWidth + measureTextWidth(lineText.substring(0, selStart), config)
-                            val y = (line - visibleTop) * lineHeightPx + viewport.scrollY % lineHeightPx
-                            canvas.drawRect(xEnd.toFloat(), y.toFloat(), xStart.toFloat(), (y + lineHeightPx).toFloat(), selectionPaint)
+                            val xStart = textLeft + measureTextWidth(lineText.substring(0, selStart), config)
+                            val xEnd = textLeft + measureTextWidth(lineText.substring(0, selEnd), config)
+                            val y = (line - visibleTop) * lineHeightPx - yRem
+                            canvas.drawRect(xStart, y.toFloat(), xEnd, (y + lineHeightPx).toFloat(), selectionPaint)
                         }
                     }
                 }
             }
         }
 
-        // Draw lines
+        // Draw line text with syntax highlighting
         for (line in visibleTop until visibleBottom) {
             if (!window.contains(line)) break
 
-            val y = (line - visibleTop) * lineHeightPx + viewport.scrollY % lineHeightPx
+            val y = (line - visibleTop) * lineHeightPx - yRem
             val lineText = window.text(line)
-
-            // Draw line number
-            lineNumberPaint.color = if (line in caretLines) {
-                theme.lineNumberActive.toInt()
-            } else {
-                theme.lineNumber.toInt()
-            }
-            canvas.drawText(
-                "${line + 1}",
-                gutterWidth - 12f,
-                y + lineHeightPx * 0.7f,
-                lineNumberPaint,
-            )
-
-            // Draw line text with syntax highlighting
             if (coloredSpans.isNotEmpty()) {
-                drawLineWithSpans(canvas, lineText, window.byteStart(line), coloredSpans, gutterWidth + 8f, y + lineHeightPx * 0.7f, config)
+                drawLineWithSpans(canvas, lineText, window.byteStart(line), coloredSpans, textLeft, y + lineHeightPx * 0.7f, config)
             } else {
                 textPaint.color = theme.foreground.toInt()
-                canvas.drawText(lineText, gutterWidth + 8f, y + lineHeightPx * 0.7f, textPaint)
+                canvas.drawText(lineText, textLeft, y + lineHeightPx * 0.7f, textPaint)
             }
         }
 
@@ -180,13 +191,39 @@ class Renderer(
                     .coerceIn(0, lineText.length)
                 val c1 = (if (line == endLine) sqEnd - lineStart else lineEnd - lineStart)
                     .coerceIn(c0, lineText.length)
-                val xStart = gutterWidth + 8f + measureTextWidth(lineText.substring(0, c0), config)
-                var xEnd = gutterWidth + 8f + measureTextWidth(lineText.substring(0, c1), config)
+                val xStart = textLeft + measureTextWidth(lineText.substring(0, c0), config)
+                var xEnd = textLeft + measureTextWidth(lineText.substring(0, c1), config)
                 if (xEnd < xStart + 12f) xEnd = xStart + 12f // keep zero-width diagnostics visible
-                val y = (line - visibleTop) * lineHeightPx + viewport.scrollY % lineHeightPx
+                val y = (line - visibleTop) * lineHeightPx - yRem
                 squigglePaint.color = sq.severity.color
                 SquiggleDecoration.drawSquiggle(canvas, squigglePaint, xStart, xEnd, y + lineHeightPx * 0.7f + 5f)
             }
+        }
+
+        // Draw cursors
+        for (caret in carets) {
+            val (line, col) = snapshot.offsetToLineColumn(caret.head)
+            if (line in visibleTop until visibleBottom && window.contains(line)) {
+                val lineText = window.text(line)
+                val visibleText = lineText.substring(0, col.coerceAtMost(lineText.length))
+                val x = textLeft + measureTextWidth(visibleText, config)
+                val y = (line - visibleTop) * lineHeightPx - yRem
+                canvas.drawLine(x, y.toFloat(), x, (y + lineHeightPx).toFloat(), cursorPaint)
+            }
+        }
+
+        canvas.restore()
+
+        // Line numbers, drawn after the clipped text pass so the gutter always reads cleanly.
+        for (line in visibleTop until visibleBottom) {
+            if (!window.contains(line)) break
+            val y = (line - visibleTop) * lineHeightPx - yRem
+            lineNumberPaint.color = if (line in caretLines) {
+                theme.lineNumberActive.toInt()
+            } else {
+                theme.lineNumber.toInt()
+            }
+            canvas.drawText("${line + 1}", gutterWidth - 12f, y + lineHeightPx * 0.7f, lineNumberPaint)
         }
 
         // Gutter markers: breakpoint dots + the current-execution marker, drawn in the gutter's left inset.
@@ -194,7 +231,7 @@ class Renderer(
             .filterIsInstance<GutterMarkerDecoration>()
         for (marker in gutterMarkers) {
             if (marker.line in visibleTop until visibleBottom) {
-                val y = (marker.line - visibleTop) * lineHeightPx + viewport.scrollY % lineHeightPx
+                val y = (marker.line - visibleTop) * lineHeightPx - yRem
                 val radius = lineHeightPx * 0.24f
                 val cx = radius + 6f
                 val cy = y + lineHeightPx / 2f
@@ -208,18 +245,6 @@ class Renderer(
                 } else {
                     canvas.drawCircle(cx, cy, radius, breakpointPaint)
                 }
-            }
-        }
-
-        // Draw cursors
-        for (caret in carets) {
-            val (line, col) = snapshot.offsetToLineColumn(caret.head)
-            if (line in visibleTop until visibleBottom && window.contains(line)) {
-                val lineText = window.text(line)
-                val visibleText = lineText.substring(0, col.coerceAtMost(lineText.length))
-                val x = gutterWidth + 8f + measureTextWidth(visibleText, config)
-                val y = (line - visibleTop) * lineHeightPx + viewport.scrollY % lineHeightPx
-                canvas.drawLine(x, y.toFloat(), x, (y + lineHeightPx).toFloat(), cursorPaint)
             }
         }
     }

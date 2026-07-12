@@ -70,11 +70,14 @@ data class ExtensionDeps(
     }
 }
 
-/** A UI action an extension contributes to a host surface (start-editor screen, drawer header). */
+/** A UI action an extension contributes to a host surface (start-editor screen, drawer header,
+ *  editor context menu). [fileExtensions] optionally limits a context-menu action to files with a
+ *  matching extension (lowercase, no dot); empty means every file. */
 data class ContributedAction(
     val id: String,
     val label: String,
     val icon: String? = null,
+    val fileExtensions: List<String> = emptyList(),
 )
 
 /** Actions an extension contributes to host surfaces. Rendered when the extension is active and its
@@ -82,8 +85,10 @@ data class ContributedAction(
 data class ExtensionContributions(
     val editorStartActions: List<ContributedAction> = emptyList(),
     val drawerActions: List<ContributedAction> = emptyList(),
+    val editorContextActions: List<ContributedAction> = emptyList(),
 ) {
-    val isEmpty: Boolean get() = editorStartActions.isEmpty() && drawerActions.isEmpty()
+    val isEmpty: Boolean
+        get() = editorStartActions.isEmpty() && drawerActions.isEmpty() && editorContextActions.isEmpty()
 
     companion object {
         val EMPTY = ExtensionContributions()

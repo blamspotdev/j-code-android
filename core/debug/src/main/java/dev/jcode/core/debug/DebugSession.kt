@@ -261,10 +261,10 @@ class DebugSession(
 
     /** Host project path -> distro path (mirrors LspSession's translation). */
     fun hostToDistroPath(hostPath: String): String =
-        hostPath.replace("/storage/emulated/0/JCode/projects/", "/workspace/").replace("\\", "/")
+        dev.jcode.core.distro.WorkspaceHostPaths.hostToGuest(hostPath).replace("\\", "/")
 
     fun distroToHostPath(distroPath: String): String =
-        distroPath.replace("/workspace/", "/storage/emulated/0/JCode/projects/").replace("/", java.io.File.separator)
+        dev.jcode.core.distro.WorkspaceHostPaths.guestToHost(distroPath).replace("/", java.io.File.separator)
 
     override fun close() {
         scope.launch { runCatching { sendRequest("disconnect", JSONObject().put("terminateDebuggee", true)) } }

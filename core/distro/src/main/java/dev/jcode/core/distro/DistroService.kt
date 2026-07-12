@@ -45,6 +45,14 @@ class DistroService(
     private val context: Context,
 ) {
     private val appContext = context.applicationContext
+
+    init {
+        // Anchor host<->guest path translation on the ext4 projects root. DistroService is the common
+        // module every terminal/LSP/debug path translator routes through, so this runs before any of
+        // them use WorkspaceHostPaths.
+        WorkspaceHostPaths.init(appContext.filesDir)
+    }
+
     private val prootManager = ProotManager(appContext)
     private val rootfsManager = RootfsManager(
         appContext,
@@ -1597,13 +1605,13 @@ class DistroService(
             !projectHostPath.isNullOrBlank() && !projectTargetPath.isNullOrBlank() -> {
                 listOf(DistroBind(projectHostPath, projectTargetPath))
             }
-            else -> listOf(DistroBind(DEFAULT_PROJECTS_HOST_PATH, DEFAULT_DISTRO_WORKDIR))
+            else -> listOf(DistroBind(WorkspaceHostPaths.projectsRoot, DEFAULT_DISTRO_WORKDIR))
         }
     }
 
     private fun primaryBind(): PrimaryBind {
         val bind = _environmentState.value.runtime.binds.firstOrNull()
-            ?: DistroBind(DEFAULT_PROJECTS_HOST_PATH, DEFAULT_DISTRO_WORKDIR)
+            ?: DistroBind(WorkspaceHostPaths.projectsRoot, DEFAULT_DISTRO_WORKDIR)
         return PrimaryBind(
             host = bind.host,
             hostFile = File(bind.host),

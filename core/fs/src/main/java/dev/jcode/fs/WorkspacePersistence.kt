@@ -48,6 +48,24 @@ interface WorkspaceDao {
     @Query("SELECT * FROM projects WHERE id = :id LIMIT 1")
     suspend fun getProject(id: Long): ProjectEntity?
 
+    // --- One-time ext4 migration helpers (re-anchor absolute host paths; see WorkspaceManager). ---
+    @Query("SELECT * FROM workspaces")
+    suspend fun getAllWorkspaces(): List<WorkspaceEntity>
+
+    @Query("SELECT * FROM projects")
+    suspend fun getAllProjects(): List<ProjectEntity>
+
+    @Query("SELECT * FROM recents")
+    suspend fun getAllRecents(): List<RecentEntity>
+
+    // In-place UPDATE (NOT an @Insert REPLACE): REPLACE on workspaces would DELETE+INSERT the row and
+    // CASCADE-delete its projects (ForeignKey.CASCADE), wiping them during migration.
+    @Query("UPDATE workspaces SET rootPath = :rootPath WHERE id = :id")
+    suspend fun updateWorkspaceRootPath(id: Long, rootPath: String)
+
+    @Query("DELETE FROM recents WHERE uri = :uri")
+    suspend fun deleteRecent(uri: String)
+
     @Query("SELECT location FROM projects WHERE workspaceId = :workspaceId")
     suspend fun getProjectLocations(workspaceId: Long): List<String>
 

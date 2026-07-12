@@ -232,6 +232,9 @@ private fun createChatWebView(
                     val target = runCatching { JSONObject(json).optString("extensionId") }.getOrNull()
                     if (!target.isNullOrEmpty() && target != extension.id) return@collect
                 }
+                // `contextAction` is delivered only to the extension view page at the action's route
+                // (or pulled on that page's boot) — never to the chat surface.
+                if (name == "contextAction") return@collect
                 val js = "window.JCode && window.JCode._onEvent && " +
                     "window.JCode._onEvent(${JSONObject.quote(name)}, ${JSONObject.quote(json)})"
                 webView.post { webView.evaluateJavascript(js, null) }
