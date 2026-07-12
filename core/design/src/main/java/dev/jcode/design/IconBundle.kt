@@ -2,6 +2,7 @@ package dev.jcode.design
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material.icons.automirrored.rounded.Article
@@ -79,7 +80,7 @@ enum class JCodeIcon {
     Browser, DevTools, Image,
     DropDown, ChevronDown, ChevronRight, ArrowUp, MenuToggle, Help,
     Copy, Cut, Delete, Open, Rename, SelectAll, Clear, Definition, References, Format,
-    Preview, Pin,
+    Preview, Pin, Palette,
 }
 
 /**
@@ -115,6 +116,7 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.NewFolder to Icons.Rounded.CreateNewFolder,
         JCodeIcon.NewFile to Icons.Rounded.NoteAdd,
         JCodeIcon.Sdk to Icons.Rounded.BuildCircle,
+        JCodeIcon.Palette to Icons.Rounded.Palette,
         JCodeIcon.Lsp to Icons.Rounded.IntegrationInstructions,
         JCodeIcon.Debug to Icons.Rounded.BugReport,
         JCodeIcon.Scm to Icons.Rounded.Source,

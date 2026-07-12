@@ -102,6 +102,8 @@ class EditorTabActions(
     val onTogglePin: (String) -> Unit = {},
     val onCloseOthers: (String) -> Unit = {},
     val onCloseToRight: (String) -> Unit = {},
+    /** Set (or, with a null hex, clear) the manual color of a file tab. Persists to the project .jcode. */
+    val onSetTabColor: (String, String?) -> Unit = { _, _ -> },
 )
 
 val LocalEditorTabActions = compositionLocalOf { EditorTabActions() }

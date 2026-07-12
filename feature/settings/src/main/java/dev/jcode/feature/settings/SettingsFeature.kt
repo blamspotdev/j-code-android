@@ -66,6 +66,8 @@ import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.ExplorerHiddenMode
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
+import dev.jcode.design.LocalTabColoringSetting
+import dev.jcode.design.TabColoring
 import dev.jcode.design.LocalVolumeKeysSetting
 import dev.jcode.design.VolumeKeyAction
 import dev.jcode.design.LocalRestoreSession
@@ -99,6 +101,7 @@ object SettingsFeature {
         onUpdateFontSize: (ConfigScope, Float?) -> Unit,
         onUpdateTabSize: (ConfigScope, Int?) -> Unit,
         onUpdateMinimap: (ConfigScope, Boolean?) -> Unit,
+        onUpdateTabColoring: (ConfigScope, String?) -> Unit,
         onUpdateLigatures: (ConfigScope, Boolean?) -> Unit,
         onUpdateExplorerViewMode: (ConfigScope, String?) -> Unit,
         themeMode: ThemeMode,
@@ -121,6 +124,7 @@ object SettingsFeature {
         val explorerHiddenSetting = LocalExplorerHiddenSetting.current
         val cutoutSetting = LocalCutoutSetting.current
         val volumeKeysSetting = LocalVolumeKeysSetting.current
+        val tabColoringSetting = LocalTabColoringSetting.current
         val extraKeysSetting = LocalExtraKeysSetting.current
         val bottomBarSetting = LocalBottomBarSetting.current
         val fontSettings = LocalFontSettings.current
@@ -624,7 +628,7 @@ object SettingsFeature {
             SettingsCard(
                 title = "Tabs",
                 description = "How editor and terminal tabs behave. Applies app-wide.",
-                keywords = "tabs tab close button hide editor terminal accidental",
+                keywords = "tabs tab close button hide editor terminal accidental coloring color accent random directory",
             ) {
                 ToggleRow(
                     label = "Hide tab close button",
@@ -633,6 +637,17 @@ object SettingsFeature {
                     onCheckedChange = tabCloseSetting.onChange,
                     modified = tabCloseSetting.hidden != SettingsDefaults.HIDE_TAB_CLOSE_BUTTON,
                     onReset = { tabCloseSetting.onChange(SettingsDefaults.HIDE_TAB_CLOSE_BUTTON) },
+                )
+                SettingsDropdownRow(
+                    label = "Tab coloring",
+                    supporting = "Color-code editor file tabs. Long-press a file tab to set its color by hand; " +
+                        "colors are remembered in the project's .jcode. A project can override this default.",
+                    options = TabColoring.entries.map { it.name },
+                    selected = tabColoringSetting.mode.name,
+                    onSelect = { tabColoringSetting.onChange(TabColoring.valueOf(it)) },
+                    optionLabel = { tabColoringLabel(TabColoring.valueOf(it)) },
+                    modified = tabColoringSetting.mode != SettingsDefaults.TAB_COLORING,
+                    onReset = { tabColoringSetting.onChange(SettingsDefaults.TAB_COLORING) },
                 )
             }
 
@@ -717,7 +732,7 @@ object SettingsFeature {
             SettingsCard(
                 title = "Editor behavior",
                 description = "These controls write back to YAML and update the open editor immediately.",
-                keywords = "editor behavior font size tab size minimap ligatures indent",
+                keywords = "editor behavior font size tab size minimap ligatures indent tab coloring color accent",
             ) {
                 StepperRow(
                     label = "Font size",
@@ -752,6 +767,22 @@ object SettingsFeature {
                     onCheckedChange = { onUpdateLigatures(selectedScope, it) },
                     modified = scopedEditor?.ligatures != null,
                     onReset = { onUpdateLigatures(selectedScope, null) },
+                )
+                // Sanitize: a hand-edited .jcode may hold an unknown enum name; fall back to the
+                // app default rather than crashing composition on TabColoring.valueOf.
+                val tabColoring = (scopedEditor?.tabColoring ?: effectiveConfig.editor.tabColoring)
+                    ?.let { runCatching { TabColoring.valueOf(it) }.getOrNull() }
+                    ?.name
+                    ?: tabColoringSetting.mode.name
+                SettingsDropdownRow(
+                    label = "Tab coloring",
+                    supporting = "Overrides the app-level default for this scope.",
+                    options = TabColoring.entries.map { it.name },
+                    selected = tabColoring,
+                    onSelect = { onUpdateTabColoring(selectedScope, it) },
+                    optionLabel = { runCatching { tabColoringLabel(TabColoring.valueOf(it)) }.getOrDefault(it) },
+                    modified = scopedEditor?.tabColoring != null,
+                    onReset = { onUpdateTabColoring(selectedScope, null) },
                 )
             }
 
@@ -836,6 +867,13 @@ private fun bottomBarVisibilityLabel(mode: BottomBarVisibility): String = when (
     BottomBarVisibility.Hidden -> "Hidden"
     BottomBarVisibility.HideOnKeyboard -> "Hide on Soft Keyboard"
     BottomBarVisibility.AlwaysShow -> "Always Show"
+}
+
+private fun tabColoringLabel(mode: TabColoring): String = when (mode) {
+    TabColoring.RandomRemember -> "Random (if not exist then remember)"
+    TabColoring.Random -> "Random"
+    TabColoring.DirectoryBased -> "Directory based (then remember)"
+    TabColoring.Disabled -> "Disabled"
 }
 
 /** [defaultSuffix] disambiguates the per-button System Default label, e.g. "System Default (Vol Up)". */

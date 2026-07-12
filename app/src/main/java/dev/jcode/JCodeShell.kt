@@ -258,6 +258,11 @@ import dev.jcode.design.ExtensionSettingSpec
 import dev.jcode.design.ExtensionSettingsGroup
 import dev.jcode.design.ExtensionSettingsUi
 import dev.jcode.design.CutoutSetting
+import dev.jcode.design.EditorTabColors
+import dev.jcode.design.LocalEditorTabColors
+import dev.jcode.design.LocalTabColoringSetting
+import dev.jcode.design.TabColoring
+import dev.jcode.design.TabColoringSetting
 import dev.jcode.design.ExplorerHiddenMode
 import dev.jcode.design.ExplorerHiddenSetting
 import dev.jcode.design.ExtraKey
@@ -526,6 +531,15 @@ fun JCodeApp(
     val volumeKeysSetting = remember(volumeUpAction, volumeDownAction) {
         VolumeKeysSetting(volumeUpAction, volumeDownAction, viewModel::setVolumeUpAction, viewModel::setVolumeDownAction)
     }
+    val tabColoringMode by viewModel.tabColoringMode.collectAsStateWithLifecycle()
+    val tabColoringSetting = remember(tabColoringMode) {
+        TabColoringSetting(tabColoringMode, viewModel::setTabColoringMode)
+    }
+    val editorTabColorMap by viewModel.editorTabColors.collectAsStateWithLifecycle()
+    val effectiveTabColoring by viewModel.effectiveTabColoring.collectAsStateWithLifecycle()
+    val editorTabColors = remember(editorTabColorMap, effectiveTabColoring) {
+        EditorTabColors({ path -> editorTabColorMap[path] }, effectiveTabColoring != TabColoring.Disabled)
+    }
     val editorFontId by viewModel.editorFontId.collectAsStateWithLifecycle()
     val terminalFontId by viewModel.terminalFontId.collectAsStateWithLifecycle()
     val fontContext = LocalContext.current
@@ -776,8 +790,11 @@ fun JCodeApp(
                 onTogglePin = viewModel::toggleEditorTabPinned,
                 onCloseOthers = viewModel::closeOtherEditorTabs,
                 onCloseToRight = viewModel::closeEditorTabsToRight,
+                onSetTabColor = viewModel::setTabColor,
             )
         },
+        LocalTabColoringSetting provides tabColoringSetting,
+        LocalEditorTabColors provides editorTabColors,
         LocalEditorDragMovesCursor provides editorDragSetting,
         LocalRestoreSession provides restoreSessionSetting,
         LocalExtensionActivation provides extensionActivationSetting,
@@ -852,6 +869,7 @@ fun JCodeApp(
         onUpdateEditorFontSize = viewModel::updateEditorFontSize,
         onUpdateEditorTabSize = viewModel::updateEditorTabSize,
         onUpdateEditorMinimap = viewModel::updateEditorMinimap,
+        onUpdateEditorTabColoring = viewModel::updateEditorTabColoring,
         onUpdateEditorLigatures = viewModel::updateEditorLigatures,
         onUpdateExplorerViewMode = viewModel::updateExplorerViewMode,
         themeMode = themeMode,
@@ -999,6 +1017,7 @@ private fun JCodeShell(
     onUpdateEditorFontSize: (ConfigScope, Float?) -> Unit,
     onUpdateEditorTabSize: (ConfigScope, Int?) -> Unit,
     onUpdateEditorMinimap: (ConfigScope, Boolean?) -> Unit,
+    onUpdateEditorTabColoring: (ConfigScope, String?) -> Unit,
     onUpdateEditorLigatures: (ConfigScope, Boolean?) -> Unit,
     onUpdateExplorerViewMode: (ConfigScope, String?) -> Unit,
     themeMode: ThemeMode,
@@ -1887,6 +1906,7 @@ private fun JCodeShell(
                                     onUpdateFontSize = onUpdateEditorFontSize,
                                     onUpdateTabSize = onUpdateEditorTabSize,
                                     onUpdateMinimap = onUpdateEditorMinimap,
+                                    onUpdateTabColoring = onUpdateEditorTabColoring,
                                     onUpdateLigatures = onUpdateEditorLigatures,
                                     onUpdateExplorerViewMode = onUpdateExplorerViewMode,
                                     themeMode = themeMode,

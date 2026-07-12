@@ -86,6 +86,14 @@ data class ProjectConfig(
 
     @SerialName("distro")
     val distro: DistroConfig? = null,
+
+    /** Manually-set / remembered editor tab colors, keyed by project-relative file path -> #RRGGBB. */
+    @SerialName("tabColors")
+    val tabColors: Map<String, String> = emptyMap(),
+
+    /** Remembered per-directory tab colors (Directory-based mode), keyed by project-relative dir -> #RRGGBB. */
+    @SerialName("tabDirColors")
+    val tabDirColors: Map<String, String> = emptyMap(),
 )
 
 @Serializable
@@ -113,6 +121,10 @@ data class EditorConfig(
 
     @SerialName("aggressiveAutocorrectKill")
     val aggressiveAutocorrectKill: Boolean? = null,
+
+    /** Editor tab coloring mode ([TabColoring] name); null inherits the app-level default. */
+    @SerialName("tabColoring")
+    val tabColoring: String? = null,
 )
 
 @Serializable
@@ -222,6 +234,8 @@ data class EffectiveEditorConfig(
     val formatOnSave: Boolean = false,
     val ligatures: Boolean = true,
     val aggressiveAutocorrectKill: Boolean = false,
+    /** [TabColoring] name from workspace/project .jcode; null means "inherit the app-level default". */
+    val tabColoring: String? = null,
 )
 
 data class EffectiveFilesConfig(

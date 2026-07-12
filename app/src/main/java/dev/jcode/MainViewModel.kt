@@ -35,11 +35,17 @@ import dev.jcode.core.lsp.Diagnostic as LspDiagnostic
 import dev.jcode.core.lsp.DiagnosticSeverity as LspDiagnosticSeverity
 import dev.jcode.core.resource.ResourceManager
 import dev.jcode.core.resource.ResourceManagerLocator
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import dev.jcode.design.BottomBarVisibility
 import dev.jcode.design.ExtraKeysVisibility
 import dev.jcode.design.SettingsDefaults
+import dev.jcode.design.TabColoring
 import dev.jcode.design.ThemeMode
 import dev.jcode.design.VolumeKeyAction
+import dev.jcode.design.randomTabColor
+import dev.jcode.design.tabColorFromHex
+import dev.jcode.design.tabColorToHex
 import dev.jcode.editor.SyntaxHighlighter
 import dev.jcode.feature.editor.pane.EditorGroup
 import dev.jcode.feature.editor.pane.EditorPageKind
@@ -511,6 +517,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .getSharedPreferences(MainActivity.UI_STARTUP_PREFS, Context.MODE_PRIVATE)
             .edit().putBoolean(MainActivity.KEY_RESPECT_CUTOUT, enabled).apply()
         viewModelScope.launch { uiPreferences.edit { it[respectCutoutKey] = enabled } }
+    }
+
+    private val tabColoringKey = stringPreferencesKey("tab_coloring")
+
+    /** App-level (Global) editor-tab coloring default; a project/workspace .jcode can override it. */
+    val tabColoringMode: StateFlow<TabColoring> = uiPreferences.data
+        .map { prefs ->
+            prefs[tabColoringKey]?.let { runCatching { TabColoring.valueOf(it) }.getOrNull() }
+                ?: SettingsDefaults.TAB_COLORING
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.TAB_COLORING)
+
+    fun setTabColoringMode(mode: TabColoring) {
+        viewModelScope.launch { uiPreferences.edit { it[tabColoringKey] = mode.name } }
     }
 
     private val confirmCloseRunningKey = booleanPreferencesKey("perf_confirm_close_running")
@@ -1507,6 +1527,134 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             configService.updateEditorConfig(scope) { it.copy(ligatures = enabled) }
         }
     }
+
+    /** Project/workspace .jcode override of the tab-coloring mode ([TabColoring] name; null inherits). */
+    fun updateEditorTabColoring(scope: ConfigScope, value: String?) {
+        viewModelScope.launch {
+            if (!ensureScopeAvailable(scope)) return@launch
+            configService.updateEditorConfig(scope) { it.copy(tabColoring = value) }
+        }
+    }
+
+    // ---- Editor tab colors ------------------------------------------------------------------------
+    // Effective mode = .jcode override (project<-workspace) if set, else the app-level default.
+    val effectiveTabColoring: StateFlow<TabColoring> =
+        combine(effectiveConfig, tabColoringMode) { eff, global ->
+            eff.editor.tabColoring?.let { runCatching { TabColoring.valueOf(it) }.getOrNull() } ?: global
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.TAB_COLORING)
+
+    private val _editorTabColors = MutableStateFlow<Map<String, Color>>(emptyMap())
+    /** Absolute-file-path -> accent color for the currently open file tabs (empty when Disabled). */
+    val editorTabColors: StateFlow<Map<String, Color>> = _editorTabColors.asStateFlow()
+
+    // Session caches so a generated color is stable across recomposes and matches what gets persisted.
+    private val ephemeralTabColors = mutableMapOf<String, Int>() // absPath -> argb (Random mode)
+    private val sessionGenFile = mutableMapOf<String, Int>()     // relPath -> argb (RandomRemember, pre-persist)
+    private val sessionGenDir = mutableMapOf<String, Int>()      // relDir -> argb (DirectoryBased, pre-persist)
+
+    private data class TabColorInputs(
+        val group: EditorGroup,
+        val project: Project?,
+        val mode: TabColoring,
+        val storedFiles: Map<String, String>,
+        val storedDirs: Map<String, String>,
+    )
+
+    init {
+        viewModelScope.launch {
+            combine(
+                _editorGroup,
+                selectedProject,
+                effectiveTabColoring,
+                configService.projectConfig,
+            ) { group, project, mode, cfg ->
+                TabColorInputs(group, project, mode, cfg?.tabColors.orEmpty(), cfg?.tabDirColors.orEmpty())
+            }.collect { recomputeTabColors(it) }
+        }
+    }
+
+    private var lastColorRoot: String? = null
+
+    private suspend fun recomputeTabColors(inp: TabColorInputs) {
+        val root = (inp.project?.fsPath as? FsPath.Local)?.file
+        // The session caches hold project-relative scratch colors; drop them on project switch so a
+        // same-named file in another project doesn't reuse the previous project's generated color.
+        val rootPath = root?.absolutePath
+        if (rootPath != lastColorRoot) {
+            lastColorRoot = rootPath
+            ephemeralTabColors.clear()
+            sessionGenFile.clear()
+            sessionGenDir.clear()
+        }
+        if (inp.mode == TabColoring.Disabled || root == null) {
+            if (_editorTabColors.value.isNotEmpty()) _editorTabColors.value = emptyMap()
+            return
+        }
+        val out = LinkedHashMap<String, Color>()
+        var newFiles: MutableMap<String, String>? = null
+        var newDirs: MutableMap<String, String>? = null
+        for (tab in inp.group.tabs) {
+            if (tab.isPage) continue
+            val abs = tab.filePath.path
+            val rel = relativeTabKey(root, tab.filePath) ?: continue
+            val stored = inp.storedFiles[rel]
+            if (stored != null) {
+                tabColorFromHex(stored)?.let { out[abs] = it }
+                continue
+            }
+            when (inp.mode) {
+                TabColoring.RandomRemember -> {
+                    val argb = sessionGenFile.getOrPut(rel) { randomTabColor().toArgb() }
+                    out[abs] = Color(argb)
+                    (newFiles ?: LinkedHashMap<String, String>().also { newFiles = it })[rel] = tabColorToHex(Color(argb))
+                }
+                TabColoring.Random -> {
+                    out[abs] = Color(ephemeralTabColors.getOrPut(abs) { randomTabColor().toArgb() })
+                }
+                TabColoring.DirectoryBased -> {
+                    val dir = rel.substringBeforeLast('/', "")
+                    val storedDir = inp.storedDirs[dir]
+                    if (storedDir != null) {
+                        tabColorFromHex(storedDir)?.let { out[abs] = it }
+                    } else {
+                        val argb = sessionGenDir.getOrPut(dir) { randomTabColor().toArgb() }
+                        out[abs] = Color(argb)
+                        (newDirs ?: LinkedHashMap<String, String>().also { newDirs = it })[dir] = tabColorToHex(Color(argb))
+                    }
+                }
+                TabColoring.Disabled -> Unit
+            }
+        }
+        _editorTabColors.value = out
+        // Persist freshly generated colors once; updateProjectTabColorMaps no-ops if unchanged, so the
+        // reload this triggers re-enters here with the entries already stored and stops. A write
+        // failure must not tear down the collector, so swallow it (colors just stay session-only).
+        if (newFiles != null || newDirs != null) {
+            runCatching {
+                configService.updateProjectTabColorMaps { files, dirs ->
+                    (files + newFiles.orEmpty()) to (dirs + newDirs.orEmpty())
+                }
+            }
+        }
+    }
+
+    /** Manually set (hex) or clear (null) a file tab's color; persists to the project .jcode. */
+    fun setTabColor(tabId: String, hex: String?) {
+        val tab = _editorGroup.value.tabs.find { it.id == tabId } ?: return
+        viewModelScope.launch {
+            if (!ensureScopeAvailable(ConfigScope.Project)) return@launch
+            val root = (selectedProject.value?.fsPath as? FsPath.Local)?.file ?: return@launch
+            val rel = relativeTabKey(root, tab.filePath)
+                ?: run { emitMessage("Can't color a file outside the project"); return@launch }
+            configService.updateProjectTabColorMaps { files, dirs ->
+                (if (hex == null) files - rel else files + (rel to hex)) to dirs
+            }
+        }
+    }
+
+    private fun relativeTabKey(root: java.io.File, file: java.io.File): String? =
+        runCatching { file.relativeTo(root).invariantSeparatorsPath }
+            .getOrNull()?.takeIf { it.isNotEmpty() && !it.startsWith("..") }
 
     fun setThemeMode(mode: ThemeMode?, scope: ConfigScope = ConfigScope.Workspace) {
         viewModelScope.launch {
