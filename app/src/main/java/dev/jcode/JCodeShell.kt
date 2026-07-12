@@ -2015,6 +2015,7 @@ private fun JCodeShell(
                             breadcrumb = breadcrumb,
                             onCloseWorkspace = handleCloseWorkspace,
                             onCloseProject = handleCloseProject,
+                            onCollapseSidebar = { leftSidebarExpanded = false },
                             onCreateProject = onCreateProject,
                             onRemoveProject = onRemoveProject,
                             onSelectProject = onSelectProject,
@@ -2207,6 +2208,7 @@ private fun WorkspacePanel(
     installedExtensions: List<InstalledExtension>,
     marketplaceEntries: List<MarketplaceEntry>,
     marketplaceBusy: Boolean,
+    onCollapseSidebar: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -2234,6 +2236,7 @@ private fun WorkspacePanel(
                 onDrawerAction = onDrawerAction,
                 onCloseWorkspace = onCloseWorkspace,
                 onCloseProject = onCloseProject,
+                onCollapseSidebar = onCollapseSidebar,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 

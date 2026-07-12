@@ -64,6 +64,7 @@ internal fun WorkspaceHeader(
     onDrawerAction: (MainViewModel.ShellContribution) -> Unit,
     onCloseWorkspace: () -> Unit,
     onCloseProject: () -> Unit,
+    onCollapseSidebar: (() -> Unit)? = null,
 ) {
     Column(
         modifier = Modifier
@@ -76,6 +77,16 @@ internal fun WorkspaceHeader(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            // In the persistent (landscape) layout, the editor top-bar's sidebar toggle sits under
+            // this panel, so surface a collapse control in the panel header itself.
+            onCollapseSidebar?.let { collapse ->
+                WorkbenchIconActionButton(
+                    icon = jcIcon(JCodeIcon.MenuToggle),
+                    contentDescription = "Hide left sidebar",
+                    onClick = collapse,
+                    active = true,
+                )
+            }
             // The title doubles as a menu anchor: a User Workspace can be closed (Close workspace),
             // and the Default Workspace can close its open project (Close project). With nothing open
             // in the Default Workspace there is nothing to close, so it stays a plain label.
