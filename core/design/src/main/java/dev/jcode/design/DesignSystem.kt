@@ -147,6 +147,26 @@ class RestoreSessionSetting(
 
 val LocalRestoreSession = compositionLocalOf { RestoreSessionSetting() }
 
+/** Which files/folders the Explorer hides at the PROJECT ROOT. */
+enum class ExplorerHiddenMode { HideSpecifiedAndInjected, HideInjected, None }
+
+/**
+ * Explorer "hide files at the project root" preference, shared with the settings screen and the
+ * Explorer (via [LocalExplorerHiddenSetting]) without threading params through JCodeShell (ART
+ * register limit). [specifiedRaw] is the user's newline-separated pattern list; [hiddenPatternsFor]
+ * resolves the effective hide list for a project id per [mode], merging the by-line list with the
+ * injected list the SCM extension pushes from each project's .gitignore.
+ */
+class ExplorerHiddenSetting(
+    val mode: ExplorerHiddenMode = ExplorerHiddenMode.HideSpecifiedAndInjected,
+    val specifiedRaw: String = ".jcode",
+    val onSetMode: (ExplorerHiddenMode) -> Unit = {},
+    val onSetSpecifiedRaw: (String) -> Unit = {},
+    val hiddenPatternsFor: (projectId: String?) -> List<String> = { emptyList() },
+)
+
+val LocalExplorerHiddenSetting = compositionLocalOf { ExplorerHiddenSetting() }
+
 /**
  * Performance / resource-management preferences, shared (via [LocalPerformanceSettings]) with both the
  * settings screen and JCodeShell without threading params through the latter (ART register limit).

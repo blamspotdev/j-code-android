@@ -63,6 +63,8 @@ import dev.jcode.design.LocalFontSettings
 import dev.jcode.design.LocalEditorDragMovesCursor
 import dev.jcode.design.LocalExtraKeysSetting
 import dev.jcode.design.LocalPerformanceSettings
+import dev.jcode.design.ExplorerHiddenMode
+import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalRestoreSession
 import dev.jcode.design.WebPreviewBrowsers
 import dev.jcode.design.LocalWebPreviewBrowsers
@@ -113,6 +115,7 @@ object SettingsFeature {
         val tabCloseSetting = LocalTabCloseButtonSetting.current
         val editorDragSetting = LocalEditorDragMovesCursor.current
         val restoreSessionSetting = LocalRestoreSession.current
+        val explorerHiddenSetting = LocalExplorerHiddenSetting.current
         val extraKeysSetting = LocalExtraKeysSetting.current
         val bottomBarSetting = LocalBottomBarSetting.current
         val fontSettings = LocalFontSettings.current
@@ -597,6 +600,36 @@ object SettingsFeature {
                 }
             }
 
+            SettingsSectionHeader("Explorer")
+            SettingsCard(
+                title = "Hidden files (project root)",
+                description = "Hide files and folders at the project root in the Explorer. \"By-injected\" " +
+                    "comes from each project's .gitignore, kept in sync by the Source Control extension.",
+                keywords = "explorer files folder hide hidden project root gitignore jcode ignore injected specified show reveal by-line",
+            ) {
+                SettingsDropdownRow(
+                    label = "Mode",
+                    options = ExplorerHiddenMode.entries.map { it.name },
+                    selected = explorerHiddenSetting.mode.name,
+                    onSelect = { explorerHiddenSetting.onSetMode(ExplorerHiddenMode.valueOf(it)) },
+                    optionLabel = { explorerHiddenModeLabel(ExplorerHiddenMode.valueOf(it)) },
+                    modified = explorerHiddenSetting.mode != SettingsDefaults.HIDDEN_ROOT_MODE,
+                    onReset = { explorerHiddenSetting.onSetMode(SettingsDefaults.HIDDEN_ROOT_MODE) },
+                )
+                var hidePatterns by remember(explorerHiddenSetting.specifiedRaw) {
+                    mutableStateOf(explorerHiddenSetting.specifiedRaw)
+                }
+                SettingsTextFieldRow(
+                    label = "Specified — one pattern per line",
+                    value = hidePatterns,
+                    onValueChange = { hidePatterns = it },
+                    onCommit = { explorerHiddenSetting.onSetSpecifiedRaw(hidePatterns) },
+                    placeholder = ".jcode",
+                    singleLine = false,
+                    minLines = 3,
+                )
+            }
+
             } // end Global tab
 
             if (showScopedTab) {
@@ -729,6 +762,13 @@ object SettingsFeature {
         }
         }
     }
+}
+
+/** Human-readable labels for the [ExplorerHiddenMode] dropdown (match the settings wording). */
+private fun explorerHiddenModeLabel(mode: ExplorerHiddenMode): String = when (mode) {
+    ExplorerHiddenMode.HideSpecifiedAndInjected -> "Hide Specified + By-Injected"
+    ExplorerHiddenMode.HideInjected -> "Hide By-Injected"
+    ExplorerHiddenMode.None -> "No Hidden File"
 }
 
 /** Human-readable label for an [ExtraKeysVisibility] dropdown option. */

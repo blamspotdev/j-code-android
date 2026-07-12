@@ -97,6 +97,7 @@ fun ExplorerView(
     context: Context,
     modifier: Modifier = Modifier,
     viewMode: ExplorerViewMode = ExplorerViewMode.Tree,
+    hiddenPatterns: List<String> = emptyList(),
     onFileSelected: ((FsNode) -> Unit)? = null,
     onSnackbar: ((String) -> Unit)? = null,
 ) {
@@ -133,6 +134,11 @@ fun ExplorerView(
     // The view mode is an app preference (Settings); react when it changes.
     LaunchedEffect(viewMode) {
         viewModel.setViewMode(viewMode)
+    }
+
+    // The project-root hide-list (Settings); re-filter when it changes without remounting the tree.
+    LaunchedEffect(hiddenPatterns) {
+        viewModel.setHiddenPatterns(hiddenPatterns)
     }
 
     // Where toolbar create/paste should land: the viewed dir in List mode; the selected dir (or the

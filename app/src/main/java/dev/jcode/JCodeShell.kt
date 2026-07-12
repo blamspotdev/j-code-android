@@ -257,6 +257,9 @@ import dev.jcode.design.PerformanceSettings
 import dev.jcode.design.ExtensionSettingSpec
 import dev.jcode.design.ExtensionSettingsGroup
 import dev.jcode.design.ExtensionSettingsUi
+import dev.jcode.design.ExplorerHiddenMode
+import dev.jcode.design.ExplorerHiddenSetting
+import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalExtensionSettingsUi
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.WebPreviewBrowsers
@@ -443,6 +446,25 @@ fun JCodeApp(
     }
     val editorDragMovesCursor by viewModel.editorDragMovesCursor.collectAsStateWithLifecycle()
     val cursorDragVerticalLevel by viewModel.editorCursorDragVerticalLevel.collectAsStateWithLifecycle()
+    val explorerHiddenMode by viewModel.explorerHiddenMode.collectAsStateWithLifecycle()
+    val explorerHiddenPatterns by viewModel.explorerHiddenPatterns.collectAsStateWithLifecycle()
+    val hiddenInjected by viewModel.hiddenInjected.collectAsStateWithLifecycle()
+    val explorerHiddenSetting = remember(explorerHiddenMode, explorerHiddenPatterns, hiddenInjected) {
+        ExplorerHiddenSetting(
+            mode = explorerHiddenMode,
+            specifiedRaw = explorerHiddenPatterns,
+            onSetMode = viewModel::setExplorerHiddenMode,
+            onSetSpecifiedRaw = viewModel::setExplorerHiddenPatterns,
+            hiddenPatternsFor = { pid ->
+                when (explorerHiddenMode) {
+                    ExplorerHiddenMode.None -> emptyList()
+                    ExplorerHiddenMode.HideInjected -> hiddenInjected[pid].orEmpty()
+                    ExplorerHiddenMode.HideSpecifiedAndInjected ->
+                        explorerHiddenPatterns.lines().map { it.trim() }.filter { it.isNotEmpty() } + hiddenInjected[pid].orEmpty()
+                }
+            },
+        )
+    }
     val cursorDragHorizontalLevel by viewModel.editorCursorDragHorizontalLevel.collectAsStateWithLifecycle()
     val editorDragSetting = remember(editorDragMovesCursor, cursorDragVerticalLevel, cursorDragHorizontalLevel) {
         EditorDragSetting(
@@ -750,6 +772,7 @@ fun JCodeApp(
         LocalSetupTerminalSessionId provides setupTerminalSessionId,
         LocalDebugSession provides debugSessionUi,
         LocalPerformanceSettings provides performanceSettings,
+        LocalExplorerHiddenSetting provides explorerHiddenSetting,
         LocalExtensionSettingsUi provides extensionSettingsUi,
         LocalWebPreviewBrowsers provides webPreviewBrowsers,
         LocalIssueActions provides issueActions,
@@ -2248,6 +2271,7 @@ private fun WorkspacePanel(
                                                 context = context,
                                                 modifier = Modifier.fillMaxSize(),
                                                 viewMode = explorerViewModeOf(effectiveConfig.explorer.viewMode),
+                                                hiddenPatterns = LocalExplorerHiddenSetting.current.hiddenPatternsFor(selectedProject.id.toString()),
                                                 onFileSelected = onOpenFile,
                                                 onSnackbar = onSnackbar,
                                             )

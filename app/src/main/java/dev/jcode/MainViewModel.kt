@@ -473,6 +473,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { uiPreferences.edit { it[hardwareAccelerationKey] = enabled } }
     }
 
+    // Explorer "hide files at the project root" preference: a mode + the user's newline-separated
+    // by-line pattern list. The injected (.gitignore) list lives in hiddenInjected below.
+    private val explorerHiddenModeKey = stringPreferencesKey("explorer_hidden_root_mode")
+    val explorerHiddenMode: StateFlow<dev.jcode.design.ExplorerHiddenMode> = uiPreferences.data
+        .map { prefs ->
+            runCatching { dev.jcode.design.ExplorerHiddenMode.valueOf(prefs[explorerHiddenModeKey] ?: "") }
+                .getOrDefault(SettingsDefaults.HIDDEN_ROOT_MODE)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.HIDDEN_ROOT_MODE)
+
+    fun setExplorerHiddenMode(mode: dev.jcode.design.ExplorerHiddenMode) {
+        viewModelScope.launch { uiPreferences.edit { it[explorerHiddenModeKey] = mode.name } }
+    }
+
+    private val explorerHiddenPatternsKey = stringPreferencesKey("explorer_hidden_root_patterns")
+    val explorerHiddenPatterns: StateFlow<String> = uiPreferences.data
+        .map { prefs -> prefs[explorerHiddenPatternsKey] ?: SettingsDefaults.HIDDEN_ROOT_PATTERNS }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.HIDDEN_ROOT_PATTERNS)
+
+    fun setExplorerHiddenPatterns(raw: String) {
+        viewModelScope.launch { uiPreferences.edit { it[explorerHiddenPatternsKey] = raw } }
+    }
+
     private val confirmCloseRunningKey = booleanPreferencesKey("perf_confirm_close_running")
 
     /** When true (default), closing a project/workspace with a running terminal program, an active
@@ -1867,6 +1890,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // Per-project "hidden files (by-injected)" — the SCM extension pushes each project's .gitignore
+    // patterns here (workbench.setHiddenInjected); the Explorer merges them per the hide mode. Kept
+    // separate from extension_settings and the user's by-line list so injected entries stay separable.
+    private val hiddenInjectedKey = stringPreferencesKey("explorer_hidden_injected")
+
+    val hiddenInjected: StateFlow<Map<String, List<String>>> = uiPreferences.data
+        .map { prefs -> parseHiddenInjected(prefs[hiddenInjectedKey]) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    private fun parseHiddenInjected(json: String?): Map<String, List<String>> {
+        if (json.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val root = JSONObject(json)
+            buildMap {
+                root.keys().forEach { pid ->
+                    val arr = root.optJSONArray(pid) ?: return@forEach
+                    put(pid, (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotBlank() })
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    fun setHiddenInjected(projectId: String, patterns: List<String>) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val root = runCatching { JSONObject(prefs[hiddenInjectedKey] ?: "{}") }.getOrDefault(JSONObject())
+                root.put(projectId, org.json.JSONArray(patterns))
+                prefs[hiddenInjectedKey] = root.toString()
+            }
+        }
+    }
+
     /** The `activeFile` event/query payload: guest (/workspace) path of the focused file tab, or {}. */
     private fun activeFileEventJson(): String {
         val tab = _editorGroup.value.tabs.firstOrNull { it.id == _editorGroup.value.activeTabId && !it.isPage }
@@ -2075,6 +2130,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         "workbench.activeFile" -> apiOk(JSONObject(activeFileEventJson()))
+
+        // The SCM extension injects a project's .gitignore patterns as the Explorer's "by-injected"
+        // hide list. `path` is the project/repo guest path; matched to a project by its bind target.
+        "workbench.setHiddenInjected" -> {
+            val guestPath = p.optString("path").trim().trimEnd('/')
+            val arr = p.optJSONArray("patterns")
+            val patterns = if (arr != null) (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotBlank() } else emptyList()
+            val proj = currentWorkspace.value?.projects.orEmpty().firstOrNull { pr ->
+                val g = pr.distroBindTarget.trimEnd('/')
+                guestPath == g || guestPath.startsWith("$g/") || g.startsWith("$guestPath/")
+            }
+            if (proj != null) setHiddenInjected(proj.id.toString(), patterns)
+            apiOk(JSONObject().put("matched", proj != null))
+        }
 
         "workbench.projectInfo" -> apiOk(
             JSONObject().apply {

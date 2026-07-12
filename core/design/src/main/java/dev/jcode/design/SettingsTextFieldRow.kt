@@ -39,6 +39,8 @@ fun SettingsTextFieldRow(
     supporting: String? = null,
     placeholder: String = "",
     onCommit: (() -> Unit)? = null,
+    singleLine: Boolean = true,
+    minLines: Int = 1,
 ) {
     var wasFocused by remember { mutableStateOf(false) }
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -60,9 +62,9 @@ fun SettingsTextFieldRow(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 40.dp)
-                    .padding(horizontal = 10.dp),
-                contentAlignment = Alignment.CenterStart,
+                    .heightIn(min = if (singleLine) 40.dp else 96.dp)
+                    .padding(horizontal = 10.dp, vertical = if (singleLine) 0.dp else 8.dp),
+                contentAlignment = if (singleLine) Alignment.CenterStart else Alignment.TopStart,
             ) {
                 if (value.isEmpty() && placeholder.isNotEmpty()) {
                     Text(
@@ -74,7 +76,8 @@ fun SettingsTextFieldRow(
                 BasicTextField(
                     value = value,
                     onValueChange = onValueChange,
-                    singleLine = true,
+                    singleLine = singleLine,
+                    minLines = minLines,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     modifier = Modifier

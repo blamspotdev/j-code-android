@@ -17,4 +17,6 @@ object SettingsDefaults {
     val EXTRA_KEYS_PORTRAIT = ExtraKeysVisibility.WithKeyboard
     val EXTRA_KEYS_LANDSCAPE = ExtraKeysVisibility.Hidden
     val BOTTOM_STATUS_BAR = BottomBarVisibility.HideOnKeyboard
+    val HIDDEN_ROOT_MODE = ExplorerHiddenMode.HideSpecifiedAndInjected
+    const val HIDDEN_ROOT_PATTERNS = ".jcode"
 }

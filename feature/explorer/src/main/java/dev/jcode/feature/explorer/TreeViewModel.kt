@@ -113,6 +113,9 @@ class TreeViewModel(
         val path: FsPath,
     )
 
+    // Root-level hide patterns (Settings). Only project-root children are filtered.
+    private var hiddenPatterns: List<String> = emptyList()
+
     /** Load the root of a project. */
     suspend fun loadProjectRoot(project: Project) {
         _isLoading.value = true
@@ -140,6 +143,13 @@ class TreeViewModel(
         if (_viewMode.value == mode) return
         _viewMode.value = mode
         selectionState.clear()
+        applyMode()
+    }
+
+    /** Update the project-root hide patterns and re-materialize the current view. */
+    suspend fun setHiddenPatterns(patterns: List<String>) {
+        if (hiddenPatterns == patterns) return
+        hiddenPatterns = patterns
         applyMode()
     }
 
@@ -199,7 +209,7 @@ class TreeViewModel(
         out: MutableList<TreeRow>,
     ) {
         if (depth > 64) return // safety against pathological/cyclic structures
-        val children = runCatching { fs.list(parentPath) }.getOrElse { emptyList() }
+        val children = filterHiddenAtRoot(parentPath, runCatching { fs.list(parentPath) }.getOrElse { emptyList() })
         if (children.isEmpty()) {
             out.add(placeholderRow(parentPath, depth))
             return
@@ -232,6 +242,32 @@ class TreeViewModel(
         isPlaceholder = true,
     )
 
+    /** Hide matching entries — ONLY at the project root (a nested folder with the same name stays). */
+    private fun filterHiddenAtRoot(parentPath: FsPath, children: List<FsNode>): List<FsNode> {
+        if (hiddenPatterns.isEmpty() || parentPath.stableId != projectRootPath?.stableId) return children
+        return children.filterNot { child -> hiddenPatterns.any { matchesHidden(it, child.name) } }
+    }
+
+    private fun matchesHidden(pattern: String, name: String): Boolean {
+        var pat = pattern.trim()
+        if (pat.isEmpty() || pat.startsWith("#") || pat.startsWith("!")) return false // blank / comment / negation
+        pat = pat.trimStart('/').trimEnd('/')
+        val head = pat.substringBefore('/') // a nested pattern like "foo/bar" hides "foo" at the root
+        if (head.isEmpty()) return false
+        return if (head.any { it == '*' || it == '?' }) globToRegex(head).matches(name) else head == name
+    }
+
+    private fun globToRegex(glob: String): Regex {
+        val sb = StringBuilder()
+        for (c in glob) when (c) {
+            '*' -> sb.append(".*")
+            '?' -> sb.append('.')
+            '.', '(', ')', '+', '|', '^', '$', '{', '}', '[', ']', '\\' -> sb.append('\\').append(c)
+            else -> sb.append(c)
+        }
+        return Regex(sb.toString())
+    }
+
     // --- List mode ---
 
     /** Navigate into a directory (List mode); replaces [listRows] with that dir's flat children. */
@@ -243,7 +279,7 @@ class TreeViewModel(
             updateBreadcrumb(path, label)
             selectionState.clear()
 
-            val children = fs.list(path)
+            val children = filterHiddenAtRoot(path, fs.list(path))
             _listRows.value = children.map { child -> buildRow(child, depth = 0) }
         } finally {
             _isLoading.value = false
