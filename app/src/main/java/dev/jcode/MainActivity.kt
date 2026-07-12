@@ -44,6 +44,17 @@ class MainActivity : ComponentActivity() {
             )
         }
         enableEdgeToEdge()
+        // Draw into the display cutout unless the user opted to respect it (Settings). Mutable, so
+        // JCodeShell also updates it live; set here for the first frame. Mirrored from DataStore.
+        val respectCutout = getSharedPreferences(UI_STARTUP_PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_RESPECT_CUTOUT, false)
+        window.attributes = window.attributes.apply {
+            layoutInDisplayCutoutMode = if (respectCutout) {
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+            } else {
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
+        }
         // POST_NOTIFICATIONS is a runtime permission at targetSdk 33 and the backend FGS
         // notification ("Stop & close", session status) starts with the first terminal/run
         // session — so ask right away rather than dropping notifications silently.
@@ -58,6 +69,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val UI_STARTUP_PREFS = "jcode-ui-startup"
         const val KEY_HW_ACCELERATION = "hw_acceleration"
+        const val KEY_RESPECT_CUTOUT = "respect_device_cutout"
     }
 
     override fun onResume() {

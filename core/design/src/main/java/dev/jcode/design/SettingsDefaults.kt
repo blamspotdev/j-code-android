@@ -19,4 +19,5 @@ object SettingsDefaults {
     val BOTTOM_STATUS_BAR = BottomBarVisibility.HideOnKeyboard
     val HIDDEN_ROOT_MODE = ExplorerHiddenMode.HideSpecifiedAndInjected
     const val HIDDEN_ROOT_PATTERNS = ".jcode"
+    const val RESPECT_DEVICE_CUTOUT = false
 }

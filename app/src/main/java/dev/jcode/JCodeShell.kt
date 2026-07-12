@@ -257,8 +257,10 @@ import dev.jcode.design.PerformanceSettings
 import dev.jcode.design.ExtensionSettingSpec
 import dev.jcode.design.ExtensionSettingsGroup
 import dev.jcode.design.ExtensionSettingsUi
+import dev.jcode.design.CutoutSetting
 import dev.jcode.design.ExplorerHiddenMode
 import dev.jcode.design.ExplorerHiddenSetting
+import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalExtensionSettingsUi
 import dev.jcode.design.LocalPerformanceSettings
@@ -464,6 +466,26 @@ fun JCodeApp(
                 }
             },
         )
+    }
+    val respectDeviceCutout by viewModel.respectDeviceCutout.collectAsStateWithLifecycle()
+    val cutoutContext = LocalContext.current
+    val hasDeviceCutout = remember(cutoutContext) {
+        (cutoutContext as? android.app.Activity)?.display?.cutout != null
+    }
+    // layoutInDisplayCutoutMode is mutable after window creation, so apply the choice live (no restart).
+    LaunchedEffect(respectDeviceCutout) {
+        (cutoutContext as? android.app.Activity)?.let { act ->
+            act.window.attributes = act.window.attributes.apply {
+                layoutInDisplayCutoutMode = if (respectDeviceCutout) {
+                    android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                } else {
+                    android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                }
+            }
+        }
+    }
+    val cutoutSetting = remember(respectDeviceCutout, hasDeviceCutout) {
+        CutoutSetting(respect = respectDeviceCutout, hasCutout = hasDeviceCutout, onChange = viewModel::setRespectDeviceCutout)
     }
     val cursorDragHorizontalLevel by viewModel.editorCursorDragHorizontalLevel.collectAsStateWithLifecycle()
     val editorDragSetting = remember(editorDragMovesCursor, cursorDragVerticalLevel, cursorDragHorizontalLevel) {
@@ -773,6 +795,7 @@ fun JCodeApp(
         LocalDebugSession provides debugSessionUi,
         LocalPerformanceSettings provides performanceSettings,
         LocalExplorerHiddenSetting provides explorerHiddenSetting,
+        LocalCutoutSetting provides cutoutSetting,
         LocalExtensionSettingsUi provides extensionSettingsUi,
         LocalWebPreviewBrowsers provides webPreviewBrowsers,
         LocalIssueActions provides issueActions,

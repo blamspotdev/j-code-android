@@ -496,6 +496,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { uiPreferences.edit { it[explorerHiddenPatternsKey] = raw } }
     }
 
+    private val respectCutoutKey = booleanPreferencesKey("respect_device_cutout")
+
+    /** Whether to keep content out of the display cutout (notch/punch-hole). Mirrored to synchronous
+     *  SharedPreferences so MainActivity applies the window cutout mode on the first frame; JCodeShell
+     *  also applies it live (window.attributes is mutable, unlike the hardware-acceleration flag). */
+    val respectDeviceCutout: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[respectCutoutKey] ?: SettingsDefaults.RESPECT_DEVICE_CUTOUT }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.RESPECT_DEVICE_CUTOUT)
+
+    fun setRespectDeviceCutout(enabled: Boolean) {
+        getApplication<Application>()
+            .getSharedPreferences(MainActivity.UI_STARTUP_PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean(MainActivity.KEY_RESPECT_CUTOUT, enabled).apply()
+        viewModelScope.launch { uiPreferences.edit { it[respectCutoutKey] = enabled } }
+    }
+
     private val confirmCloseRunningKey = booleanPreferencesKey("perf_confirm_close_running")
 
     /** When true (default), closing a project/workspace with a running terminal program, an active

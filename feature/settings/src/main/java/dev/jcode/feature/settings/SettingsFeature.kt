@@ -64,6 +64,7 @@ import dev.jcode.design.LocalEditorDragMovesCursor
 import dev.jcode.design.LocalExtraKeysSetting
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.ExplorerHiddenMode
+import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalRestoreSession
 import dev.jcode.design.WebPreviewBrowsers
@@ -116,6 +117,7 @@ object SettingsFeature {
         val editorDragSetting = LocalEditorDragMovesCursor.current
         val restoreSessionSetting = LocalRestoreSession.current
         val explorerHiddenSetting = LocalExplorerHiddenSetting.current
+        val cutoutSetting = LocalCutoutSetting.current
         val extraKeysSetting = LocalExtraKeysSetting.current
         val bottomBarSetting = LocalBottomBarSetting.current
         val fontSettings = LocalFontSettings.current
@@ -303,6 +305,25 @@ object SettingsFeature {
                     modified = hideStatusBarWithKeyboard != SettingsDefaults.HIDE_STATUS_BAR_WITH_KEYBOARD,
                     onReset = { onUpdateHideStatusBarWithKeyboard(SettingsDefaults.HIDE_STATUS_BAR_WITH_KEYBOARD) },
                 )
+            }
+
+            // Hidden on displays without a cutout (desktop mode, external display, notchless devices).
+            if (cutoutSetting.hasCutout) {
+                SettingsCard(
+                    title = "Display cutout",
+                    description = "Keep the app clear of the camera notch or punch-hole. When off, the " +
+                        "app draws into the cutout area for a full-screen layout.",
+                    keywords = "cutout notch punch hole camera display safe area letterbox fullscreen screen edge insets",
+                ) {
+                    ToggleRow(
+                        label = "Respect device cutout",
+                        supporting = "Lay out the app inside the cutout's safe area instead of drawing behind it.",
+                        checked = cutoutSetting.respect,
+                        onCheckedChange = cutoutSetting.onChange,
+                        modified = cutoutSetting.respect != SettingsDefaults.RESPECT_DEVICE_CUTOUT,
+                        onReset = { cutoutSetting.onChange(SettingsDefaults.RESPECT_DEVICE_CUTOUT) },
+                    )
+                }
             }
 
             SettingsCard(
