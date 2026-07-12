@@ -290,6 +290,15 @@ class EditorView @JvmOverloads constructor(
         return (state.snapshot.value.lineCount * lineHeightPx(state) - vp.heightPx).coerceAtLeast(0)
     }
 
+    /** Scroll the viewport by [lines] text lines (positive = toward the end of the file). Drives
+     *  external scroll bindings (e.g. volume keys); no-op when no state is attached. */
+    fun scrollLines(lines: Int) {
+        val state = editorState ?: return
+        val vp = state.viewport.value
+        val newY = (vp.scrollY + lines * lineHeightPx(state)).coerceIn(0, maxScrollY(state))
+        if (newY != vp.scrollY) state.updateViewport { it.copy(scrollY = newY) }
+    }
+
     /** How far the widest VISIBLE line allows scrolling right. Cheap (one batched line read) and
      *  stable while dragging; longer off-screen lines extend the range as they scroll into view. */
     private fun maxScrollX(state: EditorState): Int {

@@ -66,6 +66,8 @@ import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.ExplorerHiddenMode
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
+import dev.jcode.design.LocalVolumeKeysSetting
+import dev.jcode.design.VolumeKeyAction
 import dev.jcode.design.LocalRestoreSession
 import dev.jcode.design.WebPreviewBrowsers
 import dev.jcode.design.LocalWebPreviewBrowsers
@@ -118,6 +120,7 @@ object SettingsFeature {
         val restoreSessionSetting = LocalRestoreSession.current
         val explorerHiddenSetting = LocalExplorerHiddenSetting.current
         val cutoutSetting = LocalCutoutSetting.current
+        val volumeKeysSetting = LocalVolumeKeysSetting.current
         val extraKeysSetting = LocalExtraKeysSetting.current
         val bottomBarSetting = LocalBottomBarSetting.current
         val fontSettings = LocalFontSettings.current
@@ -367,6 +370,35 @@ object SettingsFeature {
                     optionLabel = { extraKeysVisibilityLabel(ExtraKeysVisibility.valueOf(it)) },
                     modified = extraKeysSetting.landscape != SettingsDefaults.EXTRA_KEYS_LANDSCAPE,
                     onReset = { extraKeysSetting.onChangeLandscape(SettingsDefaults.EXTRA_KEYS_LANDSCAPE) },
+                )
+            }
+
+            SettingsSectionHeader("Input")
+            SettingsCard(
+                title = "Volume keys",
+                description = "Remap the hardware volume buttons to editor/terminal actions. " +
+                    "\"System Default\" keeps normal volume control. Pane actions (arrows, scroll) act on " +
+                    "whichever editor or terminal is focused; hold to repeat arrows and scrolling.",
+                keywords = "volume keys button hardware remap bind binding shortcut undo redo arrow scroll " +
+                    "command palette input up down page rocker media",
+            ) {
+                SettingsDropdownRow(
+                    label = "Volume up",
+                    options = VolumeKeyAction.entries.map { it.name },
+                    selected = volumeKeysSetting.up.name,
+                    onSelect = { volumeKeysSetting.onChangeUp(VolumeKeyAction.valueOf(it)) },
+                    optionLabel = { volumeKeyActionLabel(VolumeKeyAction.valueOf(it), "Vol Up") },
+                    modified = volumeKeysSetting.up != SettingsDefaults.VOLUME_UP_ACTION,
+                    onReset = { volumeKeysSetting.onChangeUp(SettingsDefaults.VOLUME_UP_ACTION) },
+                )
+                SettingsDropdownRow(
+                    label = "Volume down",
+                    options = VolumeKeyAction.entries.map { it.name },
+                    selected = volumeKeysSetting.down.name,
+                    onSelect = { volumeKeysSetting.onChangeDown(VolumeKeyAction.valueOf(it)) },
+                    optionLabel = { volumeKeyActionLabel(VolumeKeyAction.valueOf(it), "Vol Down") },
+                    modified = volumeKeysSetting.down != SettingsDefaults.VOLUME_DOWN_ACTION,
+                    onReset = { volumeKeysSetting.onChangeDown(SettingsDefaults.VOLUME_DOWN_ACTION) },
                 )
             }
 
@@ -804,6 +836,20 @@ private fun bottomBarVisibilityLabel(mode: BottomBarVisibility): String = when (
     BottomBarVisibility.Hidden -> "Hidden"
     BottomBarVisibility.HideOnKeyboard -> "Hide on Soft Keyboard"
     BottomBarVisibility.AlwaysShow -> "Always Show"
+}
+
+/** [defaultSuffix] disambiguates the per-button System Default label, e.g. "System Default (Vol Up)". */
+private fun volumeKeyActionLabel(action: VolumeKeyAction, defaultSuffix: String): String = when (action) {
+    VolumeKeyAction.SystemDefault -> "System Default ($defaultSuffix)"
+    VolumeKeyAction.Undo -> "Undo"
+    VolumeKeyAction.Redo -> "Redo"
+    VolumeKeyAction.KeyLeft -> "Key Left"
+    VolumeKeyAction.KeyRight -> "Key Right"
+    VolumeKeyAction.KeyUp -> "Key Up"
+    VolumeKeyAction.KeyDown -> "Key Down"
+    VolumeKeyAction.ScrollUp -> "Scroll Up"
+    VolumeKeyAction.ScrollDown -> "Scroll Down"
+    VolumeKeyAction.CommandPalette -> "Command Palette"
 }
 
 /** Current Settings search query; cards/headers self-filter on it. */

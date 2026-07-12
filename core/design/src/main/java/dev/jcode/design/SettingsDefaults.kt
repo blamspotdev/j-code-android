@@ -20,4 +20,6 @@ object SettingsDefaults {
     val HIDDEN_ROOT_MODE = ExplorerHiddenMode.HideSpecifiedAndInjected
     const val HIDDEN_ROOT_PATTERNS = ".jcode"
     const val RESPECT_DEVICE_CUTOUT = false
+    val VOLUME_UP_ACTION = VolumeKeyAction.SystemDefault
+    val VOLUME_DOWN_ACTION = VolumeKeyAction.SystemDefault
 }

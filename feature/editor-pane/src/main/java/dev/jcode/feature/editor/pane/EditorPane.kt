@@ -586,4 +586,9 @@ private class EditorExtraKeysTarget(private val view: EditorView) : ExtraKeysTar
         }
         view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, keyCode))
     }
+
+    // [lines] positive = earlier content (up); the editor's scrollY grows downward, so negate.
+    override fun onScroll(lines: Int) {
+        view.scrollLines(-lines)
+    }
 }

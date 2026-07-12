@@ -572,6 +572,12 @@ class TerminalView @JvmOverloads constructor(
         }
     }
 
+    /** Scroll the scrollback by [delta] lines (positive = up into history, negative = toward the live
+     *  bottom). Drives external scroll bindings (e.g. volume keys). */
+    fun scrollByLines(delta: Int) {
+        setScrollOffset(scrollOffset + delta)
+    }
+
     /** Jump back to the live bottom of the terminal (following new output). */
     fun scrollToBottom() {
         if (scrollOffset != 0) {

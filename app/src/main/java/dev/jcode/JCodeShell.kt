@@ -260,8 +260,12 @@ import dev.jcode.design.ExtensionSettingsUi
 import dev.jcode.design.CutoutSetting
 import dev.jcode.design.ExplorerHiddenMode
 import dev.jcode.design.ExplorerHiddenSetting
+import dev.jcode.design.ExtraKey
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
+import dev.jcode.design.LocalVolumeKeysSetting
+import dev.jcode.design.VolumeKeyAction
+import dev.jcode.design.VolumeKeysSetting
 import dev.jcode.design.LocalExtensionSettingsUi
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.WebPreviewBrowsers
@@ -517,6 +521,11 @@ fun JCodeApp(
     val bottomBarSetting = remember(bottomStatusBar) {
         BottomBarSetting(bottomStatusBar, viewModel::setBottomStatusBar)
     }
+    val volumeUpAction by viewModel.volumeUpAction.collectAsStateWithLifecycle()
+    val volumeDownAction by viewModel.volumeDownAction.collectAsStateWithLifecycle()
+    val volumeKeysSetting = remember(volumeUpAction, volumeDownAction) {
+        VolumeKeysSetting(volumeUpAction, volumeDownAction, viewModel::setVolumeUpAction, viewModel::setVolumeDownAction)
+    }
     val editorFontId by viewModel.editorFontId.collectAsStateWithLifecycle()
     val terminalFontId by viewModel.terminalFontId.collectAsStateWithLifecycle()
     val fontContext = LocalContext.current
@@ -757,6 +766,7 @@ fun JCodeApp(
         LocalTabCloseButtonSetting provides tabCloseSetting,
         LocalExtraKeysSetting provides extraKeysSetting,
         LocalExtraKeysState provides extraKeysState,
+        LocalVolumeKeysSetting provides volumeKeysSetting,
         LocalBottomBarSetting provides bottomBarSetting,
         LocalFontSettings provides fontSettings,
         LocalEditorTypeface provides editorTypeface,
@@ -899,6 +909,7 @@ fun JCodeApp(
         hideStatusBarWithKeyboard = hideStatusBarWithKeyboard,
         onUpdateHideStatusBarWithKeyboard = viewModel::setHideStatusBarWithKeyboard,
         bringEditorToFront = viewModel.bringEditorToFront,
+        volumeKeyAction = viewModel.volumeKeyAction,
     )
     }
 
@@ -1015,6 +1026,7 @@ private fun JCodeShell(
     hideStatusBarWithKeyboard: Boolean,
     onUpdateHideStatusBarWithKeyboard: (Boolean) -> Unit,
     bringEditorToFront: SharedFlow<Unit>,
+    volumeKeyAction: SharedFlow<VolumeKeyAction>,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -1154,6 +1166,23 @@ private fun JCodeShell(
         }
     }
     var commandPaletteVisible by rememberSaveable { mutableStateOf(false) }
+    // Volume-key bindings (Settings → Input): route focused-pane arrows/scroll to the same target the
+    // extra-keys row drives, and open the command palette. Undo/Redo run directly in the Activity.
+    val volumeExtraKeys = LocalExtraKeysState.current
+    LaunchedEffect(volumeKeyAction) {
+        volumeKeyAction.collect { action ->
+            when (action) {
+                VolumeKeyAction.KeyLeft -> volumeExtraKeys.target?.onExtraKey(ExtraKey.Left, false, false)
+                VolumeKeyAction.KeyRight -> volumeExtraKeys.target?.onExtraKey(ExtraKey.Right, false, false)
+                VolumeKeyAction.KeyUp -> volumeExtraKeys.target?.onExtraKey(ExtraKey.Up, false, false)
+                VolumeKeyAction.KeyDown -> volumeExtraKeys.target?.onExtraKey(ExtraKey.Down, false, false)
+                VolumeKeyAction.ScrollUp -> volumeExtraKeys.target?.onScroll(3)
+                VolumeKeyAction.ScrollDown -> volumeExtraKeys.target?.onScroll(-3)
+                VolumeKeyAction.CommandPalette -> commandPaletteVisible = true
+                else -> Unit
+            }
+        }
+    }
     var terminalSessionIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var selectedTerminalSessionId by rememberSaveable { mutableStateOf("") }
     // Live tab names keyed by session id, driven by the shell's OSC 7712 (the running program name).

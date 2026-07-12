@@ -39,6 +39,7 @@ import dev.jcode.design.BottomBarVisibility
 import dev.jcode.design.ExtraKeysVisibility
 import dev.jcode.design.SettingsDefaults
 import dev.jcode.design.ThemeMode
+import dev.jcode.design.VolumeKeyAction
 import dev.jcode.editor.SyntaxHighlighter
 import dev.jcode.feature.editor.pane.EditorGroup
 import dev.jcode.feature.editor.pane.EditorPageKind
@@ -657,6 +658,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             uiPreferences.edit { prefs -> prefs[bottomStatusBarKey] = mode.name }
         }
+    }
+
+    private val volumeUpActionKey = stringPreferencesKey("volume_up_action")
+    private val volumeDownActionKey = stringPreferencesKey("volume_down_action")
+
+    /** Action bound to the hardware Volume Up button; [VolumeKeyAction.SystemDefault] = normal volume. */
+    val volumeUpAction: StateFlow<VolumeKeyAction> = uiPreferences.data
+        .map { prefs ->
+            prefs[volumeUpActionKey]?.let { runCatching { VolumeKeyAction.valueOf(it) }.getOrNull() }
+                ?: SettingsDefaults.VOLUME_UP_ACTION
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.VOLUME_UP_ACTION)
+
+    /** Action bound to the hardware Volume Down button; [VolumeKeyAction.SystemDefault] = normal volume. */
+    val volumeDownAction: StateFlow<VolumeKeyAction> = uiPreferences.data
+        .map { prefs ->
+            prefs[volumeDownActionKey]?.let { runCatching { VolumeKeyAction.valueOf(it) }.getOrNull() }
+                ?: SettingsDefaults.VOLUME_DOWN_ACTION
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.VOLUME_DOWN_ACTION)
+
+    fun setVolumeUpAction(action: VolumeKeyAction) {
+        viewModelScope.launch { uiPreferences.edit { it[volumeUpActionKey] = action.name } }
+    }
+
+    fun setVolumeDownAction(action: VolumeKeyAction) {
+        viewModelScope.launch { uiPreferences.edit { it[volumeDownActionKey] = action.name } }
+    }
+
+    /** Volume-key actions that must run in the Compose layer (focused-pane arrows/scroll, command
+     *  palette). Undo/Redo are invoked directly by the Activity. Collected by JCodeShell. */
+    private val _volumeKeyAction = MutableSharedFlow<VolumeKeyAction>(extraBufferCapacity = 8)
+    val volumeKeyAction = _volumeKeyAction.asSharedFlow()
+
+    fun emitVolumeKeyAction(action: VolumeKeyAction) {
+        _volumeKeyAction.tryEmit(action)
     }
 
     private val hideTabCloseButtonKey = booleanPreferencesKey("hide_tab_close_button")

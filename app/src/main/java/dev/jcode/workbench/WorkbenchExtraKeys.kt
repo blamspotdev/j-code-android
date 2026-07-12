@@ -86,6 +86,11 @@ class TerminalExtraKeysTarget(private val view: TerminalView) : ExtraKeysTarget 
         view.pendingAlt = alt
     }
 
+    // [lines] positive = up into scrollback history, matching the terminal's scrollOffset axis.
+    override fun onScroll(lines: Int) {
+        view.scrollByLines(lines)
+    }
+
     /** xterm modified sequences: modifier code = 1 + (2 if alt) + (4 if ctrl). */
     private fun modifiedSequence(key: ExtraKey, ctrl: Boolean, alt: Boolean): String? {
         val mod = 1 + (if (alt) 2 else 0) + (if (ctrl) 4 else 0)
