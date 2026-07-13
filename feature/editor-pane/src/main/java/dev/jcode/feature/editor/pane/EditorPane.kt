@@ -493,6 +493,7 @@ fun EditorViewHost(
                     ContextAction(JCodeIcon.Paste, "Paste") { view?.pasteClipboard() },
                 ),
                 listActions = buildList {
+                    add(ContextAction(JCodeIcon.Cursor, "Select Text") { view?.beginTextSelection() })
                     add(ContextAction(JCodeIcon.SelectAll, "Select all") { view?.selectAll() })
                     menuExtras.previewToggle?.let { toggle ->
                         add(ContextAction(JCodeIcon.Preview, "Preview") { toggle() })

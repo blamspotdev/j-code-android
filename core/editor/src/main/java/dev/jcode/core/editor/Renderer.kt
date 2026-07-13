@@ -144,10 +144,15 @@ class Renderer(
                     if (window.contains(line)) {
                         val lineStart = window.byteStart(line)
                         val lineEnd = window.byteEnd(line)
-                        val selStart = if (line == startLine) (caret.start - lineStart).coerceAtLeast(0) else 0
-                        val selEnd = if (line == endLine) (caret.end - lineStart).coerceAtMost(lineEnd - lineStart) else (lineEnd - lineStart)
+                        val lineText = window.text(line)
+                        // Byte columns clamped to the UTF-16 length like the squiggle/caret passes:
+                        // on a non-ASCII line the byte length exceeds lineText.length and an
+                        // unclamped substring throws mid-draw.
+                        val selStart = (if (line == startLine) (caret.start - lineStart).coerceAtLeast(0) else 0)
+                            .coerceIn(0, lineText.length)
+                        val selEnd = (if (line == endLine) (caret.end - lineStart).coerceAtMost(lineEnd - lineStart) else (lineEnd - lineStart))
+                            .coerceIn(selStart, lineText.length)
                         if (selStart < selEnd) {
-                            val lineText = window.text(line)
                             val xStart = textLeft + measureTextWidth(lineText.substring(0, selStart), config)
                             val xEnd = textLeft + measureTextWidth(lineText.substring(0, selEnd), config)
                             val y = (line - visibleTop) * lineHeightPx - yRem
