@@ -28,19 +28,21 @@ entries:
   - id: nodejs
     category: languages
     name: Node.js and npm
-    description: Installs Node.js and npm for TypeScript, JavaScript, and frontend tooling.
+    description: Installs the newest LTS Node.js and npm (resolved at install time) for TypeScript, JavaScript, and frontend tooling.
     # Ubuntu's apt "npm" (Debian-patched) fails under proot with a phantom
     # `mkdir '/home' ENOENT` inside Arborist, breaking all `npm install`/`npm create`.
     # Ship upstream Node (unpatched npm) into /usr/local so it shadows any distro node on PATH.
     installScript: |
       set -e
-      NODE_VERSION=v20.18.1
+      command -v curl >/dev/null 2>&1 || sudo apt-get install -y curl ca-certificates
+      # Newest LTS line from the release index (column 10 = LTS codename, "-" = not LTS).
+      NODE_VERSION=$(curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 && $10!="-" {print $1; exit}')
+      [ -n "$NODE_VERSION" ]
       case "$(uname -m)" in
         aarch64|arm64) NODE_ARCH=arm64 ;;
         x86_64|amd64)  NODE_ARCH=x64 ;;
         *) echo "Unsupported architecture: $(uname -m)"; exit 1 ;;
       esac
-      command -v curl >/dev/null 2>&1 || sudo apt-get install -y curl ca-certificates
       TARBALL="node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz"
       curl -fsSL -o "/tmp/${TARBALL}" "https://nodejs.org/dist/${NODE_VERSION}/${TARBALL}"
       sudo tar -xzf "/tmp/${TARBALL}" -C /usr/local --strip-components=1
@@ -51,7 +53,9 @@ entries:
     uninstallScript: |
       sudo rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
       sudo rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack
-    updateCheckScript: "false"
+    updateCheckScript: |
+      L=$(curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 && $10!="-" {print $1; exit}')
+      [ -n "$L" ] && [ "$(node --version 2>/dev/null)" != "$L" ]
 
   - id: jdk
     category: languages
@@ -114,7 +118,7 @@ entries:
   - id: android-sdk
     category: android
     name: Android SDK
-    description: Command-line tools, the Android 34 platform, build-tools 34, and Gradle 8.7 — wired with the ARM-native aapt2 so on-device Gradle builds (assembleDebug) produce a real APK. Requires the Android SDK prerequisites. Large download.
+    description: Command-line tools, the newest stable Android platform and build-tools, and the latest Gradle — all resolved at install time and wired with the ARM-native aapt2 so on-device Gradle builds (assembleDebug) produce a real APK. Gradle is exposed at /opt/gradle/current and on PATH. Requires the Android SDK prerequisites. Large download.
     supportedArches: [arm64]
     requiredSdks: [android-prereqs]
     installScript: |
@@ -122,41 +126,76 @@ entries:
       export ANDROID_HOME="$HOME/android-sdk"
       export JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
       mkdir -p "$ANDROID_HOME"
+      # One manifest fetch drives every version choice below (`sdkmanager --list` re-downloads the
+      # same manifest through a JVM and takes tens of minutes under proot).
+      wget -qO /tmp/android-repo.xml https://dl.google.com/android/repository/repository2-3.xml
       if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
-        wget -q -O /tmp/clt.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+        CLT_ZIP=$(grep -oE 'commandlinetools-linux-[0-9]+_latest\.zip' /tmp/android-repo.xml | sort -u -V | tail -1)
+        [ -n "$CLT_ZIP" ]
+        wget -q -O /tmp/clt.zip "https://dl.google.com/android/repository/$CLT_ZIP"
         rm -rf /tmp/cmdline-tools && (cd /tmp && unzip -q clt.zip)
         mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
         mv /tmp/cmdline-tools/* "$ANDROID_HOME/cmdline-tools/latest/"
         rm -rf /tmp/cmdline-tools /tmp/clt.zip
       fi
+      # Newest stable platform and build-tools named in the manifest (previews use codename
+      # platform paths and -rcN build-tools suffixes, so both are filtered out).
+      PLATFORM=$(grep -oE 'platforms;android-[0-9]+(\.[0-9]+)?' /tmp/android-repo.xml | sort -u -V | tail -1)
+      BUILD_TOOLS=$(grep -oE 'build-tools;[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?' /tmp/android-repo.xml | grep -v -- '-rc' | sort -u -V | tail -1)
+      rm -f /tmp/android-repo.xml
+      [ -n "$PLATFORM" ] && [ -n "$BUILD_TOOLS" ]
+      PLAT_DIR="${PLATFORM#platforms;}"
+      BT_VER="${BUILD_TOOLS#build-tools;}"
       SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-      # Accept licenses (timeout guards a post-write hang).
-      yes | timeout 120 "$SDKM" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
+      # Accept licenses. Both pipeline members need their own timeout: sdkmanager hangs after
+      # writing the licenses, and under proot `yes` never gets SIGPIPE when its consumer dies,
+      # which otherwise deadlocks the whole script on the pipeline.
+      timeout 130 yes | timeout 120 "$SDKM" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
       # sdkmanager downloads only when fed 'yes' on stdin, but then HANGS after finishing. Run it in
-      # the background, wait for the platform + build-tools to land, then stop it.
-      ( yes | "$SDKM" --sdk_root="$ANDROID_HOME" "platforms;android-34" "build-tools;34.0.0" "platform-tools" >/tmp/android-sdk-install.log 2>&1 ) &
+      # the background, wait for the platform + build-tools to land, then stop it — bailing out
+      # early if it dies instead of hanging.
+      ( timeout 1900 yes | "$SDKM" --sdk_root="$ANDROID_HOME" "$PLATFORM" "$BUILD_TOOLS" "platform-tools" >/tmp/android-sdk-install.log 2>&1 ) &
+      SDK_PID=$!
       for i in $(seq 1 180); do
-        [ -f "$ANDROID_HOME/platforms/android-34/android.jar" ] && [ -x "$ANDROID_HOME/build-tools/34.0.0/aapt2" ] && break
+        [ -f "$ANDROID_HOME/platforms/$PLAT_DIR/android.jar" ] && [ -x "$ANDROID_HOME/build-tools/$BT_VER/aapt2" ] && break
+        kill -0 "$SDK_PID" 2>/dev/null || break
         sleep 10
       done
       pkill -f sdkmanager 2>/dev/null || true
+      if [ ! -f "$ANDROID_HOME/platforms/$PLAT_DIR/android.jar" ] || [ ! -x "$ANDROID_HOME/build-tools/$BT_VER/aapt2" ]; then
+        echo "sdkmanager failed to install $PLATFORM / $BUILD_TOOLS:"
+        tail -n 20 /tmp/android-sdk-install.log 2>/dev/null || true
+        exit 1
+      fi
       # Replace the x86_64 aapt2/aapt/zipalign with the distro's native aarch64 builds.
       DEB=/usr/lib/android-sdk/build-tools/debian
-      for b in aapt2 aapt zipalign; do [ -e "$DEB/$b" ] && cp -f "$DEB/$b" "$ANDROID_HOME/build-tools/34.0.0/$b"; done
-      if [ ! -x /opt/gradle/gradle-8.7/bin/gradle ]; then
-        wget -q -O /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip
+      for b in aapt2 aapt zipalign; do
+        if [ -e "$DEB/$b" ]; then cp -f "$DEB/$b" "$ANDROID_HOME/build-tools/$BT_VER/$b"; fi
+      done
+      GRADLE_VERSION=$(wget -qO- https://services.gradle.org/versions/current | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
+      [ -n "$GRADLE_VERSION" ]
+      if [ ! -x "/opt/gradle/gradle-$GRADLE_VERSION/bin/gradle" ]; then
+        wget -q -O /tmp/gradle.zip "https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip"
         sudo mkdir -p /opt/gradle && (cd /opt/gradle && sudo unzip -q /tmp/gradle.zip) && rm -f /tmp/gradle.zip
       fi
+      # Stable paths so run recipes and projects never hardcode a Gradle version.
+      sudo ln -sfn "/opt/gradle/gradle-$GRADLE_VERSION" /opt/gradle/current
+      sudo ln -sf /opt/gradle/current/bin/gradle /usr/local/bin/gradle
     verifyScript: |
-      [ -f "$HOME/android-sdk/platforms/android-34/android.jar" ] && [ -x /opt/gradle/gradle-8.7/bin/gradle ] && "$HOME/android-sdk/build-tools/34.0.0/aapt2" version >/dev/null 2>&1 && echo ready
+      ls "$HOME"/android-sdk/platforms/*/android.jar >/dev/null 2>&1 && [ -x /opt/gradle/current/bin/gradle ] && BT=$(ls -d "$HOME"/android-sdk/build-tools/*/ 2>/dev/null | sort -V | tail -1) && "${BT}aapt2" version >/dev/null 2>&1 && echo ready
     uninstallScript: |
       rm -rf "$HOME/android-sdk"
-      sudo rm -rf /opt/gradle/gradle-8.7
+      sudo rm -rf /opt/gradle
+      sudo rm -f /usr/local/bin/gradle
+    updateCheckScript: |
+      [ -d "$HOME/android-sdk/platforms" ] || exit 1
+      A=$(wget -qO- https://dl.google.com/android/repository/repository2-3.xml | grep -oE 'platforms;android-[0-9]+(\.[0-9]+)?' | sort -u -V | tail -1)
+      [ -n "$A" ] && [ ! -f "$HOME/android-sdk/platforms/${A#platforms;}/android.jar" ]
 
   - id: dotnet
     category: dotnet
     name: .NET SDK
-    description: Installs the currently-supported .NET SDKs (LTS + STS channels, resolved at install time — .NET 10 + 9 today) into $HOME/.dotnet, plus a pinned .NET 8 runtime floor that csharp-ls and netcoredbg need. A new .NET release needs no JCode update.
+    description: Installs the currently-supported .NET SDKs (LTS + STS channels, resolved at install time — .NET 10 + 9 today) into $HOME/.dotnet, plus a pinned .NET 8 runtime floor that netcoredbg needs. A new .NET release needs no JCode update.
     installScript: |
       sudo apt-get update
       sudo apt-get install -y curl ca-certificates
@@ -167,8 +206,8 @@ entries:
       # install gets --skip-non-versioned-files so it can't overwrite that newer host.
       bash /tmp/dotnet-install.sh --channel LTS --install-dir "$HOME/.dotnet"
       bash /tmp/dotnet-install.sh --channel STS --install-dir "$HOME/.dotnet" --skip-non-versioned-files
-      # Pinned .NET 8 runtime floor (runtime-only): csharp-ls 0.16.0 targets net8.0 and netcoredbg is
-      # built against .NET 8; both need the 8.x shared runtime even once .NET 8's SDK is EOL.
+      # Pinned .NET 8 runtime floor (runtime-only): netcoredbg is built against .NET 8 and needs
+      # the 8.x shared runtime even once .NET 8's SDK is EOL.
       bash /tmp/dotnet-install.sh --channel 8.0 --runtime dotnet --install-dir "$HOME/.dotnet" --skip-non-versioned-files
       # CoreCLR over-reserves for the whole device RAM inside proot's ptrace-constrained address
       # space and gets killed on first start; every dotnet call needs the 1 GB GC cap. The shim
@@ -202,15 +241,15 @@ entries:
     installScript: |
       sudo apt-get update
       sudo apt-get install -y postgresql postgresql-contrib
-      sudo -u postgres pg_ctlcluster 16 main start
+      sudo -u postgres pg_ctlcluster "$(ls /etc/postgresql | sort -V | tail -1)" main start
       sudo -u postgres createuser --superuser jcode
       createdb jcode
     verifyScript: |
       pg_isready -U jcode -d jcode >/dev/null 2>&1 && echo ready
     uninstallScript: |
-      sudo -u postgres pg_ctlcluster 16 main stop 2>/dev/null || true
+      for v in $(ls /etc/postgresql 2>/dev/null); do sudo -u postgres pg_ctlcluster "$v" main stop 2>/dev/null || true; done
       sudo apt-get remove -y postgresql postgresql-contrib
-      sudo rm -rf /var/lib/postgresql/16/main
+      sudo rm -rf /var/lib/postgresql
     updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(postgresql|postgresql-contrib)/'"
 
   - id: mariadb

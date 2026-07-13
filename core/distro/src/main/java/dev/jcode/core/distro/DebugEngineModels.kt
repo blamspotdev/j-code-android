@@ -105,12 +105,18 @@ object DebugEngineCatalog {
             id = "js-debug",
             category = "Web",
             name = "js-debug (Node.js / JS / TS)",
-            description = "VS Code's JavaScript/Node debug adapter (DAP over TCP). Needs Node.js.",
-            installCommand = "set -e; V=v1.100.0; " +
-                "wget -qO /tmp/js-debug.tar.gz https://github.com/microsoft/vscode-js-debug/releases/download/\$V/js-debug-dap-\$V.tar.gz && " +
-                "rm -rf \"\$HOME/js-debug\" && mkdir -p \"\$HOME/js-debug\" && tar xzf /tmp/js-debug.tar.gz -C \"\$HOME/js-debug\" --strip-components=1 && rm -f /tmp/js-debug.tar.gz",
+            description = "VS Code's JavaScript/Node debug adapter (DAP over TCP), newest release resolved at install time. Needs Node.js.",
+            // Not every vscode-js-debug release attaches the js-debug-dap tarball; take the newest
+            // release that has one (the API lists releases newest-first).
+            installCommand = "set -e; " +
+                "URL=\$(curl -fsSL 'https://api.github.com/repos/microsoft/vscode-js-debug/releases?per_page=10' | grep -oE 'https://[^\"]*js-debug-dap-v[0-9.]+\\.tar\\.gz' | head -n1); " +
+                "[ -n \"\$URL\" ] && wget -qO /tmp/js-debug.tar.gz \"\$URL\" && " +
+                "rm -rf \"\$HOME/js-debug\" && mkdir -p \"\$HOME/js-debug\" && tar xzf /tmp/js-debug.tar.gz -C \"\$HOME/js-debug\" --strip-components=1 && rm -f /tmp/js-debug.tar.gz && " +
+                "basename \"\$URL\" > \"\$HOME/js-debug/.release\"",
             verifyCommand = "test -f \"\$HOME/js-debug/src/dapDebugServer.js\" && node -e \"process.exit(0)\"",
             uninstallCommand = "rm -rf \"\$HOME/js-debug\"",
+            updateCheckCommand = "U=\$(curl -fsSL 'https://api.github.com/repos/microsoft/vscode-js-debug/releases?per_page=10' | grep -oE 'https://[^\"]*js-debug-dap-v[0-9.]+\\.tar\\.gz' | head -n1); " +
+                "[ -n \"\$U\" ] && [ \"\$(basename \"\$U\")\" != \"\$(cat \"\$HOME/js-debug/.release\" 2>/dev/null)\" ]",
             adapterCommand = "node \"\$HOME/js-debug/src/dapDebugServer.js\" {{port}} 127.0.0.1",
             transport = "tcp",
             debugType = "pwa-node",

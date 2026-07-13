@@ -83,10 +83,9 @@ object LspServerCatalog {
             // dotnet lives behind the /usr/local/bin/dotnet shim (GC heap cap + DOTNET_ROOT — see the
             // dotnet catalog entry); global tools land in ~/.dotnet/tools, which non-login shells
             // don't have on PATH, and the tool's apphost needs the same env to find the runtime.
-            // 0.16.0 = the newest release that still runs on the .NET 8 SDK the dotnet toolchain
-            // installs (0.17+ package the tool for a newer runtime and fail with
-            // "DotnetToolSettings.xml was not found in the package"; device-verified).
-            installCommand = "dotnet tool install --global csharp-ls --version 0.16.0",
+            // Unpinned: current releases target .NET 10, which the dotnet toolchain's LTS channel
+            // installs (the old 0.16.0 pin only mattered while that toolchain topped out at .NET 8).
+            installCommand = "dotnet tool install --global csharp-ls",
             verifyCommand = "env DOTNET_ROOT=\"\$HOME/.dotnet\" DOTNET_GCHeapHardLimit=0x40000000 \"\$HOME/.dotnet/tools/csharp-ls\" --version",
             uninstallCommand = "dotnet tool uninstall --global csharp-ls",
             runCommand = "env DOTNET_ROOT=\"\$HOME/.dotnet\" DOTNET_GCHeapHardLimit=0x40000000 \"\$HOME/.dotnet/tools/csharp-ls\"",
