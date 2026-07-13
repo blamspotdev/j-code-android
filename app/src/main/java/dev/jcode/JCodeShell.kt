@@ -177,6 +177,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import dev.jcode.adaptive.JCodeWindowInfo
+import dev.jcode.adaptive.JCodeWindowHeightClass
 import dev.jcode.adaptive.JCodeWindowWidthClass
 import dev.jcode.adaptive.rememberJCodeWindowInfo
 import dev.jcode.core.config.ConfigScope
@@ -1063,7 +1064,10 @@ private fun JCodeShell(
     val focusRequester = remember { FocusRequester() }
     val compactDrawerState = rememberDrawerState(DrawerValue.Closed)
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val isMobileLandscapeMode = isLandscape && windowInfo.widthClass != JCodeWindowWidthClass.Expanded
+    // A phone in landscape is WIDE (Expanded width) but SHORT (Compact height); a real tablet in
+    // landscape is tall too. Key off height, not width, so phones keep the modal drawers they use in
+    // portrait instead of switching to the cramped persistent side panels a tablet would want.
+    val isMobileLandscapeMode = isLandscape && windowInfo.heightClass == JCodeWindowHeightClass.Compact
     val usesModalWorkspace = !isLandscape || isMobileLandscapeMode
     val isPortraitMobileMode = usesModalWorkspace && windowInfo.widthClass == JCodeWindowWidthClass.Compact
     val hasLandscapeInspectorSidebar = isLandscape
