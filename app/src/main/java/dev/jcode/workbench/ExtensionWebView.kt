@@ -258,25 +258,7 @@ fun ExtensionWebViewPage(
     // Paint the WebView backdrop with the theme background from creation, so there is no flash of the
     // WebView's default white before the page's CSS loads and the --jcode-* vars are injected.
     val backgroundArgb = colorScheme.background.toArgb()
-    val themeJs = remember(colorScheme, semantic) {
-        fun hex(c: Color): String = String.format("#%06X", 0xFFFFFF and c.toArgb())
-        val vars = listOf(
-            "--jcode-background" to hex(colorScheme.background),
-            "--jcode-surface" to hex(colorScheme.surface),
-            "--jcode-surface-variant" to hex(colorScheme.surfaceVariant),
-            "--jcode-on-surface" to hex(colorScheme.onSurface),
-            "--jcode-on-surface-variant" to hex(colorScheme.onSurfaceVariant),
-            "--jcode-outline" to hex(colorScheme.outline),
-            "--jcode-outline-variant" to hex(colorScheme.outlineVariant),
-            "--jcode-primary" to hex(colorScheme.primary),
-            "--jcode-on-primary" to hex(colorScheme.onPrimary),
-            "--jcode-error" to hex(colorScheme.error),
-            "--jcode-success" to hex(semantic.success),
-            "--jcode-warning" to hex(semantic.warning),
-        )
-        val sets = vars.joinToString("") { (k, v) -> "r.setProperty('$k','$v');" }
-        "(function(){try{var r=document.documentElement.style;$sets}catch(e){}})()"
-    }
+    val themeJs = remember(colorScheme, semantic) { extensionThemeJs(colorScheme, semantic) }
     val themeJsState = rememberUpdatedState(themeJs)
     LaunchedEffect(themeJs, backgroundArgb) {
         webView?.post { webView?.setBackgroundColor(backgroundArgb); webView?.evaluateJavascript(themeJs, null) }
@@ -291,11 +273,16 @@ fun ExtensionWebViewPage(
                 // extensions' WebViews so they don't react to traffic that isn't theirs. A
                 // `contextAction` is further targeted at the view showing the action's route, so a
                 // tap is handled exactly once (drawer embeds and other views never see it).
+                // `explorerAction` is pushed only to an extension's persistent background host.
+                if (name == "explorerAction") return@collect
                 if (name == "config" || name == "contextAction") {
                     val o = runCatching { JSONObject(json) }.getOrNull()
                     val target = o?.optString("extensionId")
                     if (!target.isNullOrEmpty() && target != extension.id) return@collect
                     if (name == "contextAction" && o?.optString("actionId") != route) return@collect
+                }
+                if (ExtensionDevLog.isDev(extension.id)) {
+                    ExtensionDevLog.log(ExtensionDevLogEntry.Kind.Event, extension.id, "$name $json")
                 }
                 val js = "window.JCode && window.JCode._onEvent && " +
                     "window.JCode._onEvent(${JSONObject.quote(name)}, ${JSONObject.quote(json)})"
@@ -336,6 +323,22 @@ fun ExtensionWebViewPage(
                 // Route `<input type="file">` to the SAF picker so extensions can select a file from
                 // device storage (e.g. a .bak to restore). Without a WebChromeClient the input is inert.
                 webChromeClient = object : WebChromeClient() {
+                    // Surface the extension web UI's console in the Extension Dev tools (dev extensions only).
+                    override fun onConsoleMessage(msg: android.webkit.ConsoleMessage): Boolean {
+                        if (ExtensionDevLog.isDev(extension.id)) {
+                            val level = msg.messageLevel().name.lowercase()
+                            val src = msg.sourceId()?.substringAfterLast('/').orEmpty()
+                            val loc = if (msg.lineNumber() > 0) "  ($src:${msg.lineNumber()})" else ""
+                            ExtensionDevLog.log(
+                                if (level == "error") ExtensionDevLogEntry.Kind.Error else ExtensionDevLogEntry.Kind.Console,
+                                extension.id, "[$level] ${msg.message().orEmpty()}$loc",
+                            )
+                        }
+                        // Don't claim the message — let the WebView's default logcat forwarding run
+                        // too (important for signed extensions we don't record).
+                        return false
+                    }
+
                     override fun onShowFileChooser(
                         wv: WebView?,
                         filePathCallback: ValueCallback<Array<Uri>>?,
@@ -375,3 +378,27 @@ fun ExtensionWebViewPage(
 private const val NO_UI_HTML =
     "<html><body style=\"font-family:sans-serif;color:#9aa;padding:24px\">" +
         "This extension does not ship a UI.</body></html>"
+
+/** JCode's live theme as CSS variables (--jcode-*), injected into extension pages so they match the app. */
+internal fun extensionThemeJs(
+    colorScheme: androidx.compose.material3.ColorScheme,
+    semantic: dev.jcode.design.JCodeSemanticColors,
+): String {
+    fun hex(c: Color): String = String.format("#%06X", 0xFFFFFF and c.toArgb())
+    val vars = listOf(
+        "--jcode-background" to hex(colorScheme.background),
+        "--jcode-surface" to hex(colorScheme.surface),
+        "--jcode-surface-variant" to hex(colorScheme.surfaceVariant),
+        "--jcode-on-surface" to hex(colorScheme.onSurface),
+        "--jcode-on-surface-variant" to hex(colorScheme.onSurfaceVariant),
+        "--jcode-outline" to hex(colorScheme.outline),
+        "--jcode-outline-variant" to hex(colorScheme.outlineVariant),
+        "--jcode-primary" to hex(colorScheme.primary),
+        "--jcode-on-primary" to hex(colorScheme.onPrimary),
+        "--jcode-error" to hex(colorScheme.error),
+        "--jcode-success" to hex(semantic.success),
+        "--jcode-warning" to hex(semantic.warning),
+    )
+    val sets = vars.joinToString("") { (k, v) -> "r.setProperty('$k','$v');" }
+    return "(function(){try{var r=document.documentElement.style;$sets}catch(e){}})()"
+}

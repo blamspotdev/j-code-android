@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.snakeyaml.engine.v2.api.Dump
 import org.snakeyaml.engine.v2.api.DumpSettings
@@ -155,6 +157,22 @@ class ConfigService {
                 saveProjectConfig(current.copy(theme = update(current.theme ?: ThemeConfig())))
             }
         }
+    }
+
+    /** Update the project's remembered tab-color maps (per-file and per-directory) in one write.
+     *  Project-scoped only (keys are project-relative paths). No-ops when nothing actually changes,
+     *  so the auto-remember recompute converges after a single persist. */
+    // Both the manual "Change Tab Color" write and the auto-remember recompute funnel through here;
+    // the mutex makes each read-modify-write atomic so a concurrent write can't drop the other's entry.
+    private val tabColorMutex = Mutex()
+
+    suspend fun updateProjectTabColorMaps(
+        update: (files: Map<String, String>, dirs: Map<String, String>) -> Pair<Map<String, String>, Map<String, String>>,
+    ) = tabColorMutex.withLock {
+        val current = _projectConfig.value ?: defaultProjectConfig()
+        val (files, dirs) = update(current.tabColors, current.tabDirColors)
+        if (files == current.tabColors && dirs == current.tabDirColors) return@withLock
+        saveProjectConfig(current.copy(tabColors = files, tabDirColors = dirs))
     }
 
     suspend fun updateExplorerConfig(
@@ -303,6 +321,8 @@ class ConfigService {
                 extensions = parseExtensionsConfig(document.map("extensions")).nullIfEmpty(),
                 theme = parseThemeConfig(document.map("theme")).nullIfEmpty(),
                 distro = parseDistroConfig(document.map("distro")).nullIfEmpty(),
+                tabColors = parseStringMap(document.map("tabColors")),
+                tabDirColors = parseStringMap(document.map("tabDirColors")),
             ),
             document = document,
         )
@@ -328,9 +348,13 @@ class ConfigService {
                 formatOnSave = map.boolean("formatOnSave"),
                 ligatures = map.boolean("ligatures"),
                 aggressiveAutocorrectKill = map.boolean("aggressiveAutocorrectKill"),
+                tabColoring = map.string("tabColoring"),
             )
         )
     }
+
+    private fun parseStringMap(map: Map<String, Any?>): Map<String, String> =
+        map.entries.associateNotNull { (key, value) -> (value as? String)?.let { key to it } }
 
     private fun parseFilesConfig(map: Map<String, Any?>): FilesConfig = FilesConfig(
         exclude = map.stringList("exclude"),
@@ -417,6 +441,8 @@ class ConfigService {
         root.mergeSection("extensions", config.extensions?.toYamlMap().orEmpty())
         root.mergeSection("theme", config.theme?.toYamlMap().orEmpty())
         root.mergeSection("distro", config.distro?.toYamlMap().orEmpty())
+        root.mergeSection("tabColors", config.tabColors.toStringYamlMap())
+        root.mergeSection("tabDirColors", config.tabDirColors.toStringYamlMap())
         return root
     }
 
@@ -452,6 +478,8 @@ class ConfigService {
                 ?: wsEditor?.aggressiveAutocorrectKill
                 ?: defaults.editor.aggressiveAutocorrectKill
                 ?: false,
+            // null here = no .jcode override at any scope; the app-level default is applied downstream.
+            tabColoring = prjEditor?.tabColoring ?: wsEditor?.tabColoring,
         )
 
         val wsFiles = workspace?.files
@@ -623,7 +651,8 @@ private fun EditorConfig.nullIfEmpty(): EditorConfig? {
         minimap == null &&
         formatOnSave == null &&
         ligatures == null &&
-        aggressiveAutocorrectKill == null
+        aggressiveAutocorrectKill == null &&
+        tabColoring == null
     ) {
         null
     } else {
@@ -672,7 +701,11 @@ private fun EditorConfig.toYamlMap(): Map<String, Any?> = linkedMapOf<String, An
     formatOnSave?.let { this["formatOnSave"] = it }
     ligatures?.let { this["ligatures"] = it }
     aggressiveAutocorrectKill?.let { this["aggressiveAutocorrectKill"] = it }
+    tabColoring?.let { this["tabColoring"] = it }
 }
+
+private fun Map<String, String>.toStringYamlMap(): Map<String, Any?> =
+    entries.associateNotNull { (key, value) -> key to value }
 
 private fun FilesConfig.toYamlMap(): Map<String, Any?> = linkedMapOf<String, Any?>().apply {
     if (exclude.isNotEmpty()) this["exclude"] = exclude

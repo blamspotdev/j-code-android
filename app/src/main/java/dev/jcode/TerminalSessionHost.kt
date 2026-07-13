@@ -50,6 +50,15 @@ object TerminalSessionHost {
         uiOpenFileListener = listener
     }
 
+    // Optional UI hook so a guest tool that opens a URL (xdg-open/$BROWSER -> OSC 7714) reaches the
+    // host's web preview / chosen browser. Set via a DisposableEffect and cleared on dispose.
+    @Volatile
+    private var uiOpenUrlListener: ((String) -> Unit)? = null
+
+    fun setUiOpenUrlListener(listener: ((String) -> Unit)?) {
+        uiOpenUrlListener = listener
+    }
+
     // Optional UI hook so the terminal tab can be named after the running foreground process.
     // Set via a DisposableEffect and cleared on dispose, so it never outlives its composition.
     @Volatile
@@ -83,6 +92,11 @@ object TerminalSessionHost {
                 // hop to the main thread and hand the path token to the active UI listener.
                 mgr.onOpenFileRequest = { token ->
                     uiOpenFileListener?.let { listener -> mainHandler.post { listener(token) } }
+                }
+                // A guest browser-open (xdg-open/$BROWSER -> OSC 7714) fires this off the reader thread;
+                // hop to the main thread and hand the URL to the active UI listener.
+                mgr.onOpenUrlRequest = { url ->
+                    uiOpenUrlListener?.let { listener -> mainHandler.post { listener(url) } }
                 }
                 // The shell reports the running program via OSC 7712 (off the reader thread); hop to
                 // the main thread so the UI can rename the session's tab.

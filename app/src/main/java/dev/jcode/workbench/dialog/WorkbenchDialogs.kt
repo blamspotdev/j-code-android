@@ -29,6 +29,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -123,6 +124,7 @@ internal fun NewItemDialog(
     installedToolchains: Set<String>,
     onDismiss: () -> Unit,
     onConfirm: (MainViewModel.NewItemRequest) -> Unit,
+    resolveDynamicOptions: suspend (String) -> List<String> = { emptyList() },
 ) {
     var isWorkspace by rememberSaveable { mutableStateOf(false) }
     var name by rememberSaveable { mutableStateOf("") }
@@ -138,6 +140,21 @@ internal fun NewItemDialog(
     val inputValues = remember(selectedTemplateId) {
         mutableStateMapOf<String, String>().apply {
             selectedTemplate?.inputs?.forEach { put(it.id, it.defaultValue) }
+        }
+    }
+    // Inputs with an optionsCommand get their dropdown filled live from the runtime (e.g. installed
+    // .NET SDKs); resolved async and merged over the static options, which stay the offline fallback.
+    val dynamicOptions = remember(selectedTemplateId) { mutableStateMapOf<String, List<String>>() }
+    LaunchedEffect(selectedTemplateId) {
+        val template = selectedTemplate ?: return@LaunchedEffect
+        for (input in template.inputs) {
+            if (input.optionsCommand.isBlank()) continue
+            val resolved = resolveDynamicOptions(input.optionsCommand)
+            if (resolved.isNotEmpty()) {
+                dynamicOptions[input.id] = resolved
+                // Re-seed the value when the static default isn't among the live options.
+                if ((inputValues[input.id] ?: "") !in resolved) inputValues[input.id] = resolved.first()
+            }
         }
     }
     if (!hasInputs && step != 0) step = 0
@@ -210,6 +227,7 @@ internal fun NewItemDialog(
                     selectedTemplate.inputs.forEach { input ->
                         TemplateInputField(
                             input = input,
+                            options = dynamicOptions[input.id] ?: input.options,
                             value = inputValues[input.id] ?: input.defaultValue,
                             onValue = { inputValues[input.id] = it },
                         )
@@ -277,12 +295,13 @@ internal fun NewItemDialog(
 @Composable
 private fun TemplateInputField(
     input: TemplateInput,
+    options: List<String>,
     value: String,
     onValue: (String) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(input.label, style = MaterialTheme.typography.labelLarge)
-        if (input.type == "select" && input.options.isNotEmpty()) {
+        if (input.type == "select" && options.isNotEmpty()) {
             var expanded by remember { mutableStateOf(false) }
             Box {
                 OutlinedButton(
@@ -293,7 +312,7 @@ private fun TemplateInputField(
                     Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
                 }
                 DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                    input.options.forEach { option ->
+                    options.forEach { option ->
                         DropdownMenuItem(
                             text = { Text(option) },
                             onClick = {
@@ -363,10 +382,10 @@ private fun TemplateOption(
                 val requires = "Requires: ${template.requires.joinToString(", ")}"
                 Text(
                     if (missing.isEmpty()) requires
-                    else "$requires — install ${missing.joinToString(", ")} via SDK Manager",
+                    else "$requires — ${missing.joinToString(", ")} will be installed during setup",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (missing.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant
-                    else MaterialTheme.colorScheme.error,
+                    else MaterialTheme.colorScheme.tertiary,
                 )
             }
         }

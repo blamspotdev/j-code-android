@@ -20,6 +20,10 @@ data class TemplateInput(
     /** "select" (a fixed choice list) or "text" (free entry). Unknown types fall back to text. */
     val type: String = "select",
     val options: List<String> = emptyList(),
+    /** Optional guest command whose stdout lines become the live select options at New-Project time
+     *  (e.g. installed .NET SDKs → net8.0/net10.0). Falls back to [options] when empty, the runtime
+     *  isn't ready, or the command yields nothing — so a new .NET release needs no app change. */
+    val optionsCommand: String = "",
     val default: String? = null,
 ) {
     /** The value to pre-fill / fall back to when the user leaves it untouched. */

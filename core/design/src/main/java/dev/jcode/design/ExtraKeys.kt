@@ -56,6 +56,10 @@ interface ExtraKeysTarget {
 
     /** Sticky modifiers were armed/cleared; a terminal applies them to the next typed character. */
     fun onModifiersChanged(ctrl: Boolean, alt: Boolean) {}
+
+    /** Scroll the surface by [lines]: positive reveals earlier content (editor: up the file; terminal:
+     *  back into scrollback), negative moves toward the newest content. Default: no-op. */
+    fun onScroll(lines: Int) {}
 }
 
 /**

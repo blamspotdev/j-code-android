@@ -71,24 +71,55 @@ data class ExtensionDeps(
 }
 
 /** A UI action an extension contributes to a host surface (start-editor screen, drawer header,
- *  editor context menu). [fileExtensions] optionally limits a context-menu action to files with a
- *  matching extension (lowercase, no dot); empty means every file. */
+ *  editor or explorer context menu). [fileExtensions] optionally limits a context-menu action to
+ *  files with a matching extension (lowercase, no dot); empty means every file. [targets] limits an
+ *  explorer action to "file" and/or "directory" rows; empty means both. */
 data class ContributedAction(
     val id: String,
     val label: String,
     val icon: String? = null,
     val fileExtensions: List<String> = emptyList(),
+    val targets: List<String> = emptyList(),
+)
+
+/** One terminal of a [RunConfigPreset]: a tab label and the bash command to run in it. In [command],
+ *  `{{projectDir}}` expands to the project's guest root; `{{file}}`/`{{dir}}` to the guest path/dir of
+ *  the FIRST required file (the anchor); and `{{fileN}}`/`{{dirN}}` (1-based) to each of the preset's
+ *  [RunConfigPreset.requires] globs' first match, so a two-file preset can reference both. */
+data class RunPresetTerminal(
+    val label: String,
+    val command: String,
+)
+
+/** An extension-contributed build/run **preset**, offered on the Configure Run page when the project
+ *  contains ALL of [requires] (each a glob; with a slash it matches the file's project-relative path,
+ *  without one just the file name — e.g. `*.csproj`, or a package.json anywhere via a globstar path).
+ *  Applying it prefills the run form with [readyPort] + [terminals] (never auto-saved). A preset may
+ *  drive several terminals (e.g. an ASP.NET server + a Vite client), which is why it needs its own
+ *  required-file list rather than a single match. */
+data class RunConfigPreset(
+    val id: String,
+    val label: String,
+    val requires: List<String>,
+    val terminals: List<RunPresetTerminal>,
+    val readyPort: Int = 0,
 )
 
 /** Actions an extension contributes to host surfaces. Rendered when the extension is active and its
- *  required toolchains are installed; the host routes known action ids (e.g. clone, remoteRepo). */
+ *  required toolchains are installed; the host routes known action ids (e.g. clone, remoteRepo).
+ *  [explorerDecorations] opts the extension into pushing per-file VCS decorations into the Explorer
+ *  (`workbench.setExplorerDecorations`); the host keeps its web UI alive per project to feed them. */
 data class ExtensionContributions(
     val editorStartActions: List<ContributedAction> = emptyList(),
     val drawerActions: List<ContributedAction> = emptyList(),
     val editorContextActions: List<ContributedAction> = emptyList(),
+    val explorerContextActions: List<ContributedAction> = emptyList(),
+    val explorerDecorations: Boolean = false,
+    val runConfigPresets: List<RunConfigPreset> = emptyList(),
 ) {
     val isEmpty: Boolean
-        get() = editorStartActions.isEmpty() && drawerActions.isEmpty() && editorContextActions.isEmpty()
+        get() = editorStartActions.isEmpty() && drawerActions.isEmpty() && editorContextActions.isEmpty() &&
+            explorerContextActions.isEmpty() && !explorerDecorations && runConfigPresets.isEmpty()
 
     companion object {
         val EMPTY = ExtensionContributions()
@@ -267,6 +298,9 @@ data class InstalledExtension(
     val suggests: ExtensionDeps = ExtensionDeps.EMPTY,
     /** Actions this extension contributes to host surfaces (start-editor screen, drawer header). */
     val contributes: ExtensionContributions = ExtensionContributions.EMPTY,
+    /** True for an UNSIGNED extension sideloaded via Developer options — the only kind that is
+     *  "debuggable" (surfaced in the Extension Dev tools). Signed/marketplace extensions are false. */
+    val dev: Boolean = false,
 )
 
 /** The first bundled language that claims [fileName] (by file extension), or null. */

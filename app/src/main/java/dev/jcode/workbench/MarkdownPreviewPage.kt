@@ -9,16 +9,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -28,23 +20,26 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.DpOffset
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material3.ColorScheme
+import android.content.res.Configuration
 import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
 import dev.jcode.design.JCodeIcon
+import dev.jcode.design.LocalCutoutSetting
+import dev.jcode.design.LocalMarkdownPreviewSetting
+import dev.jcode.findActivity
 import dev.jcode.design.JCodeSemanticColors
 import dev.jcode.design.JCodeTheme
-import dev.jcode.design.JcTooltip
-import dev.jcode.design.jcIcon
 import dev.jcode.editor.MarkdownHtml
 import dev.jcode.editor.TokenPalette
 import dev.jcode.feature.editor.pane.EditorTab
@@ -62,8 +57,9 @@ import java.io.File
 /**
  * Rendered Markdown preview for a file tab in preview mode. Reads the LIVE buffer (unsaved edits
  * included) from the tab's EditorState snapshot flow and re-renders debounced as the user types;
- * the body is patched via JS so the WebView keeps its scroll position. Long-press (or the header
- * button) flips back to the source editor through [LocalEditorMenuExtras]'s preview toggle.
+ * the body is patched via JS so the WebView keeps its scroll position. Long-press opens a context
+ * menu: Select Text (highlights the pressed block), Copy (the highlighted text), and View Source
+ * Code, which flips back to the source editor through [LocalEditorMenuExtras]'s preview toggle.
  */
 @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
 @Composable
@@ -76,6 +72,7 @@ fun MarkdownPreviewPage(
     val state = tab.editorState ?: return
     val density = LocalDensity.current
     val menuExtras = LocalEditorMenuExtras.current
+    val clipboard = LocalClipboardManager.current
     val colorScheme = MaterialTheme.colorScheme
     val semantic = JCodeTheme.semanticColors
     val backgroundArgb = colorScheme.background.toArgb()
@@ -85,6 +82,10 @@ fun MarkdownPreviewPage(
     var pageReady by remember { mutableStateOf(false) }
     var latestBodyJs by remember { mutableStateOf<String?>(null) }
     var menuAt by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    // What "Select Text" last highlighted (the select script returns it) — Copy uses this directly.
+    // The next long-press's own touch-down collapses the page selection before any query could run,
+    // so the selection must be captured when it is MADE, not when the menu reopens.
+    var selectedText by remember { mutableStateOf("") }
 
     val palette = if (dark) TokenPalette.DARK else TokenPalette.LIGHT
     val packResolver = remember(languagePacks) {
@@ -119,13 +120,45 @@ fun MarkdownPreviewPage(
         webView?.evaluateJavascript(js, null)
     }
 
-    // Live theme: vars are baked into the shell document, then re-injected on theme changes.
-    val themeJs = remember(colorScheme, semantic) {
+    // "Word wrap in portrait" off → lay the portrait preview out at landscape width (the screen
+    // height, minus the cutout when the app respects it) and let the WebView pan sideways. CSS px in
+    // the WebView equal Android dp, so the width is computed in dp. 0 = normal wrapped layout.
+    val configuration = LocalConfiguration.current
+    val wrapSetting = LocalMarkdownPreviewSetting.current
+    val cutoutSetting = LocalCutoutSetting.current
+    val previewContext = LocalContext.current
+    val mdMinWidthDp = if (
+        !wrapSetting.wrapInPortrait &&
+        configuration.orientation != Configuration.ORIENTATION_LANDSCAPE
+    ) {
+        // WindowMetrics bounds include the system bars that Configuration.screenHeightDp excludes
+        // at targetSdk 33, so this matches the width the edge-to-edge preview actually gets after
+        // rotating to landscape (minus only the cutout, when the app respects it).
+        val activity = previewContext.findActivity()
+        val heightPx = activity?.windowManager?.currentWindowMetrics?.bounds?.height()
+        val cutoutPx = if (cutoutSetting.respect) {
+            activity?.display?.cutout?.safeInsetTop ?: 0
+        } else {
+            0
+        }
+        val widthDp = heightPx?.let { ((it - cutoutPx) / density.density).toInt() }
+            ?: configuration.screenHeightDp
+        widthDp.coerceAtLeast(configuration.screenWidthDp)
+    } else {
+        0
+    }
+
+    // Live theme: vars are baked into the shell document, then re-injected on theme changes (the
+    // wrap width rides the same pipeline so orientation/setting flips apply to the open page).
+    val themeJs = remember(colorScheme, semantic, mdMinWidthDp) {
         val sets = themeVars(colorScheme, semantic)
             .joinToString("") { (k, v) -> "r.setProperty('$k','$v');" }
-        "(function(){try{var r=document.documentElement.style;$sets}catch(e){}})()"
+        "(function(){try{var r=document.documentElement.style;$sets" +
+            "r.setProperty('--jcode-md-minw','${mdMinWidthDp}px');}catch(e){}})()"
     }
     val themeJsState = rememberUpdatedState(themeJs)
+    // Markdown link taps honor the user's global web-preview browser choice (was hardcoded to SYSTEM).
+    val webBrowserChoice by rememberUpdatedState(dev.jcode.design.LocalWebPreviewBrowsers.current.globalChoice)
     LaunchedEffect(themeJs, backgroundArgb, webView) {
         webView?.post {
             webView?.setBackgroundColor(backgroundArgb)
@@ -137,37 +170,7 @@ fun MarkdownPreviewPage(
         onDispose { webView?.destroy(); webView = null }
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = tab.title,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-            Text(
-                text = "  ·  Preview",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
-            JcTooltip("Show source") {
-                IconButton(onClick = { menuExtras.previewToggle?.invoke() }, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        imageVector = jcIcon(JCodeIcon.Code),
-                        contentDescription = "Show source",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-            }
-        }
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+    Box(modifier = modifier.fillMaxSize()) {
             // Keyed so a crashed WebView renderer disposes this view and the factory builds a fresh
             // one; the injection effect re-delivers the current body once the new page reports ready.
             key(webViewGeneration) {
@@ -189,7 +192,11 @@ fun MarkdownPreviewPage(
                             ): Boolean {
                                 val url = request.url?.toString().orEmpty()
                                 if (url.startsWith("http://") || url.startsWith("https://")) {
-                                    ProjectRunner.openInBrowser(view.context, url, "")
+                                    if (webBrowserChoice == dev.jcode.design.WebPreviewBrowsers.BUILTIN) {
+                                        BuiltinBrowser.requestOpen(url)
+                                    } else {
+                                        ProjectRunner.openInBrowser(view.context, url, webBrowserChoice)
+                                    }
                                 }
                                 return true
                             }
@@ -238,16 +245,55 @@ fun MarkdownPreviewPage(
                     expanded = true,
                     onDismissRequest = { menuAt = null },
                     offset = offset,
+                    quickActions = listOf(
+                        ContextAction(JCodeIcon.Copy, "Copy", enabled = selectedText.isNotEmpty()) {
+                            clipboard.setText(AnnotatedString(selectedText))
+                        },
+                    ),
                     listActions = listOfNotNull(
+                        ContextAction(JCodeIcon.Cursor, "Select Text") {
+                            webView?.evaluateJavascript(selectBlockJs(x, y)) { res ->
+                                selectedText = decodeJsString(res)
+                            }
+                        },
                         menuExtras.previewToggle?.let { toggle ->
-                            ContextAction(JCodeIcon.Code, "Show source") { toggle() }
+                            ContextAction(JCodeIcon.Code, "View Source Code") { toggle() }
                         },
                     ),
                 )
             }
-        }
     }
 }
+
+/** evaluateJavascript delivers a JSON-encoded value (`"text"` or `null`) — decode to a plain string. */
+private fun decodeJsString(result: String?): String =
+    runCatching { org.json.JSONTokener(result ?: "null").nextValue() as? String }.getOrNull().orEmpty()
+
+/** Highlight the text block (paragraph, code block, list item, heading, table cell…) under a
+ *  long-press at view coordinates ([x], [y]), so the context menu's Copy has a visible target.
+ *  Coordinates convert to CSS client space, including pinch-zoom via the visual viewport. */
+private fun selectBlockJs(x: Float, y: Float): String = """
+(function(px,py){try{
+var dpr=window.devicePixelRatio||1,vv=window.visualViewport;
+var cx=px/dpr,cy=py/dpr;
+if(vv){cx=cx/vv.scale+vv.offsetLeft;cy=cy/vv.scale+vv.offsetTop;}
+var r=document.caretRangeFromPoint(cx,cy);
+if(!r)return '';
+var blocks={P:1,PRE:1,LI:1,H1:1,H2:1,H3:1,H4:1,H5:1,H6:1,TD:1,TH:1,BLOCKQUOTE:1,TABLE:1};
+var n=r.startContainer;
+while(n){
+  if(n.nodeType===1){
+    if(blocks[n.tagName])break;
+    if(n.id==='md'||n===document.body){n=null;break;}
+  }
+  n=n.parentNode;
+}
+if(!n)return '';
+var sel=window.getSelection();sel.removeAllRanges();
+var range=document.createRange();range.selectNodeContents(n);sel.addRange(range);
+return sel.toString();
+}catch(e){return ''}})($x,$y)
+""".trimIndent()
 
 private fun themeVars(colorScheme: ColorScheme, semantic: JCodeSemanticColors): List<Pair<String, String>> {
     fun hex(c: Color): String = String.format("#%06X", 0xFFFFFF and c.toArgb())
@@ -276,7 +322,7 @@ private fun shellDocument(colorScheme: ColorScheme, semantic: JCodeSemanticColor
 html,body{margin:0;padding:0;background:var(--jcode-background);color:var(--jcode-on-surface);
 font-family:-apple-system,Roboto,'Segoe UI',sans-serif;font-size:14px;line-height:1.55;
 -webkit-text-size-adjust:100%;word-wrap:break-word}
-#md{padding:14px 16px 48px}
+#md{padding:14px 16px 48px;min-width:var(--jcode-md-minw,0px)}
 h1,h2,h3,h4,h5,h6{line-height:1.25;margin:1.1em 0 .5em;font-weight:600}
 h1{font-size:1.7em;padding-bottom:.25em;border-bottom:1px solid var(--jcode-outline-variant)}
 h2{font-size:1.4em;padding-bottom:.25em;border-bottom:1px solid var(--jcode-outline-variant)}

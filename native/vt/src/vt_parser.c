@@ -582,10 +582,10 @@ static void handle_osc(VtParser* parser) {
         if (parser->on_title_change) {
             parser->on_title_change(parser->userdata, title);
         }
-    } else if (cmd >= 7711 && cmd <= 7713) {
-        // JCode shell-integration events (7711 open-file, 7712 tab title, 7713 task complete):
-        // queued for the host to drain after each feed (see vt_parser_osc_event_at), replacing the
-        // Kotlin-side per-byte re-scan of the same output.
+    } else if (cmd >= 7711 && cmd <= 7714) {
+        // JCode shell-integration events (7711 open-file, 7712 tab title, 7713 task complete,
+        // 7714 open-url): queued for the host to drain after each feed (see vt_parser_osc_event_at),
+        // replacing the Kotlin-side per-byte re-scan of the same output.
         osc_event_push(parser, cmd, &parser->osc_buffer[i]);
     }
 }
@@ -667,7 +667,53 @@ static void parser_transition(VtParser* parser, uint8_t ch) {
                 parser->state = VT_STATE_DCS_ENTRY;
             } else if (ch == 'X' || ch == '^' || ch == '_') {
                 parser->state = VT_STATE_SOS_PM_APC_STRING;
+            } else if (ch >= 0x20 && ch <= 0x2F) {
+                // Intermediate byte of an nF escape: charset designation (ESC ( B, ESC ) 0, ESC * B,
+                // ESC + B, ESC % G), DECALN (ESC # 8), etc. Collect it and swallow the final byte in
+                // ESCAPE_INTERMEDIATE — otherwise the final (B/0/G/8/…) leaks into GROUND and is printed
+                // to the grid as a stray glyph that accumulates on the alternate screen.
+                parser->state = VT_STATE_ESCAPE_INTERMEDIATE;
+            } else if (ch == '7') {
+                // DECSC — save cursor + attributes (same as CSI s).
+                VtScreen* s = parser->active;
+                s->saved_row = s->cursor_row;
+                s->saved_col = s->cursor_col;
+                s->saved_attrs = parser->attrs;
+                s->saved_fg = parser->fg;
+                s->saved_bg = parser->bg;
+                parser->state = VT_STATE_GROUND;
+            } else if (ch == '8') {
+                // DECRC — restore cursor + attributes (same as CSI u).
+                VtScreen* s = parser->active;
+                s->cursor_row = s->saved_row;
+                s->cursor_col = s->saved_col;
+                parser->attrs = s->saved_attrs;
+                parser->fg = s->saved_fg;
+                parser->bg = s->saved_bg;
+                parser->state = VT_STATE_GROUND;
+            } else if (ch == 'D') {
+                // IND — index (move down one line, scroll at bottom of region).
+                screen_newline(parser);
+                parser->state = VT_STATE_GROUND;
+            } else if (ch == 'M') {
+                // RI — reverse index (move up one line, scroll down at top of region).
+                if (parser->active->cursor_row <= parser->active->scroll_top) {
+                    screen_scroll_down(parser, 1);
+                } else {
+                    parser->active->cursor_row--;
+                }
+                parser->state = VT_STATE_GROUND;
+            } else if (ch == 'E') {
+                // NEL — next line (CR + LF).
+                screen_carriage_return(parser);
+                screen_newline(parser);
+                parser->state = VT_STATE_GROUND;
+            } else if (ch == 'c') {
+                // RIS — full terminal reset.
+                vt_parser_reset(parser);
+                parser->state = VT_STATE_GROUND;
             } else {
+                // Any other single-byte ESC final (keypad mode ESC =/>, etc.): consume, don't print.
                 parser->state = VT_STATE_GROUND;
             }
             break;
@@ -780,7 +826,11 @@ static void parser_transition(VtParser* parser, uint8_t ch) {
             break;
             
         case VT_STATE_ESCAPE_INTERMEDIATE:
-            parser->state = VT_STATE_GROUND;
+            // Keep collecting intermediate bytes; the final (0x30-0x7E) ends the escape. Charset
+            // designations and similar nF escapes aren't rendered, so consume the final without printing.
+            if (ch < 0x20 || ch > 0x2F) {
+                parser->state = VT_STATE_GROUND;
+            }
             break;
     }
 }

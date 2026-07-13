@@ -6,17 +6,20 @@ import dev.jcode.core.debug.DebugState
 import dev.jcode.core.distro.DebugEngineCatalogState
 import dev.jcode.debug.VariableRow
 import dev.jcode.design.JCodeIcon
+import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.MarketplaceEntry
+import dev.jcode.run.ProjectRunner
 
 /** A live terminal session's id + display label, listed in the top-bar terminal menu. */
 internal data class TerminalInstance(val id: String, val label: String)
 
 /** Terminal tap behavior, provided to the deeply-nested terminal view without prop-drilling. */
 internal data class TerminalTapConfig(
-    /** True: single tap opens a link/path, double tap shows the keyboard. False: single tap = keyboard. */
-    val doubleTapToFocus: Boolean = true,
     /** Invoked with the tapped token (a URL is opened in the browser; a path in the editor). */
     val onToken: (String) -> Unit = {},
+    /** Invoked on paste when the clipboard holds an image: saves it into the active project and
+     *  returns the guest path to paste (or null to skip). */
+    val onPasteImage: (android.net.Uri) -> String? = { null },
 )
 
 internal val LocalTerminalTapConfig = compositionLocalOf { TerminalTapConfig() }
@@ -31,6 +34,23 @@ internal val LocalDebugCatalogState = compositionLocalOf { DebugEngineCatalogSta
  *  keyed by extension id. A CompositionLocal so the giant [dev.jcode.JCodeShell] composable stays
  *  under the ART register limit. */
 internal val LocalExtensionInstallPhases = compositionLocalOf<Map<String, String>> { emptyMap() }
+
+/** Run-config presets active extensions contribute, matched against the project's files on the
+ *  Configure Run page. Same register-limit rationale as above. */
+internal val LocalRunConfigPresets =
+    compositionLocalOf<List<ProjectRunner.ExtensionRunPreset>> { emptyList() }
+
+/** State for the right-drawer "Extension Dev" tab (developer options): the installed **dev** (unsigned
+ *  sideloaded) extensions plus the host's extension-API version and reload/sideload actions. Provided
+ *  via a CompositionLocal so the register-limited shell needn't thread it. */
+internal data class ExtensionDevState(
+    val extensions: List<InstalledExtension> = emptyList(),
+    val hostApiVersion: Int = 1,
+    val onReload: () -> Unit = {},
+    val onLoad: () -> Unit = {},
+)
+
+internal val LocalExtensionDevState = compositionLocalOf { ExtensionDevState() }
 
 /** Session id of the background "Setup" terminal (toolchain installs / project scaffolds), or null
  *  while none has been started. Same register-limit rationale as above. */
@@ -151,5 +171,8 @@ internal enum class RightPanelTab(
     /** Built-in browser DevTools (console / network / elements); only shown once the in-app browser
      *  has been opened this session (see [dev.jcode.workbench.BuiltinBrowser]). */
     Devtools("DevTools", JCodeIcon.DevTools, enabled = true),
+    /** Extension-authoring tools (inspector / manifest validator / live log); shown only when
+     *  Developer options is enabled (see [dev.jcode.design.LocalDeveloperSetting]). */
+    ExtensionDev("Ext Dev", JCodeIcon.Extensions, enabled = true),
     Chat("Chat", JCodeIcon.Chat, enabled = true),
 }

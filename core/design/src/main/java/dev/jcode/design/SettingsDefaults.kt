@@ -3,7 +3,6 @@ package dev.jcode.design
 /** Factory defaults for the app-level (Global) settings. Single source of truth shared by the
  *  ViewModel's DataStore fallbacks and the Settings screen's modified/reset-to-default logic. */
 object SettingsDefaults {
-    const val TERMINAL_DOUBLE_TAP_TO_FOCUS = true
     const val HARDWARE_ACCELERATION = true
     const val CONFIRM_CLOSE_RUNNING = true
     const val EXIT_ON_SWIPE_AWAY = true
@@ -18,4 +17,15 @@ object SettingsDefaults {
     val EXTRA_KEYS_PORTRAIT = ExtraKeysVisibility.WithKeyboard
     val EXTRA_KEYS_LANDSCAPE = ExtraKeysVisibility.Hidden
     val BOTTOM_STATUS_BAR = BottomBarVisibility.HideOnKeyboard
+    val HIDDEN_ROOT_MODE = ExplorerHiddenMode.HideSpecifiedAndInjected
+    const val HIDDEN_ROOT_PATTERNS = ".jcode"
+    const val RESPECT_DEVICE_CUTOUT = false
+    const val MARKDOWN_WRAP_PORTRAIT = true
+    const val DEVELOPER_OPTIONS = false
+    val VOLUME_UP_ACTION = VolumeKeyAction.SystemDefault
+    val VOLUME_DOWN_ACTION = VolumeKeyAction.SystemDefault
+    // Default to ephemeral Random so the feature is visible out of the box WITHOUT silently writing
+    // a .jcode on first file open; persistence (RandomRemember / DirectoryBased) is opt-in.
+    val TAB_COLORING = TabColoring.Random
+    val TAB_MAX_SIZE = TabMaxSize.Medium
 }

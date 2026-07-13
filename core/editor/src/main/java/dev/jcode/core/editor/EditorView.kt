@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.Paint
 import android.graphics.Typeface
 import android.util.AttributeSet
 import android.view.GestureDetector
@@ -22,6 +23,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
@@ -245,7 +247,11 @@ class EditorView @JvmOverloads constructor(
                     performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                     return
                 }
-                if (word != null) {
+                // A press INSIDE an active selection keeps it (so the menu's Copy/Cut act on a
+                // handle-adjusted range instead of resetting it to the pressed word).
+                val range = selectionRange()
+                val insideSelection = range != null && offset in range.first..range.second
+                if (!insideSelection && word != null) {
                     runBlocking { editorState?.setSelection(listOf(Caret(word.first, word.second))) }
                 }
                 performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
@@ -280,6 +286,22 @@ class EditorView @JvmOverloads constructor(
         removeCallbacks(flingRunnable)
     }
 
+    // --- text-selection handles ("Select Text" in the context menu) -----------------------------
+    // While on, two draggable teardrop anchors mark the selection ends; dragging one adjusts that
+    // end while the other stays pinned. Cleared when the selection collapses, the text changes, or
+    // the state detaches.
+    private var selectionHandlesVisible = false
+    private var draggingHandle = false
+    private var dragFixedOffset = 0
+    private var dragPointerId = -1
+    private var dragXBias = 0f
+    private var handleRadiusPx = 0f
+    private var startHandleCx = Float.NaN
+    private var startHandleCy = Float.NaN
+    private var endHandleCx = Float.NaN
+    private var endHandleCy = Float.NaN
+    private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
     private fun lineHeightPx(state: EditorState): Int {
         val cfg = state.renderConfig.value
         return (cfg.fontSizeSp * density * cfg.lineHeightMultiplier).toInt().coerceAtLeast(1)
@@ -288,6 +310,15 @@ class EditorView @JvmOverloads constructor(
     private fun maxScrollY(state: EditorState): Int {
         val vp = state.viewport.value
         return (state.snapshot.value.lineCount * lineHeightPx(state) - vp.heightPx).coerceAtLeast(0)
+    }
+
+    /** Scroll the viewport by [lines] text lines (positive = toward the end of the file). Drives
+     *  external scroll bindings (e.g. volume keys); no-op when no state is attached. */
+    fun scrollLines(lines: Int) {
+        val state = editorState ?: return
+        val vp = state.viewport.value
+        val newY = (vp.scrollY + lines * lineHeightPx(state)).coerceIn(0, maxScrollY(state))
+        if (newY != vp.scrollY) state.updateViewport { it.copy(scrollY = newY) }
     }
 
     /** How far the widest VISIBLE line allows scrolling right. Cheap (one batched line read) and
@@ -329,6 +360,9 @@ class EditorView @JvmOverloads constructor(
             return
         }
         cancelFling()
+        // A caret-visibility debounce armed under the previous state must not fire against this one
+        // (the view is reused across tab switches).
+        removeCallbacks(ensureCaretAfterResize)
         observationScope?.cancel()
         this.editorState = editorState
         this.renderer = Renderer(typeface, density)
@@ -348,6 +382,8 @@ class EditorView @JvmOverloads constructor(
             val vp = editorState.viewport.value
             val clampedY = vp.scrollY.coerceIn(0, maxScrollY(editorState))
             if (clampedY != vp.scrollY) editorState.updateViewport { it.copy(scrollY = clampedY) }
+            // A text change invalidates the handle geometry (and typing collapses the selection).
+            selectionHandlesVisible = false
             invalidate()
         }.launchIn(scope)
         editorState.viewport.onEach { invalidate() }.launchIn(scope)
@@ -365,7 +401,11 @@ class EditorView @JvmOverloads constructor(
         // Follow the caret while typing: keep a collapsed cursor in view as it moves. Selections don't
         // auto-scroll, so select-all / drag-select don't yank the viewport around.
         editorState.carets.onEach { carets ->
-            if (carets.firstOrNull()?.isSelection == false) ensureCaretVisible()
+            if (carets.firstOrNull()?.isSelection == false) {
+                ensureCaretVisible()
+                // Handles only make sense over a live selection (covers tap-elsewhere, completion accept).
+                selectionHandlesVisible = false
+            }
             invalidate()
         }.launchIn(scope)
         // A pending "reveal (line,col)" request (e.g. opening a file at a location tapped in the
@@ -381,7 +421,11 @@ class EditorView @JvmOverloads constructor(
         cancelFling()
         val snapshot = state.snapshot.value
         val targetLine = line.coerceIn(0, max(0, snapshot.lineCount - 1))
-        val offset = snapshot.lineColumnToOffset(targetLine, column.coerceAtLeast(0))
+        // Clamp the column to the target line's own byte range so an over-long column (e.g. a
+        // hand-typed "Go to Line" of 5:999) snaps to the line end instead of walking past the
+        // newline onto a later line. lineAt returns [start, end) excluding the trailing newline.
+        val (lineStart, lineEnd) = snapshot.lineAt(targetLine)
+        val offset = (lineStart + column.coerceAtLeast(0)).coerceIn(lineStart, lineEnd)
         // Compute line height from the render config (the viewport's may not be set yet on a fresh tab).
         val cfg = state.renderConfig.value
         val lineHeight = (cfg.fontSizeSp * density * cfg.lineHeightMultiplier).toInt().coerceAtLeast(1)
@@ -450,6 +494,9 @@ class EditorView @JvmOverloads constructor(
     /** Detach the current EditorState. */
     fun detach() {
         cancelFling()
+        removeCallbacks(ensureCaretAfterResize)
+        selectionHandlesVisible = false
+        draggingHandle = false
         observationScope?.cancel()
         observationScope = null
         editorState = null
@@ -463,6 +510,8 @@ class EditorView @JvmOverloads constructor(
         setMeasuredDimension(width, height)
     }
 
+    private val ensureCaretAfterResize = Runnable { if (hasFocus()) ensureCaretVisible() }
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         editorState?.updateViewport { vp ->
@@ -472,7 +521,12 @@ class EditorView @JvmOverloads constructor(
             )
         }
         // The IME (or any layout change) shrank the editor: keep the caret above the keyboard.
-        if (h in 1 until oldh && hasFocus()) ensureCaretVisible()
+        // The keyboard animates over many frames, so debounce to one scroll at the settled height
+        // instead of measuring the caret line on every frame.
+        if (h in 1 until oldh && hasFocus()) {
+            removeCallbacks(ensureCaretAfterResize)
+            postDelayed(ensureCaretAfterResize, 80)
+        }
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -491,9 +545,55 @@ class EditorView @JvmOverloads constructor(
         canvas.drawColor(theme.background.toInt())
 
         renderer.draw(canvas, snapshot, viewport, config, carets, decorations = decorations, theme = theme)
+        // After renderer.draw (and its canvas.restore), so the anchors draw unclipped over everything.
+        drawSelectionHandles(canvas, theme)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // A grab on a selection handle owns the whole gesture: it must never reach the gesture
+        // detector, or the same drag would also scroll / place the caret / re-open the menu. The
+        // guard includes draggingHandle so a drag whose handle MODE is force-cleared mid-gesture
+        // (edit/undo collapsing the selection) still swallows its tail events instead of leaking a
+        // DOWN-less stream into the detector, and still resets cleanly on UP/CANCEL.
+        if (selectionHandlesVisible || draggingHandle) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    draggingHandle = false // stale-drag safety: a fresh gesture starts clean
+                    val grab = if (selectionHandlesVisible) grabHandleAt(event.x, event.y) else null
+                    if (grab != null) {
+                        draggingHandle = true
+                        dragFixedOffset = grab.first
+                        // Finger offset from the grabbed end's text anchor, subtracted on every
+                        // move so the selection edge tracks the grab point, not the fingertip.
+                        dragXBias = event.x - grab.second
+                        dragPointerId = event.getPointerId(0)
+                        requestFocus()
+                        cancelFling()
+                        parent?.requestDisallowInterceptTouchEvent(true)
+                        return true
+                    }
+                }
+                MotionEvent.ACTION_MOVE -> if (draggingHandle) {
+                    if (selectionHandlesVisible) {
+                        val idx = event.findPointerIndex(dragPointerId)
+                        if (idx >= 0) dragHandleTo(event.getX(idx), event.getY(idx))
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_POINTER_UP -> if (draggingHandle) {
+                    // Invalidate the pointer but keep owning the gesture until UP/CANCEL:
+                    // releasing here would leak the remaining finger's DOWN-less stream into
+                    // the gesture detector, whose stale focus point then jump-scrolls.
+                    if (event.getPointerId(event.actionIndex) == dragPointerId) dragPointerId = -1
+                    return true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (draggingHandle) {
+                    draggingHandle = false
+                    return true
+                }
+            }
+            if (draggingHandle) return true
+        }
         gestureDetector.onTouchEvent(event)
         // Consume ACTION_DOWN so the gesture detector gets the rest of the stream (drag-scroll + tap).
         // Caret placement happens in the detector's onSingleTapUp, so dragging only scrolls.
@@ -512,6 +612,92 @@ class EditorView @JvmOverloads constructor(
             return true
         }
         return super.onTouchEvent(event)
+    }
+
+    /** Draw the two teardrop anchors (circle + square corner pointing at the text) at the selection
+     *  ends. Off-screen endpoints are simply skipped; their geometry is invalidated for hit-testing. */
+    private fun drawSelectionHandles(canvas: Canvas, theme: EditorTheme) {
+        startHandleCx = Float.NaN
+        startHandleCy = Float.NaN
+        endHandleCx = Float.NaN
+        endHandleCy = Float.NaN
+        if (!selectionHandlesVisible) return
+        val state = editorState ?: return
+        val (s, e) = selectionRange() ?: return
+        val snapshot = state.snapshot.value
+        val r = 8f * density
+        handleRadiusPx = r
+        handlePaint.color = theme.cursor.toInt()
+
+        val startLine = snapshot.offsetToLineColumn(s).first
+        val endLine = snapshot.offsetToLineColumn(e).first
+        anchorPixel(s, startLine)?.let { (x, y) ->
+            if (y >= 0f && y <= height + r * 2 && x >= -r * 2 && x <= width + r * 2) {
+                // Bulb below-left of the anchor; the square corner points up-right at the text.
+                canvas.drawCircle(x - r, y + r, r, handlePaint)
+                canvas.drawRect(x - r, y, x, y + r, handlePaint)
+                startHandleCx = x - r
+                startHandleCy = y + r
+            }
+        }
+        anchorPixel(e, endLine)?.let { (x, y) ->
+            if (y >= 0f && y <= height + r * 2 && x >= -r * 2 && x <= width + r * 2) {
+                // Bulb below-right of the anchor; the square corner points up-left at the text.
+                canvas.drawCircle(x + r, y + r, r, handlePaint)
+                canvas.drawRect(x, y, x + r, y + r, handlePaint)
+                endHandleCx = x + r
+                endHandleCy = y + r
+            }
+        }
+    }
+
+    /** If the touch grabs a handle, returns (byte offset of the OTHER, pinned selection end;
+     *  x of the grabbed end's text anchor). Null when no handle is hit; nearest handle wins when
+     *  the touch targets overlap. */
+    private fun grabHandleAt(x: Float, y: Float): Pair<Int, Float>? {
+        val (s, e) = selectionRange() ?: return null
+        val slop = max(handleRadiusPx * 1.6f, 20f * density)
+        val dStart = if (startHandleCx.isNaN()) Float.MAX_VALUE else hypot(x - startHandleCx, y - startHandleCy)
+        val dEnd = if (endHandleCx.isNaN()) Float.MAX_VALUE else hypot(x - endHandleCx, y - endHandleCy)
+        return when {
+            dStart <= slop && dStart <= dEnd -> e to (startHandleCx + handleRadiusPx)
+            dEnd <= slop -> s to (endHandleCx - handleRadiusPx)
+            else -> null
+        }
+    }
+
+    /** Move the dragged selection end to the text under the finger, keeping the other end pinned.
+     *  The bulb hangs below and beside the text anchor, so the mapped point is biased back to the
+     *  anchor (dragXBias horizontally, one bulb + half a line vertically). Outside the text (past
+     *  the last line) the last valid end is kept. */
+    private fun dragHandleTo(x: Float, y: Float) {
+        val state = editorState ?: return
+        val hotspotDy = handleRadiusPx + lineHeightPx(state) * 0.5f
+        val moved = offsetAt(x - dragXBias, y - hotspotDy) ?: return
+        // Never collapse mid-drag: a collapsed selection would drop handle mode entirely.
+        if (moved == dragFixedOffset) return
+        val current = state.carets.value.firstOrNull()
+        if (current?.anchor == dragFixedOffset && current.head == moved) return
+        runBlocking { state.setSelection(listOf(Caret(dragFixedOffset, moved))) }
+    }
+
+    /** Turn on the draggable selection handles ("Select Text" in the context menu). Preserves an
+     *  existing selection; otherwise selects the word at the caret, falling back to the caret's line. */
+    fun beginTextSelection() {
+        val state = editorState ?: return
+        val caret = state.carets.value.firstOrNull()
+        if (caret == null || !caret.isSelection) {
+            val head = caret?.head ?: 0
+            val range = wordAt(head)?.let { it.first to it.second } ?: run {
+                val snapshot = state.snapshot.value
+                val line = snapshot.offsetToLineColumn(head.coerceIn(0, snapshot.byteLength)).first
+                snapshot.lineAt(line)
+            }
+            if (range.second <= range.first) return // empty line: nothing to select
+            runBlocking { state.setSelection(listOf(Caret(range.first, range.second))) }
+        }
+        selectionHandlesVisible = true
+        invalidate()
     }
 
     /** The 0-based line if the tap is in the gutter (left margin), else null. */
@@ -686,9 +872,19 @@ class EditorView @JvmOverloads constructor(
     }
 
     fun pasteClipboard() {
+        pasteClipboard(retriesLeft = 8)
+    }
+
+    /** Clipboard reads require window focus. Invoked from a context-menu tap, the dismissing popup
+     *  can still hold focus for a few frames — primaryClip reads null then — so retry briefly
+     *  instead of silently dropping the paste. */
+    private fun pasteClipboard(retriesLeft: Int) {
         val state = editorState ?: return
         val text = clipboard()?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
-            ?: return
+        if (text == null) {
+            if (retriesLeft > 0) postDelayed({ pasteClipboard(retriesLeft - 1) }, 50L)
+            return
+        }
         val range = selectionRange()
         runBlocking {
             val insertAt = if (range != null) {

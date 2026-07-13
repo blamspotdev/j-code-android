@@ -1,5 +1,9 @@
 package dev.jcode.feature.editor.pane
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -35,6 +39,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.font.FontFamily
@@ -60,6 +66,12 @@ import dev.jcode.core.editor.completion.EditorCompletionModule
 import dev.jcode.core.editor.completion.LocalCompletionSource
 import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
+import dev.jcode.design.LocalChromeControls
+import dev.jcode.design.LocalEditorTabColors
+import dev.jcode.design.LocalTabMaxSize
+import dev.jcode.design.MiddleEllipsisText
+import dev.jcode.design.TabColorDialog
+import dev.jcode.design.tabColorToHex
 import dev.jcode.design.ExtraKey
 import dev.jcode.design.ExtraKeysTarget
 import dev.jcode.design.LocalEditorDragMovesCursor
@@ -90,13 +102,20 @@ fun EditorPane(
     pageContent: @Composable (EditorTab) -> Unit = {},
 ) {
     Column(modifier = modifier.clipToBounds()) {
-        // Tab strip — explicit fixed height so it's never compressed
-        TabStrip(
-            group = group,
-            onTabSelected = onTabSelected,
-            onTabClosed = onTabClosed,
-            onOpenFile = onOpenFile,
-        )
+        // Tab strip — explicit fixed height so it's never compressed. Collapses together with the
+        // workbench header when the palette's "Hide Header and Tabs" mode is on.
+        AnimatedVisibility(
+            visible = !LocalChromeControls.current.chromeHidden,
+            enter = expandVertically(animationSpec = tween(200)),
+            exit = shrinkVertically(animationSpec = tween(200)),
+        ) {
+            TabStrip(
+                group = group,
+                onTabSelected = onTabSelected,
+                onTabClosed = onTabClosed,
+                onOpenFile = onOpenFile,
+            )
+        }
 
         // Active tab body: a file tab hosts the editor view; a page tab renders host content.
         val activeTab = group.activeTab
@@ -204,7 +223,10 @@ private fun TabItem(
     onClosed: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    var colorDialogOpen by remember { mutableStateOf(false) }
     val tabActions = LocalEditorTabActions.current
+    val tabColors = LocalEditorTabColors.current
+    val accent = if (tab.isPage) null else tabColors.colorFor(tab.filePath.path)
     Box {
         Row(
             modifier = Modifier
@@ -215,6 +237,8 @@ private fun TabItem(
                     if (isActive) MaterialTheme.colorScheme.surfaceVariant
                     else MaterialTheme.colorScheme.surface
                 )
+                // Tab-color accent: a thin bar along the top edge (Settings → Tabs → Tab coloring).
+                .drawBehind { accent?.let { drawRect(it, size = Size(size.width, 3.dp.toPx())) } }
                 .height(36.dp)
                 .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -230,10 +254,10 @@ private fun TabItem(
                     modifier = Modifier.size(13.dp),
                 )
             }
-            Text(
+            MiddleEllipsisText(
                 text = tab.title,
+                maxWidth = LocalTabMaxSize.current.size.titleMaxWidth,
                 style = MaterialTheme.typography.labelMedium,
-                maxLines = 1,
             )
 
             // Trailing slot: a dirty tab shows the unsaved-changes dot; the "×" appears on the active,
@@ -278,13 +302,25 @@ private fun TabItem(
         CompactContextMenu(
             expanded = menuOpen,
             onDismissRequest = { menuOpen = false },
-            listActions = listOf(
-                ContextAction(JCodeIcon.Pin, if (tab.pinned) "Unpin" else "Pin") { tabActions.onTogglePin(tab.id) },
-                ContextAction(JCodeIcon.Close, "Close") { onClosed() },
-                ContextAction(JCodeIcon.Close, "Close others") { tabActions.onCloseOthers(tab.id) },
-                ContextAction(JCodeIcon.Close, "Close to the right") { tabActions.onCloseToRight(tab.id) },
-            ),
+            listActions = buildList {
+                add(ContextAction(JCodeIcon.Pin, if (tab.pinned) "Unpin" else "Pin") { tabActions.onTogglePin(tab.id) })
+                // Real file tabs only (non-blank path), and hidden when tab coloring is Disabled.
+                if (!tab.isPage && tab.filePath.path.isNotBlank() && tabColors.pickerEnabled) {
+                    add(ContextAction(JCodeIcon.Palette, "Change Tab Color") { colorDialogOpen = true })
+                }
+                add(ContextAction(JCodeIcon.Close, "Close") { onClosed() })
+                add(ContextAction(JCodeIcon.Close, "Close others") { tabActions.onCloseOthers(tab.id) })
+                add(ContextAction(JCodeIcon.Close, "Close to the right") { tabActions.onCloseToRight(tab.id) })
+            },
         )
+        if (colorDialogOpen) {
+            TabColorDialog(
+                currentHex = accent?.let { tabColorToHex(it) },
+                onPick = { tabActions.onSetTabColor(tab.id, tabColorToHex(it)); colorDialogOpen = false },
+                onClear = { tabActions.onSetTabColor(tab.id, null); colorDialogOpen = false },
+                onDismiss = { colorDialogOpen = false },
+            )
+        }
     }
 }
 
@@ -469,6 +505,7 @@ fun EditorViewHost(
                     ContextAction(JCodeIcon.Paste, "Paste") { view?.pasteClipboard() },
                 ),
                 listActions = buildList {
+                    add(ContextAction(JCodeIcon.Cursor, "Select Text") { view?.beginTextSelection() })
                     add(ContextAction(JCodeIcon.SelectAll, "Select all") { view?.selectAll() })
                     menuExtras.previewToggle?.let { toggle ->
                         add(ContextAction(JCodeIcon.Preview, "Preview") { toggle() })
@@ -585,5 +622,10 @@ private class EditorExtraKeysTarget(private val view: EditorView) : ExtraKeysTar
             else -> return
         }
         view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, keyCode))
+    }
+
+    // [lines] positive = earlier content (up); the editor's scrollY grows downward, so negate.
+    override fun onScroll(lines: Int) {
+        view.scrollLines(-lines)
     }
 }

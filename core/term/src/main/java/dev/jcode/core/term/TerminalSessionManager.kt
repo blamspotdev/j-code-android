@@ -79,6 +79,11 @@ class TerminalSessionManager(
     @Volatile
     var onOpenFileRequest: ((String) -> Unit)? = null
 
+    /** Invoked (off the main thread) when a guest tool opens a URL through the xdg-open/`$BROWSER`
+     *  shim (OSC 7714), so the host can route it to the in-app web preview or the chosen browser. */
+    @Volatile
+    var onOpenUrlRequest: ((String) -> Unit)? = null
+
     /** Invoked (off the main thread) with (sessionId, title) when the shell reports the running
      *  program via OSC 7712, so the UI can name the terminal tab after the foreground process. */
     @Volatile
@@ -146,6 +151,20 @@ class TerminalSessionManager(
             File(profileD, "jcode-open.sh").writeText(GUEST_SHELL_INTEGRATION)
         }
 
+        // Install a browser-open shim so guest CLIs (claude, etc.) that call xdg-open / $BROWSER / open
+        // reach the host: it emits OSC 7714 with the URL, which the session reader routes to the web
+        // preview or the chosen browser. /usr/local/bin is early on PATH so it overrides any distro one.
+        runCatching {
+            val localBin = File(rootfsPath, "usr/local/bin")
+            localBin.mkdirs()
+            for (name in listOf("xdg-open", "sensible-browser", "x-www-browser", "www-browser", "gnome-open", "open")) {
+                File(localBin, name).apply {
+                    writeText(GUEST_OPEN_URL_SHIM)
+                    setExecutable(true, false)
+                }
+            }
+        }
+
         // Foreign-arch environment: ensure the QEMU emulator is extracted before spawning.
         if (prootManager.needsQemu(rootfsArch) && !prootManager.isQemuInstalled(rootfsArch)) {
             val qemuOk = kotlinx.coroutines.runBlocking { prootManager.ensureQemuInstalled(rootfsArch) }
@@ -177,6 +196,9 @@ class TerminalSessionManager(
             // hook also fires inside run scripts (`bash run-*.sh`) — naming the tab after the actual
             // tool (npm/vite/dotnet) rather than the bash wrapper. See GUEST_SHELL_INTEGRATION.
             "BASH_ENV" to "/etc/profile.d/jcode-open.sh",
+            // Browser-openers consult $BROWSER first; point it at the OSC 7714 shim (see below) so
+            // guest tools open URLs through the host instead of failing on the missing X11/dbus stack.
+            "BROWSER" to "/usr/local/bin/xdg-open",
         )
 
         val prootArgs = prootManager.buildShellCommand(
@@ -229,6 +251,7 @@ class TerminalSessionManager(
                         onTitleChange?.invoke(session.id, title)
                     }
                     7713 -> onTaskComplete?.invoke(session.id, payload.trim())
+                    7714 -> onOpenUrlRequest?.invoke(payload.trim())
                 }
             }
             while (isActive) {
@@ -414,5 +437,12 @@ if [ -t 1 ]; then
     *) PROMPT_COMMAND="__jcode_tab_reset;${'$'}{PROMPT_COMMAND}" ;;
   esac
 fi
+"""
+
+// Browser-open shim installed at /usr/local/bin/{xdg-open,open,sensible-browser,…}. Emits OSC 7714
+// with the URL to the controlling terminal (so it works even if the caller redirects stdout), which
+// the session reader routes to the host's web-preview / chosen browser.
+private val GUEST_OPEN_URL_SHIM = """#!/bin/sh
+printf '\033]7714;%s\007' "${'$'}1" >/dev/tty 2>/dev/null || printf '\033]7714;%s\007' "${'$'}1"
 """
 

@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -19,6 +20,7 @@ import dev.jcode.design.DensityMode
 import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.M3Theme
 import dev.jcode.design.ThemeBundleRegistry
+import dev.jcode.design.VolumeKeyAction
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by lazy {
@@ -44,6 +46,17 @@ class MainActivity : ComponentActivity() {
             )
         }
         enableEdgeToEdge()
+        // Draw into the display cutout unless the user opted to respect it (Settings). Mutable, so
+        // JCodeShell also updates it live; set here for the first frame. Mirrored from DataStore.
+        val respectCutout = getSharedPreferences(UI_STARTUP_PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_RESPECT_CUTOUT, false)
+        window.attributes = window.attributes.apply {
+            layoutInDisplayCutoutMode = if (respectCutout) {
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+            } else {
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
+        }
         // POST_NOTIFICATIONS is a runtime permission at targetSdk 33 and the backend FGS
         // notification ("Stop & close", session status) starts with the first terminal/run
         // session — so ask right away rather than dropping notifications silently.
@@ -58,6 +71,33 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val UI_STARTUP_PREFS = "jcode-ui-startup"
         const val KEY_HW_ACCELERATION = "hw_acceleration"
+        const val KEY_RESPECT_CUTOUT = "respect_device_cutout"
+    }
+
+    // Volume buttons can be remapped (Settings → Input → Volume keys). Activity.dispatchKeyEvent is
+    // the only hook that reliably sees volume keys regardless of which pane holds focus, and can
+    // suppress the OS volume change by consuming the event before the window handles it.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val keyCode = event.keyCode
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            val action = if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+                viewModel.volumeUpAction.value
+            } else {
+                viewModel.volumeDownAction.value
+            }
+            if (action == VolumeKeyAction.SystemDefault) return super.dispatchKeyEvent(event)
+            // Fire on key-down (repeating only for repeatable actions); consume both down and up so no
+            // volume panel or adjustment leaks for a mapped key.
+            if (event.action == KeyEvent.ACTION_DOWN && (action.repeatable || event.repeatCount == 0)) {
+                when (action) {
+                    VolumeKeyAction.Undo -> viewModel.undoActiveTab()
+                    VolumeKeyAction.Redo -> viewModel.redoActiveTab()
+                    else -> viewModel.emitVolumeKeyAction(action)
+                }
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onResume() {

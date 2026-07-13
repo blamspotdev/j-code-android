@@ -233,8 +233,9 @@ private fun createChatWebView(
                     if (!target.isNullOrEmpty() && target != extension.id) return@collect
                 }
                 // `contextAction` is delivered only to the extension view page at the action's route
-                // (or pulled on that page's boot) — never to the chat surface.
-                if (name == "contextAction") return@collect
+                // (or pulled on that page's boot); `explorerAction` only to an extension's persistent
+                // background host — never to the chat surface.
+                if (name == "contextAction" || name == "explorerAction") return@collect
                 val js = "window.JCode && window.JCode._onEvent && " +
                     "window.JCode._onEvent(${JSONObject.quote(name)}, ${JSONObject.quote(json)})"
                 webView.post { webView.evaluateJavascript(js, null) }

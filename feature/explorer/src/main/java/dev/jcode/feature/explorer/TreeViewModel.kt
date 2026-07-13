@@ -20,18 +20,17 @@ data class TreeRow(
     val depth: Int,
     val isExpanded: Boolean,
     val isSelected: Boolean,
-    val badge: ExplorerBadge? = null,
+    /** VCS status letter for the badge + filename tint: M/A/D/R/U/? for the path itself, or
+     *  [DIR_CONTAINS_CHANGES] propagated onto an ancestor directory. */
+    val vcsStatus: String? = null,
+    /** The row is a git submodule root ("S" chip; can combine with a dirty [vcsStatus]). */
+    val isSubmodule: Boolean = false,
     /** A non-interactive "(empty)" marker shown under an expanded, childless directory. */
     val isPlaceholder: Boolean = false,
 )
 
-/** Placeholder badge for VCS status, error counts, etc. */
-@Immutable
-sealed interface ExplorerBadge {
-    data object Unsaved : ExplorerBadge
-    data class VcsStatus(val status: String) : ExplorerBadge
-    data class ProblemCount(val errors: Int, val warnings: Int) : ExplorerBadge
-}
+/** Synthetic status for a directory containing changed files (never sent by extensions). */
+const val DIR_CONTAINS_CHANGES = "•"
 
 /** View mode for the explorer. */
 enum class ExplorerViewMode {
@@ -77,8 +76,6 @@ class TreeViewModel(
     private val workspace: Workspace?,
     private val fs: Fs,
     initialViewMode: ExplorerViewMode = ExplorerViewMode.Tree,
-    private val scmStatus: Map<String, String> = emptyMap(),
-    private val problems: Map<String, Pair<Int, Int>> = emptyMap(),
 ) {
     private val _viewMode = MutableStateFlow(initialViewMode)
     val viewMode: StateFlow<ExplorerViewMode> = _viewMode.asStateFlow()
@@ -113,6 +110,49 @@ class TreeViewModel(
         val path: FsPath,
     )
 
+    // Root-level hide patterns (Settings). Only project-root children are filtered.
+    private var hiddenPatterns: List<String> = emptyList()
+
+    // VCS decorations pushed by the shell (extension-computed): explicit per-path status letters,
+    // submodule roots, and the derived "contains changes" mark on ancestor directories.
+    private var scmStatus: Map<String, String> = emptyMap()
+    private var scmDirStatus: Map<String, String> = emptyMap()
+    private var scmSubmodules: Set<String> = emptySet()
+
+    /** Update VCS decorations ([status]/[submodules] keyed by [dev.jcode.fs.FsPath.stableId]) and
+     *  repaint. Ancestor directories of every decorated path get a [DIR_CONTAINS_CHANGES] mark up to
+     *  the project root, so collapsed folders still show that something changed inside. */
+    suspend fun setScmDecorations(status: Map<String, String>, submodules: Set<String>) {
+        if (scmStatus == status && scmSubmodules == submodules) return
+        scmStatus = status
+        scmSubmodules = submodules
+        val rootId = projectRootPath?.stableId
+        scmDirStatus = buildMap {
+            for (path in status.keys) {
+                var parent = java.io.File(path).parentFile
+                while (parent != null) {
+                    val id = parent.absolutePath
+                    if (id == rootId || put(id, DIR_CONTAINS_CHANGES) != null) break
+                    parent = parent.parentFile
+                }
+            }
+        }
+        repaintRows()
+    }
+
+    /** Re-materialize the current rows in place — unlike [refresh], keeps List-mode selection and
+     *  breadcrumb untouched (decoration pushes must not wipe what the user is doing). */
+    private suspend fun repaintRows() {
+        when (_viewMode.value) {
+            ExplorerViewMode.Tree -> rebuildRows()
+            ExplorerViewMode.List -> {
+                val path = listPath ?: return
+                val children = filterHiddenAtRoot(path, runCatching { fs.list(path) }.getOrElse { return })
+                _listRows.value = children.map { child -> buildRow(child, depth = 0) }
+            }
+        }
+    }
+
     /** Load the root of a project. */
     suspend fun loadProjectRoot(project: Project) {
         _isLoading.value = true
@@ -140,6 +180,13 @@ class TreeViewModel(
         if (_viewMode.value == mode) return
         _viewMode.value = mode
         selectionState.clear()
+        applyMode()
+    }
+
+    /** Update the project-root hide patterns and re-materialize the current view. */
+    suspend fun setHiddenPatterns(patterns: List<String>) {
+        if (hiddenPatterns == patterns) return
+        hiddenPatterns = patterns
         applyMode()
     }
 
@@ -199,7 +246,7 @@ class TreeViewModel(
         out: MutableList<TreeRow>,
     ) {
         if (depth > 64) return // safety against pathological/cyclic structures
-        val children = runCatching { fs.list(parentPath) }.getOrElse { emptyList() }
+        val children = filterHiddenAtRoot(parentPath, runCatching { fs.list(parentPath) }.getOrElse { emptyList() })
         if (children.isEmpty()) {
             out.add(placeholderRow(parentPath, depth))
             return
@@ -207,16 +254,7 @@ class TreeViewModel(
         for (child in children) {
             val isDir = child.kind == FsKind.Directory
             val expanded = isDir && _expandedIds.value.contains(child.path.stableId)
-            out.add(
-                TreeRow(
-                    id = child.path.stableId,
-                    node = child,
-                    depth = depth,
-                    isExpanded = expanded,
-                    isSelected = false,
-                    badge = buildBadge(child.path.stableId),
-                ),
-            )
+            out.add(buildRow(child, depth).copy(isExpanded = expanded))
             if (expanded) {
                 addExpandedChildren(child.path, depth + 1, out)
             }
@@ -232,6 +270,32 @@ class TreeViewModel(
         isPlaceholder = true,
     )
 
+    /** Hide matching entries — ONLY at the project root (a nested folder with the same name stays). */
+    private fun filterHiddenAtRoot(parentPath: FsPath, children: List<FsNode>): List<FsNode> {
+        if (hiddenPatterns.isEmpty() || parentPath.stableId != projectRootPath?.stableId) return children
+        return children.filterNot { child -> hiddenPatterns.any { matchesHidden(it, child.name) } }
+    }
+
+    private fun matchesHidden(pattern: String, name: String): Boolean {
+        var pat = pattern.trim()
+        if (pat.isEmpty() || pat.startsWith("#") || pat.startsWith("!")) return false // blank / comment / negation
+        pat = pat.trimStart('/').trimEnd('/')
+        val head = pat.substringBefore('/') // a nested pattern like "foo/bar" hides "foo" at the root
+        if (head.isEmpty()) return false
+        return if (head.any { it == '*' || it == '?' }) globToRegex(head).matches(name) else head == name
+    }
+
+    private fun globToRegex(glob: String): Regex {
+        val sb = StringBuilder()
+        for (c in glob) when (c) {
+            '*' -> sb.append(".*")
+            '?' -> sb.append('.')
+            '.', '(', ')', '+', '|', '^', '$', '{', '}', '[', ']', '\\' -> sb.append('\\').append(c)
+            else -> sb.append(c)
+        }
+        return Regex(sb.toString())
+    }
+
     // --- List mode ---
 
     /** Navigate into a directory (List mode); replaces [listRows] with that dir's flat children. */
@@ -243,7 +307,7 @@ class TreeViewModel(
             updateBreadcrumb(path, label)
             selectionState.clear()
 
-            val children = fs.list(path)
+            val children = filterHiddenAtRoot(path, fs.list(path))
             _listRows.value = children.map { child -> buildRow(child, depth = 0) }
         } finally {
             _isLoading.value = false
@@ -315,24 +379,16 @@ class TreeViewModel(
         return segments.reversed()
     }
 
-    private fun buildRow(node: FsNode, depth: Int): TreeRow = TreeRow(
-        id = node.path.stableId,
-        node = node,
-        depth = depth,
-        isExpanded = false,
-        isSelected = false,
-        badge = buildBadge(node.path.stableId),
-    )
-
-    private fun buildBadge(pathKey: String): ExplorerBadge? {
-        scmStatus[pathKey]?.let { status ->
-            return ExplorerBadge.VcsStatus(status)
-        }
-        problems[pathKey]?.let { (errors, warnings) ->
-            if (errors > 0 || warnings > 0) {
-                return ExplorerBadge.ProblemCount(errors, warnings)
-            }
-        }
-        return null
+    private fun buildRow(node: FsNode, depth: Int): TreeRow {
+        val key = node.path.stableId
+        return TreeRow(
+            id = key,
+            node = node,
+            depth = depth,
+            isExpanded = false,
+            isSelected = false,
+            vcsStatus = scmStatus[key] ?: scmDirStatus[key],
+            isSubmodule = key in scmSubmodules,
+        )
     }
 }

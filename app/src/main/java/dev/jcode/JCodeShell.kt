@@ -57,6 +57,8 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -177,6 +179,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import dev.jcode.adaptive.JCodeWindowInfo
+import dev.jcode.adaptive.JCodeWindowHeightClass
 import dev.jcode.adaptive.JCodeWindowWidthClass
 import dev.jcode.adaptive.rememberJCodeWindowInfo
 import dev.jcode.core.config.ConfigScope
@@ -195,7 +198,19 @@ import dev.jcode.core.distro.LspCatalogState
 import dev.jcode.core.distro.SdkCatalogState
 import dev.jcode.core.term.TerminalSessionManager
 import dev.jcode.core.term.TerminalView
+import dev.jcode.design.ChromeControls
+import dev.jcode.design.CommandPaletteSetting
 import dev.jcode.design.CommandRegistry
+import dev.jcode.design.LocalChromeControls
+import dev.jcode.design.LocalCommandPaletteSetting
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import dev.jcode.design.DeveloperSetting
+import dev.jcode.design.LocalDeveloperSetting
+import dev.jcode.design.LocalMarkdownPreviewSetting
+import dev.jcode.workbench.ExtensionDevState
+import dev.jcode.workbench.LocalExtensionDevState
+import dev.jcode.design.MarkdownPreviewSetting
 import dev.jcode.design.ThemeMode
 import dev.jcode.feature.editor.pane.EditorGroup
 import dev.jcode.feature.editor.pane.EditorMenuContribution
@@ -233,6 +248,7 @@ import dev.jcode.workbench.ExtensionWebViewPage
 import dev.jcode.workbench.BrowserPage
 import dev.jcode.workbench.BuiltinBrowser
 import dev.jcode.workbench.DevtoolsSidebarContent
+import dev.jcode.workbench.ExtensionDevSidebarContent
 import dev.jcode.workbench.ImageViewerPage
 import dev.jcode.workbench.MarkdownPreviewPage
 import dev.jcode.workbench.SearchToolPanel
@@ -252,15 +268,31 @@ import dev.jcode.workbench.LocalDebugCatalogState
 import dev.jcode.workbench.LocalDebugEditorState
 import dev.jcode.workbench.LocalDebugSession
 import dev.jcode.workbench.LocalExtensionInstallPhases
+import dev.jcode.workbench.LocalRunConfigPresets
 import dev.jcode.workbench.LocalSetupTerminalSessionId
 import dev.jcode.design.PerformanceSettings
 import dev.jcode.design.ExtensionSettingSpec
 import dev.jcode.design.ExtensionSettingsGroup
 import dev.jcode.design.ExtensionSettingsUi
+import dev.jcode.design.CutoutSetting
+import dev.jcode.design.EditorTabColors
+import dev.jcode.design.LocalEditorTabColors
+import dev.jcode.design.LocalTabColoringSetting
+import dev.jcode.design.LocalTabMaxSize
+import dev.jcode.design.MiddleEllipsisText
+import dev.jcode.design.TabColoring
+import dev.jcode.design.TabColoringSetting
+import dev.jcode.design.TabMaxSizeSetting
+import dev.jcode.design.ExplorerHiddenMode
+import dev.jcode.design.ExplorerHiddenSetting
+import dev.jcode.design.ExtraKey
+import dev.jcode.design.LocalCutoutSetting
+import dev.jcode.design.LocalExplorerHiddenSetting
+import dev.jcode.design.LocalVolumeKeysSetting
+import dev.jcode.design.VolumeKeyAction
+import dev.jcode.design.VolumeKeysSetting
 import dev.jcode.design.LocalExtensionSettingsUi
 import dev.jcode.design.LocalPerformanceSettings
-import dev.jcode.design.LocalSourceControlSettings
-import dev.jcode.design.SourceControlSettings
 import dev.jcode.design.WebPreviewBrowsers
 import dev.jcode.design.LocalWebPreviewBrowsers
 import dev.jcode.workbench.TerminalInstance
@@ -275,6 +307,8 @@ import dev.jcode.workbench.WorkbenchIconActionButton
 import dev.jcode.workbench.AgentChatActions
 import dev.jcode.workbench.AgentChatSidebarContent
 import dev.jcode.workbench.AgentChatWebViewHolder
+import dev.jcode.workbench.ScmBackgroundHost
+import dev.jcode.workbench.ScmWebViewHolder
 import dev.jcode.workbench.agentChatTabTitle
 import dev.jcode.workbench.hasAgentChatExtension
 import dev.jcode.workbench.LocalAgentChatActions
@@ -286,11 +320,16 @@ import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.workbench.LocalTerminalTapConfig
 import dev.jcode.workbench.TerminalExtraKeysTarget
 import dev.jcode.workbench.WorkbenchExtraKeysBar
-import dev.jcode.workbench.rememberBottomStatusBarVisible
+import dev.jcode.workbench.BottomStatusBarSlot
 import dev.jcode.workbench.RightPanelTab
 import dev.jcode.workbench.WorkbenchManagerActions
 import dev.jcode.workbench.TerminalTapConfig
 import dev.jcode.workbench.WorkbenchTool
+import dev.jcode.feature.explorer.ExplorerContextAction
+import dev.jcode.feature.explorer.ExplorerScmUi
+import dev.jcode.feature.explorer.LocalExplorerScmUi
+import dev.jcode.feature.marketplace.hasWebUi
+import dev.jcode.fs.FsKind
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
 import dev.jcode.fs.ProjectKind
@@ -403,7 +442,6 @@ fun JCodeApp(
     val themeBundleId by viewModel.themeBundleId.collectAsStateWithLifecycle()
     val iconBundleId by viewModel.iconBundleId.collectAsStateWithLifecycle()
     val formatterId by viewModel.formatterId.collectAsStateWithLifecycle()
-    val terminalDoubleTapToFocus by viewModel.terminalDoubleTapToFocus.collectAsStateWithLifecycle()
     val hardwareAcceleration by viewModel.hardwareAcceleration.collectAsStateWithLifecycle()
     val confirmCloseRunning by viewModel.confirmCloseRunning.collectAsStateWithLifecycle()
     val autoCloseIdleTerminals by viewModel.autoCloseIdleTerminals.collectAsStateWithLifecycle()
@@ -446,6 +484,92 @@ fun JCodeApp(
     }
     val editorDragMovesCursor by viewModel.editorDragMovesCursor.collectAsStateWithLifecycle()
     val cursorDragVerticalLevel by viewModel.editorCursorDragVerticalLevel.collectAsStateWithLifecycle()
+    val explorerHiddenMode by viewModel.explorerHiddenMode.collectAsStateWithLifecycle()
+    val explorerHiddenPatterns by viewModel.explorerHiddenPatterns.collectAsStateWithLifecycle()
+    val hiddenInjected by viewModel.hiddenInjected.collectAsStateWithLifecycle()
+    val explorerHiddenSetting = remember(explorerHiddenMode, explorerHiddenPatterns, hiddenInjected) {
+        ExplorerHiddenSetting(
+            mode = explorerHiddenMode,
+            specifiedRaw = explorerHiddenPatterns,
+            onSetMode = viewModel::setExplorerHiddenMode,
+            onSetSpecifiedRaw = viewModel::setExplorerHiddenPatterns,
+            hiddenPatternsFor = { pid ->
+                when (explorerHiddenMode) {
+                    ExplorerHiddenMode.None -> emptyList()
+                    ExplorerHiddenMode.HideInjected -> hiddenInjected[pid].orEmpty()
+                    ExplorerHiddenMode.HideSpecifiedAndInjected ->
+                        explorerHiddenPatterns.lines().map { it.trim() }.filter { it.isNotEmpty() } + hiddenInjected[pid].orEmpty()
+                }
+            },
+        )
+    }
+    val respectDeviceCutout by viewModel.respectDeviceCutout.collectAsStateWithLifecycle()
+    val cutoutContext = LocalContext.current
+    val hasDeviceCutout = remember(cutoutContext) {
+        (cutoutContext as? android.app.Activity)?.display?.cutout != null
+    }
+    // layoutInDisplayCutoutMode is mutable after window creation, so apply the choice live (no restart).
+    LaunchedEffect(respectDeviceCutout) {
+        (cutoutContext as? android.app.Activity)?.let { act ->
+            act.window.attributes = act.window.attributes.apply {
+                layoutInDisplayCutoutMode = if (respectDeviceCutout) {
+                    android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                } else {
+                    android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                }
+            }
+        }
+    }
+    val cutoutSetting = remember(respectDeviceCutout, hasDeviceCutout) {
+        CutoutSetting(respect = respectDeviceCutout, hasCutout = hasDeviceCutout, onChange = viewModel::setRespectDeviceCutout)
+    }
+    val paletteDisabledCommands by viewModel.paletteDisabledCommands.collectAsStateWithLifecycle()
+    val commandPaletteSetting = remember(paletteDisabledCommands) {
+        CommandPaletteSetting(disabledIds = paletteDisabledCommands, onSetEnabled = viewModel::setPaletteCommandEnabled)
+    }
+    val markdownWrapPortrait by viewModel.markdownWrapPortrait.collectAsStateWithLifecycle()
+    val markdownPreviewSetting = remember(markdownWrapPortrait) {
+        MarkdownPreviewSetting(wrapInPortrait = markdownWrapPortrait, onSetWrapInPortrait = viewModel::setMarkdownWrapPortrait)
+    }
+    // Developer options: reveals the Extension Dev right-drawer tab + unsigned .jext sideloading.
+    val developerOptions by viewModel.developerOptions.collectAsStateWithLifecycle()
+    val jextPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) viewModel.sideloadExtension(uri)
+    }
+    var showSideloadWarning by remember { mutableStateOf(false) }
+    val developerSetting = remember(developerOptions) {
+        DeveloperSetting(
+            enabled = developerOptions,
+            onSetEnabled = viewModel::setDeveloperOptions,
+            onLoadExtension = { showSideloadWarning = true },
+        )
+    }
+    val extensionDevState = remember(installedExtensions) {
+        ExtensionDevState(
+            extensions = installedExtensions.filter { it.dev },
+            hostApiVersion = EXTENSION_API_VERSION,
+            onReload = viewModel::refreshInstalledExtensions,
+            onLoad = { showSideloadWarning = true },
+        )
+    }
+    if (showSideloadWarning) {
+        AlertDialog(
+            onDismissRequest = { showSideloadWarning = false },
+            title = { Text("Load unsigned extension?") },
+            text = {
+                Text(
+                    "Sideloaded extensions aren't verified by the marketplace. Only load a .jext from a " +
+                        "developer you trust — it can run commands in the Linux runtime.\n\n" +
+                        "An unsigned package loads as a debuggable dev extension; a signed one installs " +
+                        "normally but can't be debugged here.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showSideloadWarning = false; jextPicker.launch("*/*") }) { Text("Choose .jext") }
+            },
+            dismissButton = { TextButton(onClick = { showSideloadWarning = false }) { Text("Cancel") } },
+        )
+    }
     val cursorDragHorizontalLevel by viewModel.editorCursorDragHorizontalLevel.collectAsStateWithLifecycle()
     val editorDragSetting = remember(editorDragMovesCursor, cursorDragVerticalLevel, cursorDragHorizontalLevel) {
         EditorDragSetting(
@@ -476,6 +600,22 @@ fun JCodeApp(
     val bottomBarSetting = remember(bottomStatusBar) {
         BottomBarSetting(bottomStatusBar, viewModel::setBottomStatusBar)
     }
+    val volumeUpAction by viewModel.volumeUpAction.collectAsStateWithLifecycle()
+    val volumeDownAction by viewModel.volumeDownAction.collectAsStateWithLifecycle()
+    val volumeKeysSetting = remember(volumeUpAction, volumeDownAction) {
+        VolumeKeysSetting(volumeUpAction, volumeDownAction, viewModel::setVolumeUpAction, viewModel::setVolumeDownAction)
+    }
+    val tabColoringMode by viewModel.tabColoringMode.collectAsStateWithLifecycle()
+    val tabColoringSetting = remember(tabColoringMode) {
+        TabColoringSetting(tabColoringMode, viewModel::setTabColoringMode)
+    }
+    val editorTabColorMap by viewModel.editorTabColors.collectAsStateWithLifecycle()
+    val effectiveTabColoring by viewModel.effectiveTabColoring.collectAsStateWithLifecycle()
+    val editorTabColors = remember(editorTabColorMap, effectiveTabColoring) {
+        EditorTabColors({ path -> editorTabColorMap[path] }, effectiveTabColoring != TabColoring.Disabled)
+    }
+    val tabMaxSize by viewModel.tabMaxSize.collectAsStateWithLifecycle()
+    val tabMaxSizeSetting = remember(tabMaxSize) { TabMaxSizeSetting(tabMaxSize, viewModel::setTabMaxSize) }
     val editorFontId by viewModel.editorFontId.collectAsStateWithLifecycle()
     val terminalFontId by viewModel.terminalFontId.collectAsStateWithLifecycle()
     val fontContext = LocalContext.current
@@ -543,22 +683,32 @@ fun JCodeApp(
     }
     StatusBarKeyboardController(enabled = hideStatusBarWithKeyboard)
     val tapContext = LocalContext.current
+    // Routing for a URL surfaced by the terminal — a tapped link, or a guest CLI's xdg-open/$BROWSER
+    // (OSC 7714). Both honor the same web-preview browser choice as Build & Run. rememberUpdatedState
+    // keeps the long-lived OSC listener pointed at the latest choice/project without re-registering.
+    val openTerminalUrl by rememberUpdatedState<(String) -> Unit> { url ->
+        val trimmed = url.trim().trimEnd('.', ',', ')', ']', '}', ';')
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            val choice = webPreviewBrowsers.effective(selectedProject?.id?.toString().orEmpty())
+            if (choice == WebPreviewBrowsers.BUILTIN) BuiltinBrowser.requestOpen(trimmed)
+            else ProjectRunner.openInBrowser(tapContext, trimmed, choice)
+        }
+    }
     val terminalTapConfig = TerminalTapConfig(
-        doubleTapToFocus = terminalDoubleTapToFocus,
         onToken = { token ->
             val trimmed = token.trim().trimEnd('.', ',', ')', ']', '}', ';')
-            if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-                val choice = webPreviewBrowsers.effective(selectedProject?.id?.toString().orEmpty())
-                if (choice == WebPreviewBrowsers.BUILTIN) BuiltinBrowser.requestOpen(trimmed)
-                else ProjectRunner.openInBrowser(tapContext, trimmed, choice)
-            } else {
-                viewModel.openFileByGuestPath(token)
-            }
+            if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) openTerminalUrl(trimmed)
+            else viewModel.openFileByGuestPath(token)
         },
+        onPasteImage = { uri -> viewModel.savePastedImage(uri) },
     )
     DisposableEffect(viewModel) {
         TerminalSessionHost.setUiOpenFileListener { token -> viewModel.openFileByGuestPath(token) }
-        onDispose { TerminalSessionHost.setUiOpenFileListener(null) }
+        TerminalSessionHost.setUiOpenUrlListener { url -> openTerminalUrl(url) }
+        onDispose {
+            TerminalSessionHost.setUiOpenFileListener(null)
+            TerminalSessionHost.setUiOpenUrlListener(null)
+        }
     }
     // Surface the built-in browser editor tab whenever something requests it (a "Built-in browser"
     // preview, or a terminal-URL tap, bumps BuiltinBrowser.revealSignal). Handled here because this is
@@ -652,6 +802,47 @@ fun JCodeApp(
     val vcsActions = remember(contributedDrawerActions) {
         VcsActions(drawerActions = contributedDrawerActions, onAction = viewModel::openContributedView)
     }
+    // Explorer VCS decorations (pushed by the SCM extension) + extension-contributed row menu actions,
+    // sliced for the selected project and handed to the explorer as a CompositionLocal.
+    val contributedExplorerActions by viewModel.contributedExplorerContextActions.collectAsStateWithLifecycle()
+    val contributedRunPresets by viewModel.contributedRunConfigPresets.collectAsStateWithLifecycle()
+    val explorerScmDecorations by viewModel.explorerScmDecorations.collectAsStateWithLifecycle()
+    val explorerScmUi = remember(contributedExplorerActions, explorerScmDecorations, selectedProject?.id) {
+        val slice = selectedProject?.id?.toString()?.let { explorerScmDecorations[it] }
+        ExplorerScmUi(
+            status = slice?.status.orEmpty(),
+            submodules = slice?.submodules.orEmpty(),
+            contextActions = contributedExplorerActions.map {
+                ExplorerContextAction("${it.extId}:${it.id}", it.label, contributedMenuIcon(it.icon), it.fileExtensions, it.targets)
+            },
+            onContextAction = { action, node ->
+                val hostFile = (node.path as? FsPath.Local)?.file
+                if (hostFile != null) {
+                    contributedExplorerActions.firstOrNull { "${it.extId}:${it.id}" == action.key }
+                        ?.let { viewModel.handleExplorerContextAction(it, hostFile, node.kind == FsKind.Directory) }
+                }
+            },
+            onFsActivity = viewModel::notifyWorkspaceFilesChanged,
+        )
+    }
+    // Persistent SCM WebView: boots the decorations-contributing SCM extension per open project so
+    // git status reaches the explorer without the SCM panel ever being shown.
+    val scmHostExt = remember(installedExtensions, extensionActivations) {
+        installedExtensions.firstOrNull {
+            it.type == ExtensionType.Scm && it.hasWebUi && it.contributes.explorerDecorations &&
+                (extensionActivations[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual
+        }
+    }
+    ScmBackgroundHost(
+        ext = scmHostExt,
+        projectKey = selectedProject?.id?.toString(),
+        owner = viewModel,
+        exec = viewModel::runtimeExecJson,
+        apiRequest = viewModel::extensionApiRequest,
+        events = viewModel.extensionEvents,
+        liveHosts = viewModel.liveExtensionHosts,
+        onHostGone = viewModel::clearExplorerScmDecorations,
+    )
     val editorEmptyActions = remember(recents, contributedStartActions) {
         EditorEmptyActions(
             recents = recents,
@@ -706,6 +897,7 @@ fun JCodeApp(
         LocalTabCloseButtonSetting provides tabCloseSetting,
         LocalExtraKeysSetting provides extraKeysSetting,
         LocalExtraKeysState provides extraKeysState,
+        LocalVolumeKeysSetting provides volumeKeysSetting,
         LocalBottomBarSetting provides bottomBarSetting,
         LocalFontSettings provides fontSettings,
         LocalEditorTypeface provides editorTypeface,
@@ -715,8 +907,12 @@ fun JCodeApp(
                 onTogglePin = viewModel::toggleEditorTabPinned,
                 onCloseOthers = viewModel::closeOtherEditorTabs,
                 onCloseToRight = viewModel::closeEditorTabsToRight,
+                onSetTabColor = viewModel::setTabColor,
             )
         },
+        LocalTabColoringSetting provides tabColoringSetting,
+        LocalEditorTabColors provides editorTabColors,
+        LocalTabMaxSize provides tabMaxSizeSetting,
         LocalEditorDragMovesCursor provides editorDragSetting,
         LocalRestoreSession provides restoreSessionSetting,
         LocalExtensionActivation provides extensionActivationSetting,
@@ -734,18 +930,23 @@ fun JCodeApp(
         },
         LocalEditorSaveActions provides editorSaveActions,
         LocalEditorMenuExtras provides editorMenuExtras,
+        LocalExplorerScmUi provides explorerScmUi,
         LocalCompletionSource provides completionSource,
         LocalEnvironmentManager provides environmentManagerActions,
         LocalEditorEmptyActions provides editorEmptyActions,
         LocalVcsActions provides vcsActions,
         LocalDebugCatalogState provides debugCatalogState,
         LocalExtensionInstallPhases provides extensionInstallPhases,
+        LocalRunConfigPresets provides contributedRunPresets,
         LocalSetupTerminalSessionId provides setupTerminalSessionId,
         LocalDebugSession provides debugSessionUi,
         LocalPerformanceSettings provides performanceSettings,
-        LocalSourceControlSettings provides remember {
-            SourceControlSettings(ready = true, onLoad = viewModel::getGitIdentity, onSave = viewModel::setGitIdentity)
-        },
+        LocalExplorerHiddenSetting provides explorerHiddenSetting,
+        LocalCutoutSetting provides cutoutSetting,
+        LocalCommandPaletteSetting provides commandPaletteSetting,
+        LocalMarkdownPreviewSetting provides markdownPreviewSetting,
+        LocalDeveloperSetting provides developerSetting,
+        LocalExtensionDevState provides extensionDevState,
         LocalExtensionSettingsUi provides extensionSettingsUi,
         LocalWebPreviewBrowsers provides webPreviewBrowsers,
         LocalIssueActions provides issueActions,
@@ -792,6 +993,7 @@ fun JCodeApp(
         onUpdateEditorFontSize = viewModel::updateEditorFontSize,
         onUpdateEditorTabSize = viewModel::updateEditorTabSize,
         onUpdateEditorMinimap = viewModel::updateEditorMinimap,
+        onUpdateEditorTabColoring = viewModel::updateEditorTabColoring,
         onUpdateEditorLigatures = viewModel::updateEditorLigatures,
         onUpdateExplorerViewMode = viewModel::updateExplorerViewMode,
         themeMode = themeMode,
@@ -846,11 +1048,10 @@ fun JCodeApp(
             extensionEvents = viewModel.extensionEvents,
         ) },
         onOpenSettingsPage = viewModel::openSettingsPage,
-        terminalDoubleTapToFocus = terminalDoubleTapToFocus,
-        onUpdateTerminalDoubleTapToFocus = viewModel::setTerminalDoubleTapToFocus,
         hideStatusBarWithKeyboard = hideStatusBarWithKeyboard,
         onUpdateHideStatusBarWithKeyboard = viewModel::setHideStatusBarWithKeyboard,
         bringEditorToFront = viewModel.bringEditorToFront,
+        volumeKeyAction = viewModel.volumeKeyAction,
     )
     }
 
@@ -860,6 +1061,7 @@ fun JCodeApp(
             installedToolchains = sdkCatalogState.installedEntryIds,
             onDismiss = viewModel::dismissNewDialog,
             onConfirm = viewModel::createNewItem,
+            resolveDynamicOptions = viewModel::runTemplateOptionsCommand,
         )
     }
 
@@ -939,6 +1141,7 @@ private fun JCodeShell(
     onUpdateEditorFontSize: (ConfigScope, Float?) -> Unit,
     onUpdateEditorTabSize: (ConfigScope, Int?) -> Unit,
     onUpdateEditorMinimap: (ConfigScope, Boolean?) -> Unit,
+    onUpdateEditorTabColoring: (ConfigScope, String?) -> Unit,
     onUpdateEditorLigatures: (ConfigScope, Boolean?) -> Unit,
     onUpdateExplorerViewMode: (ConfigScope, String?) -> Unit,
     themeMode: ThemeMode,
@@ -963,11 +1166,10 @@ private fun JCodeShell(
     onSaveRunConfig: (Project, RunConfig) -> Unit,
     runConfigVersion: Int,
     onOpenSettingsPage: () -> Unit,
-    terminalDoubleTapToFocus: Boolean,
-    onUpdateTerminalDoubleTapToFocus: (Boolean) -> Unit,
     hideStatusBarWithKeyboard: Boolean,
     onUpdateHideStatusBarWithKeyboard: (Boolean) -> Unit,
     bringEditorToFront: SharedFlow<Unit>,
+    volumeKeyAction: SharedFlow<VolumeKeyAction>,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -979,7 +1181,10 @@ private fun JCodeShell(
     val focusRequester = remember { FocusRequester() }
     val compactDrawerState = rememberDrawerState(DrawerValue.Closed)
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val isMobileLandscapeMode = isLandscape && windowInfo.widthClass != JCodeWindowWidthClass.Expanded
+    // A phone in landscape is WIDE (Expanded width) but SHORT (Compact height); a real tablet in
+    // landscape is tall too. Key off height, not width, so phones keep the modal drawers they use in
+    // portrait instead of switching to the cramped persistent side panels a tablet would want.
+    val isMobileLandscapeMode = isLandscape && windowInfo.heightClass == JCodeWindowHeightClass.Compact
     val usesModalWorkspace = !isLandscape || isMobileLandscapeMode
     val isPortraitMobileMode = usesModalWorkspace && windowInfo.widthClass == JCodeWindowWidthClass.Compact
     val hasLandscapeInspectorSidebar = isLandscape
@@ -987,7 +1192,14 @@ private fun JCodeShell(
     val leftSidebarWidth = if (windowInfo.widthClass == JCodeWindowWidthClass.Expanded) 284.dp else 236.dp
     val rightSidebarWidth = (configuration.screenWidthDp * 0.75f).dp
     val activeTab = editorGroup.activeTab
-    val portraitRightSidebarTabs = remember { RightPanelTab.entries.filter { it.enabled }.toSet() }
+    // The Extension Dev tab exists only when Developer options is on, so it's excluded here too —
+    // otherwise a persisted ExtensionDev selection would survive turning developer mode off.
+    val developerModeEnabled = LocalDeveloperSetting.current.enabled
+    val portraitRightSidebarTabs = remember(developerModeEnabled) {
+        RightPanelTab.entries
+            .filter { it.enabled && (it != RightPanelTab.ExtensionDev || developerModeEnabled) }
+            .toSet()
+    }
 
     var selectedTool by rememberSaveable { mutableStateOf(WorkbenchTool.Explorer) }
     // A previously-persisted selection may point at a now-hidden destination; fall back to Explorer.
@@ -1074,6 +1286,14 @@ private fun JCodeShell(
     var rightPanelTab by rememberSaveable {
         mutableStateOf(RightPanelTab.Terminal)
     }
+    // Turning Developer options off must fully retire the Ext Dev tab — including the landscape
+    // persistent sidebar, which renders rightPanelTab directly (no portrait clamp). Reset the
+    // selection so its panel (and its auto-reload loop) stop composing everywhere.
+    LaunchedEffect(developerModeEnabled) {
+        if (!developerModeEnabled && rightPanelTab == RightPanelTab.ExtensionDev) {
+            rightPanelTab = RightPanelTab.Terminal
+        }
+    }
     // When a debug session starts, surface its console: reveal the right drawer on its Debug tab
     // (the left Run/Debug panel keeps only the launch button + call stack + variables).
     val debugSessionActive = LocalDebugSession.current.state.let {
@@ -1107,6 +1327,33 @@ private fun JCodeShell(
         }
     }
     var commandPaletteVisible by rememberSaveable { mutableStateOf(false) }
+    // Palette-driven view modes and one-shot tools. Window-level modes live in WindowModeState (a
+    // process holder, so the status-bar keyboard controller can coordinate); pure-UI state stays here.
+    var chromeHidden by rememberSaveable { mutableStateOf(false) }
+    var goToLineVisible by remember { mutableStateOf(false) }
+    var colorPickActive by remember { mutableStateOf(false) }
+    var sampledColor by remember { mutableStateOf<Int?>(null) }
+    val fullscreenMode by WindowModeState.fullscreen.collectAsStateWithLifecycle()
+    val keepAwakeMode by WindowModeState.keepAwake.collectAsStateWithLifecycle()
+    val orientationLockedMode by WindowModeState.orientationLocked.collectAsStateWithLifecycle()
+    WindowModeController()
+    // Volume-key bindings (Settings → Input): route focused-pane arrows/scroll to the same target the
+    // extra-keys row drives, and open the command palette. Undo/Redo run directly in the Activity.
+    val volumeExtraKeys = LocalExtraKeysState.current
+    LaunchedEffect(volumeKeyAction) {
+        volumeKeyAction.collect { action ->
+            when (action) {
+                VolumeKeyAction.KeyLeft -> volumeExtraKeys.target?.onExtraKey(ExtraKey.Left, false, false)
+                VolumeKeyAction.KeyRight -> volumeExtraKeys.target?.onExtraKey(ExtraKey.Right, false, false)
+                VolumeKeyAction.KeyUp -> volumeExtraKeys.target?.onExtraKey(ExtraKey.Up, false, false)
+                VolumeKeyAction.KeyDown -> volumeExtraKeys.target?.onExtraKey(ExtraKey.Down, false, false)
+                VolumeKeyAction.ScrollUp -> volumeExtraKeys.target?.onScroll(3)
+                VolumeKeyAction.ScrollDown -> volumeExtraKeys.target?.onScroll(-3)
+                VolumeKeyAction.CommandPalette -> commandPaletteVisible = true
+                else -> Unit
+            }
+        }
+    }
     var terminalSessionIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var selectedTerminalSessionId by rememberSaveable { mutableStateOf("") }
     // Live tab names keyed by session id, driven by the shell's OSC 7712 (the running program name).
@@ -1414,6 +1661,7 @@ private fun JCodeShell(
         debugSessionUiLocal.onStop()
         agentChatActionsLocal.onStopAllServices()
         AgentChatWebViewHolder.destroyAll()
+        ScmWebViewHolder.destroyAll()
         closeAllTerminalSessions()
     }
 
@@ -1551,49 +1799,143 @@ private fun JCodeShell(
         }
     }
 
-    DisposableEffect(onCreateProject, openFolderLauncher, onOpenWorkspaceConfig, onOpenProjectConfig, onAutoSetup, selectedProject?.id) {
+    // Context for the configurable palette commands: what the focused screen is showing decides
+    // which entries register at all (predicates would go stale — closures capture these values, so
+    // they are also keys below and re-register on every relevant change).
+    val paletteSetting = LocalCommandPaletteSetting.current
+    val paletteSaveActions = LocalEditorSaveActions.current
+    val paletteTab = editorGroup.activeTab
+    val paletteHasTabs = editorGroup.tabs.isNotEmpty()
+    val paletteEditorActive = paletteTab?.editorState != null && !paletteTab.isPage && !paletteTab.previewMode
+    val paletteLanguageIdentified = run {
+        val name = paletteTab?.filePath?.name
+        name != null && activeLanguageExtensions.any { it.languageFor(name) != null }
+    }
+    val paletteFontSize = effectiveConfig.editor.fontSize
+    // Mirror Settings' most-specific-scope rule so a font-size nudge isn't masked by an existing
+    // project override.
+    val paletteFontScope = if (selectedProject?.fsPath is FsPath.Local) ConfigScope.Project else ConfigScope.Workspace
+
+    DisposableEffect(
+        onCreateProject, openFolderLauncher, onOpenWorkspaceConfig, onOpenProjectConfig, onAutoSetup,
+        selectedProject?.id, paletteSetting.disabledIds, paletteTab?.id, paletteHasTabs,
+        paletteEditorActive, paletteLanguageIdentified, chromeHidden, fullscreenMode, keepAwakeMode,
+        orientationLockedMode, paletteFontSize,
+    ) {
         CommandRegistry.clear()
+        // A configurable command registers only while enabled in Settings → Command Palette AND its
+        // context applies (view/focus-dependent entries stay out of the list entirely otherwise).
+        fun registerConfigurable(id: String, title: String, group: String, icon: JCodeIcon, visible: Boolean = true, action: () -> Unit) {
+            if (id in paletteSetting.disabledIds || !visible) return
+            CommandRegistry.register(id = id, title = title, group = group, action = action, icon = icon)
+        }
+        registerConfigurable(
+            id = "view.orientationLock",
+            title = if (orientationLockedMode) "Unlock Screen Orientation" else "Lock Screen Orientation",
+            group = "View",
+            icon = JCodeIcon.ScreenRotation,
+        ) { WindowModeState.orientationLocked.value = !orientationLockedMode }
+        registerConfigurable(
+            id = "view.fullscreen",
+            title = if (fullscreenMode) "Exit Fullscreen" else "Enter Fullscreen",
+            group = "View",
+            icon = JCodeIcon.Fullscreen,
+        ) { WindowModeState.fullscreen.value = !fullscreenMode }
+        registerConfigurable(
+            id = "view.keepAwake",
+            title = if (keepAwakeMode) "Keep Awake: Turn Off" else "Keep Awake: Turn On",
+            group = "View",
+            icon = JCodeIcon.KeepAwake,
+        ) { WindowModeState.keepAwake.value = !keepAwakeMode }
+        registerConfigurable(
+            id = "view.hideChrome",
+            title = if (chromeHidden) "Show Header and Tabs" else "Hide Header and Tabs",
+            group = "View",
+            icon = JCodeIcon.Collapse,
+            visible = paletteHasTabs,
+        ) { chromeHidden = !chromeHidden }
+        registerConfigurable(
+            id = "editor.goToLine",
+            title = "Go to Line…",
+            group = "Editor",
+            icon = JCodeIcon.Cursor,
+            visible = paletteEditorActive,
+        ) { goToLineVisible = true }
+        registerConfigurable(
+            id = "editor.formatDocument",
+            title = "Format Document",
+            group = "Editor",
+            icon = JCodeIcon.Format,
+            visible = paletteEditorActive && paletteLanguageIdentified,
+        ) { paletteSaveActions.onFormat() }
+        registerConfigurable(
+            id = "editor.fontSizeIncrease",
+            title = "Increase Editor Font Size",
+            group = "Editor",
+            icon = JCodeIcon.TextIncrease,
+            visible = paletteEditorActive,
+        ) { onUpdateEditorFontSize(paletteFontScope, (paletteFontSize + 1f).coerceIn(8f, 72f)) }
+        registerConfigurable(
+            id = "editor.fontSizeDecrease",
+            title = "Decrease Editor Font Size",
+            group = "Editor",
+            icon = JCodeIcon.TextDecrease,
+            visible = paletteEditorActive,
+        ) { onUpdateEditorFontSize(paletteFontScope, (paletteFontSize - 1f).coerceIn(8f, 72f)) }
+        registerConfigurable(
+            id = "tools.colorSearch",
+            title = "Color Search (pick from screen)",
+            group = "Tools",
+            icon = JCodeIcon.Palette,
+        ) { colorPickActive = true }
         CommandRegistry.register(
             id = "workspace.newFolder",
             title = "New Folder",
             group = "Workspace",
             action = onCreateProject,
+            icon = JCodeIcon.NewFolder,
         )
         CommandRegistry.register(
             id = "workspace.openFolder",
             title = "Open Folder",
             group = "Workspace",
             action = { openFolderLauncher.launch(null) },
+            icon = JCodeIcon.Files,
         )
         CommandRegistry.register(
             id = "workspace.autoSetupEnvironment",
             title = "Auto-Setup Environment",
             group = "Workspace",
             action = onAutoSetup,
+            icon = JCodeIcon.Sdk,
         )
         CommandRegistry.register(
             id = "workbench.focusExplorer",
             title = "Focus Explorer",
             group = "Workbench",
             action = { selectedTool = WorkbenchTool.Explorer },
+            icon = JCodeIcon.Files,
         )
         CommandRegistry.register(
             id = "workbench.showSearch",
             title = "Show Search Placeholder",
             group = "Workbench",
             action = { selectedTool = WorkbenchTool.Search },
+            icon = JCodeIcon.Search,
         )
         CommandRegistry.register(
             id = "settings.openPage",
             title = "Open Settings",
             group = "Settings",
             action = onOpenSettingsPage,
+            icon = JCodeIcon.Settings,
         )
         CommandRegistry.register(
             id = "settings.openWorkspaceYaml",
             title = "Open Workspace YAML",
             group = "Settings",
             action = onOpenWorkspaceConfig,
+            icon = JCodeIcon.Code,
         )
         CommandRegistry.register(
             id = "settings.openProjectYaml",
@@ -1601,6 +1943,7 @@ private fun JCodeShell(
             group = "Settings",
             action = onOpenProjectConfig,
             whenPredicate = { selectedProject?.fsPath is FsPath.Local },
+            icon = JCodeIcon.Code,
         )
         onDispose { }
     }
@@ -1706,7 +2049,7 @@ private fun JCodeShell(
                     // Sits above the status bar so Scaffold's innerPadding reserves space for it and
                     // the editor/terminal content shrinks instead of being covered while typing.
                     WorkbenchExtraKeysBar()
-                    if (rememberBottomStatusBarVisible()) {
+                    BottomStatusBarSlot {
                         WorkbenchStatusBar(
                             activeTab = activeTab,
                             selectedProject = selectedProject,
@@ -1728,6 +2071,14 @@ private fun JCodeShell(
                         .weight(1f)
                         .fillMaxHeight(),
                 ) {
+                    CompositionLocalProvider(
+                        LocalChromeControls provides remember(chromeHidden) {
+                            ChromeControls(
+                                chromeHidden = chromeHidden,
+                                onSetChromeHidden = { chromeHidden = it },
+                            )
+                        },
+                    ) {
                     EditorWorkspace(
                         windowInfo = windowInfo,
                         workspace = workspace,
@@ -1811,6 +2162,7 @@ private fun JCodeShell(
                                     onUpdateFontSize = onUpdateEditorFontSize,
                                     onUpdateTabSize = onUpdateEditorTabSize,
                                     onUpdateMinimap = onUpdateEditorMinimap,
+                                    onUpdateTabColoring = onUpdateEditorTabColoring,
                                     onUpdateLigatures = onUpdateEditorLigatures,
                                     onUpdateExplorerViewMode = onUpdateExplorerViewMode,
                                     themeMode = themeMode,
@@ -1825,8 +2177,6 @@ private fun JCodeShell(
                                             .filter { it.type == ExtensionType.Formatter }
                                             .map { it.id to it.name },
                                     onSelectFormatter = onSelectFormatter,
-                                    terminalDoubleTapToFocus = terminalDoubleTapToFocus,
-                                    onUpdateTerminalDoubleTapToFocus = onUpdateTerminalDoubleTapToFocus,
                                     hideStatusBarWithKeyboard = hideStatusBarWithKeyboard,
                                     onUpdateHideStatusBarWithKeyboard = onUpdateHideStatusBarWithKeyboard,
                                     isUserWorkspace = breadcrumb.size > 1,
@@ -1890,14 +2240,29 @@ private fun JCodeShell(
                                     val project = (workspace?.projects.orEmpty() + listOfNotNull(selectedProject))
                                         .firstOrNull { it.id == id }
                                     if (project != null) {
-                                        val initial = remember(project.id, runConfigVersion) {
-                                            ProjectRunner.editableRunConfig(project)
+                                        // key: the page slot is positional, so without it switching between two
+                                        // projects' Run Config tabs would reuse the first project's form state and
+                                        // Save could overwrite the other project's run.yaml.
+                                        key(project.id) {
+                                            val initial = remember(runConfigVersion) {
+                                                ProjectRunner.editableRunConfig(project)
+                                            }
+                                            val runPresets = LocalRunConfigPresets.current
+                                            var suggestions by remember {
+                                                mutableStateOf(emptyList<ProjectRunner.RunSuggestion>())
+                                            }
+                                            LaunchedEffect(runPresets) {
+                                                suggestions = withContext(Dispatchers.IO) {
+                                                    ProjectRunner.suggestRunConfigs(project, runPresets)
+                                                }
+                                            }
+                                            RunConfigPage(
+                                                initial = initial,
+                                                suggestions = suggestions,
+                                                onSave = { onSaveRunConfig(project, it) },
+                                                modifier = Modifier.fillMaxSize(),
+                                            )
                                         }
-                                        RunConfigPage(
-                                            initial = initial,
-                                            onSave = { onSaveRunConfig(project, it) },
-                                            modifier = Modifier.fillMaxSize(),
-                                        )
                                     }
                                 }
                                 EditorPageKind.ExtensionDetail -> {
@@ -1971,6 +2336,7 @@ private fun JCodeShell(
                             }
                         },
                     )
+                    }
 
                     if (isPersistentLeftSidebarVisible) {
                         WorkspacePanel(
@@ -1993,6 +2359,7 @@ private fun JCodeShell(
                             breadcrumb = breadcrumb,
                             onCloseWorkspace = handleCloseWorkspace,
                             onCloseProject = handleCloseProject,
+                            onCollapseSidebar = { leftSidebarExpanded = false },
                             onCreateProject = onCreateProject,
                             onRemoveProject = onRemoveProject,
                             onSelectProject = onSelectProject,
@@ -2135,6 +2502,35 @@ private fun JCodeShell(
             compact = usesModalWorkspace,
             onDismiss = { commandPaletteVisible = false },
         )
+
+        if (goToLineVisible) {
+            val goToState = editorGroup.activeTab?.editorState
+            if (goToState == null) {
+                LaunchedEffect(Unit) { goToLineVisible = false }
+            } else {
+                GoToLineDialog(
+                    lineCount = goToState.snapshot.value.lineCount,
+                    onDismiss = { goToLineVisible = false },
+                    onGo = { line, column ->
+                        goToState.requestReveal((line - 1).coerceAtLeast(0), (column - 1).coerceAtLeast(0))
+                    },
+                )
+            }
+        }
+
+        if (colorPickActive) {
+            ColorPickOverlay(
+                onPicked = { colorPickActive = false; sampledColor = it },
+                onCancel = { colorPickActive = false },
+            )
+        }
+        sampledColor?.let { color ->
+            ColorSampleDialog(
+                argb = color,
+                onPickAgain = { sampledColor = null; colorPickActive = true },
+                onDismiss = { sampledColor = null },
+            )
+        }
     }
 }
 
@@ -2185,6 +2581,7 @@ private fun WorkspacePanel(
     installedExtensions: List<InstalledExtension>,
     marketplaceEntries: List<MarketplaceEntry>,
     marketplaceBusy: Boolean,
+    onCollapseSidebar: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -2212,6 +2609,7 @@ private fun WorkspacePanel(
                 onDrawerAction = onDrawerAction,
                 onCloseWorkspace = onCloseWorkspace,
                 onCloseProject = onCloseProject,
+                onCollapseSidebar = onCollapseSidebar,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
@@ -2249,6 +2647,7 @@ private fun WorkspacePanel(
                                                 context = context,
                                                 modifier = Modifier.fillMaxSize(),
                                                 viewMode = explorerViewModeOf(effectiveConfig.explorer.viewMode),
+                                                hiddenPatterns = LocalExplorerHiddenSetting.current.hiddenPatternsFor(selectedProject.id.toString()),
                                                 onFileSelected = onOpenFile,
                                                 onSnackbar = onSnackbar,
                                             )
@@ -2398,32 +2797,44 @@ private fun EditorWorkspace(
     editorPageContent: @Composable (EditorTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val chrome = LocalChromeControls.current
     Surface(
         modifier = modifier.fillMaxHeight(),
         color = MaterialTheme.colorScheme.background,
     ) {
+        Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            WorkbenchTopBar(
-                workspace = workspace,
-                selectedProject = selectedProject,
-                activeTab = activeTab,
-                leftSidebarExpanded = leftSidebarExpanded,
-                canShowRightSidebar = canShowRightSidebar,
-                rightSidebarVisible = rightSidebarVisible,
-                onToggleLeftSidebar = onToggleLeftSidebar,
-                onToggleRightSidebar = onToggleRightSidebar,
-                onShowTerminal = onShowTerminal,
-                onRun = onRun,
-                onStop = onStop,
-                onRerun = onRerun,
-                isRunning = isRunning,
-                terminalBusy = terminalBusy,
-                terminalHasUnseen = terminalHasUnseen,
-                terminalSessions = terminalSessions,
-                onOpenTerminalSession = onOpenTerminalSession,
-                onSave = onSave,
-            )
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
+            // The palette's "Hide Header and Tabs" mode collapses the header (the tab strip hides
+            // inside EditorPane via the same local); the floating pill below restores it.
+            AnimatedVisibility(
+                visible = !chrome.chromeHidden,
+                enter = expandVertically(animationSpec = tween(200)),
+                exit = shrinkVertically(animationSpec = tween(200)),
+            ) {
+                Column {
+                    WorkbenchTopBar(
+                        workspace = workspace,
+                        selectedProject = selectedProject,
+                        activeTab = activeTab,
+                        leftSidebarExpanded = leftSidebarExpanded,
+                        canShowRightSidebar = canShowRightSidebar,
+                        rightSidebarVisible = rightSidebarVisible,
+                        onToggleLeftSidebar = onToggleLeftSidebar,
+                        onToggleRightSidebar = onToggleRightSidebar,
+                        onShowTerminal = onShowTerminal,
+                        onRun = onRun,
+                        onStop = onStop,
+                        onRerun = onRerun,
+                        isRunning = isRunning,
+                        terminalBusy = terminalBusy,
+                        terminalHasUnseen = terminalHasUnseen,
+                        terminalSessions = terminalSessions,
+                        onOpenTerminalSession = onOpenTerminalSession,
+                        onSave = onSave,
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
+                }
+            }
 
             if (editorGroup.tabs.isEmpty()) {
                 EditorEmptyState(
@@ -2455,6 +2866,28 @@ private fun EditorWorkspace(
                     pageContent = editorPageContent,
                 )
             }
+        }
+        if (chrome.chromeHidden) {
+            // 44dp box (≥ the 48dp min once IconButton's own touch expansion is added) keeps the only
+            // exit from hidden-chrome mode comfortably tappable.
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                    .clickable { chrome.onSetChromeHidden(false) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = jcIcon(JCodeIcon.ChevronDown),
+                    contentDescription = "Show header and tabs",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
         }
     }
 }
@@ -2714,11 +3147,13 @@ private fun WorkbenchRightSidebar(
                     // and the tab is shown only while such an extension is installed.
                     val chatAvailable = hasAgentChatExtension()
                     val chatTabTitle = agentChatTabTitle()
+                    val devMode = LocalDeveloperSetting.current.enabled
                     RightPanelTab.entries
                         .filter {
                             it.enabled &&
                                 (it != RightPanelTab.Chat || chatAvailable) &&
-                                (it != RightPanelTab.Devtools || BuiltinBrowser.everOpened.value)
+                                (it != RightPanelTab.Devtools || BuiltinBrowser.everOpened.value) &&
+                                (it != RightPanelTab.ExtensionDev || devMode)
                         }
                         .forEach { tab ->
                         val selected = tab == selectedTab
@@ -2856,6 +3291,9 @@ private fun WorkbenchRightSidebarBody(
         }
         RightPanelTab.Devtools -> {
             DevtoolsSidebarContent(modifier = modifier)
+        }
+        RightPanelTab.ExtensionDev -> {
+            ExtensionDevSidebarContent(modifier = modifier)
         }
         RightPanelTab.Chat -> {
             AgentChatSidebarContent(modifier = modifier)
@@ -3030,11 +3468,11 @@ private fun TerminalSidebarContent(
                                     modifier = Modifier.size(12.dp),
                                 )
                             }
-                            Text(
+                            MiddleEllipsisText(
                                 text = terminalTabLabel(
                                     terminalTitleFor(sessionId) ?: terminalSessionFor(sessionId)?.label
                                 ),
-                                maxLines = 1,
+                                maxWidth = LocalTabMaxSize.current.size.titleMaxWidth,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (isActive) {
                                     MaterialTheme.colorScheme.onSurface
@@ -3174,18 +3612,18 @@ private fun TerminalSidebarContent(
                                 TerminalView(ctx).apply {
                                     setFontSize(30f)
                                     setTypeface(terminalTypeface)
-                                    doubleTapToFocus = tapConfig.doubleTapToFocus
                                     onTapToken = tapConfig.onToken
                                     onContextMenu = { x, y -> termMenu = TerminalMenuRequest(x, y, this) }
+                                    onPasteImage = tapConfig.onPasteImage
                                     wireExtraKeys(this)
                                     bind(session)
                                 }
                             },
                             update = { view ->
                                 view.setTypeface(terminalTypeface)
-                                view.doubleTapToFocus = tapConfig.doubleTapToFocus
                                 view.onTapToken = tapConfig.onToken
                                 view.onContextMenu = { x, y -> termMenu = TerminalMenuRequest(x, y, view) }
+                                view.onPasteImage = tapConfig.onPasteImage
                                 view.bind(session) // no-op if already bound to this session
                                 view.setActive(isActive)
                             },
@@ -3202,11 +3640,14 @@ private fun TerminalSidebarContent(
                         expanded = true,
                         onDismissRequest = { termMenu = null },
                         offset = menuOffset,
-                        quickActions = listOf(
-                            ContextAction(JCodeIcon.Paste, "Paste") { req.view.contextPaste() },
-                        ),
+                        quickActions = buildList {
+                            if (req.view.hasSelection()) {
+                                add(ContextAction(JCodeIcon.Copy, "Copy") { req.view.contextCopy() })
+                            }
+                            add(ContextAction(JCodeIcon.Paste, "Paste") { req.view.contextPaste() })
+                        },
                         listActions = listOf(
-                            ContextAction(JCodeIcon.SelectAll, "Select text") { req.view.contextArmSelection() },
+                            ContextAction(JCodeIcon.Cursor, "Select Text") { req.view.beginTextSelection() },
                             ContextAction(JCodeIcon.SelectAll, "Select all") { req.view.contextSelectAll() },
                             ContextAction(JCodeIcon.Clear, "Clear") { req.view.contextClear() },
                         ),
@@ -3466,7 +3907,7 @@ private fun explorerViewModeOf(value: String): ExplorerViewMode =
     ExplorerViewMode.entries.firstOrNull { it.name.equals(value, ignoreCase = true) } ?: ExplorerViewMode.Tree
 
 /** Unwrap the hosting [Activity] from a Compose [Context] (it may be a ContextWrapper). */
-private fun Context.findActivity(): Activity? {
+internal fun Context.findActivity(): Activity? {
     var current: Context? = this
     while (current is ContextWrapper) {
         if (current is Activity) return current
@@ -3485,18 +3926,31 @@ private fun Context.findActivity(): Activity? {
 private fun StatusBarKeyboardController(enabled: Boolean) {
     val activity = LocalContext.current.findActivity() ?: return
     val imeVisible = WindowInsets.isImeVisible
-    DisposableEffect(enabled, imeVisible) {
+    val fullscreen by WindowModeState.fullscreen.collectAsStateWithLifecycle()
+    // Hiding the system bar kicks off a second insets animation + relayout wave; delay it until the
+    // IME animation has settled so the two don't overlap (the delay also drops the pending hide for
+    // free when the keyboard closes again quickly). Showing stays immediate so closing the keyboard
+    // never leaves the bar hidden. While the palette's Fullscreen mode owns the bars, do nothing —
+    // re-showing here would undo it on every keyboard transition.
+    LaunchedEffect(enabled, imeVisible, fullscreen) {
+        if (fullscreen) return@LaunchedEffect
         val window = activity.window
         val controller = WindowCompat.getInsetsController(window, window.decorView)
         if (enabled && imeVisible) {
+            delay(300)
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             controller.hide(WindowInsetsCompat.Type.statusBars())
         } else {
             controller.show(WindowInsetsCompat.Type.statusBars())
         }
+    }
+    DisposableEffect(Unit) {
         onDispose {
-            WindowCompat.getInsetsController(window, window.decorView)
-                .show(WindowInsetsCompat.Type.statusBars())
+            if (WindowModeState.fullscreen.value) return@onDispose
+            activity.window?.let { window ->
+                WindowCompat.getInsetsController(window, window.decorView)
+                    .show(WindowInsetsCompat.Type.statusBars())
+            }
         }
     }
 }

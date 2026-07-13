@@ -63,8 +63,20 @@ import dev.jcode.design.LocalFontSettings
 import dev.jcode.design.LocalEditorDragMovesCursor
 import dev.jcode.design.LocalExtraKeysSetting
 import dev.jcode.design.LocalPerformanceSettings
+import dev.jcode.design.ExplorerHiddenMode
+import dev.jcode.design.LocalCutoutSetting
+import dev.jcode.design.LocalExplorerHiddenSetting
+import dev.jcode.design.LocalTabColoringSetting
+import dev.jcode.design.LocalTabMaxSize
+import dev.jcode.design.TabColoring
+import dev.jcode.design.TabMaxSize
+import dev.jcode.design.LocalCommandPaletteSetting
+import dev.jcode.design.LocalDeveloperSetting
+import dev.jcode.design.LocalMarkdownPreviewSetting
+import dev.jcode.design.LocalVolumeKeysSetting
+import dev.jcode.design.PaletteCommandCatalog
+import dev.jcode.design.VolumeKeyAction
 import dev.jcode.design.LocalRestoreSession
-import dev.jcode.design.LocalSourceControlSettings
 import dev.jcode.design.WebPreviewBrowsers
 import dev.jcode.design.LocalWebPreviewBrowsers
 import dev.jcode.design.LocalTabCloseButtonSetting
@@ -95,6 +107,7 @@ object SettingsFeature {
         onUpdateFontSize: (ConfigScope, Float?) -> Unit,
         onUpdateTabSize: (ConfigScope, Int?) -> Unit,
         onUpdateMinimap: (ConfigScope, Boolean?) -> Unit,
+        onUpdateTabColoring: (ConfigScope, String?) -> Unit,
         onUpdateLigatures: (ConfigScope, Boolean?) -> Unit,
         onUpdateExplorerViewMode: (ConfigScope, String?) -> Unit,
         themeMode: ThemeMode,
@@ -106,8 +119,6 @@ object SettingsFeature {
         formatterId: String,
         formatterOptions: List<Pair<String, String>>,
         onSelectFormatter: (String) -> Unit,
-        terminalDoubleTapToFocus: Boolean,
-        onUpdateTerminalDoubleTapToFocus: (Boolean) -> Unit,
         hideStatusBarWithKeyboard: Boolean,
         onUpdateHideStatusBarWithKeyboard: (Boolean) -> Unit,
         isUserWorkspace: Boolean = false,
@@ -116,6 +127,11 @@ object SettingsFeature {
         val tabCloseSetting = LocalTabCloseButtonSetting.current
         val editorDragSetting = LocalEditorDragMovesCursor.current
         val restoreSessionSetting = LocalRestoreSession.current
+        val explorerHiddenSetting = LocalExplorerHiddenSetting.current
+        val cutoutSetting = LocalCutoutSetting.current
+        val volumeKeysSetting = LocalVolumeKeysSetting.current
+        val tabColoringSetting = LocalTabColoringSetting.current
+        val tabMaxSizeSetting = LocalTabMaxSize.current
         val extraKeysSetting = LocalExtraKeysSetting.current
         val bottomBarSetting = LocalBottomBarSetting.current
         val fontSettings = LocalFontSettings.current
@@ -202,10 +218,11 @@ object SettingsFeature {
                 }
             }
             SettingsSearchField(query = query, onQueryChange = { query = it })
-            // A search reaches across ALL tabs, so a match can never hide behind the tab selection;
-            // outside a search, only the selected tab's cards render.
-            val showGlobalTab = query.isNotBlank() || safeTab == 0
-            val showScopedTab = query.isNotBlank() || safeTab >= 1
+            // Search is scoped to the SELECTED tab (like VS Code's User/Workspace split): the GLOBAL
+            // tab shows only app-level settings, WORKSPACE/PROJECT only the .jcode-scoped ones — so a
+            // search on the Project tab never surfaces global settings that aren't project-overridable.
+            val showGlobalTab = safeTab == 0
+            val showScopedTab = safeTab >= 1
             if (showGlobalTab) {
             SettingsSectionHeader("Appearance")
             SettingsCard(
@@ -305,6 +322,25 @@ object SettingsFeature {
                 )
             }
 
+            // Hidden on displays without a cutout (desktop mode, external display, notchless devices).
+            if (cutoutSetting.hasCutout) {
+                SettingsCard(
+                    title = "Display cutout",
+                    description = "Keep the app clear of the camera notch or punch-hole. When off, the " +
+                        "app draws into the cutout area for a full-screen layout.",
+                    keywords = "cutout notch punch hole camera display safe area letterbox fullscreen screen edge insets",
+                ) {
+                    ToggleRow(
+                        label = "Respect device cutout",
+                        supporting = "Lay out the app inside the cutout's safe area instead of drawing behind it.",
+                        checked = cutoutSetting.respect,
+                        onCheckedChange = cutoutSetting.onChange,
+                        modified = cutoutSetting.respect != SettingsDefaults.RESPECT_DEVICE_CUTOUT,
+                        onReset = { cutoutSetting.onChange(SettingsDefaults.RESPECT_DEVICE_CUTOUT) },
+                    )
+                }
+            }
+
             SettingsCard(
                 title = "Bottom status bar",
                 description = "The bar at the bottom of the workbench showing branch, distro, and " +
@@ -349,6 +385,56 @@ object SettingsFeature {
                 )
             }
 
+            SettingsSectionHeader("Input")
+            SettingsCard(
+                title = "Volume keys",
+                description = "Remap the hardware volume buttons to editor/terminal actions. " +
+                    "\"System Default\" keeps normal volume control. Pane actions (arrows, scroll) act on " +
+                    "whichever editor or terminal is focused; hold to repeat arrows and scrolling.",
+                keywords = "volume keys button hardware remap bind binding shortcut undo redo arrow scroll " +
+                    "command palette input up down page rocker media",
+            ) {
+                SettingsDropdownRow(
+                    label = "Volume up",
+                    options = VolumeKeyAction.entries.map { it.name },
+                    selected = volumeKeysSetting.up.name,
+                    onSelect = { volumeKeysSetting.onChangeUp(VolumeKeyAction.valueOf(it)) },
+                    optionLabel = { volumeKeyActionLabel(VolumeKeyAction.valueOf(it), "Vol Up") },
+                    modified = volumeKeysSetting.up != SettingsDefaults.VOLUME_UP_ACTION,
+                    onReset = { volumeKeysSetting.onChangeUp(SettingsDefaults.VOLUME_UP_ACTION) },
+                )
+                SettingsDropdownRow(
+                    label = "Volume down",
+                    options = VolumeKeyAction.entries.map { it.name },
+                    selected = volumeKeysSetting.down.name,
+                    onSelect = { volumeKeysSetting.onChangeDown(VolumeKeyAction.valueOf(it)) },
+                    optionLabel = { volumeKeyActionLabel(VolumeKeyAction.valueOf(it), "Vol Down") },
+                    modified = volumeKeysSetting.down != SettingsDefaults.VOLUME_DOWN_ACTION,
+                    onReset = { volumeKeysSetting.onChangeDown(SettingsDefaults.VOLUME_DOWN_ACTION) },
+                )
+            }
+
+            SettingsCard(
+                title = "Command Palette",
+                description = "Choose which built-in commands the palette offers. Context-dependent " +
+                    "commands only appear when their view is focused (e.g. Go to Line needs an open editor).",
+                keywords = "command palette commands orientation lock fullscreen keep awake screen on " +
+                    "hide header tabs zen go to line color search picker eyedropper format document",
+            ) {
+                val paletteSetting = LocalCommandPaletteSetting.current
+                PaletteCommandCatalog.forEach { command ->
+                    val enabled = command.id !in paletteSetting.disabledIds
+                    ToggleRow(
+                        label = command.label,
+                        supporting = command.description,
+                        checked = enabled,
+                        onCheckedChange = { paletteSetting.onSetEnabled(command.id, it) },
+                        modified = !enabled,
+                        onReset = { paletteSetting.onSetEnabled(command.id, true) },
+                    )
+                }
+            }
+
             SettingsSectionHeader("Startup")
             SettingsCard(
                 title = "Restore last session",
@@ -363,37 +449,6 @@ object SettingsFeature {
                     modified = restoreSessionSetting.enabled != SettingsDefaults.RESTORE_LAST_SESSION,
                     onReset = { restoreSessionSetting.onChange(SettingsDefaults.RESTORE_LAST_SESSION) },
                 )
-            }
-
-            SettingsSectionHeader("Source Control")
-            SettingsCard(
-                title = "Git identity",
-                description = "The author name and email recorded on your commits. Applies to all git in the " +
-                    "runtime, and is also editable from the Source Control sign-in page.",
-                keywords = "git source control scm identity name email commit author github sign in credentials",
-            ) {
-                val scm = LocalSourceControlSettings.current
-                var name by rememberSaveable { mutableStateOf("") }
-                var email by rememberSaveable { mutableStateOf("") }
-                var loaded by rememberSaveable { mutableStateOf(false) }
-                var saved by rememberSaveable { mutableStateOf(false) }
-                LaunchedEffect(scm) {
-                    if (!loaded) {
-                        val (n, e) = scm.onLoad()
-                        name = n; email = e; loaded = true
-                    }
-                }
-                SettingsTextFieldRow(label = "Name", value = name, onValueChange = { name = it; saved = false }, placeholder = "Your name")
-                SettingsTextFieldRow(label = "Email", value = email, onValueChange = { email = it; saved = false }, placeholder = "you@example.com")
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    FilledTonalButton(
-                        onClick = { scm.onSave(name.trim(), email.trim()); saved = true },
-                        enabled = name.isNotBlank() && email.isNotBlank(),
-                    ) { Text("Save identity") }
-                    if (saved) {
-                        Text("Saved", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                    }
-                }
             }
 
             // Per-extension settings now live on the Extension Settings screen (Extensions list → gear),
@@ -602,7 +657,7 @@ object SettingsFeature {
             SettingsCard(
                 title = "Tabs",
                 description = "How editor and terminal tabs behave. Applies app-wide.",
-                keywords = "tabs tab close button hide editor terminal accidental",
+                keywords = "tabs tab close button hide editor terminal accidental coloring color accent random directory width size small medium large shorten ellipsis truncate",
             ) {
                 ToggleRow(
                     label = "Hide tab close button",
@@ -611,6 +666,27 @@ object SettingsFeature {
                     onCheckedChange = tabCloseSetting.onChange,
                     modified = tabCloseSetting.hidden != SettingsDefaults.HIDE_TAB_CLOSE_BUTTON,
                     onReset = { tabCloseSetting.onChange(SettingsDefaults.HIDE_TAB_CLOSE_BUTTON) },
+                )
+                SettingsDropdownRow(
+                    label = "Tab width",
+                    supporting = "The most an editor or terminal tab widens before its name is shortened " +
+                        "in the middle (e.g. \"build.gradle.kts\" → \"build.g…kts\").",
+                    options = TabMaxSize.entries.map { it.name },
+                    selected = tabMaxSizeSetting.size.name,
+                    onSelect = { tabMaxSizeSetting.onChange(TabMaxSize.valueOf(it)) },
+                    modified = tabMaxSizeSetting.size != SettingsDefaults.TAB_MAX_SIZE,
+                    onReset = { tabMaxSizeSetting.onChange(SettingsDefaults.TAB_MAX_SIZE) },
+                )
+                SettingsDropdownRow(
+                    label = "Tab coloring",
+                    supporting = "Color-code editor file tabs. Long-press a file tab to set its color by hand; " +
+                        "colors are remembered in the project's .jcode. A project can override this default.",
+                    options = TabColoring.entries.map { it.name },
+                    selected = tabColoringSetting.mode.name,
+                    onSelect = { tabColoringSetting.onChange(TabColoring.valueOf(it)) },
+                    optionLabel = { tabColoringLabel(TabColoring.valueOf(it)) },
+                    modified = tabColoringSetting.mode != SettingsDefaults.TAB_COLORING,
+                    onReset = { tabColoringSetting.onChange(SettingsDefaults.TAB_COLORING) },
                 )
             }
 
@@ -631,21 +707,84 @@ object SettingsFeature {
                 }
             }
 
-            SettingsSectionHeader("Terminal")
             SettingsCard(
-                title = "Terminal",
-                description = "How tapping the terminal behaves. Applies app-wide.",
-                keywords = "terminal double tap type focus keyboard links urls paths single",
+                title = "Markdown preview",
+                description = "How the rendered Markdown preview lays out.",
+                keywords = "markdown preview word wrap portrait landscape width horizontal scroll pan wide tables code",
             ) {
+                val markdownPreviewSetting = LocalMarkdownPreviewSetting.current
                 ToggleRow(
-                    label = "Double-tap to type",
-                    supporting = "Double-tap focuses the terminal and shows the keyboard; a single tap opens URLs and file paths. Turn off to focus with a single tap (links disabled).",
-                    checked = terminalDoubleTapToFocus,
-                    onCheckedChange = onUpdateTerminalDoubleTapToFocus,
-                    modified = terminalDoubleTapToFocus != SettingsDefaults.TERMINAL_DOUBLE_TAP_TO_FOCUS,
-                    onReset = { onUpdateTerminalDoubleTapToFocus(SettingsDefaults.TERMINAL_DOUBLE_TAP_TO_FOCUS) },
+                    label = "Word wrap in portrait",
+                    supporting = "Off: a portrait preview lays out at landscape width (the screen height, " +
+                        "honoring the device-cutout setting) and pans sideways — wide tables and code stay unbroken.",
+                    checked = markdownPreviewSetting.wrapInPortrait,
+                    onCheckedChange = { markdownPreviewSetting.onSetWrapInPortrait(it) },
+                    modified = markdownPreviewSetting.wrapInPortrait != SettingsDefaults.MARKDOWN_WRAP_PORTRAIT,
+                    onReset = { markdownPreviewSetting.onSetWrapInPortrait(SettingsDefaults.MARKDOWN_WRAP_PORTRAIT) },
                 )
             }
+
+            SettingsSectionHeader("Explorer")
+            SettingsCard(
+                title = "Hidden files (project root)",
+                description = "Hide files and folders at the project root in the Explorer. \"By-injected\" " +
+                    "comes from each project's .gitignore, kept in sync by the Source Control extension.",
+                keywords = "explorer files folder hide hidden project root gitignore jcode ignore injected specified show reveal by-line",
+            ) {
+                SettingsDropdownRow(
+                    label = "Mode",
+                    options = ExplorerHiddenMode.entries.map { it.name },
+                    selected = explorerHiddenSetting.mode.name,
+                    onSelect = { explorerHiddenSetting.onSetMode(ExplorerHiddenMode.valueOf(it)) },
+                    optionLabel = { explorerHiddenModeLabel(ExplorerHiddenMode.valueOf(it)) },
+                    modified = explorerHiddenSetting.mode != SettingsDefaults.HIDDEN_ROOT_MODE,
+                    onReset = { explorerHiddenSetting.onSetMode(SettingsDefaults.HIDDEN_ROOT_MODE) },
+                )
+                var hidePatterns by remember(explorerHiddenSetting.specifiedRaw) {
+                    mutableStateOf(explorerHiddenSetting.specifiedRaw)
+                }
+                SettingsTextFieldRow(
+                    label = "Specified — one pattern per line",
+                    value = hidePatterns,
+                    onValueChange = { hidePatterns = it },
+                    onCommit = { explorerHiddenSetting.onSetSpecifiedRaw(hidePatterns) },
+                    placeholder = ".jcode",
+                    singleLine = false,
+                    minLines = 3,
+                )
+            }
+
+            SettingsSectionHeader("Developer")
+            SettingsCard(
+                title = "Developer options",
+                description = "Tools for building and testing JCode extensions.",
+                keywords = "developer options extension sideload unsigned jext debug dev tools inspector validator log console reload make tool third party",
+            ) {
+                val developerSetting = LocalDeveloperSetting.current
+                ToggleRow(
+                    label = "Enable developer options",
+                    supporting = "Adds an \"Ext Dev\" tab to the right panel (inspector, manifest validator, " +
+                        "live log) and lets you sideload an unsigned .jext to debug it. Signed marketplace " +
+                        "extensions are unaffected.",
+                    checked = developerSetting.enabled,
+                    onCheckedChange = { developerSetting.onSetEnabled(it) },
+                    modified = developerSetting.enabled != SettingsDefaults.DEVELOPER_OPTIONS,
+                    onReset = { developerSetting.onSetEnabled(SettingsDefaults.DEVELOPER_OPTIONS) },
+                )
+                if (developerSetting.enabled) {
+                    Text(
+                        "Compile and pack your extension with the JCode extension make tool, then load the " +
+                            "unsigned .jext here — the Ext Dev tab auto-reloads it on each rebuild. Only signed " +
+                            "packages (signed privately by the JCode maintainers) reach the marketplace.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FilledTonalButton(onClick = developerSetting.onLoadExtension, modifier = Modifier.fillMaxWidth()) {
+                        Text("Load extension (.jext)…")
+                    }
+                }
+            }
+
             } // end Global tab
 
             if (showScopedTab) {
@@ -680,7 +819,7 @@ object SettingsFeature {
             SettingsCard(
                 title = "Editor behavior",
                 description = "These controls write back to YAML and update the open editor immediately.",
-                keywords = "editor behavior font size tab size minimap ligatures indent",
+                keywords = "editor behavior font size tab size minimap ligatures indent tab coloring color accent",
             ) {
                 StepperRow(
                     label = "Font size",
@@ -715,6 +854,22 @@ object SettingsFeature {
                     onCheckedChange = { onUpdateLigatures(selectedScope, it) },
                     modified = scopedEditor?.ligatures != null,
                     onReset = { onUpdateLigatures(selectedScope, null) },
+                )
+                // Sanitize: a hand-edited .jcode may hold an unknown enum name; fall back to the
+                // app default rather than crashing composition on TabColoring.valueOf.
+                val tabColoring = (scopedEditor?.tabColoring ?: effectiveConfig.editor.tabColoring)
+                    ?.let { runCatching { TabColoring.valueOf(it) }.getOrNull() }
+                    ?.name
+                    ?: tabColoringSetting.mode.name
+                SettingsDropdownRow(
+                    label = "Tab coloring",
+                    supporting = "Overrides the app-level default for this scope.",
+                    options = TabColoring.entries.map { it.name },
+                    selected = tabColoring,
+                    onSelect = { onUpdateTabColoring(selectedScope, it) },
+                    optionLabel = { runCatching { tabColoringLabel(TabColoring.valueOf(it)) }.getOrDefault(it) },
+                    modified = scopedEditor?.tabColoring != null,
+                    onReset = { onUpdateTabColoring(selectedScope, null) },
                 )
             }
 
@@ -780,6 +935,13 @@ object SettingsFeature {
     }
 }
 
+/** Human-readable labels for the [ExplorerHiddenMode] dropdown (match the settings wording). */
+private fun explorerHiddenModeLabel(mode: ExplorerHiddenMode): String = when (mode) {
+    ExplorerHiddenMode.HideSpecifiedAndInjected -> "Hide Specified + By-Injected"
+    ExplorerHiddenMode.HideInjected -> "Hide By-Injected"
+    ExplorerHiddenMode.None -> "No Hidden File"
+}
+
 /** Human-readable label for an [ExtraKeysVisibility] dropdown option. */
 private fun extraKeysVisibilityLabel(mode: ExtraKeysVisibility): String = when (mode) {
     ExtraKeysVisibility.Hidden -> "Hidden"
@@ -792,6 +954,27 @@ private fun bottomBarVisibilityLabel(mode: BottomBarVisibility): String = when (
     BottomBarVisibility.Hidden -> "Hidden"
     BottomBarVisibility.HideOnKeyboard -> "Hide on Soft Keyboard"
     BottomBarVisibility.AlwaysShow -> "Always Show"
+}
+
+private fun tabColoringLabel(mode: TabColoring): String = when (mode) {
+    TabColoring.RandomRemember -> "Random (if not exist then remember)"
+    TabColoring.Random -> "Random"
+    TabColoring.DirectoryBased -> "Directory based (then remember)"
+    TabColoring.Disabled -> "Disabled"
+}
+
+/** [defaultSuffix] disambiguates the per-button System Default label, e.g. "System Default (Vol Up)". */
+private fun volumeKeyActionLabel(action: VolumeKeyAction, defaultSuffix: String): String = when (action) {
+    VolumeKeyAction.SystemDefault -> "System Default ($defaultSuffix)"
+    VolumeKeyAction.Undo -> "Undo"
+    VolumeKeyAction.Redo -> "Redo"
+    VolumeKeyAction.KeyLeft -> "Key Left"
+    VolumeKeyAction.KeyRight -> "Key Right"
+    VolumeKeyAction.KeyUp -> "Key Up"
+    VolumeKeyAction.KeyDown -> "Key Down"
+    VolumeKeyAction.ScrollUp -> "Scroll Up"
+    VolumeKeyAction.ScrollDown -> "Scroll Down"
+    VolumeKeyAction.CommandPalette -> "Command Palette"
 }
 
 /** Current Settings search query; cards/headers self-filter on it. */

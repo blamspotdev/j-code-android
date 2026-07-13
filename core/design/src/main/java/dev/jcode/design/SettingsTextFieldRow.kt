@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -21,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -39,6 +41,10 @@ fun SettingsTextFieldRow(
     supporting: String? = null,
     placeholder: String = "",
     onCommit: (() -> Unit)? = null,
+    singleLine: Boolean = true,
+    minLines: Int = 1,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    monospace: Boolean = false,
 ) {
     var wasFocused by remember { mutableStateOf(false) }
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -60,9 +66,9 @@ fun SettingsTextFieldRow(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 40.dp)
-                    .padding(horizontal = 10.dp),
-                contentAlignment = Alignment.CenterStart,
+                    .heightIn(min = if (singleLine) 40.dp else 96.dp)
+                    .padding(horizontal = 10.dp, vertical = if (singleLine) 0.dp else 8.dp),
+                contentAlignment = if (singleLine) Alignment.CenterStart else Alignment.TopStart,
             ) {
                 if (value.isEmpty() && placeholder.isNotEmpty()) {
                     Text(
@@ -74,8 +80,13 @@ fun SettingsTextFieldRow(
                 BasicTextField(
                     value = value,
                     onValueChange = onValueChange,
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                    singleLine = singleLine,
+                    minLines = minLines,
+                    keyboardOptions = keyboardOptions,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontFamily = if (monospace) FontFamily.Monospace else null,
+                    ),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     modifier = Modifier
                         .fillMaxWidth()

@@ -34,6 +34,7 @@ object ExplorerFeature {
         context: Context,
         modifier: Modifier = Modifier,
         viewMode: ExplorerViewMode = ExplorerViewMode.Tree,
+        hiddenPatterns: List<String> = emptyList(),
         onFileSelected: ((dev.jcode.fs.FsNode) -> Unit)? = null,
         onSnackbar: ((String) -> Unit)? = null,
     ) {
@@ -44,6 +45,7 @@ object ExplorerFeature {
             context = context,
             modifier = modifier,
             viewMode = viewMode,
+            hiddenPatterns = hiddenPatterns,
             onFileSelected = onFileSelected,
             onSnackbar = onSnackbar,
         )
