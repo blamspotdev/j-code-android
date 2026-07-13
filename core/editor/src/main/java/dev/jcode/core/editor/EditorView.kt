@@ -421,7 +421,11 @@ class EditorView @JvmOverloads constructor(
         cancelFling()
         val snapshot = state.snapshot.value
         val targetLine = line.coerceIn(0, max(0, snapshot.lineCount - 1))
-        val offset = snapshot.lineColumnToOffset(targetLine, column.coerceAtLeast(0))
+        // Clamp the column to the target line's own byte range so an over-long column (e.g. a
+        // hand-typed "Go to Line" of 5:999) snaps to the line end instead of walking past the
+        // newline onto a later line. lineAt returns [start, end) excluding the trailing newline.
+        val (lineStart, lineEnd) = snapshot.lineAt(targetLine)
+        val offset = (lineStart + column.coerceAtLeast(0)).coerceIn(lineStart, lineEnd)
         // Compute line height from the render config (the viewport's may not be set yet on a fresh tab).
         val cfg = state.renderConfig.value
         val lineHeight = (cfg.fontSizeSp * density * cfg.lineHeightMultiplier).toInt().coerceAtLeast(1)
@@ -868,9 +872,19 @@ class EditorView @JvmOverloads constructor(
     }
 
     fun pasteClipboard() {
+        pasteClipboard(retriesLeft = 8)
+    }
+
+    /** Clipboard reads require window focus. Invoked from a context-menu tap, the dismissing popup
+     *  can still hold focus for a few frames — primaryClip reads null then — so retry briefly
+     *  instead of silently dropping the paste. */
+    private fun pasteClipboard(retriesLeft: Int) {
         val state = editorState ?: return
         val text = clipboard()?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
-            ?: return
+        if (text == null) {
+            if (retriesLeft > 0) postDelayed({ pasteClipboard(retriesLeft - 1) }, 50L)
+            return
+        }
         val range = selectionRange()
         runBlocking {
             val insertAt = if (range != null) {

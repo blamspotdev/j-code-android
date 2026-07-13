@@ -20,6 +20,8 @@ object SettingsDefaults {
     val HIDDEN_ROOT_MODE = ExplorerHiddenMode.HideSpecifiedAndInjected
     const val HIDDEN_ROOT_PATTERNS = ".jcode"
     const val RESPECT_DEVICE_CUTOUT = false
+    const val MARKDOWN_WRAP_PORTRAIT = true
+    const val DEVELOPER_OPTIONS = false
     val VOLUME_UP_ACTION = VolumeKeyAction.SystemDefault
     val VOLUME_DOWN_ACTION = VolumeKeyAction.SystemDefault
     // Default to ephemeral Random so the feature is visible out of the box WITHOUT silently writing

@@ -89,6 +89,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -102,6 +103,10 @@ import org.json.JSONObject
 /** Version of the JCode <-> extension request/event API served by this app build. Bump when route
  *  families or envelope semantics change; extensions gate on it via their manifest's api.minApiVersion. */
 const val EXTENSION_API_VERSION = 1
+
+/** Upper bound on per-push explorer decoration/submodule entries — a runaway or malicious extension
+ *  must not be able to grow the decoration maps without limit. */
+const val MAX_EXPLORER_DECORATIONS = 20_000
 
 /**
  * Process-singleton holder for the app-level UI-preferences DataStore. A DataStore must be created
@@ -201,6 +206,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val installed = runCatching { extensionInstaller.installed() }.getOrDefault(emptyList())
             _installedExtensions.value = installed
+            // Gate the Extension Dev log to dev (unsigned sideloaded) extensions only.
+            dev.jcode.workbench.ExtensionDevLog.devIds = installed.filter { it.dev }.map { it.id }.toSet()
             // Any extension may contribute templates (a language/dev pack can bundle them too).
             // Always offer an "Empty Project" first — a blank folder that needs no extension.
             val fromExtensions = installed.flatMap { it.templates }
@@ -208,6 +215,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 listOf(ProjectTemplate(id = "empty", name = "Empty Project", description = "A blank project folder — no scaffolding."))
             }
             _templates.value = emptyOption + fromExtensions.filter { it.id != "empty" }
+        }
+    }
+
+    /**
+     * Sideload an extension from a picked `.jext` [uri] (Developer options). Streams it to a cache
+     * file, installs it (unsigned → marked debuggable; signed → installed normally), refreshes, and
+     * reports the outcome. See [ExtensionInstaller.installLocalJext].
+     */
+    fun sideloadExtension(uri: android.net.Uri) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val tmp = File.createTempFile("sideload", ".jext", appContext.cacheDir)
+                    try {
+                        appContext.contentResolver.openInputStream(uri)?.use { input ->
+                            tmp.outputStream().use { input.copyTo(it) }
+                        } ?: error("cannot open the selected file")
+                        extensionInstaller.installLocalJext(tmp, BuildConfig.VERSION_NAME).getOrThrow()
+                    } finally {
+                        tmp.delete()
+                    }
+                }
+            }
+            result
+                .onSuccess { r ->
+                    refreshInstalledExtensions()
+                    emitMessage(
+                        if (r.signed) "Installed '${r.extension.name}' (signed — not debuggable)."
+                        else "Loaded '${r.extension.name}' (unsigned dev extension).",
+                    )
+                }
+                .onFailure { emitMessage("Sideload failed: ${it.message ?: "invalid .jext"}") }
         }
     }
 
@@ -722,6 +761,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { uiPreferences.edit { it[volumeDownActionKey] = action.name } }
     }
 
+    // Built-in Command Palette commands the user switched off (Settings → Command Palette); stored
+    // as a JSON array of command ids so the default (everything enabled) needs no migration.
+    private val paletteDisabledKey = stringPreferencesKey("palette_disabled_commands")
+
+    val paletteDisabledCommands: StateFlow<Set<String>> = uiPreferences.data
+        .map { prefs ->
+            runCatching {
+                val arr = org.json.JSONArray(prefs[paletteDisabledKey] ?: "[]")
+                buildSet { for (i in 0 until arr.length()) arr.optString(i).takeIf { it.isNotBlank() }?.let(::add) }
+            }.getOrDefault(emptySet())
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
+    fun setPaletteCommandEnabled(id: String, enabled: Boolean) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val current = runCatching {
+                    val arr = org.json.JSONArray(prefs[paletteDisabledKey] ?: "[]")
+                    buildSet { for (i in 0 until arr.length()) arr.optString(i).takeIf { it.isNotBlank() }?.let(::add) }
+                }.getOrDefault(emptySet())
+                val next = if (enabled) current - id else current + id
+                prefs[paletteDisabledKey] = org.json.JSONArray(next.toList()).toString()
+            }
+        }
+    }
+
     /** Volume-key actions that must run in the Compose layer (focused-pane arrows/scroll, command
      *  palette). Undo/Redo are invoked directly by the Activity. Collected by JCodeShell. */
     private val _volumeKeyAction = MutableSharedFlow<VolumeKeyAction>(extraBufferCapacity = 8)
@@ -742,6 +807,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setHideTabCloseButton(enabled: Boolean) {
         viewModelScope.launch {
             uiPreferences.edit { prefs -> prefs[hideTabCloseButtonKey] = enabled }
+        }
+    }
+
+    private val markdownWrapPortraitKey = booleanPreferencesKey("markdown_wrap_portrait")
+
+    /** Markdown preview: wrap to the viewport in portrait (default). When off, portrait previews
+     *  lay out at landscape width (the screen height, honoring the cutout setting) and pan sideways. */
+    val markdownWrapPortrait: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[markdownWrapPortraitKey] ?: SettingsDefaults.MARKDOWN_WRAP_PORTRAIT }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.MARKDOWN_WRAP_PORTRAIT)
+
+    fun setMarkdownWrapPortrait(enabled: Boolean) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[markdownWrapPortraitKey] = enabled }
+        }
+    }
+
+    private val developerOptionsKey = booleanPreferencesKey("developer_options")
+
+    /** Developer options (off by default): reveals extension-authoring tools — the Extension Dev
+     *  right-drawer tab and unsigned `.jext` sideloading. */
+    val developerOptions: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[developerOptionsKey] ?: SettingsDefaults.DEVELOPER_OPTIONS }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.DEVELOPER_OPTIONS)
+
+    fun setDeveloperOptions(enabled: Boolean) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[developerOptionsKey] = enabled }
         }
     }
 
@@ -1244,6 +1337,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val label: String,
         val icon: String? = null,
         val fileExtensions: List<String> = emptyList(),
+        val targets: List<String> = emptyList(),
     )
 
     /** Actions active extensions contribute to the empty-editor start screen (their required tools met). */
@@ -1265,6 +1359,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             availableContributions(exts, acts, sdk) { it.editorContextActions }
         }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
 
+    /** Actions active extensions contribute to the explorer's file/folder context menu. The explorer
+     *  filters them per row via [ShellContribution.fileExtensions] and [ShellContribution.targets]. */
+    val contributedExplorerContextActions: StateFlow<List<ShellContribution>> =
+        combine(installedExtensions, extensionActivations, distroService.sdkCatalogState) { exts, acts, sdk ->
+            availableContributions(exts, acts, sdk) { it.explorerContextActions }
+        }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+    /** Run-config presets active extensions contribute (required toolchains met), offered on the
+     *  Configure Run page when the project contains all of a preset's required files. */
+    val contributedRunConfigPresets: StateFlow<List<ProjectRunner.ExtensionRunPreset>> =
+        combine(installedExtensions, extensionActivations, distroService.sdkCatalogState) { exts, acts, sdk ->
+            exts.filter { (acts[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual }
+                .filter { ext -> ext.requires.sdks.all { it in sdk.installedEntryIds } }
+                .flatMap { ext -> ext.contributes.runConfigPresets.map { ProjectRunner.ExtensionRunPreset(ext.name, it) } }
+        }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
+
     private fun availableContributions(
         exts: List<InstalledExtension>,
         acts: Map<String, ExtensionActivation>,
@@ -1274,7 +1384,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         exts.filter { (acts[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual }
             .filter { ext -> ext.requires.sdks.all { it in sdk.installedEntryIds } }
             .flatMap { ext ->
-                surface(ext.contributes).map { ShellContribution(ext.id, it.id, it.label, it.icon, it.fileExtensions) }
+                surface(ext.contributes).map { ShellContribution(ext.id, it.id, it.label, it.icon, it.fileExtensions, it.targets) }
             }
             .distinctBy { it.extId + ":" + it.id }
 
@@ -1310,6 +1420,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             pendingContextActions[c.extId] = json
         }
         openExtensionViewPage(c.extId, c.id, c.label)
+    }
+
+    /** Extension ids with a live background web host (the persistent SCM WebView) — those get
+     *  explorer taps as a pushed `explorerAction` event instead of a page open. Registered by the
+     *  compose layer that owns the host WebViews. */
+    val liveExtensionHosts: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** Deliver an explorer file/folder context-menu tap. An extension with a live background host
+     *  handles it silently via the pushed `explorerAction` event. When its host is still booting,
+     *  stash the tap for the boot-time pull instead. Extensions without a background host get the
+     *  editor pattern — stash for pull on boot and open the extension's view at the action's route. */
+    fun handleExplorerContextAction(c: ShellContribution, hostPath: File, isDirectory: Boolean) {
+        val json = JSONObject().apply {
+            put("extensionId", c.extId)
+            put("actionId", c.id)
+            put("path", hostToGuestPath(hostPath))
+            put("name", hostPath.name)
+            put("isDirectory", isDirectory)
+        }.toString()
+        val hostExpected = installedExtensions.value.firstOrNull { it.id == c.extId }?.contributes?.explorerDecorations == true
+        when {
+            c.extId in liveExtensionHosts -> _extensionEvents.tryEmit("explorerAction" to json)
+            hostExpected -> pendingContextActions[c.extId] = json
+            else -> {
+                val viewTabId = EXT_APP_PREFIX + c.extId + "#" + c.id
+                if (_editorGroup.value.tabs.any { it.id == viewTabId }) {
+                    _extensionEvents.tryEmit("contextAction" to json)
+                } else {
+                    pendingContextActions[c.extId] = json
+                }
+                openExtensionViewPage(c.extId, c.id, c.label)
+            }
+        }
+    }
+
+    /** "Something under the project changed on disk" hint (saves, explorer file ops, explorer
+     *  Refresh) so decoration-pushing extensions re-run their status checks (debounced ext-side). */
+    fun notifyWorkspaceFilesChanged() {
+        _extensionEvents.tryEmit("filesChanged" to "{}")
     }
 
     /** Resolve the post-open prompt shown after a folder was opened inside a User Workspace. */
@@ -1358,6 +1507,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 BackendSessionKind.JOB,
                 "scaffold:${template.id}:${project.name}",
             ).use {
+                // Missing template requirements (SDK-catalog ids, e.g. android-sdk) install first —
+                // the Setup terminal's mutex serializes install → scaffold as one visible flow, so
+                // an Android project's SDK is present before its first build instead of failing later.
+                val missing = template.requires.filterNot { it in distroService.sdkCatalogState.value.installedEntryIds }
+                if (missing.isNotEmpty()) {
+                    emitMessage("Installing ${missing.size} required toolchain(s) for '${project.name}'…")
+                    if (!installRequiredSdks(template.requires, project.name)) {
+                        emitMessage("Project '${project.name}' scaffold cancelled: required toolchains missing.")
+                        templateScaffolder.reset()
+                        return@use
+                    }
+                }
                 val ok = templateScaffolder.scaffold(
                     TemplateScaffolder.Request(
                         template = template,
@@ -2170,8 +2331,67 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return dev.jcode.core.distro.WorkspaceHostPaths.hostToGuest(p)
     }
 
-    /** Entry point for JCodeNative.request — validates the envelope, version, and capability. */
+    /** [hostToGuestPath]'s inverse plus the matched project: a guest path in the PER-PROJECT bind view
+     *  (what exec.run mounts, so what extensions report) → the project it lives in and its host path.
+     *  resolveHostFile is wrong here — it inverts the terminal's whole-root view, which diverges from
+     *  the bind view for nested workspaces and sanitized bind names. */
+    private fun guestToHostInProject(guestPath: String): Pair<Project, File>? {
+        val g = guestPath.trimEnd('/')
+        currentWorkspace.value?.projects.orEmpty().forEach { proj ->
+            val bind = proj.distroBindTarget.trimEnd('/')
+            val projHost = (proj.fsPath as? FsPath.Local)?.file ?: return@forEach
+            if (g == bind || g.startsWith("$bind/")) {
+                return proj to File(projHost.absolutePath.trimEnd('/') + g.removePrefix(bind))
+            }
+        }
+        return null
+    }
+
+    /** Per-file VCS decorations pushed by extensions (`workbench.setExplorerDecorations`), keyed
+     *  projectId → repo guest root → decoration set. In-memory only: git status is recomputed by the
+     *  extension on every project open, so persisting would only ever show stale letters. */
+    private val _explorerScmDecorations = MutableStateFlow<Map<String, Map<String, ScmRepoDecorations>>>(emptyMap())
+
+    /** Flattened per-project view for the explorer: host absolute path → status / submodule set. */
+    val explorerScmDecorations: StateFlow<Map<String, ScmProjectDecorations>> =
+        _explorerScmDecorations.map { byProject ->
+            byProject.mapValues { (_, repos) ->
+                ScmProjectDecorations(
+                    status = repos.values.flatMap { it.status.entries }.associate { it.key to it.value },
+                    submodules = repos.values.flatMap { it.submodules }.toSet(),
+                )
+            }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    data class ScmRepoDecorations(val status: Map<String, String>, val submodules: Set<String>)
+    data class ScmProjectDecorations(val status: Map<String, String>, val submodules: Set<String>)
+
+    /** Drop all pushed decorations — called when the providing extension's host is torn down
+     *  (uninstall/update/project switch), so the explorer never shows frozen stale badges. */
+    fun clearExplorerScmDecorations() {
+        _explorerScmDecorations.value = emptyMap()
+    }
+
+    /** Entry point for JCodeNative.request. Logs the request/response to the Extension Dev tools when
+     *  the caller is a dev (unsigned sideloaded) extension, then delegates to [extensionApiRequestImpl]. */
     suspend fun extensionApiRequest(ext: InstalledExtension, envelopeJson: String): String {
+        val isDevExt = dev.jcode.workbench.ExtensionDevLog.isDev(ext.id)
+        if (isDevExt) dev.jcode.workbench.ExtensionDevLog.log(
+            dev.jcode.workbench.ExtensionDevLogEntry.Kind.Request, ext.id, "→ $envelopeJson",
+        )
+        val result = extensionApiRequestImpl(ext, envelopeJson)
+        if (isDevExt) {
+            val ok = runCatching { JSONObject(result).optBoolean("ok", true) }.getOrDefault(true)
+            dev.jcode.workbench.ExtensionDevLog.log(
+                if (ok) dev.jcode.workbench.ExtensionDevLogEntry.Kind.Response
+                else dev.jcode.workbench.ExtensionDevLogEntry.Kind.Error,
+                ext.id, "← $result",
+            )
+        }
+        return result
+    }
+
+    private suspend fun extensionApiRequestImpl(ext: InstalledExtension, envelopeJson: String): String {
         val req = runCatching { JSONObject(envelopeJson) }.getOrNull()
             ?: return apiError("malformed request envelope")
         val type = req.optString("type")
@@ -2196,6 +2416,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (type == "workbench.pendingContextAction") {
             val pending = pendingContextActions.remove(ext.id)
             return apiOk(JSONObject().apply { if (pending != null) put("action", JSONObject(pending)) })
+        }
+        // Explorer decorations are writable only by extensions that declare the contribution — the
+        // generic `workbench` capability must not let any extension forge another's VCS badges.
+        if (type == "workbench.setExplorerDecorations" && !ext.contributes.explorerDecorations) {
+            return apiError("extension does not contribute explorerDecorations")
         }
         // Per-extension settings (config.*) are scoped to the caller — resolved from its declared
         // `settings:` defaults overlaid with the user's saved values. Also handled here for ext.id.
@@ -2372,6 +2597,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 currentWorkspace.value?.let { put("workspace", it.name) }
             },
         )
+
+        // Per-file VCS decorations for the Explorer (status letters + submodule dirs). `path` is a repo
+        // guest root; entry paths are relative to it. One push replaces that repo's whole slice under
+        // its project, so a repo going clean clears its letters.
+        "workbench.setExplorerDecorations" -> {
+            val repoGuest = p.optString("path").trim().trimEnd('/')
+            val resolved = if (repoGuest.isNotEmpty() && !repoGuest.split('/').contains("..")) {
+                guestToHostInProject(repoGuest)
+            } else {
+                null
+            }
+            if (resolved != null) {
+                val (proj, repoHost) = resolved
+                val repoRoot = repoHost.absolutePath.trimEnd('/')
+                fun hostOf(rel: String): String? = rel.trim().trim('/').takeIf { it.isNotEmpty() && !it.split('/').contains("..") }
+                    ?.let { "$repoRoot/$it" }
+                val status = buildMap {
+                    val arr = p.optJSONArray("decorations") ?: org.json.JSONArray()
+                    for (i in 0 until minOf(arr.length(), MAX_EXPLORER_DECORATIONS)) {
+                        val d = arr.optJSONObject(i) ?: continue
+                        val code = d.optString("status").trim().takeIf { it.isNotEmpty() } ?: continue
+                        hostOf(d.optString("path"))?.let { put(it, code.take(2)) }
+                    }
+                }
+                val submodules = buildSet {
+                    val arr = p.optJSONArray("submodules") ?: org.json.JSONArray()
+                    for (i in 0 until minOf(arr.length(), MAX_EXPLORER_DECORATIONS)) {
+                        hostOf(arr.optString(i))?.let(::add)
+                    }
+                }
+                _explorerScmDecorations.update { byProject ->
+                    val pid = proj.id.toString()
+                    val repos = byProject[pid].orEmpty() + (repoGuest to ScmRepoDecorations(status, submodules))
+                    byProject + (pid to repos)
+                }
+            }
+            apiOk(JSONObject().put("matched", resolved != null))
+        }
 
         // Every project folder in the open workspace, as guest mount paths — lets a multi-repo extension
         // (e.g. Source Control) enumerate and switch between repositories. Each project's guest path is its
@@ -2876,6 +3139,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (clean) state.markClean()
             withContext(Dispatchers.IO) { file.diskSignatureOrNull() }?.let { diskSignatures[tab.id] = it }
             queueSyntaxCheck(file)
+            notifyWorkspaceFilesChanged()
             clean
         }.getOrElse {
             emitMessage("Failed to save ${tab.title}: ${it.message ?: "error"}")

@@ -2,43 +2,47 @@ package dev.jcode
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import dev.jcode.design.CommandRegistry
 import dev.jcode.design.CommandSpec
+import dev.jcode.design.CompactSearchField
+import dev.jcode.design.JCodeIcon
+import dev.jcode.design.jcIcon
 
 /**
- * Ctrl/Cmd+Shift+P command palette. Sources its entries from the shared [CommandRegistry] (populated
- * by the workbench shell) and fuzzy-filters them. Renders as a centered dialog on large screens and
- * a bottom sheet on compact ones.
+ * Ctrl/Cmd+Shift+P command palette. Sources entries from the shared [CommandRegistry] (populated by
+ * the workbench shell) and fuzzy-filters them. Uses JCode's compact vocabulary — the shared
+ * [CompactSearchField] plus dense icon+title rows — so it reads like the manager panels and context
+ * menus. Renders as a bottom sheet on compact windows and a centered dialog on large ones.
  */
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
@@ -50,54 +54,49 @@ internal fun CommandPalette(
     if (!visible) return
 
     var query by rememberSaveable { mutableStateOf("") }
-    val commands = remember(query) {
+    // CommandRegistry.version is Compose state — reading it here re-filters when the shell (re)registers
+    // commands, including the first population after a process-restore that reopened the palette.
+    val commands = remember(query, CommandRegistry.version) {
         CommandRegistry.all().filter { command ->
             command.isEnabled() && fuzzyMatches(query, "${command.group} ${command.title}")
         }
     }
-    val focusRequester = remember { FocusRequester() }
+
+    fun run(command: CommandSpec) {
+        command.action()
+        onDismiss()
+    }
 
     val content: @Composable () -> Unit = {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            TextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(focusRequester),
-                placeholder = { Text("Type a command") },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = {
-                    commands.firstOrNull()?.action?.invoke()
-                    onDismiss()
-                }),
-                singleLine = true,
+            CompactSearchField(
+                query = query,
+                onQueryChange = { query = it },
+                placeholder = "Search commands",
+                autoFocus = true,
+                onImeAction = {
+                    // Only act on a real query — an empty-field Go must not fire whatever command
+                    // happens to sit first in the registry.
+                    if (query.isNotBlank()) commands.firstOrNull()?.let(::run) else onDismiss()
+                },
             )
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(commands, key = CommandSpec::id) { command ->
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(18.dp))
-                            .clickable {
-                                command.action()
-                                onDismiss()
-                            },
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f),
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Text(command.title, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                text = command.group,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+            if (commands.isEmpty()) {
+                Text(
+                    text = "No matching commands",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                )
+            } else {
+                // Cap the list so the sheet/dialog stays compact instead of filling the screen.
+                LazyColumn(modifier = Modifier.heightIn(max = 340.dp)) {
+                    items(commands, key = CommandSpec::id) { command ->
+                        CommandRow(command, onClick = { run(command) })
                     }
                 }
             }
@@ -105,23 +104,58 @@ internal fun CommandPalette(
     }
 
     if (compact) {
-        ModalBottomSheet(onDismissRequest = onDismiss) {
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
             content()
         }
     } else {
         Dialog(onDismissRequest = onDismiss) {
             Surface(
-                modifier = Modifier.widthIn(max = 560.dp),
-                shape = RoundedCornerShape(28.dp),
+                modifier = Modifier.widthIn(max = 520.dp),
+                shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 3.dp,
             ) {
                 content()
             }
         }
     }
+}
 
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
+/** A single dense palette row: leading command glyph, title, and a trailing dim group label. */
+@Composable
+private fun CommandRow(command: CommandSpec, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .heightIn(min = 40.dp)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(
+            imageVector = jcIcon(command.icon ?: JCodeIcon.CommandPalette),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(
+            text = command.title,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = command.group,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
     }
 }
 

@@ -70,7 +70,11 @@ import dev.jcode.design.LocalTabColoringSetting
 import dev.jcode.design.LocalTabMaxSize
 import dev.jcode.design.TabColoring
 import dev.jcode.design.TabMaxSize
+import dev.jcode.design.LocalCommandPaletteSetting
+import dev.jcode.design.LocalDeveloperSetting
+import dev.jcode.design.LocalMarkdownPreviewSetting
 import dev.jcode.design.LocalVolumeKeysSetting
+import dev.jcode.design.PaletteCommandCatalog
 import dev.jcode.design.VolumeKeyAction
 import dev.jcode.design.LocalRestoreSession
 import dev.jcode.design.WebPreviewBrowsers
@@ -214,10 +218,11 @@ object SettingsFeature {
                 }
             }
             SettingsSearchField(query = query, onQueryChange = { query = it })
-            // A search reaches across ALL tabs, so a match can never hide behind the tab selection;
-            // outside a search, only the selected tab's cards render.
-            val showGlobalTab = query.isNotBlank() || safeTab == 0
-            val showScopedTab = query.isNotBlank() || safeTab >= 1
+            // Search is scoped to the SELECTED tab (like VS Code's User/Workspace split): the GLOBAL
+            // tab shows only app-level settings, WORKSPACE/PROJECT only the .jcode-scoped ones — so a
+            // search on the Project tab never surfaces global settings that aren't project-overridable.
+            val showGlobalTab = safeTab == 0
+            val showScopedTab = safeTab >= 1
             if (showGlobalTab) {
             SettingsSectionHeader("Appearance")
             SettingsCard(
@@ -407,6 +412,27 @@ object SettingsFeature {
                     modified = volumeKeysSetting.down != SettingsDefaults.VOLUME_DOWN_ACTION,
                     onReset = { volumeKeysSetting.onChangeDown(SettingsDefaults.VOLUME_DOWN_ACTION) },
                 )
+            }
+
+            SettingsCard(
+                title = "Command Palette",
+                description = "Choose which built-in commands the palette offers. Context-dependent " +
+                    "commands only appear when their view is focused (e.g. Go to Line needs an open editor).",
+                keywords = "command palette commands orientation lock fullscreen keep awake screen on " +
+                    "hide header tabs zen go to line color search picker eyedropper format document",
+            ) {
+                val paletteSetting = LocalCommandPaletteSetting.current
+                PaletteCommandCatalog.forEach { command ->
+                    val enabled = command.id !in paletteSetting.disabledIds
+                    ToggleRow(
+                        label = command.label,
+                        supporting = command.description,
+                        checked = enabled,
+                        onCheckedChange = { paletteSetting.onSetEnabled(command.id, it) },
+                        modified = !enabled,
+                        onReset = { paletteSetting.onSetEnabled(command.id, true) },
+                    )
+                }
             }
 
             SettingsSectionHeader("Startup")
@@ -681,6 +707,23 @@ object SettingsFeature {
                 }
             }
 
+            SettingsCard(
+                title = "Markdown preview",
+                description = "How the rendered Markdown preview lays out.",
+                keywords = "markdown preview word wrap portrait landscape width horizontal scroll pan wide tables code",
+            ) {
+                val markdownPreviewSetting = LocalMarkdownPreviewSetting.current
+                ToggleRow(
+                    label = "Word wrap in portrait",
+                    supporting = "Off: a portrait preview lays out at landscape width (the screen height, " +
+                        "honoring the device-cutout setting) and pans sideways — wide tables and code stay unbroken.",
+                    checked = markdownPreviewSetting.wrapInPortrait,
+                    onCheckedChange = { markdownPreviewSetting.onSetWrapInPortrait(it) },
+                    modified = markdownPreviewSetting.wrapInPortrait != SettingsDefaults.MARKDOWN_WRAP_PORTRAIT,
+                    onReset = { markdownPreviewSetting.onSetWrapInPortrait(SettingsDefaults.MARKDOWN_WRAP_PORTRAIT) },
+                )
+            }
+
             SettingsSectionHeader("Explorer")
             SettingsCard(
                 title = "Hidden files (project root)",
@@ -709,6 +752,37 @@ object SettingsFeature {
                     singleLine = false,
                     minLines = 3,
                 )
+            }
+
+            SettingsSectionHeader("Developer")
+            SettingsCard(
+                title = "Developer options",
+                description = "Tools for building and testing JCode extensions.",
+                keywords = "developer options extension sideload unsigned jext debug dev tools inspector validator log console reload make tool third party",
+            ) {
+                val developerSetting = LocalDeveloperSetting.current
+                ToggleRow(
+                    label = "Enable developer options",
+                    supporting = "Adds an \"Ext Dev\" tab to the right panel (inspector, manifest validator, " +
+                        "live log) and lets you sideload an unsigned .jext to debug it. Signed marketplace " +
+                        "extensions are unaffected.",
+                    checked = developerSetting.enabled,
+                    onCheckedChange = { developerSetting.onSetEnabled(it) },
+                    modified = developerSetting.enabled != SettingsDefaults.DEVELOPER_OPTIONS,
+                    onReset = { developerSetting.onSetEnabled(SettingsDefaults.DEVELOPER_OPTIONS) },
+                )
+                if (developerSetting.enabled) {
+                    Text(
+                        "Compile and pack your extension with the JCode extension make tool, then load the " +
+                            "unsigned .jext here — the Ext Dev tab auto-reloads it on each rebuild. Only signed " +
+                            "packages (signed privately by the JCode maintainers) reach the marketplace.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FilledTonalButton(onClick = developerSetting.onLoadExtension, modifier = Modifier.fillMaxWidth()) {
+                        Text("Load extension (.jext)…")
+                    }
+                }
             }
 
             } // end Global tab

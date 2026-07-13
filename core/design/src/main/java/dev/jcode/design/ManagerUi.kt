@@ -167,56 +167,12 @@ private fun ManagerSearchField(
     onQueryChange: (String) -> Unit,
     placeholder: String,
 ) {
-    val focusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier
-                .heightIn(min = 36.dp)
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Icon(
-                LocalIconBundle.current[JCodeIcon.Search],
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Box(modifier = Modifier.weight(1f)) {
-                if (query.isEmpty()) {
-                    Text(
-                        placeholder,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                BasicTextField(
-                    value = query,
-                    onValueChange = onQueryChange,
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
-                )
-            }
-            if (query.isNotEmpty()) {
-                Icon(
-                    LocalIconBundle.current[JCodeIcon.Close],
-                    contentDescription = "Clear search",
-                    modifier = Modifier
-                        .size(18.dp)
-                        .clickable { onQueryChange("") },
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
+    CompactSearchField(
+        query = query,
+        onQueryChange = onQueryChange,
+        placeholder = placeholder,
+        autoFocus = true,
+    )
 }
 
 /** Compact filter pill for manager panels — matches the tab-pill styling, denser than M3 FilterChip. */

@@ -1,5 +1,9 @@
 package dev.jcode.feature.editor.pane
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -62,6 +66,7 @@ import dev.jcode.core.editor.completion.EditorCompletionModule
 import dev.jcode.core.editor.completion.LocalCompletionSource
 import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
+import dev.jcode.design.LocalChromeControls
 import dev.jcode.design.LocalEditorTabColors
 import dev.jcode.design.LocalTabMaxSize
 import dev.jcode.design.MiddleEllipsisText
@@ -97,13 +102,20 @@ fun EditorPane(
     pageContent: @Composable (EditorTab) -> Unit = {},
 ) {
     Column(modifier = modifier.clipToBounds()) {
-        // Tab strip — explicit fixed height so it's never compressed
-        TabStrip(
-            group = group,
-            onTabSelected = onTabSelected,
-            onTabClosed = onTabClosed,
-            onOpenFile = onOpenFile,
-        )
+        // Tab strip — explicit fixed height so it's never compressed. Collapses together with the
+        // workbench header when the palette's "Hide Header and Tabs" mode is on.
+        AnimatedVisibility(
+            visible = !LocalChromeControls.current.chromeHidden,
+            enter = expandVertically(animationSpec = tween(200)),
+            exit = shrinkVertically(animationSpec = tween(200)),
+        ) {
+            TabStrip(
+                group = group,
+                onTabSelected = onTabSelected,
+                onTabClosed = onTabClosed,
+                onOpenFile = onOpenFile,
+            )
+        }
 
         // Active tab body: a file tab hosts the editor view; a page tab renders host content.
         val activeTab = group.activeTab

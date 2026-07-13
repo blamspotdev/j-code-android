@@ -9,7 +9,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -49,6 +48,7 @@ import androidx.compose.ui.draganddrop.DragAndDropEvent
 import androidx.compose.ui.draganddrop.DragAndDropTarget
 import androidx.compose.ui.draganddrop.mimeTypes
 import androidx.compose.ui.draganddrop.toAndroidDragEvent
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
@@ -57,6 +57,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
+import dev.jcode.design.JCodeTheme
 import dev.jcode.design.JcTooltip
 import dev.jcode.design.DenseRow
 import dev.jcode.design.LocalDensityMode
@@ -141,6 +142,13 @@ fun ExplorerView(
         viewModel.setHiddenPatterns(hiddenPatterns)
     }
 
+    // VCS decorations pushed by the shell; re-badge rows when the extension reports new status (also
+    // keyed on the view model so a recreated one is fed the current maps, not just future changes).
+    val scmUi = LocalExplorerScmUi.current
+    LaunchedEffect(viewModel, scmUi.status, scmUi.submodules) {
+        viewModel.setScmDecorations(scmUi.status, scmUi.submodules)
+    }
+
     // Where toolbar create/paste should land: the viewed dir in List mode; the selected dir (or the
     // selected file's parent) in Tree mode, falling back to the project root.
     fun resolveCreateParent(): FsPath {
@@ -171,6 +179,7 @@ fun ExplorerView(
                 runCatching {
                     deleteToTrash(fs, context, row.node.path, project.fsPath)
                     viewModel.refresh()
+                    scmUi.onFsActivity?.invoke()
                     onSnackbar?.invoke("Moved '${row.node.name}' to trash")
                 }.onFailure { onSnackbar?.invoke("Delete failed: ${it.message}") }
             }
@@ -185,7 +194,10 @@ fun ExplorerView(
             onCreateFile = { showCreateDialog = CreateTarget(resolveCreateParent(), isDirectory = false) },
             onCreateFolder = { showCreateDialog = CreateTarget(resolveCreateParent(), isDirectory = true) },
             onCollapseAll = { scope.launch { viewModel.collapseAll() } },
-            onRefresh = { scope.launch { viewModel.refresh() } },
+            onRefresh = {
+                scope.launch { viewModel.refresh() }
+                scmUi.onFsActivity?.invoke()
+            },
             onPaste = {
                 clipboard?.let { entry ->
                     scope.launch {
@@ -199,6 +211,7 @@ fun ExplorerView(
                                 viewModel.refresh()
                             }
                             clipboard = null
+                            scmUi.onFsActivity?.invoke()
                         }.onFailure { onSnackbar?.invoke("Paste failed: ${it.message}") }
                     }
                 }
@@ -270,6 +283,7 @@ fun ExplorerView(
                             createFile(fs, context, target.parentPath, name)
                         }
                         viewModel.refresh()
+                        scmUi.onFsActivity?.invoke()
                         onSnackbar?.invoke("Created '$name'")
                     }.onFailure {
                         onSnackbar?.invoke("Create failed: ${it.message}")
@@ -291,6 +305,7 @@ fun ExplorerView(
                     runCatching {
                         renameFile(fs, context, target.path, newName)
                         viewModel.refresh()
+                        scmUi.onFsActivity?.invoke()
                         onSnackbar?.invoke("Renamed to '$newName'")
                     }.onFailure {
                         onSnackbar?.invoke("Rename failed: ${it.message}")
@@ -331,6 +346,7 @@ private fun RowOverflowMenu(
     onAction: (TreeRow, RowAction) -> Unit,
 ) {
     val isDir = row.node.kind == FsKind.Directory
+    val scmUi = LocalExplorerScmUi.current
     Box {
         JcTooltip("More actions") {
             IconButton(
@@ -359,6 +375,11 @@ private fun RowOverflowMenu(
                 if (isDir) {
                     add(ContextAction(JCodeIcon.NewFile, "New file") { onAction(row, RowAction.NewFile) })
                     add(ContextAction(JCodeIcon.NewFolder, "New folder") { onAction(row, RowAction.NewFolder) })
+                }
+                scmUi.onContextAction?.let { dispatch ->
+                    scmUi.contextActions
+                        .filter { explorerActionAppliesTo(it, row.node.name, isDir) }
+                        .forEach { a -> add(ContextAction(a.icon, a.label) { dispatch(a, row.node) }) }
                 }
             },
         )
@@ -556,11 +577,12 @@ private fun TreeRowItem(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodyMedium,
+                color = row.vcsStatus?.let { vcsStatusColor(it) } ?: Color.Unspecified,
             )
         },
         trailing = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                row.badge?.let { badge -> BadgeContent(badge) }
+                RowVcsBadges(row)
                 RowOverflowMenu(
                     row = row,
                     expanded = menuExpanded,
@@ -634,6 +656,7 @@ private fun ListViewContent(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.bodyMedium,
+                            color = row.vcsStatus?.let { vcsStatusColor(it) } ?: Color.Unspecified,
                         )
                         if (row.node.kind == FsKind.File) {
                             Text(
@@ -648,7 +671,7 @@ private fun ListViewContent(
                 },
                 trailing = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        row.badge?.let { badge -> BadgeContent(badge) }
+                        RowVcsBadges(row)
                         RowOverflowMenu(
                             row = row,
                             expanded = menuExpanded,
@@ -771,54 +794,40 @@ private fun CreateRenameDialog(
     )
 }
 
-// --- Badge ---
+// --- VCS badges ---
 
+/** Trailing VCS chips for a row: an "S" submodule marker and/or the status letter. */
 @Composable
-private fun BadgeContent(badge: ExplorerBadge) {
-    when (badge) {
-        is ExplorerBadge.Unsaved -> {
+private fun RowVcsBadges(row: TreeRow) {
+    if (row.isSubmodule) {
+        JcTooltip("Git submodule") {
             Text(
-                text = "●",
+                text = "S",
                 color = MaterialTheme.colorScheme.tertiary,
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
-
-        is ExplorerBadge.VcsStatus -> {
-            val color = when (badge.status) {
-                "M" -> MaterialTheme.colorScheme.primary
-                "A" -> MaterialTheme.colorScheme.tertiary
-                "D" -> MaterialTheme.colorScheme.error
-                "?" -> MaterialTheme.colorScheme.onSurfaceVariant
-                else -> MaterialTheme.colorScheme.onSurfaceVariant
-            }
-            Text(
-                text = badge.status,
-                color = color,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 2.dp),
             )
         }
-
-        is ExplorerBadge.ProblemCount -> {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (badge.errors > 0) {
-                    Text(
-                        text = "✕ ${badge.errors}",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
-                if (badge.warnings > 0) {
-                    Text(
-                        text = "⚠ ${badge.warnings}",
-                        color = MaterialTheme.colorScheme.tertiary,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
-            }
-        }
     }
+    row.vcsStatus?.let { status ->
+        Text(
+            text = status,
+            color = vcsStatusColor(status),
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 2.dp),
+        )
+    }
+}
+
+/** Shared status-letter → color mapping (badge and filename tint): modified amber, added/untracked
+ *  green, deleted/conflicted red, renamed primary. */
+@Composable
+private fun vcsStatusColor(status: String): Color = when (status.firstOrNull()) {
+    'M', DIR_CONTAINS_CHANGES.first() -> JCodeTheme.semanticColors.warning
+    'A', '?' -> JCodeTheme.semanticColors.success
+    'D', 'U' -> MaterialTheme.colorScheme.error
+    'R', 'C' -> MaterialTheme.colorScheme.primary
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
 }
 
 // --- Drag and Drop Scaffold ---

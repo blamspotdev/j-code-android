@@ -77,11 +77,24 @@ class ExtensionInstaller internal constructor(context: Context) {
             }
         }
 
-    /** Install from a local `.jext` file (sideload). */
-    suspend fun installLocalJext(file: File, appVersion: String): Result<InstalledExtension> =
+    /**
+     * Install from a local `.jext` file (Developer-options sideload). An UNSIGNED package is marked
+     * `dev = true` (debuggable in the Extension Dev tools); a SIGNED one installs normally (not
+     * debuggable — a signed package is production, per the marketplace signing policy). [signed]
+     * reports which it was, so the caller can warn appropriately.
+     */
+    suspend fun installLocalJext(file: File, appVersion: String): Result<SideloadResult> =
         withContext(Dispatchers.IO) {
-            runCatching { installFromJextBytes(file.readBytes(), expectedFingerprint = null, appVersion = appVersion) }
+            runCatching {
+                val bytes = file.readBytes()
+                val signed = JextCrypto.isSignedJext(bytes)
+                val ext = installFromJextBytes(bytes, expectedFingerprint = null, appVersion = appVersion, markDev = !signed)
+                SideloadResult(ext, signed = signed)
+            }
         }
+
+    /** Outcome of a sideload: the installed extension plus whether the package was signed. */
+    data class SideloadResult(val extension: InstalledExtension, val signed: Boolean)
 
     /**
      * Install extensions bundled in the APK assets (e.g. `builtin-extensions/foo.jext`) that aren't
@@ -109,11 +122,13 @@ class ExtensionInstaller internal constructor(context: Context) {
         return map?.str("version") ?: "0.0.0"
     }
 
-    /** Verify a .jext (integrity + compatibility), then unpack it under the install root. */
+    /** Verify a .jext (integrity + compatibility), then unpack it under the install root. When
+     *  [markDev] is set, drop a [DEV_MARKER] file so the install is flagged debuggable. */
     private fun installFromJextBytes(
         bytes: ByteArray,
         expectedFingerprint: String?,
         appVersion: String,
+        markDev: Boolean = false,
     ): InstalledExtension {
         // Official packages ship signed (Ed25519) + encrypted (AES-256-GCM). Verify + decrypt to the
         // inner plain-.jext ZIP first; a plain (format-1) ZIP is passed through for backward compatibility.
@@ -144,6 +159,9 @@ class ExtensionInstaller internal constructor(context: Context) {
         tmp.mkdirs()
         val tmpPath = tmp.canonicalPath + File.separator
         for ((rel, data) in files) {
+            // Never let a package supply its own dev marker — only the host writes it (below), so a
+            // crafted .jext can't self-elevate to a debuggable dev extension.
+            if (rel == DEV_MARKER || rel.endsWith("/$DEV_MARKER")) continue
             val outFile = File(tmp, rel)
             if (!outFile.canonicalPath.startsWith(tmpPath)) continue // zip-slip guard
             outFile.parentFile?.mkdirs()
@@ -154,6 +172,10 @@ class ExtensionInstaller internal constructor(context: Context) {
             tmp.copyRecursively(dest, overwrite = true)
             tmp.deleteRecursively()
         }
+        // The dev marker is written AFTER the atomic swap (a re-extract wipes dest, so a re-sideload
+        // via the make tool re-marks it each time). Package authors can't smuggle it in — it lives
+        // outside the extracted file set.
+        if (markDev) runCatching { File(dest, DEV_MARKER).writeText("sideloaded") }
         return loadInstalled(dest) ?: error("Installed package has no valid extension.yaml")
     }
 
@@ -250,6 +272,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             requires = parseDeps(map["requires"]),
             suggests = parseDeps(map["suggests"]),
             contributes = parseContributions(map["contributes"]),
+            dev = File(dir, DEV_MARKER).exists(),
         )
     }
 
@@ -349,12 +372,46 @@ class ExtensionInstaller internal constructor(context: Context) {
                     icon = a.str("icon"),
                     fileExtensions = a.listOfAny("fileExtensions")
                         .mapNotNull { it?.toString()?.trim()?.removePrefix(".")?.lowercase()?.takeIf(String::isNotBlank) },
+                    targets = a.listOfAny("targets")
+                        .mapNotNull { it?.toString()?.trim()?.lowercase()?.takeIf { t -> t == "file" || t == "directory" } },
                 )
             }
+        val runPresets = map.listOfAny("runConfigPresets").mapNotNull { item ->
+            val p = (item as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
+            val id = p.str("id")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+            // `requires` is the list of globs that must ALL be present; accept a single `match` string
+            // as shorthand for a one-file preset.
+            val requires = (p.strList("requires") + listOfNotNull(p.str("match")?.takeIf(String::isNotBlank)))
+                .distinct()
+            if (requires.isEmpty()) return@mapNotNull null
+            // `terminals: [{label,command}]`; accept a single top-level `command` as a one-terminal
+            // shorthand (labelled by `terminalLabel`).
+            val terminals = p.listOfAny("terminals").mapNotNull { t ->
+                val tm = (t as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
+                val cmd = tm.str("command")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+                RunPresetTerminal(label = tm.str("label") ?: "Run", command = cmd)
+            }.ifEmpty {
+                p.str("command")?.takeIf(String::isNotBlank)
+                    ?.let { listOf(RunPresetTerminal(p.str("terminalLabel") ?: "Run", it)) }
+                    .orEmpty()
+            }
+            if (terminals.isEmpty()) return@mapNotNull null
+            RunConfigPreset(
+                id = id,
+                label = p.str("label") ?: id,
+                requires = requires,
+                terminals = terminals,
+                // Tolerate YAML ints, quoted ints, and floats (5173.0) alike.
+                readyPort = p.str("readyPort")?.let { it.toIntOrNull() ?: it.toDoubleOrNull()?.toInt() } ?: 0,
+            )
+        }
         return ExtensionContributions(
             editorStartActions = actions("editorStartActions"),
             drawerActions = actions("drawerActions"),
             editorContextActions = actions("editorContextActions"),
+            explorerContextActions = actions("explorerContextActions"),
+            explorerDecorations = map["explorerDecorations"] == true || map.str("explorerDecorations") == "true",
+            runConfigPresets = runPresets,
         )
     }
 
@@ -447,6 +504,7 @@ class ExtensionInstaller internal constructor(context: Context) {
         const val INDEX_URL = BASE_URL + "marketplace.yaml"
         const val JEHM_FILE = "extension.jehm"
         const val JEXT_MANIFEST = ".jext-manifest.json"
+        const val DEV_MARKER = ".jcode-dev"
     }
 }
 

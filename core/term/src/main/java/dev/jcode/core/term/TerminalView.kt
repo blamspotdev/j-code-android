@@ -479,8 +479,18 @@ class TerminalView @JvmOverloads constructor(
      *  path is pasted — a raw terminal can't render an image, and CLIs accept an image file path.
      *  Otherwise the clipboard text is written to the PTY as keyboard input. */
     private fun pasteFromClipboard() {
+        pasteFromClipboard(retriesLeft = 8)
+    }
+
+    private fun pasteFromClipboard(retriesLeft: Int) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-        val clip = clipboard?.primaryClip?.takeIf { it.itemCount > 0 } ?: return
+        val clip = clipboard?.primaryClip?.takeIf { it.itemCount > 0 }
+        if (clip == null) {
+            // Clipboard reads require window focus; a dismissing context-menu popup can still hold
+            // it for a few frames — retry briefly instead of silently dropping the paste.
+            if (retriesLeft > 0) postDelayed({ pasteFromClipboard(retriesLeft - 1) }, 50L)
+            return
+        }
         val item = clip.getItemAt(0)
         val uri = item.uri
         if (uri != null) {

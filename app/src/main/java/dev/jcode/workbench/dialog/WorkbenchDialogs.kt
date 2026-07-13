@@ -382,10 +382,10 @@ private fun TemplateOption(
                 val requires = "Requires: ${template.requires.joinToString(", ")}"
                 Text(
                     if (missing.isEmpty()) requires
-                    else "$requires — install ${missing.joinToString(", ")} via SDK Manager",
+                    else "$requires — ${missing.joinToString(", ")} will be installed during setup",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (missing.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant
-                    else MaterialTheme.colorScheme.error,
+                    else MaterialTheme.colorScheme.tertiary,
                 )
             }
         }

@@ -6,6 +6,7 @@ import android.net.Uri
 import dev.jcode.core.config.RunConfig
 import dev.jcode.core.config.RunConfigStore
 import dev.jcode.core.config.RunConfigTerminal
+import dev.jcode.feature.marketplace.RunConfigPreset
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
 import java.io.File
@@ -105,6 +106,181 @@ object ProjectRunner {
     /** Persist [config] to the project's `.jcode/run.yaml`. */
     fun saveRunConfig(project: Project, config: RunConfig) {
         (project.fsPath as? FsPath.Local)?.file?.let { RunConfigStore.save(it, config) }
+    }
+
+    /** A [RunConfigPreset] paired with the display name of the extension that contributed it. */
+    data class ExtensionRunPreset(
+        val source: String,
+        val preset: RunConfigPreset,
+    )
+
+    /** A run config detected from the project's files, offered on the Configure page as a one-tap
+     *  form prefill (never auto-saved). [source] says what detected it — "Detected" for built-in
+     *  probes, or the contributing extension's name. */
+    data class RunSuggestion(
+        val label: String,
+        val source: String,
+        val config: RunConfig,
+    )
+
+    /**
+     * Scan [project]'s files (to [SCAN_DEPTH] levels, skipping dependency/VCS dirs) and propose run
+     * configs: .NET projects per `.csproj` (web vs console via `Microsoft.NET.Sdk.Web`, plus a
+     * combined ASP.NET + Vite recipe when both halves exist), Vite/npm apps per `package.json`, a
+     * Gradle build when `gradlew` is present, and every [extensionPresets] whose required files are
+     * ALL present. Blocking filesystem work — call from a background dispatcher.
+     */
+    fun suggestRunConfigs(project: Project, extensionPresets: List<ExtensionRunPreset>): List<RunSuggestion> {
+        val root = (project.fsPath as? FsPath.Local)?.file?.takeIf(File::isDirectory) ?: return emptyList()
+        val guestDir = project.distroBindTarget.trimEnd('/')
+        val files = root.walkTopDown()
+            .maxDepth(SCAN_DEPTH)
+            .onEnter { dir -> dir == root || (dir.name !in SCAN_SKIP_DIRS && !dir.name.startsWith(".")) }
+            .filter { it.isFile }
+            .take(SCAN_FILE_CAP)
+            .toList()
+        fun rel(f: File) = f.relativeTo(root).invariantSeparatorsPath
+        fun guest(f: File) = "$guestDir/${rel(f)}"
+        fun stage(suffix: String) = sanitizeStageName("${project.name}-$suffix")
+
+        // Extension presets are curated (named, multi-terminal) and go FIRST so the generic built-in
+        // probes below can't crowd them out of the SCAN_TOTAL_CAP-capped list in a busy monorepo.
+        val presetSuggestions = mutableListOf<RunSuggestion>()
+        val suggestions = mutableListOf<RunSuggestion>()
+
+        val csprojs = files.filter { it.extension.equals("csproj", ignoreCase = true) }
+            .map { it to runCatching { it.readText() }.getOrDefault("").contains("Microsoft.NET.Sdk.Web") }
+        val packageJsons = files.filter { it.name == "package.json" }
+            .map { it to runCatching { it.readText() }.getOrDefault("") }
+        val viteJsons = packageJsons.filter { (_, text) -> text.contains("\"vite\"") }
+
+        val firstWebCsproj = csprojs.firstOrNull { it.second }?.first
+        val firstViteDir = viteJsons.firstOrNull()?.first?.parentFile
+        if (firstWebCsproj != null && firstViteDir != null) {
+            val clientGuest = if (firstViteDir == root) guestDir else guest(firstViteDir)
+            suggestions += RunSuggestion(
+                label = "ASP.NET Core + Vite (dev) — ${rel(firstWebCsproj)}",
+                source = "Detected",
+                config = RunConfig(
+                    name = "ASP.NET Core + Vite (dev)",
+                    readyPort = VITE_PORT,
+                    terminals = listOf(
+                        RunConfigTerminal("Server", dotnetProjectCommand(guest(firstWebCsproj), stage("server"), web = true)),
+                        RunConfigTerminal("Client", viteClientCommand(guestDir, stage("client"), VITE_PORT, clientGuest)),
+                    ),
+                ),
+            )
+        }
+        csprojs.take(SCAN_PER_KIND_CAP).forEach { (csproj, web) ->
+            val kind = if (web) "ASP.NET Core" else ".NET console"
+            suggestions += RunSuggestion(
+                label = "$kind — ${rel(csproj)}",
+                source = "Detected",
+                config = RunConfig(
+                    name = "$kind (${csproj.nameWithoutExtension})",
+                    readyPort = if (web) ASPNET_PORT else 0,
+                    terminals = listOf(
+                        RunConfigTerminal("Server", dotnetProjectCommand(guest(csproj), stage(csproj.nameWithoutExtension), web)),
+                    ),
+                ),
+            )
+        }
+        viteJsons.take(SCAN_PER_KIND_CAP).forEach { (json, _) ->
+            val dir = json.parentFile ?: return@forEach
+            val clientGuest = if (dir == root) guestDir else guest(dir)
+            suggestions += RunSuggestion(
+                label = "Vite dev server — ${rel(json)}",
+                source = "Detected",
+                config = RunConfig(
+                    name = "Vite dev server",
+                    readyPort = VITE_PORT,
+                    terminals = listOf(
+                        RunConfigTerminal("Client", viteClientCommand(guestDir, stage("client"), VITE_PORT, clientGuest)),
+                    ),
+                ),
+            )
+        }
+        (packageJsons - viteJsons.toSet()).take(SCAN_PER_KIND_CAP).forEach { (json, text) ->
+            val script = if (text.contains("\"dev\"")) "dev" else if (text.contains("\"start\"")) "start" else return@forEach
+            val dir = json.parentFile ?: return@forEach
+            val dirGuest = if (dir == root) guestDir else guest(dir)
+            suggestions += RunSuggestion(
+                label = "npm run $script — ${rel(json)}",
+                source = "Detected",
+                config = RunConfig(
+                    name = "npm run $script",
+                    readyPort = 0,
+                    terminals = listOf(RunConfigTerminal("Run", npmScriptCommand(dirGuest, stage("npm"), script))),
+                ),
+            )
+        }
+        if (File(root, "gradlew").isFile) {
+            suggestions += RunSuggestion(
+                label = "Gradle — assembleDebug",
+                source = "Detected",
+                config = RunConfig(
+                    name = "Gradle build (assembleDebug)",
+                    readyPort = 0,
+                    terminals = listOf(
+                        RunConfigTerminal("Build", "clear\nset -e\ncd \"$guestDir\"\nbash gradlew assembleDebug"),
+                    ),
+                ),
+            )
+        }
+
+        // Extension presets: applicable only when EVERY `requires` glob matches some file. Each glob's
+        // first match feeds {{fileN}}/{{dirN}} (1-based) — and the first also {{file}}/{{dir}} — so a
+        // two-file preset (e.g. ASP.NET + Vite = a .csproj AND a package.json) can reference both.
+        extensionPresets.forEach { (source, preset) ->
+            fun firstMatch(glob: String): File? {
+                val regex = runCatching { globToRegex(glob) }.getOrNull() ?: return null
+                val byName = '/' !in glob
+                return files.firstOrNull { f -> regex.matches(if (byName) f.name else rel(f)) }
+            }
+            val matched = preset.requires.map { firstMatch(it) }
+            if (matched.any { it == null }) return@forEach // a required file is missing → not applicable
+            val anchor = matched.first()!!
+            fun substitute(cmd: String): String {
+                var out = cmd.replace("{{projectDir}}", guestDir)
+                matched.forEachIndexed { i, f ->
+                    val g = guest(f!!)
+                    val d = g.substringBeforeLast('/')
+                    out = out.replace("{{file${i + 1}}}", g).replace("{{dir${i + 1}}}", d)
+                    if (i == 0) out = out.replace("{{file}}", g).replace("{{dir}}", d)
+                }
+                return out
+            }
+            presetSuggestions += RunSuggestion(
+                label = "${preset.label} — ${rel(anchor)}",
+                source = source,
+                config = RunConfig(
+                    name = preset.label,
+                    readyPort = preset.readyPort,
+                    terminals = preset.terminals.map { RunConfigTerminal(it.label, substitute(it.command)) },
+                ),
+            )
+        }
+
+        return (presetSuggestions + suggestions).distinctBy { it.label }.take(SCAN_TOTAL_CAP)
+    }
+
+    // Glob → anchored Regex: `**` crosses directories (an optional trailing `/` is absorbed so
+    // `**/*.csproj` also matches a root-level file), `*` stays within one path segment, `?` is one char.
+    private fun globToRegex(glob: String): Regex {
+        val sb = StringBuilder()
+        var i = 0
+        while (i < glob.length) {
+            when {
+                glob.startsWith("**", i) -> {
+                    sb.append(".*")
+                    i += if (glob.getOrNull(i + 2) == '/') 3 else 2
+                }
+                glob[i] == '*' -> { sb.append("[^/]*"); i++ }
+                glob[i] == '?' -> { sb.append("[^/]"); i++ }
+                else -> { sb.append(Regex.escape(glob[i].toString())); i++ }
+            }
+        }
+        return Regex(sb.toString())
     }
 
     /**
@@ -284,6 +460,47 @@ object ProjectRunner {
             appendLine("npm run dev -- --host 0.0.0.0 --port $port")
         }
 
+    // Generic .NET build & run for a specific .csproj (a suggested config for external projects, so
+    // the project is built as-is — no TFM retargeting). Same noexec-safe shape as the template
+    // recipe: build to ext4, launch the managed DLL via the dotnet host.
+    private fun dotnetProjectCommand(csprojGuest: String, stageName: String, web: Boolean): String =
+        buildString {
+            appendLine("clear")
+            appendLine("set -e")
+            appendLine("CSPROJ=\"$csprojGuest\"")
+            appendLine("OUT=\"\$HOME/.jcode-run/$stageName\"")
+            appendLine("echo '== J Code: .NET (dotnet build + run) =='")
+            appendLine("echo '[1/2] Building (dotnet build, Debug)...'")
+            appendLine("rm -rf \"\$OUT\"")
+            appendLine("dotnet build \"\$CSPROJ\" -c Debug -o \"\$OUT\" --nologo")
+            appendLine("cd \"\$OUT\"")
+            if (web) {
+                appendLine("echo '[2/2] Starting server on http://localhost:$ASPNET_PORT (Development)...'")
+                appendLine("ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS='http://0.0.0.0:$ASPNET_PORT' dotnet \"\$(basename \"\$CSPROJ\" .csproj).dll\"")
+            } else {
+                appendLine("echo '[2/2] Running...'")
+                appendLine("dotnet \"\$(basename \"\$CSPROJ\" .csproj).dll\"")
+            }
+        }
+
+    // Generic npm project: stage to ext4 (FUSE /workspace can't host node_modules), install, run the
+    // detected script.
+    private fun npmScriptCommand(dirGuest: String, stageName: String, script: String): String =
+        buildString {
+            appendLine("clear")
+            appendLine("set -e")
+            appendLine("SRC=\"$dirGuest\"")
+            appendLine("STAGE=\"\$HOME/.jcode-run/$stageName\"")
+            appendLine("echo '== J Code: npm run $script =='")
+            appendLine("export npm_config_fund=false npm_config_audit=false")
+            appendLine("echo '[1/2] Staging + installing deps (npm install)...'")
+            appendLine("rm -rf \"\$STAGE\" && mkdir -p \"\$STAGE\" && cp -a \"\$SRC/.\" \"\$STAGE/\"")
+            appendLine("cd \"\$STAGE\"")
+            appendLine("npm install")
+            appendLine("echo '[2/2] npm run $script ...'")
+            appendLine("npm run $script")
+        }
+
     private fun sanitizeStageName(name: String): String {
         val cleaned = name.trim().lowercase().map { ch ->
             if (ch.isLetterOrDigit() || ch == '-' || ch == '_') ch else '-'
@@ -293,6 +510,11 @@ object ProjectRunner {
 
     private const val ASPNET_PORT = 5080
     private const val VITE_PORT = 5173
+    private const val SCAN_DEPTH = 4
+    private const val SCAN_FILE_CAP = 4_000
+    private const val SCAN_PER_KIND_CAP = 4
+    private const val SCAN_TOTAL_CAP = 12
+    private val SCAN_SKIP_DIRS = setOf("node_modules", "bin", "obj", "build", "dist", "out", "target")
     private const val SERVER_WAIT_MS = 240_000L
     private const val POLL_INTERVAL_MS = 1_000L
     private const val CONNECT_TIMEOUT_MS = 800

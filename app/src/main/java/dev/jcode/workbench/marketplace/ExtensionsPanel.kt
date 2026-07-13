@@ -1,6 +1,7 @@
 package dev.jcode.workbench.marketplace
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -53,7 +54,10 @@ import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.isUpdateAvailable
 import dev.jcode.feature.marketplace.otherAuthors
 import dev.jcode.feature.marketplace.primaryAuthor
+import androidx.compose.runtime.collectAsState
 import dev.jcode.workbench.ExtensionWebViewPage
+import dev.jcode.workbench.ScmHostWebView
+import dev.jcode.workbench.ScmWebViewHolder
 import kotlinx.coroutines.flow.SharedFlow
 import java.io.File
 
@@ -287,6 +291,25 @@ internal fun ScmPanel(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        return
+    }
+    // A decorations-contributing extension lives in the persistent background host's WebView (one
+    // instance per project): attaching it keeps panel state across drawer switches and avoids a
+    // second status-computing instance. `generation` re-checks after the host (re)creates an entry —
+    // never fall back to a throwaway page WebView for these, or the extension boots twice.
+    val holderGeneration by ScmWebViewHolder.generation.collectAsState()
+    val holderEntry = remember(ext.id, projectKey, holderGeneration) {
+        ScmWebViewHolder.get(ext.id)?.takeIf { it.projectKey == projectKey?.toString() }
+    }
+    if (holderEntry != null) {
+        key(ext.id, projectKey) { ScmHostWebView(holderEntry, modifier.fillMaxSize()) }
+        return
+    }
+    if (ext.contributes.explorerDecorations && LocalExtensionActivation.current.modeFor(ext.id) != ExtensionActivation.Manual) {
+        // Host hasn't (re)created the entry yet (project switch in flight); the generation bump
+        // recomposes this into the attach branch moments later. Manual activation falls through to
+        // the panel-owned WebView below instead — there is no background host to wait for.
+        Box(modifier = modifier.fillMaxSize())
         return
     }
     // Key by (extension id, open project) so the panel owns one WebView for the installed SCM extension
