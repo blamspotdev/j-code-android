@@ -22,6 +22,7 @@ import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import kotlinx.coroutines.*
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
@@ -49,10 +50,10 @@ class TerminalView @JvmOverloads constructor(
     private var cellWidth = 0f
     private var cellHeight = 0f
 
-    // Selection state
+    // Selection state ("Select Text" in the context menu shows draggable handles over it). Rows are
+    // LOGICAL — relative to the live screen top, negative rows in scrollback — so the highlight and
+    // handles track the content while scrolled. Cleared on new output, resize, or session rebind.
     private var isSelecting = false
-    // Set by the "Select text" menu action so the next touch-drag begins a selection.
-    private var selectionArmed = false
 
     // Invoked on the main thread with the contiguous token under a confirmed single tap, so the host
     // can open it as a URL (browser) or file path (editor).
@@ -73,10 +74,28 @@ class TerminalView @JvmOverloads constructor(
     // Notified after an armed modifier is consumed (or discarded) by typed input, so the row can
     // un-highlight its CTRL/ALT chips.
     var onPendingModifiersConsumed: (() -> Unit)? = null
+    // Kept normalized: (startRow, startCol) <= (endRow, endCol) row-major; end column is inclusive.
     private var selectionStartRow = 0
     private var selectionStartCol = 0
     private var selectionEndRow = 0
     private var selectionEndCol = 0
+
+    // Handle-drag state (mirrors EditorView's selection handles): dragging one teardrop moves that
+    // selection end while the other stays pinned at dragFixed*.
+    private var draggingHandle = false
+    private var dragFixedRow = 0
+    private var dragFixedCol = 0
+    private var dragPointerId = -1
+    private var dragXBias = 0f
+    // The long-press cell, content-anchored (see onLongPress), consumed by beginTextSelection().
+    private var pressLogicalRow = 0
+    private var pressCol = 0
+    private var pressScrollback = 0
+    private var handleRadiusPx = 0f
+    private var startHandleCx = Float.NaN
+    private var startHandleCy = Float.NaN
+    private var endHandleCx = Float.NaN
+    private var endHandleCy = Float.NaN
 
     // Scrollback view state
     private var scrollOffset = 0        // lines scrolled up from the live bottom (0 = follow output)
@@ -86,14 +105,20 @@ class TerminalView @JvmOverloads constructor(
     // Gesture detector: long-press selection, vertical pan to scroll history, tap to focus.
     private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onLongPress(e: MotionEvent) {
-            // Request the action menu. "Select text" arms drag-selection for the next touch; while
-            // armed or already selecting, a long-press shouldn't re-open the menu.
-            if (isSelecting || selectionArmed) return
+            // Request the action menu. With a selection active it offers Copy; a handle drag never
+            // reaches this detector, so no in-drag guard is needed. The press cell is captured
+            // content-anchored (logical row + scrollback size) so "Select Text" still targets what
+            // was under the finger even after output shifts rows while the menu is open.
+            if (cellWidth > 0f && cellHeight > 0f) {
+                pressLogicalRow = (e.y / cellHeight).toInt().coerceIn(0, rows - 1) - scrollOffset
+                pressCol = (e.x / cellWidth).toInt().coerceIn(0, cols - 1)
+                pressScrollback = vtParser?.scrollbackSize ?: 0
+            }
             onContextMenu?.invoke(e.x, e.y)
         }
 
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
-            if (isSelecting || cellHeight <= 0f) return false
+            if (cellHeight <= 0f) return false
             // Dragging down (distanceY < 0) scrolls back into history; up returns toward the bottom.
             scrollAccumY -= distanceY
             val lines = (scrollAccumY / cellHeight).toInt()
@@ -110,8 +135,13 @@ class TerminalView @JvmOverloads constructor(
         }
 
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-            // A confirmed single tap opens a link/path under the finger (never the keyboard).
-            handleTokenTap(e.x, e.y)
+            // With a selection active, a tap elsewhere dismisses it (and must not also open a
+            // link). Otherwise a confirmed single tap opens a link/path under the finger.
+            if (isSelecting) {
+                clearSelection()
+            } else {
+                handleTokenTap(e.x, e.y)
+            }
             return true
         }
 
@@ -168,6 +198,10 @@ class TerminalView @JvmOverloads constructor(
     private val selectionBgPaint = Paint().apply {
         color = selectionColorArgb
         style = Paint.Style.FILL
+    }
+    // Teardrop selection anchors: the opaque hue of the selection tint.
+    private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(59, 130, 246)
     }
     // Reused per background/selection run so a row of same-colored cells is one drawRect.
     private val runBgPaint = Paint().apply { style = Paint.Style.FILL }
@@ -253,39 +287,57 @@ class TerminalView @JvmOverloads constructor(
         cellWidth = textPaint.measureText("M")
         cellHeight = textPaint.fontSpacing
         
-        // Handle touch events for selection, history scrolling, and keyboard.
+        // Handle touch events for selection-handle drags, history scrolling, and keyboard.
         setOnTouchListener { v, event ->
+            // A grab on a selection handle owns the whole gesture: it must never reach the gesture
+            // detector, or the same drag would also scroll history / re-open the menu. The guard
+            // includes draggingHandle so a drag whose selection is force-cleared mid-gesture (new
+            // output) still swallows its tail events instead of leaking a DOWN-less stream into
+            // the detector, and still resets cleanly on UP/CANCEL.
+            if (isSelecting || draggingHandle) {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        draggingHandle = false // stale-drag safety: a fresh gesture starts clean
+                        val anchorX = if (isSelecting) grabHandleAt(event.x, event.y) else null
+                        if (anchorX != null) {
+                            draggingHandle = true
+                            // Finger offset from the grabbed end's text anchor, subtracted on every
+                            // move so the selection edge tracks the grab point, not the fingertip.
+                            dragXBias = event.x - anchorX
+                            dragPointerId = event.getPointerId(0)
+                            v.parent?.requestDisallowInterceptTouchEvent(true)
+                            return@setOnTouchListener true
+                        }
+                    }
+                    MotionEvent.ACTION_MOVE -> if (draggingHandle) {
+                        if (isSelecting) {
+                            val idx = event.findPointerIndex(dragPointerId)
+                            if (idx >= 0) dragHandleTo(event.getX(idx), event.getY(idx))
+                        }
+                        return@setOnTouchListener true
+                    }
+                    MotionEvent.ACTION_POINTER_UP -> if (draggingHandle) {
+                        // Invalidate the pointer but keep owning the gesture until UP/CANCEL:
+                        // releasing here would leak the remaining finger's DOWN-less stream into
+                        // the gesture detector, whose stale focus point then jump-scrolls history.
+                        if (event.getPointerId(event.actionIndex) == dragPointerId) dragPointerId = -1
+                        return@setOnTouchListener true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (draggingHandle) {
+                        draggingHandle = false
+                        return@setOnTouchListener true
+                    }
+                }
+                if (draggingHandle) return@setOnTouchListener true
+            }
             val gestureHandled = gestureDetector.onTouchEvent(event)
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    // Claim the gesture: a touch starting in the terminal belongs to it (scroll / text
-                    // selection), so the nav drawer's swipe-to-open can't steal a drag and pop the drawer.
-                    v.parent?.requestDisallowInterceptTouchEvent(true)
-                    // After "Select text" from the menu, the next touch-drag selects.
-                    if (selectionArmed) startSelection(event.x, event.y)
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    if (isSelecting) {
-                        updateSelectionEnd(event.x, event.y)
-                        true
-                    } else {
-                        gestureHandled
-                    }
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (isSelecting) {
-                        copySelectionToClipboard()
-                        isSelecting = false
-                        selectionArmed = false
-                        invalidateGrid()
-                        true
-                    } else {
-                        selectionArmed = false
-                        gestureHandled
-                    }
-                }
-                else -> gestureHandled
+            if (event.action == MotionEvent.ACTION_DOWN) {
+                // Claim the gesture: a touch starting in the terminal belongs to it (scroll / text
+                // selection), so the nav drawer's swipe-to-open can't steal a drag and pop the drawer.
+                v.parent?.requestDisallowInterceptTouchEvent(true)
+                true
+            } else {
+                gestureHandled
             }
         }
 
@@ -304,37 +356,117 @@ class TerminalView @JvmOverloads constructor(
         })
     }
 
-    private fun startSelection(x: Float, y: Float) {
-        val row = (y / cellHeight).toInt().coerceIn(0, rows - 1)
-        val col = (x / cellWidth).toInt().coerceIn(0, cols - 1)
+    /** Select the token (contiguous non-space run) under the last long-press and show the
+     *  draggable selection handles; a blank cell falls back to the row's trimmed extent. No-op on
+     *  a blank row. The pressed cell was captured in onLongPress and is shifted by any scrollback
+     *  growth since, so output arriving while the menu was open doesn't retarget the selection. */
+    fun beginTextSelection() {
+        val parser = vtParser ?: return
+        if (!parser.isOpen || cellWidth <= 0f || cellHeight <= 0f) return
+        val grown = (parser.scrollbackSize - pressScrollback).coerceAtLeast(0)
+        val logicalRow = (pressLogicalRow - grown).coerceIn(-parser.scrollbackSize, rows - 1)
+        val col = pressCol
+        val line = rowText(parser, logicalRow) ?: return
+        var start: Int
+        var end: Int
+        if (col < line.length && line[col] != ' ') {
+            start = col
+            while (start > 0 && line[start - 1] != ' ') start--
+            end = col
+            while (end + 1 < line.length && line[end + 1] != ' ') end++
+        } else {
+            start = line.indexOfFirst { it != ' ' }
+            end = line.indexOfLast { it != ' ' }
+            if (start < 0) return
+        }
         isSelecting = true
-        selectionStartRow = row
-        selectionStartCol = col
-        selectionEndRow = row
-        selectionEndCol = col
+        selectionStartRow = logicalRow
+        selectionStartCol = start
+        selectionEndRow = logicalRow
+        selectionEndCol = end
         invalidateGrid()
     }
 
-    private fun updateSelectionEnd(x: Float, y: Float) {
-        val row = (y / cellHeight).toInt().coerceIn(0, rows - 1)
-        val col = (x / cellWidth).toInt().coerceIn(0, cols - 1)
-        selectionEndRow = row
-        selectionEndCol = col
+    private fun clearSelection() {
+        if (!isSelecting) return
+        isSelecting = false
         invalidateGrid()
     }
 
-    private fun copySelectionToClipboard() {
-        val text = getSelectedText()
-        if (text.isNotBlank()) {
-            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.setPrimaryClip(ClipData.newPlainText("Terminal Selection", text))
+    /** If the touch grabs a handle, pins the OTHER selection end (into dragFixed*) and returns the
+     *  CENTER x of the grabbed end's cell for drag bias — computed from the selection fields, not
+     *  the drawn bulb (which may be edge-clamped), and mid-cell so dragHandleTo's floor mapping
+     *  round-trips instead of growing the selection a column on the first jittered MOVE. Null when
+     *  no handle is hit; nearest handle wins when the touch targets overlap. */
+    private fun grabHandleAt(x: Float, y: Float): Float? {
+        val slop = max(handleRadiusPx * 1.6f, 20f * resources.displayMetrics.density)
+        val dStart = if (startHandleCx.isNaN()) Float.MAX_VALUE else hypot(x - startHandleCx, y - startHandleCy)
+        val dEnd = if (endHandleCx.isNaN()) Float.MAX_VALUE else hypot(x - endHandleCx, y - endHandleCy)
+        return when {
+            dStart <= slop && dStart <= dEnd -> {
+                dragFixedRow = selectionEndRow
+                dragFixedCol = selectionEndCol
+                (selectionStartCol + 0.5f) * cellWidth
+            }
+            dEnd <= slop -> {
+                dragFixedRow = selectionStartRow
+                dragFixedCol = selectionStartCol
+                (selectionEndCol + 0.5f) * cellWidth
+            }
+            else -> null
         }
     }
 
+    /** Move the dragged selection end to the cell under the finger, keeping the other end pinned.
+     *  The bulb hangs below the text anchor, so the mapped point is biased back up onto it
+     *  (dragXBias horizontally, one bulb + half a cell vertically). */
+    private fun dragHandleTo(x: Float, y: Float) {
+        if (cellWidth <= 0f || cellHeight <= 0f) return
+        val hotspotDy = handleRadiusPx + cellHeight * 0.5f
+        val viewRow = ((y - hotspotDy) / cellHeight).toInt().coerceIn(0, rows - 1)
+        val col = ((x - dragXBias) / cellWidth).toInt().coerceIn(0, cols - 1)
+        if (setNormalizedSelection(dragFixedRow, dragFixedCol, viewRow - scrollOffset, col)) {
+            invalidateGrid()
+        }
+    }
+
+    /** Store the pair ordered row-major (start <= end), so the dragged end may freely cross the
+     *  pinned one. Returns true when the stored selection actually changed. */
+    private fun setNormalizedSelection(r1: Int, c1: Int, r2: Int, c2: Int): Boolean {
+        val swap = r2 < r1 || (r2 == r1 && c2 < c1)
+        val sr = if (swap) r2 else r1
+        val sc = if (swap) c2 else c1
+        val er = if (swap) r1 else r2
+        val ec = if (swap) c1 else c2
+        if (sr == selectionStartRow && sc == selectionStartCol &&
+            er == selectionEndRow && ec == selectionEndCol
+        ) return false
+        selectionStartRow = sr
+        selectionStartCol = sc
+        selectionEndRow = er
+        selectionEndCol = ec
+        return true
+    }
+
+    /** Returns true only when text was actually written to the clipboard. */
+    private fun copySelectionToClipboard(): Boolean {
+        val text = getSelectedText()
+        if (text.isBlank()) return false
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Terminal Selection", text))
+        return true
+    }
+
     /** Actions for the host-rendered long-press menu (see [onContextMenu]). */
-    fun contextArmSelection() {
-        selectionArmed = true
-        toast("Drag to select text")
+    fun hasSelection(): Boolean = isSelecting
+
+    fun contextCopy() {
+        // The selection may have been dismissed (new output) while the menu was open; the stored
+        // rows then point at shifted content, so copying them would grab the wrong text.
+        if (!isSelecting) return
+        val copied = copySelectionToClipboard()
+        clearSelection()
+        toast(if (copied) "Copied" else "Nothing to copy")
     }
 
     fun contextSelectAll() = selectAllAndCopy()
@@ -371,12 +503,12 @@ class TerminalView @JvmOverloads constructor(
     private fun selectAllAndCopy() {
         val parser = vtParser ?: return
         if (!parser.isOpen) return
-        selectionStartRow = 0
+        clearSelection()
+        selectionStartRow = -scrollOffset
         selectionStartCol = 0
-        selectionEndRow = (rows - 1).coerceAtLeast(0)
+        selectionEndRow = (rows - 1).coerceAtLeast(0) - scrollOffset
         selectionEndCol = (cols - 1).coerceAtLeast(0)
-        copySelectionToClipboard()
-        toast("Copied")
+        toast(if (copySelectionToClipboard()) "Copied" else "Nothing to copy")
     }
 
     /** Clear the screen via Ctrl-L (the shell/readline redraws a fresh prompt). */
@@ -388,16 +520,11 @@ class TerminalView @JvmOverloads constructor(
         android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
     }
 
-    /** Extract the contiguous non-space token under a tap and hand it to [onTapToken] (URL/path open). */
-    private fun handleTokenTap(x: Float, y: Float) {
-        val parser = vtParser ?: return
-        if (!parser.isOpen || cellWidth <= 0f || cellHeight <= 0f) return
-        val viewRow = (y / cellHeight).toInt()
-        val col = (x / cellWidth).toInt()
-        if (viewRow < 0 || col < 0) return
-        val logicalRow = viewRow - scrollOffset
+    /** The logical row's text with blank cells as spaces (BMP-truncated: for boundary scans only,
+     *  extraction goes through [getSelectedText]), or null when it can't be read. */
+    private fun rowText(parser: VtParser, logicalRow: Int): String? {
         val maxCol = min(cols, parser.cols)
-        if (col >= maxCol) return
+        if (maxCol <= 0) return null
         val buf = rowBufFor(parser)
         val filled = parser.readRow(logicalRow, buf)
         val sb = StringBuilder(maxCol)
@@ -405,7 +532,17 @@ class TerminalView @JvmOverloads constructor(
             val cp = buf[c * VtParser.CELL_STRIDE]
             sb.append(if (cp == 0 || cp == ' '.code) ' ' else cp.toChar())
         }
-        val line = sb.toString()
+        return sb.toString()
+    }
+
+    /** Extract the contiguous non-space token under a tap and hand it to [onTapToken] (URL/path open). */
+    private fun handleTokenTap(x: Float, y: Float) {
+        val parser = vtParser ?: return
+        if (!parser.isOpen || cellWidth <= 0f || cellHeight <= 0f) return
+        val viewRow = (y / cellHeight).toInt()
+        val col = (x / cellWidth).toInt()
+        if (viewRow < 0 || col < 0) return
+        val line = rowText(parser, viewRow - scrollOffset) ?: return
         if (col >= line.length || line[col] == ' ') return
         var start = col
         while (start > 0 && line[start - 1] != ' ') start--
@@ -416,20 +553,16 @@ class TerminalView @JvmOverloads constructor(
     }
 
     private fun getSelectedText(): String {
-        val parser = vtParser ?: return ""
-        
-        val startRow = min(selectionStartRow, selectionEndRow)
-        val endRow = max(selectionStartRow, selectionEndRow)
-        val startCol = if (selectionStartRow <= selectionEndRow) selectionStartCol else selectionEndCol
-        val endCol = if (selectionStartRow <= selectionEndRow) selectionEndCol else selectionStartCol
-        
+        // A persistent selection can outlive the session: the parser may have been closed (reaped)
+        // while this view is still bound, and readRow on a closed parser throws.
+        val parser = vtParser?.takeIf { it.isOpen } ?: return ""
         val sb = StringBuilder()
         val buf = rowBufFor(parser)
 
-        for (row in startRow..endRow) {
+        for (row in selectionStartRow..selectionEndRow) {
             val filled = parser.readRow(row, buf)
-            val rowStartCol = if (row == startRow) startCol else 0
-            val rowEndCol = if (row == endRow) endCol else cols - 1
+            val rowStartCol = if (row == selectionStartRow) selectionStartCol else 0
+            val rowEndCol = if (row == selectionEndRow) selectionEndCol else cols - 1
 
             for (col in rowStartCol..rowEndCol.coerceAtMost(filled - 1)) {
                 val cp = buf[col * VtParser.CELL_STRIDE]
@@ -437,7 +570,7 @@ class TerminalView @JvmOverloads constructor(
                     sb.appendCodePoint(cp)
                 }
             }
-            if (row < endRow) {
+            if (row < selectionEndRow) {
                 sb.append('\n')
             }
         }
@@ -462,6 +595,7 @@ class TerminalView @JvmOverloads constructor(
         rows = session.rows
         scrollOffset = 0
         scrollAccumY = 0f
+        isSelecting = false
         lastScrollbackSize = session.parser.scrollbackSize
         gridDirty = true  // new session's content must be re-recorded, not the previous grid replayed
         // Repaint whenever the session parses new output. Called off the main thread by the session
@@ -479,6 +613,10 @@ class TerminalView @JvmOverloads constructor(
                             scrollOffset = (scrollOffset + (sb - lastScrollbackSize)).coerceAtMost(sb)
                         }
                         lastScrollbackSize = sb
+                        // New output shifts rows under a persistent selection — drop it (the
+                        // terminal's equivalent of the editor's text-change dismissal) rather
+                        // than highlight the wrong cells.
+                        clearSelection()
                         invalidateGrid()
                         resetBlink()
                     }
@@ -504,6 +642,9 @@ class TerminalView @JvmOverloads constructor(
     fun setActive(active: Boolean) {
         if (active == isActiveSession) return
         isActiveSession = active
+        // A backgrounded session's output doesn't reach the onUpdate dismissal above, so a
+        // selection left behind on tab switch could point at stale rows — drop it on transition.
+        clearSelection()
         if (active) {
             // Post so focus is requested after this view is laid out/attached — requesting it
             // synchronously right after creation (new session tab) is too early and silently fails,
@@ -535,6 +676,7 @@ class TerminalView @JvmOverloads constructor(
      */
     fun detach() {
         isSelecting = false
+        draggingHandle = false
         unbind()
     }
 
@@ -727,6 +869,10 @@ class TerminalView @JvmOverloads constructor(
         // anchored to the bottom). The session owns these so background sessions stay sized too.
         boundSession?.resize(cols, rows)
 
+        // The reflow moves content across rows, so a persistent selection would highlight the
+        // wrong cells.
+        clearSelection()
+
         // Snap to the live bottom: after a resize (e.g. the keyboard opening/closing) the scrollback
         // size changed under us, so any prior scroll offset would point at the wrong content.
         scrollOffset = 0
@@ -805,6 +951,44 @@ class TerminalView @JvmOverloads constructor(
         }
 
         drawCursor(canvas, parser)
+        // Outside the grid RenderNode so cursor-blink replays stay one GPU op; the handles cost
+        // two circles + two rects per frame at most.
+        drawSelectionHandles(canvas)
+    }
+
+    /** Draw the two teardrop anchors (circle + square corner pointing at the text) under the
+     *  selection ends. Endpoints scrolled out of the viewport are skipped; their geometry is
+     *  invalidated for hit-testing. */
+    private fun drawSelectionHandles(canvas: Canvas) {
+        startHandleCx = Float.NaN
+        startHandleCy = Float.NaN
+        endHandleCx = Float.NaN
+        endHandleCy = Float.NaN
+        if (!isSelecting) return
+        val r = 8f * resources.displayMetrics.density
+        handleRadiusPx = r
+
+        val startViewRow = selectionStartRow + scrollOffset
+        if (startViewRow in 0 until rows) {
+            // Bulb below-left of the anchor, clamped fully on-screen — a column-0 selection start
+            // (common in a terminal) would otherwise put the whole teardrop past the left edge.
+            val cx = (selectionStartCol * cellWidth - r).coerceAtLeast(r)
+            val y = (startViewRow + 1) * cellHeight
+            canvas.drawCircle(cx, y + r, r, handlePaint)
+            canvas.drawRect(cx, y, cx + r, y + r, handlePaint)
+            startHandleCx = cx
+            startHandleCy = y + r
+        }
+        val endViewRow = selectionEndRow + scrollOffset
+        if (endViewRow in 0 until rows) {
+            // Bulb below-right of the anchor, clamped on-screen for a last-column selection end.
+            val cx = ((selectionEndCol + 1) * cellWidth + r).coerceAtMost(width - r)
+            val y = (endViewRow + 1) * cellHeight
+            canvas.drawCircle(cx, y + r, r, handlePaint)
+            canvas.drawRect(cx - r, y, cx, y + r, handlePaint)
+            endHandleCx = cx
+            endHandleCy = y + r
+        }
     }
 
     /** Draw the cell grid (backgrounds + glyphs), batching same-attribute cells into single ops. */
@@ -813,20 +997,15 @@ class TerminalView @JvmOverloads constructor(
         bgPaint.color = Color.BLACK
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
 
-        // Calculate selection bounds
-        val selStartRow = min(selectionStartRow, selectionEndRow)
-        val selEndRow = max(selectionStartRow, selectionEndRow)
-        val selStartCol = if (selectionStartRow <= selectionEndRow) selectionStartCol else selectionEndCol
-        val selEndCol = if (selectionStartRow <= selectionEndRow) selectionEndCol else selectionStartCol
-        val selectionActive = scrollOffset == 0 && isSelecting
-
         val buf = rowBufFor(parser)
         val stride = VtParser.CELL_STRIDE
 
         // Effective background of a cell (0 = none): selection tint wins, else the SGR background.
-        fun cellBg(row: Int, col: Int): Int {
-            if (selectionActive && row in selStartRow..selEndRow &&
-                (row != selStartRow || col >= selStartCol) && (row != selEndRow || col <= selEndCol)
+        // Selection rows are logical, so the highlight tracks the content through scrollback.
+        fun cellBg(logicalRow: Int, col: Int): Int {
+            if (isSelecting && logicalRow in selectionStartRow..selectionEndRow &&
+                (logicalRow != selectionStartRow || col >= selectionStartCol) &&
+                (logicalRow != selectionEndRow || col <= selectionEndCol)
             ) {
                 return selectionColorArgb
             }
@@ -855,10 +1034,10 @@ class TerminalView @JvmOverloads constructor(
             // Background / selection runs: merge adjacent cells sharing an effective colour.
             var c = 0
             while (c < colBound) {
-                val bg = cellBg(row, c)
+                val bg = cellBg(logicalRow, c)
                 if (bg == 0) { c++; continue }
                 var e = c + 1
-                while (e < colBound && cellBg(row, e) == bg) e++
+                while (e < colBound && cellBg(logicalRow, e) == bg) e++
                 runBgPaint.color = bg
                 canvas.drawRect(c * cellWidth, yTop, e * cellWidth, yTop + cellHeight, runBgPaint)
                 c = e

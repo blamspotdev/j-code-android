@@ -3310,11 +3310,14 @@ private fun TerminalSidebarContent(
                         expanded = true,
                         onDismissRequest = { termMenu = null },
                         offset = menuOffset,
-                        quickActions = listOf(
-                            ContextAction(JCodeIcon.Paste, "Paste") { req.view.contextPaste() },
-                        ),
+                        quickActions = buildList {
+                            if (req.view.hasSelection()) {
+                                add(ContextAction(JCodeIcon.Copy, "Copy") { req.view.contextCopy() })
+                            }
+                            add(ContextAction(JCodeIcon.Paste, "Paste") { req.view.contextPaste() })
+                        },
                         listActions = listOf(
-                            ContextAction(JCodeIcon.SelectAll, "Select text") { req.view.contextArmSelection() },
+                            ContextAction(JCodeIcon.Cursor, "Select Text") { req.view.beginTextSelection() },
                             ContextAction(JCodeIcon.SelectAll, "Select all") { req.view.contextSelectAll() },
                             ContextAction(JCodeIcon.Clear, "Clear") { req.view.contextClear() },
                         ),

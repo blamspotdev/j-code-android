@@ -577,7 +577,10 @@ class EditorView @JvmOverloads constructor(
                     return true
                 }
                 MotionEvent.ACTION_POINTER_UP -> if (draggingHandle) {
-                    if (event.getPointerId(event.actionIndex) == dragPointerId) draggingHandle = false
+                    // Invalidate the pointer but keep owning the gesture until UP/CANCEL:
+                    // releasing here would leak the remaining finger's DOWN-less stream into
+                    // the gesture detector, whose stale focus point then jump-scrolls.
+                    if (event.getPointerId(event.actionIndex) == dragPointerId) dragPointerId = -1
                     return true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (draggingHandle) {
