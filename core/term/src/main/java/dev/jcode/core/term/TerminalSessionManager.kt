@@ -131,6 +131,11 @@ class TerminalSessionManager(
         val rootfsPath = rootfsManager.getRootfsPath(distroId)
         if (!rootfsManager.isDistroInstalled(distroId)) return null
 
+        // Ensure DNS/host config so `apt` works from the terminal. Minimal ubuntu-base images (26.04)
+        // ship no usable /etc/resolv.conf; this repairs such an install even if it was created before
+        // the fix (guarded writes → cheap no-op once configured). Fresh installs get it at extraction.
+        rootfsManager.ensureRootfsNetworking(rootfsPath)
+
         // Suppress Ubuntu/Debian's /etc/bash.bashrc "sudo hint", which runs `$(groups)` (printing
         // "groups: cannot find name for group ID N" for the inherited Android gids) unless
         // ~/.hushlogin or ~/.sudo_as_admin_successful exists. .hushlogin also quiets login MOTD.
@@ -140,6 +145,17 @@ class TerminalSessionManager(
                 File(rootfsPath, "home/$user").mkdirs()
                 File(rootfsPath, "home/$user/.hushlogin").createNewFile()
             }
+        }
+
+        // Ship a phone-friendly htop layout so `htop` shows process NAMES and hides threads. htop's
+        // desktop default packs so many wide columns (VIRT/RES/SHR/PRIORITY/NICE/TIME) that the
+        // Command column — the actual process names — falls off a narrow phone screen, leaving only a
+        // wall of "root". This compact layout (PID/CPU%/MEM%/Command) fits, and hiding threads
+        // collapses the app's ~40 JVM-thread rows into one process. Written only when absent, so a
+        // user's own htop settings (htop rewrites this file on exit) are never clobbered.
+        runCatching {
+            writeDefaultHtoprc(File(rootfsPath, "root"))
+            if (user != "root") writeDefaultHtoprc(File(rootfsPath, "home/$user"))
         }
 
         // Install the `code`/`jcode` open-in-editor command for login shells (sourced via
@@ -401,6 +417,14 @@ class TerminalSessionManager(
         }
         activeSessionId = null
     }
+
+    /** Seed the phone-friendly htop layout at [home]/.config/htop/htoprc, only when absent. */
+    private fun writeDefaultHtoprc(home: File) {
+        val rc = File(home, ".config/htop/htoprc")
+        if (rc.exists()) return
+        rc.parentFile?.mkdirs()
+        rc.writeText(DEFAULT_HTOPRC)
+    }
 }
 
 private val GUEST_SHELL_INTEGRATION = """# J Code shell integration (sourced via /etc/profile -> /etc/profile.d/*.sh).
@@ -444,5 +468,52 @@ fi
 // the session reader routes to the host's web-preview / chosen browser.
 private val GUEST_OPEN_URL_SHIM = """#!/bin/sh
 printf '\033]7714;%s\007' "${'$'}1" >/dev/tty 2>/dev/null || printf '\033]7714;%s\007' "${'$'}1"
+"""
+
+// Default htop config seeded into a fresh $HOME/.config/htop/htoprc. A compact, phone-width column
+// set (PID/CPU%/MEM%/Command) so process NAMES are visible instead of being pushed off-screen by
+// htop's desktop-width default, with userland threads hidden so a multi-threaded process (e.g. the
+// JCode app's own JVM, ~40 threads) shows as one row. htop rewrites this file when the user changes
+// settings, so it only shapes the first run and never overrides a deliberate choice.
+private val DEFAULT_HTOPRC = """# Beware! This file is rewritten by htop when settings are changed in the interface.
+# The parser is also very primitive, and not human-friendly.
+htop_version=3.4.1
+config_reader_min_version=3
+fields=0 46 47 1
+hide_kernel_threads=1
+hide_userland_threads=1
+shadow_other_users=0
+show_thread_names=0
+show_program_path=0
+highlight_base_name=1
+highlight_megabytes=1
+highlight_threads=1
+find_comm_in_cmdline=1
+strip_exe_from_cmdline=1
+show_merged_command=0
+header_margin=1
+screen_tabs=1
+show_cpu_usage=1
+show_cpu_frequency=0
+show_cpu_temperature=0
+show_cached_memory=1
+color_scheme=0
+enable_mouse=1
+delay=15
+hide_function_bar=0
+header_layout=two_50_50
+column_meters_0=LeftCPUs Memory Swap
+column_meter_modes_0=1 1 1
+column_meters_1=RightCPUs Tasks LoadAverage Uptime
+column_meter_modes_1=1 2 2 2
+tree_view=0
+sort_key=46
+sort_direction=-1
+screen:Main=PID PERCENT_CPU PERCENT_MEM Command
+.sort_key=PERCENT_CPU
+.sort_direction=-1
+screen:I/O=PID IO_RATE Command
+.sort_key=IO_RATE
+.sort_direction=-1
 """
 
