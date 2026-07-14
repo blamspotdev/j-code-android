@@ -41,6 +41,7 @@ import dev.jcode.design.jcIcon
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -114,8 +115,10 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -286,6 +289,8 @@ import dev.jcode.design.TabMaxSizeSetting
 import dev.jcode.design.ExplorerHiddenMode
 import dev.jcode.design.ExplorerHiddenSetting
 import dev.jcode.design.ExtraKey
+import dev.jcode.design.AppUpdateSetting
+import dev.jcode.design.LocalAppUpdate
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalVolumeKeysSetting
@@ -523,6 +528,28 @@ fun JCodeApp(
     val cutoutSetting = remember(respectDeviceCutout, hasDeviceCutout) {
         CutoutSetting(respect = respectDeviceCutout, hasCutout = hasDeviceCutout, onChange = viewModel::setRespectDeviceCutout)
     }
+    val updateInfo by viewModel.updateInfo.collectAsStateWithLifecycle()
+    val updateChecking by viewModel.updateChecking.collectAsStateWithLifecycle()
+    val updateContext = LocalContext.current
+    val appUpdateSetting = remember(updateInfo, updateChecking) {
+        AppUpdateSetting(
+            currentVersion = BuildConfig.VERSION_NAME,
+            latestVersion = updateInfo?.latestVersion,
+            updateAvailable = updateInfo?.updateAvailable == true,
+            checking = updateChecking,
+            onCheck = viewModel::checkForUpdate,
+            onOpenRelease = {
+                val url = updateInfo?.releaseUrl
+                    ?: "https://github.com/blamspotdev/j-code-android/releases/latest"
+                runCatching {
+                    updateContext.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                }
+            },
+        )
+    }
     val paletteDisabledCommands by viewModel.paletteDisabledCommands.collectAsStateWithLifecycle()
     val commandPaletteSetting = remember(paletteDisabledCommands) {
         CommandPaletteSetting(disabledIds = paletteDisabledCommands, onSetEnabled = viewModel::setPaletteCommandEnabled)
@@ -738,6 +765,22 @@ fun JCodeApp(
         }
     }
 
+    // Surface an "update available" toast (with an Update action) once per launch when the startup
+    // GitHub-release check finds a newer version. The Settings > About card offers a manual re-check.
+    var updateToastShown by remember { mutableStateOf(false) }
+    LaunchedEffect(updateInfo?.updateAvailable) {
+        val info = updateInfo
+        if (info?.updateAvailable == true && !updateToastShown) {
+            updateToastShown = true
+            val result = snackbarHostState.showSnackbar(
+                message = "Update available: v${info.latestVersion}",
+                actionLabel = "Update",
+                duration = SnackbarDuration.Long,
+            )
+            if (result == SnackbarResult.ActionPerformed) appUpdateSetting.onOpenRelease()
+        }
+    }
+
     // Keep clean editor tabs mirrored to disk: re-sync on every foreground regain and on a slow tick
     // while foregrounded, so external writes (e.g. an agent in the terminal) show up in the editor.
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -943,6 +986,7 @@ fun JCodeApp(
         LocalPerformanceSettings provides performanceSettings,
         LocalExplorerHiddenSetting provides explorerHiddenSetting,
         LocalCutoutSetting provides cutoutSetting,
+        LocalAppUpdate provides appUpdateSetting,
         LocalCommandPaletteSetting provides commandPaletteSetting,
         LocalMarkdownPreviewSetting provides markdownPreviewSetting,
         LocalDeveloperSetting provides developerSetting,

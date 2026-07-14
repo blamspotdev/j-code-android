@@ -188,6 +188,23 @@ class CutoutSetting(
 val LocalCutoutSetting = compositionLocalOf { CutoutSetting() }
 
 /**
+ * In-app update state, shared (via [LocalAppUpdate]) with the settings screen without threading
+ * params through JCodeShell (ART register limit). Populated from a GitHub-release check on startup:
+ * [updateAvailable] flags a newer [latestVersion] than [currentVersion]; [onCheck] re-runs the check;
+ * [onOpenRelease] opens the release page in a browser.
+ */
+class AppUpdateSetting(
+    val currentVersion: String = "",
+    val latestVersion: String? = null,
+    val updateAvailable: Boolean = false,
+    val checking: Boolean = false,
+    val onCheck: () -> Unit = {},
+    val onOpenRelease: () -> Unit = {},
+)
+
+val LocalAppUpdate = compositionLocalOf { AppUpdateSetting() }
+
+/**
  * Performance / resource-management preferences, shared (via [LocalPerformanceSettings]) with both the
  * settings screen and JCodeShell without threading params through the latter (ART register limit).
  * [confirmCloseRunning] warns before closing a project/workspace that still has a running terminal

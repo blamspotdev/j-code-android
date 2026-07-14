@@ -64,6 +64,7 @@ import dev.jcode.design.LocalEditorDragMovesCursor
 import dev.jcode.design.LocalExtraKeysSetting
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.ExplorerHiddenMode
+import dev.jcode.design.LocalAppUpdate
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalTabColoringSetting
@@ -617,6 +618,59 @@ object SettingsFeature {
                     OutlinedButton(onClick = onRefreshEnvironment, modifier = Modifier.weight(1f)) {
                         Text("Refresh checks")
                     }
+                }
+            }
+
+            SettingsSectionHeader("About")
+            SettingsCard(
+                title = "J Code",
+                description = "App version and updates from GitHub releases.",
+                keywords = "about version update check release github changelog build app",
+            ) {
+                val appUpdate = LocalAppUpdate.current
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Version ${appUpdate.currentVersion}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (appUpdate.updateAvailable) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primary,
+                            shape = RoundedCornerShape(50),
+                        ) {
+                            Text(
+                                text = "Update: v${appUpdate.latestVersion}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            )
+                        }
+                    } else if (appUpdate.latestVersion != null) {
+                        Text(
+                            text = "Up to date",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (appUpdate.updateAvailable) {
+                    FilledTonalButton(
+                        onClick = appUpdate.onOpenRelease,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Update to v${appUpdate.latestVersion}")
+                    }
+                }
+                OutlinedButton(
+                    onClick = appUpdate.onCheck,
+                    enabled = !appUpdate.checking,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (appUpdate.checking) "Checking…" else "Check for updates")
                 }
             }
 
