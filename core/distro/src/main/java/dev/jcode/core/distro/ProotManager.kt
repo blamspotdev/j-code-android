@@ -38,6 +38,10 @@ class ProotManager(private val context: Context) {
     private val prootTmpDir: File
         get() = File(appContext.filesDir, "tmp/proot")
 
+    /** Directory holding synthetic /proc files bound over the (SELinux-blocked) real ones. */
+    private val fakeProcDir: File
+        get() = File(appContext.filesDir, "tmp/proot-fakeproc")
+
     /** Absolute path to the lib directory (for LD_LIBRARY_PATH) */
     val libtallocPath: String
         get() = libtallocDir.absolutePath
@@ -74,6 +78,54 @@ class ProotManager(private val context: Context) {
         } catch (e: Exception) {
             android.util.Log.e("ProotManager", "ensureProotTmpDir: failed", e)
             false
+        }
+    }
+
+    /**
+     * Android's SELinux policy denies app processes read access to several system-wide procfs files
+     * (/proc/stat, /proc/loadavg, /proc/uptime, /proc/version); proot's fake-root can't lift a
+     * kernel-level denial, so tools that need them — htop, top, uptime, vmstat — abort with
+     * "Cannot open /proc/stat: Permission denied". Mirror proot-distro/Termux: generate small
+     * synthetic versions on the host and bind them over the real entries (see [buildProotCommand]).
+     * Memory (/proc/meminfo) and per-process files stay real (they ARE readable), so htop shows real
+     * RAM + the real process tree; only the CPU/load figures are static placeholders — the live tick
+     * data is exactly what Android withholds. Distro-agnostic (the denial is host-side, not per-rootfs).
+     * Idempotent; regenerated only when a file is missing. Returns the dir, or null on failure.
+     */
+    fun ensureFakeProcFiles(): File? {
+        val dir = fakeProcDir
+        return try {
+            val cores = Runtime.getRuntime().availableProcessors().coerceIn(1, 4096)
+            val stat = buildString {
+                append("cpu  0 0 0 0 0 0 0 0 0 0\n")
+                for (i in 0 until cores) append("cpu$i 0 0 0 0 0 0 0 0 0 0\n")
+                append("intr 0\nctxt 0\nbtime 1893456000\nprocesses 1\n")
+                append("procs_running 1\nprocs_blocked 0\n")
+                append("softirq 0 0 0 0 0 0 0 0 0 0 0\n")
+            }
+            val files = mapOf(
+                "stat" to stat,
+                "loadavg" to "0.00 0.00 0.00 1/1 1\n",
+                "uptime" to "0.00 0.00\n",
+                "version" to "Linux version $REPORTED_KERNEL_RELEASE (jcode@localhost) " +
+                    "(gcc) #1 SMP PREEMPT\n",
+            )
+            if (files.keys.any { !File(dir, it).exists() }) {
+                dir.mkdirs()
+                files.forEach { (name, content) ->
+                    File(dir, name).apply {
+                        writeText(content)
+                        setReadable(true, false)
+                    }
+                }
+            }
+            // Take /proc/stat + /proc/loadavg live: the (process-wide) sampler rewrites them from real
+            // per-core cpuidle deltas so htop/top show true utilization instead of the static baseline.
+            CpuStatSampler.shared(dir).ensureRunning()
+            dir.takeIf { File(it, "stat").exists() }
+        } catch (e: Exception) {
+            android.util.Log.e("ProotManager", "ensureFakeProcFiles: failed", e)
+            null
         }
     }
 
@@ -284,6 +336,16 @@ class ProotManager(private val context: Context) {
         args.addAll(listOf("-b", "/dev"))
         args.addAll(listOf("-b", "/proc"))
         args.addAll(listOf("-b", "/sys"))
+
+        // Overlay synthetic /proc/{stat,loadavg,uptime,version} — Android's SELinux sandbox denies the
+        // real ones to app processes, which makes htop/top/uptime abort ("Cannot open /proc/stat").
+        // Declared AFTER `-b /proc` so the more-specific file bindings win. Real /proc/meminfo and the
+        // per-process files stay live, so only CPU/load readings are placeholders. See ensureFakeProcFiles.
+        ensureFakeProcFiles()?.let { fp ->
+            for (name in listOf("stat", "loadavg", "uptime", "version")) {
+                args.addAll(listOf("-b", "${File(fp, name).absolutePath}:/proc/$name"))
+            }
+        }
 
         // Shared transfer dir for the extension `file.import` bridge: SAF-picked files are stream-copied
         // to this host dir by the app so extensions can reach them by a runtime path (/jcode-transfer)
