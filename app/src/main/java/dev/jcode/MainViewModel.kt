@@ -1195,6 +1195,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages = _messages.asSharedFlow()
 
+    private val _updateInfo = MutableStateFlow<UpdateInfo?>(null)
+    /** Latest GitHub-release check result, or null until the first successful check. */
+    val updateInfo = _updateInfo.asStateFlow()
+    private val _updateChecking = MutableStateFlow(false)
+    val updateChecking = _updateChecking.asStateFlow()
+
+    /** Query GitHub for the latest release and update [updateInfo]. Runs once on startup and on
+     *  demand from Settings; a failed/offline check leaves the previous result untouched. */
+    fun checkForUpdate() {
+        if (_updateChecking.value) return
+        viewModelScope.launch {
+            _updateChecking.value = true
+            try {
+                UpdateChecker.check()?.let { _updateInfo.value = it }
+            } finally {
+                _updateChecking.value = false
+            }
+        }
+    }
+
+    init {
+        checkForUpdate()
+    }
+
     /** Emitted when a file is opened from the terminal, so the shell can surface the editor. */
     private val _bringEditorToFront = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val bringEditorToFront = _bringEditorToFront.asSharedFlow()
