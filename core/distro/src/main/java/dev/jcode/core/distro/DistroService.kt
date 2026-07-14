@@ -204,6 +204,7 @@ class DistroService(
     suspend fun deleteEnvironment(environmentId: String): Boolean {
         val removed = rootfsManager.removeDistro(environmentId)
         verifiedDistroUsers.keys.removeAll { it.startsWith("$environmentId:") }
+        networkingConfigured.remove(environmentId)
         dataStore.edit { prefs ->
             prefs.remove(installedEntriesKey(environmentId))
             prefs.remove(installedLspEntriesKey(environmentId))
@@ -1196,6 +1197,9 @@ class DistroService(
     /** (distroId:user) pairs verified to exist in the rootfs, so execs don't re-check every time. */
     private val verifiedDistroUsers = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
+    /** distroIds whose DNS/host config has been ensured this process, so it runs at most once each. */
+    private val networkingConfigured = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     /** Last failed ensure per (distroId:user): a broken rootfs must not re-run the script on every refresh. */
     private val distroUserEnsureFailures = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
@@ -1416,6 +1420,13 @@ class DistroService(
 
         if (!prootManager.isProotInstalled) {
             return ExecResult(internalError = "proot binary is not available.", exitCode = 1)
+        }
+
+        // Self-heal DNS/host config once per distro per process. Fresh installs get this at extraction
+        // time, but an environment installed before this fix (e.g. a broken minimal ubuntu-base 26.04
+        // with no working /etc/resolv.conf) is repaired here so apt starts resolving without a reinstall.
+        if (networkingConfigured.add(distroId)) {
+            rootfsManager.ensureRootfsNetworking(rootfsPath)
         }
 
         // Foreign-arch environment: make sure the QEMU emulator is extracted before invoking proot.
