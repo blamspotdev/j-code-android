@@ -504,6 +504,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // crashes with "multiple DataStores active for the same file".
     private val uiPreferences = UiPreferencesStore.get(appContext)
 
+    /** Serialize the app-preferences DataStore for the Settings > Backup "Export settings" action. */
+    suspend fun exportSettingsJson(): String = SettingsBackup.export(uiPreferences)
+
+    /** Apply a previously-exported settings document; returns how many settings were restored. */
+    suspend fun importSettingsJson(document: String): Int = SettingsBackup.import(uiPreferences, document)
+
     private val hardwareAccelerationKey = booleanPreferencesKey("perf_hardware_acceleration")
 
     /** GPU-accelerated window rendering (default on). Applied by MainActivity at window creation, so
