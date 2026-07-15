@@ -66,6 +66,7 @@ import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.ExplorerHiddenMode
 import dev.jcode.design.LocalAppUpdate
 import dev.jcode.design.LocalSettingsBackup
+import dev.jcode.design.LocalEnvironmentBackup
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalTabColoringSetting
@@ -618,6 +619,23 @@ object SettingsFeature {
                     }
                     OutlinedButton(onClick = onRefreshEnvironment, modifier = Modifier.weight(1f)) {
                         Text("Refresh checks")
+                    }
+                }
+                if (environmentState.distroInstalled == true) {
+                    val envBackup = LocalEnvironmentBackup.current
+                    Text(
+                        text = "Back up the whole Linux environment (~2.5 GB) to a .tar.gz you can " +
+                            "restore here or on another device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(onClick = envBackup.onBackup, modifier = Modifier.weight(1f)) {
+                            Text("Back up (.tar.gz)")
+                        }
+                        OutlinedButton(onClick = envBackup.onRestore, modifier = Modifier.weight(1f)) {
+                            Text("Restore…")
+                        }
                     }
                 }
             }
