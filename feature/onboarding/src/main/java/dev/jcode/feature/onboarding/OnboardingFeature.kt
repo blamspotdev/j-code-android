@@ -80,6 +80,7 @@ object OnboardingFeature {
         onAutoSetup: () -> Unit,
         onStorageAccessGranted: () -> Unit,
         onDismiss: (() -> Unit)? = null,
+        onRestoreEnvironment: (() -> Unit)? = null,
     ) {
         // Full-bleed backdrop first, insets padding inside: otherwise the workbench behind the
         // onboarding shows through the status/navigation-bar strips (visible in landscape).
@@ -106,6 +107,7 @@ object OnboardingFeature {
                     shape = RoundedCornerShape(0.dp),
                     showStorageStep = true,
                     onStorageAccessGranted = onStorageAccessGranted,
+                    onRestoreEnvironment = onRestoreEnvironment,
                 )
             }
         }
@@ -154,6 +156,7 @@ private fun StepperScreen(
     shape: RoundedCornerShape,
     showStorageStep: Boolean = false,
     onStorageAccessGranted: () -> Unit = {},
+    onRestoreEnvironment: (() -> Unit)? = null,
     installedEnvironments: List<EnvironmentInfo> = emptyList(),
     onSwitchEnvironment: (String) -> Unit = {},
     onDeleteEnvironment: (String) -> Unit = {},
@@ -221,6 +224,7 @@ private fun StepperScreen(
                 onSelectDistro = onSelectDistro,
                 onAutoSetup = onAutoSetup,
                 onRefresh = onRefresh,
+                onRestoreEnvironment = onRestoreEnvironment,
             )
         }
     }
@@ -309,6 +313,7 @@ private fun DistroSelectionCard(
     onSelectDistro: (DistroProfile) -> Unit,
     onAutoSetup: () -> Unit,
     onRefresh: () -> Unit,
+    onRestoreEnvironment: (() -> Unit)? = null,
 ) {
     // Interactive until the previous step (storage) is done; the whole card also locks while a setup
     // runs AND stays locked once it has succeeded (Step 3 done) — re-selecting/re-running from here
@@ -357,9 +362,21 @@ private fun DistroSelectionCard(
             FilledTonalButton(onClick = onAutoSetup, enabled = interactive) {
                 Text("Use ${environmentState.runtime.selectedDistro.label}")
             }
+            if (onRestoreEnvironment != null) {
+                OutlinedButton(onClick = onRestoreEnvironment, enabled = interactive) {
+                    Text("Restore from backup…")
+                }
+            }
             OutlinedButton(onClick = onRefresh, enabled = interactive) {
                 Text("Refresh")
             }
+        }
+        if (onRestoreEnvironment != null && interactive) {
+            Text(
+                text = "Or restore a .tar.gz backup into the selected distro — brings back its toolchains, VMs and files instead of a fresh download. Pick the distro that matches your backup first.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

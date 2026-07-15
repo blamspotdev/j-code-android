@@ -987,6 +987,11 @@ fun JCodeApp(
     val envRestoreLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent(),
     ) { uri -> if (uri != null) viewModel.restoreEnvironmentFrom(uri) }
+    // Onboarding restore runs THROUGH the setup pipeline (proot/user/smoke-test) so a fresh install
+    // restored from a backup ends up fully working — unlike the Settings path which just swaps the rootfs.
+    val envRestoreOnboardingLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri -> if (uri != null) viewModel.restoreEnvironmentOnboarding(uri) }
     val environmentBackupActions = remember {
         EnvironmentBackupActions(
             onBackup = {
@@ -1225,6 +1230,7 @@ fun JCodeApp(
             onAutoSetup = { viewModel.runAutoSetup() },
             onStorageAccessGranted = { viewModel.onStorageAccessGranted() },
             onDismiss = { viewModel.deferFirstRunEnvironmentSetup() },
+            onRestoreEnvironment = { envRestoreOnboardingLauncher.launch("*/*") },
         )
     }
 

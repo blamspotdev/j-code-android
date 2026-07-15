@@ -555,6 +555,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Restore the environment from a backup during ONBOARDING: copy the picked .tar.gz to cache, arm the
+     * DistroInstalled step to restore from it (instead of downloading), then run the full setup pipeline
+     * so proot / jcode-user / smoke-test still run and produce a working environment. Progress shows in
+     * the onboarding "Setup log" and finishes with the normal "Done" completion.
+     */
+    fun restoreEnvironmentOnboarding(uri: android.net.Uri) {
+        viewModelScope.launch {
+            val tmp = withContext(Dispatchers.IO) {
+                runCatching {
+                    val t = java.io.File(appContext.cacheDir, "env-restore-onboarding-${System.nanoTime()}.tar.gz")
+                    appContext.contentResolver.openInputStream(uri)?.use { input ->
+                        t.outputStream().use { input.copyTo(it, 1 shl 16) }
+                    } ?: error("Could not read the backup file")
+                    t
+                }.getOrNull()
+            }
+            if (tmp == null) {
+                _messages.tryEmit("Could not read the backup file.")
+                return@launch
+            }
+            distroService.setPendingRestoreTarball(tmp)
+            runAutoSetup()
+        }
+    }
+
     private val hardwareAccelerationKey = booleanPreferencesKey("perf_hardware_acceleration")
 
     /** GPU-accelerated window rendering (default on). Applied by MainActivity at window creation, so

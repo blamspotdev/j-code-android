@@ -1145,12 +1145,33 @@ class DistroService(
         }
     }
 
+    // When armed (by an onboarding "restore from backup" action), the DistroInstalled step restores the
+    // rootfs from this local tarball instead of downloading — so the rest of the pipeline (proot, jcode
+    // user, smoke test) still runs and yields a working environment. Cleared after one use.
+    @Volatile private var pendingRestoreTarball: File? = null
+
+    /** Arm the next install run to restore from [tarball] instead of downloading. Pass null to clear. */
+    fun setPendingRestoreTarball(tarball: File?) { pendingRestoreTarball = tarball }
+
     private fun installSelectedDistro(
         profile: DistroProfile = _environmentState.value.runtime.selectedDistro,
         onLine: ((String) -> Unit)? = null,
         onDownloadProgress: ((percent: Int?, detail: String) -> Unit)? = null,
     ): ExecResult {
         return try {
+            val restore = pendingRestoreTarball
+            if (restore != null) {
+                pendingRestoreTarball = null
+                onLine?.invoke("Restoring ${profile.label} from backup (${"%.1f".format(restore.length() / (1024f * 1024f))} MiB)…")
+                onDownloadProgress?.invoke(null, "Restoring from backup…")
+                val rootfsDir = rootfsManager.getRootfsPath(profile.id)
+                val ok = rootfsManager.extractRootfs(restore, rootfsDir)
+                restore.delete()
+                if (!ok) return ExecResult(internalError = "Failed to restore rootfs for ${profile.label}", exitCode = 1)
+                rootfsManager.writeMetadata(profile)
+                onLine?.invoke("Restored rootfs at ${rootfsDir.absolutePath}.")
+                return ExecResult(stdout = "${profile.label} restored from backup", exitCode = 0)
+            }
             android.util.Log.d("DistroService", "installSelectedDistro: checking for ${profile.id}")
             if (rootfsManager.isDistroInstalled(profile.id)) {
                 android.util.Log.d("DistroService", "installSelectedDistro: ${profile.label} already installed")
