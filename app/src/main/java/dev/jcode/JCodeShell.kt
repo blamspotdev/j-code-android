@@ -293,6 +293,8 @@ import dev.jcode.design.AppUpdateSetting
 import dev.jcode.design.LocalAppUpdate
 import dev.jcode.design.LocalSettingsBackup
 import dev.jcode.design.SettingsBackupActions
+import dev.jcode.design.EnvironmentBackupActions
+import dev.jcode.design.LocalEnvironmentBackup
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalVolumeKeysSetting
@@ -978,6 +980,38 @@ fun JCodeApp(
         )
     }
 
+    // Environment backup/restore: pack/unpack the active Linux rootfs as a .tar.gz via a SAF picker.
+    val envBackupLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/gzip"),
+    ) { uri -> if (uri != null) viewModel.backupEnvironmentTo(uri) }
+    val envRestoreLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri -> if (uri != null) viewModel.restoreEnvironmentFrom(uri) }
+    val environmentBackupActions = remember {
+        EnvironmentBackupActions(
+            onBackup = {
+                val id = viewModel.distroService.selectedEnvironment().id
+                envBackupLauncher.launch("jcode-env-$id.tar.gz")
+            },
+            onRestore = { envRestoreLauncher.launch("*/*") },
+        )
+    }
+    val envBackupStatus by viewModel.envBackupStatus.collectAsStateWithLifecycle()
+    envBackupStatus?.let { status ->
+        AlertDialog(
+            onDismissRequest = {},
+            confirmButton = {},
+            title = { Text("Environment") },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(16.dp))
+                    Text(status)
+                }
+            },
+        )
+    }
+
     CompositionLocalProvider(
         LocalTerminalTapConfig provides terminalTapConfig,
         LocalTabCloseButtonSetting provides tabCloseSetting,
@@ -1031,6 +1065,7 @@ fun JCodeApp(
         LocalCutoutSetting provides cutoutSetting,
         LocalAppUpdate provides appUpdateSetting,
         LocalSettingsBackup provides settingsBackupActions,
+        LocalEnvironmentBackup provides environmentBackupActions,
         LocalCommandPaletteSetting provides commandPaletteSetting,
         LocalMarkdownPreviewSetting provides markdownPreviewSetting,
         LocalDeveloperSetting provides developerSetting,

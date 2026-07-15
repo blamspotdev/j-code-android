@@ -188,6 +188,42 @@ class DistroService(
         refreshEnvironment()
     }
 
+    /** The active environment's profile (id/label), for the backup filename and UI. */
+    fun selectedEnvironment(): DistroProfile = _environmentState.value.runtime.selectedDistro
+
+    /** True when the active environment has an installed rootfs that can be backed up. */
+    fun selectedEnvironmentInstalled(): Boolean =
+        rootfsManager.isDistroInstalled(_environmentState.value.runtime.selectedDistro.id)
+
+    /**
+     * Stream the active environment's rootfs to [out] as tar.gz (the "Back up environment" action).
+     * [onProgress] reports (files, uncompressed bytes) periodically. Runs on the IO dispatcher.
+     */
+    suspend fun packSelectedEnvironment(
+        out: java.io.OutputStream,
+        onProgress: ((files: Long, bytes: Long) -> Unit)? = null,
+    ): Boolean = withContext(Dispatchers.IO) {
+        val id = _environmentState.value.runtime.selectedDistro.id
+        if (!rootfsManager.isDistroInstalled(id)) return@withContext false
+        RootfsArchiver.pack(rootfsManager.getRootfsPath(id), out, onProgress)
+    }
+
+    /**
+     * Restore a tar.gz backup into the active environment's rootfs, replacing it. Reuses
+     * [RootfsManager.extractRootfs] (symlinks/hard-links/exec bits), then re-derives environment
+     * state so terminals pick up the restored tree. Runs on the IO dispatcher.
+     */
+    suspend fun restoreSelectedEnvironment(tarball: java.io.File): Boolean = withContext(Dispatchers.IO) {
+        val profile = _environmentState.value.runtime.selectedDistro
+        val ok = rootfsManager.extractRootfs(tarball, rootfsManager.getRootfsPath(profile.id))
+        if (ok) {
+            rootfsManager.writeMetadata(profile)
+            verifiedDistroUsers.keys.removeAll { it.startsWith("${profile.id}:") }
+            refreshEnvironment()
+        }
+        ok
+    }
+
     /** Switch the active environment that terminals and [exec] target. */
     fun setActiveEnvironment(environmentId: String) {
         val available = _environmentState.value.availableDistros

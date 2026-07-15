@@ -217,6 +217,18 @@ class SettingsBackupActions(
 val LocalSettingsBackup = compositionLocalOf { SettingsBackupActions() }
 
 /**
+ * Environment (Linux rootfs) backup/restore actions, shared (via [LocalEnvironmentBackup]) with the
+ * settings screen. [onBackup] packs the active environment to a `.tar.gz` file; [onRestore] extracts
+ * a picked `.tar.gz` back over it. [available] gates the buttons on an installed environment.
+ */
+class EnvironmentBackupActions(
+    val onBackup: () -> Unit = {},
+    val onRestore: () -> Unit = {},
+)
+
+val LocalEnvironmentBackup = compositionLocalOf { EnvironmentBackupActions() }
+
+/**
  * Performance / resource-management preferences, shared (via [LocalPerformanceSettings]) with both the
  * settings screen and JCodeShell without threading params through the latter (ART register limit).
  * [confirmCloseRunning] warns before closing a project/workspace that still has a running terminal

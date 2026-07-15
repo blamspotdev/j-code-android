@@ -510,6 +510,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Apply a previously-exported settings document; returns how many settings were restored. */
     suspend fun importSettingsJson(document: String): Int = SettingsBackup.import(uiPreferences, document)
 
+    private val _envBackupStatus = MutableStateFlow<String?>(null)
+    /** Non-null while an environment backup/restore runs; the message drives a modal progress dialog. */
+    val envBackupStatus = _envBackupStatus.asStateFlow()
+
+    /** Pack the active environment's rootfs to a SAF-created .tar.gz [uri]. */
+    fun backupEnvironmentTo(uri: android.net.Uri) {
+        if (_envBackupStatus.value != null) return
+        viewModelScope.launch {
+            _envBackupStatus.value = "Preparing backup…"
+            val ok = runCatching {
+                withContext(Dispatchers.IO) {
+                    appContext.contentResolver.openOutputStream(uri)?.use { os ->
+                        distroService.packSelectedEnvironment(os) { files, bytes ->
+                            _envBackupStatus.value = "Backing up… $files files (${bytes / (1024 * 1024)} MB)"
+                        }
+                    } ?: error("Could not open the destination file")
+                }
+            }.getOrDefault(false)
+            _messages.tryEmit(if (ok) "Environment backed up." else "Environment backup failed.")
+            _envBackupStatus.value = null
+        }
+    }
+
+    /** Restore the active environment's rootfs from a SAF-picked .tar.gz [uri], replacing it. */
+    fun restoreEnvironmentFrom(uri: android.net.Uri) {
+        if (_envBackupStatus.value != null) return
+        viewModelScope.launch {
+            _envBackupStatus.value = "Restoring environment…"
+            val ok = runCatching {
+                val tmp = withContext(Dispatchers.IO) {
+                    val t = java.io.File(appContext.cacheDir, "env-restore-${System.nanoTime()}.tar.gz")
+                    appContext.contentResolver.openInputStream(uri)?.use { input ->
+                        t.outputStream().use { input.copyTo(it, 1 shl 16) }
+                    } ?: error("Could not read the backup file")
+                    t
+                }
+                val restored = distroService.restoreSelectedEnvironment(tmp)
+                withContext(Dispatchers.IO) { tmp.delete() }
+                restored
+            }.getOrDefault(false)
+            _messages.tryEmit(if (ok) "Environment restored." else "Environment restore failed.")
+            _envBackupStatus.value = null
+        }
+    }
+
     private val hardwareAccelerationKey = booleanPreferencesKey("perf_hardware_acceleration")
 
     /** GPU-accelerated window rendering (default on). Applied by MainActivity at window creation, so
