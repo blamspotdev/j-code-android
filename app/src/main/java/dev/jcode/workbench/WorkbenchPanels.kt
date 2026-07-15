@@ -78,7 +78,7 @@ internal fun WorkspaceEmptyState(
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                text = workspace?.name ?: "J Code",
+                text = workspace?.name ?: "JCode",
                 fontWeight = FontWeight.SemiBold,
             )
             Text(

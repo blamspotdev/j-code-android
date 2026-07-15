@@ -61,7 +61,7 @@ object SyntaxHighlighter {
     private val OPERATORS = "+-*/%=<>!&|^~?:".toCharArray().toHashSet()
 
     /**
-     * Resolve the right highlighter for a file. Markdown and JSON are built into J Code, so they color
+     * Resolve the right highlighter for a file. Markdown and JSON are built into JCode, so they color
      * natively and authoritatively — ahead of any installed pack — with no extension required. Otherwise
      * an installed [lang] pack drives coloring, falling back to the generic tokenizer so every buffer is lit.
      */

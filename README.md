@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="media/jcode-app-icon.svg" width="96" alt="J Code icon" />
+  <img src="media/jcode-app-icon.svg" width="96" alt="JCode icon" />
 </p>
 
-<h1 align="center">J Code</h1>
+<h1 align="center">JCode</h1>
 
 <p align="center">
   A native Android IDE with an embedded Linux runtime — build, run, and edit real
@@ -11,7 +11,7 @@
 
 ---
 
-J Code is an Android IDE written in **Kotlin + Jetpack Compose**, with **C++/NDK**
+JCode is an Android IDE written in **Kotlin + Jetpack Compose**, with **C++/NDK**
 for the performance-critical subsystems (editor buffer, VT terminal, parsers). It
 embeds a self-contained **Linux environment** via bundled `proot` — runtimes,
 SDKs, compilers, and language servers live in an app-managed Ubuntu 24.04 / Debian

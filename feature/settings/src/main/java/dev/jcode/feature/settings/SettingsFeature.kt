@@ -446,7 +446,7 @@ object SettingsFeature {
             ) {
                 ToggleRow(
                     label = "Restore last session on launch",
-                    supporting = "Reopen the last workspace, project, and editor tabs — including unsaved changes — when J Code starts. Missing files are skipped.",
+                    supporting = "Reopen the last workspace, project, and editor tabs — including unsaved changes — when JCode starts. Missing files are skipped.",
                     checked = restoreSessionSetting.enabled,
                     onCheckedChange = restoreSessionSetting.onChange,
                     modified = restoreSessionSetting.enabled != SettingsDefaults.RESTORE_LAST_SESSION,
@@ -460,7 +460,7 @@ object SettingsFeature {
             SettingsSectionHeader("Performance")
             SettingsCard(
                 title = "Rendering",
-                description = "How J Code draws the UI, editor, and terminal.",
+                description = "How JCode draws the UI, editor, and terminal.",
                 keywords = "performance rendering hardware acceleration gpu software draw graphics lag smooth",
             ) {
                 ToggleRow(
@@ -548,7 +548,7 @@ object SettingsFeature {
                         description = when (choice) {
                             WebPreviewBrowsers.SYSTEM -> "The device's default browser app"
                             WebPreviewBrowsers.ASK -> "Show the Android app chooser each time"
-                            WebPreviewBrowsers.BUILTIN -> "J Code's own in-editor browser, with DevTools"
+                            WebPreviewBrowsers.BUILTIN -> "JCode's own in-editor browser, with DevTools"
                             else -> choice
                         },
                         selected = webPreview.globalChoice == choice,
@@ -642,7 +642,7 @@ object SettingsFeature {
 
             SettingsSectionHeader("About")
             SettingsCard(
-                title = "J Code",
+                title = "JCode",
                 description = "App version and updates from GitHub releases.",
                 keywords = "about version update check release github changelog build app",
             ) {

@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-J Code is licensed under the MIT License (see [`LICENSE`](LICENSE)). J Code bundles,
+JCode is licensed under the MIT License (see [`LICENSE`](LICENSE)). JCode bundles,
 links, or otherwise distributes the third-party components listed below. Each
 component remains under its own license; the notices below are provided to comply
 with those licenses and are for informational purposes only.
@@ -19,13 +19,13 @@ directory and executed in place); the support libraries ship under
 `native/proot/src/main/assets/bin/` and are extracted to app-private storage at
 runtime. PRoot and its loaders run as **separate processes** (spawned via a PTY);
 they are not linked into the application. libtalloc and libandroid-shmem are
-loaded by the PRoot process via `LD_LIBRARY_PATH`, not by J Code's own code.
+loaded by the PRoot process via `LD_LIBRARY_PATH`, not by JCode's own code.
 
 | Component | Version | License | Source |
 |---|---|---|---|
 | PRoot (incl. `loader` / `loader32`) | 5.1.107.76 (Termux build) | **GPL-2.0** | https://github.com/termux/proot |
 | libtalloc | 2.4.3 | **LGPL-3.0** | https://talloc.samba.org/ |
-| libandroid-shmem | upstream `7f0bd7e2` + J Code memfd modifications (modified source: `native/proot/libandroid-shmem/`) | BSD-3-Clause | https://github.com/termux/libandroid-shmem |
+| libandroid-shmem | upstream `7f0bd7e2` + JCode memfd modifications (modified source: `native/proot/libandroid-shmem/`) | BSD-3-Clause | https://github.com/termux/libandroid-shmem |
 
 ### Written offer for corresponding source (GPL-2.0 / LGPL-3.0)
 
@@ -40,14 +40,14 @@ the exact versions bundled in a given release. Contact the Licensor (see
 These binaries are unmodified upstream builds. Their licenses (GPL-2.0 / LGPL-3.0)
 apply only to the binaries themselves and, because they execute as separate
 processes / dynamically loaded libraries of a separate process, do not extend to
-J Code's own code.
+JCode's own code.
 
 ---
 
 ## 2. Native libraries compiled from source
 
 These are fetched and compiled by the NDK/CMake build (see `native/CMakeLists.txt`)
-and linked into J Code's `.so` libraries.
+and linked into JCode's `.so` libraries.
 
 | Component | Version | License | Linkage | Source |
 |---|---|---|---|---|
@@ -61,8 +61,8 @@ and linked into J Code's `.so` libraries.
 **libgit2 linking exception.** libgit2 is GPL-2.0 *with* an explicit exception
 granting "unlimited permission to link the compiled version of this library into
 combinations with other programs, and to distribute those combinations without any
-restriction." J Code relies on this exception to statically link libgit2 without
-the GPL extending to J Code's own code. A copy of libgit2's `COPYING` (which
+restriction." JCode relies on this exception to statically link libgit2 without
+the GPL extending to JCode's own code. A copy of libgit2's `COPYING` (which
 contains the exception) is distributed with the corresponding source on request.
 
 > Some of the modules above (libgit2/libssh2/Mbed TLS, tree-sitter) back features
@@ -103,7 +103,7 @@ Bundled into the APK (`classes.dex` / merged resources). Unless noted, each is
 
 ## 4. Bundled fonts
 
-Shipped as Android font resources and rendered by J Code's own views (the code
+Shipped as Android font resources and rendered by JCode's own views (the code
 editor). The font files are unmodified upstream releases; per the OFL's Reserved
 Font Name rules they must not be subset or otherwise modified without renaming.
 
@@ -117,11 +117,11 @@ License, Version 1.1 — the full license text ships in this repository at
 [`licenses/OFL-1.1-JetBrainsMono.txt`](licenses/OFL-1.1-JetBrainsMono.txt)
 (upstream `OFL.txt`, verbatim); the font file's own metadata carries the
 copyright notice and a license pointer. The OFL applies to the font files only —
-it does not extend to J Code's code or to documents rendered with the font.
+it does not extend to JCode's code or to documents rendered with the font.
 
 ---
 
-## 5. J Code's own native and JVM code
+## 5. JCode's own native and JVM code
 
 All first-party modules — `:app`, `:core:*`, `:feature:*`, and the native
 libraries `jcodebuffer`, `jcode_core`, `pty`, `jcode_vt`, and the

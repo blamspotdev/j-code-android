@@ -91,7 +91,7 @@ entries:
   - id: cmake-ninja
     category: build-tools
     name: CMake and Ninja
-    description: Installs the baseline native build tools used by J Code and Android/NDK projects.
+    description: Installs the baseline native build tools used by JCode and Android/NDK projects.
     installScript: |
       sudo apt-get update
       sudo apt-get install -y cmake ninja-build pkg-config

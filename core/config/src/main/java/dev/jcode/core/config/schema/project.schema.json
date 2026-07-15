@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "JCode Project Configuration",
-  "description": "Project-level configuration for J Code IDE (overrides workspace config)",
+  "description": "Project-level configuration for JCode IDE (overrides workspace config)",
   "type": "object",
   "properties": {
     "editor": {

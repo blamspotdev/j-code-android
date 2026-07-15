@@ -427,7 +427,7 @@ class TerminalSessionManager(
     }
 }
 
-private val GUEST_SHELL_INTEGRATION = """# J Code shell integration (sourced via /etc/profile -> /etc/profile.d/*.sh).
+private val GUEST_SHELL_INTEGRATION = """# JCode shell integration (sourced via /etc/profile -> /etc/profile.d/*.sh).
 
 # Open a file in the editor from the terminal.
 # Usage: jcode <path>[:line[:col]] ...   (alias: code, when no real `code` exists)

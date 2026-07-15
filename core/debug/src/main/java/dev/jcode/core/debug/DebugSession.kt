@@ -92,7 +92,7 @@ class DebugSession(
 
             capabilities = sendRequest("initialize", JSONObject().apply {
                 put("clientID", "jcode")
-                put("clientName", "J Code")
+                put("clientName", "JCode")
                 put("adapterID", debugType)
                 put("locale", "en")
                 put("linesStartAt1", true)

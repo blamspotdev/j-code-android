@@ -53,13 +53,13 @@ object SettingsBackup {
 
     /**
      * Apply a previously-exported document. Returns the number of settings restored. Throws
-     * [IllegalArgumentException] if the document is not a J Code settings backup so the caller can
+     * [IllegalArgumentException] if the document is not a JCode settings backup so the caller can
      * surface a clear error instead of silently importing nothing.
      */
     suspend fun import(dataStore: DataStore<Preferences>, document: String): Int {
         val root = JSONObject(document)
         val entries = root.optJSONArray("settings")
-            ?: throw IllegalArgumentException("Not a J Code settings backup.")
+            ?: throw IllegalArgumentException("Not a JCode settings backup.")
         var applied = 0
         dataStore.edit { prefs ->
             for (i in 0 until entries.length()) {

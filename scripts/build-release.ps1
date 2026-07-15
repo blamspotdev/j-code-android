@@ -65,7 +65,7 @@ if ($Variant) {
 } elseif (-not [Console]::IsInputRedirected) {
     Write-Host ''
     Say 'Which build?'
-    Write-Host '  [1] Release  - final build (dev.jcode / "J Code"), version straight from VERSION.txt' -ForegroundColor Gray
+    Write-Host '  [1] Release  - final build (dev.jcode / "JCode"), version straight from VERSION.txt' -ForegroundColor Gray
     Write-Host '  [2] Beta     - side-by-side testing build (dev.jcode.beta / "JCode (beta)"): installs' -ForegroundColor Gray
     Write-Host '                 ALONGSIDE the release app, own data, versionName gets a -label suffix' -ForegroundColor Gray
     $sel = Read-Host 'Select [1]'
@@ -78,7 +78,7 @@ if ($Variant) {
 # Beta = a separate app id so it doesn't overwrite the installed release. Fixed ".beta" (one beta
 # slot) regardless of the version label, so successive betas replace each other, never the release.
 $IdSuffix = if ($IsPre) { '.beta' } else { '' }
-$AppLabel = if ($IsPre) { 'JCode (beta)' } else { 'J Code' }
+$AppLabel = if ($IsPre) { 'JCode (beta)' } else { 'JCode' }
 $VariantTag = if ($IsPre) { 'beta' } else { 'release' }
 Say "Variant: $VariantTag$(if ($IsPre) { " -> app id dev.jcode$IdSuffix, label '$AppLabel', version label: $PreReleaseLabel" })"
 
@@ -244,7 +244,7 @@ function New-ReleaseKeystore($KsPath, $PassFile) {
     [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
     $pw = ((([Convert]::ToBase64String($bytes)) -replace '[+/=]', '') + 'aA1').Substring(0, 24)
     & $keytool -genkeypair -v -keystore $KsPath -alias jcode -keyalg RSA -keysize 4096 -validity 10000 `
-        -storepass $pw -keypass $pw -dname 'CN=J Code, O=JCode, C=US'
+        -storepass $pw -keypass $pw -dname 'CN=JCode, O=JCode, C=US'
     if ($LASTEXITCODE -ne 0) { Warn 'keytool failed to create the keystore.'; return $null }
     Set-Content -Path $PassFile -Value $pw -NoNewline
     Say  "Created release keystore: $KsPath"

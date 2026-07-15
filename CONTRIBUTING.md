@@ -1,4 +1,4 @@
-# Contributing to J Code
+# Contributing to JCode
 
 Contributions are welcome — bug reports, fixes, and pull requests.
 
@@ -14,7 +14,7 @@ Contributions are welcome — bug reports, fixes, and pull requests.
 
 ## License of contributions
 
-J Code is licensed under the **MIT License** (see [`LICENSE`](LICENSE)). By submitting a
+JCode is licensed under the **MIT License** (see [`LICENSE`](LICENSE)). By submitting a
 contribution (a pull request, patch, or any change intentionally submitted for inclusion in the
 Work), you agree it is provided under the **same MIT terms** and that you have the right to
 submit it. If your employer holds rights to your work,

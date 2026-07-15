@@ -85,7 +85,7 @@ private class DevToolsBridge {
 }
 
 /**
- * J Code's built-in browser, shown as a full-screen editor page: address bar + back/forward/reload,
+ * JCode's built-in browser, shown as a full-screen editor page: address bar + back/forward/reload,
  * and it feeds the DevTools drawer panel — console messages (via WebChromeClient) and network requests
  * (via an injected `fetch`/`XMLHttpRequest` shim). State lives in [BuiltinBrowser] so DevTools, which
  * sits in a different part of the tree, can observe it and drive JS eval / DOM snapshots.

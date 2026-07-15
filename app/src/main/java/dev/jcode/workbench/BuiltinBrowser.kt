@@ -34,7 +34,7 @@ interface BrowserController {
 }
 
 /**
- * Shared state for J Code's single built-in browser, observed by both [BrowserPage] (the editor-area
+ * Shared state for JCode's single built-in browser, observed by both [BrowserPage] (the editor-area
  * browser) and the DevTools right-drawer panel, which live in different parts of the composition. A
  * process singleton because there is at most one built-in browser tab at a time.
  */

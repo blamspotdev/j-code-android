@@ -27,7 +27,7 @@ val jcodeVersionCode: Int = runCatching {
 // label so it installs ALONGSIDE the normal release app instead of replacing it (the release script
 // passes ".beta" for a Beta build). Its private data (Linux rootfs, settings, sessions) is isolated
 // under the suffixed package; only the shared /storage/emulated/0/JCode projects folder is common.
-// Empty (the default) keeps the normal dev.jcode / "J Code" release identity. namespace is unchanged
+// Empty (the default) keeps the normal dev.jcode / "JCode" release identity. namespace is unchanged
 // (compile-time R/BuildConfig package), so no source references break.
 val jcodeIdSuffix: String =
     (project.findProperty("jcodeIdSuffix") as? String)?.trim().orEmpty()
@@ -44,8 +44,14 @@ android {
         versionName = jcodeVersionName
 
         // Launcher name (AndroidManifest android:label="${appLabel}"). The Beta build overrides this
-        // to "J Code.beta" in the release block below.
-        manifestPlaceholders["appLabel"] = "J Code"
+        // to "JCode.beta" in the release block below.
+        manifestPlaceholders["appLabel"] = "JCode"
+
+        // Launcher icon (AndroidManifest android:icon/roundIcon). Debug and Beta builds swap in a
+        // tinted adaptive icon (red gradient / purple gradient background) below so they're
+        // distinguishable on the home screen; the plain release build keeps ic_launcher.
+        manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher"
+        manifestPlaceholders["appIconRound"] = "@mipmap/ic_launcher_round"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -56,6 +62,8 @@ android {
             // `installDebug` never overwrites an installed release or beta build.
             applicationIdSuffix = ".debug"
             manifestPlaceholders["appLabel"] = "JCode (debug)"
+            manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher_debug"
+            manifestPlaceholders["appIconRound"] = "@mipmap/ic_launcher_debug_round"
         }
         release {
             isMinifyEnabled = false
@@ -68,6 +76,8 @@ android {
             if (jcodeIdSuffix.isNotEmpty()) {
                 applicationIdSuffix = jcodeIdSuffix
                 manifestPlaceholders["appLabel"] = "JCode (${jcodeIdSuffix.removePrefix(".")})"
+                manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher_beta"
+                manifestPlaceholders["appIconRound"] = "@mipmap/ic_launcher_beta_round"
             }
         }
     }

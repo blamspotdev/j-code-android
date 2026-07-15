@@ -319,7 +319,7 @@ class WebPreviewBrowsers(
     companion object {
         const val SYSTEM = "SYSTEM"
         const val ASK = "ASK"
-        /** Open the preview inside J Code's own in-editor browser (with DevTools) instead of an external app. */
+        /** Open the preview inside JCode's own in-editor browser (with DevTools) instead of an external app. */
         const val BUILTIN = "BUILTIN"
         const val INHERIT = ""
     }
@@ -345,7 +345,7 @@ private val JCodeTypography = Typography(
     ),
 )
 
-/** Convenience accessors for J Code design tokens that sit alongside [MaterialTheme]. */
+/** Convenience accessors for JCode design tokens that sit alongside [MaterialTheme]. */
 object JCodeTheme {
     val semanticColors: JCodeSemanticColors
         @Composable get() = LocalSemanticColors.current

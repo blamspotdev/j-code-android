@@ -4132,7 +4132,7 @@ private fun WorkbenchBackHandler(
     exitPromptItems?.let { items ->
         AlertDialog(
             onDismissRequest = { exitPromptItems = null },
-            title = { Text("Exit J Code?") },
+            title = { Text("Exit JCode?") },
             text = {
                 Text("Still running:\n" + items.joinToString("\n") { "•  $it" })
             },

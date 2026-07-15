@@ -242,7 +242,7 @@ internal fun WorkbenchTopBar(
                 verticalArrangement = Arrangement.spacedBy(1.dp),
             ) {
                 Text(
-                    text = activeTab?.title ?: selectedProject?.name ?: "J Code",
+                    text = activeTab?.title ?: selectedProject?.name ?: "JCode",
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     fontWeight = FontWeight.SemiBold,

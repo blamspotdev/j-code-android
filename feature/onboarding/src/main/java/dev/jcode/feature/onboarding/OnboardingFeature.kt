@@ -327,7 +327,7 @@ private fun DistroSelectionCard(
         Text(
             text = when {
                 completed -> "Environment ready — ${environmentState.runtime.selectedDistro.label} is set up."
-                enabled -> "Choose the Linux distro J Code should prepare for your embedded environment."
+                enabled -> "Choose the Linux distro JCode should prepare for your embedded environment."
                 else -> "Allow storage access above to continue."
             },
             style = MaterialTheme.typography.bodySmall,
@@ -617,7 +617,7 @@ private fun Header() {
         ) {
             Text("Environment setup", fontWeight = FontWeight.SemiBold)
             Text(
-                text = "Pick a Linux distro and J Code configures the rest automatically.",
+                text = "Pick a Linux distro and JCode configures the rest automatically.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -686,7 +686,7 @@ private fun StorageAccessCard(
                 Text(
                     text = "Without it, projects fall back to app-private storage and are removed " +
                         "when the app is uninstalled. In the settings screen that opens, turn on " +
-                        "\"Allow access to manage all files\" for J Code, then return here.",
+                        "\"Allow access to manage all files\" for JCode, then return here.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
