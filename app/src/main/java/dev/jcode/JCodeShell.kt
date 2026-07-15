@@ -291,6 +291,8 @@ import dev.jcode.design.ExplorerHiddenSetting
 import dev.jcode.design.ExtraKey
 import dev.jcode.design.AppUpdateSetting
 import dev.jcode.design.LocalAppUpdate
+import dev.jcode.design.LocalSettingsBackup
+import dev.jcode.design.SettingsBackupActions
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalVolumeKeysSetting
@@ -935,6 +937,47 @@ fun JCodeApp(
         state.updateDecorations { it.replaceLayer(dev.jcode.core.editor.decor.Layer.SQUIGGLY, decos) }
     }
 
+    // Settings backup/restore: SAF pickers save/load the app-preferences DataStore as a JSON file.
+    val backupScope = rememberCoroutineScope()
+    val settingsExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(SettingsBackup.MIME),
+    ) { uri ->
+        if (uri != null) backupScope.launch {
+            val outcome = runCatching {
+                val json = viewModel.exportSettingsJson()
+                withContext(Dispatchers.IO) {
+                    updateContext.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) }
+                        ?: error("Could not open the file for writing")
+                }
+            }
+            snackbarHostState.showSnackbar(
+                outcome.fold({ "Settings exported" }, { "Export failed: ${it.message}" }),
+            )
+        }
+    }
+    val settingsImportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri ->
+        if (uri != null) backupScope.launch {
+            val outcome = runCatching {
+                val text = withContext(Dispatchers.IO) {
+                    updateContext.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
+                        ?: error("Could not read the file")
+                }
+                viewModel.importSettingsJson(text)
+            }
+            snackbarHostState.showSnackbar(
+                outcome.fold({ "Imported $it settings" }, { "Import failed: ${it.message}" }),
+            )
+        }
+    }
+    val settingsBackupActions = remember {
+        SettingsBackupActions(
+            onExport = { settingsExportLauncher.launch(SettingsBackup.SUGGESTED_NAME) },
+            onImport = { settingsImportLauncher.launch("*/*") },
+        )
+    }
+
     CompositionLocalProvider(
         LocalTerminalTapConfig provides terminalTapConfig,
         LocalTabCloseButtonSetting provides tabCloseSetting,
@@ -987,6 +1030,7 @@ fun JCodeApp(
         LocalExplorerHiddenSetting provides explorerHiddenSetting,
         LocalCutoutSetting provides cutoutSetting,
         LocalAppUpdate provides appUpdateSetting,
+        LocalSettingsBackup provides settingsBackupActions,
         LocalCommandPaletteSetting provides commandPaletteSetting,
         LocalMarkdownPreviewSetting provides markdownPreviewSetting,
         LocalDeveloperSetting provides developerSetting,

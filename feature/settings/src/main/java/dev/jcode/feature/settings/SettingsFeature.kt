@@ -65,6 +65,7 @@ import dev.jcode.design.LocalExtraKeysSetting
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.ExplorerHiddenMode
 import dev.jcode.design.LocalAppUpdate
+import dev.jcode.design.LocalSettingsBackup
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalTabColoringSetting
@@ -671,6 +672,21 @@ object SettingsFeature {
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(if (appUpdate.checking) "Checking…" else "Check for updates")
+                }
+            }
+
+            SettingsCard(
+                title = "Backup & restore",
+                description = "Save your app preferences to a file, then restore them here or on " +
+                    "another device. (Theme and editor settings live in the workspace config.)",
+                keywords = "backup restore export import settings preferences file save load transfer migrate json device",
+            ) {
+                val backup = LocalSettingsBackup.current
+                FilledTonalButton(onClick = backup.onExport, modifier = Modifier.fillMaxWidth()) {
+                    Text("Export settings…")
+                }
+                OutlinedButton(onClick = backup.onImport, modifier = Modifier.fillMaxWidth()) {
+                    Text("Import settings…")
                 }
             }
 
