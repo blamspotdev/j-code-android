@@ -2,6 +2,7 @@ package dev.jcode.fs
 
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
 import android.os.FileObserver
 import androidx.documentfile.provider.DocumentFile
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -113,6 +114,36 @@ class SafFs @Inject constructor(
 
     private fun snapshotDirectory(uri: Uri): List<String> {
         val root = uri.requireSafDocument(context)
+        // Fast path: ONE ContentResolver query returns every child with its name/mtime/size. The old
+        // DocumentFile.listFiles() + per-child .name/.lastModified()/.length() issued N+1 SAF queries,
+        // and this runs on every 2s poll — an O(N) IPC storm while a SAF folder is watched. Falls back
+        // to the per-child path if a provider rejects the batched query (keeps the exact snapshot shape).
+        val childrenUri = runCatching {
+            DocumentsContract.buildChildDocumentsUriUsingTree(
+                root.uri,
+                DocumentsContract.getDocumentId(root.uri),
+            )
+        }.getOrNull()
+        if (childrenUri != null) {
+            val projection = arrayOf(
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                DocumentsContract.Document.COLUMN_SIZE,
+            )
+            val batched = runCatching {
+                buildList {
+                    context.contentResolver.query(childrenUri, projection, null, null, null)?.use { c ->
+                        while (c.moveToNext()) {
+                            val name = if (c.isNull(0)) "" else c.getString(0)
+                            val modified = if (c.isNull(1)) 0L else c.getLong(1)
+                            val size = if (c.isNull(2)) 0L else c.getLong(2)
+                            add("$name#$modified#$size")
+                        }
+                    }
+                }
+            }.getOrNull()
+            if (batched != null) return batched.sorted()
+        }
         return root.listFiles().map { file ->
             buildString {
                 append(file.name ?: file.uri.toString())
