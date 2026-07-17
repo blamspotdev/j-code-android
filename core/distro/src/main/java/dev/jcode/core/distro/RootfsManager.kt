@@ -270,6 +270,8 @@ class RootfsManager(
                     entry = tin.nextTarEntry
                 }
             }
+            // A freshly extracted minimal image has no working DNS/host config — wire it up so apt works.
+            ensureRootfsNetworking(targetDir)
             android.util.Log.d(
                 "RootfsManager",
                 "extractRootfs: OK ($hardlinks hard links, $symlinkedLinks converted to symlinks)",
@@ -280,6 +282,67 @@ class RootfsManager(
             false
         }
     }
+
+    /**
+     * Write the minimal DNS/host config a proot guest needs for name resolution to work. The official
+     * minimal `ubuntu-base` images (used for newer releases such as 26.04) ship /etc/resolv.conf as an
+     * EMPTY 0-byte file — normally populated at boot by systemd-resolved/cloud-init, none of which run
+     * under proot — so glibc falls back to 127.0.0.1:53 (nothing listening) and every `apt-get update`
+     * dies with "Temporary failure resolving 'archive.ubuntu.com'". The fuller AnLinux image (used for
+     * 24.04) pre-bakes `nameserver 8.8.8.8`, which is why it "just works" and 26.04 does not. Mirrors
+     * what proot-distro/Termux do post-extraction. NB: apt sources are left alone — 26.04 arm64 serves
+     * correctly from archive.ubuntu.com; only DNS is missing.
+     *
+     * Idempotent and safe on images that already carry working config: resolv.conf is (re)written only
+     * when missing, empty, or lacking a nameserver; /etc/hosts only when empty/missing — so a user's own
+     * resolver/hosts customization is preserved on self-heal. A dangling systemd-resolved symlink (as in
+     * fuller images) is unlinked first so the write can't follow it to a dead target. Pure host-side
+     * writes into the extracted tree (the rootfs is plain files under filesDir) — no proot round-trip and
+     * no DNS needed to perform them. Android exposes no host /etc/resolv.conf to copy, so public
+     * resolvers are used.
+     *
+     * @return true if the config is in place afterwards.
+     */
+    fun ensureRootfsNetworking(rootfsDir: File): Boolean {
+        return try {
+            val etc = File(rootfsDir, "etc").apply { mkdirs() }
+
+            val resolv = File(etc, "resolv.conf")
+            if (!isUsableResolvConf(resolv)) {
+                // Don't write *through* a dangling systemd-resolved stub symlink — replace it.
+                if (isSymlink(resolv)) resolv.delete()
+                resolv.writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\nnameserver 8.8.4.4\n")
+            }
+
+            // Loopback names — cosmetic, but the minimal base ships /etc/hosts empty (0 bytes), which
+            // makes sudo/hostname emit "unable to resolve host" noise. Only fill when empty/missing.
+            val hosts = File(etc, "hosts")
+            if (!isSymlink(hosts) && hosts.length() == 0L) {
+                hosts.writeText("127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n")
+            }
+
+            // Deliberately NOT written: /etc/nsswitch.conf (ubuntu-base ships a correct one), apt
+            // sources (26.04 arm64 correctly uses archive.ubuntu.com — rewriting to ports would break
+            // it), and ca-certificates (apt uses http+GPG; TLS tools install it on demand).
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("RootfsManager", "ensureRootfsNetworking failed", e)
+            false
+        }
+    }
+
+    /** A resolv.conf is usable only if it is a real (non-symlink) file with at least one nameserver. */
+    private fun isUsableResolvConf(f: File): Boolean =
+        !isSymlink(f) && f.isFile &&
+            runCatching {
+                f.readText().lineSequence().any {
+                    val t = it.trim()
+                    t.startsWith("nameserver") && t.removePrefix("nameserver").isNotBlank()
+                }
+            }.getOrDefault(false)
+
+    private fun isSymlink(f: File): Boolean =
+        runCatching { java.nio.file.Files.isSymbolicLink(f.toPath()) }.getOrDefault(false)
 
     private fun tryHardLink(target: File, link: File): Boolean = try {
         Os.link(target.absolutePath, link.absolutePath)

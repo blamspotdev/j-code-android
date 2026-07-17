@@ -17,6 +17,7 @@ import dev.jcode.design.LocalRestoreSession
 import dev.jcode.design.LocalTabCloseButtonSetting
 import dev.jcode.design.BottomBarSetting
 import dev.jcode.design.EditorTabActions
+import dev.jcode.design.FontOption
 import dev.jcode.design.FontSettings
 import dev.jcode.design.LocalEditorTabActions
 import dev.jcode.design.LocalEditorTypeface
@@ -41,6 +42,7 @@ import dev.jcode.design.jcIcon
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -114,8 +116,10 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -286,6 +290,12 @@ import dev.jcode.design.TabMaxSizeSetting
 import dev.jcode.design.ExplorerHiddenMode
 import dev.jcode.design.ExplorerHiddenSetting
 import dev.jcode.design.ExtraKey
+import dev.jcode.design.AppUpdateSetting
+import dev.jcode.design.LocalAppUpdate
+import dev.jcode.design.LocalSettingsBackup
+import dev.jcode.design.SettingsBackupActions
+import dev.jcode.design.EnvironmentBackupActions
+import dev.jcode.design.LocalEnvironmentBackup
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalVolumeKeysSetting
@@ -523,6 +533,28 @@ fun JCodeApp(
     val cutoutSetting = remember(respectDeviceCutout, hasDeviceCutout) {
         CutoutSetting(respect = respectDeviceCutout, hasCutout = hasDeviceCutout, onChange = viewModel::setRespectDeviceCutout)
     }
+    val updateInfo by viewModel.updateInfo.collectAsStateWithLifecycle()
+    val updateChecking by viewModel.updateChecking.collectAsStateWithLifecycle()
+    val updateContext = LocalContext.current
+    val appUpdateSetting = remember(updateInfo, updateChecking) {
+        AppUpdateSetting(
+            currentVersion = BuildConfig.VERSION_NAME,
+            latestVersion = updateInfo?.latestVersion,
+            updateAvailable = updateInfo?.updateAvailable == true,
+            checking = updateChecking,
+            onCheck = viewModel::checkForUpdate,
+            onOpenRelease = {
+                val url = updateInfo?.releaseUrl
+                    ?: "https://github.com/blamspotdev/j-code-android/releases/latest"
+                runCatching {
+                    updateContext.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                }
+            },
+        )
+    }
     val paletteDisabledCommands by viewModel.paletteDisabledCommands.collectAsStateWithLifecycle()
     val commandPaletteSetting = remember(paletteDisabledCommands) {
         CommandPaletteSetting(disabledIds = paletteDisabledCommands, onSetEnabled = viewModel::setPaletteCommandEnabled)
@@ -618,18 +650,21 @@ fun JCodeApp(
     val tabMaxSizeSetting = remember(tabMaxSize) { TabMaxSizeSetting(tabMaxSize, viewModel::setTabMaxSize) }
     val editorFontId by viewModel.editorFontId.collectAsStateWithLifecycle()
     val terminalFontId by viewModel.terminalFontId.collectAsStateWithLifecycle()
+    val environmentFonts by viewModel.environmentFonts.collectAsStateWithLifecycle()
     val fontContext = LocalContext.current
-    val editorTypeface = remember(editorFontId) { MonoFontCatalog.resolve(fontContext, editorFontId) }
-    val terminalTypeface = remember(terminalFontId) { MonoFontCatalog.resolve(fontContext, terminalFontId) }
-    val fontSettings = remember(editorFontId, terminalFontId) {
+    val envFontPaths = remember(environmentFonts) { environmentFonts.associate { it.id to it.path } }
+    val editorTypeface = remember(editorFontId, envFontPaths) { MonoFontCatalog.resolve(fontContext, editorFontId, envFontPaths) }
+    val terminalTypeface = remember(terminalFontId, envFontPaths) { MonoFontCatalog.resolve(fontContext, terminalFontId, envFontPaths) }
+    val fontSettings = remember(editorFontId, terminalFontId, environmentFonts) {
         FontSettings(
-            options = MonoFontCatalog.options,
+            options = MonoFontCatalog.options + environmentFonts.map { FontOption(it.id, it.name) },
             editorFontId = editorFontId,
             terminalFontId = terminalFontId,
             editorDefaultId = MonoFontCatalog.EDITOR_DEFAULT,
             terminalDefaultId = MonoFontCatalog.TERMINAL_DEFAULT,
             onSelectEditorFont = viewModel::setEditorFont,
             onSelectTerminalFont = viewModel::setTerminalFont,
+            onScanFonts = viewModel::refreshEnvironmentFonts,
         )
     }
     val editorSaveActions = remember(viewModel) {
@@ -738,6 +773,22 @@ fun JCodeApp(
         }
     }
 
+    // Surface an "update available" toast (with an Update action) once per launch when the startup
+    // GitHub-release check finds a newer version. The Settings > About card offers a manual re-check.
+    var updateToastShown by remember { mutableStateOf(false) }
+    LaunchedEffect(updateInfo?.updateAvailable) {
+        val info = updateInfo
+        if (info?.updateAvailable == true && !updateToastShown) {
+            updateToastShown = true
+            val result = snackbarHostState.showSnackbar(
+                message = "Update available: v${info.latestVersion}",
+                actionLabel = "Update",
+                duration = SnackbarDuration.Long,
+            )
+            if (result == SnackbarResult.ActionPerformed) appUpdateSetting.onOpenRelease()
+        }
+    }
+
     // Keep clean editor tabs mirrored to disk: re-sync on every foreground regain and on a slow tick
     // while foregrounded, so external writes (e.g. an agent in the terminal) show up in the editor.
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -826,11 +877,14 @@ fun JCodeApp(
         )
     }
     // Persistent SCM WebView: boots the decorations-contributing SCM extension per open project so
-    // git status reaches the explorer without the SCM panel ever being shown.
-    val scmHostExt = remember(installedExtensions, extensionActivations) {
+    // git status reaches the explorer without the SCM panel ever being shown. Excludes hosts the user
+    // stopped from the Task Manager (they'd otherwise re-attach on the next project open).
+    val suspendedBackgroundExts by viewModel.suspendedBackgroundExtensions.collectAsStateWithLifecycle()
+    val scmHostExt = remember(installedExtensions, extensionActivations, suspendedBackgroundExts) {
         installedExtensions.firstOrNull {
             it.type == ExtensionType.Scm && it.hasWebUi && it.contributes.explorerDecorations &&
-                (extensionActivations[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual
+                (extensionActivations[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual &&
+                it.id !in suspendedBackgroundExts
         }
     }
     ScmBackgroundHost(
@@ -847,6 +901,7 @@ fun JCodeApp(
         EditorEmptyActions(
             recents = recents,
             onOpenRecent = viewModel::openRecent,
+            onExportRecent = viewModel::exportRecentToStorage,
             onNewProject = viewModel::requestNew,
             onOpenFolder = { openFolderLauncher.launch(null) },
             startActions = contributedStartActions,
@@ -892,6 +947,84 @@ fun JCodeApp(
         state.updateDecorations { it.replaceLayer(dev.jcode.core.editor.decor.Layer.SQUIGGLY, decos) }
     }
 
+    // Settings backup/restore: SAF pickers save/load the app-preferences DataStore as a JSON file.
+    val backupScope = rememberCoroutineScope()
+    val settingsExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(SettingsBackup.MIME),
+    ) { uri ->
+        if (uri != null) backupScope.launch {
+            val outcome = runCatching {
+                val json = viewModel.exportSettingsJson()
+                withContext(Dispatchers.IO) {
+                    updateContext.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) }
+                        ?: error("Could not open the file for writing")
+                }
+            }
+            snackbarHostState.showSnackbar(
+                outcome.fold({ "Settings exported" }, { "Export failed: ${it.message}" }),
+            )
+        }
+    }
+    val settingsImportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri ->
+        if (uri != null) backupScope.launch {
+            val outcome = runCatching {
+                val text = withContext(Dispatchers.IO) {
+                    updateContext.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
+                        ?: error("Could not read the file")
+                }
+                viewModel.importSettingsJson(text)
+            }
+            snackbarHostState.showSnackbar(
+                outcome.fold({ "Imported $it settings" }, { "Import failed: ${it.message}" }),
+            )
+        }
+    }
+    val settingsBackupActions = remember {
+        SettingsBackupActions(
+            onExport = { settingsExportLauncher.launch(SettingsBackup.SUGGESTED_NAME) },
+            onImport = { settingsImportLauncher.launch("*/*") },
+        )
+    }
+
+    // Environment backup/restore: pack/unpack the active Linux rootfs as a .tar.gz via a SAF picker.
+    val envBackupLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/gzip"),
+    ) { uri -> if (uri != null) viewModel.backupEnvironmentTo(uri) }
+    val envRestoreLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri -> if (uri != null) viewModel.restoreEnvironmentFrom(uri) }
+    // Onboarding restore runs THROUGH the setup pipeline (proot/user/smoke-test) so a fresh install
+    // restored from a backup ends up fully working — unlike the Settings path which just swaps the rootfs.
+    val envRestoreOnboardingLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri -> if (uri != null) viewModel.restoreEnvironmentOnboarding(uri) }
+    val environmentBackupActions = remember {
+        EnvironmentBackupActions(
+            onBackup = {
+                val id = viewModel.distroService.selectedEnvironment().id
+                envBackupLauncher.launch("jcode-env-$id.tar.gz")
+            },
+            onRestore = { envRestoreLauncher.launch("*/*") },
+        )
+    }
+    val envBackupStatus by viewModel.envBackupStatus.collectAsStateWithLifecycle()
+    envBackupStatus?.let { status ->
+        AlertDialog(
+            onDismissRequest = {},
+            confirmButton = {},
+            title = { Text("Environment") },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(16.dp))
+                    Text(status)
+                }
+            },
+        )
+    }
+
     CompositionLocalProvider(
         LocalTerminalTapConfig provides terminalTapConfig,
         LocalTabCloseButtonSetting provides tabCloseSetting,
@@ -928,6 +1061,13 @@ fun JCodeApp(
                 keepAliveFor = { id -> id !in extensionKeepAliveDisabled },
             )
         },
+        LocalTaskManagerBackgroundActions provides remember {
+            TaskManagerBackgroundActions(
+                snapshot = viewModel::backgroundExtensionSnapshot,
+                onStop = viewModel::stopBackgroundExtension,
+                onStart = viewModel::startBackgroundExtension,
+            )
+        },
         LocalEditorSaveActions provides editorSaveActions,
         LocalEditorMenuExtras provides editorMenuExtras,
         LocalExplorerScmUi provides explorerScmUi,
@@ -943,6 +1083,9 @@ fun JCodeApp(
         LocalPerformanceSettings provides performanceSettings,
         LocalExplorerHiddenSetting provides explorerHiddenSetting,
         LocalCutoutSetting provides cutoutSetting,
+        LocalAppUpdate provides appUpdateSetting,
+        LocalSettingsBackup provides settingsBackupActions,
+        LocalEnvironmentBackup provides environmentBackupActions,
         LocalCommandPaletteSetting provides commandPaletteSetting,
         LocalMarkdownPreviewSetting provides markdownPreviewSetting,
         LocalDeveloperSetting provides developerSetting,
@@ -985,6 +1128,7 @@ fun JCodeApp(
         onSelectProject = viewModel::selectProject,
         onOpenProject = viewModel::openProject,
         onRenameProject = viewModel::renameProject,
+        onExportProject = viewModel::exportProjectToStorage,
         onOpenFile = viewModel::openFile,
         onOpenPathAtLine = viewModel::openFileByGuestPath,
         onSelectEditorTab = viewModel::selectEditorTab,
@@ -1102,6 +1246,7 @@ fun JCodeApp(
             onAutoSetup = { viewModel.runAutoSetup() },
             onStorageAccessGranted = { viewModel.onStorageAccessGranted() },
             onDismiss = { viewModel.deferFirstRunEnvironmentSetup() },
+            onRestoreEnvironment = { envRestoreOnboardingLauncher.launch("*/*") },
         )
     }
 
@@ -1133,6 +1278,7 @@ private fun JCodeShell(
     onSelectProject: (Long) -> Unit,
     onOpenProject: (Project) -> Unit,
     onRenameProject: (Long, String) -> Unit,
+    onExportProject: (Project) -> Unit,
     onOpenFile: (dev.jcode.fs.FsNode) -> Unit,
     onOpenPathAtLine: (String) -> Unit,
     onSelectEditorTab: (String) -> Unit,
@@ -1986,6 +2132,7 @@ private fun JCodeShell(
                 onSelectProject = onSelectProject,
                 onOpenProject = onOpenProject,
                 onRenameProject = onRenameProject,
+                onExportProject = onExportProject,
                 onSelectTool = onSelectWorkbenchTool,
                 onOpenExternalFolder = { openFolderLauncher.launch(null) },
                 contributedDrawerActions = vcs.drawerActions,
@@ -2365,6 +2512,7 @@ private fun JCodeShell(
                             onSelectProject = onSelectProject,
                             onOpenProject = onOpenProject,
                             onRenameProject = onRenameProject,
+                            onExportProject = onExportProject,
                             onSelectTool = onSelectWorkbenchTool,
                             onOpenExternalFolder = { openFolderLauncher.launch(null) },
                             contributedDrawerActions = vcs.drawerActions,
@@ -2555,6 +2703,7 @@ private fun WorkspacePanel(
     onSelectProject: (Long) -> Unit,
     onOpenProject: (Project) -> Unit,
     onRenameProject: (Long, String) -> Unit,
+    onExportProject: (Project) -> Unit,
     onSelectTool: (WorkbenchTool) -> Unit,
     onOpenExternalFolder: () -> Unit,
     contributedDrawerActions: List<MainViewModel.ShellContribution>,
@@ -2630,6 +2779,7 @@ private fun WorkspacePanel(
                                     onRenameProject = onRenameProject,
                                     onRemoveProject = onRemoveProject,
                                     onOpenProjectSettings = { id -> onSelectProject(id); onOpenProjectConfig() },
+                                    onExportProject = onExportProject,
                                     onCreateProject = onCreateProject,
                                 )
                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
@@ -2900,6 +3050,7 @@ private fun EditorWorkspace(
 internal data class EditorEmptyActions(
     val recents: List<RecentEntity> = emptyList(),
     val onOpenRecent: (RecentEntity) -> Unit = {},
+    val onExportRecent: (RecentEntity) -> Unit = {},
     val onNewProject: () -> Unit = {},
     val onOpenFolder: () -> Unit = {},
     /** Extension-contributed actions (e.g. Clone, Remote Repo) shown after New/Open Folder. */
@@ -3024,7 +3175,11 @@ private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modi
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 actions.recents.forEach { recent ->
-                    RecentRow(recent = recent, onOpen = { actions.onOpenRecent(recent) })
+                    RecentRow(
+                        recent = recent,
+                        onOpen = { actions.onOpenRecent(recent) },
+                        onExport = { actions.onExportRecent(recent) },
+                    )
                 }
             }
         }
@@ -3032,7 +3187,8 @@ private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modi
 }
 
 @Composable
-private fun RecentRow(recent: RecentEntity, onOpen: () -> Unit) {
+private fun RecentRow(recent: RecentEntity, onOpen: () -> Unit, onExport: () -> Unit) {
+    var menuOpen by remember { mutableStateOf(false) }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -3043,7 +3199,7 @@ private fun RecentRow(recent: RecentEntity, onOpen: () -> Unit) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .padding(start = 8.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -3075,6 +3231,26 @@ private fun RecentRow(recent: RecentEntity, onOpen: () -> Unit) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+            // SAF recents have no local dir to copy out; only offer Export for Local ones.
+            if (recent.kind == ProjectKind.Local) {
+                Box {
+                    IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            imageVector = jcIcon(JCodeIcon.MoreVert),
+                            contentDescription = "Recent project actions",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    CompactContextMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false },
+                        listActions = listOf(
+                            ContextAction(JCodeIcon.Save, "Export to storage") { onExport() },
+                        ),
+                    )
+                }
             }
         }
     }
@@ -4003,7 +4179,7 @@ private fun WorkbenchBackHandler(
     exitPromptItems?.let { items ->
         AlertDialog(
             onDismissRequest = { exitPromptItems = null },
-            title = { Text("Exit J Code?") },
+            title = { Text("Exit JCode?") },
             text = {
                 Text("Still running:\n" + items.joinToString("\n") { "•  $it" })
             },

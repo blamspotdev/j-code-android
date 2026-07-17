@@ -20,7 +20,7 @@ for arg in "$@"; do
             echo "Usage: $(basename "$0") [-y|--yes] [--release|--beta] [--label=<s>]"
             echo "Builds a release APK of JCode into ./builds."
             echo "  -y, --yes       auto-accept install prompts"
-            echo "  --release       final build (default; dev.jcode / \"J Code\"; version from VERSION.txt)"
+            echo "  --release       final build (default; dev.jcode / \"JCode\"; version from VERSION.txt)"
             echo "  --beta          side-by-side testing build (dev.jcode.beta / \"JCode (beta)\") that"
             echo "                  installs ALONGSIDE the release app; versionName gets a -label suffix"
             echo "  --label=<s>     beta version label (default: beta -> 1.0.2-beta)"
@@ -196,7 +196,7 @@ if [ -z "$VARIANT" ]; then
     if [ -t 0 ]; then
         printf '\n'
         say 'Which build?'
-        printf '  [1] Release  - final build (dev.jcode / "J Code"), version straight from VERSION.txt\n'
+        printf '  [1] Release  - final build (dev.jcode / "JCode"), version straight from VERSION.txt\n'
         printf '  [2] Beta     - side-by-side build (dev.jcode.beta / "JCode (beta)"): installs ALONGSIDE\n'
         printf '                 the release app, own data, versionName gets a -label suffix\n'
         read -r -p 'Select [1] ' _sel
@@ -211,7 +211,7 @@ if [ -z "$VARIANT" ]; then
 fi
 case "$VARIANT" in beta|prerelease) IS_PRE=1; VARIANT="beta" ;; *) IS_PRE=0; VARIANT="release" ;; esac
 # Beta = a separate app id (fixed ".beta", one beta slot) so it never overwrites the release build.
-ID_SUFFIX=""; APP_LABEL="J Code"; [ "$IS_PRE" = 1 ] && { ID_SUFFIX=".beta"; APP_LABEL="JCode (beta)"; }
+ID_SUFFIX=""; APP_LABEL="JCode"; [ "$IS_PRE" = 1 ] && { ID_SUFFIX=".beta"; APP_LABEL="JCode (beta)"; }
 [ "$IS_PRE" = 1 ] && say "Variant: beta -> app id dev.jcode$ID_SUFFIX, label '$APP_LABEL', version label: $PRERELEASE_LABEL" || say "Variant: release"
 
 VERSION="$(tr -d '[:space:]' < VERSION.txt 2>/dev/null || echo 1.0.0)"
@@ -256,7 +256,7 @@ create_release_keystore() {
     local pw; pw="$(head -c 18 /dev/urandom | base64 | tr -d '+/=' | cut -c1-21)aA1"
     "$keytool" -genkeypair -v -keystore "$JCODE_KEYSTORE_DEFAULT" -alias jcode \
         -keyalg RSA -keysize 4096 -validity 10000 \
-        -storepass "$pw" -keypass "$pw" -dname "CN=J Code, O=JCode, C=US" \
+        -storepass "$pw" -keypass "$pw" -dname "CN=JCode, O=JCode, C=US" \
         || { warn "keytool failed to create the keystore."; return 1; }
     printf '%s' "$pw" > "$JCODE_KEYSTORE_PASS_FILE"
     chmod 600 "$JCODE_KEYSTORE_PASS_FILE" 2>/dev/null || true

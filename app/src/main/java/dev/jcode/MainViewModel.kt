@@ -504,6 +504,83 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // crashes with "multiple DataStores active for the same file".
     private val uiPreferences = UiPreferencesStore.get(appContext)
 
+    /** Serialize the app-preferences DataStore for the Settings > Backup "Export settings" action. */
+    suspend fun exportSettingsJson(): String = SettingsBackup.export(uiPreferences)
+
+    /** Apply a previously-exported settings document; returns how many settings were restored. */
+    suspend fun importSettingsJson(document: String): Int = SettingsBackup.import(uiPreferences, document)
+
+    private val _envBackupStatus = MutableStateFlow<String?>(null)
+    /** Non-null while an environment backup/restore runs; the message drives a modal progress dialog. */
+    val envBackupStatus = _envBackupStatus.asStateFlow()
+
+    /** Pack the active environment's rootfs to a SAF-created .tar.gz [uri]. */
+    fun backupEnvironmentTo(uri: android.net.Uri) {
+        if (_envBackupStatus.value != null) return
+        viewModelScope.launch {
+            _envBackupStatus.value = "Preparing backup…"
+            val ok = runCatching {
+                withContext(Dispatchers.IO) {
+                    appContext.contentResolver.openOutputStream(uri)?.use { os ->
+                        distroService.packSelectedEnvironment(os) { files, bytes ->
+                            _envBackupStatus.value = "Backing up… $files files (${bytes / (1024 * 1024)} MB)"
+                        }
+                    } ?: error("Could not open the destination file")
+                }
+            }.getOrDefault(false)
+            _messages.tryEmit(if (ok) "Environment backed up." else "Environment backup failed.")
+            _envBackupStatus.value = null
+        }
+    }
+
+    /** Restore the active environment's rootfs from a SAF-picked .tar.gz [uri], replacing it. */
+    fun restoreEnvironmentFrom(uri: android.net.Uri) {
+        if (_envBackupStatus.value != null) return
+        viewModelScope.launch {
+            _envBackupStatus.value = "Restoring environment…"
+            val ok = runCatching {
+                val tmp = withContext(Dispatchers.IO) {
+                    val t = java.io.File(appContext.cacheDir, "env-restore-${System.nanoTime()}.tar.gz")
+                    appContext.contentResolver.openInputStream(uri)?.use { input ->
+                        t.outputStream().use { input.copyTo(it, 1 shl 16) }
+                    } ?: error("Could not read the backup file")
+                    t
+                }
+                val restored = distroService.restoreSelectedEnvironment(tmp)
+                withContext(Dispatchers.IO) { tmp.delete() }
+                restored
+            }.getOrDefault(false)
+            _messages.tryEmit(if (ok) "Environment restored." else "Environment restore failed.")
+            _envBackupStatus.value = null
+        }
+    }
+
+    /**
+     * Restore the environment from a backup during ONBOARDING: copy the picked .tar.gz to cache, arm the
+     * DistroInstalled step to restore from it (instead of downloading), then run the full setup pipeline
+     * so proot / jcode-user / smoke-test still run and produce a working environment. Progress shows in
+     * the onboarding "Setup log" and finishes with the normal "Done" completion.
+     */
+    fun restoreEnvironmentOnboarding(uri: android.net.Uri) {
+        viewModelScope.launch {
+            val tmp = withContext(Dispatchers.IO) {
+                runCatching {
+                    val t = java.io.File(appContext.cacheDir, "env-restore-onboarding-${System.nanoTime()}.tar.gz")
+                    appContext.contentResolver.openInputStream(uri)?.use { input ->
+                        t.outputStream().use { input.copyTo(it, 1 shl 16) }
+                    } ?: error("Could not read the backup file")
+                    t
+                }.getOrNull()
+            }
+            if (tmp == null) {
+                _messages.tryEmit("Could not read the backup file.")
+                return@launch
+            }
+            distroService.setPendingRestoreTarball(tmp)
+            runAutoSetup()
+        }
+    }
+
     private val hardwareAccelerationKey = booleanPreferencesKey("perf_hardware_acceleration")
 
     /** GPU-accelerated window rendering (default on). Applied by MainActivity at window creation, so
@@ -700,13 +777,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val editorFontKey = stringPreferencesKey("editor_font")
     private val terminalFontKey = stringPreferencesKey("terminal_font")
 
-    /** Selected monospace font id for the editor / terminal (see [MonoFontCatalog]). */
+    /** Selected monospace font id for the editor / terminal (see [MonoFontCatalog]). A saved id for a
+     *  font that was removed from the catalog (e.g. the retired "System monospace") falls back to the
+     *  default. */
     val editorFontId: StateFlow<String> = uiPreferences.data
-        .map { prefs -> prefs[editorFontKey]?.ifBlank { null } ?: MonoFontCatalog.EDITOR_DEFAULT }
+        .map { prefs ->
+            prefs[editorFontKey]?.ifBlank { null }?.takeUnless { it == MonoFontCatalog.RETIRED_SYSTEM }
+                ?: MonoFontCatalog.EDITOR_DEFAULT
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MonoFontCatalog.EDITOR_DEFAULT)
 
     val terminalFontId: StateFlow<String> = uiPreferences.data
-        .map { prefs -> prefs[terminalFontKey]?.ifBlank { null } ?: MonoFontCatalog.TERMINAL_DEFAULT }
+        .map { prefs ->
+            prefs[terminalFontKey]?.ifBlank { null }?.takeUnless { it == MonoFontCatalog.RETIRED_SYSTEM }
+                ?: MonoFontCatalog.TERMINAL_DEFAULT
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MonoFontCatalog.TERMINAL_DEFAULT)
 
     fun setEditorFont(id: String) {
@@ -715,6 +800,75 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setTerminalFont(id: String) {
         viewModelScope.launch { uiPreferences.edit { it[terminalFontKey] = id } }
+    }
+
+    // --- Environment (distro) fonts ----------------------------------------------------------------
+    // Monospace fonts installed in the Linux runtime (DejaVu Sans Mono ships with the base image;
+    // users apt-install FiraCode / Nerd Fonts) discovered via fontconfig and loaded straight from the
+    // rootfs on ext4. Offered in the editor/terminal font pickers next to the built-ins. Ids are
+    // prefixed [MonoFontCatalog.ENV_PREFIX]: "env:default" follows `fc-match monospace`; "env:fam:<f>"
+    // is a specific installed family.
+    data class EnvironmentFont(val id: String, val name: String, val path: String)
+
+    private val _environmentFonts = MutableStateFlow<List<EnvironmentFont>>(emptyList())
+    val environmentFonts: StateFlow<List<EnvironmentFont>> = _environmentFonts.asStateFlow()
+
+    init {
+        // Discover once the rootfs is installed (root exec is enough — no need for the jcode user);
+        // re-discover if the selected distro changes.
+        viewModelScope.launch {
+            distroService.environmentState
+                .map { it.distroInstalled == true }
+                .distinctUntilChanged()
+                .collect { installed -> if (installed) refreshEnvironmentFonts() }
+        }
+    }
+
+    /** Re-scan the runtime's installed monospace fonts (no-op until the rootfs is installed). Cheap
+     *  enough to call whenever the font settings open, so newly apt-installed fonts appear without a
+     *  restart. */
+    fun refreshEnvironmentFonts() {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (distroService.environmentState.value.distroInstalled != true) return@launch
+            val fonts = runCatching { discoverEnvironmentFonts() }
+                .onFailure { android.util.Log.w("JCode", "environment font discovery failed", it) }
+                .getOrDefault(emptyList())
+            if (fonts != _environmentFonts.value) _environmentFonts.value = fonts
+        }
+    }
+
+    private suspend fun discoverEnvironmentFonts(): List<EnvironmentFont> {
+        val rootfs = distroService.activeRootfsPath()
+        fun hostFile(guestPath: String): File? {
+            val p = guestPath.trim()
+            if (p.isEmpty() || !p.startsWith("/")) return null
+            return File(rootfs, p.removePrefix("/")).takeIf { it.isFile && it.canRead() }
+        }
+        // Enumerate mono/charcell families: "spacing|family|style|file" ('|' dodges tab-escaping through
+        // the proot shell; fontconfig still interprets the trailing \n).
+        val listCmd = "command -v fc-list >/dev/null 2>&1 && " +
+            "fc-list -f '%{spacing}|%{family}|%{style}|%{file}\\n' : 2>/dev/null || true"
+        val byFamily = LinkedHashMap<String, EnvironmentFont>()
+        distroService.exec(listCmd, user = "root", raw = true).stdout.lineSequence().forEach { line ->
+            val parts = line.split('|')
+            if (parts.size < 4) return@forEach
+            if ((parts[0].trim().toIntOrNull() ?: 0) < 100) return@forEach // fontconfig: mono=100, charcell=110
+            val family = parts[1].substringBefore(',').trim().ifBlank { return@forEach }
+            val host = hostFile(parts[3]) ?: return@forEach
+            val style = parts[2].substringBefore(',').trim()
+            val isRegular = style.isEmpty() || style.equals("Regular", true) ||
+                style.equals("Book", true) || style.equals("Normal", true) || style.equals("Medium", true)
+            if (isRegular || family !in byFamily) {
+                byFamily[family] = EnvironmentFont("${MonoFontCatalog.ENV_PREFIX}fam:$family", family, host.absolutePath)
+            }
+        }
+        val out = mutableListOf<EnvironmentFont>()
+        // The environment's default monospace (follows fontconfig), shown first as "Distro monospace".
+        val matchCmd = "command -v fc-match >/dev/null 2>&1 && fc-match -f '%{file}' monospace 2>/dev/null || true"
+        hostFile(distroService.exec(matchCmd, user = "root", raw = true).stdout)
+            ?.let { out.add(EnvironmentFont("${MonoFontCatalog.ENV_PREFIX}default", "Distro monospace", it.absolutePath)) }
+        out.addAll(byFamily.values.sortedBy { it.name.lowercase() })
+        return out
     }
 
     private val bottomStatusBarKey = stringPreferencesKey("bottom_status_bar")
@@ -1195,6 +1349,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages = _messages.asSharedFlow()
 
+    private val _updateInfo = MutableStateFlow<UpdateInfo?>(null)
+    /** Latest GitHub-release check result, or null until the first successful check. */
+    val updateInfo = _updateInfo.asStateFlow()
+    private val _updateChecking = MutableStateFlow(false)
+    val updateChecking = _updateChecking.asStateFlow()
+
+    /** Query GitHub for the latest release and update [updateInfo]. Runs once on startup and on
+     *  demand from Settings; a failed/offline check leaves the previous result untouched. */
+    fun checkForUpdate() {
+        if (_updateChecking.value) return
+        viewModelScope.launch {
+            _updateChecking.value = true
+            try {
+                UpdateChecker.check()?.let { _updateInfo.value = it }
+            } finally {
+                _updateChecking.value = false
+            }
+        }
+    }
+
+    init {
+        checkForUpdate()
+    }
+
     /** Emitted when a file is opened from the terminal, so the shell can surface the editor. */
     private val _bringEditorToFront = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val bringEditorToFront = _bringEditorToFront.asSharedFlow()
@@ -1211,13 +1389,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             uniqueName = "jcode.lang.stylesheet",
             version = "1.0.1",
         ),
-        BundledExtensionSpec(
-            assetPath = "builtin-extensions/jcode.ext.gitscm-0.5.1.jext",
-            uniqueName = "jcode.ext.gitscm",
-            version = "0.5.1",
-        ),
-        // NOTE: manager extensions (SQL Client, VM Manager) are NOT bundled — they pull in
-        // libraries/binaries at runtime and are distributed via the marketplace, not baked into the app.
     )
 
     init {
@@ -1671,6 +1842,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val ok = workspaceManager.renameProject(projectId, newName)
             emitMessage(if (ok) "Renamed to '${newName.trim()}'." else "Rename failed.")
+        }
+    }
+
+    /** Copy a local project out to shared storage (`/storage/emulated/0/JCode/exports/<name>-<ts>`) so
+     *  it's browsable in a file manager / other apps. A one-shot snapshot: `node_modules` (large and
+     *  regenerable) is skipped. Projects otherwise live on app-private ext4 (see WorkspaceHostPaths);
+     *  the DocumentsProvider gives a live view, this gives a real on-disk copy. Needs all-files access. */
+    fun exportProjectToStorage(project: Project) =
+        exportDirToStorage(project.name, (project.fsPath as? FsPath.Local)?.file)
+
+    /** Export a "Recent" entry (a project's on-disk location) to shared storage; SAF recents have no
+     *  local directory and are rejected. */
+    fun exportRecentToStorage(recent: RecentEntity) {
+        val dir = if (recent.kind == ProjectKind.Local) File(recent.uri) else null
+        exportDirToStorage(dir?.name.orEmpty().ifBlank { "project" }, dir)
+    }
+
+    private fun exportDirToStorage(name: String, source: File?) {
+        if (source == null || !source.isDirectory) {
+            viewModelScope.launch { emitMessage("Export failed: '$name' isn't a local folder.") }
+            return
+        }
+        if (!android.os.Environment.isExternalStorageManager()) {
+            viewModelScope.launch { emitMessage("Grant all-files access in Settings to export to storage.") }
+            return
+        }
+        viewModelScope.launch {
+            emitMessage("Exporting '$name' to storage…")
+            val result = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+                    val dest = File("/storage/emulated/0/JCode/exports/$name-$stamp")
+                    // Manual pruning walk: copyRecursively can't skip a whole subtree, so drop
+                    // node_modules via onEnter (before descending) instead of copying then deleting it.
+                    source.walkTopDown()
+                        .onEnter { it.name != "node_modules" }
+                        .forEach { file ->
+                            val out = File(dest, file.relativeTo(source).path)
+                            if (file.isDirectory) {
+                                out.mkdirs()
+                            } else {
+                                out.parentFile?.mkdirs()
+                                file.copyTo(out, overwrite = true)
+                            }
+                        }
+                    dest.absolutePath
+                }
+            }
+            result.onSuccess { emitMessage("Exported to $it") }
+                .onFailure { emitMessage("Export failed: ${it.message ?: "unknown error"}") }
         }
     }
 
@@ -2443,11 +2664,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 else -> apiError("unknown request type: $type")
             }
         }
-        return runCatching { dispatchExtensionApi(type, payload) }
+        return runCatching { dispatchExtensionApi(type, payload, ext.id) }
             .getOrElse { apiError(it.message ?: "internal error") }
     }
 
-    private suspend fun dispatchExtensionApi(type: String, p: JSONObject): String = when (type) {
+    private suspend fun dispatchExtensionApi(type: String, p: JSONObject, callerExtId: String): String = when (type) {
         "api.hello" -> apiOk(
             JSONObject()
                 .put("apiVersion", EXTENSION_API_VERSION)
@@ -2534,17 +2755,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             apiOk(JSONObject())
         }
 
-        // Register a top-level folder under the current workspace (already created on disk, e.g. by a
-        // git clone) as a Project and open it. In a User Workspace it prompts open-vs-add instead.
+        // Destinations an extension can clone/register a top-level folder into: the Default Workspace's
+        // flat "Projects" root, plus every user Workspace whose folder is reachable under the guest
+        // /workspace mount. Each guestPath is where the extension should physically place the clone; the
+        // matching `destinationId` is passed back to workbench.openFolder so the host registers it there.
+        "workbench.cloneDestinations" -> {
+            val defId = workspaceManager.ensureDefaultWorkspaceId()
+            val dests = org.json.JSONArray()
+            dests.put(JSONObject().put("id", "default").put("label", "Projects").put("guestPath", "/workspace"))
+            workspaceManager.listWorkspaces().forEach { ws ->
+                if (ws.id == defId) return@forEach
+                val guest = dev.jcode.core.distro.WorkspaceHostPaths.hostToGuest(ws.rootPath)
+                if (guest == "/workspace" || guest.startsWith("/workspace/")) {
+                    dests.put(JSONObject().put("id", ws.id.toString()).put("label", ws.name).put("guestPath", guest))
+                }
+            }
+            apiOk(JSONObject().put("destinations", dests))
+        }
+
+        // Register a top-level folder (already created on disk, e.g. by a git clone) as a Project and
+        // open it. `destinationId` (from workbench.cloneDestinations) chooses the target workspace:
+        // "default"/absent = the Default Workspace (opens immediately), a workspace id = that User
+        // Workspace (switches to it and prompts open-vs-add). Absent id keeps the legacy behavior of
+        // registering under whatever workspace is currently open.
         "workbench.openFolder" -> {
             val name = p.optString("name").trim()
             require(name.isNotBlank()) { "name required" }
             val sanitized = workspaceManager.sanitizedFolderName(name)
-            val userWorkspace = workspaceManager.breadcrumb.value.size > 1
-            if (!userWorkspace) resetDefaultWorkspaceProject()
-            val project = workspaceManager.createNode(sanitized, WorkspaceNodeType.Project, null)
-            if (userWorkspace) _postClonePrompt.value = project else _selectedProjectId.value = project.id
-            apiOk(JSONObject().put("name", project.name).put("opened", !userWorkspace))
+            val defId = workspaceManager.ensureDefaultWorkspaceId()
+            val destId = p.optString("destinationId").trim()
+            val currentId = workspaceManager.currentWorkspace.value?.id ?: defId
+            val targetWs = when {
+                destId.isBlank() -> currentId
+                destId == "default" -> defId
+                else -> destId.toLongOrNull()?.takeIf { workspaceManager.workspaceExists(it) } ?: defId
+            }
+            // Make the target the current context (rebuilds the breadcrumb: Default root + target) so
+            // resetDefaultWorkspaceProject's single-slot check and project selection resolve correctly.
+            workspaceManager.restoreWorkspace(targetWs)
+            if (targetWs == defId) {
+                resetDefaultWorkspaceProject()
+                val project = workspaceManager.createNodeIn(defId, sanitized, WorkspaceNodeType.Project, null)
+                _selectedProjectId.value = project.id
+                apiOk(JSONObject().put("name", project.name).put("opened", true))
+            } else {
+                val project = workspaceManager.createNodeIn(targetWs, sanitized, WorkspaceNodeType.Project, null)
+                _postClonePrompt.value = project
+                apiOk(JSONObject().put("name", project.name).put("opened", false))
+            }
         }
 
         "service.start" -> {
@@ -2552,6 +2810,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val command = p.optString("command")
             require(command.isNotBlank()) { "command required" }
             val started = startRuntimeService(
+                extId = callerExtId,
                 id = id,
                 command = command,
                 user = p.optString("user").ifBlank { "root" },
@@ -2561,13 +2820,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         "service.stop" -> {
-            stopRuntimeService(p.optString("id").ifBlank { "service" })
+            stopRuntimeService(callerExtId, p.optString("id").ifBlank { "service" })
             apiOk(JSONObject())
         }
 
         "service.status" -> {
             val id = p.optString("id").ifBlank { "service" }
-            apiOk(JSONObject().put("running", runtimeServices[id]?.isAlive == true).put("id", id))
+            apiOk(JSONObject().put("running", runtimeServices[svcKey(callerExtId, id)]?.isAlive == true).put("id", id))
         }
 
         "workbench.activeFile" -> apiOk(JSONObject(activeFileEventJson()))
@@ -2668,18 +2927,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Long-lived runtime services (e.g. the opencode agent server behind the OpenChamber Chat UI).
     // A one-shot exec.run can't host a server: proot --kill-on-exit reaps the tree the moment the
     // launcher exec returns. spawnDapProcess gives a piped proot Process the JVM holds open, so the
-    // server survives until we destroy() it (which reaps its tree). Keyed by service id.
+    // server survives until we destroy() it (which reaps its tree). Keyed by "<extId> <serviceId>"
+    // (extension ids never contain spaces) so services can be listed + reaped per owning extension
+    // for the Task Manager "Background extensions" section.
     private val runtimeServices = ConcurrentHashMap<String, Process>()
 
-    /** Start (or confirm running) a long-lived server inside the runtime. Idempotent per [id]. */
-    fun startRuntimeService(id: String, command: String, user: String = "root", extraPath: String = ""): Boolean {
-        runtimeServices[id]?.let { if (it.isAlive) return true else runtimeServices.remove(id) }
+    private fun svcKey(extId: String, id: String) = "$extId $id"
+
+    /** Start (or confirm running) a long-lived server inside the runtime. Idempotent per (ext, id). */
+    fun startRuntimeService(extId: String, id: String, command: String, user: String = "root", extraPath: String = ""): Boolean {
+        val key = svcKey(extId, id)
+        runtimeServices[key]?.let { if (it.isAlive) return true else runtimeServices.remove(key) }
         val process = distroService.spawnDapProcess(
             command = command,
             userOverride = user,
             extraPath = extraPath,
         ) ?: return false
-        runtimeServices[id] = process
+        runtimeServices[key] = process
         // Drain stdout/stderr so the OS pipe buffers never fill and block the server. Kept as daemon
         // threads (mirrors DebugController's stderr drainer); output is discarded (server has its own log).
         Thread { runCatching { process.inputStream.bufferedReader().forEachLine { } } }
@@ -2689,14 +2953,82 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return true
     }
 
-    fun stopRuntimeService(id: String) {
-        runtimeServices.remove(id)?.let { runCatching { it.destroy() } }
+    fun stopRuntimeService(extId: String, id: String) {
+        runtimeServices.remove(svcKey(extId, id))?.let { runCatching { it.destroy() } }
+    }
+
+    /** Destroy every runtime service started by [extId] (proot --kill-on-exit reaps each tree). */
+    private fun reapExtensionServices(extId: String) {
+        val prefix = "$extId "
+        runtimeServices.keys.filter { it.startsWith(prefix) }.forEach { key ->
+            runtimeServices.remove(key)?.let { runCatching { it.destroy() } }
+        }
     }
 
     /** Reap every runtime service (called on project/workspace close and ViewModel teardown). */
     fun stopAllRuntimeServices() {
         runtimeServices.values.forEach { runCatching { it.destroy() } }
         runtimeServices.clear()
+    }
+
+    // --- Background extensions (Task Manager "Background extensions" section) -----------------------
+    // A "background extension" is one running a persistent WebView host (the SCM sidebar or OpenChamber
+    // Chat) and/or a service.start server. Stop reaps its services and tears down its host; the SCM
+    // host re-attaches whenever a project is open, so it is additionally SUSPENDED to stay down until
+    // the user starts it again (the Chat host restarts on its own when the tab is reopened).
+
+    data class BackgroundExtensionInfo(
+        val id: String,
+        val name: String,
+        val hasHost: Boolean,
+        val serviceCount: Int,
+        val suspended: Boolean,
+    )
+
+    private val _suspendedBackgroundExtensions = MutableStateFlow<Set<String>>(emptySet())
+
+    /** SCM hosts the user stopped; the shell gates SCM host re-attach on this so it stays down. */
+    val suspendedBackgroundExtensions: StateFlow<Set<String>> = _suspendedBackgroundExtensions.asStateFlow()
+
+    /** Snapshot of every extension doing background work, for the Task Manager (polled, not reactive). */
+    fun backgroundExtensionSnapshot(): List<BackgroundExtensionInfo> {
+        val scmIds = dev.jcode.workbench.ScmWebViewHolder.ids().toSet()
+        val chatIds = dev.jcode.workbench.AgentChatWebViewHolder.ids().toSet()
+        val serviceCounts = runtimeServices.keys.groupingBy { it.substringBefore(' ') }.eachCount()
+        val suspended = _suspendedBackgroundExtensions.value
+        val names = installedExtensions.value.associate { it.id to it.name }
+        return (scmIds + chatIds + serviceCounts.keys + suspended).map { id ->
+            BackgroundExtensionInfo(
+                id = id,
+                name = names[id] ?: id,
+                hasHost = id in scmIds || id in chatIds,
+                serviceCount = serviceCounts[id] ?: 0,
+                suspended = id in suspended,
+            )
+        }.sortedBy { it.name.lowercase() }
+    }
+
+    /** Stop a background extension: reap its runtime services and tear down its host. A live SCM host
+     *  is suspended (it would otherwise re-attach on the next project open); a Chat host is destroyed
+     *  and simply restarts when the user reopens the Chat tab. Runs on the main thread (WebView.destroy). */
+    fun stopBackgroundExtension(id: String) {
+        viewModelScope.launch(Dispatchers.Main) {
+            reapExtensionServices(id)
+            if (id in liveExtensionHosts || dev.jcode.workbench.ScmWebViewHolder.get(id) != null) {
+                _suspendedBackgroundExtensions.update { it + id }
+                liveExtensionHosts.remove(id)
+                clearExplorerScmDecorations()
+                // The shell's ScmBackgroundHost tears the WebView down once scmHostExt drops to null.
+            }
+            if (dev.jcode.workbench.AgentChatWebViewHolder.get(id) != null) {
+                dev.jcode.workbench.AgentChatWebViewHolder.destroy(id)
+            }
+        }
+    }
+
+    /** Resume a stopped SCM host: lift the suspension so it re-attaches on the next recomposition. */
+    fun startBackgroundExtension(id: String) {
+        _suspendedBackgroundExtensions.update { it - id }
     }
 
     override fun onCleared() {

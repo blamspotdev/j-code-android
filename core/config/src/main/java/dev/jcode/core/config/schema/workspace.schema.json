@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "JCode Workspace Configuration",
-  "description": "Workspace-level configuration for J Code IDE",
+  "description": "Workspace-level configuration for JCode IDE",
   "type": "object",
   "properties": {
     "editor": {

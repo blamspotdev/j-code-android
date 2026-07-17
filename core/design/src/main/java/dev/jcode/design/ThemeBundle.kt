@@ -51,7 +51,7 @@ data class ThemeBundle(
     val id: String,
     val name: String,
     val description: String,
-    val author: String = "J Code",
+    val author: String = "JCode",
     val dark: ColorScheme,
     val light: ColorScheme,
     val darkSemantic: JCodeSemanticColors,

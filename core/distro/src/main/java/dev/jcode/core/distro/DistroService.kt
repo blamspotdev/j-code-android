@@ -188,6 +188,42 @@ class DistroService(
         refreshEnvironment()
     }
 
+    /** The active environment's profile (id/label), for the backup filename and UI. */
+    fun selectedEnvironment(): DistroProfile = _environmentState.value.runtime.selectedDistro
+
+    /** True when the active environment has an installed rootfs that can be backed up. */
+    fun selectedEnvironmentInstalled(): Boolean =
+        rootfsManager.isDistroInstalled(_environmentState.value.runtime.selectedDistro.id)
+
+    /**
+     * Stream the active environment's rootfs to [out] as tar.gz (the "Back up environment" action).
+     * [onProgress] reports (files, uncompressed bytes) periodically. Runs on the IO dispatcher.
+     */
+    suspend fun packSelectedEnvironment(
+        out: java.io.OutputStream,
+        onProgress: ((files: Long, bytes: Long) -> Unit)? = null,
+    ): Boolean = withContext(Dispatchers.IO) {
+        val id = _environmentState.value.runtime.selectedDistro.id
+        if (!rootfsManager.isDistroInstalled(id)) return@withContext false
+        RootfsArchiver.pack(rootfsManager.getRootfsPath(id), out, onProgress)
+    }
+
+    /**
+     * Restore a tar.gz backup into the active environment's rootfs, replacing it. Reuses
+     * [RootfsManager.extractRootfs] (symlinks/hard-links/exec bits), then re-derives environment
+     * state so terminals pick up the restored tree. Runs on the IO dispatcher.
+     */
+    suspend fun restoreSelectedEnvironment(tarball: java.io.File): Boolean = withContext(Dispatchers.IO) {
+        val profile = _environmentState.value.runtime.selectedDistro
+        val ok = rootfsManager.extractRootfs(tarball, rootfsManager.getRootfsPath(profile.id))
+        if (ok) {
+            rootfsManager.writeMetadata(profile)
+            verifiedDistroUsers.keys.removeAll { it.startsWith("${profile.id}:") }
+            refreshEnvironment()
+        }
+        ok
+    }
+
     /** Switch the active environment that terminals and [exec] target. */
     fun setActiveEnvironment(environmentId: String) {
         val available = _environmentState.value.availableDistros
@@ -204,6 +240,7 @@ class DistroService(
     suspend fun deleteEnvironment(environmentId: String): Boolean {
         val removed = rootfsManager.removeDistro(environmentId)
         verifiedDistroUsers.keys.removeAll { it.startsWith("$environmentId:") }
+        networkingConfigured.remove(environmentId)
         dataStore.edit { prefs ->
             prefs.remove(installedEntriesKey(environmentId))
             prefs.remove(installedLspEntriesKey(environmentId))
@@ -1069,6 +1106,11 @@ class DistroService(
         return state.distroInstalled == true && state.jcodeUserReady == true
     }
 
+    /** Host directory of the active distro's rootfs. Lets the app read guest files directly (the rootfs
+     *  is on app-private ext4) — e.g. a guest `/usr/share/fonts/...` path is `File(activeRootfsPath(),
+     *  "usr/share/fonts/...")`. */
+    fun activeRootfsPath(): File = rootfsManager.getRootfsPath(_environmentState.value.runtime.selectedDistro.id)
+
     /** The distro path that an unbound project would resolve to (e.g. `/workspace`). */
     fun defaultWorkdir(): String = _environmentState.value.runtime.workdir
 
@@ -1108,12 +1150,33 @@ class DistroService(
         }
     }
 
+    // When armed (by an onboarding "restore from backup" action), the DistroInstalled step restores the
+    // rootfs from this local tarball instead of downloading — so the rest of the pipeline (proot, jcode
+    // user, smoke test) still runs and yields a working environment. Cleared after one use.
+    @Volatile private var pendingRestoreTarball: File? = null
+
+    /** Arm the next install run to restore from [tarball] instead of downloading. Pass null to clear. */
+    fun setPendingRestoreTarball(tarball: File?) { pendingRestoreTarball = tarball }
+
     private fun installSelectedDistro(
         profile: DistroProfile = _environmentState.value.runtime.selectedDistro,
         onLine: ((String) -> Unit)? = null,
         onDownloadProgress: ((percent: Int?, detail: String) -> Unit)? = null,
     ): ExecResult {
         return try {
+            val restore = pendingRestoreTarball
+            if (restore != null) {
+                pendingRestoreTarball = null
+                onLine?.invoke("Restoring ${profile.label} from backup (${"%.1f".format(restore.length() / (1024f * 1024f))} MiB)…")
+                onDownloadProgress?.invoke(null, "Restoring from backup…")
+                val rootfsDir = rootfsManager.getRootfsPath(profile.id)
+                val ok = rootfsManager.extractRootfs(restore, rootfsDir)
+                restore.delete()
+                if (!ok) return ExecResult(internalError = "Failed to restore rootfs for ${profile.label}", exitCode = 1)
+                rootfsManager.writeMetadata(profile)
+                onLine?.invoke("Restored rootfs at ${rootfsDir.absolutePath}.")
+                return ExecResult(stdout = "${profile.label} restored from backup", exitCode = 0)
+            }
             android.util.Log.d("DistroService", "installSelectedDistro: checking for ${profile.id}")
             if (rootfsManager.isDistroInstalled(profile.id)) {
                 android.util.Log.d("DistroService", "installSelectedDistro: ${profile.label} already installed")
@@ -1195,6 +1258,9 @@ class DistroService(
 
     /** (distroId:user) pairs verified to exist in the rootfs, so execs don't re-check every time. */
     private val verifiedDistroUsers = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    /** distroIds whose DNS/host config has been ensured this process, so it runs at most once each. */
+    private val networkingConfigured = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /** Last failed ensure per (distroId:user): a broken rootfs must not re-run the script on every refresh. */
     private val distroUserEnsureFailures = java.util.concurrent.ConcurrentHashMap<String, Long>()
@@ -1416,6 +1482,13 @@ class DistroService(
 
         if (!prootManager.isProotInstalled) {
             return ExecResult(internalError = "proot binary is not available.", exitCode = 1)
+        }
+
+        // Self-heal DNS/host config once per distro per process. Fresh installs get this at extraction
+        // time, but an environment installed before this fix (e.g. a broken minimal ubuntu-base 26.04
+        // with no working /etc/resolv.conf) is repaired here so apt starts resolving without a reinstall.
+        if (networkingConfigured.add(distroId)) {
+            rootfsManager.ensureRootfsNetworking(rootfsPath)
         }
 
         // Foreign-arch environment: make sure the QEMU emulator is extracted before invoking proot.

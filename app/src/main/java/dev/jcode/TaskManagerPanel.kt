@@ -19,6 +19,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +50,19 @@ import java.io.File
 private data class LinuxProc(val pid: Int, val name: String, val rssKb: Long)
 
 /**
+ * Task Manager access to background extensions (persistent WebView hosts + their service.start
+ * servers), provided by [JCodeApp] via CompositionLocal so the Tasks panel can list and stop them
+ * without threading the ViewModel through the shell. [snapshot] is polled on the panel's refresh tick.
+ */
+internal data class TaskManagerBackgroundActions(
+    val snapshot: () -> List<MainViewModel.BackgroundExtensionInfo> = { emptyList() },
+    val onStop: (String) -> Unit = {},
+    val onStart: (String) -> Unit = {},
+)
+
+internal val LocalTaskManagerBackgroundActions = compositionLocalOf { TaskManagerBackgroundActions() }
+
+/**
  * The right-drawer "Tasks" tab — a task manager for everything the IDE is running:
  * sessions (terminals with their foreground program + idle time, Build & Run, the debug session)
  * with stop controls, and the raw app-uid Linux process list from /proc (name, PID, memory) with
@@ -66,7 +80,9 @@ internal fun TaskManagerSidebarContent(
     modifier: Modifier = Modifier,
 ) {
     val debug = LocalDebugSession.current
+    val backgroundActions = LocalTaskManagerBackgroundActions.current
     var processes by remember { mutableStateOf<List<LinuxProc>>(emptyList()) }
+    var backgroundExtensions by remember { mutableStateOf<List<MainViewModel.BackgroundExtensionInfo>>(emptyList()) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
     // Live refresh only while the tab is actually watched: leaving the tab (or closing the drawer)
@@ -77,6 +93,7 @@ internal fun TaskManagerSidebarContent(
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (isActive) {
                 processes = withContext(Dispatchers.IO) { listOwnProcesses() }
+                backgroundExtensions = backgroundActions.snapshot()
                 now = System.currentTimeMillis()
                 delay(2_000L)
             }
@@ -136,6 +153,17 @@ internal fun TaskManagerSidebarContent(
                 actionDescription = "Stop debugging",
                 onStop = debug.onStop,
             )
+        }
+
+        if (backgroundExtensions.isNotEmpty()) {
+            TaskSectionLabel("Background extensions")
+            backgroundExtensions.forEach { info ->
+                BackgroundExtensionRow(
+                    info = info,
+                    onStop = { backgroundActions.onStop(info.id) },
+                    onStart = { backgroundActions.onStart(info.id) },
+                )
+            }
         }
 
         val totalMb = processes.sumOf { it.rssKb } / 1024
@@ -217,6 +245,76 @@ private fun TaskRow(
                         tint = MaterialTheme.colorScheme.error,
                         modifier = Modifier.size(20.dp),
                     )
+                }
+            }
+        }
+    }
+}
+
+/** A background extension (persistent host and/or service.start servers). Stop reaps its servers and
+ *  tears down its host; a stopped SCM host shows Start (it stays down until then). */
+@Composable
+private fun BackgroundExtensionRow(
+    info: MainViewModel.BackgroundExtensionInfo,
+    onStop: () -> Unit,
+    onStart: () -> Unit,
+) {
+    val subtitle = if (info.suspended) {
+        "stopped"
+    } else {
+        buildList {
+            if (info.hasHost) add("background host")
+            if (info.serviceCount > 0) add("${info.serviceCount} server${if (info.serviceCount > 1) "s" else ""}")
+        }.joinToString(" · ").ifEmpty { "running" }
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.26f),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 10.dp, top = 2.dp, bottom = 2.dp, end = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Extension · ${info.name}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (info.suspended) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (info.suspended) {
+                JcTooltip("Start extension") {
+                    IconButton(onClick = onStart) {
+                        Icon(
+                            imageVector = jcIcon(JCodeIcon.Run),
+                            contentDescription = "Start extension",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+            } else {
+                JcTooltip("Stop extension") {
+                    IconButton(onClick = onStop) {
+                        Icon(
+                            imageVector = jcIcon(JCodeIcon.Stop),
+                            contentDescription = "Stop extension",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                 }
             }
         }

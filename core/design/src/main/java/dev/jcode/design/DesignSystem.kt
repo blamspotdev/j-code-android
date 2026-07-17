@@ -129,6 +129,8 @@ class FontSettings(
     val terminalDefaultId: String = "",
     val onSelectEditorFont: (String) -> Unit = {},
     val onSelectTerminalFont: (String) -> Unit = {},
+    /** Re-scan the Linux environment's installed fonts (called when the font settings open). */
+    val onScanFonts: () -> Unit = {},
 )
 
 val LocalFontSettings = compositionLocalOf { FontSettings() }
@@ -186,6 +188,47 @@ class CutoutSetting(
 )
 
 val LocalCutoutSetting = compositionLocalOf { CutoutSetting() }
+
+/**
+ * In-app update state, shared (via [LocalAppUpdate]) with the settings screen without threading
+ * params through JCodeShell (ART register limit). Populated from a GitHub-release check on startup:
+ * [updateAvailable] flags a newer [latestVersion] than [currentVersion]; [onCheck] re-runs the check;
+ * [onOpenRelease] opens the release page in a browser.
+ */
+class AppUpdateSetting(
+    val currentVersion: String = "",
+    val latestVersion: String? = null,
+    val updateAvailable: Boolean = false,
+    val checking: Boolean = false,
+    val onCheck: () -> Unit = {},
+    val onOpenRelease: () -> Unit = {},
+)
+
+val LocalAppUpdate = compositionLocalOf { AppUpdateSetting() }
+
+/**
+ * Settings backup/restore actions, shared (via [LocalSettingsBackup]) with the settings screen
+ * without threading params through JCodeShell. [onExport] launches a file picker to save the app
+ * preferences to a JSON document; [onImport] picks a document and restores them.
+ */
+class SettingsBackupActions(
+    val onExport: () -> Unit = {},
+    val onImport: () -> Unit = {},
+)
+
+val LocalSettingsBackup = compositionLocalOf { SettingsBackupActions() }
+
+/**
+ * Environment (Linux rootfs) backup/restore actions, shared (via [LocalEnvironmentBackup]) with the
+ * settings screen. [onBackup] packs the active environment to a `.tar.gz` file; [onRestore] extracts
+ * a picked `.tar.gz` back over it. [available] gates the buttons on an installed environment.
+ */
+class EnvironmentBackupActions(
+    val onBackup: () -> Unit = {},
+    val onRestore: () -> Unit = {},
+)
+
+val LocalEnvironmentBackup = compositionLocalOf { EnvironmentBackupActions() }
 
 /**
  * Performance / resource-management preferences, shared (via [LocalPerformanceSettings]) with both the
@@ -278,7 +321,7 @@ class WebPreviewBrowsers(
     companion object {
         const val SYSTEM = "SYSTEM"
         const val ASK = "ASK"
-        /** Open the preview inside J Code's own in-editor browser (with DevTools) instead of an external app. */
+        /** Open the preview inside JCode's own in-editor browser (with DevTools) instead of an external app. */
         const val BUILTIN = "BUILTIN"
         const val INHERIT = ""
     }
@@ -304,7 +347,7 @@ private val JCodeTypography = Typography(
     ),
 )
 
-/** Convenience accessors for J Code design tokens that sit alongside [MaterialTheme]. */
+/** Convenience accessors for JCode design tokens that sit alongside [MaterialTheme]. */
 object JCodeTheme {
     val semanticColors: JCodeSemanticColors
         @Composable get() = LocalSemanticColors.current

@@ -64,6 +64,9 @@ import dev.jcode.design.LocalEditorDragMovesCursor
 import dev.jcode.design.LocalExtraKeysSetting
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.ExplorerHiddenMode
+import dev.jcode.design.LocalAppUpdate
+import dev.jcode.design.LocalSettingsBackup
+import dev.jcode.design.LocalEnvironmentBackup
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalTabColoringSetting
@@ -284,6 +287,9 @@ object SettingsFeature {
                 keywords = "font fonts family typeface monospace editor terminal jetbrains mono system code appearance " +
                     fontSettings.options.joinToString(" ") { it.name },
             ) {
+                // Re-scan the environment's installed fonts each time this card is shown, so fonts the
+                // user apt-installed since launch appear without a restart.
+                LaunchedEffect(Unit) { fontSettings.onScanFonts() }
                 val fontOptionIds = fontSettings.options.map { it.id }
                 val fontLabel: (String) -> String =
                     { id -> fontSettings.options.firstOrNull { it.id == id }?.name ?: id }
@@ -443,7 +449,7 @@ object SettingsFeature {
             ) {
                 ToggleRow(
                     label = "Restore last session on launch",
-                    supporting = "Reopen the last workspace, project, and editor tabs — including unsaved changes — when J Code starts. Missing files are skipped.",
+                    supporting = "Reopen the last workspace, project, and editor tabs — including unsaved changes — when JCode starts. Missing files are skipped.",
                     checked = restoreSessionSetting.enabled,
                     onCheckedChange = restoreSessionSetting.onChange,
                     modified = restoreSessionSetting.enabled != SettingsDefaults.RESTORE_LAST_SESSION,
@@ -457,7 +463,7 @@ object SettingsFeature {
             SettingsSectionHeader("Performance")
             SettingsCard(
                 title = "Rendering",
-                description = "How J Code draws the UI, editor, and terminal.",
+                description = "How JCode draws the UI, editor, and terminal.",
                 keywords = "performance rendering hardware acceleration gpu software draw graphics lag smooth",
             ) {
                 ToggleRow(
@@ -545,7 +551,7 @@ object SettingsFeature {
                         description = when (choice) {
                             WebPreviewBrowsers.SYSTEM -> "The device's default browser app"
                             WebPreviewBrowsers.ASK -> "Show the Android app chooser each time"
-                            WebPreviewBrowsers.BUILTIN -> "J Code's own in-editor browser, with DevTools"
+                            WebPreviewBrowsers.BUILTIN -> "JCode's own in-editor browser, with DevTools"
                             else -> choice
                         },
                         selected = webPreview.globalChoice == choice,
@@ -617,6 +623,91 @@ object SettingsFeature {
                     OutlinedButton(onClick = onRefreshEnvironment, modifier = Modifier.weight(1f)) {
                         Text("Refresh checks")
                     }
+                }
+                if (environmentState.distroInstalled == true) {
+                    val envBackup = LocalEnvironmentBackup.current
+                    Text(
+                        text = "Back up the whole Linux environment (~2.5 GB) to a .tar.gz you can " +
+                            "restore here or on another device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(onClick = envBackup.onBackup, modifier = Modifier.weight(1f)) {
+                            Text("Back up (.tar.gz)")
+                        }
+                        OutlinedButton(onClick = envBackup.onRestore, modifier = Modifier.weight(1f)) {
+                            Text("Restore…")
+                        }
+                    }
+                }
+            }
+
+            SettingsSectionHeader("About")
+            SettingsCard(
+                title = "JCode",
+                description = "App version and updates from GitHub releases.",
+                keywords = "about version update check release github changelog build app",
+            ) {
+                val appUpdate = LocalAppUpdate.current
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Version ${appUpdate.currentVersion}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (appUpdate.updateAvailable) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primary,
+                            shape = RoundedCornerShape(50),
+                        ) {
+                            Text(
+                                text = "Update: v${appUpdate.latestVersion}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            )
+                        }
+                    } else if (appUpdate.latestVersion != null) {
+                        Text(
+                            text = "Up to date",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (appUpdate.updateAvailable) {
+                    FilledTonalButton(
+                        onClick = appUpdate.onOpenRelease,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Update to v${appUpdate.latestVersion}")
+                    }
+                }
+                OutlinedButton(
+                    onClick = appUpdate.onCheck,
+                    enabled = !appUpdate.checking,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (appUpdate.checking) "Checking…" else "Check for updates")
+                }
+            }
+
+            SettingsCard(
+                title = "Backup & restore",
+                description = "Save your app preferences to a file, then restore them here or on " +
+                    "another device. (Theme and editor settings live in the workspace config.)",
+                keywords = "backup restore export import settings preferences file save load transfer migrate json device",
+            ) {
+                val backup = LocalSettingsBackup.current
+                FilledTonalButton(onClick = backup.onExport, modifier = Modifier.fillMaxWidth()) {
+                    Text("Export settings…")
+                }
+                OutlinedButton(onClick = backup.onImport, modifier = Modifier.fillMaxWidth()) {
+                    Text("Import settings…")
                 }
             }
 

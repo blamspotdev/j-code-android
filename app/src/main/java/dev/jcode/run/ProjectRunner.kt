@@ -52,7 +52,7 @@ object ProjectRunner {
     /**
      * Detect how to build & run [project], or null if no recipe matches. Detection prefers the
      * project's scaffold [Project.templateId] (authoritative, cheap), then falls back to a filesystem
-     * probe for projects opened without a J Code template. Recipes self-heal, so detection does NOT
+     * probe for projects opened without a JCode template. Recipes self-heal, so detection does NOT
      * require a complete on-disk layout.
      */
     fun detectRunPlan(project: Project): RunPlan? {
@@ -412,7 +412,7 @@ object ProjectRunner {
             appendLine("set -e")
             appendLine("PROJ=\"$projectDir\"")
             appendLine("SRV=\"\$HOME/.jcode-run/$stageName-server\"")
-            appendLine("echo '== J Code: Server (ASP.NET Core - Development) =='")
+            appendLine("echo '== JCode: Server (ASP.NET Core - Development) =='")
             appendLine(SELECT_TFM)
             appendLine("echo \"[setup] Target framework: \$TFM\"")
             appendLine("if ! ls \"\$PROJ/Server\"/*.csproj >/dev/null 2>&1; then")
@@ -441,7 +441,7 @@ object ProjectRunner {
             appendLine("PROJ=\"$projectDir\"")
             appendLine("CLIENT=\"$clientDir\"")
             appendLine("STAGE=\"\$HOME/.jcode-run/$stageName-client\"")
-            appendLine("echo '== J Code: Client (Vite dev server) =='")
+            appendLine("echo '== JCode: Client (Vite dev server) =='")
             appendLine("export npm_config_fund=false npm_config_audit=false")
             // Self-heal: scaffold a Vite React app if the client has no package.json yet.
             appendLine("if [ ! -f \"\$CLIENT/package.json\" ]; then")
@@ -469,7 +469,7 @@ object ProjectRunner {
             appendLine("set -e")
             appendLine("CSPROJ=\"$csprojGuest\"")
             appendLine("OUT=\"\$HOME/.jcode-run/$stageName\"")
-            appendLine("echo '== J Code: .NET (dotnet build + run) =='")
+            appendLine("echo '== JCode: .NET (dotnet build + run) =='")
             appendLine("echo '[1/2] Building (dotnet build, Debug)...'")
             appendLine("rm -rf \"\$OUT\"")
             appendLine("dotnet build \"\$CSPROJ\" -c Debug -o \"\$OUT\" --nologo")
@@ -491,7 +491,7 @@ object ProjectRunner {
             appendLine("set -e")
             appendLine("SRC=\"$dirGuest\"")
             appendLine("STAGE=\"\$HOME/.jcode-run/$stageName\"")
-            appendLine("echo '== J Code: npm run $script =='")
+            appendLine("echo '== JCode: npm run $script =='")
             appendLine("export npm_config_fund=false npm_config_audit=false")
             appendLine("echo '[1/2] Staging + installing deps (npm install)...'")
             appendLine("rm -rf \"\$STAGE\" && mkdir -p \"\$STAGE\" && cp -a \"\$SRC/.\" \"\$STAGE/\"")

@@ -101,7 +101,7 @@ class IconBundle(
     val id: String,
     val name: String,
     val description: String,
-    val author: String = "J Code",
+    val author: String = "JCode",
     private val overrides: Map<JCodeIcon, ImageVector>,
     private val fallback: IconBundle? = null,
 ) {

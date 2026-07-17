@@ -87,6 +87,7 @@ internal object AgentChatWebViewHolder {
 
     fun get(id: String): Entry? = entries[id]
     fun put(id: String, entry: Entry) { entries[id] = entry }
+    fun ids(): List<String> = entries.keys.toList()
 
     fun destroy(id: String) {
         entries.remove(id)?.let { e ->

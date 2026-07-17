@@ -234,17 +234,51 @@ class WorkspaceManager @Inject constructor(
         // Nest inside the open workspace's folder; the Default Workspace keeps using the flat
         // projects root (its rootPath is workspaces/default, which must not hold projects).
         val active = currentWorkspace.value
-        val base = if (active != null && active.id != defaultWorkspaceId) {
-            File(active.rootPath)
+        val targetWorkspaceId = if (active != null && active.id != defaultWorkspaceId) {
+            active.id
         } else {
-            storageRoots.projectsRoot
+            defaultWorkspaceId ?: ensureDefaultWorkspace().id
         }
-        val directory = File(base, sanitizedFolderName(name))
+        return createNodeIn(targetWorkspaceId, name, nodeType, templateId)
+    }
+
+    /**
+     * Like [createNode] but places the folder under an explicitly chosen [workspaceId] (its flat
+     * projects root for the Default Workspace, else that workspace's own folder) and registers the
+     * project there. Unlike [createNode] it never reads the async [currentWorkspace] flow, so it is
+     * safe to call right after requesting a workspace switch (e.g. the Source Control clone flow's
+     * destination selector) without racing the switch.
+     */
+    suspend fun createNodeIn(
+        workspaceId: Long,
+        name: String,
+        nodeType: WorkspaceNodeType,
+        templateId: String?,
+    ): Project {
+        val directory = File(baseDirFor(workspaceId), sanitizedFolderName(name))
         val path = FsPath.Local(directory)
         validateWritable(path)
         writeNodeConfig(directory, nodeType, templateId)
-        return registerProject(path).copy(nodeType = nodeType, templateId = templateId)
+        return registerProjectIn(path, workspaceId).copy(nodeType = nodeType, templateId = templateId)
     }
+
+    /** Host directory new nodes for [workspaceId] are created under: the flat projects root for the
+     *  Default Workspace (whose rootPath is workspaces/default and must not hold projects), else the
+     *  workspace's own folder. */
+    private suspend fun baseDirFor(workspaceId: Long): File {
+        val defaultId = defaultWorkspaceId ?: ensureDefaultWorkspace().id
+        if (workspaceId == defaultId) return storageRoots.projectsRoot
+        return workspaceDao.getAllWorkspaces().firstOrNull { it.id == workspaceId }
+            ?.let { File(it.rootPath) }
+            ?: storageRoots.projectsRoot
+    }
+
+    /** The Default Workspace's id, running the one-time init first if it hasn't happened yet. */
+    suspend fun ensureDefaultWorkspaceId(): Long = defaultWorkspaceId ?: ensureDefaultWorkspace().id
+
+    /** Every workspace (Default + user), for surfaces that let the user target a specific one
+     *  (e.g. the clone destination picker). */
+    suspend fun listWorkspaces(): List<WorkspaceEntity> = workspaceDao.getAllWorkspaces()
 
     /**
      * Open a Workspace folder as the current container: find/create its [WorkspaceEntity], register
@@ -365,8 +399,10 @@ class WorkspaceManager @Inject constructor(
         if (trail.size > 1) navigateToWorkspace(trail[trail.size - 2].id)
     }
 
-    private suspend fun registerProject(path: FsPath): Project {
-        val workspaceId = currentWorkspaceId.value ?: ensureDefaultWorkspace().id
+    private suspend fun registerProject(path: FsPath): Project =
+        registerProjectIn(path, currentWorkspaceId.value ?: ensureDefaultWorkspace().id)
+
+    private suspend fun registerProjectIn(path: FsPath, workspaceId: Long): Project {
         val now = System.currentTimeMillis()
         val name = sanitizedFolderName(path.displayName.ifBlank { "project-$now" })
 

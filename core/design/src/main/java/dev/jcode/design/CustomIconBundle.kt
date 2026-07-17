@@ -16,7 +16,7 @@ import androidx.compose.ui.unit.dp
  *
  * Icons are drawn on a 24x24 grid. Colors are black; the consuming `Icon` applies the real tint.
  */
-// --- "J Code Line": a minimal, uniform-stroke line set --------------------------------------
+// --- "JCode Line": a minimal, uniform-stroke line set --------------------------------------
 // Declared before [jcodeLineIconBundle] / [customIconBundles] below so top-level init order
 // (top-to-bottom) populates the map before the bundle reads it.
 
@@ -126,7 +126,7 @@ private val lineIcons: Map<JCodeIcon, ImageVector> = mapOf(
 
 private val jcodeLineIconBundle = IconBundle(
     id = "jcode-line",
-    name = "J Code Line",
+    name = "JCode Line",
     description = "Custom minimal line icons.",
     overrides = lineIcons,
     fallback = defaultIconBundle,
