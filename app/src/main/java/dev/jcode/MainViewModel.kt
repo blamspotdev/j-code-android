@@ -65,10 +65,13 @@ import dev.jcode.workbench.SetupTerminalRunner
 import dev.jcode.fs.FsKind
 import dev.jcode.fs.FsNode
 import dev.jcode.fs.FsPath
+import dev.jcode.fs.copyFolderToLocal
 import dev.jcode.fs.copyLocalTreeToDocumentTree
+import dev.jcode.fs.folderDisplayName
 import dev.jcode.fs.Project
 import dev.jcode.fs.ProjectKind
 import dev.jcode.fs.RecentEntity
+import dev.jcode.fs.scanFolderForImport
 import dev.jcode.fs.Workspace
 import dev.jcode.fs.WorkspaceCrumb
 import dev.jcode.fs.WorkspaceManager
@@ -142,6 +145,20 @@ enum class EditorCloseChoice { SAVE, DISCARD, CLOSE_SAVED, CANCEL }
 
 /** Drives the editor "unsaved changes" dialog: the titles of the dirty tabs about to be closed. */
 data class PendingEditorClose(val dirtyTitles: List<String>)
+
+/** A folder awaiting the Project/Workspace choice: opened in place on managed storage, or copied into
+ *  /sources and awaiting adoption. [label] names it in the dialog. */
+sealed interface PendingFolderType {
+    val label: String
+
+    data class OpenInPlace(val path: FsPath) : PendingFolderType {
+        override val label: String get() = path.displayName
+    }
+
+    data class AdoptStaged(val staged: File) : PendingFolderType {
+        override val label: String get() = staged.name
+    }
+}
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     val workspaceManager: WorkspaceManager = WorkspaceServiceLocator.workspaceManager(application)
@@ -484,9 +501,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _postClonePrompt = MutableStateFlow<Project?>(null)
     val postClonePrompt: StateFlow<Project?> = _postClonePrompt.asStateFlow()
 
-    /** An opened folder awaiting a Project/Workspace choice (it has no `.jcode` type yet). */
-    private val _openFolderTypePrompt = MutableStateFlow<FsPath?>(null)
-    val openFolderTypePrompt: StateFlow<FsPath?> = _openFolderTypePrompt.asStateFlow()
+    /** A folder awaiting a Project/Workspace choice (it has no `.jcode` type yet) — either opened in
+     *  place on managed storage, or already copied into /sources staging and awaiting adoption. */
+    private val _openFolderTypePrompt = MutableStateFlow<PendingFolderType?>(null)
+    val openFolderTypePrompt: StateFlow<PendingFolderType?> = _openFolderTypePrompt.asStateFlow()
 
     private val _selectedProjectId = MutableStateFlow<Long?>(null)
     val selectedProject: StateFlow<Project?> = currentWorkspace
@@ -1640,6 +1658,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *  (e.g. the SCM extension's clones) before handing them over via `workbench.addFolder`. */
     private fun sourcesRoot(): File = dev.jcode.core.distro.WorkspaceHostPaths.sourcesRoot(appContext.filesDir)
 
+    private fun formatBytes(bytes: Long): String {
+        if (bytes < 1024) return "$bytes B"
+        val units = listOf("KB", "MB", "GB", "TB")
+        var value = bytes.toDouble() / 1024
+        var unit = 0
+        while (value >= 1024 && unit < units.lastIndex) {
+            value /= 1024
+            unit++
+        }
+        return String.format(java.util.Locale.US, if (value >= 100) "%.0f %s" else "%.1f %s", value, units[unit])
+    }
+
     fun createNewItem(request: NewItemRequest) {
         viewModelScope.launch {
             val fallback = if (request.isWorkspace) "untitled-workspace" else "untitled-project"
@@ -1709,8 +1739,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Open a folder the user picked. A tagged Workspace is entered as a container; an untyped folder
-     * prompts Project vs Workspace first; a plain folder opens as the single project.
+     * Open a folder the user picked. Picks already on app-private ext4 storage (the "JCode Projects"
+     * DocumentsProvider, or an existing project dir) open in place. Anything else — primary storage,
+     * cloud, third-party SAF — is copied onto /sources first (the runtime can't bind-mount it
+     * otherwise); [importExternalFolder] scans it and refuses an empty or oversized folder.
      */
     fun openExternalFolder(path: FsPath) {
         viewModelScope.launch {
@@ -1719,40 +1751,169 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 emitMessage("That folder is the JCode Projects root — pick a project or workspace folder inside it.")
                 return@launch
             }
-            when {
-                workspaceManager.isWorkspaceFolder(resolved) &&
-                    workspaceManager.enterFolderAsWorkspace(resolved) != null -> clearEditorTabs()
+            if (workspaceManager.isOnManagedStorage(resolved)) {
+                openManagedFolder(resolved)
+            } else {
+                importExternalFolder(resolved)
+            }
+        }
+    }
 
-                workspaceManager.folderNeedsType(resolved) -> _openFolderTypePrompt.value = resolved
+    private suspend fun openManagedFolder(resolved: FsPath) {
+        when {
+            workspaceManager.isWorkspaceFolder(resolved) &&
+                workspaceManager.enterFolderAsWorkspace(resolved) != null -> clearEditorTabs()
 
-                else -> {
-                    resetDefaultWorkspaceProject()
-                    val project = workspaceManager.addFolder(resolved)
-                    _selectedProjectId.value = project.id
-                    emitMessage("Opened '${project.name}'.")
-                }
+            workspaceManager.folderNeedsType(resolved) ->
+                _openFolderTypePrompt.value = PendingFolderType.OpenInPlace(resolved)
+
+            else -> {
+                resetDefaultWorkspaceProject()
+                val project = workspaceManager.addFolder(resolved)
+                _selectedProjectId.value = project.id
+                emitMessage("Opened '${project.name}'.")
+            }
+        }
+    }
+
+    /** Scan an off-ext4 pick and, if it isn't empty and fits, copy it into /sources then adopt it. */
+    private suspend fun importExternalFolder(source: FsPath) {
+        val label = folderDisplayName(appContext, source)
+        val scan = runCatching { scanFolderForImport(appContext, source) }.getOrElse {
+            emitMessage("Couldn't read '$label': ${it.message ?: "unknown error"}.")
+            return
+        }
+        if (scan.fileCount == 0) {
+            emitMessage("'$label' is empty — nothing to import.")
+            return
+        }
+        val sources = sourcesRoot().apply { mkdirs() }
+        if (scan.totalBytes + IMPORT_FREE_SPACE_HEADROOM_BYTES > sources.usableSpace) {
+            emitMessage(
+                "'$label' is too large to import — needs ${formatBytes(scan.totalBytes)}, " +
+                    "only ${formatBytes(sources.usableSpace)} free.",
+            )
+            return
+        }
+        if (!saveAllDirtyAwait()) {
+            emitMessage("Save or close open files before importing a folder.")
+            return
+        }
+        emitMessage("Importing '$label'…")
+        val staged = runCatching { copyIntoSources(source, label) }.getOrElse {
+            emitMessage("Import failed: ${it.message ?: "unknown error"}.")
+            return
+        }
+        val stagedPath = FsPath.Local(staged)
+        when {
+            workspaceManager.isWorkspaceFolder(stagedPath) ->
+                adoptStagedGuarded(staged, WorkspaceNodeType.Workspace)?.let { emitMessage("Imported Workspace '${it.name}'.") }
+
+            workspaceManager.folderNeedsType(stagedPath) ->
+                _openFolderTypePrompt.value = PendingFolderType.AdoptStaged(staged)
+
+            else ->
+                adoptStagedGuarded(staged, WorkspaceNodeType.Project)?.let { emitMessage("Imported '${it.name}'.") }
+        }
+    }
+
+    /** [adoptStagedFolder] with the save-guard re-checked immediately before adoption: the import copy
+     *  can run long enough for the user to dirty an open buffer, and adoption clears editor tabs without
+     *  saving. On an unsaveable buffer the staged copy is discarded (already messaged) and null returned. */
+    private suspend fun adoptStagedGuarded(staged: File, nodeType: WorkspaceNodeType): Project? {
+        if (!saveAllDirtyAwait()) {
+            emitMessage("Save or close open files before importing a folder.")
+            withContext(Dispatchers.IO) { staged.deleteRecursively() }
+            return null
+        }
+        return adoptStagedFolder(staged, nodeType)
+    }
+
+    /** Copy [source] into a hidden /sources temp dir, then atomically rename to a unique final name. */
+    private suspend fun copyIntoSources(source: FsPath, label: String): File = withContext(Dispatchers.IO) {
+        val sources = sourcesRoot().apply { mkdirs() }
+        // Reclaim temp dirs orphaned by a crash mid-copy (safe: only our own ".import-" prefix).
+        sources.listFiles { f -> f.isDirectory && f.name.startsWith(".import-") }?.forEach { it.deleteRecursively() }
+        val tmp = File(sources, ".import-${System.nanoTime()}")
+        try {
+            copyFolderToLocal(appContext, source, sources, tmp.name)
+            val base = workspaceManager.sanitizedFolderName(label)
+            var dest = File(sources, base)
+            var suffix = 1
+            while (dest.exists()) dest = File(sources, "$base-${suffix++}")
+            if (!tmp.renameTo(dest)) error("Cannot place the imported folder in staging")
+            dest
+        } catch (t: Throwable) {
+            tmp.deleteRecursively()
+            throw t
+        }
+    }
+
+    /**
+     * Move a staged /sources folder into the active workspace (or the Default Workspace) as [nodeType],
+     * switching/entering as needed. Shared by the SCM clone bridge (`workbench.addFolder`) and the
+     * SAF-import path. The caller must have flushed unsaved buffers first (adoption clears editor tabs).
+     */
+    private suspend fun adoptStagedFolder(staged: File, nodeType: WorkspaceNodeType): Project {
+        val defId = workspaceManager.ensureDefaultWorkspaceId()
+        return when (nodeType) {
+            WorkspaceNodeType.Workspace -> {
+                clearEditorTabs()
+                workspaceManager.restoreWorkspace(defId)
+                val node = workspaceManager.adoptFolderIn(defId, staged, WorkspaceNodeType.Workspace)
+                workspaceManager.enterWorkspaceFolder(node)
+                node
+            }
+
+            WorkspaceNodeType.Project -> {
+                val targetWs = workspaceManager.currentWorkspace.value?.id ?: defId
+                workspaceManager.restoreWorkspace(targetWs)
+                if (targetWs == defId) resetDefaultWorkspaceProject()
+                val project = workspaceManager.adoptFolderIn(targetWs, staged, WorkspaceNodeType.Project)
+                _selectedProjectId.value = project.id
+                project
             }
         }
     }
 
     fun resolveOpenFolderType(isWorkspace: Boolean) {
-        val path = _openFolderTypePrompt.value ?: return
+        val pending = _openFolderTypePrompt.value ?: return
         _openFolderTypePrompt.value = null
+        val nodeType = if (isWorkspace) WorkspaceNodeType.Workspace else WorkspaceNodeType.Project
         viewModelScope.launch {
-            if (isWorkspace && workspaceManager.enterFolderAsWorkspace(path) != null) {
-                clearEditorTabs()
-                return@launch
+            when (pending) {
+                is PendingFolderType.OpenInPlace -> {
+                    val path = pending.path
+                    if (isWorkspace && workspaceManager.enterFolderAsWorkspace(path) != null) {
+                        clearEditorTabs()
+                        return@launch
+                    }
+                    resetDefaultWorkspaceProject()
+                    val project = workspaceManager.addFolderWithType(path, nodeType)
+                    _selectedProjectId.value = project.id
+                    emitMessage("Opened ${if (isWorkspace) "Workspace" else "Project"} '${project.name}'.")
+                }
+
+                is PendingFolderType.AdoptStaged -> {
+                    if (!pending.staged.isDirectory) {
+                        emitMessage("The imported folder is no longer available.")
+                        return@launch
+                    }
+                    adoptStagedGuarded(pending.staged, nodeType)?.let {
+                        emitMessage("Imported ${if (isWorkspace) "Workspace" else "Project"} '${it.name}'.")
+                    }
+                }
             }
-            resetDefaultWorkspaceProject()
-            val nodeType = if (isWorkspace) WorkspaceNodeType.Workspace else WorkspaceNodeType.Project
-            val project = workspaceManager.addFolderWithType(path, nodeType)
-            _selectedProjectId.value = project.id
-            emitMessage("Opened ${if (isWorkspace) "Workspace" else "Project"} '${project.name}'.")
         }
     }
 
     fun dismissOpenFolderPrompt() {
+        val pending = _openFolderTypePrompt.value
         _openFolderTypePrompt.value = null
+        // An imported-but-unclassified folder would otherwise linger in /sources; drop it on cancel.
+        if (pending is PendingFolderType.AdoptStaged) {
+            viewModelScope.launch(Dispatchers.IO) { pending.staged.deleteRecursively() }
+        }
     }
 
     /** Recently opened folders (most-recent first) for the empty-editor "Recent" list. */
@@ -2777,26 +2938,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             when (nodeType) {
                 null -> apiOk(JSONObject().put("needsType", true))
-                WorkspaceNodeType.Workspace -> {
+                else -> {
                     // Adoption clears the current editor tabs; flush unsaved buffers first and refuse
                     // rather than silently discarding work a dialog never guarded.
                     require(saveAllDirtyAwait()) { "unsaved changes could not be saved — save or close open files first" }
-                    val defId = workspaceManager.ensureDefaultWorkspaceId()
-                    clearEditorTabs()
-                    workspaceManager.restoreWorkspace(defId)
-                    val node = workspaceManager.adoptFolderIn(defId, staged, WorkspaceNodeType.Workspace)
-                    workspaceManager.enterWorkspaceFolder(node)
-                    apiOk(JSONObject().put("name", node.name).put("workspace", true))
-                }
-                WorkspaceNodeType.Project -> {
-                    require(saveAllDirtyAwait()) { "unsaved changes could not be saved — save or close open files first" }
-                    val defId = workspaceManager.ensureDefaultWorkspaceId()
-                    val targetWs = workspaceManager.currentWorkspace.value?.id ?: defId
-                    workspaceManager.restoreWorkspace(targetWs)
-                    if (targetWs == defId) resetDefaultWorkspaceProject()
-                    val project = workspaceManager.adoptFolderIn(targetWs, staged, WorkspaceNodeType.Project)
-                    _selectedProjectId.value = project.id
-                    apiOk(JSONObject().put("name", project.name).put("workspace", false))
+                    val node = adoptStagedFolder(staged, nodeType)
+                    apiOk(JSONObject().put("name", node.name).put("workspace", nodeType == WorkspaceNodeType.Workspace))
                 }
             }
         }
@@ -3810,6 +3957,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
+        /** Free space to leave on app storage after importing an off-ext4 folder into /sources. */
+        private const val IMPORT_FREE_SPACE_HEADROOM_BYTES = 64L * 1024 * 1024
+
         /** DataStore key + a synchronous mirror of "close app on swipe-away", so [BackendService]
          *  can decide in onTaskRemoved without a blocking DataStore read. */
         const val EXIT_ON_SWIPE_AWAY_KEY = "exit_on_swipe_away"

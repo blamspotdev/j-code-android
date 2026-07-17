@@ -331,6 +331,127 @@ private fun treeUriToLocalFile(treeUri: Uri): File? = runCatching {
     }
 }.getOrNull()
 
+/** Files + total bytes discovered by [scanFolderForImport], used to reject empty or oversized imports. */
+data class FolderScan(val fileCount: Int, val totalBytes: Long)
+
+/**
+ * Recursively count regular files and sum their sizes under a picked folder (Local or SAF). Mirrors
+ * the import copy — `node_modules` subtrees are skipped — so the byte total matches what would land
+ * on ext4. Lets the caller refuse an empty folder (nothing to import) or one too large for /sources
+ * before copying a single byte.
+ */
+suspend fun scanFolderForImport(context: Context, source: FsPath): FolderScan = withContext(Dispatchers.IO) {
+    var files = 0
+    var bytes = 0L
+    when (source) {
+        is FsPath.Local ->
+            source.file.walkTopDown()
+                .onEnter { it == source.file || it.name != "node_modules" }
+                .forEach { if (it.isFile) { files++; bytes += it.length() } }
+
+        is FsPath.Saf -> {
+            // Track visited document ids so a cyclic/misbehaving provider can't loop forever.
+            val seen = HashSet<String>()
+            val stack = ArrayDeque(listOf(DocumentsContract.getTreeDocumentId(source.uri)))
+            while (stack.isNotEmpty()) {
+                val parent = stack.removeLast()
+                if (!seen.add(parent)) continue
+                for (child in safChildren(context, source.uri, parent)) {
+                    if (child.isDir) {
+                        if (child.name != "node_modules") stack.addLast(child.documentId)
+                    } else {
+                        files++
+                        bytes += child.size
+                    }
+                }
+            }
+        }
+    }
+    FolderScan(files, bytes)
+}
+
+/**
+ * Copy a picked folder (Local or SAF) into [destParent] as a new child directory named [dirName],
+ * returning that directory. `node_modules` is skipped (large + regenerable), matching the scan and
+ * the export path. Throws on any I/O failure; the caller owns cleanup of a partial [dirName].
+ */
+suspend fun copyFolderToLocal(context: Context, source: FsPath, destParent: File, dirName: String): File =
+    withContext(Dispatchers.IO) {
+        val dest = File(destParent, dirName).apply { mkdirs() }
+        when (source) {
+            is FsPath.Local -> {
+                val root = source.file
+                root.walkTopDown()
+                    .onEnter { it == root || it.name != "node_modules" }
+                    .forEach { entry ->
+                        if (entry == root) return@forEach
+                        val target = File(dest, entry.relativeTo(root).path)
+                        if (entry.isDirectory) target.mkdirs()
+                        else entry.inputStream().use { i -> target.outputStream().use { i.copyTo(it) } }
+                    }
+            }
+
+            is FsPath.Saf -> copySafDirInto(context, source.uri, DocumentsContract.getTreeDocumentId(source.uri), dest, 0)
+        }
+        dest
+    }
+
+/** Cap on SAF import recursion depth — a backstop against a cyclic/pathological DocumentsProvider. */
+private const val MAX_IMPORT_DEPTH = 64
+
+/** The leaf name of a picked folder, for naming its imported copy (SAF display name, else file name). */
+fun folderDisplayName(context: Context, source: FsPath): String = when (source) {
+    is FsPath.Local -> source.file.name
+    is FsPath.Saf -> DocumentFile.fromTreeUri(context, source.uri)?.name
+        ?: DocumentsContract.getTreeDocumentId(source.uri).substringAfterLast('/').substringAfterLast(':')
+}
+
+private fun copySafDirInto(context: Context, treeUri: Uri, parentId: String, destDir: File, depth: Int) {
+    require(depth <= MAX_IMPORT_DEPTH) { "Folder nesting too deep to import (> $MAX_IMPORT_DEPTH levels)" }
+    for (child in safChildren(context, treeUri, parentId)) {
+        // DISPLAY_NAME is provider-controlled; reduce to a safe leaf so it can't escape destDir.
+        val leaf = child.name.substringAfterLast('/').substringAfterLast('\\').trim()
+        if (leaf.isEmpty() || leaf == "." || leaf == "..") continue
+        val target = File(destDir, leaf)
+        if (child.isDir) {
+            if (leaf == "node_modules") continue
+            target.mkdirs()
+            copySafDirInto(context, treeUri, child.documentId, target, depth + 1)
+        } else {
+            val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, child.documentId)
+            context.contentResolver.openInputStream(uri)?.use { i -> target.outputStream().use { i.copyTo(it) } }
+                ?: error("Cannot read '$leaf'")
+        }
+    }
+}
+
+private data class SafChild(val documentId: String, val name: String, val isDir: Boolean, val size: Long)
+
+/** One efficient batched query for a SAF directory's children — avoids the DocumentFile N+1 storm. */
+private fun safChildren(context: Context, treeUri: Uri, parentDocId: String): List<SafChild> {
+    val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+    val out = ArrayList<SafChild>()
+    context.contentResolver.query(
+        childrenUri,
+        arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_SIZE,
+        ),
+        null, null, null,
+    )?.use { c ->
+        while (c.moveToNext()) {
+            val id = c.getString(0) ?: continue
+            val name = c.getString(1) ?: continue
+            val isDir = c.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR
+            val size = if (c.isNull(3)) 0L else c.getLong(3)
+            out.add(SafChild(id, name, isDir, size))
+        }
+    }
+    return out
+}
+
 /** Provider-reported display name, reduced to a safe leaf filename — DISPLAY_NAME is provider-
  *  controlled and must not be able to traverse out of the import target. */
 private fun displayNameOf(context: Context, uri: Uri): String {

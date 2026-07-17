@@ -1231,9 +1231,9 @@ fun JCodeApp(
         )
     }
 
-    openFolderTypePrompt?.let { path ->
+    openFolderTypePrompt?.let { pending ->
         OpenFolderTypeDialog(
-            folderName = path.displayName,
+            folderName = pending.label,
             onDismiss = viewModel::dismissOpenFolderPrompt,
             onConfirm = viewModel::resolveOpenFolderType,
         )

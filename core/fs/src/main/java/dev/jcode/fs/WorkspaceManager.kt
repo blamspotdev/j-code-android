@@ -388,6 +388,19 @@ class WorkspaceManager @Inject constructor(
     }.getOrNull()?.takeIf { it.isDirectory }
 
     /**
+     * True when [path] is a Local folder already inside app-private ext4 storage (context.filesDir) —
+     * i.e. the "JCode Projects" DocumentsProvider or an existing project dir. Such picks already have a
+     * runtime bind mount and open in place; anything else (primary storage, cloud/third-party SAF) must
+     * be copied onto /sources first before the runtime can reach it.
+     */
+    fun isOnManagedStorage(path: FsPath): Boolean {
+        val file = (path as? FsPath.Local)?.file ?: return false
+        val root = runCatching { context.filesDir.canonicalFile }.getOrDefault(context.filesDir.absoluteFile)
+        val target = runCatching { file.canonicalFile }.getOrDefault(file.absoluteFile)
+        return target == root || target.path.startsWith(root.path + File.separator)
+    }
+
+    /**
      * True when [path] resolves to the managed projects root itself (or an ancestor of it) — the
      * "JCode Projects" DocumentsProvider makes that root pickable, but adopting it as a node would
      * nest the whole managed tree inside itself.
