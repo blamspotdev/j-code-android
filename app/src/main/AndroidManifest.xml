@@ -60,6 +60,20 @@
                 android:value="interactive_terminal_and_build_runner" />
         </service>
 
+        <!-- Exposes the app-private ext4 projects tree to the system Files app / SAF pickers as a
+             browsable "JCode Projects" root (files never leave ext4). Guarded by MANAGE_DOCUMENTS,
+             which only DocumentsUI holds; authority is per-variant so debug/beta/release coexist. -->
+        <provider
+            android:name=".provider.ProjectsDocumentsProvider"
+            android:authorities="${applicationId}.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+
     </application>
 
 </manifest>

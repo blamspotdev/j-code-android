@@ -129,6 +129,8 @@ class FontSettings(
     val terminalDefaultId: String = "",
     val onSelectEditorFont: (String) -> Unit = {},
     val onSelectTerminalFont: (String) -> Unit = {},
+    /** Re-scan the Linux environment's installed fonts (called when the font settings open). */
+    val onScanFonts: () -> Unit = {},
 )
 
 val LocalFontSettings = compositionLocalOf { FontSettings() }

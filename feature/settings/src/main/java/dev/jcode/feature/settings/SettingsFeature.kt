@@ -287,6 +287,9 @@ object SettingsFeature {
                 keywords = "font fonts family typeface monospace editor terminal jetbrains mono system code appearance " +
                     fontSettings.options.joinToString(" ") { it.name },
             ) {
+                // Re-scan the environment's installed fonts each time this card is shown, so fonts the
+                // user apt-installed since launch appear without a restart.
+                LaunchedEffect(Unit) { fontSettings.onScanFonts() }
                 val fontOptionIds = fontSettings.options.map { it.id }
                 val fontLabel: (String) -> String =
                     { id -> fontSettings.options.firstOrNull { it.id == id }?.name ?: id }

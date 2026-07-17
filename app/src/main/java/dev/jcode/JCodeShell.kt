@@ -17,6 +17,7 @@ import dev.jcode.design.LocalRestoreSession
 import dev.jcode.design.LocalTabCloseButtonSetting
 import dev.jcode.design.BottomBarSetting
 import dev.jcode.design.EditorTabActions
+import dev.jcode.design.FontOption
 import dev.jcode.design.FontSettings
 import dev.jcode.design.LocalEditorTabActions
 import dev.jcode.design.LocalEditorTypeface
@@ -649,18 +650,21 @@ fun JCodeApp(
     val tabMaxSizeSetting = remember(tabMaxSize) { TabMaxSizeSetting(tabMaxSize, viewModel::setTabMaxSize) }
     val editorFontId by viewModel.editorFontId.collectAsStateWithLifecycle()
     val terminalFontId by viewModel.terminalFontId.collectAsStateWithLifecycle()
+    val environmentFonts by viewModel.environmentFonts.collectAsStateWithLifecycle()
     val fontContext = LocalContext.current
-    val editorTypeface = remember(editorFontId) { MonoFontCatalog.resolve(fontContext, editorFontId) }
-    val terminalTypeface = remember(terminalFontId) { MonoFontCatalog.resolve(fontContext, terminalFontId) }
-    val fontSettings = remember(editorFontId, terminalFontId) {
+    val envFontPaths = remember(environmentFonts) { environmentFonts.associate { it.id to it.path } }
+    val editorTypeface = remember(editorFontId, envFontPaths) { MonoFontCatalog.resolve(fontContext, editorFontId, envFontPaths) }
+    val terminalTypeface = remember(terminalFontId, envFontPaths) { MonoFontCatalog.resolve(fontContext, terminalFontId, envFontPaths) }
+    val fontSettings = remember(editorFontId, terminalFontId, environmentFonts) {
         FontSettings(
-            options = MonoFontCatalog.options,
+            options = MonoFontCatalog.options + environmentFonts.map { FontOption(it.id, it.name) },
             editorFontId = editorFontId,
             terminalFontId = terminalFontId,
             editorDefaultId = MonoFontCatalog.EDITOR_DEFAULT,
             terminalDefaultId = MonoFontCatalog.TERMINAL_DEFAULT,
             onSelectEditorFont = viewModel::setEditorFont,
             onSelectTerminalFont = viewModel::setTerminalFont,
+            onScanFonts = viewModel::refreshEnvironmentFonts,
         )
     }
     val editorSaveActions = remember(viewModel) {
@@ -873,11 +877,14 @@ fun JCodeApp(
         )
     }
     // Persistent SCM WebView: boots the decorations-contributing SCM extension per open project so
-    // git status reaches the explorer without the SCM panel ever being shown.
-    val scmHostExt = remember(installedExtensions, extensionActivations) {
+    // git status reaches the explorer without the SCM panel ever being shown. Excludes hosts the user
+    // stopped from the Task Manager (they'd otherwise re-attach on the next project open).
+    val suspendedBackgroundExts by viewModel.suspendedBackgroundExtensions.collectAsStateWithLifecycle()
+    val scmHostExt = remember(installedExtensions, extensionActivations, suspendedBackgroundExts) {
         installedExtensions.firstOrNull {
             it.type == ExtensionType.Scm && it.hasWebUi && it.contributes.explorerDecorations &&
-                (extensionActivations[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual
+                (extensionActivations[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual &&
+                it.id !in suspendedBackgroundExts
         }
     }
     ScmBackgroundHost(
@@ -894,6 +901,7 @@ fun JCodeApp(
         EditorEmptyActions(
             recents = recents,
             onOpenRecent = viewModel::openRecent,
+            onExportRecent = viewModel::exportRecentToStorage,
             onNewProject = viewModel::requestNew,
             onOpenFolder = { openFolderLauncher.launch(null) },
             startActions = contributedStartActions,
@@ -1053,6 +1061,13 @@ fun JCodeApp(
                 keepAliveFor = { id -> id !in extensionKeepAliveDisabled },
             )
         },
+        LocalTaskManagerBackgroundActions provides remember {
+            TaskManagerBackgroundActions(
+                snapshot = viewModel::backgroundExtensionSnapshot,
+                onStop = viewModel::stopBackgroundExtension,
+                onStart = viewModel::startBackgroundExtension,
+            )
+        },
         LocalEditorSaveActions provides editorSaveActions,
         LocalEditorMenuExtras provides editorMenuExtras,
         LocalExplorerScmUi provides explorerScmUi,
@@ -1113,6 +1128,7 @@ fun JCodeApp(
         onSelectProject = viewModel::selectProject,
         onOpenProject = viewModel::openProject,
         onRenameProject = viewModel::renameProject,
+        onExportProject = viewModel::exportProjectToStorage,
         onOpenFile = viewModel::openFile,
         onOpenPathAtLine = viewModel::openFileByGuestPath,
         onSelectEditorTab = viewModel::selectEditorTab,
@@ -1262,6 +1278,7 @@ private fun JCodeShell(
     onSelectProject: (Long) -> Unit,
     onOpenProject: (Project) -> Unit,
     onRenameProject: (Long, String) -> Unit,
+    onExportProject: (Project) -> Unit,
     onOpenFile: (dev.jcode.fs.FsNode) -> Unit,
     onOpenPathAtLine: (String) -> Unit,
     onSelectEditorTab: (String) -> Unit,
@@ -2115,6 +2132,7 @@ private fun JCodeShell(
                 onSelectProject = onSelectProject,
                 onOpenProject = onOpenProject,
                 onRenameProject = onRenameProject,
+                onExportProject = onExportProject,
                 onSelectTool = onSelectWorkbenchTool,
                 onOpenExternalFolder = { openFolderLauncher.launch(null) },
                 contributedDrawerActions = vcs.drawerActions,
@@ -2494,6 +2512,7 @@ private fun JCodeShell(
                             onSelectProject = onSelectProject,
                             onOpenProject = onOpenProject,
                             onRenameProject = onRenameProject,
+                            onExportProject = onExportProject,
                             onSelectTool = onSelectWorkbenchTool,
                             onOpenExternalFolder = { openFolderLauncher.launch(null) },
                             contributedDrawerActions = vcs.drawerActions,
@@ -2684,6 +2703,7 @@ private fun WorkspacePanel(
     onSelectProject: (Long) -> Unit,
     onOpenProject: (Project) -> Unit,
     onRenameProject: (Long, String) -> Unit,
+    onExportProject: (Project) -> Unit,
     onSelectTool: (WorkbenchTool) -> Unit,
     onOpenExternalFolder: () -> Unit,
     contributedDrawerActions: List<MainViewModel.ShellContribution>,
@@ -2759,6 +2779,7 @@ private fun WorkspacePanel(
                                     onRenameProject = onRenameProject,
                                     onRemoveProject = onRemoveProject,
                                     onOpenProjectSettings = { id -> onSelectProject(id); onOpenProjectConfig() },
+                                    onExportProject = onExportProject,
                                     onCreateProject = onCreateProject,
                                 )
                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
@@ -3029,6 +3050,7 @@ private fun EditorWorkspace(
 internal data class EditorEmptyActions(
     val recents: List<RecentEntity> = emptyList(),
     val onOpenRecent: (RecentEntity) -> Unit = {},
+    val onExportRecent: (RecentEntity) -> Unit = {},
     val onNewProject: () -> Unit = {},
     val onOpenFolder: () -> Unit = {},
     /** Extension-contributed actions (e.g. Clone, Remote Repo) shown after New/Open Folder. */
@@ -3153,7 +3175,11 @@ private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modi
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 actions.recents.forEach { recent ->
-                    RecentRow(recent = recent, onOpen = { actions.onOpenRecent(recent) })
+                    RecentRow(
+                        recent = recent,
+                        onOpen = { actions.onOpenRecent(recent) },
+                        onExport = { actions.onExportRecent(recent) },
+                    )
                 }
             }
         }
@@ -3161,7 +3187,8 @@ private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modi
 }
 
 @Composable
-private fun RecentRow(recent: RecentEntity, onOpen: () -> Unit) {
+private fun RecentRow(recent: RecentEntity, onOpen: () -> Unit, onExport: () -> Unit) {
+    var menuOpen by remember { mutableStateOf(false) }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -3172,7 +3199,7 @@ private fun RecentRow(recent: RecentEntity, onOpen: () -> Unit) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .padding(start = 8.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -3204,6 +3231,26 @@ private fun RecentRow(recent: RecentEntity, onOpen: () -> Unit) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+            // SAF recents have no local dir to copy out; only offer Export for Local ones.
+            if (recent.kind == ProjectKind.Local) {
+                Box {
+                    IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            imageVector = jcIcon(JCodeIcon.MoreVert),
+                            contentDescription = "Recent project actions",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    CompactContextMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false },
+                        listActions = listOf(
+                            ContextAction(JCodeIcon.Save, "Export to storage") { onExport() },
+                        ),
+                    )
+                }
             }
         }
     }

@@ -1106,6 +1106,11 @@ class DistroService(
         return state.distroInstalled == true && state.jcodeUserReady == true
     }
 
+    /** Host directory of the active distro's rootfs. Lets the app read guest files directly (the rootfs
+     *  is on app-private ext4) — e.g. a guest `/usr/share/fonts/...` path is `File(activeRootfsPath(),
+     *  "usr/share/fonts/...")`. */
+    fun activeRootfsPath(): File = rootfsManager.getRootfsPath(_environmentState.value.runtime.selectedDistro.id)
+
     /** The distro path that an unbound project would resolve to (e.g. `/workspace`). */
     fun defaultWorkdir(): String = _environmentState.value.runtime.workdir
 

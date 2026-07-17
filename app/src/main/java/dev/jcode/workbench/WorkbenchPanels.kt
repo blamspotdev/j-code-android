@@ -102,6 +102,7 @@ internal fun ProjectRoster(
     onRenameProject: (Long, String) -> Unit,
     onRemoveProject: (Long) -> Unit,
     onOpenProjectSettings: (Long) -> Unit,
+    onExportProject: (Project) -> Unit,
     onCreateProject: () -> Unit,
 ) {
     var renameTarget by remember { mutableStateOf<Project?>(null) }
@@ -206,6 +207,7 @@ internal fun ProjectRoster(
                                 listActions = listOf(
                                     ContextAction(JCodeIcon.Open, if (isWorkspace) "Open workspace" else "Open") { onOpenProject(project) },
                                     ContextAction(JCodeIcon.Settings, "Project settings") { onOpenProjectSettings(project.id) },
+                                    ContextAction(JCodeIcon.Save, "Export to storage") { onExportProject(project) },
                                 ),
                             )
                         }
