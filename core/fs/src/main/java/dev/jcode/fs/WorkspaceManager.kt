@@ -387,6 +387,24 @@ class WorkspaceManager @Inject constructor(
         }
     }.getOrNull()?.takeIf { it.isDirectory }
 
+    /**
+     * True when [path] resolves to the managed projects root itself (or an ancestor of it) — the
+     * "JCode Projects" DocumentsProvider makes that root pickable, but adopting it as a node would
+     * nest the whole managed tree inside itself.
+     */
+    fun isManagedRoot(path: FsPath): Boolean {
+        val picked = (resolveManageable(path) as? FsPath.Local)?.file
+            ?.let { runCatching { it.canonicalFile }.getOrDefault(it.absoluteFile) }
+            ?: return false
+        var dir: File? = runCatching { storageRoots.projectsRoot.canonicalFile }
+            .getOrDefault(storageRoots.projectsRoot.absoluteFile)
+        while (dir != null) {
+            if (dir == picked) return true
+            dir = dir.parentFile
+        }
+        return false
+    }
+
     /** True if the folder is tagged as a Workspace container in its `.jcode` config. */
     suspend fun isWorkspaceFolder(path: FsPath): Boolean = withContext(Dispatchers.IO) {
         parseNodeMeta(readFolderConfig(path)).first == WorkspaceNodeType.Workspace
@@ -599,11 +617,14 @@ class WorkspaceManager @Inject constructor(
         return candidate
     }
 
+    /** Output never contains separators, and dot-only names ("." / "..") fall back like blank ones —
+     *  `File(base, sanitized)` can therefore never resolve to the base dir itself or escape it. */
     fun sanitizedFolderName(name: String): String {
         return name.lowercase()
             .replace(Regex("[^a-z0-9._-]+"), "-")
             .trim('-')
-            .ifBlank { "project" }
+            .takeUnless { it.isBlank() || it.all { c -> c == '.' } }
+            ?: "project"
     }
 
     // --- Folder type detection + assignment (.jcode is the source of truth; not stored in the DB) ---

@@ -1715,6 +1715,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun openExternalFolder(path: FsPath) {
         viewModelScope.launch {
             val resolved = workspaceManager.resolveManageable(path)
+            if (workspaceManager.isManagedRoot(resolved)) {
+                emitMessage("That folder is the JCode Projects root — pick a project or workspace folder inside it.")
+                return@launch
+            }
             when {
                 workspaceManager.isWorkspaceFolder(resolved) &&
                     workspaceManager.enterFolderAsWorkspace(resolved) != null -> clearEditorTabs()
