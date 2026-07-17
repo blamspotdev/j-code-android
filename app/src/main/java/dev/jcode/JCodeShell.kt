@@ -2801,8 +2801,11 @@ private fun WorkspacePanel(
 
                             when {
                                 selectedProject != null -> {
-                                    // Key on the project id so roster mutations never remount/reload the tree.
-                                    key(selectedProject.id) {
+                                    // Key on id + location so roster mutations never remount/reload the tree,
+                                    // but a REUSED row id (SQLite hands the deleted max rowid to the next
+                                    // insert — routine in the single-slot Default workspace) still remounts
+                                    // when it names a different folder.
+                                    key(selectedProject.id, selectedProject.location) {
                                         Box(modifier = Modifier.weight(1f)) {
                                             ExplorerFeature.Content(
                                                 workspace = workspace,

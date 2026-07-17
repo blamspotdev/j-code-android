@@ -173,6 +173,18 @@ class TreeViewModel(
         } finally {
             _isLoading.value = false
         }
+        // A directory listing can transiently come back null/empty right as a project lands (e.g.
+        // the folder was moved into place by a clone adoption moments ago) — File.listFiles reports
+        // IO hiccups as null, which renders here as an empty tree with no error. One delayed
+        // re-list self-heals that case; a genuinely empty project just pays one cheap extra stat.
+        val looksEmpty = when (_viewMode.value) {
+            ExplorerViewMode.Tree -> _treeRows.value.count { !it.isPlaceholder } <= 1
+            ExplorerViewMode.List -> _listRows.value.isEmpty()
+        }
+        if (looksEmpty) {
+            kotlinx.coroutines.delay(350)
+            applyMode()
+        }
     }
 
     /** Switch between Tree and List, materializing the correct flow for the new mode. */
