@@ -361,8 +361,11 @@ class WorkspaceManager @Inject constructor(
     }
 
     /**
-     * Resolve a SAF tree under primary external storage to a Local path so picked folders that live
-     * inside our managed storage can drive the runtime; non-primary SAF trees pass through unchanged.
+     * Resolve a SAF tree that actually names a local folder to its Local path, so picked folders
+     * that live inside our managed storage drive the runtime directly; other SAF trees pass through
+     * unchanged. Covers primary external storage (`primary:` document ids) and the app's own
+     * "JCode Projects" DocumentsProvider — its ids ARE absolute ext4 paths, and without this mapping
+     * a pick from that root opened as a bind-less content:// project despite living on our storage.
      */
     fun resolveManageable(path: FsPath): FsPath = when (path) {
         is FsPath.Local -> path
@@ -371,11 +374,16 @@ class WorkspaceManager @Inject constructor(
 
     private fun safTreeToLocal(uri: Uri): File? = runCatching {
         val docId = android.provider.DocumentsContract.getTreeDocumentId(uri)
-        val parts = docId.split(":", limit = 2)
-        if (parts.getOrNull(0).equals("primary", ignoreCase = true)) {
-            File(android.os.Environment.getExternalStorageDirectory(), parts.getOrNull(1).orEmpty())
-        } else {
-            null
+        when {
+            uri.authority == "${context.packageName}.documents" -> File(docId)
+            else -> {
+                val parts = docId.split(":", limit = 2)
+                if (parts.getOrNull(0).equals("primary", ignoreCase = true)) {
+                    File(android.os.Environment.getExternalStorageDirectory(), parts.getOrNull(1).orEmpty())
+                } else {
+                    null
+                }
+            }
         }
     }.getOrNull()?.takeIf { it.isDirectory }
 
