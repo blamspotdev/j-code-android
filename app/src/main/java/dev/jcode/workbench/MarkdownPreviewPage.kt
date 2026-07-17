@@ -57,9 +57,11 @@ import java.io.File
 /**
  * Rendered Markdown preview for a file tab in preview mode. Reads the LIVE buffer (unsaved edits
  * included) from the tab's EditorState snapshot flow and re-renders debounced as the user types;
- * the body is patched via JS so the WebView keeps its scroll position. Long-press opens a context
- * menu: Select Text (highlights the pressed block), Copy (the highlighted text), and View Source
- * Code, which flips back to the source editor through [LocalEditorMenuExtras]'s preview toggle.
+ * the body is patched via JS so the WebView keeps its scroll position. Leaving the tab destroys the
+ * WebView (the shell keys this page by tab id), so the reading position is stashed in
+ * [PreviewScrollCache] and re-applied to its replacement. Long-press opens a context menu: Select
+ * Text (highlights the pressed block), Copy (the highlighted text), and View Source Code, which
+ * flips back to the source editor through [LocalEditorMenuExtras]'s preview toggle.
  */
 @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
 @Composable
@@ -114,10 +116,29 @@ fun MarkdownPreviewPage(
         }
     }
 
+    // Restore only for the first body this WebView receives: later re-renders (typing) must leave the
+    // reader wherever they are now, not yank them back to where the tab was last left.
+    var restoredScroll by remember(webViewGeneration) { mutableStateOf(false) }
+
     LaunchedEffect(latestBodyJs, pageReady, webView) {
         val js = latestBodyJs ?: return@LaunchedEffect
         if (!pageReady) return@LaunchedEffect
-        webView?.evaluateJavascript(js, null)
+        val view = webView ?: return@LaunchedEffect
+        view.evaluateJavascript(js, null)
+        if (restoredScroll) return@LaunchedEffect
+        restoredScroll = true
+        val (x, y) = PreviewScrollCache.load(tab.id) ?: return@LaunchedEffect
+        if (x == 0 && y == 0) return@LaunchedEffect
+        // scrollTo would clamp to the top while the injected body is still unmeasured; the visual
+        // state callback is the point at which that DOM is laid out and ready to draw.
+        view.postVisualStateCallback(
+            0L,
+            object : WebView.VisualStateCallback() {
+                override fun onComplete(requestId: Long) {
+                    view.scrollTo(x, y)
+                }
+            },
+        )
     }
 
     // "Word wrap in portrait" off → lay the portrait preview out at landscape width (the screen
@@ -167,7 +188,13 @@ fun MarkdownPreviewPage(
     }
 
     DisposableEffect(tab.id) {
-        onDispose { webView?.destroy(); webView = null }
+        onDispose {
+            webView?.let { view ->
+                PreviewScrollCache.save(tab.id, view.scrollX, view.scrollY)
+                view.destroy()
+            }
+            webView = null
+        }
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -263,6 +290,28 @@ fun MarkdownPreviewPage(
                 )
             }
     }
+}
+
+/**
+ * Where each previewed tab was last scrolled to, in WebView (view) pixels — the space both
+ * `View.getScrollX/Y` and `View.scrollTo` speak, so the value round-trips unchanged whatever the
+ * page zoom. Keyed by tab id and bounded, since a long session can page through many previews.
+ */
+private object PreviewScrollCache {
+    private const val MAX_TABS = 32
+
+    private val offsets = object : LinkedHashMap<String, Pair<Int, Int>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Int, Int>>): Boolean =
+            size > MAX_TABS
+    }
+
+    @Synchronized
+    fun save(tabId: String, x: Int, y: Int) {
+        offsets[tabId] = x to y
+    }
+
+    @Synchronized
+    fun load(tabId: String): Pair<Int, Int>? = offsets[tabId]
 }
 
 /** evaluateJavascript delivers a JSON-encoded value (`"text"` or `null`) — decode to a plain string. */
