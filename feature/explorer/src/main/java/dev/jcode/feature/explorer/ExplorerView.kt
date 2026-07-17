@@ -3,6 +3,9 @@ import dev.jcode.design.JCodeIcon
 import dev.jcode.design.jcIcon
 
 import android.content.Context
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -41,6 +44,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -70,11 +74,18 @@ import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
 import dev.jcode.fs.Workspace
 import dev.jcode.fs.copyFileOrDir
+import dev.jcode.fs.copyLocalTreeToDocumentTree
 import dev.jcode.fs.createFile
 import dev.jcode.fs.createDirectory
 import dev.jcode.fs.deleteToTrash
+import dev.jcode.fs.exportFileToUri
+import dev.jcode.fs.importContentUris
 import dev.jcode.fs.renameFile
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -149,6 +160,52 @@ fun ExplorerView(
         viewModel.setScmDecorations(scmUi.status, scmUi.submodules)
     }
 
+    // SAF import/export: import streams device-storage picks into a target dir (row menu or toolbar);
+    // export saves a file via a create-document picker or copies a local folder into a picked tree.
+    // Pending targets are saveable tokens (a process death behind the system picker would drop plain
+    // remember state and silently ignore the pick), and the copies run in their own supervisor scope:
+    // leaving the Explorer must not cancel a tree copy midway.
+    val fileOpScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
+    var importTarget by rememberSaveable { mutableStateOf<String?>(null) }
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        val target = importTarget?.let(::fsPathFromToken)
+        importTarget = null
+        if (target != null && uris.isNotEmpty()) fileOpScope.launch {
+            val result = runCatching { importContentUris(fs, context, uris, target) }
+            // Refresh either way: a partial failure may have landed some files already.
+            viewModel.refresh()
+            scmUi.onFsActivity?.invoke()
+            result.onSuccess { names -> onSnackbar?.invoke("Imported ${names.size} file(s)") }
+                .onFailure { onSnackbar?.invoke("Import failed: ${it.message}") }
+        }
+    }
+    var exportFileSource by rememberSaveable { mutableStateOf<String?>(null) }
+    val exportFileLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri ->
+        val source = exportFileSource?.let(::fsPathFromToken)
+        exportFileSource = null
+        if (source != null && uri != null) fileOpScope.launch {
+            runCatching { exportFileToUri(context, source, uri) }
+                .onSuccess { onSnackbar?.invoke("Exported file") }
+                .onFailure { onSnackbar?.invoke("Export failed: ${it.message}") }
+        }
+    }
+    var exportDirSource by rememberSaveable { mutableStateOf<String?>(null) }
+    val exportDirLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        val source = exportDirSource?.let(::File)
+        exportDirSource = null
+        if (source != null && uri != null) fileOpScope.launch {
+            runCatching { copyLocalTreeToDocumentTree(context, source, uri, source.name) }
+                .onSuccess { n -> onSnackbar?.invoke("Exported $n file(s) from '${source.name}'") }
+                .onFailure { onSnackbar?.invoke("Export failed: ${it.message}") }
+        }
+    }
+
     // Where toolbar create/paste should land: the viewed dir in List mode; the selected dir (or the
     // selected file's parent) in Tree mode, falling back to the project root.
     fun resolveCreateParent(): FsPath {
@@ -183,6 +240,24 @@ fun ExplorerView(
                     onSnackbar?.invoke("Moved '${row.node.name}' to trash")
                 }.onFailure { onSnackbar?.invoke("Delete failed: ${it.message}") }
             }
+            RowAction.ImportHere -> {
+                importTarget = fsPathToken(row.node.path)
+                importLauncher.launch(arrayOf("*/*"))
+            }
+            RowAction.Export -> {
+                val path = row.node.path
+                when {
+                    row.node.kind != FsKind.Directory -> {
+                        exportFileSource = fsPathToken(path)
+                        exportFileLauncher.launch(row.node.name)
+                    }
+                    path is FsPath.Local -> {
+                        exportDirSource = path.file.absolutePath
+                        exportDirLauncher.launch(null)
+                    }
+                    else -> onSnackbar?.invoke("Folder export supports local folders only")
+                }
+            }
         }
     }
 
@@ -193,6 +268,10 @@ fun ExplorerView(
             viewMode = activeViewMode,
             onCreateFile = { showCreateDialog = CreateTarget(resolveCreateParent(), isDirectory = false) },
             onCreateFolder = { showCreateDialog = CreateTarget(resolveCreateParent(), isDirectory = true) },
+            onImport = {
+                importTarget = fsPathToken(resolveCreateParent())
+                importLauncher.launch(arrayOf("*/*"))
+            },
             onCollapseAll = { scope.launch { viewModel.collapseAll() } },
             onRefresh = {
                 scope.launch { viewModel.refresh() }
@@ -328,12 +407,24 @@ data class ClipboardEntry(
 )
 
 /** Per-row actions surfaced via the visible overflow (⋮) menu. */
-enum class RowAction { Open, NewFile, NewFolder, Rename, Copy, Cut, Delete }
+enum class RowAction { Open, NewFile, NewFolder, Rename, Copy, Cut, Delete, ImportHere, Export }
 
 /** Parent of a path, or null when there is no addressable parent (SAF tree URIs). */
 private fun parentPathOf(path: FsPath): FsPath? = when (path) {
     is FsPath.Local -> path.file.parentFile?.let { FsPath.Local(it) }
     is FsPath.Saf -> null
+}
+
+// FsPath as a saveable string, for pending SAF-picker targets that must survive process death.
+private fun fsPathToken(path: FsPath): String = when (path) {
+    is FsPath.Local -> "local:" + path.file.absolutePath
+    is FsPath.Saf -> "saf:" + path.uri
+}
+
+private fun fsPathFromToken(token: String): FsPath? = when {
+    token.startsWith("local:") -> FsPath.Local(File(token.removePrefix("local:")))
+    token.startsWith("saf:") -> FsPath.Saf(Uri.parse(token.removePrefix("saf:")))
+    else -> null
 }
 
 // --- Row overflow menu (visible ⋮ on every row) ---
@@ -375,7 +466,9 @@ private fun RowOverflowMenu(
                 if (isDir) {
                     add(ContextAction(JCodeIcon.NewFile, "New file") { onAction(row, RowAction.NewFile) })
                     add(ContextAction(JCodeIcon.NewFolder, "New folder") { onAction(row, RowAction.NewFolder) })
+                    add(ContextAction(JCodeIcon.Add, "Import files…") { onAction(row, RowAction.ImportHere) })
                 }
+                add(ContextAction(JCodeIcon.Save, "Export…") { onAction(row, RowAction.Export) })
                 scmUi.onContextAction?.let { dispatch ->
                     scmUi.contextActions
                         .filter { explorerActionAppliesTo(it, row.node.name, isDir) }
@@ -706,6 +799,7 @@ private fun ExplorerToolbar(
     viewMode: ExplorerViewMode,
     onCreateFile: () -> Unit,
     onCreateFolder: () -> Unit,
+    onImport: () -> Unit,
     onCollapseAll: () -> Unit,
     onRefresh: () -> Unit,
     onPaste: () -> Unit,
@@ -719,6 +813,7 @@ private fun ExplorerToolbar(
     ) {
         ToolbarIcon(jcIcon(JCodeIcon.NewFile), "New File", onCreateFile)
         ToolbarIcon(jcIcon(JCodeIcon.NewFolder), "New Folder", onCreateFolder)
+        ToolbarIcon(jcIcon(JCodeIcon.Add), "Import files", onImport)
         ToolbarIcon(jcIcon(JCodeIcon.Paste), "Paste", onPaste, enabled = canPaste)
         ToolbarIcon(jcIcon(JCodeIcon.Refresh), "Refresh", onRefresh)
         if (viewMode == ExplorerViewMode.Tree) {

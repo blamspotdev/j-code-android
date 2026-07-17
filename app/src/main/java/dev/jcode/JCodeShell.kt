@@ -755,6 +755,21 @@ fun JCodeApp(
     val openFolderLauncher = rememberOpenFolderLauncher(
         onFolderPicked = viewModel::openExternalFolder,
     )
+    // Project/recent "Export to storage": a SAF tree picker chooses the destination folder, then the
+    // view model copies the tree. The pending request is a saveable "<name>\n<source dir>" token (a
+    // lambda would be dropped if the process dies behind the picker, silently ignoring the pick);
+    // an empty dir segment marks a non-local source, which exportDirTo rejects with a message.
+    var pendingTreeExport by rememberSaveable { mutableStateOf<String?>(null) }
+    val exportTreeLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        val pending = pendingTreeExport
+        pendingTreeExport = null
+        if (uri != null && pending != null) {
+            val dir = pending.substringAfter('\n')
+            viewModel.exportDirTo(pending.substringBefore('\n'), dir.ifBlank { null }?.let(::File), uri)
+        }
+    }
     val openFolderTypePrompt by viewModel.openFolderTypePrompt.collectAsStateWithLifecycle()
     val environmentNotConfigured = environmentState.smokeTestPassed != true
     // The first-run screen latches once shown and stays up until the user taps "Done" (which defers).
@@ -901,7 +916,11 @@ fun JCodeApp(
         EditorEmptyActions(
             recents = recents,
             onOpenRecent = viewModel::openRecent,
-            onExportRecent = viewModel::exportRecentToStorage,
+            onExportRecent = { recent ->
+                val dir = if (recent.kind == ProjectKind.Local) recent.uri else ""
+                pendingTreeExport = File(dir).name.ifBlank { "project" } + "\n" + dir
+                exportTreeLauncher.launch(null)
+            },
             onNewProject = viewModel::requestNew,
             onOpenFolder = { openFolderLauncher.launch(null) },
             startActions = contributedStartActions,
@@ -1128,7 +1147,11 @@ fun JCodeApp(
         onSelectProject = viewModel::selectProject,
         onOpenProject = viewModel::openProject,
         onRenameProject = viewModel::renameProject,
-        onExportProject = viewModel::exportProjectToStorage,
+        onExportProject = { project ->
+            val dir = (project.fsPath as? FsPath.Local)?.file?.absolutePath ?: ""
+            pendingTreeExport = project.name + "\n" + dir
+            exportTreeLauncher.launch(null)
+        },
         onOpenFile = viewModel::openFile,
         onOpenPathAtLine = viewModel::openFileByGuestPath,
         onSelectEditorTab = viewModel::selectEditorTab,

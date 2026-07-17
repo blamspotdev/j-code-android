@@ -65,6 +65,7 @@ import dev.jcode.workbench.SetupTerminalRunner
 import dev.jcode.fs.FsKind
 import dev.jcode.fs.FsNode
 import dev.jcode.fs.FsPath
+import dev.jcode.fs.copyLocalTreeToDocumentTree
 import dev.jcode.fs.Project
 import dev.jcode.fs.ProjectKind
 import dev.jcode.fs.RecentEntity
@@ -1640,6 +1641,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         else viewModelScope.launch { emitMessage("Added '${project.name}' to the workspace.") }
     }
 
+    /** Host side of the guest /sources mount — the staging dir extensions materialize folders into
+     *  (e.g. the SCM extension's clones) before handing them over via `workbench.addFolder`. */
+    private fun sourcesRoot(): File = dev.jcode.core.distro.WorkspaceHostPaths.sourcesRoot(appContext.filesDir)
+
     fun createNewItem(request: NewItemRequest) {
         viewModelScope.launch {
             val fallback = if (request.isWorkspace) "untitled-workspace" else "untitled-project"
@@ -1845,52 +1850,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Copy a local project out to shared storage (`/storage/emulated/0/JCode/exports/<name>-<ts>`) so
-     *  it's browsable in a file manager / other apps. A one-shot snapshot: `node_modules` (large and
+    /** Copy a local project/recent dir out to a user-picked SAF folder ("Export to storage") so it's
+     *  browsable in a file manager / other apps. A one-shot snapshot: `node_modules` (large and
      *  regenerable) is skipped. Projects otherwise live on app-private ext4 (see WorkspaceHostPaths);
-     *  the DocumentsProvider gives a live view, this gives a real on-disk copy. Needs all-files access. */
-    fun exportProjectToStorage(project: Project) =
-        exportDirToStorage(project.name, (project.fsPath as? FsPath.Local)?.file)
-
-    /** Export a "Recent" entry (a project's on-disk location) to shared storage; SAF recents have no
-     *  local directory and are rejected. */
-    fun exportRecentToStorage(recent: RecentEntity) {
-        val dir = if (recent.kind == ProjectKind.Local) File(recent.uri) else null
-        exportDirToStorage(dir?.name.orEmpty().ifBlank { "project" }, dir)
-    }
-
-    private fun exportDirToStorage(name: String, source: File?) {
+     *  the DocumentsProvider gives a live view, this gives a real on-disk copy. A null/non-directory
+     *  [source] (e.g. a SAF project with no local dir) is rejected with a message. */
+    fun exportDirTo(name: String, source: File?, dest: Uri) {
         if (source == null || !source.isDirectory) {
             viewModelScope.launch { emitMessage("Export failed: '$name' isn't a local folder.") }
             return
         }
-        if (!android.os.Environment.isExternalStorageManager()) {
-            viewModelScope.launch { emitMessage("Grant all-files access in Settings to export to storage.") }
-            return
-        }
         viewModelScope.launch {
-            emitMessage("Exporting '$name' to storage…")
-            val result = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                runCatching {
-                    val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
-                    val dest = File("/storage/emulated/0/JCode/exports/$name-$stamp")
-                    // Manual pruning walk: copyRecursively can't skip a whole subtree, so drop
-                    // node_modules via onEnter (before descending) instead of copying then deleting it.
-                    source.walkTopDown()
-                        .onEnter { it.name != "node_modules" }
-                        .forEach { file ->
-                            val out = File(dest, file.relativeTo(source).path)
-                            if (file.isDirectory) {
-                                out.mkdirs()
-                            } else {
-                                out.parentFile?.mkdirs()
-                                file.copyTo(out, overwrite = true)
-                            }
-                        }
-                    dest.absolutePath
-                }
-            }
-            result.onSuccess { emitMessage("Exported to $it") }
+            emitMessage("Exporting '$name'…")
+            val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+            runCatching { copyLocalTreeToDocumentTree(appContext, source, dest, "$name-$stamp") }
+                .onSuccess { emitMessage("Exported $it file(s) from '$name'.") }
                 .onFailure { emitMessage("Export failed: ${it.message ?: "unknown error"}") }
         }
     }
@@ -2755,29 +2729,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             apiOk(JSONObject())
         }
 
-        // Destinations an extension can clone/register a top-level folder into: the Default Workspace's
-        // flat "Projects" root, plus every user Workspace whose folder is reachable under the guest
-        // /workspace mount. Each guestPath is where the extension should physically place the clone; the
-        // matching `destinationId` is passed back to workbench.openFolder so the host registers it there.
-        "workbench.cloneDestinations" -> {
-            val defId = workspaceManager.ensureDefaultWorkspaceId()
-            val dests = org.json.JSONArray()
-            dests.put(JSONObject().put("id", "default").put("label", "Projects").put("guestPath", "/workspace"))
-            workspaceManager.listWorkspaces().forEach { ws ->
-                if (ws.id == defId) return@forEach
-                val guest = dev.jcode.core.distro.WorkspaceHostPaths.hostToGuest(ws.rootPath)
-                if (guest == "/workspace" || guest.startsWith("/workspace/")) {
-                    dests.put(JSONObject().put("id", ws.id.toString()).put("label", ws.name).put("guestPath", guest))
-                }
-            }
-            apiOk(JSONObject().put("destinations", dests))
-        }
-
-        // Register a top-level folder (already created on disk, e.g. by a git clone) as a Project and
-        // open it. `destinationId` (from workbench.cloneDestinations) chooses the target workspace:
-        // "default"/absent = the Default Workspace (opens immediately), a workspace id = that User
-        // Workspace (switches to it and prompts open-vs-add). Absent id keeps the legacy behavior of
-        // registering under whatever workspace is currently open.
+        // Register a top-level folder (already created on disk under the guest /workspace mount) as a
+        // Project and open it. `destinationId` chooses the target workspace: "default"/absent = the
+        // Default Workspace (opens immediately), a workspace id = that User Workspace (switches to it
+        // and prompts open-vs-add). Absent id registers under whatever workspace is currently open.
         "workbench.openFolder" -> {
             val name = p.optString("name").trim()
             require(name.isNotBlank()) { "name required" }
@@ -2790,6 +2745,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 destId == "default" -> defId
                 else -> destId.toLongOrNull()?.takeIf { workspaceManager.workspaceExists(it) } ?: defId
             }
+            // Opening clears the current editor tabs; flush unsaved buffers first and refuse rather
+            // than silently discarding work a dialog never guarded.
+            require(saveAllDirtyAwait()) { "unsaved changes could not be saved — save or close open files first" }
             // Make the target the current context (rebuilds the breadcrumb: Default root + target) so
             // resetDefaultWorkspaceProject's single-slot check and project selection resolve correctly.
             workspaceManager.restoreWorkspace(targetWs)
@@ -2802,6 +2760,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val project = workspaceManager.createNodeIn(targetWs, sanitized, WorkspaceNodeType.Project, null)
                 _postClonePrompt.value = project
                 apiOk(JSONObject().put("name", project.name).put("opened", false))
+            }
+        }
+
+        // Adopt a folder an extension materialized under the guest /sources staging mount (e.g. the
+        // SCM extension's clones) into the workbench. `type` "project" (default) moves it into the
+        // current workspace and opens it; "workspace" moves it into the projects root, stamps it as a
+        // User Workspace, and enters it (top-level folders become projects). The folder physically
+        // leaves /sources, so the staging dir only ever holds not-yet-classified material. What to do
+        // with a staged folder — and any UI asking the user — is the calling extension's concern; a
+        // staged folder is discarded by simply deleting it in the runtime (rm -rf /sources/<name>).
+        "workbench.addFolder" -> {
+            val guest = p.optString("path").trim().trimEnd('/')
+            val prefix = dev.jcode.core.distro.WorkspaceHostPaths.SOURCES_GUEST + "/"
+            require(guest.startsWith(prefix)) { "path must be under ${dev.jcode.core.distro.WorkspaceHostPaths.SOURCES_GUEST}" }
+            val name = guest.removePrefix(prefix)
+            require(name.isNotBlank() && !name.contains('/') && !name.startsWith(".")) {
+                "path must name a top-level sources folder"
+            }
+            val staged = File(sourcesRoot(), name)
+            require(staged.isDirectory) { "no staged folder named '$name'" }
+            // Adoption clears the current editor tabs; flush unsaved buffers first and refuse rather
+            // than silently discarding work a dialog never guarded.
+            require(saveAllDirtyAwait()) { "unsaved changes could not be saved — save or close open files first" }
+            val defId = workspaceManager.ensureDefaultWorkspaceId()
+            if (p.optString("type").equals("workspace", ignoreCase = true)) {
+                clearEditorTabs()
+                workspaceManager.restoreWorkspace(defId)
+                val node = workspaceManager.adoptFolderIn(defId, staged, WorkspaceNodeType.Workspace)
+                workspaceManager.enterWorkspaceFolder(node)
+                apiOk(JSONObject().put("name", node.name).put("workspace", true))
+            } else {
+                val targetWs = workspaceManager.currentWorkspace.value?.id ?: defId
+                workspaceManager.restoreWorkspace(targetWs)
+                if (targetWs == defId) resetDefaultWorkspaceProject()
+                val project = workspaceManager.adoptFolderIn(targetWs, staged, WorkspaceNodeType.Project)
+                _selectedProjectId.value = project.id
+                apiOk(JSONObject().put("name", project.name).put("workspace", false))
             }
         }
 

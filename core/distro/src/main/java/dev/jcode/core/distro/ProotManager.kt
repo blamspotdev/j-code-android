@@ -53,9 +53,6 @@ class ProotManager(private val context: Context) {
     @Volatile
     private var runtimePrepared = false
 
-    @Volatile
-    private var transferDirReady = false
-
     /**
      * Ensure the proot temp directory exists and is writable. Called before every proot
      * invocation; after the first successful prep it costs a single stat (recovers with a full
@@ -347,16 +344,19 @@ class ProotManager(private val context: Context) {
             }
         }
 
-        // Shared transfer dir for the extension `file.import` bridge: SAF-picked files are stream-copied
-        // to this host dir by the app so extensions can reach them by a runtime path (/jcode-transfer)
-        // and stream them onward (e.g. scp a .bak into a DB VM) without a base64 round-trip. Bound only
-        // when it exists/creatable on the host so this stays a no-op on devices without the folder
-        // (e.g. All-files access not granted). Once available it can't silently vanish mid-run, so a
-        // positive result is cached to skip the per-spawn stat on (slow) emulated storage.
-        val transferDir = File("/storage/emulated/0/JCode/.jcode-transfer")
-        if (transferDirReady || transferDir.exists() || transferDir.mkdirs()) {
-            transferDirReady = true
-            args.addAll(listOf("-b", "${transferDir.absolutePath}:/jcode-transfer"))
+        // Transfer dir for the extension `file.import` bridge: SAF-picked files are stream-copied to
+        // this host dir by the app so extensions can reach them by a runtime path (/jcode-transfer)
+        // and stream them onward (e.g. scp a .bak into a DB VM) without a base64 round-trip.
+        val transferDir = WorkspaceHostPaths.transferRoot(appContext.filesDir)
+        if (transferDir.exists() || transferDir.mkdirs()) {
+            args.addAll(listOf("-b", "${transferDir.absolutePath}:${WorkspaceHostPaths.TRANSFER_GUEST}"))
+        }
+
+        // Clone-staging dir (see WorkspaceHostPaths.sourcesRoot): the SCM extension clones remote
+        // repos into /sources; the host then classifies each clone as Project or Workspace.
+        val sourcesDir = WorkspaceHostPaths.sourcesRoot(appContext.filesDir)
+        if (sourcesDir.exists() || sourcesDir.mkdirs()) {
+            args.addAll(listOf("-b", "${sourcesDir.absolutePath}:${WorkspaceHostPaths.SOURCES_GUEST}"))
         }
 
         // Working directory

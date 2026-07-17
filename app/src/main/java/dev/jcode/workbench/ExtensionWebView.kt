@@ -61,7 +61,8 @@ import java.io.FileOutputStream
  */
 /** Host dir that ProotManager bind-mounts into every runtime as `/jcode-transfer`; the `file.import`
  *  bridge stream-copies SAF-picked files here so extensions can reach them by a runtime path. */
-private const val JCODE_TRANSFER_HOST = "/storage/emulated/0/JCode/.jcode-transfer"
+private fun transferHostDir(context: Context): File =
+    dev.jcode.core.distro.WorkspaceHostPaths.transferRoot(context.filesDir)
 
 private class NoFullscreenWebView(context: Context) : WebView(context) {
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
@@ -117,7 +118,7 @@ fun ExtensionWebViewPage(
     }
     // Native "import a file into the runtime" bridge (the `file.import` API request): the SAF picker
     // returns a content:// URI, which we stream-copy into a host dir that is bind-mounted into the proot
-    // (JCODE_TRANSFER_HOST -> /jcode-transfer). The extension then gets a runtime path it can hand to
+    // (transferHostDir -> /jcode-transfer). The extension then gets a runtime path it can hand to
     // scp/RESTORE — no base64, so it scales to multi-hundred-MB backups. Reply is the usual _onResult.
     val context = LocalContext.current
     val pendingImport = remember(extension.id) { mutableStateOf<String?>(null) }
@@ -135,7 +136,7 @@ fun ExtensionWebViewPage(
                 }
                 val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "import.bin" }
                 val size = withContext(Dispatchers.IO) {
-                    val destDir = File(JCODE_TRANSFER_HOST).apply { mkdirs() }
+                    val destDir = transferHostDir(context).apply { mkdirs() }
                     val dest = File(destDir, safe)
                     var copied = 0L
                     cr.openInputStream(uri).use { input ->
@@ -162,7 +163,7 @@ fun ExtensionWebViewPage(
         }
     }
     // Native "export a runtime file to device storage" bridge (the `file.export` API request): the ext
-    // writes a file into /jcode-transfer (JCODE_TRANSFER_HOST) — e.g. a pg_dump/.bak backup — then asks
+    // writes a file into /jcode-transfer (transferHostDir) — e.g. a pg_dump/.bak backup — then asks
     // to save it out; the SAF "create document" picker lets the user choose the destination and we
     // stream-copy the host file there. The mirror of `file.import`.
     val pendingExport = remember(extension.id) { mutableStateOf<Pair<String, File>?>(null) }
@@ -219,7 +220,7 @@ fun ExtensionWebViewPage(
                     val payload = runCatching { JSONObject(envelope).optJSONObject("payload") }.getOrNull()
                     val basename = (payload?.optString("path") ?: "").substringAfterLast('/')
                     val name = payload?.optString("name")?.ifBlank { null } ?: basename.ifBlank { "backup.bin" }
-                    pendingExport.value = reqId to File(JCODE_TRANSFER_HOST, basename)
+                    pendingExport.value = reqId to File(transferHostDir(context), basename)
                     webView?.post { runCatching { exportPicker.launch(name) } }
                 } else scope.launch {
                     val payload = runCatching { onApiRequest(envelope) }.getOrElse { e ->

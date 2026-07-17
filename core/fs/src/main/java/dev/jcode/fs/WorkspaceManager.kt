@@ -262,6 +262,44 @@ class WorkspaceManager @Inject constructor(
         return registerProjectIn(path, workspaceId).copy(nodeType = nodeType, templateId = templateId)
     }
 
+    /**
+     * Move an already-populated staged folder (e.g. a clone from the /sources staging dir) under
+     * [workspaceId]'s base dir and register it there as [nodeType]. The folder name is uniquified on
+     * collision ("-1", "-2", …). Same-filesystem rename is attempted first; a copy+delete fallback
+     * covers the (unexpected) cross-device case.
+     */
+    suspend fun adoptFolderIn(workspaceId: Long, staged: File, nodeType: WorkspaceNodeType): Project {
+        val destination = withContext(Dispatchers.IO) {
+            val base = baseDirFor(workspaceId).apply { mkdirs() }
+            val name = sanitizedFolderName(staged.name)
+            var dest = File(base, name)
+            var suffix = 1
+            while (dest.exists()) dest = File(base, "$name-${suffix++}")
+            if (!staged.renameTo(dest)) {
+                // Same-filesystem in practice (staging and the workspace roots both live under
+                // filesDir); the copy fallback must fail clean or the half-copied dest becomes an
+                // orphan the reconcile would later register as a project.
+                try {
+                    staged.copyRecursively(dest, overwrite = false)
+                } catch (t: Throwable) {
+                    dest.deleteRecursively()
+                    throw t
+                }
+                staged.deleteRecursively()
+            }
+            dest
+        }
+        return try {
+            writeNodeConfig(destination, nodeType, null)
+            registerProjectIn(FsPath.Local(destination), workspaceId).copy(nodeType = nodeType, templateId = null)
+        } catch (t: Throwable) {
+            // Registration failed after the move: return the folder to staging so it stays visible in
+            // the staging list instead of vanishing from every UI.
+            withContext(Dispatchers.IO) { destination.renameTo(staged) }
+            throw t
+        }
+    }
+
     /** Host directory new nodes for [workspaceId] are created under: the flat projects root for the
      *  Default Workspace (whose rootPath is workspaces/default and must not hold projects), else the
      *  workspace's own folder. */
@@ -275,10 +313,6 @@ class WorkspaceManager @Inject constructor(
 
     /** The Default Workspace's id, running the one-time init first if it hasn't happened yet. */
     suspend fun ensureDefaultWorkspaceId(): Long = defaultWorkspaceId ?: ensureDefaultWorkspace().id
-
-    /** Every workspace (Default + user), for surfaces that let the user target a specific one
-     *  (e.g. the clone destination picker). */
-    suspend fun listWorkspaces(): List<WorkspaceEntity> = workspaceDao.getAllWorkspaces()
 
     /**
      * Open a Workspace folder as the current container: find/create its [WorkspaceEntity], register
@@ -298,9 +332,10 @@ class WorkspaceManager @Inject constructor(
                 WorkspaceEntity(name = displayName, rootPath = rootPath, lastOpened = System.currentTimeMillis()),
             )
 
-        // Add-only reconcile: register child folders not already tracked under this workspace.
+        // Add-only reconcile: register child folders not already tracked under this workspace. Hidden
+        // dirs are skipped — a cloned repo entered as a workspace must not turn .git into a project.
         val existing = workspaceDao.getProjectLocations(workspaceId).toSet()
-        folder.listFiles { f -> f.isDirectory && f.name != ".jcode" && f.name != ".trash" }
+        folder.listFiles { f -> f.isDirectory && !f.name.startsWith(".") }
             ?.sortedBy { it.name.lowercase() }
             ?.forEach { childDir ->
                 val location = childDir.absolutePath

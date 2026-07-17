@@ -1,8 +1,13 @@
 package dev.jcode.fs
 
 import android.content.Context
+import android.net.Uri
+import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Additional filesystem operations beyond the base [Fs] contract.
@@ -219,6 +224,128 @@ private suspend fun copySaf(context: Context, source: FsPath, targetParent: FsPa
         }
         return FsPath.Saf(targetFile.uri)
     }
+}
+
+/** Import content:// files (SAF picks) into [targetDir], streaming each into a new child file. Names
+ *  come from the provider (DISPLAY_NAME) and are uniquified on collision. Returns the created names. */
+suspend fun importContentUris(fs: Fs, context: Context, uris: List<Uri>, targetDir: FsPath): List<String> =
+    withContext(Dispatchers.IO) {
+        uris.map { uri ->
+            val name = displayNameOf(context, uri)
+            when (fs) {
+                is PosixFs -> {
+                    val parent = targetDir.requireLocal()
+                    var dest = File(parent, name)
+                    var suffix = 1
+                    while (dest.exists()) dest = File(parent, uniquifiedName(name, suffix++))
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        dest.outputStream().use { input.copyTo(it) }
+                    } ?: error("Cannot read '$name'")
+                    dest.name
+                }
+                is SafFs -> {
+                    val parentDoc = targetDir.toDocumentFile(context)
+                    val doc = parentDoc.createFile("application/octet-stream", name)
+                        ?: error("Cannot create '$name'")
+                    try {
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            context.contentResolver.openOutputStream(doc.uri, "wt")?.use { input.copyTo(it) }
+                                ?: error("Cannot write '$name'")
+                        } ?: error("Cannot read '$name'")
+                    } catch (t: Throwable) {
+                        runCatching { doc.delete() }
+                        throw t
+                    }
+                    doc.name ?: name
+                }
+                else -> error("Unsupported Fs implementation: ${fs::class}")
+            }
+        }
+    }
+
+/** Stream a single file at [source] out to a SAF [dest] document (created by the caller's picker). */
+suspend fun exportFileToUri(context: Context, source: FsPath, dest: Uri) = withContext(Dispatchers.IO) {
+    val input = when (source) {
+        is FsPath.Local -> source.file.inputStream()
+        is FsPath.Saf -> context.contentResolver.openInputStream(source.uri) ?: error("Cannot read the file")
+    }
+    input.use { i ->
+        context.contentResolver.openOutputStream(dest, "wt")?.use { i.copyTo(it) }
+            ?: error("Cannot write the destination")
+    }
+}
+
+/**
+ * Copy the local [source] directory into the SAF tree [treeUri] as a new child named [dirName].
+ * `node_modules` subtrees are skipped (large and regenerable). Returns the number of files copied.
+ */
+suspend fun copyLocalTreeToDocumentTree(context: Context, source: File, treeUri: Uri, dirName: String): Int =
+    withContext(Dispatchers.IO) {
+        // Refuse destinations inside the source. The app's own DocumentsProvider exposes the projects
+        // tree as a pickable, writable target, so "export foo into foo" is one picker tap away — the
+        // walk would then enumerate the growing export as part of the source and copy it into itself
+        // until the disk fills.
+        treeUriToLocalFile(treeUri)?.canonicalPath?.let { dest ->
+            val src = source.canonicalPath
+            require(dest != src && !dest.startsWith("$src/")) { "The destination is inside '${source.name}'" }
+        }
+        val root = DocumentFile.fromTreeUri(context, treeUri) ?: error("Cannot open the destination folder")
+        val destRoot = root.createDirectory(dirName) ?: error("Cannot create '$dirName' in the destination")
+        val dirDocs = hashMapOf("" to destRoot)
+        var files = 0
+        // walkTopDown yields parents before children, so each entry's parent doc is already mapped.
+        // The source root itself is exempt from the prune so exporting a folder named node_modules
+        // still copies its content.
+        source.walkTopDown()
+            .onEnter { it == source || it.name != "node_modules" }
+            .forEach { entry ->
+                if (entry == source) return@forEach
+                val rel = entry.relativeTo(source).path
+                val parent = dirDocs.getValue(rel.substringBeforeLast(File.separatorChar, ""))
+                if (entry.isDirectory) {
+                    dirDocs[rel] = parent.createDirectory(entry.name) ?: error("Cannot create '${entry.name}'")
+                } else {
+                    val doc = parent.createFile("application/octet-stream", entry.name)
+                        ?: error("Cannot create '${entry.name}'")
+                    context.contentResolver.openOutputStream(doc.uri, "wt")?.use { out ->
+                        entry.inputStream().use { it.copyTo(out) }
+                    } ?: error("Cannot write '${entry.name}'")
+                    files++
+                }
+            }
+        files
+    }
+
+/** Best-effort local backing dir of a picked SAF tree: the app's own DocumentsProvider uses absolute
+ *  paths as document ids, and primary external storage is directly mappable; other providers (cloud,
+ *  third-party) return null — their storage can't overlap local sources anyway. */
+private fun treeUriToLocalFile(treeUri: Uri): File? = runCatching {
+    val docId = DocumentsContract.getTreeDocumentId(treeUri)
+    val parts = docId.split(":", limit = 2)
+    when {
+        docId.startsWith("/") -> File(docId)
+        parts.firstOrNull().equals("primary", ignoreCase = true) ->
+            @Suppress("DEPRECATION")
+            File(android.os.Environment.getExternalStorageDirectory(), parts.getOrNull(1).orEmpty())
+        else -> null
+    }
+}.getOrNull()
+
+/** Provider-reported display name, reduced to a safe leaf filename — DISPLAY_NAME is provider-
+ *  controlled and must not be able to traverse out of the import target. */
+private fun displayNameOf(context: Context, uri: Uri): String {
+    var name = ""
+    context.contentResolver.query(uri, null, null, null, null)?.use { cur ->
+        val idx = cur.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (idx >= 0 && cur.moveToFirst()) name = cur.getString(idx).orEmpty()
+    }
+    val leaf = name.substringAfterLast('/').substringAfterLast('\\').trim()
+    return if (leaf.isBlank() || leaf == "." || leaf == "..") "import.bin" else leaf
+}
+
+private fun uniquifiedName(name: String, suffix: Int): String {
+    val dot = name.lastIndexOf('.')
+    return if (dot > 0) "${name.substring(0, dot)} ($suffix)${name.substring(dot)}" else "$name ($suffix)"
 }
 
 // --- Internal helpers ---
