@@ -816,15 +816,6 @@ fun JCodeApp(
         }
     }
 
-    // Keyed on the selection ONLY (page tabs like Settings don't count as project content). Deliberately
-    // NOT keyed on the tab count: tabs emptying mid-close (Close Project/Workspace clears them while the
-    // old selection is still momentarily set) must not re-open the file the user just closed.
-    LaunchedEffect(selectedProject?.id) {
-        if (selectedProject != null && editorGroup.tabs.none { !it.isPage }) {
-            viewModel.ensureProjectBootstrapTab()
-        }
-    }
-
     val environmentManagerActions = remember(installedEnvironments) {
         EnvironmentManagerActions(
             environments = installedEnvironments,

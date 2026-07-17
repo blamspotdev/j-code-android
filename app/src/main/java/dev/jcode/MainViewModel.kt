@@ -1049,11 +1049,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val sessionStore = SessionStore(appContext)
 
-    /** Suppresses the project bootstrap file while a session restore is deciding/opening tabs, so the
-     *  restored tabs aren't raced by a freshly bootstrapped file. Cleared when restore settles. */
-    @Volatile
-    private var suppressBootstrap = true
-
     /** Gate that keeps incremental saves from clobbering the stored session before restore has read it. */
     @Volatile
     private var sessionSaveEnabled = false
@@ -2195,23 +2190,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runDebugCatalogAction(entryId, DebugEngineAction.Uninstall)
     }
 
-    private var lastBootstrappedProjectId: Long? = null
-
-    fun ensureProjectBootstrapTab() {
-        // While a session restore is in flight, don't open the bootstrap file — restore handles the tabs.
-        if (suppressBootstrap) return
-        // Ignore page tabs (e.g. Settings): only an open file tab should suppress the bootstrap file.
-        if (_editorGroup.value.tabs.any { !it.isPage }) return
-        val project = selectedProject.value ?: return
-        // Bootstrap a project's file at most once: after the tabs are cleared (e.g. Close Project),
-        // the selection may briefly still point at it — don't re-open what the user just closed.
-        if (project.id == lastBootstrappedProjectId) return
-        lastBootstrappedProjectId = project.id
-        viewModelScope.launch {
-            openBootstrapFile(project)
-        }
-    }
-
     fun openFile(node: FsNode) {
         if (node.kind != FsKind.File) return
         viewModelScope.launch {
@@ -2764,12 +2742,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         // Adopt a folder an extension materialized under the guest /sources staging mount (e.g. the
-        // SCM extension's clones) into the workbench. `type` "project" (default) moves it into the
-        // current workspace and opens it; "workspace" moves it into the projects root, stamps it as a
-        // User Workspace, and enters it (top-level folders become projects). The folder physically
-        // leaves /sources, so the staging dir only ever holds not-yet-classified material. What to do
-        // with a staged folder — and any UI asking the user — is the calling extension's concern; a
-        // staged folder is discarded by simply deleting it in the runtime (rm -rf /sources/<name>).
+        // SCM extension's clones) into the workbench. `type` "project" moves it into the current
+        // workspace and opens it; "workspace" moves it into the projects root, stamps it as a User
+        // Workspace, and enters it (top-level folders become projects). The folder physically leaves
+        // /sources, so the staging dir only ever holds not-yet-classified material.
+        //
+        // Omitting `type` means "you decide": a folder carrying its own `.jcode` type (a repo that
+        // ships one) is adopted as what it declares, and one that declares nothing is left staged and
+        // reported as `needsType` — the host has no dialog for this, so the extension that staged the
+        // folder asks and calls back with an explicit type. Discarding is likewise the extension's
+        // business: it just deletes the staged folder in the runtime.
         "workbench.addFolder" -> {
             val guest = p.optString("path").trim().trimEnd('/')
             val prefix = dev.jcode.core.distro.WorkspaceHostPaths.SOURCES_GUEST + "/"
@@ -2780,24 +2762,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             val staged = File(sourcesRoot(), name)
             require(staged.isDirectory) { "no staged folder named '$name'" }
-            // Adoption clears the current editor tabs; flush unsaved buffers first and refuse rather
-            // than silently discarding work a dialog never guarded.
-            require(saveAllDirtyAwait()) { "unsaved changes could not be saved — save or close open files first" }
-            val defId = workspaceManager.ensureDefaultWorkspaceId()
-            if (p.optString("type").equals("workspace", ignoreCase = true)) {
-                clearEditorTabs()
-                workspaceManager.restoreWorkspace(defId)
-                val node = workspaceManager.adoptFolderIn(defId, staged, WorkspaceNodeType.Workspace)
-                workspaceManager.enterWorkspaceFolder(node)
-                apiOk(JSONObject().put("name", node.name).put("workspace", true))
-            } else {
-                val targetWs = workspaceManager.currentWorkspace.value?.id ?: defId
-                workspaceManager.restoreWorkspace(targetWs)
-                if (targetWs == defId) resetDefaultWorkspaceProject()
-                val project = workspaceManager.adoptFolderIn(targetWs, staged, WorkspaceNodeType.Project)
-                _selectedProjectId.value = project.id
-                apiOk(JSONObject().put("name", project.name).put("workspace", false))
+            val stagedPath = FsPath.Local(staged)
+            val requested = p.optString("type").trim()
+            val nodeType = when {
+                requested.equals("workspace", ignoreCase = true) -> WorkspaceNodeType.Workspace
+                requested.equals("project", ignoreCase = true) -> WorkspaceNodeType.Project
+                workspaceManager.folderNeedsType(stagedPath) -> null
+                workspaceManager.isWorkspaceFolder(stagedPath) -> WorkspaceNodeType.Workspace
+                else -> WorkspaceNodeType.Project
             }
+            when (nodeType) {
+                null -> apiOk(JSONObject().put("needsType", true))
+                WorkspaceNodeType.Workspace -> {
+                    // Adoption clears the current editor tabs; flush unsaved buffers first and refuse
+                    // rather than silently discarding work a dialog never guarded.
+                    require(saveAllDirtyAwait()) { "unsaved changes could not be saved — save or close open files first" }
+                    val defId = workspaceManager.ensureDefaultWorkspaceId()
+                    clearEditorTabs()
+                    workspaceManager.restoreWorkspace(defId)
+                    val node = workspaceManager.adoptFolderIn(defId, staged, WorkspaceNodeType.Workspace)
+                    workspaceManager.enterWorkspaceFolder(node)
+                    apiOk(JSONObject().put("name", node.name).put("workspace", true))
+                }
+                WorkspaceNodeType.Project -> {
+                    require(saveAllDirtyAwait()) { "unsaved changes could not be saved — save or close open files first" }
+                    val defId = workspaceManager.ensureDefaultWorkspaceId()
+                    val targetWs = workspaceManager.currentWorkspace.value?.id ?: defId
+                    workspaceManager.restoreWorkspace(targetWs)
+                    if (targetWs == defId) resetDefaultWorkspaceProject()
+                    val project = workspaceManager.adoptFolderIn(targetWs, staged, WorkspaceNodeType.Project)
+                    _selectedProjectId.value = project.id
+                    apiOk(JSONObject().put("name", project.name).put("workspace", false))
+                }
+            }
+        }
+
+        // Close the editor tab hosting the caller's own `#view` page (from workbench.openView), so an
+        // extension can dismiss its UI once the flow it drives is finished.
+        "workbench.closeView" -> {
+            val tabId = EXT_APP_PREFIX + callerExtId + "#" + p.optString("view").trim()
+            val existed = _editorGroup.value.tabs.any { it.id == tabId }
+            closeTabsNow(setOf(tabId), activate = null)
+            apiOk(JSONObject().put("closed", existed))
         }
 
         "service.start" -> {
@@ -3489,20 +3495,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return saved == dirty.size
     }
 
-    private suspend fun openBootstrapFile(project: Project) {
-        when (val path = project.fsPath) {
-            is FsPath.Local -> {
-                val root = path.file
-                val bootstrapFile = withContext(Dispatchers.IO) { findBootstrapFile(root) }
-                if (bootstrapFile != null) {
-                    openLocalFile(bootstrapFile)
-                }
-            }
-
-            is FsPath.Saf -> emitMessage("Open a file from the explorer to start editing SAF projects.")
-        }
-    }
-
     private suspend fun openLocalFile(file: File, line: Int? = null, column: Int? = null) {
         val stableId = file.absolutePath
         val existing = _editorGroup.value.tabs.firstOrNull { it.id == stableId }
@@ -3608,11 +3600,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val targetProj = record.projectId
             if (targetProj != null && workspace?.projects?.any { it.id == targetProj } == true) {
                 _selectedProjectId.value = targetProj
-                // A restored session's tab set is authoritative — even when it's EMPTY because the user
-                // closed every tab. Mark the project as already-bootstrapped so neither the fallback below
-                // nor the composition's bootstrap effect re-opens a starter file on a deliberately-empty
-                // session. (Only a launch with NO saved session still bootstraps a project's starter file.)
-                lastBootstrappedProjectId = targetProj
             }
 
             // Tabs: open each surviving file; recover unsaved buffers where the file (or its folder) remains.
@@ -3648,14 +3635,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         } finally {
-            suppressBootstrap = false
             sessionSaveEnabled = true
-            // If restore opened no file tab (opt-out, no saved session, or every file was missing), fall
-            // back to the normal project bootstrap. The composition's bootstrap effect may have already
-            // fired and no-op'd while suppressed; this covers the case where the project is ready now.
-            if (_editorGroup.value.tabs.none { !it.isPage }) {
-                ensureProjectBootstrapTab()
-            }
         }
     }
 
@@ -3724,38 +3704,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             message.contains("Can't", ignoreCase = true) ||
             message.contains("error", ignoreCase = true)
         OutputLog.append(message, if (isError) OutputKind.Error else OutputKind.Info)
-    }
-
-    private fun findBootstrapFile(root: File): File? {
-        val preferred = listOf(
-            "package.json",
-            "README.md",
-            "README",
-            "build.gradle.kts",
-            "settings.gradle.kts",
-            "Cargo.toml",
-            "pom.xml",
-            "pubspec.yaml",
-            "MainActivity.kt",
-            "index.ts",
-            "main.ts",
-            "main.py",
-        )
-
-        preferred.firstNotNullOfOrNull { candidate ->
-            File(root, candidate).takeIf { it.exists() && it.isFile }
-        }?.let { return it }
-
-        return root.walkTopDown()
-            .maxDepth(4)
-            // Prune heavy/irrelevant trees instead of walking into them and filtering each file —
-            // .git and node_modules can hold tens of thousands of entries that all get stat'd.
-            .onEnter { it.name != ".git" && it.name != "node_modules" }
-            .firstOrNull { file ->
-                file.isFile &&
-                    file.length() <= 2_000_000L &&
-                    file.name != ".DS_Store"
-            }
     }
 
     private fun File.isLikelyTextFile(): Boolean {

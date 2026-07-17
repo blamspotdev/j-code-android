@@ -266,7 +266,9 @@ class WorkspaceManager @Inject constructor(
      * Move an already-populated staged folder (e.g. a clone from the /sources staging dir) under
      * [workspaceId]'s base dir and register it there as [nodeType]. The folder name is uniquified on
      * collision ("-1", "-2", …). Same-filesystem rename is attempted first; a copy+delete fallback
-     * covers the (unexpected) cross-device case.
+     * covers the (unexpected) cross-device case. The type is upserted into the folder's `.jcode`
+     * config rather than written over it — a cloned repo may ship one, and its settings are the
+     * user's, not ours to drop.
      */
     suspend fun adoptFolderIn(workspaceId: Long, staged: File, nodeType: WorkspaceNodeType): Project {
         val destination = withContext(Dispatchers.IO) {
@@ -290,7 +292,7 @@ class WorkspaceManager @Inject constructor(
             dest
         }
         return try {
-            writeNodeConfig(destination, nodeType, null)
+            setFolderType(FsPath.Local(destination), nodeType)
             registerProjectIn(FsPath.Local(destination), workspaceId).copy(nodeType = nodeType, templateId = null)
         } catch (t: Throwable) {
             // Registration failed after the move: return the folder to staging so it stays visible in
