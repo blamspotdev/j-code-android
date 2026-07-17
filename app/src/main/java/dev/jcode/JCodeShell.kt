@@ -117,7 +117,6 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
@@ -239,6 +238,7 @@ import dev.jcode.feature.debug.DebugEngineManagerFeature
 import dev.jcode.feature.lspmanager.LspManagerFeature
 import dev.jcode.feature.sdkmanager.SdkManagerFeature
 import dev.jcode.feature.settings.SettingsFeature
+import dev.jcode.workbench.dialog.ImportProgressHost
 import dev.jcode.workbench.dialog.NewItemDialog
 import dev.jcode.workbench.dialog.PostCloneDialog
 import dev.jcode.workbench.dialog.OpenFolderTypeDialog
@@ -330,6 +330,7 @@ import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.workbench.LocalTerminalTapConfig
 import dev.jcode.workbench.TerminalExtraKeysTarget
 import dev.jcode.workbench.WorkbenchExtraKeysBar
+import dev.jcode.workbench.WorkbenchSnackbarHost
 import dev.jcode.workbench.BottomStatusBarSlot
 import dev.jcode.workbench.RightPanelTab
 import dev.jcode.workbench.WorkbenchManagerActions
@@ -1238,6 +1239,8 @@ fun JCodeApp(
             onConfirm = viewModel::resolveOpenFolderType,
         )
     }
+
+    ImportProgressHost(viewModel.importProgress)
 
     // Closing tabs with unsaved changes: Save / Discard / Close Saved (dismiss = keep everything).
     pendingEditorClose?.let { pending ->
@@ -2204,7 +2207,6 @@ private fun JCodeShell(
                     }
                     false
                 },
-            snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
                 Column {
                     // Sits above the status bar so Scaffold's innerPadding reserves space for it and
@@ -2693,6 +2695,17 @@ private fun JCodeShell(
                 onDismiss = { sampledColor = null },
             )
         }
+
+        // Snackbar host lives at the root — above the modal drawer sheet and the right sidebar overlay
+        // (the Scaffold's own slot sits under them), so messages are never covered by an open drawer.
+        WorkbenchSnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = 8.dp),
+        )
     }
 }
 

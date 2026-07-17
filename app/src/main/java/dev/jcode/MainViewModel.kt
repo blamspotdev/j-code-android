@@ -146,6 +146,18 @@ enum class EditorCloseChoice { SAVE, DISCARD, CLOSE_SAVED, CANCEL }
 /** Drives the editor "unsaved changes" dialog: the titles of the dirty tabs about to be closed. */
 data class PendingEditorClose(val dirtyTitles: List<String>)
 
+/** Live state of an external-folder import, driving the progress modal. During [ImportPhase.Scanning]
+ *  the total is unknown ([total] == 0 → indeterminate); during [ImportPhase.Copying], [done]/[total]
+ *  files gives a determinate bar. */
+enum class ImportPhase { Scanning, Copying }
+
+data class ImportProgress(
+    val label: String,
+    val phase: ImportPhase,
+    val done: Int = 0,
+    val total: Int = 0,
+)
+
 /** A folder awaiting the Project/Workspace choice: opened in place on managed storage, or copied into
  *  /sources and awaiting adoption. [label] names it in the dialog. */
 sealed interface PendingFolderType {
@@ -505,6 +517,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *  place on managed storage, or already copied into /sources staging and awaiting adoption. */
     private val _openFolderTypePrompt = MutableStateFlow<PendingFolderType?>(null)
     val openFolderTypePrompt: StateFlow<PendingFolderType?> = _openFolderTypePrompt.asStateFlow()
+
+    /** Non-null while an off-ext4 folder is being scanned/copied into /sources — drives the modal. */
+    private val _importProgress = MutableStateFlow<ImportProgress?>(null)
+    val importProgress: StateFlow<ImportProgress?> = _importProgress.asStateFlow()
 
     private val _selectedProjectId = MutableStateFlow<Long?>(null)
     val selectedProject: StateFlow<Project?> = currentWorkspace
@@ -1776,33 +1792,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Scan an off-ext4 pick and, if it isn't empty and fits, copy it into /sources then adopt it. */
+    /** Scan an off-ext4 pick and, if it isn't empty and fits, copy it into /sources then adopt it. A
+     *  progress modal follows the scan then the copy (see [_importProgress]). */
     private suspend fun importExternalFolder(source: FsPath) {
         val label = folderDisplayName(appContext, source)
-        val scan = runCatching { scanFolderForImport(appContext, source) }.getOrElse {
-            emitMessage("Couldn't read '$label': ${it.message ?: "unknown error"}.")
-            return
-        }
-        if (scan.fileCount == 0) {
-            emitMessage("'$label' is empty — nothing to import.")
-            return
-        }
-        val sources = sourcesRoot().apply { mkdirs() }
-        if (scan.totalBytes + IMPORT_FREE_SPACE_HEADROOM_BYTES > sources.usableSpace) {
-            emitMessage(
-                "'$label' is too large to import — needs ${formatBytes(scan.totalBytes)}, " +
-                    "only ${formatBytes(sources.usableSpace)} free.",
-            )
-            return
-        }
-        if (!saveAllDirtyAwait()) {
-            emitMessage("Save or close open files before importing a folder.")
-            return
-        }
-        emitMessage("Importing '$label'…")
-        val staged = runCatching { copyIntoSources(source, label) }.getOrElse {
-            emitMessage("Import failed: ${it.message ?: "unknown error"}.")
-            return
+        _importProgress.value = ImportProgress(label, ImportPhase.Scanning)
+        val staged = try {
+            val scan = runCatching { scanFolderForImport(appContext, source) }.getOrElse {
+                emitMessage("Couldn't read '$label': ${it.message ?: "unknown error"}.")
+                return
+            }
+            if (scan.fileCount == 0) {
+                emitMessage("'$label' is empty — nothing to import.")
+                return
+            }
+            val sources = sourcesRoot().apply { mkdirs() }
+            if (scan.totalBytes + IMPORT_FREE_SPACE_HEADROOM_BYTES > sources.usableSpace) {
+                emitMessage(
+                    "'$label' is too large to import — needs ${formatBytes(scan.totalBytes)}, " +
+                        "only ${formatBytes(sources.usableSpace)} free.",
+                )
+                return
+            }
+            if (!saveAllDirtyAwait()) {
+                emitMessage("Save or close open files before importing a folder.")
+                return
+            }
+            _importProgress.value = ImportProgress(label, ImportPhase.Copying, done = 0, total = scan.fileCount)
+            runCatching {
+                copyIntoSources(source, label) { done ->
+                    _importProgress.value = ImportProgress(label, ImportPhase.Copying, done, scan.fileCount)
+                }
+            }.getOrElse {
+                emitMessage("Import failed: ${it.message ?: "unknown error"}.")
+                return
+            }
+        } finally {
+            _importProgress.value = null
         }
         val stagedPath = FsPath.Local(staged)
         when {
@@ -1830,13 +1856,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Copy [source] into a hidden /sources temp dir, then atomically rename to a unique final name. */
-    private suspend fun copyIntoSources(source: FsPath, label: String): File = withContext(Dispatchers.IO) {
+    private suspend fun copyIntoSources(source: FsPath, label: String, onProgress: (Int) -> Unit): File = withContext(Dispatchers.IO) {
         val sources = sourcesRoot().apply { mkdirs() }
         // Reclaim temp dirs orphaned by a crash mid-copy (safe: only our own ".import-" prefix).
         sources.listFiles { f -> f.isDirectory && f.name.startsWith(".import-") }?.forEach { it.deleteRecursively() }
         val tmp = File(sources, ".import-${System.nanoTime()}")
         try {
-            copyFolderToLocal(appContext, source, sources, tmp.name)
+            copyFolderToLocal(appContext, source, sources, tmp.name, onProgress)
             val base = workspaceManager.sanitizedFolderName(label)
             var dest = File(sources, base)
             var suffix = 1

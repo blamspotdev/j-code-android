@@ -350,15 +350,17 @@ suspend fun scanFolderForImport(context: Context, source: FsPath): FolderScan = 
                 .forEach { if (it.isFile) { files++; bytes += it.length() } }
 
         is FsPath.Saf -> {
-            // Track visited document ids so a cyclic/misbehaving provider can't loop forever.
+            // Track visited document ids so a cyclic/misbehaving provider can't loop forever. The
+            // per-child skip mirrors copySafDirInto exactly, so this file total matches what is copied.
             val seen = HashSet<String>()
             val stack = ArrayDeque(listOf(DocumentsContract.getTreeDocumentId(source.uri)))
             while (stack.isNotEmpty()) {
                 val parent = stack.removeLast()
                 if (!seen.add(parent)) continue
                 for (child in safChildren(context, source.uri, parent)) {
+                    safImportLeaf(child) ?: continue
                     if (child.isDir) {
-                        if (child.name != "node_modules") stack.addLast(child.documentId)
+                        stack.addLast(child.documentId)
                     } else {
                         files++
                         bytes += child.size
@@ -373,31 +375,57 @@ suspend fun scanFolderForImport(context: Context, source: FsPath): FolderScan = 
 /**
  * Copy a picked folder (Local or SAF) into [destParent] as a new child directory named [dirName],
  * returning that directory. `node_modules` is skipped (large + regenerable), matching the scan and
- * the export path. Throws on any I/O failure; the caller owns cleanup of a partial [dirName].
+ * the export path. [onProgress] is invoked with the running file count after each file so a caller
+ * can show determinate progress. Throws on any I/O failure; the caller owns cleanup of a partial
+ * [dirName].
  */
-suspend fun copyFolderToLocal(context: Context, source: FsPath, destParent: File, dirName: String): File =
-    withContext(Dispatchers.IO) {
-        val dest = File(destParent, dirName).apply { mkdirs() }
-        when (source) {
-            is FsPath.Local -> {
-                val root = source.file
-                root.walkTopDown()
-                    .onEnter { it == root || it.name != "node_modules" }
-                    .forEach { entry ->
-                        if (entry == root) return@forEach
-                        val target = File(dest, entry.relativeTo(root).path)
-                        if (entry.isDirectory) target.mkdirs()
-                        else entry.inputStream().use { i -> target.outputStream().use { i.copyTo(it) } }
+suspend fun copyFolderToLocal(
+    context: Context,
+    source: FsPath,
+    destParent: File,
+    dirName: String,
+    onProgress: (Int) -> Unit = {},
+): File = withContext(Dispatchers.IO) {
+    val dest = File(destParent, dirName).apply { mkdirs() }
+    var copied = 0
+    val onFile = { copied++; onProgress(copied) }
+    when (source) {
+        is FsPath.Local -> {
+            val root = source.file
+            root.walkTopDown()
+                .onEnter { it == root || it.name != "node_modules" }
+                .forEach { entry ->
+                    if (entry == root) return@forEach
+                    val target = File(dest, entry.relativeTo(root).path)
+                    if (entry.isDirectory) {
+                        target.mkdirs()
+                    } else {
+                        entry.inputStream().use { i -> target.outputStream().use { i.copyTo(it) } }
+                        onFile()
                     }
-            }
-
-            is FsPath.Saf -> copySafDirInto(context, source.uri, DocumentsContract.getTreeDocumentId(source.uri), dest, 0)
+                }
         }
-        dest
+
+        is FsPath.Saf -> {
+            val rootId = DocumentsContract.getTreeDocumentId(source.uri)
+            copySafDirInto(context, source.uri, rootId, dest, 0, hashSetOf(rootId), onFile)
+        }
     }
+    dest
+}
 
 /** Cap on SAF import recursion depth — a backstop against a cyclic/pathological DocumentsProvider. */
 private const val MAX_IMPORT_DEPTH = 64
+
+/** Sanitized leaf name for a SAF child, or null when it must be skipped: an unsafe/traversing
+ *  DISPLAY_NAME, or a pruned `node_modules` directory. The single source of truth for which children
+ *  the import touches, so [scanFolderForImport] and [copySafDirInto] stay in lockstep. */
+private fun safImportLeaf(child: SafChild): String? {
+    val leaf = child.name.substringAfterLast('/').substringAfterLast('\\').trim()
+    if (leaf.isEmpty() || leaf == "." || leaf == "..") return null
+    if (child.isDir && leaf == "node_modules") return null
+    return leaf
+}
 
 /** The leaf name of a picked folder, for naming its imported copy (SAF display name, else file name). */
 fun folderDisplayName(context: Context, source: FsPath): String = when (source) {
@@ -406,21 +434,32 @@ fun folderDisplayName(context: Context, source: FsPath): String = when (source) 
         ?: DocumentsContract.getTreeDocumentId(source.uri).substringAfterLast('/').substringAfterLast(':')
 }
 
-private fun copySafDirInto(context: Context, treeUri: Uri, parentId: String, destDir: File, depth: Int) {
+private fun copySafDirInto(
+    context: Context,
+    treeUri: Uri,
+    parentId: String,
+    destDir: File,
+    depth: Int,
+    seen: MutableSet<String>,
+    onFile: () -> Unit,
+) {
     require(depth <= MAX_IMPORT_DEPTH) { "Folder nesting too deep to import (> $MAX_IMPORT_DEPTH levels)" }
     for (child in safChildren(context, treeUri, parentId)) {
-        // DISPLAY_NAME is provider-controlled; reduce to a safe leaf so it can't escape destDir.
-        val leaf = child.name.substringAfterLast('/').substringAfterLast('\\').trim()
-        if (leaf.isEmpty() || leaf == "." || leaf == "..") continue
+        // DISPLAY_NAME is provider-controlled; safImportLeaf reduces it to a safe leaf (and prunes
+        // node_modules) with the exact rule the scan used, so `done` reaches `total`.
+        val leaf = safImportLeaf(child) ?: continue
         val target = File(destDir, leaf)
         if (child.isDir) {
-            if (leaf == "node_modules") continue
+            // Descend each unique directory id once — matches the scan's dedup and bounds DAG-shaped
+            // trees a provider may expose (the same folder reachable under two parents).
+            if (!seen.add(child.documentId)) continue
             target.mkdirs()
-            copySafDirInto(context, treeUri, child.documentId, target, depth + 1)
+            copySafDirInto(context, treeUri, child.documentId, target, depth + 1, seen, onFile)
         } else {
             val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, child.documentId)
             context.contentResolver.openInputStream(uri)?.use { i -> target.outputStream().use { i.copyTo(it) } }
                 ?: error("Cannot read '$leaf'")
+            onFile()
         }
     }
 }
