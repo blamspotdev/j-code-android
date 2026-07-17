@@ -292,6 +292,10 @@ class TreeViewModel(
         var pat = pattern.trim()
         if (pat.isEmpty() || pat.startsWith("#") || pat.startsWith("!")) return false // blank / comment / negation
         pat = pat.trimStart('/').trimEnd('/')
+        // gitignore's "any directory" prefix: `**/foo` may hide a root child named foo, but the `**`
+        // segment itself must not become the head — as a glob it matches EVERY name, so one such
+        // pattern (VisualStudio.gitignore ships `**/[Pp]ackages/*`) blanked the whole explorer.
+        while (pat.startsWith("**/")) pat = pat.removePrefix("**/")
         val head = pat.substringBefore('/') // a nested pattern like "foo/bar" hides "foo" at the root
         if (head.isEmpty()) return false
         return if (head.any { it == '*' || it == '?' }) globToRegex(head).matches(name) else head == name
