@@ -284,6 +284,33 @@ entries:
       sudo apt-get remove -y redis-server
     updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(redis-server)/'"
 
+  - id: sqlcmd
+    category: databases
+    name: SQL Server client (sqlcmd)
+    description: The Microsoft go-sqlcmd command-line client for SQL Server — a single static binary, no server. The SQL Client extension uses it to reach a local, VM, or remote SQL Server.
+    supportedArches: [arm64, amd64]
+    installScript: |
+      case "$(uname -m)" in
+        aarch64|arm64) A=arm64 ;;
+        x86_64|amd64)  A=amd64 ;;
+        *) echo "sqlcmd: unsupported arch $(uname -m)"; exit 1 ;;
+      esac
+      if ! command -v curl >/dev/null 2>&1 || ! command -v bzip2 >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
+        sudo apt-get update
+        sudo apt-get install -y -o DPkg::Lock::Timeout=180 curl ca-certificates bzip2 tar
+      fi
+      tmp="$(mktemp -d)"
+      curl -fsSL "https://github.com/microsoft/go-sqlcmd/releases/latest/download/sqlcmd-linux-$A.tar.bz2" -o "$tmp/sqlcmd.tar.bz2"
+      tar -xjf "$tmp/sqlcmd.tar.bz2" -C "$tmp"
+      bin="$(find "$tmp" -type f -name sqlcmd | head -1)"
+      [ -n "$bin" ] && sudo install -m 0755 "$bin" /usr/local/bin/sqlcmd
+      rm -rf "$tmp"
+      sqlcmd --version
+    verifyScript: |
+      command -v sqlcmd >/dev/null 2>&1 && sqlcmd --version >/dev/null 2>&1 && echo ready
+    uninstallScript: |
+      sudo rm -f /usr/local/bin/sqlcmd
+
   - id: git
     category: build-tools
     name: Git
