@@ -14,6 +14,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -49,6 +50,9 @@ import java.io.File
 /** One row of the app-owned Linux process list (proot trees, adapters, the app itself). */
 private data class LinuxProc(val pid: Int, val name: String, val rssKb: Long)
 
+/** Host device RAM (the Android device, not the proot guest), read from /proc/meminfo. */
+private data class HostMemory(val availKb: Long, val totalKb: Long)
+
 /**
  * Task Manager access to background extensions (persistent WebView hosts + their service.start
  * servers), provided by [JCodeApp] via CompositionLocal so the Tasks panel can list and stop them
@@ -83,6 +87,7 @@ internal fun TaskManagerSidebarContent(
     val backgroundActions = LocalTaskManagerBackgroundActions.current
     var processes by remember { mutableStateOf<List<LinuxProc>>(emptyList()) }
     var backgroundExtensions by remember { mutableStateOf<List<MainViewModel.BackgroundExtensionInfo>>(emptyList()) }
+    var hostMemory by remember { mutableStateOf<HostMemory?>(null) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
     // Live refresh only while the tab is actually watched: leaving the tab (or closing the drawer)
@@ -92,7 +97,9 @@ internal fun TaskManagerSidebarContent(
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (isActive) {
-                processes = withContext(Dispatchers.IO) { listOwnProcesses() }
+                val (procs, mem) = withContext(Dispatchers.IO) { listOwnProcesses() to readHostMemory() }
+                processes = procs
+                hostMemory = mem
                 backgroundExtensions = backgroundActions.snapshot()
                 now = System.currentTimeMillis()
                 delay(2_000L)
@@ -109,6 +116,11 @@ internal fun TaskManagerSidebarContent(
     ) {
         val debugActive = debug.state != DebugState.DISCONNECTED && debug.state != DebugState.TERMINATED
         val hasSessions = terminalSessionIds.isNotEmpty() || runningProjectName != null || debugActive
+
+        hostMemory?.let { mem ->
+            TaskSectionLabel("Device")
+            HostMemoryRow(mem)
+        }
 
         TaskSectionLabel("Sessions")
         if (!hasSessions) {
@@ -321,6 +333,49 @@ private fun BackgroundExtensionRow(
     }
 }
 
+/** Host device RAM overview: available (free) memory prominent, with a used-memory gauge. */
+@Composable
+private fun HostMemoryRow(mem: HostMemory) {
+    val usedKb = (mem.totalKb - mem.availKb).coerceAtLeast(0)
+    val usedFraction = if (mem.totalKb > 0) (usedKb.toFloat() / mem.totalKb).coerceIn(0f, 1f) else 0f
+    val availGb = mem.availKb / 1_048_576.0
+    val totalGb = mem.totalKb / 1_048_576.0
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.26f),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Device memory",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = "%.1f GB free · %.1f GB".format(availGb, totalGb),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            LinearProgressIndicator(
+                progress = { usedFraction },
+                modifier = Modifier.fillMaxWidth(),
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+            )
+        }
+    }
+}
+
 @Composable
 private fun ProcessRow(proc: LinuxProc, isSelf: Boolean, onKill: () -> Unit) {
     Row(
@@ -399,3 +454,22 @@ private fun listOwnProcesses(): List<LinuxProc> {
         }.getOrNull()
     }.sortedByDescending { it.rssKb }
 }
+
+/**
+ * Host device RAM from /proc/meminfo — MemTotal and MemAvailable (kB). This is the Android device's
+ * memory, not the proot guest's. /proc/meminfo is a global, always-readable file (unaffected by the
+ * per-pid hidepid mount that limits [listOwnProcesses]). Returns null if it can't be parsed.
+ */
+private fun readHostMemory(): HostMemory? = runCatching {
+    var total = 0L
+    var avail = 0L
+    File("/proc/meminfo").forEachLine { line ->
+        when {
+            line.startsWith("MemTotal:") ->
+                total = line.substringAfter(':').trim().substringBefore(' ').toLongOrNull() ?: total
+            line.startsWith("MemAvailable:") ->
+                avail = line.substringAfter(':').trim().substringBefore(' ').toLongOrNull() ?: avail
+        }
+    }
+    if (total > 0L) HostMemory(availKb = avail, totalKb = total) else null
+}.getOrNull()
