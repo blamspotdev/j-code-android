@@ -646,6 +646,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { uiPreferences.edit { it[explorerHiddenModeKey] = mode.name } }
     }
 
+    private val explorerExcludeEffectKey = stringPreferencesKey("explorer_exclude_effect")
+    val explorerExcludeEffect: StateFlow<dev.jcode.design.ExplorerExcludeEffect> = uiPreferences.data
+        .map { prefs ->
+            runCatching { dev.jcode.design.ExplorerExcludeEffect.valueOf(prefs[explorerExcludeEffectKey] ?: "") }
+                .getOrDefault(SettingsDefaults.EXCLUDE_EFFECT)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.EXCLUDE_EFFECT)
+
+    fun setExplorerExcludeEffect(effect: dev.jcode.design.ExplorerExcludeEffect) {
+        viewModelScope.launch { uiPreferences.edit { it[explorerExcludeEffectKey] = effect.name } }
+    }
+
     private val explorerHiddenPatternsKey = stringPreferencesKey("explorer_hidden_root_patterns")
     val explorerHiddenPatterns: StateFlow<String> = uiPreferences.data
         .map { prefs -> prefs[explorerHiddenPatternsKey] ?: SettingsDefaults.HIDDEN_ROOT_PATTERNS }

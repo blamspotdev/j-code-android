@@ -27,6 +27,9 @@ data class TreeRow(
     val isSubmodule: Boolean = false,
     /** A non-interactive "(empty)" marker shown under an expanded, childless directory. */
     val isPlaceholder: Boolean = false,
+    /** A project-root entry matched by the exclude list while the effect is "grey out" — kept in the
+     *  tree but dimmed (when the effect is "hide" the entry is dropped instead, so this stays false). */
+    val isExcluded: Boolean = false,
 )
 
 /** Synthetic status for a directory containing changed files (never sent by extensions). */
@@ -110,8 +113,10 @@ class TreeViewModel(
         val path: FsPath,
     )
 
-    // Root-level hide patterns (Settings). Only project-root children are filtered.
+    // Root-level exclude patterns (Settings). Only project-root children are affected. When [greyOut]
+    // is true the matched entries are kept but marked [TreeRow.isExcluded]; otherwise they are dropped.
     private var hiddenPatterns: List<String> = emptyList()
+    private var greyOut: Boolean = true
 
     // VCS decorations pushed by the shell (extension-computed): explicit per-path status letters,
     // submodule roots, and the derived "contains changes" mark on ancestor directories.
@@ -148,7 +153,7 @@ class TreeViewModel(
             ExplorerViewMode.List -> {
                 val path = listPath ?: return
                 val children = filterHiddenAtRoot(path, runCatching { fs.list(path) }.getOrElse { return })
-                _listRows.value = children.map { child -> buildRow(child, depth = 0) }
+                _listRows.value = children.map { child -> buildRow(child, depth = 0, isExcludedAtRoot(path, child)) }
             }
         }
     }
@@ -195,10 +200,11 @@ class TreeViewModel(
         applyMode()
     }
 
-    /** Update the project-root hide patterns and re-materialize the current view. */
-    suspend fun setHiddenPatterns(patterns: List<String>) {
-        if (hiddenPatterns == patterns) return
+    /** Update the project-root exclude patterns + effect (grey-out vs hide) and re-materialize. */
+    suspend fun setHiddenPatterns(patterns: List<String>, greyOutExcluded: Boolean = true) {
+        if (hiddenPatterns == patterns && greyOut == greyOutExcluded) return
         hiddenPatterns = patterns
+        greyOut = greyOutExcluded
         applyMode()
     }
 
@@ -266,7 +272,7 @@ class TreeViewModel(
         for (child in children) {
             val isDir = child.kind == FsKind.Directory
             val expanded = isDir && _expandedIds.value.contains(child.path.stableId)
-            out.add(buildRow(child, depth).copy(isExpanded = expanded))
+            out.add(buildRow(child, depth, isExcludedAtRoot(parentPath, child)).copy(isExpanded = expanded))
             if (expanded) {
                 addExpandedChildren(child.path, depth + 1, out)
             }
@@ -282,10 +288,18 @@ class TreeViewModel(
         isPlaceholder = true,
     )
 
-    /** Hide matching entries — ONLY at the project root (a nested folder with the same name stays). */
+    /** Root children to show — ONLY the project root is affected (a nested folder with the same name
+     *  stays). In "hide" mode matched entries are dropped; in "grey out" mode they are kept and later
+     *  dimmed via [isExcludedAtRoot]. */
     private fun filterHiddenAtRoot(parentPath: FsPath, children: List<FsNode>): List<FsNode> {
-        if (hiddenPatterns.isEmpty() || parentPath.stableId != projectRootPath?.stableId) return children
+        if (greyOut || hiddenPatterns.isEmpty() || parentPath.stableId != projectRootPath?.stableId) return children
         return children.filterNot { child -> hiddenPatterns.any { matchesHidden(it, child.name) } }
+    }
+
+    /** Whether [node] is a project-root child matched by the exclude list while the effect is grey-out. */
+    private fun isExcludedAtRoot(parentPath: FsPath, node: FsNode): Boolean {
+        if (!greyOut || hiddenPatterns.isEmpty() || parentPath.stableId != projectRootPath?.stableId) return false
+        return hiddenPatterns.any { matchesHidden(it, node.name) }
     }
 
     private fun matchesHidden(pattern: String, name: String): Boolean {
@@ -324,7 +338,7 @@ class TreeViewModel(
             selectionState.clear()
 
             val children = filterHiddenAtRoot(path, fs.list(path))
-            _listRows.value = children.map { child -> buildRow(child, depth = 0) }
+            _listRows.value = children.map { child -> buildRow(child, depth = 0, isExcludedAtRoot(path, child)) }
         } finally {
             _isLoading.value = false
         }
@@ -395,7 +409,7 @@ class TreeViewModel(
         return segments.reversed()
     }
 
-    private fun buildRow(node: FsNode, depth: Int): TreeRow {
+    private fun buildRow(node: FsNode, depth: Int, excluded: Boolean = false): TreeRow {
         val key = node.path.stableId
         return TreeRow(
             id = key,
@@ -405,6 +419,7 @@ class TreeViewModel(
             isSelected = false,
             vcsStatus = scmStatus[key] ?: scmDirStatus[key],
             isSubmodule = key in scmSubmodules,
+            isExcluded = excluded,
         )
     }
 }

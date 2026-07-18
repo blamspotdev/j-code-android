@@ -288,6 +288,7 @@ import dev.jcode.design.MiddleEllipsisText
 import dev.jcode.design.TabColoring
 import dev.jcode.design.TabColoringSetting
 import dev.jcode.design.TabMaxSizeSetting
+import dev.jcode.design.ExplorerExcludeEffect
 import dev.jcode.design.ExplorerHiddenMode
 import dev.jcode.design.ExplorerHiddenSetting
 import dev.jcode.design.ExtraKey
@@ -499,13 +500,16 @@ fun JCodeApp(
     val editorDragMovesCursor by viewModel.editorDragMovesCursor.collectAsStateWithLifecycle()
     val cursorDragVerticalLevel by viewModel.editorCursorDragVerticalLevel.collectAsStateWithLifecycle()
     val explorerHiddenMode by viewModel.explorerHiddenMode.collectAsStateWithLifecycle()
+    val explorerExcludeEffect by viewModel.explorerExcludeEffect.collectAsStateWithLifecycle()
     val explorerHiddenPatterns by viewModel.explorerHiddenPatterns.collectAsStateWithLifecycle()
     val hiddenInjected by viewModel.hiddenInjected.collectAsStateWithLifecycle()
-    val explorerHiddenSetting = remember(explorerHiddenMode, explorerHiddenPatterns, hiddenInjected) {
+    val explorerHiddenSetting = remember(explorerHiddenMode, explorerExcludeEffect, explorerHiddenPatterns, hiddenInjected) {
         ExplorerHiddenSetting(
             mode = explorerHiddenMode,
+            effect = explorerExcludeEffect,
             specifiedRaw = explorerHiddenPatterns,
             onSetMode = viewModel::setExplorerHiddenMode,
+            onSetEffect = viewModel::setExplorerExcludeEffect,
             onSetSpecifiedRaw = viewModel::setExplorerHiddenPatterns,
             hiddenPatternsFor = { pid ->
                 when (explorerHiddenMode) {
@@ -2886,6 +2890,7 @@ private fun WorkspacePanel(
                                                 modifier = Modifier.fillMaxSize(),
                                                 viewMode = explorerViewModeOf(effectiveConfig.explorer.viewMode),
                                                 hiddenPatterns = LocalExplorerHiddenSetting.current.hiddenPatternsFor(selectedProject.id.toString()),
+                                                greyOutExcluded = LocalExplorerHiddenSetting.current.effect == ExplorerExcludeEffect.GreyOut,
                                                 onFileSelected = onOpenFile,
                                                 onSnackbar = onSnackbar,
                                             )

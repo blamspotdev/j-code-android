@@ -18,6 +18,7 @@ object SettingsDefaults {
     val EXTRA_KEYS_LANDSCAPE = ExtraKeysVisibility.Hidden
     val BOTTOM_STATUS_BAR = BottomBarVisibility.HideOnKeyboard
     val HIDDEN_ROOT_MODE = ExplorerHiddenMode.HideSpecifiedAndInjected
+    val EXCLUDE_EFFECT = ExplorerExcludeEffect.GreyOut
     const val HIDDEN_ROOT_PATTERNS = ".jcode"
     const val RESPECT_DEVICE_CUTOUT = false
     const val MARKDOWN_WRAP_PORTRAIT = true

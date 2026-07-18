@@ -52,6 +52,7 @@ import androidx.compose.ui.draganddrop.DragAndDropEvent
 import androidx.compose.ui.draganddrop.DragAndDropTarget
 import androidx.compose.ui.draganddrop.mimeTypes
 import androidx.compose.ui.draganddrop.toAndroidDragEvent
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextRange
@@ -110,6 +111,7 @@ fun ExplorerView(
     modifier: Modifier = Modifier,
     viewMode: ExplorerViewMode = ExplorerViewMode.Tree,
     hiddenPatterns: List<String> = emptyList(),
+    greyOutExcluded: Boolean = true,
     onFileSelected: ((FsNode) -> Unit)? = null,
     onSnackbar: ((String) -> Unit)? = null,
 ) {
@@ -148,9 +150,10 @@ fun ExplorerView(
         viewModel.setViewMode(viewMode)
     }
 
-    // The project-root hide-list (Settings); re-filter when it changes without remounting the tree.
-    LaunchedEffect(hiddenPatterns) {
-        viewModel.setHiddenPatterns(hiddenPatterns)
+    // The project-root exclude-list + grey-out-vs-hide effect (Settings); re-apply when either changes
+    // without remounting the tree.
+    LaunchedEffect(hiddenPatterns, greyOutExcluded) {
+        viewModel.setHiddenPatterns(hiddenPatterns, greyOutExcluded)
     }
 
     // VCS decorations pushed by the shell; re-badge rows when the extension reports new status (also
@@ -588,6 +591,9 @@ private fun EmptyExplorerHint() {
 /** Width reserved for the disclosure chevron so files (no chevron) align under folders. */
 private val ChevronSlot = 28.dp
 
+/** Opacity of a project-root entry that is excluded under the "grey out" effect. */
+private const val EXCLUDED_ROW_ALPHA = 0.4f
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TreeRowItem(
@@ -629,7 +635,9 @@ private fun TreeRowItem(
                 } else {
                     Modifier
                 }
-            ),
+            )
+            // Excluded (grey-out effect): kept in the tree but dimmed so it reads as de-emphasized.
+            .then(if (row.isExcluded) Modifier.alpha(EXCLUDED_ROW_ALPHA) else Modifier),
         leading = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Spacer(modifier = Modifier.width(indent))
@@ -729,7 +737,8 @@ private fun ListViewContent(
                         } else {
                             Modifier
                         }
-                    ),
+                    )
+                    .then(if (row.isExcluded) Modifier.alpha(EXCLUDED_ROW_ALPHA) else Modifier),
                 leading = {
                     Icon(
                         imageVector = if (row.node.kind == FsKind.Directory) jcIcon(JCodeIcon.Folder) else jcIcon(JCodeIcon.Output),
