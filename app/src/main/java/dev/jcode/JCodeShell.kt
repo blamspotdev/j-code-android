@@ -1226,6 +1226,7 @@ fun JCodeApp(
         onUpdateHideStatusBarWithKeyboard = viewModel::setHideStatusBarWithKeyboard,
         bringEditorToFront = viewModel.bringEditorToFront,
         volumeKeyAction = viewModel.volumeKeyAction,
+        runTerminalCompletions = viewModel.runTerminalCompletions,
     )
     }
 
@@ -1353,6 +1354,7 @@ private fun JCodeShell(
     onUpdateHideStatusBarWithKeyboard: (Boolean) -> Unit,
     bringEditorToFront: SharedFlow<Unit>,
     volumeKeyAction: SharedFlow<VolumeKeyAction>,
+    runTerminalCompletions: SharedFlow<Pair<String, Int>>,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -1709,6 +1711,13 @@ private fun JCodeShell(
         onDispose { TerminalSessionHost.setUiExitListener(null) }
     }
 
+    // A run's command reporting completion (OSC 7713, emitted after the command) unbinds the run from
+    // that terminal: the run is done (or was killed) even though the terminal stays open showing its
+    // output. onRunSessionGone ignores non-run sessions, so setup/manual terminals are unaffected.
+    LaunchedEffect(runTerminalCompletions) {
+        runTerminalCompletions.collect { (sessionId, _) -> onRunSessionGone(sessionId) }
+    }
+
     // Build & Run the selected project: spawn a dedicated terminal in the right drawer, stream the
     // compile/run output into it, then open the device browser once the server is reachable.
     fun handleRun(project: Project, config: RunConfig) {
@@ -1739,7 +1748,13 @@ private fun JCodeShell(
         val startedIds = mutableListOf<String>()
         for (terminal in plan.terminals) {
             val session = spawnTerminalSession(label = terminal.label) ?: break
-            terminalSessionManager.sendInput(session.id, ProjectRunner.runInvocation(project, terminal) + "\n")
+            // After the command exits, emit an OSC-7713 marker with its exit code so the run unbinds
+            // (done/killed) while the terminal stays open showing the output. Appended on the same line
+            // as the command so it's one prompt entry, not a stray extra line.
+            terminalSessionManager.sendInput(
+                session.id,
+                ProjectRunner.runInvocation(project, terminal).trimEnd('\n') + "; printf '\\033]7713;run;%s\\007' \"\$?\"\n",
+            )
             startedIds += session.id
             OutputLog.captureSession(session.id)
         }

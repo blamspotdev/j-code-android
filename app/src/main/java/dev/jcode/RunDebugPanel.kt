@@ -448,7 +448,11 @@ private fun RunConfigRow(
     onDelete: () -> Unit,
     projectKey: String,
 ) {
-    val subline = if (config.readyPort > 0) ":${config.readyPort}" else "${config.terminals.size} terminal(s)"
+    val subline = if (config.readyPort > 0) {
+        ":${config.readyPort}"
+    } else {
+        config.terminals.firstOrNull()?.command?.lineSequence()?.firstOrNull { it.isNotBlank() }?.take(32).orEmpty()
+    }
     val status = when {
         running && runInProgress -> "Building…"
         running -> "Running"
@@ -470,7 +474,7 @@ private fun RunConfigRow(
                 if (running) {
                     IconAction(jcIcon(JCodeIcon.Stop), "Stop", MaterialTheme.colorScheme.error, onStop, size = 20)
                 } else {
-                    IconAction(jcIcon(JCodeIcon.Run), "Run", MaterialTheme.colorScheme.primary, onRun, enabled = config.terminals.isNotEmpty(), size = 20)
+                    IconAction(jcIcon(JCodeIcon.Run), "Run", MaterialTheme.colorScheme.primary, onRun, enabled = config.terminals.any { it.command.isNotBlank() }, size = 20)
                     IconAction(jcIcon(JCodeIcon.Debug), "Debug", MaterialTheme.colorScheme.primary, onDebug, enabled = config.debugEntry.isNotBlank(), size = 20)
                 }
                 IconAction(jcIcon(JCodeIcon.Settings), "Configure", MaterialTheme.colorScheme.onSurfaceVariant, onConfigure, size = 18)

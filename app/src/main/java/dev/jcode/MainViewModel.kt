@@ -189,8 +189,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Shared "Setup" terminal in the right drawer that runs toolchain installs and scaffolds. */
     val setupTerminalRunner = SetupTerminalRunner(appContext, distroService)
 
+    private val _runTerminalCompletions = MutableSharedFlow<Pair<String, Int>>(extraBufferCapacity = 16)
+
+    /** (sessionId, exitCode) for every terminal task that reported completion via OSC 7713. The
+     *  workbench consumes this to mark a run finished (done/killed) when the command bound to its
+     *  terminal exits — a run config binds to its single command's process. */
+    val runTerminalCompletions: SharedFlow<Pair<String, Int>> = _runTerminalCompletions.asSharedFlow()
+
     init {
-        TerminalSessionHost.manager(appContext).onTaskComplete = setupTerminalRunner::handleTaskComplete
+        TerminalSessionHost.manager(appContext).onTaskComplete = { sessionId, payload ->
+            setupTerminalRunner.handleTaskComplete(sessionId, payload)
+            _runTerminalCompletions.tryEmit(sessionId to (payload.substringAfter(';').trim().toIntOrNull() ?: -1))
+        }
         distroService.interactiveCatalogRunner = { label, script, timeoutMs ->
             setupTerminalRunner.run(label, script, workdir = null, asUser = "root", timeoutMs = timeoutMs)
         }

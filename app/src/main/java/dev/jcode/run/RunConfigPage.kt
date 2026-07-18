@@ -2,25 +2,20 @@ package dev.jcode.run
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -28,7 +23,6 @@ import androidx.compose.ui.unit.dp
 import dev.jcode.core.config.RunConfig
 import dev.jcode.core.config.RunConfigTerminal
 import dev.jcode.design.CompactFilledButton
-import dev.jcode.design.CompactOutlinedButton
 import dev.jcode.design.SettingsTextFieldRow
 
 /**
@@ -47,7 +41,9 @@ fun RunConfigPage(
     var name by remember { mutableStateOf(initial.name) }
     var port by remember { mutableStateOf(initial.readyPort.takeIf { it > 0 }?.toString().orEmpty()) }
     var debugEntry by remember { mutableStateOf(initial.debugEntry) }
-    val terminals = remember { mutableStateListOf<RunConfigTerminal>().apply { addAll(initial.terminals) } }
+    // A run config is a single command. (Legacy multi-terminal configs seed from the first command;
+    // the auto-detected full-stack recipes keep their side-by-side terminals — they aren't edited here.)
+    var command by remember { mutableStateOf(initial.terminals.firstOrNull()?.command.orEmpty()) }
     var dirty by remember { mutableStateOf(false) }
     var savedOnce by remember { mutableStateOf(false) }
 
@@ -55,9 +51,8 @@ fun RunConfigPage(
         name = name.ifBlank { "Run" },
         readyPort = port.trim().toIntOrNull() ?: 0,
         debugEntry = debugEntry.trim(),
-        terminals = terminals
-            .filter { it.label.isNotBlank() || it.command.isNotBlank() }
-            .map { it.copy(label = it.label.ifBlank { "Run" }) },
+        // One command → one guest process whose PID the run binds to for running/done/killed status.
+        terminals = listOf(RunConfigTerminal(label = name.ifBlank { "Run" }, command = command.trim())),
     )
 
     Column(
@@ -97,56 +92,16 @@ fun RunConfigPage(
             monospace = true,
         )
 
-        Text("Terminals", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-        Text(
-            "Each terminal runs its bash command in its own tab, in start order.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        terminals.forEachIndexed { index, terminal ->
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f),
-                shape = RoundedCornerShape(10.dp),
-            ) {
-                Column(
-                    modifier = Modifier.padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "Terminal ${index + 1}",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        CompactOutlinedButton(text = "Remove", onClick = { terminals.removeAt(index); dirty = true })
-                    }
-                    SettingsTextFieldRow(
-                        label = "Label (tab name)",
-                        value = terminal.label,
-                        onValueChange = { terminals[index] = terminal.copy(label = it); dirty = true },
-                    )
-                    SettingsTextFieldRow(
-                        label = "Command (bash)",
-                        value = terminal.command,
-                        onValueChange = { terminals[index] = terminal.copy(command = it); dirty = true },
-                        singleLine = false,
-                        minLines = 4,
-                        monospace = true,
-                    )
-                }
-            }
-        }
-
-        CompactOutlinedButton(
-            text = "Add terminal",
-            onClick = { terminals.add(RunConfigTerminal("Run", "")); dirty = true },
-            modifier = Modifier.fillMaxWidth(),
+        SettingsTextFieldRow(
+            label = "Command (bash)",
+            supporting = "The one command this config runs. It executes verbosely in a terminal; the run " +
+                "tracks its process — running until it exits (done) or you stop it (killed).",
+            value = command,
+            onValueChange = { command = it; dirty = true },
+            placeholder = "e.g. dotnet run",
+            singleLine = false,
+            minLines = 4,
+            monospace = true,
         )
 
         CompactFilledButton(
