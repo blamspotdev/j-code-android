@@ -2469,18 +2469,8 @@ private fun JCodeShell(
                                             val initial = remember(runConfigVersion) {
                                                 ProjectRunner.editableRunConfig(project, index)
                                             }
-                                            val runPresets = LocalRunConfigPresets.current
-                                            var suggestions by remember {
-                                                mutableStateOf(emptyList<ProjectRunner.RunSuggestion>())
-                                            }
-                                            LaunchedEffect(runPresets) {
-                                                suggestions = withContext(Dispatchers.IO) {
-                                                    ProjectRunner.suggestRunConfigs(project, runPresets)
-                                                }
-                                            }
                                             RunConfigPage(
                                                 initial = initial,
-                                                suggestions = suggestions,
                                                 onSave = { onSaveRunConfig(project, index, it) },
                                                 modifier = Modifier.fillMaxSize(),
                                             )
@@ -2949,6 +2939,8 @@ private fun WorkspacePanel(
                         onOpenInBrowser = runActions.onOpenInBrowser,
                         onConfigureRun = runActions.onConfigureRun,
                         onConfigureBuild = runActions.onConfigureBuild,
+                        onAddRunPreset = { project, config -> runActions.onSaveRun(project, null, config) },
+                        onAddBuildPreset = { project, config -> runActions.onSaveBuild(project, null, config) },
                         onDeleteRun = runActions.onDeleteRun,
                         onDeleteBuild = runActions.onDeleteBuild,
                         modifier = Modifier.fillMaxSize(),
