@@ -210,6 +210,8 @@ internal fun WorkbenchTopBar(
     onRun: () -> Unit,
     onStop: () -> Unit,
     onRerun: () -> Unit,
+    runConfigNames: List<String>,
+    onRunConfig: (Int) -> Unit,
     isRunning: Boolean,
     terminalBusy: Boolean,
     terminalHasUnseen: Boolean,
@@ -283,15 +285,24 @@ internal fun WorkbenchTopBar(
                     )
                 }
             }
-            // Run toggles to Stop while a run is active; long-press opens the debug controls.
+            // Run toggles to Stop while a run is active. A tap runs the single/first config; with more
+            // than one config it opens a picker instead. Long-press always opens the menu — the list of
+            // run configs to launch, plus the debug/session controls.
             // Only shown when a project is open and focused — there's nothing to run otherwise.
             if (selectedProject != null) {
                 var runMenuOpen by remember { mutableStateOf(false) }
+                val hasMultipleRuns = runConfigNames.size > 1
                 Box {
                     WorkbenchIconActionButton(
                         icon = if (isRunning) jcIcon(JCodeIcon.Stop) else jcIcon(JCodeIcon.Run),
                         contentDescription = if (isRunning) "Stop" else "Run",
-                        onClick = if (isRunning) onStop else onRun,
+                        onClick = {
+                            when {
+                                isRunning -> onStop()
+                                hasMultipleRuns -> runMenuOpen = true
+                                else -> onRun()
+                            }
+                        },
                         active = isRunning,
                         onLongClick = { runMenuOpen = true },
                     )
@@ -306,6 +317,10 @@ internal fun WorkbenchTopBar(
                             ContextAction(JCodeIcon.StepOver, "Step Over", enabled = false) {},
                             ContextAction(JCodeIcon.StepOut, "Step Out", enabled = false) {},
                         ),
+                        // Each run config as its own row — tap to launch that one.
+                        listActions = runConfigNames.mapIndexed { index, name ->
+                            ContextAction(JCodeIcon.Run, name) { onRunConfig(index) }
+                        },
                     )
                 }
             }

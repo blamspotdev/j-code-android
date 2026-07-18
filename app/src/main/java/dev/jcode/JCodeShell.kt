@@ -2306,6 +2306,11 @@ private fun JCodeShell(
                             )
                         },
                     ) {
+                    // Run configs behind the top-bar Run button: a tap runs the first (or opens a picker
+                    // when there's more than one); long-press lists them all.
+                    val topBarRunConfigs = remember(selectedProject?.id, runConfigVersion) {
+                        selectedProject?.let { ProjectRunner.effectiveRuns(it) }.orEmpty()
+                    }
                     EditorWorkspace(
                         windowInfo = windowInfo,
                         workspace = workspace,
@@ -2333,6 +2338,12 @@ private fun JCodeShell(
                         onRun = { selectedProject?.let(::handleRunFirst) },
                         onStop = ::handleStopRun,
                         onRerun = { selectedProject?.let(::handleRunFirst) },
+                        runConfigNames = topBarRunConfigs.map { it.name },
+                        onRunConfig = { index ->
+                            selectedProject?.let { project ->
+                                topBarRunConfigs.getOrNull(index)?.let { config -> handleRun(project, config) }
+                            }
+                        },
                         isRunning = runningProjectId != null,
                         terminalBusy = terminalBusy,
                         terminalHasUnseen = terminalHasUnseen,
@@ -3022,6 +3033,8 @@ private fun EditorWorkspace(
     onRun: () -> Unit,
     onStop: () -> Unit,
     onRerun: () -> Unit,
+    runConfigNames: List<String>,
+    onRunConfig: (Int) -> Unit,
     isRunning: Boolean,
     terminalBusy: Boolean,
     terminalHasUnseen: Boolean,
@@ -3065,6 +3078,8 @@ private fun EditorWorkspace(
                         onRun = onRun,
                         onStop = onStop,
                         onRerun = onRerun,
+                        runConfigNames = runConfigNames,
+                        onRunConfig = onRunConfig,
                         isRunning = isRunning,
                         terminalBusy = terminalBusy,
                         terminalHasUnseen = terminalHasUnseen,
