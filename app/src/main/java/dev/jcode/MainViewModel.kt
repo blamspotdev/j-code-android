@@ -2348,6 +2348,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val _systemPackagesUpdating = MutableStateFlow(false)
+
+    /** True while an opt-in `apt-get update && upgrade` is running (drives the Settings button state). */
+    val systemPackagesUpdating: StateFlow<Boolean> = _systemPackagesUpdating.asStateFlow()
+
+    /** Opt-in "Update system packages": runs `apt-get update && apt-get upgrade` (self-healing, streamed
+     *  to the Setup terminal). Deliberately never automatic — an upgrade can be large/slow under proot. */
+    fun updateSystemPackages() {
+        if (_systemPackagesUpdating.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _systemPackagesUpdating.value = true
+            val session = SessionRegistry.registerSession(
+                context = getApplication(),
+                kind = BackendSessionKind.JOB,
+                name = "environment:update-packages",
+            )
+            try {
+                _messages.tryEmit("Updating system packages… (see the Setup terminal for progress)")
+                val result = distroService.updateSystemPackages()
+                _messages.tryEmit(
+                    if (result.succeeded) {
+                        "System packages up to date."
+                    } else {
+                        val reason = result.internalError
+                            ?: result.stderr.lineSequence().firstOrNull { it.isNotBlank() }
+                            ?: "see the Setup terminal"
+                        "Package update failed: $reason"
+                    },
+                )
+            } finally {
+                session.close()
+                _systemPackagesUpdating.value = false
+            }
+        }
+    }
+
     fun installSdkCatalogEntry(entryId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val entry = distroService.sdkCatalogState.value.entries.firstOrNull { it.id == entryId }

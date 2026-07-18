@@ -228,11 +228,14 @@ val LocalSettingsBackup = compositionLocalOf { SettingsBackupActions() }
 /**
  * Environment (Linux rootfs) backup/restore actions, shared (via [LocalEnvironmentBackup]) with the
  * settings screen. [onBackup] packs the active environment to a `.tar.gz` file; [onRestore] extracts
- * a picked `.tar.gz` back over it. [available] gates the buttons on an installed environment.
+ * a picked `.tar.gz` back over it. [onUpdatePackages] runs the opt-in `apt-get update && upgrade`
+ * ([updatingPackages] is true while it runs).
  */
 class EnvironmentBackupActions(
     val onBackup: () -> Unit = {},
     val onRestore: () -> Unit = {},
+    val onUpdatePackages: () -> Unit = {},
+    val updatingPackages: Boolean = false,
 )
 
 val LocalEnvironmentBackup = compositionLocalOf { EnvironmentBackupActions() }

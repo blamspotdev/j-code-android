@@ -826,6 +826,10 @@ class DistroService(
             val jcodeUserReady = checkDistroUser()
             if (jcodeUserReady == true) {
                 completedSteps += WizardStepId.JcodeUserCreated
+                // Refreshing package lists is best-effort and idempotent; treat it as done once the
+                // user is ready so it runs only during the fresh first-run pass (when the distro isn't
+                // installed at derive time) and never re-runs on later "Use"/refresh triggers.
+                completedSteps += WizardStepId.AptUpdated
             }
 
             val toolchainReady = checkToolchainReady()
@@ -908,6 +912,7 @@ class DistroService(
                 WizardStepId.WorkspaceReady -> ensureWorkspaceDirectory()
                 WizardStepId.ToolchainBootstrapped -> bootstrapToolchain(onLine = ::appendActivityLogLine)
                 WizardStepId.JcodeUserCreated -> createDistroUser(onLine = ::appendActivityLogLine)
+                WizardStepId.AptUpdated -> aptUpdateStep(onLine = ::appendActivityLogLine)
                 WizardStepId.SmokeTest -> smokeTest(onLine = ::appendActivityLogLine)
             }
 
@@ -990,6 +995,7 @@ class DistroService(
                     WizardStepId.WorkspaceReady -> ensureWorkspaceDirectory()
                     WizardStepId.ToolchainBootstrapped -> bootstrapToolchain(onLine = ::appendActivityLogLine)
                     WizardStepId.JcodeUserCreated -> createDistroUser(onLine = ::appendActivityLogLine)
+                    WizardStepId.AptUpdated -> aptUpdateStep(onLine = ::appendActivityLogLine)
                     WizardStepId.SmokeTest -> smokeTest(onLine = ::appendActivityLogLine)
                 }
 
@@ -1024,6 +1030,22 @@ class DistroService(
                     val error = result.internalError
                         ?: result.stderr.ifBlank { result.stdout }.lineSequence().firstOrNull { it.isNotBlank() }
                         ?: "Step failed with exit ${result.exitCode ?: "?"}."
+                    if (step in BEST_EFFORT_STEPS) {
+                        // Best-effort steps (refreshing package lists) must never block setup: log it,
+                        // mark it done so we don't loop on it, and carry on. A stale package list just
+                        // means the first `apt-get install` will refresh itself.
+                        _autoSetupProgress.tryEmit(DistroWizardProgress.Completed(step, "Skipped: $error"))
+                        val updatedCompletedSteps = _environmentState.value.completedSteps + step
+                        val nextLog = (_environmentState.value.activityLog + logLine).takeLast(SETUP_ACTIVITY_LOG_LIMIT)
+                        _environmentState.value = _environmentState.value.copy(
+                            runningStep = null,
+                            completedSteps = updatedCompletedSteps,
+                            activityLog = nextLog,
+                            errorMessage = null,
+                        )
+                        persistCompletedSteps(updatedCompletedSteps)
+                        continue
+                    }
                     _autoSetupProgress.tryEmit(DistroWizardProgress.Failed(step, error))
                     val nextLog = (_environmentState.value.activityLog + logLine).takeLast(SETUP_ACTIVITY_LOG_LIMIT)
                     _environmentState.value = _environmentState.value.copy(
@@ -1059,6 +1081,7 @@ class DistroService(
         WizardStepId.WorkspaceReady -> "Create workspace directory"
         WizardStepId.ToolchainBootstrapped -> "Skip bootstrap (use SDK Manager for tools)"
         WizardStepId.JcodeUserCreated -> "Create jcode user"
+        WizardStepId.AptUpdated -> "Refresh package lists"
         WizardStepId.SmokeTest -> "Run smoke test"
     }
 
@@ -1434,6 +1457,45 @@ class DistroService(
             runner(label, prepared, timeoutMs)?.let { return it }
         }
         return execCatalogScript(prepared, timeoutMs)
+    }
+
+    /** Fix DNS/resolv.conf for the selected distro before an apt operation. Host-side, idempotent,
+     *  no proot round-trip; safe to call unconditionally (see [RootfsManager.ensureRootfsNetworking]). */
+    private fun ensureSelectedDistroNetworking() {
+        val distroId = _environmentState.value.runtime.selectedDistro.id
+        runCatching { rootfsManager.ensureRootfsNetworking(rootfsManager.getRootfsPath(distroId)) }
+    }
+
+    /**
+     * Best-effort `apt-get update` for the fresh distro's package lists, run once during first-run
+     * setup ([WizardStepId.AptUpdated]). Ensures DNS first, then goes through [execCatalogAction] so it
+     * inherits the apt self-heal preamble + retry/back-off. Never blocks setup: the caller treats this
+     * step as best-effort ([BEST_EFFORT_STEPS]) — a stale list just means the first `apt-get install`
+     * refreshes itself. Called from inside the wizard lock, so it must NOT take [lock] again.
+     */
+    private suspend fun aptUpdateStep(onLine: ((String) -> Unit)? = null): ExecResult {
+        ensureSelectedDistroNetworking()
+        onLine?.invoke("Refreshing package lists (apt-get update)…")
+        return execCatalogAction("Refresh package lists", "sudo apt-get -y update", timeoutMs = 300_000L)
+    }
+
+    /**
+     * User-initiated system package update: `apt-get update && apt-get upgrade`. Deliberately opt-in —
+     * never run automatically, since an upgrade can pull a lot and is slow under proot. Reuses
+     * [execCatalogAction] for self-heal + retry and streams into the Setup terminal when available.
+     * Takes [lock] to serialize against catalog installs (unlike [aptUpdateStep], which already runs
+     * under the wizard's lock).
+     */
+    suspend fun updateSystemPackages(): ExecResult = lock.withLock {
+        if (_environmentState.value.distroInstalled != true || _environmentState.value.jcodeUserReady != true) {
+            return@withLock ExecResult(internalError = "Finish environment setup before updating packages.")
+        }
+        ensureSelectedDistroNetworking()
+        execCatalogAction(
+            "Update system packages",
+            "sudo apt-get -y update && sudo apt-get -y upgrade",
+            timeoutMs = 1_800_000L,
+        )
     }
 
     /**
@@ -1994,5 +2056,7 @@ class DistroService(
         private const val CATALOG_INSTALL_MAX_ATTEMPTS: Int = 3
         /** Linear back-off base between install retries (× attempt): 3s, then 6s. */
         private const val CATALOG_RETRY_BACKOFF_MS: Long = 3_000L
+        /** Wizard steps that must never abort setup — logged, marked done, and stepped over on failure. */
+        private val BEST_EFFORT_STEPS: Set<WizardStepId> = setOf(WizardStepId.AptUpdated)
     }
 }

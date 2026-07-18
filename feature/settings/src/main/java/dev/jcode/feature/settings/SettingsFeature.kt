@@ -568,7 +568,7 @@ object SettingsFeature {
                 description = "Environment setup: proot, distro bootstrap, and the final smoke test. " +
                     "Install, switch between, or remove environments from the setup page.",
                 keywords = "environment proot distro toolchain smoke test bind runtime setup manage refresh install " +
-                    "ready passed failed not installed not run unknown " +
+                    "ready passed failed not installed not run unknown update upgrade packages apt system " +
                     environmentState.runtime.selectedDistro.label,
             ) {
                 SummaryRow(
@@ -640,6 +640,19 @@ object SettingsFeature {
                         OutlinedButton(onClick = envBackup.onRestore, modifier = Modifier.weight(1f)) {
                             Text("Restore…")
                         }
+                    }
+                    Text(
+                        text = "Refresh package lists and upgrade installed packages " +
+                            "(apt-get update && upgrade). Runs in the Setup terminal — can be slow and use data.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(
+                        onClick = envBackup.onUpdatePackages,
+                        enabled = !envBackup.updatingPackages,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(if (envBackup.updatingPackages) "Updating packages…" else "Update system packages")
                     }
                 }
             }

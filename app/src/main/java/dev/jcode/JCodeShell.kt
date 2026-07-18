@@ -1018,13 +1018,16 @@ fun JCodeApp(
     val envRestoreOnboardingLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent(),
     ) { uri -> if (uri != null) viewModel.restoreEnvironmentOnboarding(uri) }
-    val environmentBackupActions = remember {
+    val systemPackagesUpdating by viewModel.systemPackagesUpdating.collectAsStateWithLifecycle()
+    val environmentBackupActions = remember(systemPackagesUpdating) {
         EnvironmentBackupActions(
             onBackup = {
                 val id = viewModel.distroService.selectedEnvironment().id
                 envBackupLauncher.launch("jcode-env-$id.tar.gz")
             },
             onRestore = { envRestoreLauncher.launch("*/*") },
+            onUpdatePackages = { viewModel.updateSystemPackages() },
+            updatingPackages = systemPackagesUpdating,
         )
     }
     val envBackupStatus by viewModel.envBackupStatus.collectAsStateWithLifecycle()
