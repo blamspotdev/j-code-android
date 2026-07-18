@@ -312,6 +312,8 @@ class WebPreviewBrowsers(
     val globalChoice: String = SYSTEM,
     /** Per-project raw choice (may be [INHERIT]); keyed by a stable project key. */
     val projectChoice: (projectKey: String) -> String = { INHERIT },
+    /** Key of the currently selected project, so the settings screen can scope its per-project override. */
+    val currentProjectKey: String = "",
     val onSetGlobal: (String) -> Unit = {},
     val onSetProject: (projectKey: String, choice: String) -> Unit = { _, _ -> },
 ) {

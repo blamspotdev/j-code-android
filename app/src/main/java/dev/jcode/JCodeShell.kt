@@ -486,6 +486,7 @@ fun JCodeApp(
             available = viewModel.installedBrowsers,
             globalChoice = webPreviewBrowserGlobal,
             projectChoice = { key -> webPreviewBrowserProjects[key] ?: WebPreviewBrowsers.INHERIT },
+            currentProjectKey = selectedProject?.id?.toString().orEmpty(),
             onSetGlobal = viewModel::setWebPreviewBrowser,
             onSetProject = viewModel::setProjectWebPreviewBrowser,
         )

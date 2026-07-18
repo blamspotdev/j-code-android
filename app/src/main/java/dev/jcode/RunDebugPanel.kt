@@ -6,7 +6,6 @@ import dev.jcode.design.jcIcon
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,10 +20,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,8 +45,6 @@ import dev.jcode.core.config.BuildConfig
 import dev.jcode.core.config.RunConfig
 import dev.jcode.core.debug.DebugState
 import dev.jcode.design.CompactOutlinedButton
-import dev.jcode.design.LocalWebPreviewBrowsers
-import dev.jcode.design.WebPreviewBrowsers
 import dev.jcode.fs.Project
 import dev.jcode.run.ProjectRunner
 import dev.jcode.workbench.DebugSessionUi
@@ -201,7 +195,6 @@ private fun ProjectRunBuildDetail(
                     onOpenInBrowser = onOpenInBrowser,
                     onConfigure = { onConfigureRun(project, index) },
                     onDelete = { onDeleteRun(project, index) },
-                    projectKey = project.id.toString(),
                 )
             }
             AddRow("Add run config", onClick = { showAddRun = true })
@@ -446,7 +439,6 @@ private fun RunConfigRow(
     onOpenInBrowser: () -> Unit,
     onConfigure: () -> Unit,
     onDelete: () -> Unit,
-    projectKey: String,
 ) {
     val subline = if (config.readyPort > 0) {
         ":${config.readyPort}"
@@ -489,7 +481,6 @@ private fun RunConfigRow(
                 RunStatusChip(status, active = running)
                 Text(subline, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             }
-            if (config.readyPort > 0) WebPreviewSelector(projectKey = projectKey)
         }
     }
 }
@@ -546,38 +537,6 @@ private fun IconAction(
 @Composable
 private fun HintText(text: String) {
     Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-}
-
-/** Per-project "Open web previews in" override; INHERIT falls back to the Settings global default. */
-@Composable
-private fun WebPreviewSelector(projectKey: String) {
-    val webPreview = LocalWebPreviewBrowsers.current
-    var open by remember { mutableStateOf(false) }
-    val raw = webPreview.projectChoice(projectKey)
-    val shown = if (raw == WebPreviewBrowsers.INHERIT) "Default (${webPreview.label(webPreview.globalChoice)})" else webPreview.label(raw)
-    val options = buildList {
-        add(WebPreviewBrowsers.INHERIT); add(WebPreviewBrowsers.SYSTEM); add(WebPreviewBrowsers.ASK); add(WebPreviewBrowsers.BUILTIN)
-        webPreview.available.forEach { add(it.packageName) }
-    }
-    Box {
-        Row(
-            modifier = Modifier.fillMaxWidth().clickable { open = true }.padding(start = 10.dp, end = 8.dp, top = 2.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
-            Text("Preview in: $shown", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            options.forEach { choice ->
-                DropdownMenuItem(
-                    text = { Text(webPreview.label(choice)) },
-                    leadingIcon = { if (choice == raw) Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                    onClick = { webPreview.onSetProject(projectKey, choice); open = false },
-                )
-            }
-        }
-    }
 }
 
 @Composable
