@@ -315,10 +315,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ): Boolean {
         if (!visiting.add(entry.id)) return true
 
-        if (!entry.requires.isEmpty) setExtensionPhase(entry.id, "Installing required tools…")
-        // Deps the marketplace index declared for this entry — resolved before install; a failure
-        // aborts because the extension asked for them up front.
-        if (!resolveRequires(entry.name, entry.requires, visiting, abortOnFail = true)) return false
+        // A code UPDATE/REINSTALL of an already-installed extension must never be blocked on
+        // (re)installing its toolchains: the extension is already present, and its required SDKs/LSPs
+        // (e.g. Node + npm-based language servers) may legitimately be uninstallable in the current
+        // runtime. Only a FRESH install resolves the index-declared `requires` up front with
+        // abort-on-fail; for an update we land the new package and let the post-install pass below
+        // attempt any missing toolchains best-effort, so the code update always applies.
+        val freshInstall = !extensionInstaller.isInstalled(entry.id)
+        if (freshInstall && !entry.requires.isEmpty) {
+            setExtensionPhase(entry.id, "Installing required tools…")
+            // Deps the marketplace index declared for this entry — resolved before install; a failure
+            // aborts because the extension asked for them up front.
+            if (!resolveRequires(entry.name, entry.requires, visiting, abortOnFail = true)) return false
+        }
 
         setExtensionPhase(entry.id, "Installing…")
         val result = extensionInstaller.install(entry, BuildConfig.VERSION_NAME)
@@ -379,10 +388,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         for (sdkId in deps.sdks) {
             if (sdkId in distroService.sdkCatalogState.value.installedEntryIds) continue
-            _messages.tryEmit("Installing required toolchain: $sdkId…")
-            if (!installRequiredSdk(sdkId)) {
-                val reason = distroService.sdkCatalogState.value.errorMessage ?: "install failed"
-                _messages.tryEmit("$sourceName: required toolchain '$sdkId' — $reason")
+            // Resolve the entry's own requiredSdks first (e.g. npm -> nodejs) via installRequiredSdks,
+            // matching the LSP/debugger and direct-toolchain paths; installRequiredSdk alone skips them.
+            if (!installRequiredSdks(listOf(sdkId), sourceName)) {
                 if (abortOnFail) return false
             }
         }

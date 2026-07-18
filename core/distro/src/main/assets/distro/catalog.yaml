@@ -27,8 +27,8 @@ entries:
 
   - id: nodejs
     category: languages
-    name: Node.js and npm
-    description: Installs the newest LTS Node.js and npm (resolved at install time) for TypeScript, JavaScript, and frontend tooling.
+    name: Node.js
+    description: The newest LTS Node.js runtime (resolved at install time) for TypeScript, JavaScript, and frontend tooling. Bundles npm; the separate npm entry keeps it on the latest release.
     # Ubuntu's apt "npm" (Debian-patched) fails under proot with a phantom
     # `mkdir '/home' ENOENT` inside Arborist, breaking all `npm install`/`npm create`.
     # Ship upstream Node (unpatched npm) into /usr/local so it shadows any distro node on PATH.
@@ -56,6 +56,30 @@ entries:
     updateCheckScript: |
       L=$(curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 && $10!="-" {print $1; exit}')
       [ -n "$L" ] && [ "$(node --version 2>/dev/null)" != "$L" ]
+
+  - id: npm
+    category: languages
+    name: npm
+    description: The Node.js package manager, upgraded to the latest published release (resolved at install time — never pinned). Requires Node.js.
+    requiredSdks: [nodejs]
+    installScript: |
+      set -e
+      command -v npm >/dev/null 2>&1 || { echo "npm not found — install Node.js first."; exit 1; }
+      # Upgrade the npm that ships with Node.js to the newest published release (not version-pinned).
+      sudo npm install -g npm@latest
+      npm --version
+    verifyScript: |
+      command -v npm >/dev/null 2>&1 && echo ready
+    uninstallScript: |
+      # npm is inseparable from Node.js — there is nothing to remove on its own. Fail with the reason
+      # on stderr so the Toolchains notice shows this actionable message instead of a generic
+      # "verification still detects npm" (verify still finds Node's bundled npm on PATH).
+      echo "npm ships with Node.js and can't be removed on its own — uninstall Node.js to remove npm." >&2
+      exit 1
+    updateCheckScript: |
+      command -v npm >/dev/null 2>&1 || exit 1
+      L=$(npm view npm version 2>/dev/null)
+      [ -n "$L" ] && [ "$(npm --version 2>/dev/null)" != "$L" ]
 
   - id: jdk
     category: languages
