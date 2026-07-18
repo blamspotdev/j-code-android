@@ -227,13 +227,9 @@ private fun ProjectRunBuildDetail(
     }
 
     if (showAddRun) {
-        AddConfigDialog(
-            title = "Add run config",
-            emptyHint = "No run trigger detected — start from a blank config.",
-            load = {
-                withContext(Dispatchers.IO) { ProjectRunner.suggestRunConfigs(project, runPresets) }
-                    .map { s -> AddChoice(s.label, s.source) { onAddRunPreset(project, s.config); showAddRun = false } }
-            },
+        AddRunConfigDialog(
+            load = { withContext(Dispatchers.IO) { ProjectRunner.suggestRunTriggers(project, runPresets) } },
+            onPick = { cfg -> onAddRunPreset(project, cfg); showAddRun = false },
             onCustom = { showAddRun = false; onConfigureRun(project, null) },
             onDismiss = { showAddRun = false },
         )
@@ -304,7 +300,12 @@ private fun AddConfigDialog(
 }
 
 @Composable
-private fun ChoiceRow(label: String, subtitle: String, onClick: () -> Unit) {
+private fun ChoiceRow(
+    label: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    trailing: androidx.compose.ui.graphics.vector.ImageVector = Icons.Rounded.Add,
+) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(10.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick)
@@ -318,7 +319,64 @@ private fun ChoiceRow(label: String, subtitle: String, onClick: () -> Unit) {
                     Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            Icon(Icons.Rounded.Add, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+            Icon(trailing, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+/**
+ * Two-level "Add run config" picker: level 1 lists the project's trigger files (each `.csproj`,
+ * `package.json`, `gradlew`, or extension preset); tapping one drills into level 2, its run options
+ * (a `.csproj` → Run / Debug; a `package.json` → one per script). Picking an option appends that
+ * config via [onPick]; "Custom (blank)" opens the editor on an empty config.
+ */
+@Composable
+private fun AddRunConfigDialog(
+    load: suspend () -> List<ProjectRunner.RunTrigger>,
+    onPick: (RunConfig) -> Unit,
+    onCustom: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var triggers by remember { mutableStateOf<List<ProjectRunner.RunTrigger>?>(null) }
+    var selected by remember { mutableStateOf<ProjectRunner.RunTrigger?>(null) }
+    LaunchedEffect(Unit) { triggers = load() }
+    val listMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.5f).coerceIn(160f, 360f).dp
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 6.dp) {
+            Column(modifier = Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                val sel = selected
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (sel != null) {
+                        IconButton(onClick = { selected = null }, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to files", modifier = Modifier.size(20.dp))
+                        }
+                    }
+                    Text(sel?.label ?: "Add run config", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                val list = triggers
+                when {
+                    list == null -> HintText("Scanning project…")
+                    sel != null -> {
+                        HintText(sel.kind)
+                        Column(modifier = Modifier.heightIn(max = listMaxHeight).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            sel.options.forEach { opt -> ChoiceRow(opt.label, opt.source, onClick = { onPick(opt.config) }) }
+                        }
+                    }
+                    list.isEmpty() -> HintText("No run trigger detected — start from a blank config.")
+                    else -> {
+                        HintText("Pick a project file, then a run option.")
+                        Column(modifier = Modifier.heightIn(max = listMaxHeight).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            list.forEach { t ->
+                                ChoiceRow(t.label, t.kind, onClick = { selected = t }, trailing = Icons.AutoMirrored.Rounded.KeyboardArrowRight)
+                            }
+                        }
+                    }
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CompactOutlinedButton(text = "Custom (blank)", onClick = onCustom, modifier = Modifier.weight(1f))
+                    CompactOutlinedButton(text = "Cancel", onClick = onDismiss, modifier = Modifier.weight(1f))
+                }
+            }
         }
     }
 }
@@ -398,29 +456,34 @@ private fun RunConfigRow(
     }
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
         Column {
+            // Row 1: full-width name + compact action icons (the status chip moves to row 2 so the
+            // name gets the whole width and stops truncating).
             Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 10.dp, top = 4.dp, bottom = 4.dp, end = 2.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, top = 4.dp, end = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                horizontalArrangement = Arrangement.spacedBy(1.dp),
             ) {
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(config.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                        RunStatusChip(status, active = running)
-                    }
-                    Text(subline, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                }
+                Text(config.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 if (running && runUrl != null) {
-                    IconAction(Icons.AutoMirrored.Rounded.OpenInNew, "Open in browser", MaterialTheme.colorScheme.onSurfaceVariant, onOpenInBrowser)
+                    IconAction(Icons.AutoMirrored.Rounded.OpenInNew, "Open in browser", MaterialTheme.colorScheme.onSurfaceVariant, onOpenInBrowser, size = 20)
                 }
                 if (running) {
-                    IconAction(jcIcon(JCodeIcon.Stop), "Stop", MaterialTheme.colorScheme.error, onStop)
+                    IconAction(jcIcon(JCodeIcon.Stop), "Stop", MaterialTheme.colorScheme.error, onStop, size = 20)
                 } else {
-                    IconAction(jcIcon(JCodeIcon.Run), "Run", MaterialTheme.colorScheme.primary, onRun, enabled = config.terminals.isNotEmpty())
-                    IconAction(jcIcon(JCodeIcon.Debug), "Debug", MaterialTheme.colorScheme.primary, onDebug, enabled = config.debugEntry.isNotBlank())
+                    IconAction(jcIcon(JCodeIcon.Run), "Run", MaterialTheme.colorScheme.primary, onRun, enabled = config.terminals.isNotEmpty(), size = 20)
+                    IconAction(jcIcon(JCodeIcon.Debug), "Debug", MaterialTheme.colorScheme.primary, onDebug, enabled = config.debugEntry.isNotBlank(), size = 20)
                 }
                 IconAction(jcIcon(JCodeIcon.Settings), "Configure", MaterialTheme.colorScheme.onSurfaceVariant, onConfigure, size = 18)
                 if (!running && deletable) IconAction(Icons.Rounded.DeleteOutline, "Delete", MaterialTheme.colorScheme.onSurfaceVariant, onDelete, size = 18)
+            }
+            // Row 2: thin status + port line.
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = if (config.readyPort > 0) 2.dp else 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                RunStatusChip(status, active = running)
+                Text(subline, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             }
             if (config.readyPort > 0) WebPreviewSelector(projectKey = projectKey)
         }
@@ -465,7 +528,7 @@ private fun IconAction(
     size: Int = 22,
 ) {
     JcTooltip(label) {
-        IconButton(onClick = onClick, enabled = enabled) {
+        IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size((size + 14).dp)) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
