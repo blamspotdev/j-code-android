@@ -388,9 +388,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         for (sdkId in deps.sdks) {
             if (sdkId in distroService.sdkCatalogState.value.installedEntryIds) continue
-            // Resolve the entry's own requiredSdks first (e.g. npm -> nodejs) via installRequiredSdks,
-            // matching the LSP/debugger and direct-toolchain paths; installRequiredSdk alone skips them.
-            if (!installRequiredSdks(listOf(sdkId), sourceName)) {
+            _messages.tryEmit("Installing required toolchain: $sdkId…")
+            if (!installRequiredSdk(sdkId)) {
+                val reason = distroService.sdkCatalogState.value.errorMessage ?: "install failed"
+                _messages.tryEmit("$sourceName: required toolchain '$sdkId' — $reason")
                 if (abortOnFail) return false
             }
         }
