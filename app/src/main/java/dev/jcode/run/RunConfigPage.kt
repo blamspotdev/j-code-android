@@ -53,6 +53,7 @@ fun RunConfigPage(
 ) {
     var name by remember { mutableStateOf(initial.name) }
     var port by remember { mutableStateOf(initial.readyPort.takeIf { it > 0 }?.toString().orEmpty()) }
+    var debugEntry by remember { mutableStateOf(initial.debugEntry) }
     val terminals = remember { mutableStateListOf<RunConfigTerminal>().apply { addAll(initial.terminals) } }
     var dirty by remember { mutableStateOf(false) }
     var savedOnce by remember { mutableStateOf(false) }
@@ -61,6 +62,7 @@ fun RunConfigPage(
     fun buildConfig() = RunConfig(
         name = name.ifBlank { "Run" },
         readyPort = port.trim().toIntOrNull() ?: 0,
+        debugEntry = debugEntry.trim(),
         terminals = terminals
             .filter { it.label.isNotBlank() || it.command.isNotBlank() }
             .map { it.copy(label = it.label.ifBlank { "Run" }) },
@@ -102,6 +104,14 @@ fun RunConfigPage(
             onValueChange = { port = it.filter(Char::isDigit); dirty = true },
             placeholder = "e.g. 5173",
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        )
+        SettingsTextFieldRow(
+            label = "Debug entry",
+            supporting = "Guest path to the source file the Debug ▸ action launches under the debugger — blank to disable Debug.",
+            value = debugEntry,
+            onValueChange = { debugEntry = it; dirty = true },
+            placeholder = "e.g. /workspace/app/Program.cs",
+            monospace = true,
         )
 
         Text("Terminals", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)

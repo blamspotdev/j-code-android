@@ -3,6 +3,8 @@ package dev.jcode.run
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import dev.jcode.core.config.BuildConfig
+import dev.jcode.core.config.ProjectConfigs
 import dev.jcode.core.config.RunConfig
 import dev.jcode.core.config.RunConfigStore
 import dev.jcode.core.config.RunConfigTerminal
@@ -82,30 +84,61 @@ object ProjectRunner {
         return null
     }
 
-    /**
-     * The run plan to actually use: a user-saved `.jcode/run.yaml` takes precedence; otherwise fall
-     * back to the template/filesystem-detected plan.
-     */
-    fun effectivePlan(project: Project): RunPlan? {
-        (project.fsPath as? FsPath.Local)?.file?.let { dir ->
-            RunConfigStore.load(dir)?.let { return it.toRunPlan() }
-        }
-        return detectRunPlan(project)
+    /** All saved build/run configs for [project] (empty if none written yet). */
+    fun loadProjectConfigs(project: Project): ProjectConfigs =
+        (project.fsPath as? FsPath.Local)?.file?.let { RunConfigStore.load(it) } ?: ProjectConfigs.EMPTY
+
+    fun saveProjectConfigs(project: Project, configs: ProjectConfigs) {
+        (project.fsPath as? FsPath.Local)?.file?.let { RunConfigStore.save(it, configs) }
     }
 
-    private fun RunConfig.toRunPlan(): RunPlan = RunPlan(
-        kindLabel = name,
-        readyPort = readyPort,
-        terminals = terminals.map { RunTerminal(it.label, it.command) },
-    )
+    /** Run configs to show/run: the saved ones, or a single detected default when none are saved. */
+    fun effectiveRuns(project: Project): List<RunConfig> {
+        val saved = loadProjectConfigs(project).runs
+        if (saved.isNotEmpty()) return saved
+        return detectRunPlan(project)?.let { listOf(it.toRunConfig()) }.orEmpty()
+    }
 
-    /** The saved run config for [project], or null if none has been written yet. */
-    fun loadRunConfig(project: Project): RunConfig? =
-        (project.fsPath as? FsPath.Local)?.file?.let { RunConfigStore.load(it) }
+    /** Build configs to show/build: the saved ones, or detected publish/release presets when none are saved. */
+    fun effectiveBuilds(project: Project): List<BuildConfig> {
+        val saved = loadProjectConfigs(project).builds
+        if (saved.isNotEmpty()) return saved
+        return detectBuildConfigs(project)
+    }
 
-    /** Persist [config] to the project's `.jcode/run.yaml`. */
-    fun saveRunConfig(project: Project, config: RunConfig) {
-        (project.fsPath as? FsPath.Local)?.file?.let { RunConfigStore.save(it, config) }
+    fun runConfigToPlan(config: RunConfig): RunPlan =
+        RunPlan(kindLabel = config.name, readyPort = config.readyPort, terminals = config.terminals.map { RunTerminal(it.label, it.command) })
+
+    private fun RunPlan.toRunConfig(): RunConfig =
+        RunConfig(name = kindLabel, readyPort = readyPort, terminals = terminals.map { RunConfigTerminal(it.label, it.command) })
+
+    /** Upsert a run config at [index] (append when [index] is null or out of range), then persist. */
+    fun upsertRun(project: Project, index: Int?, config: RunConfig) {
+        val configs = loadProjectConfigs(project)
+        val runs = configs.runs.toMutableList()
+        if (index != null && index in runs.indices) runs[index] = config else runs.add(config)
+        saveProjectConfigs(project, configs.copy(runs = runs))
+    }
+
+    fun upsertBuild(project: Project, index: Int?, config: BuildConfig) {
+        val configs = loadProjectConfigs(project)
+        val builds = configs.builds.toMutableList()
+        if (index != null && index in builds.indices) builds[index] = config else builds.add(config)
+        saveProjectConfigs(project, configs.copy(builds = builds))
+    }
+
+    fun deleteRun(project: Project, index: Int) {
+        val configs = loadProjectConfigs(project)
+        if (index in configs.runs.indices) {
+            saveProjectConfigs(project, configs.copy(runs = configs.runs.filterIndexed { i, _ -> i != index }))
+        }
+    }
+
+    fun deleteBuild(project: Project, index: Int) {
+        val configs = loadProjectConfigs(project)
+        if (index in configs.builds.indices) {
+            saveProjectConfigs(project, configs.copy(builds = configs.builds.filterIndexed { i, _ -> i != index }))
+        }
     }
 
     /** A [RunConfigPreset] paired with the display name of the extension that contributed it. */
@@ -297,17 +330,76 @@ object ProjectRunner {
     }
 
     /**
-     * The config the Configure page edits: the saved `run.yaml` if present, else a default derived
-     * from the detected plan, else a blank single-terminal starter for unrecognized projects.
+     * The run config the editor opens for [index]: the saved config at that index, else a default
+     * seeded from the detected plan, else a blank single-terminal starter (for a new config).
      */
-    fun editableRunConfig(project: Project): RunConfig {
-        loadRunConfig(project)?.let { return it }
-        val plan = detectRunPlan(project)
-        return if (plan != null) {
-            RunConfig(plan.kindLabel, plan.readyPort, plan.terminals.map { RunConfigTerminal(it.label, it.command) })
-        } else {
-            RunConfig(project.name, 0, listOf(RunConfigTerminal("Run", "")))
+    fun editableRunConfig(project: Project, index: Int?): RunConfig {
+        // Seed from the SAME list the panel shows (saved, or detected when none saved) so the row's
+        // index maps to the right config; a null index (New) starts from the detected plan or blank.
+        val runs = effectiveRuns(project)
+        if (index != null && index in runs.indices) return runs[index]
+        detectRunPlan(project)?.let { return it.toRunConfig() }
+        return RunConfig(project.name, 0, terminals = listOf(RunConfigTerminal("Run", "")))
+    }
+
+    /** The build config the editor opens for [index]: the effective one at that position, else blank. */
+    fun editableBuildConfig(project: Project, index: Int?): BuildConfig {
+        val builds = effectiveBuilds(project)
+        if (index != null && index in builds.indices) return builds[index]
+        return BuildConfig("Build", "")
+    }
+
+    /** Detected publish/release build presets: `dotnet publish`, `npm run build`, `gradle assembleRelease`. */
+    fun detectBuildConfigs(project: Project): List<BuildConfig> {
+        val root = (project.fsPath as? FsPath.Local)?.file?.takeIf(File::isDirectory) ?: return emptyList()
+        val guestDir = project.distroBindTarget.trimEnd('/')
+        val files = root.walkTopDown()
+            .maxDepth(SCAN_DEPTH)
+            .onEnter { dir -> dir == root || (dir.name !in SCAN_SKIP_DIRS && !dir.name.startsWith(".")) }
+            .filter { it.isFile }
+            .take(SCAN_FILE_CAP)
+            .toList()
+        fun rel(f: File) = f.relativeTo(root).invariantSeparatorsPath
+        fun guest(f: File) = "$guestDir/${rel(f)}"
+        fun stage(s: String) = sanitizeStageName("${project.name}-$s")
+        val out = mutableListOf<BuildConfig>()
+
+        files.firstOrNull { it.extension.equals("csproj", ignoreCase = true) }?.let { csproj ->
+            out += BuildConfig("Publish (Release) — ${rel(csproj)}", dotnetPublishCommand(guest(csproj), stage("publish")))
         }
+        files.firstOrNull { it.name == "package.json" && runCatching { it.readText() }.getOrNull()?.contains("\"build\"") == true }
+            ?.let { pkg ->
+                val dir = pkg.parentFile ?: root
+                val dirGuest = if (dir == root) guestDir else guest(dir)
+                out += BuildConfig("npm build — ${rel(pkg)}", npmBuildCommand(dirGuest, stage("npm-build")))
+            }
+        if (File(root, "gradlew").isFile) {
+            out += BuildConfig("Gradle — assembleRelease", "clear\nset -e\ncd \"$guestDir\"\nbash gradlew assembleRelease")
+        }
+        return out
+    }
+
+    private fun dotnetPublishCommand(csprojGuest: String, stageName: String): String = buildString {
+        appendLine("clear"); appendLine("set -e")
+        appendLine("CSPROJ=\"$csprojGuest\"")
+        appendLine("OUT=\"\$HOME/.jcode-build/$stageName\"")
+        appendLine("echo '== JCode: dotnet publish (Release) =='")
+        appendLine("rm -rf \"\$OUT\"")
+        appendLine("dotnet publish \"\$CSPROJ\" -c Release -o \"\$OUT\" --nologo")
+        appendLine("echo \"Published to \$OUT\"")
+    }
+
+    private fun npmBuildCommand(dirGuest: String, stageName: String): String = buildString {
+        appendLine("clear"); appendLine("set -e")
+        appendLine("SRC=\"$dirGuest\"")
+        appendLine("STAGE=\"\$HOME/.jcode-build/$stageName\"")
+        appendLine("echo '== JCode: npm run build =='")
+        appendLine("export npm_config_fund=false npm_config_audit=false")
+        appendLine("rm -rf \"\$STAGE\" && mkdir -p \"\$STAGE\" && cp -a \"\$SRC/.\" \"\$STAGE/\"")
+        appendLine("cd \"\$STAGE\"")
+        appendLine("npm install")
+        appendLine("npm run build")
+        appendLine("echo \"Built in \$STAGE\"")
     }
 
     // ASP.NET Core + Vite React, dev: the backend (Development, :5080) and the Vite dev server

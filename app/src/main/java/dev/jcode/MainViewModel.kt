@@ -3332,20 +3332,91 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val runConfigVersion: StateFlow<Int> = _runConfigVersion.asStateFlow()
 
     /** Open the structured Build & Run configuration page for [project]. Reuses one config tab. */
-    fun openRunConfigPage(project: Project) {
-        openDetailPage(RUN_CONFIG_PREFIX + project.id, EditorPageKind.RunConfig) { "Run: ${project.name}" }
+    /** Open the run-config editor for [index] (null = a new config). */
+    fun openRunConfigPage(project: Project, index: Int?) {
+        val suffix = index?.toString() ?: "new"
+        openDetailPage(RUN_CONFIG_PREFIX + project.id + "#" + suffix, EditorPageKind.RunConfig) {
+            if (index == null) "New run — ${project.name}" else "Run: ${project.name}"
+        }
     }
 
-    /** Persist a project's Build & Run config to its `.jcode/run.yaml`. */
-    fun saveRunConfig(project: Project, config: dev.jcode.core.config.RunConfig) {
+    /** Open the build-task editor for [index] (null = a new task). */
+    fun openBuildConfigPage(project: Project, index: Int?) {
+        val suffix = index?.toString() ?: "new"
+        openDetailPage(BUILD_CONFIG_PREFIX + project.id + "#" + suffix, EditorPageKind.BuildConfig) {
+            if (index == null) "New build — ${project.name}" else "Build: ${project.name}"
+        }
+    }
+
+    /** Close every open config-editor tab whose id starts with [prefix] (positional indices shift on
+     *  insert/delete, so a stale tab must not be left bound to a moved config). */
+    private fun closeConfigEditorTabs(prefix: String) {
+        val ids = _editorGroup.value.tabs.map { it.id }.filter { it.startsWith(prefix) }.toSet()
+        if (ids.isNotEmpty()) closeTabsNow(ids, activate = null)
+    }
+
+    /** Upsert one run config at [index] (null appends) into the project's `.jcode/run.yaml`. */
+    fun saveRunConfig(project: Project, index: Int?, config: dev.jcode.core.config.RunConfig) {
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { dev.jcode.run.ProjectRunner.saveRunConfig(project, config) }
+            runCatching { dev.jcode.run.ProjectRunner.upsertRun(project, index, config) }
                 .onSuccess {
                     _runConfigVersion.value++
+                    // A "New" tab holds index=null forever, so re-saving would keep appending; close it
+                    // after the first save (re-open via Configure to edit the now-saved config in place).
+                    if (index == null) withContext(Dispatchers.Main) { closeTabsNow(setOf(RUN_CONFIG_PREFIX + project.id + "#new"), activate = null) }
                     _messages.tryEmit("Saved run config for ${project.name}")
                 }
                 .onFailure { _messages.tryEmit("Failed to save run config: ${it.message ?: "error"}") }
         }
+    }
+
+    /** Upsert one build task at [index] (null appends). */
+    fun saveBuildConfig(project: Project, index: Int?, config: dev.jcode.core.config.BuildConfig) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { dev.jcode.run.ProjectRunner.upsertBuild(project, index, config) }
+                .onSuccess {
+                    _runConfigVersion.value++
+                    if (index == null) withContext(Dispatchers.Main) { closeTabsNow(setOf(BUILD_CONFIG_PREFIX + project.id + "#new"), activate = null) }
+                    _messages.tryEmit("Saved build task for ${project.name}")
+                }
+                .onFailure { _messages.tryEmit("Failed to save build task: ${it.message ?: "error"}") }
+        }
+    }
+
+    fun deleteRunConfig(project: Project, index: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { dev.jcode.run.ProjectRunner.deleteRun(project, index) }.onSuccess {
+                _runConfigVersion.value++
+                // Every later config shifts down one, so any open run-config editor's index is now stale.
+                withContext(Dispatchers.Main) { closeConfigEditorTabs(RUN_CONFIG_PREFIX + project.id + "#") }
+                _messages.tryEmit("Deleted run config")
+            }
+        }
+    }
+
+    fun deleteBuildConfig(project: Project, index: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { dev.jcode.run.ProjectRunner.deleteBuild(project, index) }.onSuccess {
+                _runConfigVersion.value++
+                withContext(Dispatchers.Main) { closeConfigEditorTabs(BUILD_CONFIG_PREFIX + project.id + "#") }
+                _messages.tryEmit("Deleted build task")
+            }
+        }
+    }
+
+    /** Launch the DAP debugger on [config]'s debug entry (a guest source path). */
+    fun startDebugForConfig(config: dev.jcode.core.config.RunConfig) {
+        val entry = config.debugEntry.trim()
+        if (entry.isBlank()) {
+            _messages.tryEmit("Set a debug entry for '${config.name}' in Configure to debug it.")
+            return
+        }
+        val host = guestToHostInProject(entry)?.second?.absolutePath
+        if (host == null) {
+            _messages.tryEmit("Debug entry not found: $entry")
+            return
+        }
+        startDebug(host)
     }
 
     fun selectEditorTab(tabId: String) {
@@ -4014,6 +4085,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val EXT_APP_PREFIX = "jcode://ext-app/"
         const val EXT_PERMISSIONS_TAB_ID = "jcode://ext-permissions"
         const val RUN_CONFIG_PREFIX = "jcode://run-config/"
+        const val BUILD_CONFIG_PREFIX = "jcode://build-config/"
         /** Stable id of the single built-in browser editor tab (see [openBrowserPage]). */
         const val BROWSER_TAB_ID = "jcode://browser"
         /** Extensions routed to the built-in image viewer instead of the text editor. */

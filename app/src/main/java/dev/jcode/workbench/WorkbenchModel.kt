@@ -1,6 +1,8 @@
 package dev.jcode.workbench
 
 import androidx.compose.runtime.compositionLocalOf
+import dev.jcode.core.config.BuildConfig
+import dev.jcode.core.config.RunConfig
 import dev.jcode.core.debug.DapStackFrame
 import dev.jcode.core.debug.DebugState
 import dev.jcode.core.distro.DebugEngineCatalogState
@@ -8,6 +10,7 @@ import dev.jcode.debug.VariableRow
 import dev.jcode.design.JCodeIcon
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.MarketplaceEntry
+import dev.jcode.fs.Project
 import dev.jcode.run.ProjectRunner
 
 /** A live terminal session's id + display label, listed in the top-bar terminal menu. */
@@ -106,6 +109,21 @@ internal val LocalIssueActions = compositionLocalOf { IssueActions() }
  * The SDK / LSP / Extension manager callbacks, bundled so the giant [dev.jcode.JCodeShell] composable
  * stays under the ART verifier's per-method register limit (too many individual params overflow it).
  */
+/** Run/Build/Debug callbacks for the Run panel + config editors, bundled (see register-limit note). */
+internal data class WorkbenchRunActions(
+    val onRun: (Project, RunConfig) -> Unit,
+    val onDebug: (RunConfig) -> Unit,
+    val onBuild: (Project, BuildConfig) -> Unit,
+    val onStop: () -> Unit,
+    val onOpenInBrowser: () -> Unit,
+    val onConfigureRun: (Project, Int?) -> Unit,
+    val onConfigureBuild: (Project, Int?) -> Unit,
+    val onSaveRun: (Project, Int?, RunConfig) -> Unit,
+    val onSaveBuild: (Project, Int?, BuildConfig) -> Unit,
+    val onDeleteRun: (Project, Int) -> Unit,
+    val onDeleteBuild: (Project, Int) -> Unit,
+)
+
 internal data class WorkbenchManagerActions(
     val onCheckSdkStatuses: () -> Unit,
     val onInstallSdkCatalogEntry: (String) -> Unit,
@@ -149,7 +167,7 @@ internal enum class WorkbenchTool(
     Explorer("Explorer", JCodeIcon.Files, "Files"),
     Search("Search", JCodeIcon.Search, "Find"),
     Scm("SCM", JCodeIcon.Scm, "SCM"),
-    RunDebug("Run/Debug", JCodeIcon.Run, "Run"),
+    RunDebug("Run", JCodeIcon.Run, "Run"),
     Extensions("Extensions", JCodeIcon.Extensions, "Ext"),
     /** SDKs + language servers + debug engines, merged into one searchable/filterable catalog. */
     ToolchainManager("Toolchains", JCodeIcon.Sdk, "Tools"),

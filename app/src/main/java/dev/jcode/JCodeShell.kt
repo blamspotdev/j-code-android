@@ -188,6 +188,7 @@ import dev.jcode.adaptive.rememberJCodeWindowInfo
 import dev.jcode.core.config.ConfigScope
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.config.ProjectConfig
+import dev.jcode.core.config.BuildConfig as RunBuildConfig
 import dev.jcode.core.config.RunConfig
 import dev.jcode.core.config.WorkspaceConfig
 import dev.jcode.core.distro.DistroBind
@@ -334,6 +335,7 @@ import dev.jcode.workbench.WorkbenchSnackbarHost
 import dev.jcode.workbench.BottomStatusBarSlot
 import dev.jcode.workbench.RightPanelTab
 import dev.jcode.workbench.WorkbenchManagerActions
+import dev.jcode.workbench.WorkbenchRunActions
 import dev.jcode.workbench.TerminalTapConfig
 import dev.jcode.workbench.WorkbenchTool
 import dev.jcode.feature.explorer.ExplorerContextAction
@@ -346,6 +348,7 @@ import dev.jcode.fs.Project
 import dev.jcode.fs.ProjectKind
 import dev.jcode.fs.RecentEntity
 import dev.jcode.run.ProjectRunner
+import dev.jcode.run.BuildConfigPage
 import dev.jcode.run.RunConfigPage
 import dev.jcode.fs.Workspace
 import dev.jcode.fs.WorkspaceCrumb
@@ -1173,7 +1176,12 @@ fun JCodeApp(
         onSelectDistro = { viewModel.selectWizardDistro(it) },
         onAutoSetup = viewModel::runAutoSetup,
         onConfigureRun = viewModel::openRunConfigPage,
+        onConfigureBuild = viewModel::openBuildConfigPage,
         onSaveRunConfig = viewModel::saveRunConfig,
+        onSaveBuildConfig = viewModel::saveBuildConfig,
+        onDeleteRun = viewModel::deleteRunConfig,
+        onDeleteBuild = viewModel::deleteBuildConfig,
+        onDebugConfig = viewModel::startDebugForConfig,
         runConfigVersion = runConfigVersion,
         managerActions = remember(viewModel) { WorkbenchManagerActions(
             onCheckSdkStatuses = viewModel::checkSdkStatuses,
@@ -1325,8 +1333,13 @@ private fun JCodeShell(
     onOpenEnvironmentWizard: () -> Unit,
     onAutoSetup: () -> Unit,
     onSelectDistro: (DistroProfile) -> Unit,
-    onConfigureRun: (Project) -> Unit,
-    onSaveRunConfig: (Project, RunConfig) -> Unit,
+    onConfigureRun: (Project, Int?) -> Unit,
+    onConfigureBuild: (Project, Int?) -> Unit,
+    onSaveRunConfig: (Project, Int?, RunConfig) -> Unit,
+    onSaveBuildConfig: (Project, Int?, RunBuildConfig) -> Unit,
+    onDeleteRun: (Project, Int) -> Unit,
+    onDeleteBuild: (Project, Int) -> Unit,
+    onDebugConfig: (RunConfig) -> Unit,
     runConfigVersion: Int,
     onOpenSettingsPage: () -> Unit,
     hideStatusBarWithKeyboard: Boolean,
@@ -1645,6 +1658,7 @@ private fun JCodeShell(
     var runUrl by rememberSaveable { mutableStateOf<String?>(null) }
     var runInProgress by remember { mutableStateOf(false) }
     var runningProjectId by remember { mutableStateOf<Long?>(null) }
+    var runningRunName by remember { mutableStateOf<String?>(null) }
     var runSessionIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var runPollJob by remember { mutableStateOf<Job?>(null) }
 
@@ -1660,6 +1674,7 @@ private fun JCodeShell(
                 runInProgress = false
                 runUrl = null
                 runningProjectId = null
+                runningRunName = null
             }
         }
     }
@@ -1689,16 +1704,14 @@ private fun JCodeShell(
 
     // Build & Run the selected project: spawn a dedicated terminal in the right drawer, stream the
     // compile/run output into it, then open the device browser once the server is reachable.
-    fun handleRun(project: Project) {
+    fun handleRun(project: Project, config: RunConfig) {
         if (!terminalReady) {
             scope.launch { snackbarHostState.showSnackbar("Finish environment setup before running.") }
             return
         }
-        val plan = ProjectRunner.effectivePlan(project)
-        if (plan == null || plan.terminals.isEmpty()) {
-            scope.launch {
-                snackbarHostState.showSnackbar("No run config for ${project.name}. Tap Configure to set one up.")
-            }
+        val plan = ProjectRunner.runConfigToPlan(config)
+        if (plan.terminals.isEmpty()) {
+            scope.launch { snackbarHostState.showSnackbar("'${config.name}' has no terminals. Tap Configure to set it up.") }
             return
         }
         rightPanelTab = RightPanelTab.Terminal
@@ -1726,6 +1739,7 @@ private fun JCodeShell(
         if (startedIds.isEmpty()) return
         runSessionIds = startedIds
         runningProjectId = project.id
+        runningRunName = config.name
         selectTerminalSession(startedIds.last()) // focus the frontend terminal
         runPollJob?.cancel()
         if (plan.readyPort > 0) {
@@ -1752,6 +1766,36 @@ private fun JCodeShell(
         }
     }
 
+    /** Run the project's first effective run config (top-bar / empty-editor Run buttons). */
+    fun handleRunFirst(project: Project) {
+        val config = ProjectRunner.effectiveRuns(project).firstOrNull()
+        if (config == null) {
+            scope.launch { snackbarHostState.showSnackbar("No run config for ${project.name}. Tap Configure to set one up.") }
+            return
+        }
+        handleRun(project, config)
+    }
+
+    /** Run a build task in its own terminal (fire-and-forget — not tracked as a run). */
+    fun handleBuild(project: Project, config: RunBuildConfig) {
+        if (!terminalReady) {
+            scope.launch { snackbarHostState.showSnackbar("Finish environment setup before building.") }
+            return
+        }
+        if (config.command.isBlank()) {
+            scope.launch { snackbarHostState.showSnackbar("'${config.name}' has no command. Tap Configure to set it up.") }
+            return
+        }
+        rightPanelTab = RightPanelTab.Terminal
+        rightSidebarVisible = true
+        val session = spawnTerminalSession(label = config.name) ?: return
+        val invocation = ProjectRunner.runInvocation(project, ProjectRunner.RunTerminal(config.name, config.command))
+        terminalSessionManager.sendInput(session.id, invocation + "\n")
+        OutputLog.beginRun(config.name)
+        OutputLog.captureSession(session.id)
+        selectTerminalSession(session.id)
+    }
+
     // Stop the current run: Ctrl-C the run terminal (graceful server/build shutdown) and reset run
     // state. The terminal session is kept so its output stays visible and a re-run can reuse it.
     fun handleStopRun() {
@@ -1765,6 +1809,7 @@ private fun JCodeShell(
         runInProgress = false
         runUrl = null
         runningProjectId = null
+        runningRunName = null
     }
 
     fun closeTerminalSession(sessionId: String) {
@@ -2123,6 +2168,26 @@ private fun JCodeShell(
         }
     }
 
+    val runActions = WorkbenchRunActions(
+        onRun = { project, config -> handleRun(project, config) },
+        onDebug = onDebugConfig,
+        onBuild = { project, config -> handleBuild(project, config) },
+        onStop = ::handleStopRun,
+        onOpenInBrowser = {
+            runUrl?.let { url ->
+                val choice = webPreviewBrowsersLocal.effective(runningProjectId?.toString().orEmpty())
+                if (choice == WebPreviewBrowsers.BUILTIN) BuiltinBrowser.requestOpen(url)
+                else ProjectRunner.openInBrowser(appContext, url, choice)
+            }
+        },
+        onConfigureRun = onConfigureRun,
+        onConfigureBuild = onConfigureBuild,
+        onSaveRun = onSaveRunConfig,
+        onSaveBuild = onSaveBuildConfig,
+        onDeleteRun = onDeleteRun,
+        onDeleteBuild = onDeleteBuild,
+    )
+
     val drawerContent: @Composable () -> Unit = {
         ModalDrawerSheet(
             modifier = Modifier.width(332.dp),
@@ -2160,20 +2225,12 @@ private fun JCodeShell(
                 onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                 onAutoSetup = onAutoSetup,
                 managerActions = managerActions,
-                onRun = ::handleRun,
-                onConfigureRun = onConfigureRun,
+                runActions = runActions,
                 runningProjectId = runningProjectId,
+                runningRunName = runningRunName,
                 runConfigVersion = runConfigVersion,
-                onStopRun = ::handleStopRun,
                 runUrl = runUrl,
                 runInProgress = runInProgress,
-                onOpenRunInBrowser = {
-                    runUrl?.let { url ->
-                        val choice = webPreviewBrowsersLocal.effective(runningProjectId?.toString().orEmpty())
-                        if (choice == WebPreviewBrowsers.BUILTIN) BuiltinBrowser.requestOpen(url)
-                        else ProjectRunner.openInBrowser(appContext, url, choice)
-                    }
-                },
                 onSnackbar = { message ->
                     scope.launch { snackbarHostState.showSnackbar(message) }
                 },
@@ -2266,9 +2323,9 @@ private fun JCodeShell(
                                 rightSidebarVisible = !rightSidebarVisible
                             }
                         },
-                        onRun = { selectedProject?.let(::handleRun) },
+                        onRun = { selectedProject?.let(::handleRunFirst) },
                         onStop = ::handleStopRun,
-                        onRerun = { selectedProject?.let(::handleRun) },
+                        onRerun = { selectedProject?.let(::handleRunFirst) },
                         isRunning = runningProjectId != null,
                         terminalBusy = terminalBusy,
                         terminalHasUnseen = terminalHasUnseen,
@@ -2399,16 +2456,18 @@ private fun JCodeShell(
                                     }
                                 }
                                 EditorPageKind.RunConfig -> {
-                                    val id = tab.id.substringAfter(MainViewModel.RUN_CONFIG_PREFIX).toLongOrNull()
+                                    val rest = tab.id.substringAfter(MainViewModel.RUN_CONFIG_PREFIX)
+                                    val id = rest.substringBefore('#').toLongOrNull()
+                                    val index = rest.substringAfter('#', "").toIntOrNull()
                                     val project = (workspace?.projects.orEmpty() + listOfNotNull(selectedProject))
                                         .firstOrNull { it.id == id }
                                     if (project != null) {
                                         // key: the page slot is positional, so without it switching between two
-                                        // projects' Run Config tabs would reuse the first project's form state and
-                                        // Save could overwrite the other project's run.yaml.
-                                        key(project.id) {
+                                        // Run Config tabs would reuse the first's form state and Save could
+                                        // overwrite the other config.
+                                        key(tab.id) {
                                             val initial = remember(runConfigVersion) {
-                                                ProjectRunner.editableRunConfig(project)
+                                                ProjectRunner.editableRunConfig(project, index)
                                             }
                                             val runPresets = LocalRunConfigPresets.current
                                             var suggestions by remember {
@@ -2422,7 +2481,26 @@ private fun JCodeShell(
                                             RunConfigPage(
                                                 initial = initial,
                                                 suggestions = suggestions,
-                                                onSave = { onSaveRunConfig(project, it) },
+                                                onSave = { onSaveRunConfig(project, index, it) },
+                                                modifier = Modifier.fillMaxSize(),
+                                            )
+                                        }
+                                    }
+                                }
+                                EditorPageKind.BuildConfig -> {
+                                    val rest = tab.id.substringAfter(MainViewModel.BUILD_CONFIG_PREFIX)
+                                    val id = rest.substringBefore('#').toLongOrNull()
+                                    val index = rest.substringAfter('#', "").toIntOrNull()
+                                    val project = (workspace?.projects.orEmpty() + listOfNotNull(selectedProject))
+                                        .firstOrNull { it.id == id }
+                                    if (project != null) {
+                                        key(tab.id) {
+                                            val initial = remember(runConfigVersion) {
+                                                ProjectRunner.editableBuildConfig(project, index)
+                                            }
+                                            BuildConfigPage(
+                                                initial = initial,
+                                                onSave = { onSaveBuildConfig(project, index, it) },
                                                 modifier = Modifier.fillMaxSize(),
                                             )
                                         }
@@ -2539,20 +2617,12 @@ private fun JCodeShell(
                             onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                             onAutoSetup = onAutoSetup,
                             managerActions = managerActions,
-                            onRun = ::handleRun,
-                            onConfigureRun = onConfigureRun,
+                            runActions = runActions,
                             runningProjectId = runningProjectId,
+                            runningRunName = runningRunName,
                             runConfigVersion = runConfigVersion,
-                            onStopRun = ::handleStopRun,
                             runUrl = runUrl,
                             runInProgress = runInProgress,
-                            onOpenRunInBrowser = {
-                    runUrl?.let { url ->
-                        val choice = webPreviewBrowsersLocal.effective(runningProjectId?.toString().orEmpty())
-                        if (choice == WebPreviewBrowsers.BUILTIN) BuiltinBrowser.requestOpen(url)
-                        else ProjectRunner.openInBrowser(appContext, url, choice)
-                    }
-                },
                             onSnackbar = { message ->
                                 scope.launch { snackbarHostState.showSnackbar(message) }
                             },
@@ -2741,14 +2811,12 @@ private fun WorkspacePanel(
     onOpenEnvironmentWizard: () -> Unit,
     onAutoSetup: () -> Unit,
     managerActions: WorkbenchManagerActions,
-    onRun: (Project) -> Unit,
-    onConfigureRun: (Project) -> Unit,
+    runActions: WorkbenchRunActions,
     runningProjectId: Long?,
+    runningRunName: String?,
     runConfigVersion: Int,
-    onStopRun: () -> Unit,
     runUrl: String?,
     runInProgress: Boolean,
-    onOpenRunInBrowser: () -> Unit,
     onSnackbar: (String) -> Unit,
     themeBundleId: String,
     onUpdateThemeBundle: (String) -> Unit,
@@ -2863,36 +2931,28 @@ private fun WorkspacePanel(
                         modifier = Modifier.fillMaxSize(),
                     )
 
-                    WorkbenchTool.RunDebug -> Column(modifier = Modifier.fillMaxSize()) {
-                        Column(
-                            modifier = Modifier
-                                .weight(1f, fill = false)
-                                .fillMaxWidth()
-                                .verticalScroll(rememberScrollState())
-                                .padding(10.dp),
-                        ) {
-                            DebugSessionPanel(ui = LocalDebugSession.current)
-                        }
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                        RunDebugPanel(
-                            // A User Workspace lists every project; the Default Workspace shows just the
-                            // one open project.
-                            projects = if (inUserWorkspace) {
-                                workspace?.projects.orEmpty()
-                            } else {
-                                listOfNotNull(selectedProject)
-                            },
-                            runningProjectId = runningProjectId,
-                            runUrl = runUrl,
-                            runInProgress = runInProgress,
-                            runConfigVersion = runConfigVersion,
-                            onRun = onRun,
-                            onConfigure = onConfigureRun,
-                            onStop = onStopRun,
-                            onOpenInBrowser = onOpenRunInBrowser,
-                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                        )
-                    }
+                    WorkbenchTool.RunDebug -> RunPanel(
+                        // A User Workspace lists every project (pick one first); the Default Workspace
+                        // shows just the open project's Build/Run detail.
+                        projects = if (inUserWorkspace) workspace?.projects.orEmpty() else listOfNotNull(selectedProject),
+                        inUserWorkspace = inUserWorkspace,
+                        runningProjectId = runningProjectId,
+                        runningRunName = runningRunName,
+                        runUrl = runUrl,
+                        runInProgress = runInProgress,
+                        runConfigVersion = runConfigVersion,
+                        debugUi = LocalDebugSession.current,
+                        onRun = runActions.onRun,
+                        onDebug = { _, config -> runActions.onDebug(config) },
+                        onBuild = runActions.onBuild,
+                        onStop = runActions.onStop,
+                        onOpenInBrowser = runActions.onOpenInBrowser,
+                        onConfigureRun = runActions.onConfigureRun,
+                        onConfigureBuild = runActions.onConfigureBuild,
+                        onDeleteRun = runActions.onDeleteRun,
+                        onDeleteBuild = runActions.onDeleteBuild,
+                        modifier = Modifier.fillMaxSize(),
+                    )
 
                     WorkbenchTool.Extensions -> ExtensionsPanel(
                         installed = installedExtensions,

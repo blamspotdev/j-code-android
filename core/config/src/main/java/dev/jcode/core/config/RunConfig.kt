@@ -7,22 +7,41 @@ import org.snakeyaml.engine.v2.api.Load
 import org.snakeyaml.engine.v2.api.LoadSettings
 import org.snakeyaml.engine.v2.common.FlowStyle
 
-/** One terminal of a build/run config: a tab label and the bash script run in it. */
+/** One terminal of a run config: a tab label and the bash script run in it. */
 data class RunConfigTerminal(
     val label: String,
     val command: String,
 )
 
-/** A per-project build/run configuration, persisted at `/{project}/.jcode/run.yaml`. */
+/**
+ * One way to run a project. [terminals] run side by side (build + serve is baked into the bash);
+ * [readyPort] > 0 is polled and opened in the browser. [debugEntry] is a guest path to the source
+ * file the Debug action launches under the DAP debugger (blank = this config isn't debuggable).
+ */
 data class RunConfig(
-    /** Display name shown in the Run panel, e.g. "ASP.NET Core + Vite React (dev)". */
     val name: String,
-    /** Localhost port to poll for readiness + open in the browser; 0 = no server/URL. */
     val readyPort: Int,
+    val debugEntry: String = "",
     val terminals: List<RunConfigTerminal>,
 )
 
-/** Reads/writes the per-project build/run config at `.jcode/run.yaml`. */
+/** One way to build a project (e.g. `dotnet publish -c Release -o out`) — a name + a single bash command. */
+data class BuildConfig(
+    val name: String,
+    val command: String,
+)
+
+/** Every build/run config for a project, persisted at `/{project}/.jcode/run.yaml`. */
+data class ProjectConfigs(
+    val runs: List<RunConfig>,
+    val builds: List<BuildConfig>,
+) {
+    companion object {
+        val EMPTY = ProjectConfigs(emptyList(), emptyList())
+    }
+}
+
+/** Reads/writes the per-project build/run configs at `.jcode/run.yaml`. */
 object RunConfigStore {
     private const val REL_PATH = ".jcode/run.yaml"
 
@@ -30,34 +49,61 @@ object RunConfigStore {
 
     fun exists(projectDir: File): Boolean = configFile(projectDir).isFile
 
-    fun load(projectDir: File): RunConfig? {
+    fun load(projectDir: File): ProjectConfigs? {
         val file = configFile(projectDir)
         if (!file.isFile) return null
         return runCatching {
-            val loaded = Load(LoadSettings.builder().build()).loadFromReader(file.reader())
-            val map = loaded as? Map<*, *> ?: return null
-            val terminals = (map["terminals"] as? List<*>).orEmpty().mapNotNull { raw ->
-                val t = (raw as? Map<*, *>) ?: return@mapNotNull null
-                val label = t["label"]?.toString()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                RunConfigTerminal(label = label, command = t["command"]?.toString().orEmpty())
+            val map = Load(LoadSettings.builder().build()).loadFromReader(file.reader()) as? Map<*, *> ?: return null
+            // v2: `runs: [...]` + `builds: [...]`. Legacy v1 had a single config at the top level
+            // (name/readyPort/terminals) — read that as a one-element runs list.
+            val runsRaw = map["runs"] as? List<*>
+            val runs = if (runsRaw != null) {
+                runsRaw.mapNotNull { parseRun(it, projectDir.name) }
+            } else {
+                parseRun(map, projectDir.name)?.takeIf { it.terminals.isNotEmpty() }?.let { listOf(it) }.orEmpty()
             }
-            RunConfig(
-                name = map["name"]?.toString()?.takeIf { it.isNotBlank() } ?: projectDir.name,
-                readyPort = (map["readyPort"] as? Number)?.toInt()
-                    ?: map["readyPort"]?.toString()?.toIntOrNull() ?: 0,
-                terminals = terminals,
-            )
+            val builds = (map["builds"] as? List<*>).orEmpty().mapNotNull { parseBuild(it) }
+            ProjectConfigs(runs = runs, builds = builds)
         }.getOrNull()
     }
 
-    fun save(projectDir: File, config: RunConfig) {
+    private fun parseRun(raw: Any?, fallbackName: String): RunConfig? {
+        val m = raw as? Map<*, *> ?: return null
+        val terminals = (m["terminals"] as? List<*>).orEmpty().mapNotNull { t ->
+            val tm = t as? Map<*, *> ?: return@mapNotNull null
+            val label = tm["label"]?.toString()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            RunConfigTerminal(label = label, command = tm["command"]?.toString().orEmpty())
+        }
+        return RunConfig(
+            name = m["name"]?.toString()?.takeIf { it.isNotBlank() } ?: fallbackName,
+            readyPort = (m["readyPort"] as? Number)?.toInt() ?: m["readyPort"]?.toString()?.toIntOrNull() ?: 0,
+            debugEntry = m["debugEntry"]?.toString().orEmpty(),
+            terminals = terminals,
+        )
+    }
+
+    private fun parseBuild(raw: Any?): BuildConfig? {
+        val m = raw as? Map<*, *> ?: return null
+        val name = m["name"]?.toString()?.takeIf { it.isNotBlank() } ?: return null
+        return BuildConfig(name = name, command = m["command"]?.toString().orEmpty())
+    }
+
+    fun save(projectDir: File, configs: ProjectConfigs) {
         val dir = File(projectDir, ".jcode").apply { if (!exists()) mkdirs() }
         val document = linkedMapOf<String, Any?>(
-            "version" to 1,
-            "name" to config.name,
-            "readyPort" to config.readyPort,
-            "terminals" to config.terminals.map { terminal ->
-                linkedMapOf<String, Any?>("label" to terminal.label, "command" to terminal.command)
+            "version" to 2,
+            "runs" to configs.runs.map { r ->
+                linkedMapOf<String, Any?>(
+                    "name" to r.name,
+                    "readyPort" to r.readyPort,
+                    "debugEntry" to r.debugEntry,
+                    "terminals" to r.terminals.map { t ->
+                        linkedMapOf<String, Any?>("label" to t.label, "command" to t.command)
+                    },
+                )
+            },
+            "builds" to configs.builds.map { b ->
+                linkedMapOf<String, Any?>("name" to b.name, "command" to b.command)
             },
         )
         val dump = Dump(DumpSettings.builder().setDefaultFlowStyle(FlowStyle.BLOCK).build())
