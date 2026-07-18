@@ -630,7 +630,7 @@ private fun Header() {
 // permission dialog.
 private fun hasStorageAccess(): Boolean = android.os.Environment.isExternalStorageManager()
 
-/** Runtime storage grant so projects can live in the shared /storage/emulated/0/JCode folder. */
+/** Runtime storage grant used to read older shared-storage projects (one-time migration). */
 @Composable
 private fun StorageAccessCard(
     number: Int,
@@ -653,8 +653,9 @@ private fun StorageAccessCard(
         active = !granted,
     ) {
         Text(
-            text = "Projects are stored in the shared /JCode folder (Internal storage), so they " +
-                "survive reinstalling the app and are visible to other apps.",
+            text = "Lets JCode migrate projects created by older versions from the shared /JCode " +
+                "folder. Projects now live in app storage — browse them via the \"JCode Projects\" " +
+                "entry in your Files app, or export them from the workspace menu.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -63,6 +63,7 @@ import dev.jcode.design.LocalFontSettings
 import dev.jcode.design.LocalEditorDragMovesCursor
 import dev.jcode.design.LocalExtraKeysSetting
 import dev.jcode.design.LocalPerformanceSettings
+import dev.jcode.design.ExplorerExcludeEffect
 import dev.jcode.design.ExplorerHiddenMode
 import dev.jcode.design.LocalAppUpdate
 import dev.jcode.design.LocalSettingsBackup
@@ -817,10 +818,11 @@ object SettingsFeature {
 
             SettingsSectionHeader("Explorer")
             SettingsCard(
-                title = "Hidden files (project root)",
-                description = "Hide files and folders at the project root in the Explorer. \"By-injected\" " +
-                    "comes from each project's .gitignore, kept in sync by the Source Control extension.",
-                keywords = "explorer files folder hide hidden project root gitignore jcode ignore injected specified show reveal by-line",
+                title = "Exclude Files/Folders",
+                description = "Exclude files and folders at the project root in the Explorer. \"By-injected\" " +
+                    "comes from each project's .gitignore, kept in sync by the Source Control extension. " +
+                    "Excluded entries are greyed out by default, or hidden from the tree entirely.",
+                keywords = "explorer files folder exclude hide hidden grey greyed grey-out dim de-emphasize project root gitignore jcode ignore injected specified show reveal by-line effect",
             ) {
                 SettingsDropdownRow(
                     label = "Mode",
@@ -830,6 +832,15 @@ object SettingsFeature {
                     optionLabel = { explorerHiddenModeLabel(ExplorerHiddenMode.valueOf(it)) },
                     modified = explorerHiddenSetting.mode != SettingsDefaults.HIDDEN_ROOT_MODE,
                     onReset = { explorerHiddenSetting.onSetMode(SettingsDefaults.HIDDEN_ROOT_MODE) },
+                )
+                SettingsDropdownRow(
+                    label = "When excluded",
+                    options = ExplorerExcludeEffect.entries.map { it.name },
+                    selected = explorerHiddenSetting.effect.name,
+                    onSelect = { explorerHiddenSetting.onSetEffect(ExplorerExcludeEffect.valueOf(it)) },
+                    optionLabel = { explorerExcludeEffectLabel(ExplorerExcludeEffect.valueOf(it)) },
+                    modified = explorerHiddenSetting.effect != SettingsDefaults.EXCLUDE_EFFECT,
+                    onReset = { explorerHiddenSetting.onSetEffect(SettingsDefaults.EXCLUDE_EFFECT) },
                 )
                 var hidePatterns by remember(explorerHiddenSetting.specifiedRaw) {
                     mutableStateOf(explorerHiddenSetting.specifiedRaw)
@@ -1026,11 +1037,17 @@ object SettingsFeature {
     }
 }
 
-/** Human-readable labels for the [ExplorerHiddenMode] dropdown (match the settings wording). */
+/** Human-readable labels for the exclude "Mode" dropdown — WHICH entries are excluded. */
 private fun explorerHiddenModeLabel(mode: ExplorerHiddenMode): String = when (mode) {
-    ExplorerHiddenMode.HideSpecifiedAndInjected -> "Hide Specified + By-Injected"
-    ExplorerHiddenMode.HideInjected -> "Hide By-Injected"
-    ExplorerHiddenMode.None -> "No Hidden File"
+    ExplorerHiddenMode.HideSpecifiedAndInjected -> "Specified + By-Injected"
+    ExplorerHiddenMode.HideInjected -> "By-Injected only"
+    ExplorerHiddenMode.None -> "Off"
+}
+
+/** Human-readable labels for the "When excluded" dropdown — HOW excluded entries appear. */
+private fun explorerExcludeEffectLabel(effect: ExplorerExcludeEffect): String = when (effect) {
+    ExplorerExcludeEffect.GreyOut -> "Grey out"
+    ExplorerExcludeEffect.Hide -> "Hide"
 }
 
 /** Human-readable label for an [ExtraKeysVisibility] dropdown option. */

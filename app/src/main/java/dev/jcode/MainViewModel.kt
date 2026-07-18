@@ -65,9 +65,13 @@ import dev.jcode.workbench.SetupTerminalRunner
 import dev.jcode.fs.FsKind
 import dev.jcode.fs.FsNode
 import dev.jcode.fs.FsPath
+import dev.jcode.fs.copyFolderToLocal
+import dev.jcode.fs.copyLocalTreeToDocumentTree
+import dev.jcode.fs.folderDisplayName
 import dev.jcode.fs.Project
 import dev.jcode.fs.ProjectKind
 import dev.jcode.fs.RecentEntity
+import dev.jcode.fs.scanFolderForImport
 import dev.jcode.fs.Workspace
 import dev.jcode.fs.WorkspaceCrumb
 import dev.jcode.fs.WorkspaceManager
@@ -141,6 +145,32 @@ enum class EditorCloseChoice { SAVE, DISCARD, CLOSE_SAVED, CANCEL }
 
 /** Drives the editor "unsaved changes" dialog: the titles of the dirty tabs about to be closed. */
 data class PendingEditorClose(val dirtyTitles: List<String>)
+
+/** Live state of an external-folder import, driving the progress modal. During [ImportPhase.Scanning]
+ *  the total is unknown ([total] == 0 → indeterminate); during [ImportPhase.Copying], [done]/[total]
+ *  files gives a determinate bar. */
+enum class ImportPhase { Scanning, Copying }
+
+data class ImportProgress(
+    val label: String,
+    val phase: ImportPhase,
+    val done: Int = 0,
+    val total: Int = 0,
+)
+
+/** A folder awaiting the Project/Workspace choice: opened in place on managed storage, or copied into
+ *  /sources and awaiting adoption. [label] names it in the dialog. */
+sealed interface PendingFolderType {
+    val label: String
+
+    data class OpenInPlace(val path: FsPath) : PendingFolderType {
+        override val label: String get() = path.displayName
+    }
+
+    data class AdoptStaged(val staged: File) : PendingFolderType {
+        override val label: String get() = staged.name
+    }
+}
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     val workspaceManager: WorkspaceManager = WorkspaceServiceLocator.workspaceManager(application)
@@ -483,9 +513,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _postClonePrompt = MutableStateFlow<Project?>(null)
     val postClonePrompt: StateFlow<Project?> = _postClonePrompt.asStateFlow()
 
-    /** An opened folder awaiting a Project/Workspace choice (it has no `.jcode` type yet). */
-    private val _openFolderTypePrompt = MutableStateFlow<FsPath?>(null)
-    val openFolderTypePrompt: StateFlow<FsPath?> = _openFolderTypePrompt.asStateFlow()
+    /** A folder awaiting a Project/Workspace choice (it has no `.jcode` type yet) — either opened in
+     *  place on managed storage, or already copied into /sources staging and awaiting adoption. */
+    private val _openFolderTypePrompt = MutableStateFlow<PendingFolderType?>(null)
+    val openFolderTypePrompt: StateFlow<PendingFolderType?> = _openFolderTypePrompt.asStateFlow()
+
+    /** Non-null while an off-ext4 folder is being scanned/copied into /sources — drives the modal. */
+    private val _importProgress = MutableStateFlow<ImportProgress?>(null)
+    val importProgress: StateFlow<ImportProgress?> = _importProgress.asStateFlow()
 
     private val _selectedProjectId = MutableStateFlow<Long?>(null)
     val selectedProject: StateFlow<Project?> = currentWorkspace
@@ -609,6 +644,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setExplorerHiddenMode(mode: dev.jcode.design.ExplorerHiddenMode) {
         viewModelScope.launch { uiPreferences.edit { it[explorerHiddenModeKey] = mode.name } }
+    }
+
+    private val explorerExcludeEffectKey = stringPreferencesKey("explorer_exclude_effect")
+    val explorerExcludeEffect: StateFlow<dev.jcode.design.ExplorerExcludeEffect> = uiPreferences.data
+        .map { prefs ->
+            runCatching { dev.jcode.design.ExplorerExcludeEffect.valueOf(prefs[explorerExcludeEffectKey] ?: "") }
+                .getOrDefault(SettingsDefaults.EXCLUDE_EFFECT)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.EXCLUDE_EFFECT)
+
+    fun setExplorerExcludeEffect(effect: dev.jcode.design.ExplorerExcludeEffect) {
+        viewModelScope.launch { uiPreferences.edit { it[explorerExcludeEffectKey] = effect.name } }
     }
 
     private val explorerHiddenPatternsKey = stringPreferencesKey("explorer_hidden_root_patterns")
@@ -1047,11 +1094,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private val sessionStore = SessionStore(appContext)
-
-    /** Suppresses the project bootstrap file while a session restore is deciding/opening tabs, so the
-     *  restored tabs aren't raced by a freshly bootstrapped file. Cleared when restore settles. */
-    @Volatile
-    private var suppressBootstrap = true
 
     /** Gate that keeps incremental saves from clobbering the stored session before restore has read it. */
     @Volatile
@@ -1640,6 +1682,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         else viewModelScope.launch { emitMessage("Added '${project.name}' to the workspace.") }
     }
 
+    /** Host side of the guest /sources mount — the staging dir extensions materialize folders into
+     *  (e.g. the SCM extension's clones) before handing them over via `workbench.addFolder`. */
+    private fun sourcesRoot(): File = dev.jcode.core.distro.WorkspaceHostPaths.sourcesRoot(appContext.filesDir)
+
+    private fun formatBytes(bytes: Long): String {
+        if (bytes < 1024) return "$bytes B"
+        val units = listOf("KB", "MB", "GB", "TB")
+        var value = bytes.toDouble() / 1024
+        var unit = 0
+        while (value >= 1024 && unit < units.lastIndex) {
+            value /= 1024
+            unit++
+        }
+        return String.format(java.util.Locale.US, if (value >= 100) "%.0f %s" else "%.1f %s", value, units[unit])
+    }
+
     fun createNewItem(request: NewItemRequest) {
         viewModelScope.launch {
             val fallback = if (request.isWorkspace) "untitled-workspace" else "untitled-project"
@@ -1709,46 +1767,191 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Open a folder the user picked. A tagged Workspace is entered as a container; an untyped folder
-     * prompts Project vs Workspace first; a plain folder opens as the single project.
+     * Open a folder the user picked. Picks already on app-private ext4 storage (the "JCode Projects"
+     * DocumentsProvider, or an existing project dir) open in place. Anything else — primary storage,
+     * cloud, third-party SAF — is copied onto /sources first (the runtime can't bind-mount it
+     * otherwise); [importExternalFolder] scans it and refuses an empty or oversized folder.
      */
     fun openExternalFolder(path: FsPath) {
         viewModelScope.launch {
             val resolved = workspaceManager.resolveManageable(path)
-            when {
-                workspaceManager.isWorkspaceFolder(resolved) &&
-                    workspaceManager.enterFolderAsWorkspace(resolved) != null -> clearEditorTabs()
+            if (workspaceManager.isManagedRoot(resolved)) {
+                emitMessage("That folder is the JCode Projects root — pick a project or workspace folder inside it.")
+                return@launch
+            }
+            if (workspaceManager.isOnManagedStorage(resolved)) {
+                openManagedFolder(resolved)
+            } else {
+                importExternalFolder(resolved)
+            }
+        }
+    }
 
-                workspaceManager.folderNeedsType(resolved) -> _openFolderTypePrompt.value = resolved
+    private suspend fun openManagedFolder(resolved: FsPath) {
+        when {
+            workspaceManager.isWorkspaceFolder(resolved) &&
+                workspaceManager.enterFolderAsWorkspace(resolved) != null -> clearEditorTabs()
 
-                else -> {
-                    resetDefaultWorkspaceProject()
-                    val project = workspaceManager.addFolder(resolved)
-                    _selectedProjectId.value = project.id
-                    emitMessage("Opened '${project.name}'.")
+            workspaceManager.folderNeedsType(resolved) ->
+                _openFolderTypePrompt.value = PendingFolderType.OpenInPlace(resolved)
+
+            else -> {
+                resetDefaultWorkspaceProject()
+                val project = workspaceManager.addFolder(resolved)
+                _selectedProjectId.value = project.id
+                emitMessage("Opened '${project.name}'.")
+            }
+        }
+    }
+
+    /** Scan an off-ext4 pick and, if it isn't empty and fits, copy it into /sources then adopt it. A
+     *  progress modal follows the scan then the copy (see [_importProgress]). */
+    private suspend fun importExternalFolder(source: FsPath) {
+        val label = folderDisplayName(appContext, source)
+        _importProgress.value = ImportProgress(label, ImportPhase.Scanning)
+        val staged = try {
+            val scan = runCatching { scanFolderForImport(appContext, source) }.getOrElse {
+                emitMessage("Couldn't read '$label': ${it.message ?: "unknown error"}.")
+                return
+            }
+            if (scan.fileCount == 0) {
+                emitMessage("'$label' is empty — nothing to import.")
+                return
+            }
+            val sources = sourcesRoot().apply { mkdirs() }
+            if (scan.totalBytes + IMPORT_FREE_SPACE_HEADROOM_BYTES > sources.usableSpace) {
+                emitMessage(
+                    "'$label' is too large to import — needs ${formatBytes(scan.totalBytes)}, " +
+                        "only ${formatBytes(sources.usableSpace)} free.",
+                )
+                return
+            }
+            if (!saveAllDirtyAwait()) {
+                emitMessage("Save or close open files before importing a folder.")
+                return
+            }
+            _importProgress.value = ImportProgress(label, ImportPhase.Copying, done = 0, total = scan.fileCount)
+            runCatching {
+                copyIntoSources(source, label) { done ->
+                    _importProgress.value = ImportProgress(label, ImportPhase.Copying, done, scan.fileCount)
                 }
+            }.getOrElse {
+                emitMessage("Import failed: ${it.message ?: "unknown error"}.")
+                return
+            }
+        } finally {
+            _importProgress.value = null
+        }
+        val stagedPath = FsPath.Local(staged)
+        when {
+            workspaceManager.isWorkspaceFolder(stagedPath) ->
+                adoptStagedGuarded(staged, WorkspaceNodeType.Workspace)?.let { emitMessage("Imported Workspace '${it.name}'.") }
+
+            workspaceManager.folderNeedsType(stagedPath) ->
+                _openFolderTypePrompt.value = PendingFolderType.AdoptStaged(staged)
+
+            else ->
+                adoptStagedGuarded(staged, WorkspaceNodeType.Project)?.let { emitMessage("Imported '${it.name}'.") }
+        }
+    }
+
+    /** [adoptStagedFolder] with the save-guard re-checked immediately before adoption: the import copy
+     *  can run long enough for the user to dirty an open buffer, and adoption clears editor tabs without
+     *  saving. On an unsaveable buffer the staged copy is discarded (already messaged) and null returned. */
+    private suspend fun adoptStagedGuarded(staged: File, nodeType: WorkspaceNodeType): Project? {
+        if (!saveAllDirtyAwait()) {
+            emitMessage("Save or close open files before importing a folder.")
+            withContext(Dispatchers.IO) { staged.deleteRecursively() }
+            return null
+        }
+        return adoptStagedFolder(staged, nodeType)
+    }
+
+    /** Copy [source] into a hidden /sources temp dir, then atomically rename to a unique final name. */
+    private suspend fun copyIntoSources(source: FsPath, label: String, onProgress: (Int) -> Unit): File = withContext(Dispatchers.IO) {
+        val sources = sourcesRoot().apply { mkdirs() }
+        // Reclaim temp dirs orphaned by a crash mid-copy (safe: only our own ".import-" prefix).
+        sources.listFiles { f -> f.isDirectory && f.name.startsWith(".import-") }?.forEach { it.deleteRecursively() }
+        val tmp = File(sources, ".import-${System.nanoTime()}")
+        try {
+            copyFolderToLocal(appContext, source, sources, tmp.name, onProgress)
+            val base = workspaceManager.sanitizedFolderName(label)
+            var dest = File(sources, base)
+            var suffix = 1
+            while (dest.exists()) dest = File(sources, "$base-${suffix++}")
+            if (!tmp.renameTo(dest)) error("Cannot place the imported folder in staging")
+            dest
+        } catch (t: Throwable) {
+            tmp.deleteRecursively()
+            throw t
+        }
+    }
+
+    /**
+     * Move a staged /sources folder into the active workspace (or the Default Workspace) as [nodeType],
+     * switching/entering as needed. Shared by the SCM clone bridge (`workbench.addFolder`) and the
+     * SAF-import path. The caller must have flushed unsaved buffers first (adoption clears editor tabs).
+     */
+    private suspend fun adoptStagedFolder(staged: File, nodeType: WorkspaceNodeType): Project {
+        val defId = workspaceManager.ensureDefaultWorkspaceId()
+        return when (nodeType) {
+            WorkspaceNodeType.Workspace -> {
+                clearEditorTabs()
+                workspaceManager.restoreWorkspace(defId)
+                val node = workspaceManager.adoptFolderIn(defId, staged, WorkspaceNodeType.Workspace)
+                workspaceManager.enterWorkspaceFolder(node)
+                node
+            }
+
+            WorkspaceNodeType.Project -> {
+                val targetWs = workspaceManager.currentWorkspace.value?.id ?: defId
+                workspaceManager.restoreWorkspace(targetWs)
+                if (targetWs == defId) resetDefaultWorkspaceProject()
+                val project = workspaceManager.adoptFolderIn(targetWs, staged, WorkspaceNodeType.Project)
+                _selectedProjectId.value = project.id
+                project
             }
         }
     }
 
     fun resolveOpenFolderType(isWorkspace: Boolean) {
-        val path = _openFolderTypePrompt.value ?: return
+        val pending = _openFolderTypePrompt.value ?: return
         _openFolderTypePrompt.value = null
+        val nodeType = if (isWorkspace) WorkspaceNodeType.Workspace else WorkspaceNodeType.Project
         viewModelScope.launch {
-            if (isWorkspace && workspaceManager.enterFolderAsWorkspace(path) != null) {
-                clearEditorTabs()
-                return@launch
+            when (pending) {
+                is PendingFolderType.OpenInPlace -> {
+                    val path = pending.path
+                    if (isWorkspace && workspaceManager.enterFolderAsWorkspace(path) != null) {
+                        clearEditorTabs()
+                        return@launch
+                    }
+                    resetDefaultWorkspaceProject()
+                    val project = workspaceManager.addFolderWithType(path, nodeType)
+                    _selectedProjectId.value = project.id
+                    emitMessage("Opened ${if (isWorkspace) "Workspace" else "Project"} '${project.name}'.")
+                }
+
+                is PendingFolderType.AdoptStaged -> {
+                    if (!pending.staged.isDirectory) {
+                        emitMessage("The imported folder is no longer available.")
+                        return@launch
+                    }
+                    adoptStagedGuarded(pending.staged, nodeType)?.let {
+                        emitMessage("Imported ${if (isWorkspace) "Workspace" else "Project"} '${it.name}'.")
+                    }
+                }
             }
-            resetDefaultWorkspaceProject()
-            val nodeType = if (isWorkspace) WorkspaceNodeType.Workspace else WorkspaceNodeType.Project
-            val project = workspaceManager.addFolderWithType(path, nodeType)
-            _selectedProjectId.value = project.id
-            emitMessage("Opened ${if (isWorkspace) "Workspace" else "Project"} '${project.name}'.")
         }
     }
 
     fun dismissOpenFolderPrompt() {
+        val pending = _openFolderTypePrompt.value
         _openFolderTypePrompt.value = null
+        // An imported-but-unclassified folder would otherwise linger in /sources; drop it on cancel.
+        if (pending is PendingFolderType.AdoptStaged) {
+            viewModelScope.launch(Dispatchers.IO) { pending.staged.deleteRecursively() }
+        }
     }
 
     /** Recently opened folders (most-recent first) for the empty-editor "Recent" list. */
@@ -1845,52 +2048,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Copy a local project out to shared storage (`/storage/emulated/0/JCode/exports/<name>-<ts>`) so
-     *  it's browsable in a file manager / other apps. A one-shot snapshot: `node_modules` (large and
+    /** Copy a local project/recent dir out to a user-picked SAF folder ("Export to storage") so it's
+     *  browsable in a file manager / other apps. A one-shot snapshot: `node_modules` (large and
      *  regenerable) is skipped. Projects otherwise live on app-private ext4 (see WorkspaceHostPaths);
-     *  the DocumentsProvider gives a live view, this gives a real on-disk copy. Needs all-files access. */
-    fun exportProjectToStorage(project: Project) =
-        exportDirToStorage(project.name, (project.fsPath as? FsPath.Local)?.file)
-
-    /** Export a "Recent" entry (a project's on-disk location) to shared storage; SAF recents have no
-     *  local directory and are rejected. */
-    fun exportRecentToStorage(recent: RecentEntity) {
-        val dir = if (recent.kind == ProjectKind.Local) File(recent.uri) else null
-        exportDirToStorage(dir?.name.orEmpty().ifBlank { "project" }, dir)
-    }
-
-    private fun exportDirToStorage(name: String, source: File?) {
+     *  the DocumentsProvider gives a live view, this gives a real on-disk copy. A null/non-directory
+     *  [source] (e.g. a SAF project with no local dir) is rejected with a message. */
+    fun exportDirTo(name: String, source: File?, dest: Uri) {
         if (source == null || !source.isDirectory) {
             viewModelScope.launch { emitMessage("Export failed: '$name' isn't a local folder.") }
             return
         }
-        if (!android.os.Environment.isExternalStorageManager()) {
-            viewModelScope.launch { emitMessage("Grant all-files access in Settings to export to storage.") }
-            return
-        }
         viewModelScope.launch {
-            emitMessage("Exporting '$name' to storage…")
-            val result = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                runCatching {
-                    val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
-                    val dest = File("/storage/emulated/0/JCode/exports/$name-$stamp")
-                    // Manual pruning walk: copyRecursively can't skip a whole subtree, so drop
-                    // node_modules via onEnter (before descending) instead of copying then deleting it.
-                    source.walkTopDown()
-                        .onEnter { it.name != "node_modules" }
-                        .forEach { file ->
-                            val out = File(dest, file.relativeTo(source).path)
-                            if (file.isDirectory) {
-                                out.mkdirs()
-                            } else {
-                                out.parentFile?.mkdirs()
-                                file.copyTo(out, overwrite = true)
-                            }
-                        }
-                    dest.absolutePath
-                }
-            }
-            result.onSuccess { emitMessage("Exported to $it") }
+            emitMessage("Exporting '$name'…")
+            val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+            runCatching { copyLocalTreeToDocumentTree(appContext, source, dest, "$name-$stamp") }
+                .onSuccess { emitMessage("Exported $it file(s) from '$name'.") }
                 .onFailure { emitMessage("Export failed: ${it.message ?: "unknown error"}") }
         }
     }
@@ -2219,23 +2391,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun uninstallDebugEngine(entryId: String) {
         runDebugCatalogAction(entryId, DebugEngineAction.Uninstall)
-    }
-
-    private var lastBootstrappedProjectId: Long? = null
-
-    fun ensureProjectBootstrapTab() {
-        // While a session restore is in flight, don't open the bootstrap file — restore handles the tabs.
-        if (suppressBootstrap) return
-        // Ignore page tabs (e.g. Settings): only an open file tab should suppress the bootstrap file.
-        if (_editorGroup.value.tabs.any { !it.isPage }) return
-        val project = selectedProject.value ?: return
-        // Bootstrap a project's file at most once: after the tabs are cleared (e.g. Close Project),
-        // the selection may briefly still point at it — don't re-open what the user just closed.
-        if (project.id == lastBootstrappedProjectId) return
-        lastBootstrappedProjectId = project.id
-        viewModelScope.launch {
-            openBootstrapFile(project)
-        }
     }
 
     fun openFile(node: FsNode) {
@@ -2755,29 +2910,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             apiOk(JSONObject())
         }
 
-        // Destinations an extension can clone/register a top-level folder into: the Default Workspace's
-        // flat "Projects" root, plus every user Workspace whose folder is reachable under the guest
-        // /workspace mount. Each guestPath is where the extension should physically place the clone; the
-        // matching `destinationId` is passed back to workbench.openFolder so the host registers it there.
-        "workbench.cloneDestinations" -> {
-            val defId = workspaceManager.ensureDefaultWorkspaceId()
-            val dests = org.json.JSONArray()
-            dests.put(JSONObject().put("id", "default").put("label", "Projects").put("guestPath", "/workspace"))
-            workspaceManager.listWorkspaces().forEach { ws ->
-                if (ws.id == defId) return@forEach
-                val guest = dev.jcode.core.distro.WorkspaceHostPaths.hostToGuest(ws.rootPath)
-                if (guest == "/workspace" || guest.startsWith("/workspace/")) {
-                    dests.put(JSONObject().put("id", ws.id.toString()).put("label", ws.name).put("guestPath", guest))
-                }
-            }
-            apiOk(JSONObject().put("destinations", dests))
-        }
-
-        // Register a top-level folder (already created on disk, e.g. by a git clone) as a Project and
-        // open it. `destinationId` (from workbench.cloneDestinations) chooses the target workspace:
-        // "default"/absent = the Default Workspace (opens immediately), a workspace id = that User
-        // Workspace (switches to it and prompts open-vs-add). Absent id keeps the legacy behavior of
-        // registering under whatever workspace is currently open.
+        // Register a top-level folder (already created on disk under the guest /workspace mount) as a
+        // Project and open it. `destinationId` chooses the target workspace: "default"/absent = the
+        // Default Workspace (opens immediately), a workspace id = that User Workspace (switches to it
+        // and prompts open-vs-add). Absent id registers under whatever workspace is currently open.
         "workbench.openFolder" -> {
             val name = p.optString("name").trim()
             require(name.isNotBlank()) { "name required" }
@@ -2790,6 +2926,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 destId == "default" -> defId
                 else -> destId.toLongOrNull()?.takeIf { workspaceManager.workspaceExists(it) } ?: defId
             }
+            // Opening clears the current editor tabs; flush unsaved buffers first and refuse rather
+            // than silently discarding work a dialog never guarded.
+            require(saveAllDirtyAwait()) { "unsaved changes could not be saved — save or close open files first" }
             // Make the target the current context (rebuilds the breadcrumb: Default root + target) so
             // resetDefaultWorkspaceProject's single-slot check and project selection resolve correctly.
             workspaceManager.restoreWorkspace(targetWs)
@@ -2803,6 +2942,57 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _postClonePrompt.value = project
                 apiOk(JSONObject().put("name", project.name).put("opened", false))
             }
+        }
+
+        // Adopt a folder an extension materialized under the guest /sources staging mount (e.g. the
+        // SCM extension's clones) into the workbench. `type` "project" moves it into the current
+        // workspace and opens it; "workspace" moves it into the projects root, stamps it as a User
+        // Workspace, and enters it (top-level folders become projects). The folder physically leaves
+        // /sources, so the staging dir only ever holds not-yet-classified material.
+        //
+        // Omitting `type` means "you decide": a folder carrying its own `.jcode` type (a repo that
+        // ships one) is adopted as what it declares, and one that declares nothing is left staged and
+        // reported as `needsType` — the host has no dialog for this, so the extension that staged the
+        // folder asks and calls back with an explicit type. Discarding is likewise the extension's
+        // business: it just deletes the staged folder in the runtime.
+        "workbench.addFolder" -> {
+            val guest = p.optString("path").trim().trimEnd('/')
+            val prefix = dev.jcode.core.distro.WorkspaceHostPaths.SOURCES_GUEST + "/"
+            require(guest.startsWith(prefix)) { "path must be under ${dev.jcode.core.distro.WorkspaceHostPaths.SOURCES_GUEST}" }
+            val name = guest.removePrefix(prefix)
+            require(name.isNotBlank() && !name.contains('/') && !name.startsWith(".")) {
+                "path must name a top-level sources folder"
+            }
+            val staged = File(sourcesRoot(), name)
+            require(staged.isDirectory) { "no staged folder named '$name'" }
+            val stagedPath = FsPath.Local(staged)
+            val requested = p.optString("type").trim()
+            val nodeType = when {
+                requested.equals("workspace", ignoreCase = true) -> WorkspaceNodeType.Workspace
+                requested.equals("project", ignoreCase = true) -> WorkspaceNodeType.Project
+                workspaceManager.folderNeedsType(stagedPath) -> null
+                workspaceManager.isWorkspaceFolder(stagedPath) -> WorkspaceNodeType.Workspace
+                else -> WorkspaceNodeType.Project
+            }
+            when (nodeType) {
+                null -> apiOk(JSONObject().put("needsType", true))
+                else -> {
+                    // Adoption clears the current editor tabs; flush unsaved buffers first and refuse
+                    // rather than silently discarding work a dialog never guarded.
+                    require(saveAllDirtyAwait()) { "unsaved changes could not be saved — save or close open files first" }
+                    val node = adoptStagedFolder(staged, nodeType)
+                    apiOk(JSONObject().put("name", node.name).put("workspace", nodeType == WorkspaceNodeType.Workspace))
+                }
+            }
+        }
+
+        // Close the editor tab hosting the caller's own `#view` page (from workbench.openView), so an
+        // extension can dismiss its UI once the flow it drives is finished.
+        "workbench.closeView" -> {
+            val tabId = EXT_APP_PREFIX + callerExtId + "#" + p.optString("view").trim()
+            val existed = _editorGroup.value.tabs.any { it.id == tabId }
+            closeTabsNow(setOf(tabId), activate = null)
+            apiOk(JSONObject().put("closed", existed))
         }
 
         "service.start" -> {
@@ -3154,20 +3344,91 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val runConfigVersion: StateFlow<Int> = _runConfigVersion.asStateFlow()
 
     /** Open the structured Build & Run configuration page for [project]. Reuses one config tab. */
-    fun openRunConfigPage(project: Project) {
-        openDetailPage(RUN_CONFIG_PREFIX + project.id, EditorPageKind.RunConfig) { "Run: ${project.name}" }
+    /** Open the run-config editor for [index] (null = a new config). */
+    fun openRunConfigPage(project: Project, index: Int?) {
+        val suffix = index?.toString() ?: "new"
+        openDetailPage(RUN_CONFIG_PREFIX + project.id + "#" + suffix, EditorPageKind.RunConfig) {
+            if (index == null) "New run — ${project.name}" else "Run: ${project.name}"
+        }
     }
 
-    /** Persist a project's Build & Run config to its `.jcode/run.yaml`. */
-    fun saveRunConfig(project: Project, config: dev.jcode.core.config.RunConfig) {
+    /** Open the build-task editor for [index] (null = a new task). */
+    fun openBuildConfigPage(project: Project, index: Int?) {
+        val suffix = index?.toString() ?: "new"
+        openDetailPage(BUILD_CONFIG_PREFIX + project.id + "#" + suffix, EditorPageKind.BuildConfig) {
+            if (index == null) "New build — ${project.name}" else "Build: ${project.name}"
+        }
+    }
+
+    /** Close every open config-editor tab whose id starts with [prefix] (positional indices shift on
+     *  insert/delete, so a stale tab must not be left bound to a moved config). */
+    private fun closeConfigEditorTabs(prefix: String) {
+        val ids = _editorGroup.value.tabs.map { it.id }.filter { it.startsWith(prefix) }.toSet()
+        if (ids.isNotEmpty()) closeTabsNow(ids, activate = null)
+    }
+
+    /** Upsert one run config at [index] (null appends) into the project's `.jcode/run.yaml`. */
+    fun saveRunConfig(project: Project, index: Int?, config: dev.jcode.core.config.RunConfig) {
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { dev.jcode.run.ProjectRunner.saveRunConfig(project, config) }
+            runCatching { dev.jcode.run.ProjectRunner.upsertRun(project, index, config) }
                 .onSuccess {
                     _runConfigVersion.value++
+                    // A "New" tab holds index=null forever, so re-saving would keep appending; close it
+                    // after the first save (re-open via Configure to edit the now-saved config in place).
+                    if (index == null) withContext(Dispatchers.Main) { closeTabsNow(setOf(RUN_CONFIG_PREFIX + project.id + "#new"), activate = null) }
                     _messages.tryEmit("Saved run config for ${project.name}")
                 }
                 .onFailure { _messages.tryEmit("Failed to save run config: ${it.message ?: "error"}") }
         }
+    }
+
+    /** Upsert one build task at [index] (null appends). */
+    fun saveBuildConfig(project: Project, index: Int?, config: dev.jcode.core.config.BuildConfig) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { dev.jcode.run.ProjectRunner.upsertBuild(project, index, config) }
+                .onSuccess {
+                    _runConfigVersion.value++
+                    if (index == null) withContext(Dispatchers.Main) { closeTabsNow(setOf(BUILD_CONFIG_PREFIX + project.id + "#new"), activate = null) }
+                    _messages.tryEmit("Saved build task for ${project.name}")
+                }
+                .onFailure { _messages.tryEmit("Failed to save build task: ${it.message ?: "error"}") }
+        }
+    }
+
+    fun deleteRunConfig(project: Project, index: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { dev.jcode.run.ProjectRunner.deleteRun(project, index) }.onSuccess {
+                _runConfigVersion.value++
+                // Every later config shifts down one, so any open run-config editor's index is now stale.
+                withContext(Dispatchers.Main) { closeConfigEditorTabs(RUN_CONFIG_PREFIX + project.id + "#") }
+                _messages.tryEmit("Deleted run config")
+            }
+        }
+    }
+
+    fun deleteBuildConfig(project: Project, index: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { dev.jcode.run.ProjectRunner.deleteBuild(project, index) }.onSuccess {
+                _runConfigVersion.value++
+                withContext(Dispatchers.Main) { closeConfigEditorTabs(BUILD_CONFIG_PREFIX + project.id + "#") }
+                _messages.tryEmit("Deleted build task")
+            }
+        }
+    }
+
+    /** Launch the DAP debugger on [config]'s debug entry (a guest source path). */
+    fun startDebugForConfig(config: dev.jcode.core.config.RunConfig) {
+        val entry = config.debugEntry.trim()
+        if (entry.isBlank()) {
+            _messages.tryEmit("Set a debug entry for '${config.name}' in Configure to debug it.")
+            return
+        }
+        val host = guestToHostInProject(entry)?.second?.absolutePath
+        if (host == null) {
+            _messages.tryEmit("Debug entry not found: $entry")
+            return
+        }
+        startDebug(host)
     }
 
     fun selectEditorTab(tabId: String) {
@@ -3494,20 +3755,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return saved == dirty.size
     }
 
-    private suspend fun openBootstrapFile(project: Project) {
-        when (val path = project.fsPath) {
-            is FsPath.Local -> {
-                val root = path.file
-                val bootstrapFile = withContext(Dispatchers.IO) { findBootstrapFile(root) }
-                if (bootstrapFile != null) {
-                    openLocalFile(bootstrapFile)
-                }
-            }
-
-            is FsPath.Saf -> emitMessage("Open a file from the explorer to start editing SAF projects.")
-        }
-    }
-
     private suspend fun openLocalFile(file: File, line: Int? = null, column: Int? = null) {
         val stableId = file.absolutePath
         val existing = _editorGroup.value.tabs.firstOrNull { it.id == stableId }
@@ -3613,11 +3860,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val targetProj = record.projectId
             if (targetProj != null && workspace?.projects?.any { it.id == targetProj } == true) {
                 _selectedProjectId.value = targetProj
-                // A restored session's tab set is authoritative — even when it's EMPTY because the user
-                // closed every tab. Mark the project as already-bootstrapped so neither the fallback below
-                // nor the composition's bootstrap effect re-opens a starter file on a deliberately-empty
-                // session. (Only a launch with NO saved session still bootstraps a project's starter file.)
-                lastBootstrappedProjectId = targetProj
             }
 
             // Tabs: open each surviving file; recover unsaved buffers where the file (or its folder) remains.
@@ -3653,14 +3895,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         } finally {
-            suppressBootstrap = false
             sessionSaveEnabled = true
-            // If restore opened no file tab (opt-out, no saved session, or every file was missing), fall
-            // back to the normal project bootstrap. The composition's bootstrap effect may have already
-            // fired and no-op'd while suppressed; this covers the case where the project is ready now.
-            if (_editorGroup.value.tabs.none { !it.isPage }) {
-                ensureProjectBootstrapTab()
-            }
         }
     }
 
@@ -3729,38 +3964,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             message.contains("Can't", ignoreCase = true) ||
             message.contains("error", ignoreCase = true)
         OutputLog.append(message, if (isError) OutputKind.Error else OutputKind.Info)
-    }
-
-    private fun findBootstrapFile(root: File): File? {
-        val preferred = listOf(
-            "package.json",
-            "README.md",
-            "README",
-            "build.gradle.kts",
-            "settings.gradle.kts",
-            "Cargo.toml",
-            "pom.xml",
-            "pubspec.yaml",
-            "MainActivity.kt",
-            "index.ts",
-            "main.ts",
-            "main.py",
-        )
-
-        preferred.firstNotNullOfOrNull { candidate ->
-            File(root, candidate).takeIf { it.exists() && it.isFile }
-        }?.let { return it }
-
-        return root.walkTopDown()
-            .maxDepth(4)
-            // Prune heavy/irrelevant trees instead of walking into them and filtering each file —
-            // .git and node_modules can hold tens of thousands of entries that all get stat'd.
-            .onEnter { it.name != ".git" && it.name != "node_modules" }
-            .firstOrNull { file ->
-                file.isFile &&
-                    file.length() <= 2_000_000L &&
-                    file.name != ".DS_Store"
-            }
     }
 
     private fun File.isLikelyTextFile(): Boolean {
@@ -3863,6 +4066,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
+        /** Free space to leave on app storage after importing an off-ext4 folder into /sources. */
+        private const val IMPORT_FREE_SPACE_HEADROOM_BYTES = 64L * 1024 * 1024
+
         /** DataStore key + a synchronous mirror of "close app on swipe-away", so [BackendService]
          *  can decide in onTaskRemoved without a blocking DataStore read. */
         const val EXIT_ON_SWIPE_AWAY_KEY = "exit_on_swipe_away"
@@ -3891,6 +4097,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val EXT_APP_PREFIX = "jcode://ext-app/"
         const val EXT_PERMISSIONS_TAB_ID = "jcode://ext-permissions"
         const val RUN_CONFIG_PREFIX = "jcode://run-config/"
+        const val BUILD_CONFIG_PREFIX = "jcode://build-config/"
         /** Stable id of the single built-in browser editor tab (see [openBrowserPage]). */
         const val BROWSER_TAB_ID = "jcode://browser"
         /** Extensions routed to the built-in image viewer instead of the text editor. */

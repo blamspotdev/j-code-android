@@ -78,7 +78,6 @@ internal fun CommandPalette(
                 query = query,
                 onQueryChange = { query = it },
                 placeholder = "Search commands",
-                autoFocus = true,
                 onImeAction = {
                     // Only act on a real query — an empty-field Go must not fire whatever command
                     // happens to sit first in the registry.

@@ -20,10 +20,12 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -40,11 +42,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.jcode.ImportPhase
+import dev.jcode.ImportProgress
 import dev.jcode.MainViewModel
 import dev.jcode.feature.marketplace.ProjectTemplate
 import dev.jcode.feature.marketplace.TemplateInput
+import kotlinx.coroutines.flow.StateFlow
 
 @Composable
 internal fun OpenFolderTypeDialog(
@@ -91,6 +99,69 @@ internal fun OpenFolderTypeDialog(
             }
         },
     )
+}
+
+/**
+ * Collects [progress] and renders [ImportProgressDialog] in its own small scope, so the per-file
+ * progress ticks recompose only this host — not the large JCodeApp body that would otherwise read
+ * the flow.
+ */
+@Composable
+internal fun ImportProgressHost(progress: StateFlow<ImportProgress?>) {
+    val current by progress.collectAsStateWithLifecycle()
+    current?.let { ImportProgressDialog(it) }
+}
+
+/**
+ * Non-dismissable modal shown while an off-ext4 folder is scanned then copied into /sources. The scan
+ * phase has no known total (indeterminate bar); the copy phase reports done/total files.
+ */
+@Composable
+internal fun ImportProgressDialog(progress: ImportProgress) {
+    Dialog(
+        onDismissRequest = {},
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+        ) {
+            Column(
+                modifier = Modifier.widthIn(min = 280.dp, max = 360.dp).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = if (progress.phase == ImportPhase.Scanning) "Scanning folder" else "Importing folder",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = "\"${progress.label}\"",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (progress.phase == ImportPhase.Copying && progress.total > 0) {
+                    val fraction = (progress.done.toFloat() / progress.total).coerceIn(0f, 1f)
+                    LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+                    Text(
+                        text = "${progress.done} / ${progress.total} files",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text(
+                        text = "Reading contents…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
 }
 
 /**

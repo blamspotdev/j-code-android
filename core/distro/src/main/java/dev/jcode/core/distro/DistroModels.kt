@@ -211,6 +211,25 @@ object WorkspaceHostPaths {
         guestPath.startsWith("$DEFAULT_DISTRO_WORKDIR/") -> projectsRoot + guestPath.removePrefix(DEFAULT_DISTRO_WORKDIR)
         else -> guestPath
     }
+
+    /** Guest mount of the clone-staging dir ([sourcesRoot]), bound into every proot spawn. */
+    const val SOURCES_GUEST = "/sources"
+
+    /** Guest mount of the extension transfer dir ([transferRoot]) used by the file.import/export bridges. */
+    const val TRANSFER_GUEST = "/jcode-transfer"
+
+    /**
+     * Host clone-staging dir bound to guest [SOURCES_GUEST]: remote-repo clones land here until the
+     * user classifies them as Project or Workspace (then they move under the projects root). Always
+     * app-private ext4 — independent of the /workspace migration marker, which only concerns where
+     * pre-existing projects live. Resolved from an explicit filesDir (not [init]) so ProotManager can
+     * bind it on any spawn without an init-order dependency.
+     */
+    fun sourcesRoot(filesDir: java.io.File): java.io.File = java.io.File(filesDir, "sources")
+
+    /** Host dir bound to guest [TRANSFER_GUEST] for the extension file.import/file.export bridges.
+     *  App-private ext4 (the app no longer writes to the shared /storage JCode folder). */
+    fun transferRoot(filesDir: java.io.File): java.io.File = java.io.File(filesDir, "jcode-transfer")
 }
 
 internal val DEFAULT_BOOTSTRAP_PACKAGES: List<String> = listOf(

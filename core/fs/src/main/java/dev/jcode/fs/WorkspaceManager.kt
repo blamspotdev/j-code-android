@@ -262,6 +262,46 @@ class WorkspaceManager @Inject constructor(
         return registerProjectIn(path, workspaceId).copy(nodeType = nodeType, templateId = templateId)
     }
 
+    /**
+     * Move an already-populated staged folder (e.g. a clone from the /sources staging dir) under
+     * [workspaceId]'s base dir and register it there as [nodeType]. The folder name is uniquified on
+     * collision ("-1", "-2", …). Same-filesystem rename is attempted first; a copy+delete fallback
+     * covers the (unexpected) cross-device case. The type is upserted into the folder's `.jcode`
+     * config rather than written over it — a cloned repo may ship one, and its settings are the
+     * user's, not ours to drop.
+     */
+    suspend fun adoptFolderIn(workspaceId: Long, staged: File, nodeType: WorkspaceNodeType): Project {
+        val destination = withContext(Dispatchers.IO) {
+            val base = baseDirFor(workspaceId).apply { mkdirs() }
+            val name = sanitizedFolderName(staged.name)
+            var dest = File(base, name)
+            var suffix = 1
+            while (dest.exists()) dest = File(base, "$name-${suffix++}")
+            if (!staged.renameTo(dest)) {
+                // Same-filesystem in practice (staging and the workspace roots both live under
+                // filesDir); the copy fallback must fail clean or the half-copied dest becomes an
+                // orphan the reconcile would later register as a project.
+                try {
+                    staged.copyRecursively(dest, overwrite = false)
+                } catch (t: Throwable) {
+                    dest.deleteRecursively()
+                    throw t
+                }
+                staged.deleteRecursively()
+            }
+            dest
+        }
+        return try {
+            setFolderType(FsPath.Local(destination), nodeType)
+            registerProjectIn(FsPath.Local(destination), workspaceId).copy(nodeType = nodeType, templateId = null)
+        } catch (t: Throwable) {
+            // Registration failed after the move: return the folder to staging so it stays visible in
+            // the staging list instead of vanishing from every UI.
+            withContext(Dispatchers.IO) { destination.renameTo(staged) }
+            throw t
+        }
+    }
+
     /** Host directory new nodes for [workspaceId] are created under: the flat projects root for the
      *  Default Workspace (whose rootPath is workspaces/default and must not hold projects), else the
      *  workspace's own folder. */
@@ -275,10 +315,6 @@ class WorkspaceManager @Inject constructor(
 
     /** The Default Workspace's id, running the one-time init first if it hasn't happened yet. */
     suspend fun ensureDefaultWorkspaceId(): Long = defaultWorkspaceId ?: ensureDefaultWorkspace().id
-
-    /** Every workspace (Default + user), for surfaces that let the user target a specific one
-     *  (e.g. the clone destination picker). */
-    suspend fun listWorkspaces(): List<WorkspaceEntity> = workspaceDao.getAllWorkspaces()
 
     /**
      * Open a Workspace folder as the current container: find/create its [WorkspaceEntity], register
@@ -298,9 +334,10 @@ class WorkspaceManager @Inject constructor(
                 WorkspaceEntity(name = displayName, rootPath = rootPath, lastOpened = System.currentTimeMillis()),
             )
 
-        // Add-only reconcile: register child folders not already tracked under this workspace.
+        // Add-only reconcile: register child folders not already tracked under this workspace. Hidden
+        // dirs are skipped — a cloned repo entered as a workspace must not turn .git into a project.
         val existing = workspaceDao.getProjectLocations(workspaceId).toSet()
-        folder.listFiles { f -> f.isDirectory && f.name != ".jcode" && f.name != ".trash" }
+        folder.listFiles { f -> f.isDirectory && !f.name.startsWith(".") }
             ?.sortedBy { it.name.lowercase() }
             ?.forEach { childDir ->
                 val location = childDir.absolutePath
@@ -324,8 +361,11 @@ class WorkspaceManager @Inject constructor(
     }
 
     /**
-     * Resolve a SAF tree under primary external storage to a Local path so picked folders that live
-     * inside our managed storage can drive the runtime; non-primary SAF trees pass through unchanged.
+     * Resolve a SAF tree that actually names a local folder to its Local path, so picked folders
+     * that live inside our managed storage drive the runtime directly; other SAF trees pass through
+     * unchanged. Covers primary external storage (`primary:` document ids) and the app's own
+     * "JCode Projects" DocumentsProvider — its ids ARE absolute ext4 paths, and without this mapping
+     * a pick from that root opened as a bind-less content:// project despite living on our storage.
      */
     fun resolveManageable(path: FsPath): FsPath = when (path) {
         is FsPath.Local -> path
@@ -334,13 +374,49 @@ class WorkspaceManager @Inject constructor(
 
     private fun safTreeToLocal(uri: Uri): File? = runCatching {
         val docId = android.provider.DocumentsContract.getTreeDocumentId(uri)
-        val parts = docId.split(":", limit = 2)
-        if (parts.getOrNull(0).equals("primary", ignoreCase = true)) {
-            File(android.os.Environment.getExternalStorageDirectory(), parts.getOrNull(1).orEmpty())
-        } else {
-            null
+        when {
+            uri.authority == "${context.packageName}.documents" -> File(docId)
+            else -> {
+                val parts = docId.split(":", limit = 2)
+                if (parts.getOrNull(0).equals("primary", ignoreCase = true)) {
+                    File(android.os.Environment.getExternalStorageDirectory(), parts.getOrNull(1).orEmpty())
+                } else {
+                    null
+                }
+            }
         }
     }.getOrNull()?.takeIf { it.isDirectory }
+
+    /**
+     * True when [path] is a Local folder already inside app-private ext4 storage (context.filesDir) —
+     * i.e. the "JCode Projects" DocumentsProvider or an existing project dir. Such picks already have a
+     * runtime bind mount and open in place; anything else (primary storage, cloud/third-party SAF) must
+     * be copied onto /sources first before the runtime can reach it.
+     */
+    fun isOnManagedStorage(path: FsPath): Boolean {
+        val file = (path as? FsPath.Local)?.file ?: return false
+        val root = runCatching { context.filesDir.canonicalFile }.getOrDefault(context.filesDir.absoluteFile)
+        val target = runCatching { file.canonicalFile }.getOrDefault(file.absoluteFile)
+        return target == root || target.path.startsWith(root.path + File.separator)
+    }
+
+    /**
+     * True when [path] resolves to the managed projects root itself (or an ancestor of it) — the
+     * "JCode Projects" DocumentsProvider makes that root pickable, but adopting it as a node would
+     * nest the whole managed tree inside itself.
+     */
+    fun isManagedRoot(path: FsPath): Boolean {
+        val picked = (resolveManageable(path) as? FsPath.Local)?.file
+            ?.let { runCatching { it.canonicalFile }.getOrDefault(it.absoluteFile) }
+            ?: return false
+        var dir: File? = runCatching { storageRoots.projectsRoot.canonicalFile }
+            .getOrDefault(storageRoots.projectsRoot.absoluteFile)
+        while (dir != null) {
+            if (dir == picked) return true
+            dir = dir.parentFile
+        }
+        return false
+    }
 
     /** True if the folder is tagged as a Workspace container in its `.jcode` config. */
     suspend fun isWorkspaceFolder(path: FsPath): Boolean = withContext(Dispatchers.IO) {
@@ -554,11 +630,14 @@ class WorkspaceManager @Inject constructor(
         return candidate
     }
 
+    /** Output never contains separators, and dot-only names ("." / "..") fall back like blank ones —
+     *  `File(base, sanitized)` can therefore never resolve to the base dir itself or escape it. */
     fun sanitizedFolderName(name: String): String {
         return name.lowercase()
             .replace(Regex("[^a-z0-9._-]+"), "-")
             .trim('-')
-            .ifBlank { "project" }
+            .takeUnless { it.isBlank() || it.all { c -> c == '.' } }
+            ?: "project"
     }
 
     // --- Folder type detection + assignment (.jcode is the source of truth; not stored in the DB) ---

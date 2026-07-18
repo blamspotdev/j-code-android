@@ -3,6 +3,8 @@ package dev.jcode.run
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import dev.jcode.core.config.BuildConfig
+import dev.jcode.core.config.ProjectConfigs
 import dev.jcode.core.config.RunConfig
 import dev.jcode.core.config.RunConfigStore
 import dev.jcode.core.config.RunConfigTerminal
@@ -82,30 +84,61 @@ object ProjectRunner {
         return null
     }
 
-    /**
-     * The run plan to actually use: a user-saved `.jcode/run.yaml` takes precedence; otherwise fall
-     * back to the template/filesystem-detected plan.
-     */
-    fun effectivePlan(project: Project): RunPlan? {
-        (project.fsPath as? FsPath.Local)?.file?.let { dir ->
-            RunConfigStore.load(dir)?.let { return it.toRunPlan() }
-        }
-        return detectRunPlan(project)
+    /** All saved build/run configs for [project] (empty if none written yet). */
+    fun loadProjectConfigs(project: Project): ProjectConfigs =
+        (project.fsPath as? FsPath.Local)?.file?.let { RunConfigStore.load(it) } ?: ProjectConfigs.EMPTY
+
+    fun saveProjectConfigs(project: Project, configs: ProjectConfigs) {
+        (project.fsPath as? FsPath.Local)?.file?.let { RunConfigStore.save(it, configs) }
     }
 
-    private fun RunConfig.toRunPlan(): RunPlan = RunPlan(
-        kindLabel = name,
-        readyPort = readyPort,
-        terminals = terminals.map { RunTerminal(it.label, it.command) },
-    )
+    /** Run configs to show/run: the saved ones, or a single detected default when none are saved. */
+    fun effectiveRuns(project: Project): List<RunConfig> {
+        val saved = loadProjectConfigs(project).runs
+        if (saved.isNotEmpty()) return saved
+        return detectRunPlan(project)?.let { listOf(it.toRunConfig()) }.orEmpty()
+    }
 
-    /** The saved run config for [project], or null if none has been written yet. */
-    fun loadRunConfig(project: Project): RunConfig? =
-        (project.fsPath as? FsPath.Local)?.file?.let { RunConfigStore.load(it) }
+    /** Build configs to show/build: the saved ones, or detected publish/release presets when none are saved. */
+    fun effectiveBuilds(project: Project): List<BuildConfig> {
+        val saved = loadProjectConfigs(project).builds
+        if (saved.isNotEmpty()) return saved
+        return detectBuildConfigs(project)
+    }
 
-    /** Persist [config] to the project's `.jcode/run.yaml`. */
-    fun saveRunConfig(project: Project, config: RunConfig) {
-        (project.fsPath as? FsPath.Local)?.file?.let { RunConfigStore.save(it, config) }
+    fun runConfigToPlan(config: RunConfig): RunPlan =
+        RunPlan(kindLabel = config.name, readyPort = config.readyPort, terminals = config.terminals.map { RunTerminal(it.label, it.command) })
+
+    private fun RunPlan.toRunConfig(): RunConfig =
+        RunConfig(name = kindLabel, readyPort = readyPort, terminals = terminals.map { RunConfigTerminal(it.label, it.command) })
+
+    /** Upsert a run config at [index] (append when [index] is null or out of range), then persist. */
+    fun upsertRun(project: Project, index: Int?, config: RunConfig) {
+        val configs = loadProjectConfigs(project)
+        val runs = configs.runs.toMutableList()
+        if (index != null && index in runs.indices) runs[index] = config else runs.add(config)
+        saveProjectConfigs(project, configs.copy(runs = runs))
+    }
+
+    fun upsertBuild(project: Project, index: Int?, config: BuildConfig) {
+        val configs = loadProjectConfigs(project)
+        val builds = configs.builds.toMutableList()
+        if (index != null && index in builds.indices) builds[index] = config else builds.add(config)
+        saveProjectConfigs(project, configs.copy(builds = builds))
+    }
+
+    fun deleteRun(project: Project, index: Int) {
+        val configs = loadProjectConfigs(project)
+        if (index in configs.runs.indices) {
+            saveProjectConfigs(project, configs.copy(runs = configs.runs.filterIndexed { i, _ -> i != index }))
+        }
+    }
+
+    fun deleteBuild(project: Project, index: Int) {
+        val configs = loadProjectConfigs(project)
+        if (index in configs.builds.indices) {
+            saveProjectConfigs(project, configs.copy(builds = configs.builds.filterIndexed { i, _ -> i != index }))
+        }
     }
 
     /** A [RunConfigPreset] paired with the display name of the extension that contributed it. */
@@ -123,14 +156,25 @@ object ProjectRunner {
         val config: RunConfig,
     )
 
+    /** A runnable trigger file — a `.csproj`, a `package.json`, `gradlew`, or an extension preset's
+     *  anchor — and the run options it offers. This is the two-level shape the "Add run config"
+     *  picker shows: pick a file, then one of its options. */
+    data class RunTrigger(
+        val label: String,
+        val kind: String,
+        val detail: String,
+        val options: List<RunSuggestion>,
+    )
+
     /**
-     * Scan [project]'s files (to [SCAN_DEPTH] levels, skipping dependency/VCS dirs) and propose run
-     * configs: .NET projects per `.csproj` (web vs console via `Microsoft.NET.Sdk.Web`, plus a
-     * combined ASP.NET + Vite recipe when both halves exist), Vite/npm apps per `package.json`, a
-     * Gradle build when `gradlew` is present, and every [extensionPresets] whose required files are
-     * ALL present. Blocking filesystem work — call from a background dispatcher.
+     * Scan [project]'s files (to [SCAN_DEPTH] levels, skipping dependency/VCS dirs) and group runnable
+     * entry points by their trigger file: one [RunTrigger] per `.csproj` (Run + Debug options — a
+     * single server invocation that lets the project build & serve its own client; port read from
+     * launchSettings), per `package.json` (one option per `scripts` entry), a Gradle build when
+     * `gradlew` is present, and every applicable [extensionPresets]. Blocking filesystem work — call
+     * from a background dispatcher.
      */
-    fun suggestRunConfigs(project: Project, extensionPresets: List<ExtensionRunPreset>): List<RunSuggestion> {
+    fun suggestRunTriggers(project: Project, extensionPresets: List<ExtensionRunPreset>): List<RunTrigger> {
         val root = (project.fsPath as? FsPath.Local)?.file?.takeIf(File::isDirectory) ?: return emptyList()
         val guestDir = project.distroBindTarget.trimEnd('/')
         val files = root.walkTopDown()
@@ -143,94 +187,20 @@ object ProjectRunner {
         fun guest(f: File) = "$guestDir/${rel(f)}"
         fun stage(suffix: String) = sanitizeStageName("${project.name}-$suffix")
 
-        // Extension presets are curated (named, multi-terminal) and go FIRST so the generic built-in
-        // probes below can't crowd them out of the SCAN_TOTAL_CAP-capped list in a busy monorepo.
-        val presetSuggestions = mutableListOf<RunSuggestion>()
-        val suggestions = mutableListOf<RunSuggestion>()
-
         val csprojs = files.filter { it.extension.equals("csproj", ignoreCase = true) }
             .map { it to runCatching { it.readText() }.getOrDefault("").contains("Microsoft.NET.Sdk.Web") }
         val packageJsons = files.filter { it.name == "package.json" }
             .map { it to runCatching { it.readText() }.getOrDefault("") }
         val viteJsons = packageJsons.filter { (_, text) -> text.contains("\"vite\"") }
+        // A web .csproj serves the client its own MSBuild SPA target builds into wwwroot; the client is
+        // resolved PER csproj (its <SpaRoot>, else a Vite package nested under its own dir) so a
+        // monorepo's services — or an unrelated standalone Vite folder — don't cross-wire.
+        val viteDirs = viteJsons.mapNotNull { it.first.parentFile }
 
-        val firstWebCsproj = csprojs.firstOrNull { it.second }?.first
-        val firstViteDir = viteJsons.firstOrNull()?.first?.parentFile
-        if (firstWebCsproj != null && firstViteDir != null) {
-            val clientGuest = if (firstViteDir == root) guestDir else guest(firstViteDir)
-            suggestions += RunSuggestion(
-                label = "ASP.NET Core + Vite (dev) — ${rel(firstWebCsproj)}",
-                source = "Detected",
-                config = RunConfig(
-                    name = "ASP.NET Core + Vite (dev)",
-                    readyPort = VITE_PORT,
-                    terminals = listOf(
-                        RunConfigTerminal("Server", dotnetProjectCommand(guest(firstWebCsproj), stage("server"), web = true)),
-                        RunConfigTerminal("Client", viteClientCommand(guestDir, stage("client"), VITE_PORT, clientGuest)),
-                    ),
-                ),
-            )
-        }
-        csprojs.take(SCAN_PER_KIND_CAP).forEach { (csproj, web) ->
-            val kind = if (web) "ASP.NET Core" else ".NET console"
-            suggestions += RunSuggestion(
-                label = "$kind — ${rel(csproj)}",
-                source = "Detected",
-                config = RunConfig(
-                    name = "$kind (${csproj.nameWithoutExtension})",
-                    readyPort = if (web) ASPNET_PORT else 0,
-                    terminals = listOf(
-                        RunConfigTerminal("Server", dotnetProjectCommand(guest(csproj), stage(csproj.nameWithoutExtension), web)),
-                    ),
-                ),
-            )
-        }
-        viteJsons.take(SCAN_PER_KIND_CAP).forEach { (json, _) ->
-            val dir = json.parentFile ?: return@forEach
-            val clientGuest = if (dir == root) guestDir else guest(dir)
-            suggestions += RunSuggestion(
-                label = "Vite dev server — ${rel(json)}",
-                source = "Detected",
-                config = RunConfig(
-                    name = "Vite dev server",
-                    readyPort = VITE_PORT,
-                    terminals = listOf(
-                        RunConfigTerminal("Client", viteClientCommand(guestDir, stage("client"), VITE_PORT, clientGuest)),
-                    ),
-                ),
-            )
-        }
-        (packageJsons - viteJsons.toSet()).take(SCAN_PER_KIND_CAP).forEach { (json, text) ->
-            val script = if (text.contains("\"dev\"")) "dev" else if (text.contains("\"start\"")) "start" else return@forEach
-            val dir = json.parentFile ?: return@forEach
-            val dirGuest = if (dir == root) guestDir else guest(dir)
-            suggestions += RunSuggestion(
-                label = "npm run $script — ${rel(json)}",
-                source = "Detected",
-                config = RunConfig(
-                    name = "npm run $script",
-                    readyPort = 0,
-                    terminals = listOf(RunConfigTerminal("Run", npmScriptCommand(dirGuest, stage("npm"), script))),
-                ),
-            )
-        }
-        if (File(root, "gradlew").isFile) {
-            suggestions += RunSuggestion(
-                label = "Gradle — assembleDebug",
-                source = "Detected",
-                config = RunConfig(
-                    name = "Gradle build (assembleDebug)",
-                    readyPort = 0,
-                    terminals = listOf(
-                        RunConfigTerminal("Build", "clear\nset -e\ncd \"$guestDir\"\nbash gradlew assembleDebug"),
-                    ),
-                ),
-            )
-        }
+        val triggers = mutableListOf<RunTrigger>()
 
-        // Extension presets: applicable only when EVERY `requires` glob matches some file. Each glob's
-        // first match feeds {{fileN}}/{{dirN}} (1-based) — and the first also {{file}}/{{dir}} — so a
-        // two-file preset (e.g. ASP.NET + Vite = a .csproj AND a package.json) can reference both.
+        // Extension presets are curated — each becomes a trigger with a single "Run" option, and they
+        // go first so a busy monorepo's generic probes can't crowd them past SCAN_TOTAL_CAP.
         extensionPresets.forEach { (source, preset) ->
             fun firstMatch(glob: String): File? {
                 val regex = runCatching { globToRegex(glob) }.getOrNull() ?: return null
@@ -250,19 +220,164 @@ object ProjectRunner {
                 }
                 return out
             }
-            presetSuggestions += RunSuggestion(
-                label = "${preset.label} — ${rel(anchor)}",
-                source = source,
-                config = RunConfig(
-                    name = preset.label,
-                    readyPort = preset.readyPort,
-                    terminals = preset.terminals.map { RunConfigTerminal(it.label, substitute(it.command)) },
+            triggers += RunTrigger(
+                label = preset.label,
+                kind = source,
+                detail = rel(anchor),
+                options = listOf(
+                    RunSuggestion(
+                        label = "Run",
+                        source = if (preset.readyPort > 0) ":${preset.readyPort}" else "${preset.terminals.size} terminal(s)",
+                        config = RunConfig(
+                            name = preset.label,
+                            readyPort = preset.readyPort,
+                            terminals = preset.terminals.map { RunConfigTerminal(it.label, substitute(it.command)) },
+                        ),
+                    ),
                 ),
             )
         }
 
-        return (presetSuggestions + suggestions).distinctBy { it.label }.take(SCAN_TOTAL_CAP)
+        // .NET: one trigger per .csproj, each with a Run and (when a source file is found) a Debug
+        // option. A web project with a detected client uses the single-endpoint recipe (client built
+        // into the server's wwwroot, served on one port); the port comes from launchSettings.
+        csprojs.take(SCAN_PER_KIND_CAP).forEach { (csproj, web) ->
+            val port = launchProfilePort(csproj, web)
+            val name = csproj.nameWithoutExtension
+            val client = spaClientDir(csproj, web, viteDirs)
+            val runCmd = if (client != null) {
+                aspnetSinglePortCommand(guest(csproj), if (client == root) guestDir else guest(client), stage("$name-server"), stage("$name-client"), port)
+            } else {
+                dotnetProjectCommand(guest(csproj), stage(name), web, port)
+            }
+            fun cfg(suffix: String, debug: String) = RunConfig(
+                name = "$name ($suffix)",
+                readyPort = port,
+                debugEntry = debug,
+                terminals = listOf(RunConfigTerminal("Server", runCmd)),
+            )
+            val detail = if (port > 0) ":$port" else "console"
+            val options = mutableListOf(RunSuggestion("Run", "dotnet · $detail", cfg("Run", "")))
+            programCsGuest(csproj) { guest(it) }?.let { prog ->
+                options += RunSuggestion("Debug", "netcoredbg · $detail", cfg("Debug", prog))
+            }
+            triggers += RunTrigger(
+                label = csproj.name,
+                kind = if (web) "C# · ASP.NET Core" else "C# · .NET",
+                detail = rel(csproj),
+                options = options,
+            )
+        }
+
+        // Node: one trigger per package.json, one option per script (a Vite "dev" script binds the dev
+        // server to 0.0.0.0 so the in-app browser can reach it).
+        packageJsons.take(SCAN_PER_KIND_CAP).forEach { (json, text) ->
+            val scripts = packageScripts(text)
+            if (scripts.isEmpty()) return@forEach
+            val dir = json.parentFile ?: return@forEach
+            val dirGuest = if (dir == root) guestDir else guest(dir)
+            val isVite = viteJsons.any { it.first == json }
+            val options = scripts.map { s ->
+                val serveDev = isVite && s == "dev"
+                val port = if (serveDev) VITE_PORT else 0
+                val cmd = if (serveDev) viteClientCommand(guestDir, stage(s), VITE_PORT, dirGuest)
+                    else npmScriptCommand(dirGuest, stage("npm-$s"), s)
+                RunSuggestion(
+                    label = "npm run $s",
+                    source = if (port > 0) ":$port" else "script",
+                    config = RunConfig(name = "npm run $s", readyPort = port, terminals = listOf(RunConfigTerminal("Run", cmd))),
+                )
+            }
+            triggers += RunTrigger(
+                label = if (dir == root) "package.json" else "${dir.name}/package.json",
+                kind = "Node",
+                detail = rel(json),
+                options = options,
+            )
+        }
+
+        if (File(root, "gradlew").isFile) {
+            triggers += RunTrigger(
+                label = "gradlew",
+                kind = "Gradle",
+                detail = "assembleDebug",
+                options = listOf(
+                    RunSuggestion(
+                        label = "assembleDebug",
+                        source = "build",
+                        config = RunConfig(
+                            name = "Gradle build (assembleDebug)",
+                            readyPort = 0,
+                            terminals = listOf(RunConfigTerminal("Build", "clear\nset -e\ncd \"$guestDir\"\nbash gradlew assembleDebug")),
+                        ),
+                    ),
+                ),
+            )
+        }
+
+        return triggers.filter { it.options.isNotEmpty() }.take(SCAN_TOTAL_CAP)
     }
+
+    /** The http(s) port from the .csproj's `Properties/launchSettings.json` first `applicationUrl`
+     *  (so the run serves — and the browser opens — the project's own port); [ASPNET_PORT] as a
+     *  fallback for a web project with no profile, 0 for a non-web project. */
+    private fun launchProfilePort(csproj: File, web: Boolean): Int {
+        if (!web) return 0
+        val dir = csproj.parentFile ?: return ASPNET_PORT
+        val ls = sequenceOf("Properties/launchSettings.json", "properties/launchSettings.json")
+            .map { File(dir, it) }.firstOrNull { it.isFile } ?: return ASPNET_PORT
+        // The first `commandName: "Project"` (Kestrel) profile's applicationUrl — NOT the file's first
+        // applicationUrl, which for stock templates is the iisSettings/IIS Express one on a different port.
+        val appUrl = runCatching {
+            val profiles = org.json.JSONObject(ls.readText()).optJSONObject("profiles") ?: return@runCatching null
+            val keys = profiles.keys()
+            while (keys.hasNext()) {
+                val p = profiles.optJSONObject(keys.next()) ?: continue
+                if (p.optString("commandName") == "Project") {
+                    p.optString("applicationUrl").takeIf { it.isNotBlank() }?.let { return@runCatching it }
+                }
+            }
+            null
+        }.getOrNull() ?: return ASPNET_PORT
+        // Prefer the http URL's port (the recipe serves plain http), else the first URL with a port.
+        val urls = appUrl.split(';').map(String::trim).filter { it.isNotEmpty() }
+        fun portOf(u: String) = Regex(":(\\d{2,5})").find(u.substringAfter("://").substringBefore('/'))?.groupValues?.get(1)?.toIntOrNull()
+        return urls.firstOrNull { it.startsWith("http://") }?.let(::portOf)
+            ?: urls.firstNotNullOfOrNull(::portOf)
+            ?: ASPNET_PORT
+    }
+
+    /** The Vite client dir a web [csproj] bundles: its own `<SpaRoot>` (the .NET SPA-template link,
+     *  resolved relative to the csproj), else a Vite package nested under the csproj's own directory;
+     *  null when the project ships no client — then a plain web run (no client build) is used. */
+    private fun spaClientDir(csproj: File, web: Boolean, viteDirs: List<File>): File? {
+        if (!web) return null
+        val dir = csproj.parentFile ?: return null
+        val text = runCatching { csproj.readText() }.getOrDefault("")
+        Regex("<SpaRoot>\\s*([^<]+?)\\s*</SpaRoot>", RegexOption.IGNORE_CASE).find(text)?.groupValues?.get(1)?.trim()?.let { raw ->
+            val resolved = File(dir, raw.replace('\\', '/').trimEnd('/')).normalize()
+            if (resolved.isDirectory && File(resolved, "package.json").isFile) return resolved
+        }
+        return viteDirs.firstOrNull { it != dir && it.absolutePath.startsWith(dir.absolutePath + File.separator) }
+    }
+
+    /** Guest path to a representative `.cs` source file (Program.cs / Startup.cs, else the first one)
+     *  next to [csproj] — the entry [RunConfig.debugEntry] points at so the debugger picks netcoredbg;
+     *  null when the project has no `.cs` file. */
+    private fun programCsGuest(csproj: File, guest: (File) -> String): String? {
+        val dir = csproj.parentFile ?: return null
+        val direct = sequenceOf("Program.cs", "Startup.cs").map { File(dir, it) }.firstOrNull { it.isFile }
+        val pick = direct ?: dir.walkTopDown().maxDepth(3)
+            .onEnter { it == dir || (it.name !in SCAN_SKIP_DIRS && !it.name.startsWith(".")) }
+            .firstOrNull { it.isFile && it.extension.equals("cs", ignoreCase = true) }
+        return pick?.let(guest)
+    }
+
+    /** The keys of the `scripts` object in a package.json's text, in file order ([] when absent). */
+    private fun packageScripts(text: String): List<String> = runCatching {
+        val scripts = org.json.JSONObject(text).optJSONObject("scripts") ?: return emptyList()
+        buildList { val keys = scripts.keys(); while (keys.hasNext()) add(keys.next()) }
+    }.getOrDefault(emptyList())
 
     // Glob → anchored Regex: `**` crosses directories (an optional trailing `/` is absorbed so
     // `**/*.csproj` also matches a root-level file), `*` stays within one path segment, `?` is one char.
@@ -284,17 +399,76 @@ object ProjectRunner {
     }
 
     /**
-     * The config the Configure page edits: the saved `run.yaml` if present, else a default derived
-     * from the detected plan, else a blank single-terminal starter for unrecognized projects.
+     * The run config the editor opens for [index]: the saved config at that index, else a default
+     * seeded from the detected plan, else a blank single-terminal starter (for a new config).
      */
-    fun editableRunConfig(project: Project): RunConfig {
-        loadRunConfig(project)?.let { return it }
-        val plan = detectRunPlan(project)
-        return if (plan != null) {
-            RunConfig(plan.kindLabel, plan.readyPort, plan.terminals.map { RunConfigTerminal(it.label, it.command) })
-        } else {
-            RunConfig(project.name, 0, listOf(RunConfigTerminal("Run", "")))
+    fun editableRunConfig(project: Project, index: Int?): RunConfig {
+        // Seed from the SAME list the panel shows (saved, or detected when none saved) so the row's
+        // index maps to the right config; a null index (New) starts from the detected plan or blank.
+        val runs = effectiveRuns(project)
+        if (index != null && index in runs.indices) return runs[index]
+        detectRunPlan(project)?.let { return it.toRunConfig() }
+        return RunConfig(project.name, 0, terminals = listOf(RunConfigTerminal("Run", "")))
+    }
+
+    /** The build config the editor opens for [index]: the effective one at that position, else blank. */
+    fun editableBuildConfig(project: Project, index: Int?): BuildConfig {
+        val builds = effectiveBuilds(project)
+        if (index != null && index in builds.indices) return builds[index]
+        return BuildConfig("Build", "")
+    }
+
+    /** Detected publish/release build presets: `dotnet publish`, `npm run build`, `gradle assembleRelease`. */
+    fun detectBuildConfigs(project: Project): List<BuildConfig> {
+        val root = (project.fsPath as? FsPath.Local)?.file?.takeIf(File::isDirectory) ?: return emptyList()
+        val guestDir = project.distroBindTarget.trimEnd('/')
+        val files = root.walkTopDown()
+            .maxDepth(SCAN_DEPTH)
+            .onEnter { dir -> dir == root || (dir.name !in SCAN_SKIP_DIRS && !dir.name.startsWith(".")) }
+            .filter { it.isFile }
+            .take(SCAN_FILE_CAP)
+            .toList()
+        fun rel(f: File) = f.relativeTo(root).invariantSeparatorsPath
+        fun guest(f: File) = "$guestDir/${rel(f)}"
+        fun stage(s: String) = sanitizeStageName("${project.name}-$s")
+        val out = mutableListOf<BuildConfig>()
+
+        files.firstOrNull { it.extension.equals("csproj", ignoreCase = true) }?.let { csproj ->
+            out += BuildConfig("Publish (Release) — ${rel(csproj)}", dotnetPublishCommand(guest(csproj), stage("publish")))
         }
+        files.firstOrNull { it.name == "package.json" && runCatching { it.readText() }.getOrNull()?.contains("\"build\"") == true }
+            ?.let { pkg ->
+                val dir = pkg.parentFile ?: root
+                val dirGuest = if (dir == root) guestDir else guest(dir)
+                out += BuildConfig("npm build — ${rel(pkg)}", npmBuildCommand(dirGuest, stage("npm-build")))
+            }
+        if (File(root, "gradlew").isFile) {
+            out += BuildConfig("Gradle — assembleRelease", "clear\nset -e\ncd \"$guestDir\"\nbash gradlew assembleRelease")
+        }
+        return out
+    }
+
+    private fun dotnetPublishCommand(csprojGuest: String, stageName: String): String = buildString {
+        appendLine("clear"); appendLine("set -e")
+        appendLine("CSPROJ=\"$csprojGuest\"")
+        appendLine("OUT=\"\$HOME/.jcode-build/$stageName\"")
+        appendLine("echo '== JCode: dotnet publish (Release) =='")
+        appendLine("rm -rf \"\$OUT\"")
+        appendLine("dotnet publish \"\$CSPROJ\" -c Release -o \"\$OUT\" --nologo")
+        appendLine("echo \"Published to \$OUT\"")
+    }
+
+    private fun npmBuildCommand(dirGuest: String, stageName: String): String = buildString {
+        appendLine("clear"); appendLine("set -e")
+        appendLine("SRC=\"$dirGuest\"")
+        appendLine("STAGE=\"\$HOME/.jcode-build/$stageName\"")
+        appendLine("echo '== JCode: npm run build =='")
+        appendLine("export npm_config_fund=false npm_config_audit=false")
+        appendLine("rm -rf \"\$STAGE\" && mkdir -p \"\$STAGE\" && cp -a \"\$SRC/.\" \"\$STAGE/\"")
+        appendLine("cd \"\$STAGE\"")
+        appendLine("npm install")
+        appendLine("npm run build")
+        appendLine("echo \"Built in \$STAGE\"")
     }
 
     // ASP.NET Core + Vite React, dev: the backend (Development, :5080) and the Vite dev server
@@ -431,6 +605,39 @@ object ProjectRunner {
             appendLine("ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS='http://0.0.0.0:$port' dotnet \"\$(basename \"\$CSPROJ\" .csproj).dll\"")
         }
 
+    // Single-endpoint ASP.NET Core: build the Vite client into the server's wwwroot and serve the API
+    // + SPA from one port (production-style — no dev server / HMR). The client is built on ext4 (FUSE
+    // /workspace can't host node_modules) with its output forced to `dist`, then copied into the
+    // SERVER SOURCE wwwroot BEFORE `dotnet build` — so the SPA is captured in the static-web-assets
+    // manifest and actually served (files dropped into the OUTPUT wwwroot after a Debug build are
+    // ignored: in Development the manifest-backed web root serves only build-time assets). Copying
+    // into wwwroot IS the build output for these projects (the .NET SPA template gitignores it).
+    // `-p:SkipSpaBuild=true` skips a build-time SPA build the .csproj gates on that property (the .NET
+    // SPA template convention — it would otherwise npm-build in the FUSE source tree and fail); a
+    // harmless no-op for projects that don't use it.
+    private fun aspnetSinglePortCommand(csprojGuest: String, clientDir: String, serverStage: String, clientStage: String, port: Int): String =
+        buildString {
+            appendLine("clear")
+            appendLine("set -e")
+            appendLine("CSPROJ=\"$csprojGuest\"")
+            appendLine("CLIENT=\"$clientDir\"")
+            appendLine("SRV=\"\$HOME/.jcode-run/$serverStage\"")
+            appendLine("STAGE=\"\$HOME/.jcode-run/$clientStage\"")
+            appendLine("WWWROOT=\"\$(dirname \"\$CSPROJ\")/wwwroot\"")
+            appendLine("echo '== JCode: ASP.NET Core (single endpoint — client built into wwwroot) =='")
+            appendLine("echo '[1/3] Building client (npm run build) on ext4...'")
+            appendLine("export npm_config_fund=false npm_config_audit=false")
+            appendLine("rm -rf \"\$STAGE\" && mkdir -p \"\$STAGE\" && cp -a \"\$CLIENT/.\" \"\$STAGE/\"")
+            appendLine("( cd \"\$STAGE\" && npm install && npm run build -- --outDir dist --emptyOutDir )")
+            appendLine("echo '[2/3] Publishing client -> server wwwroot + building server (dotnet build, Debug)...'")
+            appendLine("mkdir -p \"\$WWWROOT\" && cp -a \"\$STAGE/dist/.\" \"\$WWWROOT/\"")
+            appendLine("rm -rf \"\$SRV\"")
+            appendLine("dotnet build \"\$CSPROJ\" -c Debug -o \"\$SRV\" --nologo -p:SkipSpaBuild=true")
+            appendLine("echo '[3/3] Serving SPA + API on http://localhost:$port ...'")
+            appendLine("cd \"\$SRV\"")
+            appendLine("ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS='http://0.0.0.0:$port' dotnet \"\$(basename \"\$CSPROJ\" .csproj).dll\"")
+        }
+
     // Vite dev server (HMR). [clientDir] is the guest dir holding package.json (the project root for a
     // standalone app, or <project>/client for the ASP.NET + client layout). Staged to ext4 because the
     // FUSE /workspace can't host node_modules.
@@ -463,7 +670,7 @@ object ProjectRunner {
     // Generic .NET build & run for a specific .csproj (a suggested config for external projects, so
     // the project is built as-is — no TFM retargeting). Same noexec-safe shape as the template
     // recipe: build to ext4, launch the managed DLL via the dotnet host.
-    private fun dotnetProjectCommand(csprojGuest: String, stageName: String, web: Boolean): String =
+    private fun dotnetProjectCommand(csprojGuest: String, stageName: String, web: Boolean, port: Int): String =
         buildString {
             appendLine("clear")
             appendLine("set -e")
@@ -475,8 +682,8 @@ object ProjectRunner {
             appendLine("dotnet build \"\$CSPROJ\" -c Debug -o \"\$OUT\" --nologo")
             appendLine("cd \"\$OUT\"")
             if (web) {
-                appendLine("echo '[2/2] Starting server on http://localhost:$ASPNET_PORT (Development)...'")
-                appendLine("ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS='http://0.0.0.0:$ASPNET_PORT' dotnet \"\$(basename \"\$CSPROJ\" .csproj).dll\"")
+                appendLine("echo '[2/2] Starting server on http://localhost:$port (Development)...'")
+                appendLine("ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS='http://0.0.0.0:$port' dotnet \"\$(basename \"\$CSPROJ\" .csproj).dll\"")
             } else {
                 appendLine("echo '[2/2] Running...'")
                 appendLine("dotnet \"\$(basename \"\$CSPROJ\" .csproj).dll\"")
