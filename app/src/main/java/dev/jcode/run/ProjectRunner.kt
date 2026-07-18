@@ -170,6 +170,19 @@ object ProjectRunner {
                     ),
                 ),
             )
+            // Single-endpoint variant: one terminal that builds the client into the server's wwwroot
+            // and serves everything on one port (production-style; no dev server / HMR).
+            suggestions += RunSuggestion(
+                label = "ASP.NET Core + Vite (single endpoint) — ${rel(firstWebCsproj)}",
+                source = "Detected",
+                config = RunConfig(
+                    name = "ASP.NET Core + Vite (single endpoint)",
+                    readyPort = ASPNET_PORT,
+                    terminals = listOf(
+                        RunConfigTerminal("Server", aspnetSinglePortCommand(guest(firstWebCsproj), clientGuest, stage("server"), stage("client"))),
+                    ),
+                ),
+            )
         }
         csprojs.take(SCAN_PER_KIND_CAP).forEach { (csproj, web) ->
             val kind = if (web) "ASP.NET Core" else ".NET console"
@@ -429,6 +442,39 @@ object ProjectRunner {
             appendLine("echo '[2/2] Starting server on http://localhost:$port (Development)...'")
             appendLine("cd \"\$SRV\"")
             appendLine("ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS='http://0.0.0.0:$port' dotnet \"\$(basename \"\$CSPROJ\" .csproj).dll\"")
+        }
+
+    // Single-endpoint ASP.NET Core: build the Vite client into the server's wwwroot and serve the API
+    // + SPA from one port (production-style — no dev server / HMR). The client is built on ext4 (FUSE
+    // /workspace can't host node_modules) with its output forced to `dist`, then copied into the
+    // SERVER SOURCE wwwroot BEFORE `dotnet build` — so the SPA is captured in the static-web-assets
+    // manifest and actually served (files dropped into the OUTPUT wwwroot after a Debug build are
+    // ignored: in Development the manifest-backed web root serves only build-time assets). Copying
+    // into wwwroot IS the build output for these projects (the .NET SPA template gitignores it).
+    // `-p:SkipSpaBuild=true` skips a build-time SPA build the .csproj gates on that property (the .NET
+    // SPA template convention — it would otherwise npm-build in the FUSE source tree and fail); a
+    // harmless no-op for projects that don't use it.
+    private fun aspnetSinglePortCommand(csprojGuest: String, clientDir: String, serverStage: String, clientStage: String): String =
+        buildString {
+            appendLine("clear")
+            appendLine("set -e")
+            appendLine("CSPROJ=\"$csprojGuest\"")
+            appendLine("CLIENT=\"$clientDir\"")
+            appendLine("SRV=\"\$HOME/.jcode-run/$serverStage\"")
+            appendLine("STAGE=\"\$HOME/.jcode-run/$clientStage\"")
+            appendLine("WWWROOT=\"\$(dirname \"\$CSPROJ\")/wwwroot\"")
+            appendLine("echo '== JCode: ASP.NET Core (single endpoint — client built into wwwroot) =='")
+            appendLine("echo '[1/3] Building client (npm run build) on ext4...'")
+            appendLine("export npm_config_fund=false npm_config_audit=false")
+            appendLine("rm -rf \"\$STAGE\" && mkdir -p \"\$STAGE\" && cp -a \"\$CLIENT/.\" \"\$STAGE/\"")
+            appendLine("( cd \"\$STAGE\" && npm install && npm run build -- --outDir dist --emptyOutDir )")
+            appendLine("echo '[2/3] Publishing client -> server wwwroot + building server (dotnet build, Debug)...'")
+            appendLine("mkdir -p \"\$WWWROOT\" && cp -a \"\$STAGE/dist/.\" \"\$WWWROOT/\"")
+            appendLine("rm -rf \"\$SRV\"")
+            appendLine("dotnet build \"\$CSPROJ\" -c Debug -o \"\$SRV\" --nologo -p:SkipSpaBuild=true")
+            appendLine("echo '[3/3] Serving SPA + API on http://localhost:$ASPNET_PORT ...'")
+            appendLine("cd \"\$SRV\"")
+            appendLine("ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS='http://0.0.0.0:$ASPNET_PORT' dotnet \"\$(basename \"\$CSPROJ\" .csproj).dll\"")
         }
 
     // Vite dev server (HMR). [clientDir] is the guest dir holding package.json (the project root for a

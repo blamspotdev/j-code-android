@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,10 +25,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import dev.jcode.core.config.RunConfig
 import dev.jcode.core.config.RunConfigTerminal
 import dev.jcode.design.CompactFilledButton
@@ -53,6 +56,7 @@ fun RunConfigPage(
     val terminals = remember { mutableStateListOf<RunConfigTerminal>().apply { addAll(initial.terminals) } }
     var dirty by remember { mutableStateOf(false) }
     var savedOnce by remember { mutableStateOf(false) }
+    var showPresets by remember { mutableStateOf(false) }
 
     fun buildConfig() = RunConfig(
         name = name.ifBlank { "Run" },
@@ -78,26 +82,11 @@ fun RunConfigPage(
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
         if (suggestions.isNotEmpty()) {
-            Text("Presets", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            Text(
-                "Detected from this project's files (some from installed extensions). " +
-                    "Use fills the form — review, then Save.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            CompactOutlinedButton(
+                text = "Presets (${suggestions.size})",
+                onClick = { showPresets = true },
+                modifier = Modifier.fillMaxWidth(),
             )
-            suggestions.forEach { suggestion ->
-                PresetRow(
-                    label = suggestion.label,
-                    source = suggestion.source,
-                    onUse = {
-                        name = suggestion.config.name
-                        port = suggestion.config.readyPort.takeIf { it > 0 }?.toString().orEmpty()
-                        terminals.clear()
-                        terminals.addAll(suggestion.config.terminals)
-                        dirty = true
-                    },
-                )
-            }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
         }
 
@@ -172,6 +161,74 @@ fun RunConfigPage(
             onClick = { onSave(buildConfig()); savedOnce = true; dirty = false },
             modifier = Modifier.fillMaxWidth(),
         )
+    }
+
+    if (showPresets) {
+        PresetsDialog(
+            suggestions = suggestions,
+            onUse = { suggestion ->
+                name = suggestion.config.name
+                port = suggestion.config.readyPort.takeIf { it > 0 }?.toString().orEmpty()
+                terminals.clear()
+                terminals.addAll(suggestion.config.terminals)
+                dirty = true
+                showPresets = false
+            },
+            onDismiss = { showPresets = false },
+        )
+    }
+}
+
+/** Modal listing the detected/extension run presets; picking one prefills the form and closes. */
+@Composable
+private fun PresetsDialog(
+    suggestions: List<ProjectRunner.RunSuggestion>,
+    onUse: (ProjectRunner.RunSuggestion) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    // Cap the scrollable list to ~half the viewport (never past 340dp) so the header + Close button
+    // stay on-screen even in short phone-landscape windows.
+    val listMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.5f).coerceIn(160f, 340f).dp
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("Presets", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Detected from this project's files (some from installed extensions). " +
+                        "Use fills the form — review, then Save.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = listMaxHeight)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    suggestions.forEach { suggestion ->
+                        PresetRow(
+                            label = suggestion.label,
+                            source = suggestion.source,
+                            onUse = { onUse(suggestion) },
+                        )
+                    }
+                }
+                CompactOutlinedButton(
+                    text = "Close",
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.End),
+                )
+            }
+        }
     }
 }
 
