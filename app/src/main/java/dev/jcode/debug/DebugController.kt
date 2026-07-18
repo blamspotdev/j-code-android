@@ -71,6 +71,18 @@ class DebugController(
             _state.value = DebugState.ERROR
             return
         }
+        // The JVM entry is a JDWP placeholder with no DAP adapter — launching it would just hang on
+        // the `initialize` request until it times out. Fail fast with an actionable message instead.
+        if (!engine.dapAdapter) {
+            pushOutput(
+                "Debugging ${hostPath.substringAfterLast('/')} isn't available yet: JCode has no " +
+                    "built-in ${engine.name} adapter.\nRun the program with " +
+                    "`-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:5005` in a terminal " +
+                    "and attach an external debugger.\n",
+            )
+            _state.value = DebugState.ERROR
+            return
+        }
         // STARTING covers the prepare phase (a .NET build can take a while) so the UI shows progress
         // before any adapter process exists.
         _state.value = DebugState.STARTING

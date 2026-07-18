@@ -27,6 +27,9 @@ data class DebugEngineEntry(
     val extensions: List<String> = emptyList(),
     /** SDK catalog ids this adapter needs (e.g. netcoredbg needs the dotnet SDK). Installed first. */
     val requiredSdks: List<String> = emptyList(),
+    /** False for entries that don't ship a real DAP adapter (the JVM/JDWP placeholder): the runtime
+     *  must not try to launch them, or the `initialize` request just hangs until it times out. */
+    val dapAdapter: Boolean = true,
 )
 
 enum class DebugEngineAction(val label: String) {
@@ -128,11 +131,11 @@ object DebugEngineCatalog {
             id = "java-debug",
             category = "JVM",
             name = "Java / Kotlin (JDWP)",
-            description = "JVM debugging via JDWP. Advanced: launch your app with " +
-                "-agentlib:jdwp and attach. A full DAP adapter (java-debug) is installed manually.",
+            description = "JVM debugging via JDWP attach — JCode has no built-in DAP launcher for the " +
+                "JVM yet. Run your app with -agentlib:jdwp and attach an external debugger.",
             installCommand = "echo 'JVM debug uses JDWP. Run your app with " +
-                "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005 and attach. " +
-                "For a DAP adapter, install microsoft java-debug manually, then re-run Verify.'",
+                "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005 and attach an " +
+                "external debugger. JCode has no built-in JVM DAP launcher yet.'",
             verifyCommand = "command -v java >/dev/null 2>&1 && java -version",
             uninstallCommand = "echo 'Nothing to remove for JDWP-based debugging.'",
             adapterCommand = "echo 'java-debug adapter not installed; use JDWP attach'",
@@ -140,6 +143,7 @@ object DebugEngineCatalog {
             debugType = "java",
             languageIds = listOf("java", "kotlin"),
             extensions = listOf(".java", ".kt", ".kts"),
+            dapAdapter = false,
         ),
     )
 
