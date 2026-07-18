@@ -1668,23 +1668,32 @@ private fun JCodeShell(
     var runInProgress by remember { mutableStateOf(false) }
     var runningProjectId by remember { mutableStateOf<Long?>(null) }
     var runningRunName by remember { mutableStateOf<String?>(null) }
+    // The terminals of the current/most-recent run. Kept until the NEXT run (or a stop/exit) so a new
+    // run tears these down first — strictly one run-config's terminals exist per project at a time,
+    // even after the command has finished (its terminal stays open showing output until replaced).
     var runSessionIds by remember { mutableStateOf<List<String>>(emptyList()) }
+    // Run terminals whose command reported completion (OSC 7713); the run is "done" once all have.
+    var runDoneSessionIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var runPollJob by remember { mutableStateOf<Job?>(null) }
 
-    // A run's terminal(s) going away — the server crashed/exited (EOF), or the user closed the tab or
-    // killed it from the Task Manager — must clear the WHOLE run state, else the Build & Run row stays
-    // stuck on "Running". Manual close doesn't fire the exit listener, so both paths call this.
+    // Clear the ACTIVE-run status (so the UI shows Run again) without touching [runSessionIds] — the
+    // terminals stay for teardown-on-next-run. A run is no longer active once its command is done/killed.
+    fun clearRunActiveStatus() {
+        runPollJob?.cancel()
+        runPollJob = null
+        runInProgress = false
+        runUrl = null
+        runningProjectId = null
+        runningRunName = null
+    }
+
+    // A run terminal going away — the server crashed/exited (EOF), the user closed the tab, or killed
+    // it from the Task Manager — drops it from the run and clears the active status when none remain.
     val onRunSessionGone: (String) -> Unit = { sessionId ->
         if (sessionId in runSessionIds) {
             runSessionIds = runSessionIds.filterNot { it == sessionId }
-            if (runSessionIds.isEmpty()) {
-                runPollJob?.cancel()
-                runPollJob = null
-                runInProgress = false
-                runUrl = null
-                runningProjectId = null
-                runningRunName = null
-            }
+            runDoneSessionIds = runDoneSessionIds - sessionId
+            if (runSessionIds.isEmpty()) clearRunActiveStatus()
         }
     }
 
@@ -1711,11 +1720,17 @@ private fun JCodeShell(
         onDispose { TerminalSessionHost.setUiExitListener(null) }
     }
 
-    // A run's command reporting completion (OSC 7713, emitted after the command) unbinds the run from
-    // that terminal: the run is done (or was killed) even though the terminal stays open showing its
-    // output. onRunSessionGone ignores non-run sessions, so setup/manual terminals are unaffected.
+    // A run command reporting completion (OSC 7713, emitted after the command) marks that terminal
+    // done. The run is done once every one of its commands has completed — then the active status
+    // clears (UI shows Run again), but the terminals stay open with their output until the next run
+    // tears them down. Non-run sessions (setup/manual) aren't in runSessionIds, so they're ignored.
     LaunchedEffect(runTerminalCompletions) {
-        runTerminalCompletions.collect { (sessionId, _) -> onRunSessionGone(sessionId) }
+        runTerminalCompletions.collect { (sessionId, _) ->
+            if (sessionId in runSessionIds) {
+                runDoneSessionIds = runDoneSessionIds + sessionId
+                if (runSessionIds.all { it in runDoneSessionIds }) clearRunActiveStatus()
+            }
+        }
     }
 
     // Build & Run the selected project: spawn a dedicated terminal in the right drawer, stream the
@@ -1760,6 +1775,7 @@ private fun JCodeShell(
         }
         if (startedIds.isEmpty()) return
         runSessionIds = startedIds
+        runDoneSessionIds = emptySet()
         runningProjectId = project.id
         runningRunName = config.name
         selectTerminalSession(startedIds.last()) // focus the frontend terminal
@@ -1821,17 +1837,15 @@ private fun JCodeShell(
     // Stop the current run: Ctrl-C the run terminal (graceful server/build shutdown) and reset run
     // state. The terminal session is kept so its output stays visible and a re-run can reuse it.
     fun handleStopRun() {
-        runPollJob?.cancel()
         OutputLog.append("■ Stopped run")
         runSessionIds.forEach { id ->
             if (id in terminalSessionIds && terminalSessionManager.getSession(id) != null) {
                 terminalSessionManager.sendInput(id, byteArrayOf(0x03)) // Ctrl-C / SIGINT
             }
         }
-        runInProgress = false
-        runUrl = null
-        runningProjectId = null
-        runningRunName = null
+        // Killed: clear the active status. The terminals stay in runSessionIds so the next run tears
+        // them down — only one run-config's terminals exist per project.
+        clearRunActiveStatus()
     }
 
     fun closeTerminalSession(sessionId: String) {
