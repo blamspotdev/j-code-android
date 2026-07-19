@@ -174,6 +174,7 @@ class DebugController(
                 tcpPort = null,
             )
             "coreclr" -> prepareDotnet(engine, hostPath, projectDir)
+            "java" -> prepareJava(engine, hostPath, projectDir)
             "pwa-node" -> {
                 val port = randomDebugPort()
                 LaunchPlan(
@@ -269,6 +270,47 @@ class DebugController(
         val dll = java.io.File(csprojDir, "bin/Debug").walkTopDown()
             .firstOrNull { it.extension == "dll" && (name == null || it.nameWithoutExtension == name) }
         return dll?.let { hostToDistro(it.path) }
+    }
+
+    /** Compile the enclosing Java sources with javac and launch the main class under the java-debug
+     *  adapter (source alone won't run). The adapter speaks DAP over stdio, so there's no TCP leg. */
+    private suspend fun prepareJava(engine: DebugEngineEntry, hostPath: String, projectDir: String): LaunchPlan {
+        val srcFile = java.io.File(hostPath)
+        val text = runCatching { srcFile.readText() }.getOrDefault("")
+        if (!Regex("""static\s+void\s+main\s*\(\s*String""").containsMatchIn(text)) {
+            throw dev.jcode.core.debug.DebugException(
+                "No `public static void main(String[])` in ${srcFile.name} — open the file with main().",
+            )
+        }
+        // Java requires the public type to match the file name, so that's the main class.
+        val pkg = Regex("""(?m)^\s*package\s+([\w.]+)\s*;""").find(text)?.groupValues?.get(1)
+        val mainFqn = (pkg?.let { "$it." } ?: "") + srcFile.nameWithoutExtension
+        // Source root = the directory above the package path (default package → the file's own dir).
+        var root = srcFile.parentFile ?: srcFile
+        pkg?.split('.')?.forEach { root = root.parentFile ?: root }
+        val srcRootDistro = hostToDistro(root.path)
+        val classesDir = "/tmp/jcode-java-classes"
+        pushOutput("Compiling ${srcFile.name} (javac)…\n")
+        val build = distroService.exec(
+            command = "rm -rf '$classesDir' && mkdir -p '$classesDir' && cd '$srcRootDistro' && " +
+                "javac -g -encoding UTF-8 -d '$classesDir' \$(find . -name '*.java')",
+            workdir = srcRootDistro,
+            timeoutMs = 300_000L,
+            onLine = { pushOutput(it + "\n") },
+        )
+        if (!build.succeeded) {
+            throw dev.jcode.core.debug.DebugException("javac failed (exit ${build.exitCode ?: build.internalError}).")
+        }
+        pushOutput("Launching $mainFqn under ${engine.name}…\n")
+        val distroCwd = hostToDistro(projectDir)
+        val config = baseConfig("java", distroCwd).apply {
+            put("mainClass", mainFqn)
+            put("classPaths", JSONArray().put(classesDir))
+            put("sourcePaths", JSONArray().put(srcRootDistro))
+            put("vmArgs", "-Djava.net.preferIPv4Stack=true")
+            put("args", "")
+        }
+        return LaunchPlan(distroCwd, config, engine.adapterCommand, tcpPort = null)
     }
 
     private fun baseConfig(type: String, cwd: String): JSONObject = JSONObject().apply {
