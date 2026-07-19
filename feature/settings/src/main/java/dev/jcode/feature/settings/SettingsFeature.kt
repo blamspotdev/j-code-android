@@ -247,7 +247,7 @@ object SettingsFeature {
             SettingsCard(
                 title = "Theme bundle",
                 description = "Color palette applied across the app.",
-                keywords = "theme bundle color palette catppuccin dracula nord scheme appearance",
+                keywords = "theme bundle color palette catppuccin dracula midnight oled black scheme appearance",
             ) {
                 val activeBundle = themeBundleId.ifEmpty { ThemeBundleRegistry.default.id }
                 ThemeBundleRegistry.builtIns.forEach { bundle ->
