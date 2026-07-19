@@ -1,0 +1,15 @@
+// This directory is a self-contained Gradle build for the Java debug adapter,
+// intentionally kept OUT of the Android application's build so its Java-17/JDI
+// toolchain doesn't perturb the app modules.
+rootProject.name = 'jcode-java-dap'
+
+// ---------------------------------------------------------------------------
+// Alternatively, to fold this module into the ROOT JCode Gradle build instead
+// of building it standalone, delete this file and add the following line to the
+// repository-root settings.gradle (or settings.gradle.kts):
+//
+//     include ':tools:java-dap'
+//
+// (Groovy DSL: include ':tools:java-dap'
+//  Kotlin  DSL: include(":tools:java-dap"))
+// ---------------------------------------------------------------------------

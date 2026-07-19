@@ -1,0 +1,64 @@
+// Standalone Gradle build for the JCode Java debug adapter (stdio DAP server).
+// Requires Gradle 8.x (shadow 8.1.1) and a JDK 17+ to run the build.
+//
+// Build:   gradle shadowJar   (or: gradle build)
+// Output:  build/libs/jcode-java-dap.jar   (Main-Class: dev.jcode.javadap.Main)
+// Run:     java -jar build/libs/jcode-java-dap.jar --source-path /abs/src/root
+//          (the DAP client speaks over this process's stdin/stdout)
+
+plugins {
+    id 'java'
+    id 'application'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+}
+
+group = 'dev.jcode'
+version = '0.1.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // NOTE: the task brief named groupId "com.microsoft.java.debug", but the artifact
+    // is actually published on Maven Central under groupId "com.microsoft.java".
+    // (Verified: com.microsoft.java:com.microsoft.java.debug.core:0.53.1 resolves.)
+    implementation 'com.microsoft.java:com.microsoft.java.debug.core:0.53.1'
+
+    // We implement IHotCodeReplaceProvider, whose getEventHub() returns
+    // io.reactivex.Observable. RxJava 2 is a compile-scope transitive dependency of
+    // java-debug-core (2.2.21), but declare it explicitly since our own source imports it.
+    implementation 'io.reactivex.rxjava2:rxjava:2.2.21'
+}
+
+application {
+    mainClass = 'dev.jcode.javadap.Main'
+}
+
+// com.sun.jdi lives in the JDK module jdk.jdi. It is a default root module at runtime
+// (unqualified export), so `java -jar` needs no extra flags. At compile time it is also
+// normally resolved for classpath code, but add it explicitly to be safe across JDKs.
+// NOTE: harmless if already resolved; drop this block if your JDK rejects the flag.
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs += ['--add-modules', 'jdk.jdi']
+    options.encoding = 'UTF-8'
+}
+
+shadowJar {
+    archiveBaseName = 'jcode-java-dap'
+    archiveClassifier = ''
+    archiveVersion = ''
+    manifest {
+        attributes 'Main-Class': 'dev.jcode.javadap.Main'
+    }
+}
+
+// Make the default `build` lifecycle produce the fat jar.
+tasks.named('build') {
+    dependsOn tasks.named('shadowJar')
+}
