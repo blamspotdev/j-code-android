@@ -116,12 +116,12 @@ resolution lives in the JDT plugin we don't ship — which is exactly what
    VMDisconnect stack trace is java-debug-core's benign teardown noise (fires
    after `terminated`). The main engineering unknown (core handlers + providers
    outside the JDT plugin) is resolved.
-3. **On-device leg-2 verification (in progress — the real remaining gate).** Runs
-   the same stdio spike *inside proot* against the real fat jar: `javac`-compile
-   a HelloWorld in the guest, launch it via the adapter, confirm the breakpoint
-   pauses. Exercises the adapter→debuggee JDWP `dt_socket` loopback under proot.
-   If it stalls (like js-debug's leg 1), fall back to attach mode with an
-   explicit `address=127.0.0.1:<port>,server=y,suspend=y`.
+3. ~~On-device leg-2 verification~~ — **DONE, PASS** (Odin2, ubuntu-24.04 guest,
+   openjdk-21-jdk-headless). The same stdio spike run *inside proot* against the
+   real fat jar hit the breakpoint (`HelloWorld.main:5`, `total=0/i=1`), re-hit
+   across loop iterations on `continue`, streamed output, and exited cleanly. The
+   adapter→debuggee JDWP `dt_socket` loopback works under proot — no attach-mode
+   fallback needed. Leg 1 (stdio) + leg 2 (JDWP) both confirmed on-device.
 4. **Publish the shaded jar as a GitHub release asset** (the catalog
    `installCommand` points at a placeholder `java-dap-v1/jcode-java-dap.jar` URL —
    publish the real asset, then confirm the URL matches). *Outward-facing —
