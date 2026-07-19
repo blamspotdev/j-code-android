@@ -3486,18 +3486,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Launch the DAP debugger on [config]'s debug entry (a guest source path). */
-    fun startDebugForConfig(config: dev.jcode.core.config.RunConfig) {
-        val entry = config.debugEntry.trim()
-        if (entry.isBlank()) {
-            _messages.tryEmit("Set a debug entry for '${config.name}' in Configure to debug it.")
-            return
-        }
-        val host = guestToHostInProject(entry)?.second?.absolutePath
+    fun startDebugForConfig(project: Project, config: dev.jcode.core.config.RunConfig) {
+        val host = deriveDebugEntryHost(project, config)
         if (host == null) {
-            _messages.tryEmit("Debug entry not found: $entry")
+            _messages.tryEmit(
+                "Nothing debuggable in '${config.name}'. Open a .py/.js/.ts/.cs file, tap a line's gutter to " +
+                    "set a breakpoint, then tap Debug.",
+            )
             return
         }
         startDebug(host)
+    }
+
+    /**
+     * Resolve the source file the Debug action launches under the debugger — VS-style "just debug it",
+     * no manual field. Priority: the config's explicit [RunConfig.debugEntry], then a source file named
+     * in a run command (`node dbg.js`, `python3 app/main.py`), then the active editor tab. Only files
+     * whose language has a built-in DAP engine qualify. Returns a host absolute path, or null.
+     */
+    private fun deriveDebugEntryHost(project: Project, config: dev.jcode.core.config.RunConfig): String? {
+        val projHost = (project.fsPath as? FsPath.Local)?.file
+        val bind = project.distroBindTarget.trimEnd('/')
+
+        fun hostOf(guestOrRel: String): File? {
+            val s = guestOrRel.trim()
+            if (s.isBlank()) return null
+            return if (s.startsWith("/")) {
+                guestToHostInProject(s)?.second ?: projHost?.let { File(it, s.removePrefix(bind).trimStart('/')) }
+            } else {
+                projHost?.let { File(it, s.removePrefix("./")) }
+            }
+        }
+
+        // 1. Explicit debug entry (guest path).
+        hostOf(config.debugEntry)?.takeIf { it.isFile }?.let { return it.absolutePath }
+
+        // 2. A source file named in any run command.
+        val rx = Regex("""(?:\./)?[\w./-]+\.(?:py|pyw|js|jsx|ts|tsx|mjs|cjs|cs|c|cpp|cc|rs)""")
+        for (t in config.terminals) {
+            for (m in rx.findAll(t.command)) {
+                hostOf(m.value)?.takeIf { it.isFile && debugController.canDebugFile(it.absolutePath) }
+                    ?.let { return it.absolutePath }
+            }
+        }
+
+        // 3. The active editor file, if its language has a debug engine.
+        _editorGroup.value.activeTab?.filePath?.path
+            ?.takeIf { it.isNotBlank() && debugController.canDebugFile(it) }
+            ?.let { return it }
+
+        return null
     }
 
     fun selectEditorTab(tabId: String) {

@@ -112,6 +112,7 @@ internal val LocalIssueActions = compositionLocalOf { IssueActions() }
 /** Run/Build/Debug callbacks for the Run panel + config editors, bundled (see register-limit note). */
 internal data class WorkbenchRunActions(
     val onRun: (Project, RunConfig) -> Unit,
+    val onDebug: (Project, RunConfig) -> Unit,
     val onBuild: (Project, BuildConfig) -> Unit,
     val onStop: () -> Unit,
     val onOpenInBrowser: () -> Unit,

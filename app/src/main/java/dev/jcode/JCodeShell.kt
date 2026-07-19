@@ -1184,6 +1184,7 @@ fun JCodeApp(
         onSelectDistro = { viewModel.selectWizardDistro(it) },
         onAutoSetup = viewModel::runAutoSetup,
         onConfigureRun = viewModel::openRunConfigPage,
+        onDebugConfig = viewModel::startDebugForConfig,
         onConfigureBuild = viewModel::openBuildConfigPage,
         onSaveRunConfig = viewModel::saveRunConfig,
         onSaveRunConfigs = viewModel::saveRunConfigs,
@@ -1343,6 +1344,7 @@ private fun JCodeShell(
     onAutoSetup: () -> Unit,
     onSelectDistro: (DistroProfile) -> Unit,
     onConfigureRun: (Project, Int?) -> Unit,
+    onDebugConfig: (Project, RunConfig) -> Unit,
     onConfigureBuild: (Project, Int?) -> Unit,
     onSaveRunConfig: (Project, Int?, RunConfig) -> Unit,
     onSaveRunConfigs: (Project, List<RunConfig>) -> Unit,
@@ -2207,6 +2209,7 @@ private fun JCodeShell(
 
     val runActions = WorkbenchRunActions(
         onRun = { project, config -> handleRun(project, config) },
+        onDebug = onDebugConfig,
         onBuild = { project, config -> handleBuild(project, config) },
         onStop = ::handleStopRun,
         onOpenInBrowser = {
@@ -2981,6 +2984,7 @@ private fun WorkspacePanel(
                         runConfigVersion = runConfigVersion,
                         debugUi = LocalDebugSession.current,
                         onRun = runActions.onRun,
+                        onDebug = runActions.onDebug,
                         onBuild = runActions.onBuild,
                         onStop = runActions.onStop,
                         onOpenInBrowser = runActions.onOpenInBrowser,

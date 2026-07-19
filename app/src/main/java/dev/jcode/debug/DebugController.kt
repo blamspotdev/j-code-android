@@ -34,6 +34,18 @@ class DebugController(
     private val scope: CoroutineScope,
 ) {
     private var session: DebugSession? = null
+    /** The session that owns the current stopped thread (root, or a js-debug child) — step/continue target. */
+    private var activeSession: DebugSession? = null
+    /** js-debug child sessions (the debuggee runs here); empty for single-session adapters. */
+    private val children = java.util.concurrent.CopyOnWriteArrayList<DebugSession>()
+    /** Current breakpoints (host path -> 0-based lines), so freshly-spawned child sessions get them too. */
+    private var currentBps: Map<String, Set<Int>> = emptyMap()
+    /** Distro cwd of the active launch, reused as the child sessions' project root. */
+    private var sessionCwd: String = ""
+    /** The root js-debug adapter's TCP port, used as a fallback child-server port. */
+    private var rootTcpPort: Int? = null
+    /** Guards [endSession] so a terminated event + child cleanup can't tear down twice. */
+    private var ended = false
 
     private val _state = MutableStateFlow(DebugState.DISCONNECTED)
     val state: StateFlow<DebugState> = _state.asStateFlow()
@@ -64,6 +76,8 @@ class DebugController(
     /** Start debugging [hostPath] (its language picks the engine) with the current [bps] breakpoints. */
     fun startDebug(hostPath: String, projectDir: String, bps: Map<String, Set<Int>>) {
         stop()
+        currentBps = bps
+        ended = false
         val engine = engineForFile(hostPath)
         _output.value = emptyList()
         if (engine == null) {
@@ -95,11 +109,11 @@ class DebugController(
                 _state.value = DebugState.ERROR
                 return@launch
             }
-            beginSession(engine, plan, hostPath, bps)
+            beginSession(engine, plan, hostPath)
         }
     }
 
-    private fun beginSession(engine: DebugEngineEntry, plan: LaunchPlan, hostPath: String, bps: Map<String, Set<Int>>) {
+    private fun beginSession(engine: DebugEngineEntry, plan: LaunchPlan, hostPath: String) {
         val transportFactory: (String) -> DapTransport? = { command ->
             val proc = distroService.spawnDapProcess(
                 command, workdir = plan.distroCwd, userOverride = plan.user, extraPath = plan.adapterPath,
@@ -111,24 +125,23 @@ class DebugController(
                 else -> ProcessTransport(proc)
             }
         }
+        sessionCwd = plan.distroCwd
+        rootTcpPort = plan.tcpPort
         val s = DebugSession(engine.debugType, plan.distroCwd, transportFactory)
         session = s
+        activeSession = s
         s.onOutput = { _, text -> pushOutput(text) }
-        s.onTerminated = {
-            _location.value = null
-            // The adapter keeps waiting for another client after the debuggee exits — close the
-            // transport so proot's --kill-on-exit reaps the adapter tree instead of leaking it.
-            s.close()
-            if (session === s) session = null
-            _state.value = DebugState.TERMINATED
-        }
+        s.onTerminated = { endSession() }
+        // js-debug (multi-session): the root adapter asks us — via a `startDebugging` reverse request —
+        // to open the CHILD session where the debuggee runs and breakpoints bind. Single-session adapters
+        // (python/coreclr/lldb) never fire this, so this is inert for them.
+        s.onStartDebugging = { request, config -> spawnChild(request, config) }
         // While preparing we hold STARTING; ignore the fresh session's initial DISCONNECTED so the
         // panel doesn't flicker back to the launch row between build and adapter start.
         scope.launch { s.state.collect { if (!(it == DebugState.DISCONNECTED && _state.value == DebugState.STARTING)) _state.value = it } }
-        scope.launch { s.stopped.collect { st -> if (st != null) onStopped(st) else clearStoppedView() } }
+        scope.launch { s.stopped.collect { st -> if (st != null) onStopped(s, st) else clearStoppedView() } }
 
-        val distroBreakpoints = bps.mapKeys { hostToDistro(it.key) }
-            .mapValues { entry -> entry.value.map { it + 1 } } // DAP lines are 1-based
+        val distroBreakpoints = distroBps() // DAP lines are 1-based; applied on `initialized`
         pushOutput("Starting ${engine.name} on ${hostPath.substringAfterLast('/')}…\n")
         scope.launch {
             runCatching { s.start(plan.adapterCommand, "launch", plan.config, distroBreakpoints) }
@@ -258,8 +271,61 @@ class DebugController(
 
     private fun randomDebugPort(): Int = 41000 + kotlin.random.Random.nextInt(4000)
 
-    private fun onStopped(st: StoppedInfo) {
-        val s = session ?: return
+    /** Current breakpoints as distro-path -> 1-based lines (DAP convention). */
+    private fun distroBps(): Map<String, List<Int>> =
+        currentBps.mapKeys { hostToDistro(it.key) }.mapValues { e -> e.value.sorted().map { it + 1 } }
+
+    /**
+     * js-debug multi-session: open a CHILD DAP session by connecting to the `__jsDebugChildServer` port
+     * the root adapter handed us. The debuggee runs and breakpoints bind in the child, so its stopped /
+     * call-stack / variables / output feed the same UI; [activeSession] follows whichever child last
+     * stopped so step/continue target the right one. Children can nest (workers / child processes).
+     */
+    private fun spawnChild(request: String, config: JSONObject) {
+        val port = config.optString("__jsDebugChildServer", "").toIntOrNull() ?: rootTcpPort
+        if (port == null) {
+            pushOutput("js-debug requested a child session without a server port; cannot attach.\n")
+            return
+        }
+        val childType = config.optString("type", session?.debugType ?: "pwa-node")
+        // We advertise no runInTerminal support and reject it, so force internalConsole (program output
+        // via DAP `output` events) — otherwise a propagated terminal console would strand the debuggee.
+        config.put("console", "internalConsole")
+        val childFactory: (String) -> DapTransport? = { _ -> SocketTransport.connect("127.0.0.1", port, 12_000L) }
+        val child = DebugSession(childType, sessionCwd, childFactory)
+        children.add(child)
+        activeSession = child
+        child.onOutput = { _, text -> pushOutput(text) }
+        child.onStartDebugging = { req, cfg -> spawnChild(req, cfg) }
+        child.onTerminated = { onChildTerminated(child) }
+        scope.launch { child.stopped.collect { st -> if (st != null) onStopped(child, st) else clearStoppedView() } }
+        // Only the child's STOPPED/RUNNING drive the UI; its start-up states would flicker the panel.
+        scope.launch {
+            child.state.collect { st ->
+                if (st == DebugState.STOPPED || st == DebugState.RUNNING) _state.value = st
+            }
+        }
+        scope.launch {
+            runCatching { child.start(adapterCommand = "", request = request, configuration = config, breakpoints = distroBps()) }
+            // start() swallows its own failures into DISCONNECTED/ERROR; if the child never reached a live
+            // session (e.g. it couldn't connect to the child server), clean it up so it doesn't hang the run.
+            if (child.state.value == DebugState.DISCONNECTED || child.state.value == DebugState.ERROR) {
+                pushOutput("Child debug session couldn't connect to the js-debug child server.\n")
+                onChildTerminated(child)
+            }
+        }
+    }
+
+    private fun onChildTerminated(child: DebugSession) {
+        if (activeSession === child) { activeSession = session; _location.value = null }
+        children.remove(child)
+        runCatching { child.close() }
+        // The debuggee(s) ended once no child remains — end the whole session.
+        if (children.isEmpty()) endSession()
+    }
+
+    private fun onStopped(s: DebugSession, st: StoppedInfo) {
+        activeSession = s
         scope.launch {
             runCatching {
                 val frames = s.stackTrace(st.threadId)
@@ -295,10 +361,14 @@ class DebugController(
         _variables.value = emptyList()
     }
 
-    /** Called when the user toggles a breakpoint; pushes to a live session. */
+    /** Called when the user toggles a breakpoint; remembers it and pushes to every live session. */
     fun onBreakpointsChanged(hostPath: String, lines: Set<Int>) {
-        val s = session ?: return
-        scope.launch { runCatching { s.setBreakpoints(hostToDistro(hostPath), lines.sorted().map { it + 1 }) } }
+        currentBps = currentBps.toMutableMap().apply { if (lines.isEmpty()) remove(hostPath) else put(hostPath, lines) }
+        val distroPath = hostToDistro(hostPath)
+        val distroLines = lines.sorted().map { it + 1 }
+        // Breakpoints bind in the child sessions (js-debug); harmless on a single-session root.
+        val targets = buildList { session?.let { add(it) }; addAll(children) }
+        targets.forEach { s -> scope.launch { runCatching { s.setBreakpoints(distroPath, distroLines) } } }
     }
 
     fun resume() = withThread { s, t -> s.continueThread(t) }
@@ -312,7 +382,7 @@ class DebugController(
      * Backs the editor's long-press variable inspection.
      */
     fun evaluate(expression: String, onResult: (String?) -> Unit) {
-        val s = session
+        val s = activeSession ?: session
         val frameId = _callStack.value.firstOrNull()?.id
         if (s == null || frameId == null || _state.value != DebugState.STOPPED) {
             onResult(null)
@@ -327,14 +397,32 @@ class DebugController(
     }
 
     fun stop() {
+        ended = true // a late `terminated` event must not resurrect the session as TERMINATED
+        children.forEach { runCatching { it.close() } }
+        children.clear()
         session?.close()
         session = null
+        activeSession = null
         _state.value = DebugState.DISCONNECTED
         clearStoppedView()
     }
 
+    /** A debuggee-driven end (root or last child terminated): tear everything down, exactly once. */
+    private fun endSession() {
+        if (ended) return
+        ended = true
+        _location.value = null
+        children.forEach { runCatching { it.close() } }
+        children.clear()
+        // Close the root so proot's --kill-on-exit reaps the adapter tree instead of leaking it.
+        session?.let { runCatching { it.close() } }
+        session = null
+        activeSession = null
+        _state.value = DebugState.TERMINATED
+    }
+
     private inline fun withThread(crossinline block: suspend (DebugSession, Int) -> Unit) {
-        val s = session ?: return
+        val s = activeSession ?: session ?: return
         val t = s.stopped.value?.threadId ?: s.threads.value.firstOrNull()?.id ?: 1
         scope.launch { runCatching { block(s, t) } }
     }
@@ -348,6 +436,10 @@ class DebugController(
         val ext = "." + hostPath.substringAfterLast('.', "")
         return DebugEngineCatalog.BUILT_IN.firstOrNull { ext in it.extensions }
     }
+
+    /** True if [hostPath]'s language has a built-in DAP engine — the single source of truth for
+     *  whether the Debug action can launch it (used by run-config entry derivation). */
+    fun canDebugFile(hostPath: String): Boolean = engineForFile(hostPath) != null
 
     private fun hostToDistro(p: String): String =
         dev.jcode.core.distro.WorkspaceHostPaths.hostToGuest(p).replace("\\", "/")
@@ -386,10 +478,9 @@ private class TcpTransport private constructor(
     private val input = socket.getInputStream()
     private val output = socket.getOutputStream()
 
-    init {
-        Thread { runCatching { process.errorStream.bufferedReader().forEachLine { } } }
-            .apply { isDaemon = true }.start()
-    }
+    // stdout/stderr are already being drained by connect()'s logging threads (started before the
+    // connect loop so the adapter's pipes never fill and any startup error is captured) — the DAP
+    // stream itself flows over the socket, so nothing more to drain here.
 
     override fun read(buffer: ByteArray): Int = try { input.read(buffer) } catch (e: Exception) { -1 }
     override fun write(bytes: ByteArray) {
@@ -401,16 +492,80 @@ private class TcpTransport private constructor(
     }
 
     companion object {
-        /** Retry-connect until the adapter is listening or [timeoutMs] elapses / the process dies. */
+        /**
+         * Retry-connect until the adapter is listening or [timeoutMs] elapses / the process dies.
+         * A TCP adapter (js-debug) talks DAP over the socket, but still prints startup logs/errors to
+         * its stdout/stderr pipes. Drain BOTH from the moment it spawns — otherwise a full pipe blocks
+         * node before it binds the port (a silent "connect timeout"). The drained lines go to logcat
+         * (tag JCodeDAP-adapter) and a bounded tail so a died/never-bound adapter reports WHY.
+         */
         fun connect(host: String, port: Int, process: Process, timeoutMs: Long): TcpTransport? {
+            val tail = java.util.concurrent.ConcurrentLinkedQueue<String>()
+            fun drain(stream: java.io.InputStream, tag: String) = Thread {
+                runCatching {
+                    stream.bufferedReader().forEachLine { line ->
+                        android.util.Log.d("JCodeDAP-adapter", "[$tag] $line")
+                        tail.add("[$tag] $line"); while (tail.size > 60) tail.poll()
+                    }
+                }
+            }.apply { isDaemon = true }.start()
+            drain(process.inputStream, "out")
+            drain(process.errorStream, "err")
             val deadline = System.currentTimeMillis() + timeoutMs
             while (System.currentTimeMillis() < deadline) {
-                if (!process.isAlive) return null
+                if (!process.isAlive) {
+                    val code = runCatching { process.exitValue() }.getOrNull()
+                    android.util.Log.e(
+                        "JCodeDAP-adapter",
+                        "adapter exited early (code=$code) before $host:$port was reachable; output:\n" +
+                            tail.joinToString("\n"),
+                    )
+                    return null
+                }
                 val sock = runCatching {
                     java.net.Socket().apply { connect(java.net.InetSocketAddress(host, port), 1000) }
                 }.getOrNull()
                 if (sock != null) return TcpTransport(sock, process)
                 Thread.sleep(200)
+            }
+            android.util.Log.e(
+                "JCodeDAP-adapter",
+                "adapter never became reachable on $host:$port within ${timeoutMs}ms; output:\n" +
+                    tail.joinToString("\n"),
+            )
+            return null
+        }
+    }
+}
+
+/**
+ * A plain socket [DapTransport] for a js-debug CHILD session: connects to the `__jsDebugChildServer`
+ * port the root adapter provides. Unlike [TcpTransport] it owns no process — the root adapter process
+ * hosts every child server, so closing the root (proot `--kill-on-exit`) reaps the children too; this
+ * only closes its own socket.
+ */
+private class SocketTransport private constructor(private val socket: java.net.Socket) : DapTransport {
+    private val input = socket.getInputStream()
+    private val output = socket.getOutputStream()
+
+    override fun read(buffer: ByteArray): Int = try { input.read(buffer) } catch (e: Exception) { -1 }
+    override fun write(bytes: ByteArray) {
+        try { output.write(bytes); output.flush() } catch (_: Exception) {}
+    }
+    override fun close() {
+        runCatching { socket.close() }
+    }
+
+    companion object {
+        /** Retry-connect to the child DAP server until it accepts or [timeoutMs] elapses. */
+        fun connect(host: String, port: Int, timeoutMs: Long): SocketTransport? {
+            val deadline = System.currentTimeMillis() + timeoutMs
+            while (System.currentTimeMillis() < deadline) {
+                val sock = runCatching {
+                    java.net.Socket().apply { connect(java.net.InetSocketAddress(host, port), 1000) }
+                }.getOrNull()
+                if (sock != null) return SocketTransport(sock)
+                Thread.sleep(100)
             }
             return null
         }

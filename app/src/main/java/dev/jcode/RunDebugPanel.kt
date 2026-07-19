@@ -55,7 +55,7 @@ import kotlinx.coroutines.withContext
 /**
  * The "Run" side-panel. In a User Workspace it first lists projects; tapping one opens a Build | Run
  * segmented detail. In the Default Workspace it goes straight to the open project's detail. The Run
- * segment lists run configs (each with Run ▷ / Configure) plus the live debug session; the Build
+ * segment lists run configs (each with Run ▷ / Debug 🐞 / Configure) plus the live debug session; the Build
  * segment lists build tasks (each with Build ▷ / Configure). Multiple configs of each kind are
  * supported. Execution is orchestrated by the workbench shell via the callbacks.
  */
@@ -70,6 +70,7 @@ internal fun RunPanel(
     runConfigVersion: Int,
     debugUi: DebugSessionUi,
     onRun: (Project, RunConfig) -> Unit,
+    onDebug: (Project, RunConfig) -> Unit,
     onBuild: (Project, BuildConfig) -> Unit,
     onStop: () -> Unit,
     onOpenInBrowser: () -> Unit,
@@ -125,6 +126,7 @@ internal fun RunPanel(
                 runConfigVersion = runConfigVersion,
                 debugUi = debugUi,
                 onRun = onRun,
+                onDebug = onDebug,
                 onBuild = onBuild,
                 onStop = onStop,
                 onOpenInBrowser = onOpenInBrowser,
@@ -151,6 +153,7 @@ private fun ProjectRunBuildDetail(
     runConfigVersion: Int,
     debugUi: DebugSessionUi,
     onRun: (Project, RunConfig) -> Unit,
+    onDebug: (Project, RunConfig) -> Unit,
     onBuild: (Project, BuildConfig) -> Unit,
     onStop: () -> Unit,
     onOpenInBrowser: () -> Unit,
@@ -187,6 +190,7 @@ private fun ProjectRunBuildDetail(
                     runUrl = if (running) runUrl else null,
                     deletable = runsDeletable,
                     onRun = { onRun(project, config) },
+                    onDebug = { onDebug(project, config) },
                     onStop = onStop,
                     onOpenInBrowser = onOpenInBrowser,
                     onConfigure = { onConfigureRun(project, index) },
@@ -436,6 +440,7 @@ private fun RunConfigRow(
     runUrl: String?,
     deletable: Boolean,
     onRun: () -> Unit,
+    onDebug: () -> Unit,
     onStop: () -> Unit,
     onOpenInBrowser: () -> Unit,
     onConfigure: () -> Unit,
@@ -468,6 +473,9 @@ private fun RunConfigRow(
                     IconAction(jcIcon(JCodeIcon.Stop), "Stop", MaterialTheme.colorScheme.error, onStop, size = 20)
                 } else {
                     IconAction(jcIcon(JCodeIcon.Run), "Run", MaterialTheme.colorScheme.primary, onRun, enabled = config.terminals.any { it.command.isNotBlank() }, size = 20)
+                    // Launch under the debugger (VS-style): set gutter breakpoints, tap Debug, pause on hit.
+                    // The entry is auto-derived from the command / active file — no manual field to fill in.
+                    IconAction(jcIcon(JCodeIcon.Debug), "Debug", MaterialTheme.colorScheme.tertiary, onDebug, size = 20)
                 }
                 IconAction(jcIcon(JCodeIcon.Settings), "Configure", MaterialTheme.colorScheme.onSurfaceVariant, onConfigure, size = 18)
                 if (!running && deletable) IconAction(Icons.Rounded.DeleteOutline, "Delete", MaterialTheme.colorScheme.onSurfaceVariant, onDelete, size = 18)
