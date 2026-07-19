@@ -79,8 +79,19 @@ Java_dev_jcode_core_term_VtParser_nativeDrainOsc(JNIEnv* env, jclass clazz, jlon
         return NULL;
     }
 
-    // One scratch buffer reused for every event: "<code>;" prefix + payload.
-    jchar* chars = (jchar*)malloc((VT_OSC_BUFFER_CAP + 16) * sizeof(jchar));
+    // One scratch buffer reused for every event, sized to the largest payload — the OSC
+    // accumulator grows past VT_OSC_BUFFER_CAP now (clipboard writes), so a fixed size would
+    // truncate what the parser preserved.
+    size_t scratch = 64;
+    for (int idx = 0; idx < count; idx++) {
+        int code = 0;
+        const char* payload = "";
+        if (vt_parser_osc_event_at(parser, idx, &code, &payload)) {
+            size_t need = strlen(payload) + 16;
+            if (need > scratch) scratch = need;
+        }
+    }
+    jchar* chars = (jchar*)malloc(scratch * sizeof(jchar));
     if (!chars) {
         vt_parser_osc_clear(parser);
         return NULL;
@@ -95,7 +106,7 @@ Java_dev_jcode_core_term_VtParser_nativeDrainOsc(JNIEnv* env, jclass clazz, jlon
         if (n > (int)sizeof(prefix) - 1) n = (int)sizeof(prefix) - 1;
         int total = 0;
         for (int k = 0; k < n; k++) chars[total++] = (jchar)prefix[k];
-        for (const char* p = payload; *p && total < VT_OSC_BUFFER_CAP + 16; p++) {
+        for (const char* p = payload; *p && total < (int)scratch; p++) {
             chars[total++] = (jchar)(uint8_t)*p;
         }
         jstring s = (*env)->NewString(env, chars, total);
@@ -106,6 +117,30 @@ Java_dev_jcode_core_term_VtParser_nativeDrainOsc(JNIEnv* env, jclass clazz, jlon
     free(chars);
     vt_parser_osc_clear(parser);
     return result;
+}
+
+// Drains the pending answerback bytes (DA/DSR/CPR/DECRQM/OSC-color replies) queued during feed.
+// Returns NULL when nothing is pending — the common case. The reader loop writes the returned
+// bytes straight to the PTY, completing the query round-trip terminal programs expect.
+JNIEXPORT jbyteArray JNICALL
+Java_dev_jcode_core_term_VtParser_nativeTakeResponses(JNIEnv* env, jclass clazz, jlong handle) {
+    (void)clazz;
+    VtParser* parser = (VtParser*)handle;
+    if (!parser || parser->response_len == 0) return NULL;
+    uint8_t buf[VT_RESPONSE_CAP];
+    int n = vt_parser_take_responses(parser, buf, (int)sizeof(buf));
+    if (n <= 0) return NULL;
+    jbyteArray out = (*env)->NewByteArray(env, n);
+    if (!out) return NULL;
+    (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte*)buf);
+    return out;
+}
+
+// Packed VT_MODE_* snapshot of the input-affecting DEC private modes (see vt_parser.h / VtParser.kt).
+JNIEXPORT jint JNICALL
+Java_dev_jcode_core_term_VtParser_nativeGetInputModes(JNIEnv* env, jclass clazz, jlong handle) {
+    (void)env; (void)clazz;
+    return vt_parser_input_modes((VtParser*)handle);
 }
 
 JNIEXPORT void JNICALL
@@ -190,10 +225,19 @@ Java_dev_jcode_core_term_VtParser_nativeReadRow(JNIEnv* env, jclass clazz, jlong
     if (cols * 4 > capacity) cols = capacity / 4;
     if (cols <= 0) return 0;
 
+    // Resolve the row base once — the per-cell vt_parser_cell_at re-ran the live/scrollback
+    // resolution (bounds checks + ring modulo) for every one of the ~5k cells packed per frame.
+    const VtCell* base = vt_parser_row_ptr(parser, row);
+    int avail = 0;
+    if (base) {
+        avail = vt_parser_row_cols(parser, row);
+        if (avail > cols) avail = cols;
+    }
+
     jint* buf = (*env)->GetIntArrayElements(env, out, NULL);
     if (!buf) return 0;
     for (int col = 0; col < cols; col++) {
-        const VtCell* cell = vt_parser_cell_at(parser, row, col);
+        const VtCell* cell = col < avail ? base + col : NULL;
         jint* dst = buf + col * 4;
         if (!cell) {
             dst[0] = ' ';
@@ -221,29 +265,14 @@ Java_dev_jcode_core_term_VtParser_nativeGetScrollbackSize(JNIEnv* env, jclass cl
     return vt_parser_scrollback_count((VtParser*)handle);
 }
 
-JNIEXPORT void JNICALL
-Java_dev_jcode_core_term_VtParser_nativeClearDirty(JNIEnv* env, jobject thiz) {
-    VtParser* parser = get_parser(env, thiz);
-    if (parser) {
-        vt_parser_clear_dirty(parser);
-    }
-}
-
-JNIEXPORT jboolean JNICALL
-Java_dev_jcode_core_term_VtParser_nativeIsRowDirty(JNIEnv* env, jobject thiz, jint row) {
-    VtParser* parser = get_parser(env, thiz);
-    if (!parser || !parser->dirty_rows) return JNI_FALSE;
-    const VtScreen* screen = vt_parser_get_screen(parser);
-    if (!screen) return JNI_FALSE;
-    
-    if (row < 0 || row >= screen->rows) return JNI_FALSE;
-    return parser->dirty_rows[row] ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_dev_jcode_core_term_VtParser_nativeNeedsFullRefresh(JNIEnv* env, jobject thiz) {
-    VtParser* parser = get_parser(env, thiz);
-    return parser && parser->full_refresh ? JNI_TRUE : JNI_FALSE;
+// Monotonic count of lines ever pushed into scrollback — unlike scrollback size, it keeps growing
+// once the ring is full, so a scrolled-back view can tell "content shifted under me" from "nothing
+// I can see changed" (the render-skip + anchor logic in TerminalView.onUpdate).
+JNIEXPORT jlong JNICALL
+Java_dev_jcode_core_term_VtParser_nativeGetScrollbackPushed(JNIEnv* env, jclass clazz, jlong handle) {
+    (void)env; (void)clazz;
+    const VtParser* parser = (const VtParser*)handle;
+    return parser ? (jlong)parser->scrollback_pushed : 0;
 }
 
 JNIEXPORT jint JNICALL
