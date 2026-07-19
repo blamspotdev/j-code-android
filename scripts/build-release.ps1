@@ -61,12 +61,34 @@ Say "JCode release build (Windows) - repo: $RepoRoot"
 # Security invariant: JCode must never escalate to host root (proot userspace only).
 if (Test-Path "scripts/check-no-host-root.sh") {
     Say "Checking no-host-root invariant..."
-    $bash = Get-Command bash -ErrorAction SilentlyContinue
-    if ($bash) {
-        & bash scripts/check-no-host-root.sh
-        if ($LASTEXITCODE -ne 0) { Fail "Host-root escalation detected - aborting release build." }
+    # Use GIT's bash specifically. `Get-Command bash` can resolve to WSL's System32\bash.exe,
+    # which has no /bin/bash and exits non-zero — which must NOT be mistaken for a violation.
+    $bashExe = $null
+    $gitExe = (Get-Command git -ErrorAction SilentlyContinue).Source
+    if ($gitExe) {
+        $gitRoot = Split-Path (Split-Path $gitExe)
+        foreach ($cand in @("$gitRoot\bin\bash.exe", "$gitRoot\usr\bin\bash.exe")) {
+            if (Test-Path $cand) { $bashExe = $cand; break }
+        }
+    }
+    if (-not $bashExe) {
+        $bashExe = (Get-Command bash -ErrorAction SilentlyContinue |
+            Where-Object { $_.Source -notmatch '\\System32\\' } | Select-Object -First 1).Source
+    }
+    if ($bashExe) {
+        $guardOut = (& $bashExe scripts/check-no-host-root.sh 2>&1 | Out-String)
+        $guardExit = $LASTEXITCODE
+        Write-Host $guardOut.TrimEnd()
+        # The scanner exits 1 ONLY on a real finding, 0 when clean. Any other code = it
+        # couldn't run (warn, don't block — CI + pre-commit still enforce). Don't string-match
+        # the output: the clean message itself contains the words "host-root escalation".
+        if ($guardExit -eq 1) {
+            Fail "Host-root escalation detected - aborting release build."
+        } elseif ($guardExit -ne 0) {
+            Warn "Could not run the no-host-root scan cleanly (exit $guardExit); skipping (CI and the pre-commit hook still enforce it)."
+        }
     } else {
-        Warn "bash not found; skipping local no-host-root scan (CI and the pre-commit hook still enforce it)."
+        Warn "Git Bash not found; skipping local no-host-root scan (CI and the pre-commit hook still enforce it)."
     }
 }
 
