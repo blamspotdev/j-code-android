@@ -4,8 +4,8 @@ import android.content.res.Configuration
 import android.view.KeyEvent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.isImeVisible
@@ -41,19 +41,19 @@ fun WorkbenchExtraKeysBar(modifier: Modifier = Modifier) {
     val mode = if (landscape) setting.landscape else setting.portrait
     if (mode == ExtraKeysVisibility.Hidden) return
     val state = LocalExtraKeysState.current
-    // Animate the row's height instead of mount/unmount: a single-frame bottom-bar height jump
-    // forces the Scaffold to relayout the whole editor/terminal area in one frame at each keyboard
-    // toggle (a visible hitch on top of the already-per-frame IME relayout). Render from the last
-    // non-null target so a focus loss (target -> null) animates out too instead of unmounting; the
-    // 200ms tweens keep both bar animations inside the IME animation window (the default spring's
-    // settle tail would keep resizing the terminal after the keyboard stops).
+    // Fade, don't size-tween: the workbench snaps its IME padding to the animation target in one
+    // relayout, and a height tween here would put the Scaffold content back on a per-frame relayout
+    // treadmill for 200ms (the exact keyboard-toggle jank the snap removed). A fade animates only
+    // layer alpha — the row claims its space in the same single relayout as the keyboard snap.
+    // Render from the last non-null target so a focus loss (target -> null) fades out too instead
+    // of unmounting mid-transition.
     var lastTarget by remember { mutableStateOf<ExtraKeysTarget?>(null) }
     state.target?.let { if (lastTarget !== it) lastTarget = it }
     val target = lastTarget ?: return
     AnimatedVisibility(
         visible = state.target != null && (mode != ExtraKeysVisibility.WithKeyboard || WindowInsets.isImeVisible),
-        enter = expandVertically(tween(200)),
-        exit = shrinkVertically(tween(200)),
+        enter = fadeIn(tween(120)),
+        exit = fadeOut(tween(120)),
     ) {
         ExtraKeysRow(target = target, state = state, modifier = modifier)
     }
@@ -71,15 +71,16 @@ fun rememberBottomStatusBarVisible(): Boolean = when (LocalBottomBarSetting.curr
 /**
  * Hosts the bottom status bar behind [rememberBottomStatusBarVisible]. A restartable slot so the
  * helper's IME-inset read recomposes only this composable (value-returning composables invalidate
- * their CALLER — previously the whole Scaffold bottomBar), and the bar's height animates with the
- * keyboard instead of popping in a single frame.
+ * their CALLER — previously the whole Scaffold bottomBar). Fades rather than size-tweens for the
+ * same reason as [WorkbenchExtraKeysBar]: a height animation re-lays-out the Scaffold content every
+ * frame, which is the keyboard-toggle jank the snapped IME padding removed.
  */
 @Composable
 fun BottomStatusBarSlot(content: @Composable () -> Unit) {
     AnimatedVisibility(
         visible = rememberBottomStatusBarVisible(),
-        enter = expandVertically(tween(200)),
-        exit = shrinkVertically(tween(200)),
+        enter = fadeIn(tween(120)),
+        exit = fadeOut(tween(120)),
     ) {
         content()
     }

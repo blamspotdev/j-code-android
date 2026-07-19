@@ -79,7 +79,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.imeAnimationTarget
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -1287,6 +1288,7 @@ fun JCodeApp(
 
 }
 
+@OptIn(ExperimentalLayoutApi::class) // WindowInsets.imeAnimationTarget (snap IME padding)
 @Composable
 private fun JCodeShell(
     windowInfo: JCodeWindowInfo,
@@ -2711,7 +2713,11 @@ private fun JCodeShell(
         }
     }
 
-    Box(modifier = modifier.fillMaxSize().imePadding()) {
+    // imeAnimationTarget, not imePadding: following the IME animation re-lays-out the ENTIRE shell on
+    // every frame of the keyboard slide (~27ms of measure/layout per frame on low-end hardware — the
+    // dominant source of keyboard-toggle frame drops). Snapping the padding to the animation's target
+    // does ONE relayout per toggle; the keyboard then slides over an already-settled layout.
+    Box(modifier = modifier.fillMaxSize().windowInsetsPadding(WindowInsets.imeAnimationTarget)) {
         if (usesModalWorkspace) {
             ModalNavigationDrawer(
                 drawerState = compactDrawerState,
