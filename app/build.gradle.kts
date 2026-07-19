@@ -4,18 +4,19 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// Auto-versioning (no CI): versionName is the semver in /VERSION.txt (start 1.0.0), or an override
-// passed as `-PjcodeVersionName=…` (the release script uses this to tag a pre-release, e.g. 1.0.2-beta).
-// versionCode is derived from that semver as MAJOR*10000 + MINOR*100 + PATCH — monotonic,
+// The app version — actual Android metadata, single source of truth (VERSION.txt is gone).
+// The release scripts parse the `val jcodeVersion = "…"` line below, and `-PjcodeVersionName=…`
+// still overrides for pre-release tagging (the Beta build passes e.g. 1.3.3-beta).
+// versionCode is derived from the semver as MAJOR*10000 + MINOR*100 + PATCH — monotonic,
 // deterministic, offline, and independent of git history (a squash-merge collapsed the old
-// git-commit-count scheme and produced downgrades). Pre-release suffixes (e.g. -rc1) are
-// ignored. Both degrade to safe fallbacks when VERSION.txt is missing/unparseable. This must
-// match the same formula in scripts/build-release.ps1 ($Code) and build-release-common.sh (CODE).
+// git-commit-count scheme and produced downgrades). Pre-release suffixes (e.g. -beta) are
+// ignored by the derivation. The formula must match scripts/build-release.ps1 ($Code) and
+// build-release-common.sh (CODE).
+val jcodeVersion = "1.3.3"
+
 val jcodeVersionName: String =
     (project.findProperty("jcodeVersionName") as? String)?.trim()?.takeIf { it.isNotBlank() }
-        ?: runCatching { rootProject.file("VERSION.txt").readText().trim() }
-            .getOrNull()?.takeIf { it.isNotBlank() }
-        ?: "1.0.0"
+        ?: jcodeVersion
 
 val jcodeVersionCode: Int = runCatching {
     val (major, minor, patch) = Regex("""^(\d+)\.(\d+)\.(\d+)""")
