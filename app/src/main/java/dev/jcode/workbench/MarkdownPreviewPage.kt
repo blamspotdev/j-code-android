@@ -69,6 +69,7 @@ fun MarkdownPreviewPage(
     tab: EditorTab,
     dark: Boolean,
     languagePacks: List<InstalledExtension>,
+    mermaidScript: File? = null,
     modifier: Modifier = Modifier,
 ) {
     val state = tab.editorState ?: return
@@ -111,7 +112,9 @@ fun MarkdownPreviewPage(
                 }
                 val body = runCatching { MarkdownHtml.render(text, palette, packResolver, budgetedImages) }
                     .getOrDefault("<pre>Preview unavailable.</pre>")
-                "document.getElementById('md').innerHTML = " + JSONObject.quote(body) + ";"
+                // The mermaid pass is a no-op stub unless the shell loaded the extension's engine.
+                "document.getElementById('md').innerHTML = " + JSONObject.quote(body) + ";" +
+                    "window.jcodeRenderMermaid&&window.jcodeRenderMermaid();"
             }
         }
     }
@@ -256,11 +259,25 @@ fun MarkdownPreviewPage(
                             menuAt = downX to downY
                             true
                         }
-                        val shell = shellDocument(colorScheme, semantic)
-                        loadUrl(
-                            "data:text/html;charset=utf-8;base64," +
-                                Base64.encodeToString(shell.toByteArray(Charsets.UTF_8), Base64.NO_WRAP),
-                        )
+                        val shell = shellDocument(colorScheme, semantic, dark, mermaidScript != null)
+                        if (mermaidScript != null) {
+                            // A data: page may not load file:// subresources, so the shell loads
+                            // with the extension's www/ as its file base — the relative
+                            // <script src="./mermaid.min.js"> then resolves to the bundled engine.
+                            settings.allowFileAccess = true
+                            loadDataWithBaseURL(
+                                "file://${mermaidScript.parentFile?.absolutePath}/",
+                                shell,
+                                "text/html",
+                                "utf-8",
+                                null,
+                            )
+                        } else {
+                            loadUrl(
+                                "data:text/html;charset=utf-8;base64," +
+                                    Base64.encodeToString(shell.toByteArray(Charsets.UTF_8), Base64.NO_WRAP),
+                            )
+                        }
                         webView = this
                     }
                 },
@@ -361,13 +378,56 @@ private fun themeVars(colorScheme: ColorScheme, semantic: JCodeSemanticColors): 
     )
 }
 
-/** Empty themed shell; the rendered body is injected into `#md` once the page is ready. */
-private fun shellDocument(colorScheme: ColorScheme, semantic: JCodeSemanticColors): String {
+/** Empty themed shell; the rendered body is injected into `#md` once the page is ready. With
+ *  [withMermaid] the shell loads the Mermaid Preview extension's bundled engine (relative to the
+ *  page's file base) and defines the render pass that swaps `pre.mermaid-src` blocks for drawn
+ *  diagrams — cached by source hash so live typing only re-renders the fence being edited. */
+private fun shellDocument(
+    colorScheme: ColorScheme,
+    semantic: JCodeSemanticColors,
+    dark: Boolean,
+    withMermaid: Boolean,
+): String {
     val rootVars = themeVars(colorScheme, semantic).joinToString("") { (k, v) -> "$k:$v;" }
+    val mermaidTags = if (!withMermaid) "" else """
+<script src="./mermaid.min.js"></script>
+<script>
+(function(){
+if(!window.mermaid)return;
+mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:'${if (dark) "dark" else "default"}',
+fontFamily:'-apple-system,Roboto,sans-serif'});
+var cache={},seq=0;
+function h(s){var x=5381;for(var i=0;i<s.length;i++){x=((x<<5)+x+s.charCodeAt(i))|0;}
+return (x>>>0).toString(36)+':'+s.length;}
+window.jcodeRenderMermaid=function(){
+document.querySelectorAll('pre.mermaid-src:not([data-mmd])').forEach(function(pre){
+pre.setAttribute('data-mmd','1');
+var src=(pre.textContent||'').trim();
+if(!src)return;
+var key=h(src);
+var holder=document.createElement('div');
+holder.className='mmd-diagram';
+if(cache[key]){holder.innerHTML=cache[key];pre.replaceWith(holder);return;}
+var id='mmdjc'+(seq++);
+mermaid.render(id,src).then(function(r){
+cache[key]=r.svg;
+holder.innerHTML=r.svg;
+if(pre.parentNode)pre.replaceWith(holder);
+}).catch(function(e){
+var el=document.getElementById('d'+id);if(el)el.remove();
+if(pre.parentNode){pre.classList.add('mmd-err');pre.setAttribute('title',String(e&&e.message||e));}
+});
+});
+};
+})();
+</script>"""
     return """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 :root{$rootVars}
+.mmd-diagram{margin:.7em 0;overflow-x:auto}
+.mmd-diagram svg{max-width:100%;height:auto}
+pre.mermaid-src.mmd-err{border:1px solid var(--jcode-error)}
 html,body{margin:0;padding:0;background:var(--jcode-background);color:var(--jcode-on-surface);
 font-family:-apple-system,Roboto,'Segoe UI',sans-serif;font-size:14px;line-height:1.55;
 -webkit-text-size-adjust:100%;word-wrap:break-word}
@@ -392,7 +452,7 @@ th,td{border:1px solid var(--jcode-outline-variant);padding:5px 10px}
 th{background:var(--jcode-surface-variant)}
 img{max-width:100%;border-radius:4px}
 input[type=checkbox]{vertical-align:middle;margin-right:4px}
-</style></head><body><div id="md"></div></body></html>"""
+</style>$mermaidTags</head><body><div id="md"></div></body></html>"""
 }
 
 /** Inline a local (relative or absolute) image referenced by the Markdown as a data: URI, so it

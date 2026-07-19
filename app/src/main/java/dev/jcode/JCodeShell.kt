@@ -344,6 +344,7 @@ import dev.jcode.feature.explorer.ExplorerContextAction
 import dev.jcode.feature.explorer.ExplorerScmUi
 import dev.jcode.feature.explorer.LocalExplorerScmUi
 import dev.jcode.feature.marketplace.hasWebUi
+import dev.jcode.feature.marketplace.webUiFile
 import dev.jcode.fs.FsKind
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
@@ -1425,6 +1426,14 @@ private fun JCodeShell(
     // Only extensions not set to Manual contribute language features (highlighting/completions/format).
     val activeLanguageExtensions = installedExtensions.filter {
         LocalExtensionActivation.current.modeFor(it.id) != ExtensionActivation.Manual
+    }
+    // The Mermaid Preview extension's bundled engine, when installed (and not Manual): the built-in
+    // Markdown preview loads it to render ```mermaid fences inline instead of as plain code.
+    val mermaidScriptFile = remember(activeLanguageExtensions) {
+        activeLanguageExtensions.firstOrNull { it.id == "jcode.ext.mermaidprev" }
+            ?.webUiFile?.parentFile
+            ?.let { java.io.File(it, "mermaid.min.js") }
+            ?.takeIf { it.isFile }
     }
     val highlightTab = editorGroup.activeTab
     // previewMode is a key (not just a guard) so flipping back to source restarts the effect and
@@ -2615,6 +2624,7 @@ private fun JCodeShell(
                                             tab = tab,
                                             dark = editorDark,
                                             languagePacks = activeLanguageExtensions,
+                                            mermaidScript = mermaidScriptFile,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
