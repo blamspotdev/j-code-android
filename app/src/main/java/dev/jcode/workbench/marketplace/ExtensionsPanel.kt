@@ -293,6 +293,23 @@ internal fun ScmPanel(
         }
         return
     }
+    // No project open (no bind target): the background SCM host only boots for an open project, so its
+    // holder entry never arrives and the decorations branch below would render a permanently-blank Box.
+    // Show guidance instead.
+    if (projectKey == null) {
+        Column(
+            modifier = modifier.fillMaxSize().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Source Control", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Open a project or folder with a Git repository to manage source control here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
     // A decorations-contributing extension lives in the persistent background host's WebView (one
     // instance per project): attaching it keeps panel state across drawer switches and avoids a
     // second status-computing instance. `generation` re-checks after the host (re)creates an entry —
