@@ -1,12 +1,18 @@
 # JCode JVM debugging — implementation plan (java-debug adapter)
 
-Status: **Adapter built and desktop-verified.** The `tools/java-dap` module
-(7cb615e) compiles against the real `com.microsoft.java:com.microsoft.java.debug.core:0.53.1`,
-and a DAP stdio spike on a HelloWorld loop passes end-to-end (breakpoint binds +
-hits, call stack, live variables `total=0/i=1`, `continue` loop re-hits, clean
-terminate) — verified both via classpath and via the assembled fat jar
-(`java -jar`). The Kotlin integration (`fa45cc9`) compiles. Remaining: on-device
-leg-2 verification (in progress) and publishing the jar as a GitHub release.
+Status: **DONE — shipped and verified end-to-end in the app UI.** The
+`tools/java-dap` module (7cb615e) compiles against the real
+`com.microsoft.java:com.microsoft.java.debug.core:0.53.1`; the fat jar is
+published as GitHub release `java-dap-v1`; and a full UI-first debug session on
+the Odin2 (rebuilt app, v1.3.2) passed: set a gutter breakpoint in a `.java`
+file → run-config Debug → javac compile → adapter launch/attach → **Paused** at
+the breakpoint with current-line highlight → Continue re-hit the breakpoint on
+every loop iteration (output streamed: `i=1..5`, `done total=30`) → clean
+terminate (`disconnected`). Desktop and in-proot spikes also pass. Leg 1 (stdio)
++ leg 2 (JDWP dt_socket under proot) both confirmed. v1 limitation: no
+expression `evaluate`/hover (long-press variable inspect returns nothing for
+Java — `IEvaluationProvider` is a no-op stub); variables show via the
+scopes/variables panel.
 
 ## Why this is the only viable of the three engines
 
@@ -122,11 +128,24 @@ resolution lives in the JDT plugin we don't ship — which is exactly what
    across loop iterations on `continue`, streamed output, and exited cleanly. The
    adapter→debuggee JDWP `dt_socket` loopback works under proot — no attach-mode
    fallback needed. Leg 1 (stdio) + leg 2 (JDWP) both confirmed on-device.
-4. **Publish the shaded jar as a GitHub release asset** (the catalog
-   `installCommand` points at a placeholder `java-dap-v1/jcode-java-dap.jar` URL —
-   publish the real asset, then confirm the URL matches). *Outward-facing —
-   needs explicit approval.*
-5. **Rebuild the app** and run the final UI-first debug test on a `.java` file.
+4. ~~Publish the shaded jar as a GitHub release asset~~ — **DONE.** Published as
+   `java-dap-v1` on blamspotdev/j-code-android; the catalog `installCommand` URL
+   resolves and the downloaded jar's sha256 matches the built artifact.
+5. ~~Rebuild the app + final UI-first debug test~~ — **DONE, PASS** (see Status).
+   The signed release APK (matching keystore, `install -r`, runtime preserved)
+   was verified with a live breakpoint-pause + loop-debug session in the UI.
+
+## Known follow-ups (minor, non-blocking)
+
+- **No `evaluate`/hover for Java** (`IEvaluationProvider` no-op stub): the editor
+  long-press variable-inspect popup returns nothing for `.java`. Variables are
+  available via scopes/variables. A real evaluation provider is a future item.
+- **java-debug's `requiredSdks=["jdk"]` pulls in the `jdk` toolchain entry,
+  which also downloads ktlint (~50 MB)** for Kotlin linting — unnecessary for
+  Java debugging and slow on throttled links. Consider a leaner JDK-only
+  requirement (or make the ktlint step non-fatal) so the Install button
+  completes quickly. (The adapter itself only needs `java`/`javac` on PATH.)
+- **Kotlin** (`.kt`) support: deferred (kotlinc class-name mapping differs).
 
 ## Honest risks
 
