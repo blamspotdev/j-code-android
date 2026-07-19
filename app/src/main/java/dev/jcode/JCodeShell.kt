@@ -2280,6 +2280,8 @@ private fun JCodeShell(
                 installedExtensions = installedExtensions,
                 marketplaceEntries = marketplaceEntries,
                 marketplaceBusy = marketplaceBusy,
+                // Modal drawer: only live-watch the filesystem while the drawer is actually open.
+                explorerAutoRefresh = compactDrawerState.isOpen,
             )
         }
     }
@@ -2673,6 +2675,8 @@ private fun JCodeShell(
                             installedExtensions = installedExtensions,
                             marketplaceEntries = marketplaceEntries,
                             marketplaceBusy = marketplaceBusy,
+                            // Persistent sidebar is only composed while visible (guarded above).
+                            explorerAutoRefresh = true,
                         )
                     }
                 }
@@ -2866,6 +2870,9 @@ private fun WorkspacePanel(
     marketplaceEntries: List<MarketplaceEntry>,
     marketplaceBusy: Boolean,
     onCollapseSidebar: (() -> Unit)? = null,
+    /** Whether this panel is actually on-screen (drawer open / sidebar visible), so the Explorer only
+     *  live-watches the filesystem while the user can see it. */
+    explorerAutoRefresh: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -2937,6 +2944,7 @@ private fun WorkspacePanel(
                                                 viewMode = explorerViewModeOf(effectiveConfig.explorer.viewMode),
                                                 hiddenPatterns = LocalExplorerHiddenSetting.current.hiddenPatternsFor(selectedProject.id.toString()),
                                                 greyOutExcluded = LocalExplorerHiddenSetting.current.effect == ExplorerExcludeEffect.GreyOut,
+                                                autoRefreshEnabled = explorerAutoRefresh,
                                                 onFileSelected = onOpenFile,
                                                 onSnackbar = onSnackbar,
                                             )

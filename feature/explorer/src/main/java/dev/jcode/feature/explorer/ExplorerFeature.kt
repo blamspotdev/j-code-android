@@ -36,6 +36,7 @@ object ExplorerFeature {
         viewMode: ExplorerViewMode = ExplorerViewMode.Tree,
         hiddenPatterns: List<String> = emptyList(),
         greyOutExcluded: Boolean = true,
+        autoRefreshEnabled: Boolean = true,
         onFileSelected: ((dev.jcode.fs.FsNode) -> Unit)? = null,
         onSnackbar: ((String) -> Unit)? = null,
     ) {
@@ -48,6 +49,7 @@ object ExplorerFeature {
             viewMode = viewMode,
             hiddenPatterns = hiddenPatterns,
             greyOutExcluded = greyOutExcluded,
+            autoRefreshEnabled = autoRefreshEnabled,
             onFileSelected = onFileSelected,
             onSnackbar = onSnackbar,
         )
