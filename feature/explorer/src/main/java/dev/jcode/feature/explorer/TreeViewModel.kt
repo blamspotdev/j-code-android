@@ -255,6 +255,13 @@ class TreeViewModel(
             ),
         )
         addExpandedChildren(rootPath, depth = 1, out = result)
+        // A transient root-list failure (File.listFiles → null under heavy IO, e.g. a build) collapses
+        // to just the root + an "(empty)" placeholder. Don't blank a tree that was populated a moment
+        // ago — keep it until a refresh succeeds. (A genuinely-emptied root reappears on the next load.)
+        val builtEmpty = result.size == 2 && result[1].isPlaceholder
+        val current = _treeRows.value
+        val hadChildren = current.size > 2 || (current.size == 2 && !current[1].isPlaceholder)
+        if (builtEmpty && hadChildren) return
         _treeRows.value = result
     }
 

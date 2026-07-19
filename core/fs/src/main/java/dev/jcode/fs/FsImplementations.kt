@@ -24,7 +24,18 @@ import kotlinx.coroutines.withContext
 class PosixFs @Inject constructor() : Fs {
     override suspend fun list(path: FsPath): List<FsNode> = withContext(Dispatchers.IO) {
         val file = path.requireLocal()
-        file.listFiles().orEmpty()
+        // File.listFiles() returns null on a transient I/O error too — not only for a non-directory.
+        // Under heavy concurrent filesystem activity (a build, a git checkout, proot teardown) a
+        // perfectly readable directory can momentarily fail to list; a few short retries keep the
+        // Explorer's live-refresh from mistaking that for an empty folder and blanking the tree.
+        var entries = file.listFiles()
+        var attempt = 0
+        while (entries == null && attempt < 4 && file.isDirectory) {
+            delay(50)
+            entries = file.listFiles()
+            attempt++
+        }
+        entries.orEmpty()
             .sortedWith(compareBy<File>({ !it.isDirectory }, { it.name.lowercase() }))
             .map { child ->
                 FsNode(
