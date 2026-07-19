@@ -714,10 +714,10 @@ object ProjectRunner {
 
     private const val ASPNET_PORT = 5080
     private const val VITE_PORT = 5173
-    private const val SCAN_DEPTH = 4
-    private const val SCAN_FILE_CAP = 4_000
-    private const val SCAN_PER_KIND_CAP = 4
-    private const val SCAN_TOTAL_CAP = 12
+    private const val SCAN_DEPTH = 8
+    private const val SCAN_FILE_CAP = 8_000
+    private const val SCAN_PER_KIND_CAP = 64
+    private const val SCAN_TOTAL_CAP = 128
     private val SCAN_SKIP_DIRS = setOf("node_modules", "bin", "obj", "build", "dist", "out", "target")
     private const val SERVER_WAIT_MS = 240_000L
     private const val POLL_INTERVAL_MS = 1_000L
