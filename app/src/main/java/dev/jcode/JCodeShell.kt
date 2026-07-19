@@ -79,7 +79,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.imeAnimationTarget
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -1287,6 +1288,7 @@ fun JCodeApp(
 
 }
 
+@OptIn(ExperimentalLayoutApi::class) // WindowInsets.imeAnimationTarget (snap IME padding)
 @Composable
 private fun JCodeShell(
     windowInfo: JCodeWindowInfo,
@@ -1461,9 +1463,9 @@ private fun JCodeShell(
         mutableStateOf(isLandscape && windowInfo.widthClass != JCodeWindowWidthClass.Compact)
     }
     val isPersistentLeftSidebarVisible = !usesModalWorkspace && leftSidebarExpanded
-    var rightSidebarVisible by rememberSaveable(isLandscape, windowInfo.widthClass) {
-        mutableStateOf(false)
-    }
+    // NOT keyed on orientation/size: an open right drawer must survive a rotation. Keying it on
+    // isLandscape/widthClass re-ran the initializer on every rotation and slammed it shut.
+    var rightSidebarVisible by rememberSaveable { mutableStateOf(false) }
     // Opening a file from the terminal should surface the editor; in modal layouts the terminal
     // sits in a drawer over the editor, so close it.
     LaunchedEffect(bringEditorToFront, usesModalWorkspace) {
@@ -2280,6 +2282,8 @@ private fun JCodeShell(
                 installedExtensions = installedExtensions,
                 marketplaceEntries = marketplaceEntries,
                 marketplaceBusy = marketplaceBusy,
+                // Modal drawer: only live-watch the filesystem while the drawer is actually open.
+                explorerAutoRefresh = compactDrawerState.isOpen,
             )
         }
     }
@@ -2673,6 +2677,8 @@ private fun JCodeShell(
                             installedExtensions = installedExtensions,
                             marketplaceEntries = marketplaceEntries,
                             marketplaceBusy = marketplaceBusy,
+                            // Persistent sidebar is only composed while visible (guarded above).
+                            explorerAutoRefresh = true,
                         )
                     }
                 }
@@ -2707,7 +2713,11 @@ private fun JCodeShell(
         }
     }
 
-    Box(modifier = modifier.fillMaxSize().imePadding()) {
+    // imeAnimationTarget, not imePadding: following the IME animation re-lays-out the ENTIRE shell on
+    // every frame of the keyboard slide (~27ms of measure/layout per frame on low-end hardware — the
+    // dominant source of keyboard-toggle frame drops). Snapping the padding to the animation's target
+    // does ONE relayout per toggle; the keyboard then slides over an already-settled layout.
+    Box(modifier = modifier.fillMaxSize().windowInsetsPadding(WindowInsets.imeAnimationTarget)) {
         if (usesModalWorkspace) {
             ModalNavigationDrawer(
                 drawerState = compactDrawerState,
@@ -2866,6 +2876,9 @@ private fun WorkspacePanel(
     marketplaceEntries: List<MarketplaceEntry>,
     marketplaceBusy: Boolean,
     onCollapseSidebar: (() -> Unit)? = null,
+    /** Whether this panel is actually on-screen (drawer open / sidebar visible), so the Explorer only
+     *  live-watches the filesystem while the user can see it. */
+    explorerAutoRefresh: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -2937,6 +2950,7 @@ private fun WorkspacePanel(
                                                 viewMode = explorerViewModeOf(effectiveConfig.explorer.viewMode),
                                                 hiddenPatterns = LocalExplorerHiddenSetting.current.hiddenPatternsFor(selectedProject.id.toString()),
                                                 greyOutExcluded = LocalExplorerHiddenSetting.current.effect == ExplorerExcludeEffect.GreyOut,
+                                                autoRefreshEnabled = explorerAutoRefresh,
                                                 onFileSelected = onOpenFile,
                                                 onSnackbar = onSnackbar,
                                             )

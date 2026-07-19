@@ -56,8 +56,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import dev.jcode.core.editor.CompletionAnchor
 import dev.jcode.core.editor.EditorContextRequest
+import dev.jcode.core.editor.EditorTheme
 import dev.jcode.core.editor.EditorLanguageAction
 import dev.jcode.core.editor.EditorView
 import dev.jcode.core.editor.completion.CompletionContext
@@ -379,6 +382,27 @@ fun EditorViewHost(
 
     // An inspection popup belongs to the stopped debug frame; clear it on tab switch or resume.
     LaunchedEffect(editorState, evaluateInDebugFrame == null) { inspection = null }
+
+    // The editor is a custom Canvas view and doesn't inherit MaterialTheme, so derive its colors from
+    // the active theme bundle here: content background follows the app background (true black under the
+    // OLED bundle), while the gutter/line-number strip uses the faintly-lighter surface so it lifts off
+    // the black. Keeps every bundle's editor in sync with its palette (Catppuccin's background/surface
+    // already equal the old fixed defaults, so it's unchanged).
+    val cs = MaterialTheme.colorScheme
+    val editorTheme = remember(cs.background, cs.surface) {
+        // Only the two backgrounds follow the bundle: content bg from the app background (true black
+        // under OLED) and the gutter from the faintly-lighter surface. Foreground/line-number/selection/
+        // cursor stay on the shared dark/light presets, so non-OLED bundles (e.g. Catppuccin, whose
+        // background/surface already equal the presets) render exactly as before.
+        val base = if (cs.background.luminance() < 0.5f) EditorTheme.DARK else EditorTheme.LIGHT
+        base.copy(
+            background = cs.background.toArgb().toLong() and 0xFFFFFFFFL,
+            gutterBackground = cs.surface.toArgb().toLong() and 0xFFFFFFFFL,
+        )
+    }
+    LaunchedEffect(editorState, editorTheme) {
+        editorState.updateTheme { editorTheme }
+    }
 
     // Apply breakpoint dots (GUTTER) + the current-stopped line marker/highlight (BACKGROUND). These
     // layers are independent of syntax (GLYPH_COLOR), so replacing them never clobbers highlighting.

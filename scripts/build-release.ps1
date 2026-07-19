@@ -99,7 +99,7 @@ if ($Variant) {
 } elseif (-not [Console]::IsInputRedirected) {
     Write-Host ''
     Say 'Which build?'
-    Write-Host '  [1] Release  - final build (dev.jcode / "JCode"), version straight from VERSION.txt' -ForegroundColor Gray
+    Write-Host '  [1] Release  - final build (dev.jcode / "JCode"), version from app/build.gradle.kts' -ForegroundColor Gray
     Write-Host '  [2] Beta     - side-by-side testing build (dev.jcode.beta / "JCode (beta)"): installs' -ForegroundColor Gray
     Write-Host '                 ALONGSIDE the release app, own data, versionName gets a -label suffix' -ForegroundColor Gray
     $sel = Read-Host 'Select [1]'
@@ -234,7 +234,9 @@ if ($rustReady) {
     Warn 'Continuing without Rust - search/wasm features in the APK will use stub libraries.'
 }
 
-$Version = if (Test-Path 'VERSION.txt') { (Get-Content 'VERSION.txt' -Raw).Trim() } else { '1.0.0' }
+# The version lives in app/build.gradle.kts (`val jcodeVersion = "…"`) — real Android metadata.
+$VersionMatch = Select-String -Path 'app\build.gradle.kts' -Pattern '^val jcodeVersion\s*=\s*"([^"]+)"' | Select-Object -First 1
+$Version = if ($VersionMatch) { $VersionMatch.Matches[0].Groups[1].Value } else { '1.0.0' }
 # Pre-release appends the label to versionName (1.0.2 -> 1.0.2-beta); versionCode ignores the suffix.
 $VersionName = if ($IsPre) { "$Version-$PreReleaseLabel" } else { $Version }
 # versionCode = MAJOR*10000 + MINOR*100 + PATCH (must match app/build.gradle.kts jcodeVersionCode).

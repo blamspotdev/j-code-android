@@ -85,6 +85,10 @@ import dev.jcode.fs.renameFile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
@@ -112,6 +116,9 @@ fun ExplorerView(
     viewMode: ExplorerViewMode = ExplorerViewMode.Tree,
     hiddenPatterns: List<String> = emptyList(),
     greyOutExcluded: Boolean = true,
+    /** Auto-refresh the tree from filesystem events while the Explorer is actually on-screen. Gated
+     *  by the caller (drawer open / sidebar visible) so watchers stop the moment it's hidden. */
+    autoRefreshEnabled: Boolean = true,
     onFileSelected: ((FsNode) -> Unit)? = null,
     onSnackbar: ((String) -> Unit)? = null,
 ) {
@@ -161,6 +168,38 @@ fun ExplorerView(
     val scmUi = LocalExplorerScmUi.current
     LaunchedEffect(viewModel, scmUi.status, scmUi.submodules) {
         viewModel.setScmDecorations(scmUi.status, scmUi.submodules)
+    }
+
+    // Live-update: while the Explorer is on-screen, watch the directories whose contents are actually
+    // shown — the project root plus every expanded folder (Tree) or the current folder (List) — and
+    // repaint on filesystem changes. Only visible dirs are watched (never the whole recursive tree),
+    // so a large repo costs a handful of inotify watches, not thousands. The watch key is the *set* of
+    // shown dirs, so a change inside an already-watched dir doesn't re-subscribe — only expand/collapse
+    // re-targets. The whole watch tears down the instant [autoRefreshEnabled] goes false.
+    val watchDirs = remember(treeRows, listRows, activeViewMode, currentPath) {
+        when (activeViewMode) {
+            ExplorerViewMode.Tree -> treeRows.asSequence()
+                .filter { it.isExpanded && it.node.kind == FsKind.Directory }
+                .map { it.node.path }
+                .distinctBy { it.stableId }
+                .toList()
+            ExplorerViewMode.List -> listOfNotNull(currentPath)
+        }
+    }
+    val watchKey = remember(watchDirs) { watchDirs.map { it.stableId }.sorted().joinToString(" ") }
+    // Reopening the drawer does one catch-up refresh for changes missed while it was hidden.
+    LaunchedEffect(autoRefreshEnabled) {
+        if (autoRefreshEnabled) viewModel.refresh()
+    }
+    LaunchedEffect(autoRefreshEnabled, watchKey) {
+        if (!autoRefreshEnabled || watchDirs.isEmpty()) return@LaunchedEffect
+        merge(*watchDirs.map { dir -> fs.watch(dir).catch { } }.toTypedArray())
+            .collectLatest {
+                // Debounce: a fresh event cancels this wait, folding a burst into a single refresh.
+                delay(300)
+                viewModel.refresh()
+                scmUi.onFsActivity?.invoke()
+            }
     }
 
     // SAF import/export: import streams device-storage picks into a target dir (row menu or toolbar);

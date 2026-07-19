@@ -255,6 +255,13 @@ class TreeViewModel(
             ),
         )
         addExpandedChildren(rootPath, depth = 1, out = result)
+        // A transient root-list failure (File.listFiles → null under heavy IO, e.g. a build) collapses
+        // to just the root + an "(empty)" placeholder. Don't blank a tree that was populated a moment
+        // ago — keep it until a refresh succeeds. (A genuinely-emptied root reappears on the next load.)
+        val builtEmpty = result.size == 2 && result[1].isPlaceholder
+        val current = _treeRows.value
+        val hadChildren = current.size > 2 || (current.size == 2 && !current[1].isPlaceholder)
+        if (builtEmpty && hadChildren) return
         _treeRows.value = result
     }
 
@@ -310,9 +317,12 @@ class TreeViewModel(
         // segment itself must not become the head — as a glob it matches EVERY name, so one such
         // pattern (VisualStudio.gitignore ships `**/[Pp]ackages/*`) blanked the whole explorer.
         while (pat.startsWith("**/")) pat = pat.removePrefix("**/")
-        val head = pat.substringBefore('/') // a nested pattern like "foo/bar" hides "foo" at the root
-        if (head.isEmpty()) return false
-        return if (head.any { it == '*' || it == '?' }) globToRegex(head).matches(name) else head == name
+        // A pattern that still holds a '/' targets something NESTED (e.g. `src/generated`, `src/**/*.js`);
+        // gitignore does not ignore the ancestor `src` itself, so it must not hide the root child. Only a
+        // whole-name pattern (`foo`, `foo/`, `/foo`, `**/foo` — the leading/trailing slashes already
+        // trimmed above) excludes a project-root entry.
+        if (pat.isEmpty() || '/' in pat) return false
+        return if (pat.any { it == '*' || it == '?' }) globToRegex(pat).matches(name) else pat == name
     }
 
     private fun globToRegex(glob: String): Regex {

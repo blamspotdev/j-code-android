@@ -20,7 +20,7 @@ for arg in "$@"; do
             echo "Usage: $(basename "$0") [-y|--yes] [--release|--beta] [--label=<s>]"
             echo "Builds a release APK of JCode into ./builds."
             echo "  -y, --yes       auto-accept install prompts"
-            echo "  --release       final build (default; dev.jcode / \"JCode\"; version from VERSION.txt)"
+            echo "  --release       final build (default; dev.jcode / \"JCode\"; version from app/build.gradle.kts)"
             echo "  --beta          side-by-side testing build (dev.jcode.beta / \"JCode (beta)\") that"
             echo "                  installs ALONGSIDE the release app; versionName gets a -label suffix"
             echo "  --label=<s>     beta version label (default: beta -> 1.0.2-beta)"
@@ -202,7 +202,7 @@ if [ -z "$VARIANT" ]; then
     if [ -t 0 ]; then
         printf '\n'
         say 'Which build?'
-        printf '  [1] Release  - final build (dev.jcode / "JCode"), version straight from VERSION.txt\n'
+        printf '  [1] Release  - final build (dev.jcode / "JCode"), version from app/build.gradle.kts\n'
         printf '  [2] Beta     - side-by-side build (dev.jcode.beta / "JCode (beta)"): installs ALONGSIDE\n'
         printf '                 the release app, own data, versionName gets a -label suffix\n'
         read -r -p 'Select [1] ' _sel
@@ -220,7 +220,9 @@ case "$VARIANT" in beta|prerelease) IS_PRE=1; VARIANT="beta" ;; *) IS_PRE=0; VAR
 ID_SUFFIX=""; APP_LABEL="JCode"; [ "$IS_PRE" = 1 ] && { ID_SUFFIX=".beta"; APP_LABEL="JCode (beta)"; }
 [ "$IS_PRE" = 1 ] && say "Variant: beta -> app id dev.jcode$ID_SUFFIX, label '$APP_LABEL', version label: $PRERELEASE_LABEL" || say "Variant: release"
 
-VERSION="$(tr -d '[:space:]' < VERSION.txt 2>/dev/null || echo 1.0.0)"
+# The version lives in app/build.gradle.kts (`val jcodeVersion = "…"`) — real Android metadata.
+VERSION="$(sed -n 's/^val jcodeVersion = "\([^"]*\)".*/\1/p' app/build.gradle.kts 2>/dev/null | head -1)"
+[ -n "$VERSION" ] || VERSION=1.0.0
 # Beta appends the label to versionName (1.0.2 -> 1.0.2-beta); versionCode ignores the suffix.
 if [ "$IS_PRE" = 1 ]; then VERSION_NAME="$VERSION-$PRERELEASE_LABEL"; else VERSION_NAME="$VERSION"; fi
 # versionCode = MAJOR*10000 + MINOR*100 + PATCH (must match app/build.gradle.kts jcodeVersionCode).

@@ -98,6 +98,22 @@ class EditorView @JvmOverloads constructor(
     // sp→px factor; RenderConfig.fontSizeSp is in sp but Paint.textSize / layout math need px.
     private val density: Float get() = resources.displayMetrics.density
 
+    // Cached display list of the whole content pass (see onDraw): the IME animation resizes this view
+    // every frame, and re-running readLines + per-span drawText per frame is what dropped frames.
+    // Key fields are identity references — every EditorState flow stores a fresh instance on change,
+    // so reference checks are exact and cheap.
+    private var contentNode: android.graphics.RenderNode? = null
+    private var nodeSnapshot: Any? = null
+    private var nodeCarets: Any? = null
+    private var nodeDecorations: Any? = null
+    private var nodeTheme: Any? = null
+    private var nodeConfig: Any? = null
+    private var nodeTypeface: Typeface? = null
+    private var nodeScrollX = Int.MIN_VALUE
+    private var nodeScrollY = Int.MIN_VALUE
+    private var nodeWidth = -1
+    private var nodeRecordedHeight = 0
+
     // One shared measurement paint for hit-testing / layout math, reconfigured only when the text size
     // or typeface changes. Allocating a TextPaint per tap/measure showed up on the hit-test hot path.
     private val measurePaint = android.text.TextPaint()
@@ -366,6 +382,11 @@ class EditorView @JvmOverloads constructor(
         observationScope?.cancel()
         this.editorState = editorState
         this.renderer = Renderer(typeface, density)
+        // The cached content display list belongs to the previous tab's state; force a re-record
+        // (and drop the height watermark) for the fresh one.
+        nodeSnapshot = null
+        nodeWidth = -1
+        nodeRecordedHeight = 0
         val scope = MainScope()
         observationScope = scope
 
@@ -398,6 +419,9 @@ class EditorView @JvmOverloads constructor(
             invalidate()
         }.launchIn(scope)
         editorState.decorations.onEach { invalidate() }.launchIn(scope)
+        // Repaint when the color theme changes (e.g. switching to the OLED bundle): the renderer reads
+        // state.theme.value every frame, so the view just needs to be told to redraw.
+        editorState.theme.onEach { invalidate() }.launchIn(scope)
         // Follow the caret while typing: keep a collapsed cursor in view as it moves. Selections don't
         // auto-scroll, so select-all / drag-select don't yank the viewport around.
         editorState.carets.onEach { carets ->
@@ -502,6 +526,10 @@ class EditorView @JvmOverloads constructor(
         editorState = null
         renderer = null
         inputConnection = null
+        contentNode?.discardDisplayList()
+        nodeSnapshot = null
+        nodeWidth = -1
+        nodeRecordedHeight = 0
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -544,8 +572,64 @@ class EditorView @JvmOverloads constructor(
         // Draw background
         canvas.drawColor(theme.background.toInt())
 
-        renderer.draw(canvas, snapshot, viewport, config, carets, decorations = decorations, theme = theme)
-        // After renderer.draw (and its canvas.restore), so the anchors draw unclipped over everything.
+        if (!canvas.isHardwareAccelerated || viewport.widthPx <= 0 || viewport.heightPx <= 0) {
+            renderer.draw(canvas, snapshot, viewport, config, carets, decorations = decorations, theme = theme)
+            drawSelectionHandles(canvas, theme)
+            return
+        }
+
+        // The IME animation resizes this view every frame while nothing about the content changes.
+        // The content pass (readLines JNI + span-segmented drawText) is far too heavy to re-run per
+        // frame, so it's recorded ONCE into a RenderNode at the largest height seen for this width and
+        // each frame just replays the display list clipped to the current bounds. The full pre-keyboard
+        // height is recorded before the IME ever opens, so both the shrink and the grow direction of a
+        // keyboard toggle replay for free; only real changes (edit, scroll, caret, theme, config, font,
+        // width, or a height beyond what was recorded) re-record. Mirrors the TerminalView grid cache.
+        val node = contentNode ?: android.graphics.RenderNode("editor-content").also { contentNode = it }
+        val contentStale = snapshot !== nodeSnapshot || carets !== nodeCarets ||
+            decorations !== nodeDecorations || theme !== nodeTheme || config !== nodeConfig ||
+            typeface !== nodeTypeface || viewport.scrollX != nodeScrollX ||
+            viewport.scrollY != nodeScrollY || viewport.widthPx != nodeWidth
+        if (contentStale || viewport.heightPx > nodeRecordedHeight) {
+            // Enable with: adb shell setprop log.tag.EditorRecord DEBUG — names the key that forced a
+            // re-record, for diagnosing invalidation storms (a healthy IME toggle records ~once).
+            if (android.util.Log.isLoggable("EditorRecord", android.util.Log.DEBUG)) {
+                android.util.Log.d(
+                    "EditorRecord",
+                    "h=${viewport.heightPx}/$nodeRecordedHeight snap=${snapshot !== nodeSnapshot} " +
+                        "car=${carets !== nodeCarets} dec=${decorations !== nodeDecorations} " +
+                        "thm=${theme !== nodeTheme} cfg=${config !== nodeConfig} tf=${typeface !== nodeTypeface} " +
+                        "sx=${viewport.scrollX != nodeScrollX} sy=${viewport.scrollY != nodeScrollY} " +
+                        "w=${viewport.widthPx != nodeWidth} hGrow=${viewport.heightPx > nodeRecordedHeight}",
+                )
+            }
+            // A width change (rotation, pane resize) resets the height watermark so a tall portrait
+            // recording never lingers into a short landscape; otherwise keep the max seen, which is
+            // what lets the keyboard-close growth replay without re-recording.
+            val recordHeight =
+                if (viewport.widthPx != nodeWidth) viewport.heightPx
+                else max(viewport.heightPx, nodeRecordedHeight)
+            val rc = node.beginRecording(viewport.widthPx, recordHeight)
+            try {
+                rc.drawColor(theme.background.toInt())
+                renderer.draw(rc, snapshot, viewport.copy(heightPx = recordHeight), config, carets, decorations = decorations, theme = theme)
+            } finally {
+                node.endRecording()
+            }
+            node.setPosition(0, 0, viewport.widthPx, recordHeight)
+            nodeSnapshot = snapshot
+            nodeCarets = carets
+            nodeDecorations = decorations
+            nodeTheme = theme
+            nodeConfig = config
+            nodeTypeface = typeface
+            nodeScrollX = viewport.scrollX
+            nodeScrollY = viewport.scrollY
+            nodeWidth = viewport.widthPx
+            nodeRecordedHeight = recordHeight
+        }
+        canvas.drawRenderNode(node)
+        // After the content replay, so the anchors draw unclipped over everything.
         drawSelectionHandles(canvas, theme)
     }
 
