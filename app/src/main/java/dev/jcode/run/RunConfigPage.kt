@@ -27,10 +27,10 @@ import dev.jcode.design.SettingsTextFieldRow
 
 /**
  * Structured editor for a project's run configuration (`.jcode/run.yaml`), opened as an in-editor
- * page. Edits a [RunConfig]: a display name, the port to open in the browser, an optional debug
- * entry, and a list of terminals (label + bash command). [onSave] persists the form to `run.yaml`.
- * Preset/trigger selection happens up front via the "Add run config" dialog, not here. Fields use
- * the app's compact [SettingsTextFieldRow] so the page matches the rest of JCode.
+ * page. Edits a [RunConfig]: a display name, the port to open in the browser, and a list of
+ * terminals (label + bash command). [onSave] persists the form to `run.yaml`. Preset/trigger
+ * selection happens up front via the "Add run config" dialog, not here. Fields use the app's compact
+ * [SettingsTextFieldRow] so the page matches the rest of JCode.
  */
 @Composable
 fun RunConfigPage(
@@ -40,7 +40,6 @@ fun RunConfigPage(
 ) {
     var name by remember { mutableStateOf(initial.name) }
     var port by remember { mutableStateOf(initial.readyPort.takeIf { it > 0 }?.toString().orEmpty()) }
-    var debugEntry by remember { mutableStateOf(initial.debugEntry) }
     // A run config is a single command. (Legacy multi-terminal configs seed from the first command;
     // the auto-detected full-stack recipes keep their side-by-side terminals — they aren't edited here.)
     var command by remember { mutableStateOf(initial.terminals.firstOrNull()?.command.orEmpty()) }
@@ -50,7 +49,7 @@ fun RunConfigPage(
     fun buildConfig() = RunConfig(
         name = name.ifBlank { "Run" },
         readyPort = port.trim().toIntOrNull() ?: 0,
-        debugEntry = debugEntry.trim(),
+        debugEntry = initial.debugEntry,
         // One command → one guest process whose PID the run binds to for running/done/killed status.
         terminals = listOf(RunConfigTerminal(label = name.ifBlank { "Run" }, command = command.trim())),
     )
@@ -83,15 +82,6 @@ fun RunConfigPage(
             placeholder = "e.g. 5173",
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         )
-        SettingsTextFieldRow(
-            label = "Debug entry",
-            supporting = "Guest path to the source file the Debug ▸ action launches under the debugger — blank to disable Debug.",
-            value = debugEntry,
-            onValueChange = { debugEntry = it; dirty = true },
-            placeholder = "e.g. /workspace/app/Program.cs",
-            monospace = true,
-        )
-
         SettingsTextFieldRow(
             label = "Command (bash)",
             supporting = "The one command this config runs. It executes verbosely in a terminal; the run " +

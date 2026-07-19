@@ -3437,6 +3437,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Append all of [configs] to the project's `.jcode/run.yaml` in one write (a framework file-pick
+     *  in the "Add run config" dialog creates every config that file offers at once). */
+    fun saveRunConfigs(project: Project, configs: List<dev.jcode.core.config.RunConfig>) {
+        if (configs.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { dev.jcode.run.ProjectRunner.upsertRuns(project, configs) }
+                .onSuccess {
+                    _runConfigVersion.value++
+                    _messages.tryEmit("Saved run config for ${project.name}")
+                }
+                .onFailure { _messages.tryEmit("Failed to save run config: ${it.message ?: "error"}") }
+        }
+    }
+
     /** Upsert one build task at [index] (null appends). */
     fun saveBuildConfig(project: Project, index: Int?, config: dev.jcode.core.config.BuildConfig) {
         viewModelScope.launch(Dispatchers.IO) {

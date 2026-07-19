@@ -120,6 +120,14 @@ object ProjectRunner {
         saveProjectConfigs(project, configs.copy(runs = runs))
     }
 
+    /** Append all of [configs] to the project's run list in a single load → append → save cycle (so a
+     *  file-pick that creates several configs at once doesn't race per-append). No-op when empty. */
+    fun upsertRuns(project: Project, configs: List<RunConfig>) {
+        if (configs.isEmpty()) return
+        val existing = loadProjectConfigs(project)
+        saveProjectConfigs(project, existing.copy(runs = existing.runs + configs))
+    }
+
     fun upsertBuild(project: Project, index: Int?, config: BuildConfig) {
         val configs = loadProjectConfigs(project)
         val builds = configs.builds.toMutableList()
@@ -147,9 +155,9 @@ object ProjectRunner {
         val preset: RunConfigPreset,
     )
 
-    /** A run config detected from the project's files, offered on the Configure page as a one-tap
-     *  form prefill (never auto-saved). [source] says what detected it — "Detected" for built-in
-     *  probes, or the contributing extension's name. */
+    /** A run config detected from the project's files, offered in the "Add run config" picker (its
+     *  [RunTrigger]'s options are all saved when that file is picked). [source] says what detected it
+     *  — "Detected" for built-in probes, or the contributing extension's name. */
     data class RunSuggestion(
         val label: String,
         val source: String,
@@ -157,8 +165,8 @@ object ProjectRunner {
     )
 
     /** A runnable trigger file — a `.csproj`, a `package.json`, `gradlew`, or an extension preset's
-     *  anchor — and the run options it offers. This is the two-level shape the "Add run config"
-     *  picker shows: pick a file, then one of its options. */
+     *  anchor — and the run options it offers. The "Add run config" picker groups these by [kind]
+     *  into frameworks; picking a file then creates all of its [options] at once. */
     data class RunTrigger(
         val label: String,
         val kind: String,
@@ -168,11 +176,11 @@ object ProjectRunner {
 
     /**
      * Scan [project]'s files (to [SCAN_DEPTH] levels, skipping dependency/VCS dirs) and group runnable
-     * entry points by their trigger file: one [RunTrigger] per `.csproj` (Run + Debug options — a
-     * single server invocation that lets the project build & serve its own client; port read from
-     * launchSettings), per `package.json` (one option per `scripts` entry), a Gradle build when
-     * `gradlew` is present, and every applicable [extensionPresets]. Blocking filesystem work — call
-     * from a background dispatcher.
+     * entry points by their trigger file: one [RunTrigger] per `.csproj` (a debug + release build
+     * option, each a single server invocation that lets the project build & serve its own client;
+     * port read from launchSettings), per `package.json` (one option per `scripts` entry), a Gradle
+     * build when `gradlew` is present, and every applicable [extensionPresets]. Blocking filesystem
+     * work — call from a background dispatcher.
      */
     fun suggestRunTriggers(project: Project, extensionPresets: List<ExtensionRunPreset>): List<RunTrigger> {
         val root = (project.fsPath as? FsPath.Local)?.file?.takeIf(File::isDirectory) ?: return emptyList()
@@ -238,34 +246,35 @@ object ProjectRunner {
             )
         }
 
-        // .NET: one trigger per .csproj, each with a Run and (when a source file is found) a Debug
-        // option. A web project with a detected client uses the single-endpoint recipe (client built
-        // into the server's wwwroot, served on one port); the port comes from launchSettings.
+        // .NET: one trigger per .csproj, each offering a debug and a release build (both build to
+        // ext4 and launch the managed DLL via the dotnet host — /workspace is noexec). A web project
+        // with a detected client uses the single-endpoint recipe (client built into the server's
+        // wwwroot, served on one port); the port comes from launchSettings.
         csprojs.take(SCAN_PER_KIND_CAP).forEach { (csproj, web) ->
             val port = launchProfilePort(csproj, web)
             val name = csproj.nameWithoutExtension
             val client = spaClientDir(csproj, web, viteDirs)
-            val runCmd = if (client != null) {
-                aspnetSinglePortCommand(guest(csproj), if (client == root) guestDir else guest(client), stage("$name-server"), stage("$name-client"), port)
-            } else {
-                dotnetProjectCommand(guest(csproj), stage(name), web, port)
-            }
-            fun cfg(suffix: String, debug: String) = RunConfig(
-                name = "$name ($suffix)",
+            val clientGuest = client?.let { if (it == root) guestDir else guest(it) }
+            fun serverCmd(config: String, suffix: String): String =
+                if (clientGuest != null) {
+                    aspnetSinglePortCommand(guest(csproj), clientGuest, stage("$name-$suffix-server"), stage("$name-$suffix-client"), port, config)
+                } else {
+                    dotnetProjectCommand(guest(csproj), stage("$name-$suffix"), web, port, config)
+                }
+            fun cfg(cfgName: String, config: String, suffix: String) = RunConfig(
+                name = cfgName,
                 readyPort = port,
-                debugEntry = debug,
-                terminals = listOf(RunConfigTerminal("Server", runCmd)),
+                terminals = listOf(RunConfigTerminal("Server", serverCmd(config, suffix))),
             )
             val detail = if (port > 0) ":$port" else "console"
-            val options = mutableListOf(RunSuggestion("Run", "dotnet · $detail", cfg("Run", "")))
-            programCsGuest(csproj) { guest(it) }?.let { prog ->
-                options += RunSuggestion("Debug", "netcoredbg · $detail", cfg("Debug", prog))
-            }
             triggers += RunTrigger(
                 label = csproj.name,
                 kind = if (web) "C# · ASP.NET Core" else "C# · .NET",
                 detail = rel(csproj),
-                options = options,
+                options = listOf(
+                    RunSuggestion("Debug build", "dotnet · $detail", cfg("$name (debug)", "Debug", "debug")),
+                    RunSuggestion("Release build", "dotnet · $detail", cfg(name, "Release", "release")),
+                ),
             )
         }
 
@@ -359,18 +368,6 @@ object ProjectRunner {
             if (resolved.isDirectory && File(resolved, "package.json").isFile) return resolved
         }
         return viteDirs.firstOrNull { it != dir && it.absolutePath.startsWith(dir.absolutePath + File.separator) }
-    }
-
-    /** Guest path to a representative `.cs` source file (Program.cs / Startup.cs, else the first one)
-     *  next to [csproj] — the entry [RunConfig.debugEntry] points at so the debugger picks netcoredbg;
-     *  null when the project has no `.cs` file. */
-    private fun programCsGuest(csproj: File, guest: (File) -> String): String? {
-        val dir = csproj.parentFile ?: return null
-        val direct = sequenceOf("Program.cs", "Startup.cs").map { File(dir, it) }.firstOrNull { it.isFile }
-        val pick = direct ?: dir.walkTopDown().maxDepth(3)
-            .onEnter { it == dir || (it.name !in SCAN_SKIP_DIRS && !it.name.startsWith(".")) }
-            .firstOrNull { it.isFile && it.extension.equals("cs", ignoreCase = true) }
-        return pick?.let(guest)
     }
 
     /** The keys of the `scripts` object in a package.json's text, in file order ([] when absent). */
@@ -615,7 +612,7 @@ object ProjectRunner {
     // `-p:SkipSpaBuild=true` skips a build-time SPA build the .csproj gates on that property (the .NET
     // SPA template convention — it would otherwise npm-build in the FUSE source tree and fail); a
     // harmless no-op for projects that don't use it.
-    private fun aspnetSinglePortCommand(csprojGuest: String, clientDir: String, serverStage: String, clientStage: String, port: Int): String =
+    private fun aspnetSinglePortCommand(csprojGuest: String, clientDir: String, serverStage: String, clientStage: String, port: Int, config: String = "Debug"): String =
         buildString {
             appendLine("clear")
             appendLine("set -e")
@@ -629,10 +626,10 @@ object ProjectRunner {
             appendLine("export npm_config_fund=false npm_config_audit=false")
             appendLine("rm -rf \"\$STAGE\" && mkdir -p \"\$STAGE\" && cp -a \"\$CLIENT/.\" \"\$STAGE/\"")
             appendLine("( cd \"\$STAGE\" && npm install && npm run build -- --outDir dist --emptyOutDir )")
-            appendLine("echo '[2/3] Publishing client -> server wwwroot + building server (dotnet build, Debug)...'")
+            appendLine("echo '[2/3] Publishing client -> server wwwroot + building server (dotnet build, $config)...'")
             appendLine("mkdir -p \"\$WWWROOT\" && cp -a \"\$STAGE/dist/.\" \"\$WWWROOT/\"")
             appendLine("rm -rf \"\$SRV\"")
-            appendLine("dotnet build \"\$CSPROJ\" -c Debug -o \"\$SRV\" --nologo -p:SkipSpaBuild=true")
+            appendLine("dotnet build \"\$CSPROJ\" -c $config -o \"\$SRV\" --nologo -p:SkipSpaBuild=true")
             appendLine("echo '[3/3] Serving SPA + API on http://localhost:$port ...'")
             appendLine("cd \"\$SRV\"")
             appendLine("ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS='http://0.0.0.0:$port' dotnet \"\$(basename \"\$CSPROJ\" .csproj).dll\"")
@@ -670,16 +667,16 @@ object ProjectRunner {
     // Generic .NET build & run for a specific .csproj (a suggested config for external projects, so
     // the project is built as-is — no TFM retargeting). Same noexec-safe shape as the template
     // recipe: build to ext4, launch the managed DLL via the dotnet host.
-    private fun dotnetProjectCommand(csprojGuest: String, stageName: String, web: Boolean, port: Int): String =
+    private fun dotnetProjectCommand(csprojGuest: String, stageName: String, web: Boolean, port: Int, config: String = "Debug"): String =
         buildString {
             appendLine("clear")
             appendLine("set -e")
             appendLine("CSPROJ=\"$csprojGuest\"")
             appendLine("OUT=\"\$HOME/.jcode-run/$stageName\"")
             appendLine("echo '== JCode: .NET (dotnet build + run) =='")
-            appendLine("echo '[1/2] Building (dotnet build, Debug)...'")
+            appendLine("echo '[1/2] Building (dotnet build, $config)...'")
             appendLine("rm -rf \"\$OUT\"")
-            appendLine("dotnet build \"\$CSPROJ\" -c Debug -o \"\$OUT\" --nologo")
+            appendLine("dotnet build \"\$CSPROJ\" -c $config -o \"\$OUT\" --nologo")
             appendLine("cd \"\$OUT\"")
             if (web) {
                 appendLine("echo '[2/2] Starting server on http://localhost:$port (Development)...'")
