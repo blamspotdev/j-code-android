@@ -316,8 +316,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Install [entry] after everything it `requires` (extensions recursively, then toolchains and
-     * language servers via the catalogs). Any required dependency that fails to install aborts the
-     * whole install. `suggests` stays manual.
+     * language servers via the catalogs). A missing required *extension* aborts the install; a failed
+     * required *toolchain* is best-effort (the pack still installs, the toolchain stays retryable).
+     * `suggests` stays manual.
      */
     private suspend fun installExtensionResolvingDeps(
         entry: MarketplaceEntry,
@@ -334,9 +335,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val freshInstall = !extensionInstaller.isInstalled(entry.id)
         if (freshInstall && !entry.requires.isEmpty) {
             setExtensionPhase(entry.id, "Installing required tools…")
-            // Deps the marketplace index declared for this entry — resolved before install; a failure
-            // aborts because the extension asked for them up front.
-            if (!resolveRequires(entry.name, entry.requires, visiting, abortOnFail = true)) return false
+            // Deps the marketplace index declared for this entry — resolved before install. A missing
+            // required *extension* aborts (the pack is broken without it); a required *toolchain* is
+            // best-effort so a heavy/flaky download (e.g. android-sdk) can't roll back the whole pack.
+            if (!resolveRequires(entry.name, entry.requires, visiting, abortOnExtensionFail = true, abortOnToolchainFail = false)) return false
         }
 
         setExtensionPhase(entry.id, "Installing…")
@@ -364,7 +366,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // left out. Non-fatal: the extension is already installed and usable on its own.
         if (!installedEntry.requires.isEmpty) {
             setExtensionPhase(entry.id, "Installing required tools…")
-            resolveRequires(entry.name, installedEntry.requires, visiting, abortOnFail = false)
+            resolveRequires(entry.name, installedEntry.requires, visiting, abortOnExtensionFail = false, abortOnToolchainFail = false)
         }
         setExtensionPhase(entry.id, null)
         return true
@@ -372,15 +374,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Install everything [deps] names that isn't already present: required extensions (recursively),
-     * then toolchain SDKs and language servers via the catalogs. With [abortOnFail] true a failure
-     * returns false so the caller rolls back its own install; with false, failures are surfaced but
-     * skipped so an already-installed extension isn't undone over an optional-in-practice dependency.
+     * then toolchain SDKs, language servers and debuggers via the catalogs. Failures are reported
+     * either way; the abort flags decide whether a failure rolls the caller's install back.
+     *
+     * [abortOnExtensionFail] gates required *extensions* — cheap, essential, and the pack is broken
+     * without them, so a fresh install aborts. [abortOnToolchainFail] gates required *toolchains*
+     * (SDKs/LSPs/debuggers): even on a fresh install these are best-effort, because a heavy or flaky
+     * download (e.g. android-sdk, a "Large download") shouldn't roll back an otherwise-usable pack —
+     * its language features still work and the toolchain stays retryable from the Toolchains manager.
      */
     private suspend fun resolveRequires(
         sourceName: String,
         deps: ExtensionDeps,
         visiting: MutableSet<String>,
-        abortOnFail: Boolean,
+        abortOnExtensionFail: Boolean,
+        abortOnToolchainFail: Boolean,
     ): Boolean {
         for (depId in deps.extensions) {
             if (depId in visiting) continue
@@ -388,12 +396,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val depEntry = _marketplaceEntries.value.firstOrNull { it.id == depId }
             if (depEntry == null) {
                 _messages.tryEmit("$sourceName: required extension '$depId' isn't in the marketplace.")
-                if (abortOnFail) return false else continue
+                if (abortOnExtensionFail) return false else continue
             }
             _messages.tryEmit("Installing required extension: ${depEntry.name}…")
             if (!installExtensionResolvingDeps(depEntry, visiting)) {
                 _messages.tryEmit("$sourceName: required extension ${depEntry.name} failed.")
-                if (abortOnFail) return false
+                if (abortOnExtensionFail) return false
             }
         }
         // resolveAndInstallSdk installs each SDK's own transitive requiredSdks first (e.g. android-sdk →
@@ -403,7 +411,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val sdkVisiting = mutableSetOf<String>()
         for (sdkId in deps.sdks) {
             if (!resolveAndInstallSdk(sdkId, sourceName, sdkVisiting)) {
-                if (abortOnFail) return false
+                if (abortOnToolchainFail) return false
             }
         }
         for (lspId in deps.lsps) {
@@ -412,7 +420,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (!installRequiredLsp(lspId)) {
                 val reason = distroService.lspCatalogState.value.errorMessage ?: "install failed"
                 _messages.tryEmit("$sourceName: required language server '$lspId' — $reason")
-                if (abortOnFail) return false
+                if (abortOnToolchainFail) return false
             }
         }
         for (dbgId in deps.dbg) {
@@ -421,7 +429,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (!installRequiredDbg(dbgId)) {
                 val reason = distroService.debugCatalogState.value.errorMessage ?: "install failed"
                 _messages.tryEmit("$sourceName: required debugger '$dbgId' — $reason")
-                if (abortOnFail) return false
+                if (abortOnToolchainFail) return false
             }
         }
         return true
