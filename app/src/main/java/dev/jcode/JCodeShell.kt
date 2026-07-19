@@ -1461,9 +1461,9 @@ private fun JCodeShell(
         mutableStateOf(isLandscape && windowInfo.widthClass != JCodeWindowWidthClass.Compact)
     }
     val isPersistentLeftSidebarVisible = !usesModalWorkspace && leftSidebarExpanded
-    var rightSidebarVisible by rememberSaveable(isLandscape, windowInfo.widthClass) {
-        mutableStateOf(false)
-    }
+    // NOT keyed on orientation/size: an open right drawer must survive a rotation. Keying it on
+    // isLandscape/widthClass re-ran the initializer on every rotation and slammed it shut.
+    var rightSidebarVisible by rememberSaveable { mutableStateOf(false) }
     // Opening a file from the terminal should surface the editor; in modal layouts the terminal
     // sits in a drawer over the editor, so close it.
     LaunchedEffect(bringEditorToFront, usesModalWorkspace) {
