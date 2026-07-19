@@ -629,12 +629,15 @@ fun JCodeApp(
     }
     val extraKeysPortrait by viewModel.extraKeysPortrait.collectAsStateWithLifecycle()
     val extraKeysLandscape by viewModel.extraKeysLandscape.collectAsStateWithLifecycle()
-    val extraKeysSetting = remember(extraKeysPortrait, extraKeysLandscape) {
+    val extraKeysFunctionKeys by viewModel.extraKeysFunctionKeys.collectAsStateWithLifecycle()
+    val extraKeysSetting = remember(extraKeysPortrait, extraKeysLandscape, extraKeysFunctionKeys) {
         ExtraKeysSetting(
             portrait = extraKeysPortrait,
             landscape = extraKeysLandscape,
+            functionKeys = extraKeysFunctionKeys,
             onChangePortrait = viewModel::setExtraKeysPortrait,
             onChangeLandscape = viewModel::setExtraKeysLandscape,
+            onChangeFunctionKeys = viewModel::setExtraKeysFunctionKeys,
         )
     }
     val extraKeysState = remember { ExtraKeysState() }

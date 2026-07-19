@@ -846,6 +846,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val extraKeysFunctionKeysKey = booleanPreferencesKey("extra_keys_function_keys")
+
+    /** Whether the extra-keys row appends F1-F12 chips for surfaces that consume them (terminal). */
+    val extraKeysFunctionKeys: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[extraKeysFunctionKeysKey] ?: SettingsDefaults.EXTRA_KEYS_FUNCTION_KEYS }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.EXTRA_KEYS_FUNCTION_KEYS)
+
+    fun setExtraKeysFunctionKeys(enabled: Boolean) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[extraKeysFunctionKeysKey] = enabled }
+        }
+    }
+
     private fun String?.toExtraKeysVisibility(default: ExtraKeysVisibility): ExtraKeysVisibility =
         this?.let { runCatching { ExtraKeysVisibility.valueOf(it) }.getOrNull() } ?: default
 

@@ -16,6 +16,7 @@ object SettingsDefaults {
     const val RESTORE_LAST_SESSION = true
     val EXTRA_KEYS_PORTRAIT = ExtraKeysVisibility.WithKeyboard
     val EXTRA_KEYS_LANDSCAPE = ExtraKeysVisibility.Hidden
+    const val EXTRA_KEYS_FUNCTION_KEYS = false
     val BOTTOM_STATUS_BAR = BottomBarVisibility.HideOnKeyboard
     val HIDDEN_ROOT_MODE = ExplorerHiddenMode.HideSpecifiedAndInjected
     val EXCLUDE_EFFECT = ExplorerExcludeEffect.GreyOut

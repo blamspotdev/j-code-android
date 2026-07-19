@@ -44,12 +44,34 @@ enum class ExtraKey(val label: String) {
     End("END"),
     PageUp("PGUP"),
     PageDown("PGDN"),
+    F1("F1"),
+    F2("F2"),
+    F3("F3"),
+    F4("F4"),
+    F5("F5"),
+    F6("F6"),
+    F7("F7"),
+    F8("F8"),
+    F9("F9"),
+    F10("F10"),
+    F11("F11"),
+    F12("F12"),
 }
+
+/** The function-key chips appended to the row when the setting is on (see [ExtraKeysRow]). */
+val EXTRA_FUNCTION_KEYS = listOf(
+    ExtraKey.F1, ExtraKey.F2, ExtraKey.F3, ExtraKey.F4, ExtraKey.F5, ExtraKey.F6,
+    ExtraKey.F7, ExtraKey.F8, ExtraKey.F9, ExtraKey.F10, ExtraKey.F11, ExtraKey.F12,
+)
 
 /** A focused surface (terminal or editor) that consumes extra-keys row presses. */
 interface ExtraKeysTarget {
     /** Chips to show, in order. Including [ExtraKey.Ctrl]/[ExtraKey.Alt] opts into sticky modifiers. */
     val keys: List<ExtraKey>
+
+    /** Whether the surface consumes F1-F12 — gates the "Function keys" setting so the chips only
+     *  appear where they do something (the terminal; the editor has no F-key bindings). */
+    val supportsFunctionKeys: Boolean get() = false
 
     /** A non-modifier chip was tapped with the sticky modifier state captured at tap time. */
     fun onExtraKey(key: ExtraKey, ctrl: Boolean, alt: Boolean)
@@ -92,12 +114,15 @@ enum class ExtraKeysVisibility {
     Always,
 }
 
-/** App setting: per-orientation visibility of the extra-keys row above the keyboard. */
+/** App setting: per-orientation visibility of the extra-keys row above the keyboard, plus whether
+ *  the F1-F12 chips are appended for surfaces that consume them. */
 class ExtraKeysSetting(
     val portrait: ExtraKeysVisibility = SettingsDefaults.EXTRA_KEYS_PORTRAIT,
     val landscape: ExtraKeysVisibility = SettingsDefaults.EXTRA_KEYS_LANDSCAPE,
+    val functionKeys: Boolean = SettingsDefaults.EXTRA_KEYS_FUNCTION_KEYS,
     val onChangePortrait: (ExtraKeysVisibility) -> Unit = {},
     val onChangeLandscape: (ExtraKeysVisibility) -> Unit = {},
+    val onChangeFunctionKeys: (Boolean) -> Unit = {},
 )
 
 val LocalExtraKeysSetting = compositionLocalOf { ExtraKeysSetting() }
@@ -109,6 +134,9 @@ fun ExtraKeysRow(
     state: ExtraKeysState,
     modifier: Modifier = Modifier,
 ) {
+    // F1-F12 append behind the setting, only for surfaces that consume them (the terminal).
+    val showFunctionKeys = LocalExtraKeysSetting.current.functionKeys && target.supportsFunctionKeys
+    val keys = if (showFunctionKeys) target.keys + EXTRA_FUNCTION_KEYS else target.keys
     Surface(color = MaterialTheme.colorScheme.surface, modifier = modifier.fillMaxWidth()) {
         Column {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
@@ -121,7 +149,7 @@ fun ExtraKeysRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                target.keys.forEach { key ->
+                keys.forEach { key ->
                     val active = (key == ExtraKey.Ctrl && state.ctrl) || (key == ExtraKey.Alt && state.alt)
                     ExtraKeyChip(
                         label = key.label,

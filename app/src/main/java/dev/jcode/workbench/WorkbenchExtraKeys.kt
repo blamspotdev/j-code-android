@@ -96,12 +96,19 @@ class TerminalExtraKeysTarget(private val view: TerminalView) : ExtraKeysTarget 
         ExtraKey.Slash, ExtraKey.Dash,
     )
 
+    // Terminals consume F1-F12 (htop/mc function bars); the row appends them behind the setting.
+    override val supportsFunctionKeys = true
+
     override fun onExtraKey(key: ExtraKey, ctrl: Boolean, alt: Boolean) {
         if (ctrl || alt) {
             modifiedSequence(key, ctrl, alt)?.let {
                 view.sendInput(it)
                 return
             }
+        }
+        functionKeyCode(key)?.let {
+            view.sendKey(it, null)
+            return
         }
         when (key) {
             ExtraKey.Esc -> view.sendKey(KeyEvent.KEYCODE_ESCAPE, null)
@@ -116,9 +123,17 @@ class TerminalExtraKeysTarget(private val view: TerminalView) : ExtraKeysTarget 
             ExtraKey.PageDown -> view.sendKey(KeyEvent.KEYCODE_PAGE_DOWN, null)
             ExtraKey.Slash -> view.sendInput("/")
             ExtraKey.Dash -> view.sendInput("-")
-            ExtraKey.Ctrl, ExtraKey.Alt -> Unit
+            else -> Unit
         }
     }
+
+    /** F1-F12 map onto the contiguous KEYCODE_F1..F12 block [TerminalView.sendKey] already encodes. */
+    private fun functionKeyCode(key: ExtraKey): Int? =
+        if (key >= ExtraKey.F1 && key <= ExtraKey.F12) {
+            KeyEvent.KEYCODE_F1 + (key.ordinal - ExtraKey.F1.ordinal)
+        } else {
+            null
+        }
 
     override fun onModifiersChanged(ctrl: Boolean, alt: Boolean) {
         view.pendingCtrl = ctrl
@@ -142,6 +157,19 @@ class TerminalExtraKeysTarget(private val view: TerminalView) : ExtraKeysTarget 
             ExtraKey.End -> "\u001B[1;${mod}F"
             ExtraKey.PageUp -> "\u001B[5;${mod}~"
             ExtraKey.PageDown -> "\u001B[6;${mod}~"
+            // F1-F4 use the CSI 1;mod P/Q/R/S form; F5-F12 the CSI code;mod ~ form.
+            ExtraKey.F1 -> "\u001B[1;${mod}P"
+            ExtraKey.F2 -> "\u001B[1;${mod}Q"
+            ExtraKey.F3 -> "\u001B[1;${mod}R"
+            ExtraKey.F4 -> "\u001B[1;${mod}S"
+            ExtraKey.F5 -> "\u001B[15;${mod}~"
+            ExtraKey.F6 -> "\u001B[17;${mod}~"
+            ExtraKey.F7 -> "\u001B[18;${mod}~"
+            ExtraKey.F8 -> "\u001B[19;${mod}~"
+            ExtraKey.F9 -> "\u001B[20;${mod}~"
+            ExtraKey.F10 -> "\u001B[21;${mod}~"
+            ExtraKey.F11 -> "\u001B[23;${mod}~"
+            ExtraKey.F12 -> "\u001B[24;${mod}~"
             else -> null
         }
     }

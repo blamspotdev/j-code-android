@@ -370,7 +370,7 @@ object SettingsFeature {
                 description = "A Termux-style key row (Esc, Tab, Ctrl, arrows and more) shown above " +
                     "the keyboard while typing in the terminal or editor. Choose when it appears in " +
                     "each orientation.",
-                keywords = "extra keys row esc ctrl alt tab arrows home end pgup pgdn page terminal editor keyboard termux orientation portrait landscape hidden always with soft keyboard",
+                keywords = "extra keys row esc ctrl alt tab arrows home end pgup pgdn page terminal editor keyboard termux orientation portrait landscape hidden always with soft keyboard function keys f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 fn htop midnight commander",
             ) {
                 SettingsDropdownRow(
                     label = "Portrait",
@@ -389,6 +389,15 @@ object SettingsFeature {
                     optionLabel = { extraKeysVisibilityLabel(ExtraKeysVisibility.valueOf(it)) },
                     modified = extraKeysSetting.landscape != SettingsDefaults.EXTRA_KEYS_LANDSCAPE,
                     onReset = { extraKeysSetting.onChangeLandscape(SettingsDefaults.EXTRA_KEYS_LANDSCAPE) },
+                )
+                ToggleRow(
+                    label = "Function keys",
+                    supporting = "Append F1–F12 chips to the row while a terminal is focused (htop, " +
+                        "midnight commander, and other TUIs use them).",
+                    checked = extraKeysSetting.functionKeys,
+                    onCheckedChange = { extraKeysSetting.onChangeFunctionKeys(it) },
+                    modified = extraKeysSetting.functionKeys != SettingsDefaults.EXTRA_KEYS_FUNCTION_KEYS,
+                    onReset = { extraKeysSetting.onChangeFunctionKeys(SettingsDefaults.EXTRA_KEYS_FUNCTION_KEYS) },
                 )
             }
 
