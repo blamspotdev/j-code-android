@@ -189,8 +189,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Shared "Setup" terminal in the right drawer that runs toolchain installs and scaffolds. */
     val setupTerminalRunner = SetupTerminalRunner(appContext, distroService)
 
+    private val _runTerminalCompletions = MutableSharedFlow<Pair<String, Int>>(extraBufferCapacity = 16)
+
+    /** (sessionId, exitCode) for every terminal task that reported completion via OSC 7713. The
+     *  workbench consumes this to mark a run finished (done/killed) when the command bound to its
+     *  terminal exits — a run config binds to its single command's process. */
+    val runTerminalCompletions: SharedFlow<Pair<String, Int>> = _runTerminalCompletions.asSharedFlow()
+
     init {
-        TerminalSessionHost.manager(appContext).onTaskComplete = setupTerminalRunner::handleTaskComplete
+        TerminalSessionHost.manager(appContext).onTaskComplete = { sessionId, payload ->
+            setupTerminalRunner.handleTaskComplete(sessionId, payload)
+            _runTerminalCompletions.tryEmit(sessionId to (payload.substringAfter(';').trim().toIntOrNull() ?: -1))
+        }
         distroService.interactiveCatalogRunner = { label, script, timeoutMs ->
             setupTerminalRunner.run(label, script, workdir = null, asUser = "root", timeoutMs = timeoutMs)
         }
@@ -315,10 +325,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ): Boolean {
         if (!visiting.add(entry.id)) return true
 
-        if (!entry.requires.isEmpty) setExtensionPhase(entry.id, "Installing required tools…")
-        // Deps the marketplace index declared for this entry — resolved before install; a failure
-        // aborts because the extension asked for them up front.
-        if (!resolveRequires(entry.name, entry.requires, visiting, abortOnFail = true)) return false
+        // A code UPDATE/REINSTALL of an already-installed extension must never be blocked on
+        // (re)installing its toolchains: the extension is already present, and its required SDKs/LSPs
+        // (e.g. Node + npm-based language servers) may legitimately be uninstallable in the current
+        // runtime. Only a FRESH install resolves the index-declared `requires` up front with
+        // abort-on-fail; for an update we land the new package and let the post-install pass below
+        // attempt any missing toolchains best-effort, so the code update always applies.
+        val freshInstall = !extensionInstaller.isInstalled(entry.id)
+        if (freshInstall && !entry.requires.isEmpty) {
+            setExtensionPhase(entry.id, "Installing required tools…")
+            // Deps the marketplace index declared for this entry — resolved before install; a failure
+            // aborts because the extension asked for them up front.
+            if (!resolveRequires(entry.name, entry.requires, visiting, abortOnFail = true)) return false
+        }
 
         setExtensionPhase(entry.id, "Installing…")
         val result = extensionInstaller.install(entry, BuildConfig.VERSION_NAME)
@@ -2339,6 +2358,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val _systemPackagesUpdating = MutableStateFlow(false)
+
+    /** True while an opt-in `apt-get update && upgrade` is running (drives the Settings button state). */
+    val systemPackagesUpdating: StateFlow<Boolean> = _systemPackagesUpdating.asStateFlow()
+
+    /** Opt-in "Update system packages": runs `apt-get update && apt-get upgrade` (self-healing, streamed
+     *  to the Setup terminal). Deliberately never automatic — an upgrade can be large/slow under proot. */
+    fun updateSystemPackages() {
+        if (_systemPackagesUpdating.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _systemPackagesUpdating.value = true
+            val session = SessionRegistry.registerSession(
+                context = getApplication(),
+                kind = BackendSessionKind.JOB,
+                name = "environment:update-packages",
+            )
+            try {
+                _messages.tryEmit("Updating system packages… (see the Setup terminal for progress)")
+                val result = distroService.updateSystemPackages()
+                _messages.tryEmit(
+                    if (result.succeeded) {
+                        "System packages up to date."
+                    } else {
+                        val reason = result.internalError
+                            ?: result.stderr.lineSequence().firstOrNull { it.isNotBlank() }
+                            ?: "see the Setup terminal"
+                        "Package update failed: $reason"
+                    },
+                )
+            } finally {
+                session.close()
+                _systemPackagesUpdating.value = false
+            }
+        }
+    }
+
     fun installSdkCatalogEntry(entryId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val entry = distroService.sdkCatalogState.value.entries.firstOrNull { it.id == entryId }
@@ -3382,6 +3437,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Append all of [configs] to the project's `.jcode/run.yaml` in one write (a framework file-pick
+     *  in the "Add run config" dialog creates every config that file offers at once). */
+    fun saveRunConfigs(project: Project, configs: List<dev.jcode.core.config.RunConfig>) {
+        if (configs.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { dev.jcode.run.ProjectRunner.upsertRuns(project, configs) }
+                .onSuccess {
+                    _runConfigVersion.value++
+                    _messages.tryEmit("Saved run config for ${project.name}")
+                }
+                .onFailure { _messages.tryEmit("Failed to save run config: ${it.message ?: "error"}") }
+        }
+    }
+
     /** Upsert one build task at [index] (null appends). */
     fun saveBuildConfig(project: Project, index: Int?, config: dev.jcode.core.config.BuildConfig) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -3417,18 +3486,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Launch the DAP debugger on [config]'s debug entry (a guest source path). */
-    fun startDebugForConfig(config: dev.jcode.core.config.RunConfig) {
-        val entry = config.debugEntry.trim()
-        if (entry.isBlank()) {
-            _messages.tryEmit("Set a debug entry for '${config.name}' in Configure to debug it.")
-            return
-        }
-        val host = guestToHostInProject(entry)?.second?.absolutePath
+    fun startDebugForConfig(project: Project, config: dev.jcode.core.config.RunConfig) {
+        val host = deriveDebugEntryHost(project, config)
         if (host == null) {
-            _messages.tryEmit("Debug entry not found: $entry")
+            _messages.tryEmit(
+                "Nothing debuggable in '${config.name}'. Open a .py/.js/.ts/.cs file, tap a line's gutter to " +
+                    "set a breakpoint, then tap Debug.",
+            )
             return
         }
         startDebug(host)
+    }
+
+    /**
+     * Resolve the source file the Debug action launches under the debugger — VS-style "just debug it",
+     * no manual field. Priority: the config's explicit [RunConfig.debugEntry], then a source file named
+     * in a run command (`node dbg.js`, `python3 app/main.py`), then the active editor tab. Only files
+     * whose language has a built-in DAP engine qualify. Returns a host absolute path, or null.
+     */
+    private fun deriveDebugEntryHost(project: Project, config: dev.jcode.core.config.RunConfig): String? {
+        val projHost = (project.fsPath as? FsPath.Local)?.file
+        val bind = project.distroBindTarget.trimEnd('/')
+
+        fun hostOf(guestOrRel: String): File? {
+            val s = guestOrRel.trim()
+            if (s.isBlank()) return null
+            return if (s.startsWith("/")) {
+                guestToHostInProject(s)?.second ?: projHost?.let { File(it, s.removePrefix(bind).trimStart('/')) }
+            } else {
+                projHost?.let { File(it, s.removePrefix("./")) }
+            }
+        }
+
+        // 1. Explicit debug entry (guest path).
+        hostOf(config.debugEntry)?.takeIf { it.isFile }?.let { return it.absolutePath }
+
+        // 2. A source file named in any run command.
+        val rx = Regex("""(?:\./)?[\w./-]+\.(?:py|pyw|js|jsx|ts|tsx|mjs|cjs|cs|c|cpp|cc|rs)""")
+        for (t in config.terminals) {
+            for (m in rx.findAll(t.command)) {
+                hostOf(m.value)?.takeIf { it.isFile && debugController.canDebugFile(it.absolutePath) }
+                    ?.let { return it.absolutePath }
+            }
+        }
+
+        // 3. The active editor file, if its language has a debug engine.
+        _editorGroup.value.activeTab?.filePath?.path
+            ?.takeIf { it.isNotBlank() && debugController.canDebugFile(it) }
+            ?.let { return it }
+
+        return null
     }
 
     fun selectEditorTab(tabId: String) {

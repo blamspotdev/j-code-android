@@ -100,6 +100,8 @@ enum class WizardStepId(val key: String) {
     ToolchainBootstrapped("toolchain-bootstrapped"),
     /** Non-root jcode user created inside the distro. */
     JcodeUserCreated("jcode-user-created"),
+    /** Package lists refreshed (`apt-get update`) — best-effort, never blocks setup. */
+    AptUpdated("apt-updated"),
     /** Final smoke test passed. */
     SmokeTest("smoke-test");
 

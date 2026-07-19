@@ -27,8 +27,8 @@ entries:
 
   - id: nodejs
     category: languages
-    name: Node.js and npm
-    description: Installs the newest LTS Node.js and npm (resolved at install time) for TypeScript, JavaScript, and frontend tooling.
+    name: Node.js
+    description: The newest LTS Node.js runtime and npm (resolved at install time) for TypeScript, JavaScript, and frontend tooling.
     # Ubuntu's apt "npm" (Debian-patched) fails under proot with a phantom
     # `mkdir '/home' ENOENT` inside Arborist, breaking all `npm install`/`npm create`.
     # Ship upstream Node (unpatched npm) into /usr/local so it shadows any distro node on PATH.

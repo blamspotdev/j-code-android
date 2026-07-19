@@ -130,20 +130,20 @@ object DebugEngineCatalog {
         DebugEngineEntry(
             id = "java-debug",
             category = "JVM",
-            name = "Java / Kotlin (JDWP)",
-            description = "JVM debugging via JDWP attach — JCode has no built-in DAP launcher for the " +
-                "JVM yet. Run your app with -agentlib:jdwp and attach an external debugger.",
-            installCommand = "echo 'JVM debug uses JDWP. Run your app with " +
-                "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005 and attach an " +
-                "external debugger. JCode has no built-in JVM DAP launcher yet.'",
-            verifyCommand = "command -v java >/dev/null 2>&1 && java -version",
-            uninstallCommand = "echo 'Nothing to remove for JDWP-based debugging.'",
-            adapterCommand = "echo 'java-debug adapter not installed; use JDWP attach'",
+            name = "Java (JDWP/JDI)",
+            description = "JVM debug adapter (Microsoft java-debug core, DAP over stdio). Breakpoints, " +
+                "stepping, call stack, and variables for javac-compiled Java. Needs a JDK.",
+            installCommand = "set -e; mkdir -p \"\$HOME/java-dap\"; " +
+                "wget -qO \"\$HOME/java-dap/jcode-java-dap.jar\" " +
+                "https://github.com/blamspotdev/j-code-android/releases/download/java-dap-v1/jcode-java-dap.jar",
+            verifyCommand = "test -f \"\$HOME/java-dap/jcode-java-dap.jar\" && java -version 2>&1 | head -1",
+            uninstallCommand = "rm -rf \"\$HOME/java-dap\"",
+            adapterCommand = "java -Djava.net.preferIPv4Stack=true -cp \"\$HOME/java-dap/jcode-java-dap.jar\" dev.jcode.javadap.Main",
             transport = "stdio",
             debugType = "java",
-            languageIds = listOf("java", "kotlin"),
-            extensions = listOf(".java", ".kt", ".kts"),
-            dapAdapter = false,
+            languageIds = listOf("java"),
+            extensions = listOf(".java"),
+            requiredSdks = listOf("jdk"),
         ),
     )
 

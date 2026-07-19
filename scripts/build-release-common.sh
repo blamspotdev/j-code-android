@@ -65,6 +65,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 say "JCode release build ($OS_NAME) — repo: $REPO_ROOT"
 
+# Security invariant: JCode must never escalate to host root (proot userspace only).
+if [ -f scripts/check-no-host-root.sh ]; then
+    say "Checking no-host-root invariant…"
+    sh scripts/check-no-host-root.sh || die "Host-root escalation detected — aborting release build."
+fi
+
 require_tool git "$GIT_HINT" "$GIT_INSTALL_CMD"
 
 if ! have java && [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then

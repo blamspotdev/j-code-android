@@ -58,6 +58,18 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 Say "JCode release build (Windows) - repo: $RepoRoot"
 
+# Security invariant: JCode must never escalate to host root (proot userspace only).
+if (Test-Path "scripts/check-no-host-root.sh") {
+    Say "Checking no-host-root invariant..."
+    $bash = Get-Command bash -ErrorAction SilentlyContinue
+    if ($bash) {
+        & bash scripts/check-no-host-root.sh
+        if ($LASTEXITCODE -ne 0) { Fail "Host-root escalation detected - aborting release build." }
+    } else {
+        Warn "bash not found; skipping local no-host-root scan (CI and the pre-commit hook still enforce it)."
+    }
+}
+
 # --- Build variant: Release or Pre-release (interactive unless -Variant was given) ---
 $IsPre = $false
 if ($Variant) {

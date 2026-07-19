@@ -228,11 +228,14 @@ val LocalSettingsBackup = compositionLocalOf { SettingsBackupActions() }
 /**
  * Environment (Linux rootfs) backup/restore actions, shared (via [LocalEnvironmentBackup]) with the
  * settings screen. [onBackup] packs the active environment to a `.tar.gz` file; [onRestore] extracts
- * a picked `.tar.gz` back over it. [available] gates the buttons on an installed environment.
+ * a picked `.tar.gz` back over it. [onUpdatePackages] runs the opt-in `apt-get update && upgrade`
+ * ([updatingPackages] is true while it runs).
  */
 class EnvironmentBackupActions(
     val onBackup: () -> Unit = {},
     val onRestore: () -> Unit = {},
+    val onUpdatePackages: () -> Unit = {},
+    val updatingPackages: Boolean = false,
 )
 
 val LocalEnvironmentBackup = compositionLocalOf { EnvironmentBackupActions() }
@@ -309,6 +312,8 @@ class WebPreviewBrowsers(
     val globalChoice: String = SYSTEM,
     /** Per-project raw choice (may be [INHERIT]); keyed by a stable project key. */
     val projectChoice: (projectKey: String) -> String = { INHERIT },
+    /** Key of the currently selected project, so the settings screen can scope its per-project override. */
+    val currentProjectKey: String = "",
     val onSetGlobal: (String) -> Unit = {},
     val onSetProject: (projectKey: String, choice: String) -> Unit = { _, _ -> },
 ) {

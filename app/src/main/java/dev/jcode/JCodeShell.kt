@@ -486,6 +486,7 @@ fun JCodeApp(
             available = viewModel.installedBrowsers,
             globalChoice = webPreviewBrowserGlobal,
             projectChoice = { key -> webPreviewBrowserProjects[key] ?: WebPreviewBrowsers.INHERIT },
+            currentProjectKey = selectedProject?.id?.toString().orEmpty(),
             onSetGlobal = viewModel::setWebPreviewBrowser,
             onSetProject = viewModel::setProjectWebPreviewBrowser,
         )
@@ -1018,13 +1019,16 @@ fun JCodeApp(
     val envRestoreOnboardingLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent(),
     ) { uri -> if (uri != null) viewModel.restoreEnvironmentOnboarding(uri) }
-    val environmentBackupActions = remember {
+    val systemPackagesUpdating by viewModel.systemPackagesUpdating.collectAsStateWithLifecycle()
+    val environmentBackupActions = remember(systemPackagesUpdating) {
         EnvironmentBackupActions(
             onBackup = {
                 val id = viewModel.distroService.selectedEnvironment().id
                 envBackupLauncher.launch("jcode-env-$id.tar.gz")
             },
             onRestore = { envRestoreLauncher.launch("*/*") },
+            onUpdatePackages = { viewModel.updateSystemPackages() },
+            updatingPackages = systemPackagesUpdating,
         )
     }
     val envBackupStatus by viewModel.envBackupStatus.collectAsStateWithLifecycle()
@@ -1180,12 +1184,13 @@ fun JCodeApp(
         onSelectDistro = { viewModel.selectWizardDistro(it) },
         onAutoSetup = viewModel::runAutoSetup,
         onConfigureRun = viewModel::openRunConfigPage,
+        onDebugConfig = viewModel::startDebugForConfig,
         onConfigureBuild = viewModel::openBuildConfigPage,
         onSaveRunConfig = viewModel::saveRunConfig,
+        onSaveRunConfigs = viewModel::saveRunConfigs,
         onSaveBuildConfig = viewModel::saveBuildConfig,
         onDeleteRun = viewModel::deleteRunConfig,
         onDeleteBuild = viewModel::deleteBuildConfig,
-        onDebugConfig = viewModel::startDebugForConfig,
         runConfigVersion = runConfigVersion,
         managerActions = remember(viewModel) { WorkbenchManagerActions(
             onCheckSdkStatuses = viewModel::checkSdkStatuses,
@@ -1223,6 +1228,7 @@ fun JCodeApp(
         onUpdateHideStatusBarWithKeyboard = viewModel::setHideStatusBarWithKeyboard,
         bringEditorToFront = viewModel.bringEditorToFront,
         volumeKeyAction = viewModel.volumeKeyAction,
+        runTerminalCompletions = viewModel.runTerminalCompletions,
     )
     }
 
@@ -1338,18 +1344,20 @@ private fun JCodeShell(
     onAutoSetup: () -> Unit,
     onSelectDistro: (DistroProfile) -> Unit,
     onConfigureRun: (Project, Int?) -> Unit,
+    onDebugConfig: (Project, RunConfig) -> Unit,
     onConfigureBuild: (Project, Int?) -> Unit,
     onSaveRunConfig: (Project, Int?, RunConfig) -> Unit,
+    onSaveRunConfigs: (Project, List<RunConfig>) -> Unit,
     onSaveBuildConfig: (Project, Int?, RunBuildConfig) -> Unit,
     onDeleteRun: (Project, Int) -> Unit,
     onDeleteBuild: (Project, Int) -> Unit,
-    onDebugConfig: (RunConfig) -> Unit,
     runConfigVersion: Int,
     onOpenSettingsPage: () -> Unit,
     hideStatusBarWithKeyboard: Boolean,
     onUpdateHideStatusBarWithKeyboard: (Boolean) -> Unit,
     bringEditorToFront: SharedFlow<Unit>,
     volumeKeyAction: SharedFlow<VolumeKeyAction>,
+    runTerminalCompletions: SharedFlow<Pair<String, Int>>,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -1663,23 +1671,32 @@ private fun JCodeShell(
     var runInProgress by remember { mutableStateOf(false) }
     var runningProjectId by remember { mutableStateOf<Long?>(null) }
     var runningRunName by remember { mutableStateOf<String?>(null) }
+    // The terminals of the current/most-recent run. Kept until the NEXT run (or a stop/exit) so a new
+    // run tears these down first — strictly one run-config's terminals exist per project at a time,
+    // even after the command has finished (its terminal stays open showing output until replaced).
     var runSessionIds by remember { mutableStateOf<List<String>>(emptyList()) }
+    // Run terminals whose command reported completion (OSC 7713); the run is "done" once all have.
+    var runDoneSessionIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var runPollJob by remember { mutableStateOf<Job?>(null) }
 
-    // A run's terminal(s) going away — the server crashed/exited (EOF), or the user closed the tab or
-    // killed it from the Task Manager — must clear the WHOLE run state, else the Build & Run row stays
-    // stuck on "Running". Manual close doesn't fire the exit listener, so both paths call this.
+    // Clear the ACTIVE-run status (so the UI shows Run again) without touching [runSessionIds] — the
+    // terminals stay for teardown-on-next-run. A run is no longer active once its command is done/killed.
+    fun clearRunActiveStatus() {
+        runPollJob?.cancel()
+        runPollJob = null
+        runInProgress = false
+        runUrl = null
+        runningProjectId = null
+        runningRunName = null
+    }
+
+    // A run terminal going away — the server crashed/exited (EOF), the user closed the tab, or killed
+    // it from the Task Manager — drops it from the run and clears the active status when none remain.
     val onRunSessionGone: (String) -> Unit = { sessionId ->
         if (sessionId in runSessionIds) {
             runSessionIds = runSessionIds.filterNot { it == sessionId }
-            if (runSessionIds.isEmpty()) {
-                runPollJob?.cancel()
-                runPollJob = null
-                runInProgress = false
-                runUrl = null
-                runningProjectId = null
-                runningRunName = null
-            }
+            runDoneSessionIds = runDoneSessionIds - sessionId
+            if (runSessionIds.isEmpty()) clearRunActiveStatus()
         }
     }
 
@@ -1704,6 +1721,19 @@ private fun JCodeShell(
             onRunSessionGone(exitedId)
         }
         onDispose { TerminalSessionHost.setUiExitListener(null) }
+    }
+
+    // A run command reporting completion (OSC 7713, emitted after the command) marks that terminal
+    // done. The run is done once every one of its commands has completed — then the active status
+    // clears (UI shows Run again), but the terminals stay open with their output until the next run
+    // tears them down. Non-run sessions (setup/manual) aren't in runSessionIds, so they're ignored.
+    LaunchedEffect(runTerminalCompletions) {
+        runTerminalCompletions.collect { (sessionId, _) ->
+            if (sessionId in runSessionIds) {
+                runDoneSessionIds = runDoneSessionIds + sessionId
+                if (runSessionIds.all { it in runDoneSessionIds }) clearRunActiveStatus()
+            }
+        }
     }
 
     // Build & Run the selected project: spawn a dedicated terminal in the right drawer, stream the
@@ -1736,12 +1766,19 @@ private fun JCodeShell(
         val startedIds = mutableListOf<String>()
         for (terminal in plan.terminals) {
             val session = spawnTerminalSession(label = terminal.label) ?: break
-            terminalSessionManager.sendInput(session.id, ProjectRunner.runInvocation(project, terminal) + "\n")
+            // After the command exits, emit an OSC-7713 marker with its exit code so the run unbinds
+            // (done/killed) while the terminal stays open showing the output. Appended on the same line
+            // as the command so it's one prompt entry, not a stray extra line.
+            terminalSessionManager.sendInput(
+                session.id,
+                ProjectRunner.runInvocation(project, terminal).trimEnd('\n') + "; printf '\\033]7713;run;%s\\007' \"\$?\"\n",
+            )
             startedIds += session.id
             OutputLog.captureSession(session.id)
         }
         if (startedIds.isEmpty()) return
         runSessionIds = startedIds
+        runDoneSessionIds = emptySet()
         runningProjectId = project.id
         runningRunName = config.name
         selectTerminalSession(startedIds.last()) // focus the frontend terminal
@@ -1803,17 +1840,15 @@ private fun JCodeShell(
     // Stop the current run: Ctrl-C the run terminal (graceful server/build shutdown) and reset run
     // state. The terminal session is kept so its output stays visible and a re-run can reuse it.
     fun handleStopRun() {
-        runPollJob?.cancel()
         OutputLog.append("■ Stopped run")
         runSessionIds.forEach { id ->
             if (id in terminalSessionIds && terminalSessionManager.getSession(id) != null) {
                 terminalSessionManager.sendInput(id, byteArrayOf(0x03)) // Ctrl-C / SIGINT
             }
         }
-        runInProgress = false
-        runUrl = null
-        runningProjectId = null
-        runningRunName = null
+        // Killed: clear the active status. The terminals stay in runSessionIds so the next run tears
+        // them down — only one run-config's terminals exist per project.
+        clearRunActiveStatus()
     }
 
     fun closeTerminalSession(sessionId: String) {
@@ -2186,7 +2221,7 @@ private fun JCodeShell(
         },
         onConfigureRun = onConfigureRun,
         onConfigureBuild = onConfigureBuild,
-        onSaveRun = onSaveRunConfig,
+        onSaveRuns = onSaveRunConfigs,
         onSaveBuild = onSaveBuildConfig,
         onDeleteRun = onDeleteRun,
         onDeleteBuild = onDeleteBuild,
@@ -2303,6 +2338,11 @@ private fun JCodeShell(
                             )
                         },
                     ) {
+                    // Run configs behind the top-bar Run button: a tap runs the first (or opens a picker
+                    // when there's more than one); long-press lists them all.
+                    val topBarRunConfigs = remember(selectedProject?.id, runConfigVersion) {
+                        selectedProject?.let { ProjectRunner.effectiveRuns(it) }.orEmpty()
+                    }
                     EditorWorkspace(
                         windowInfo = windowInfo,
                         workspace = workspace,
@@ -2330,6 +2370,12 @@ private fun JCodeShell(
                         onRun = { selectedProject?.let(::handleRunFirst) },
                         onStop = ::handleStopRun,
                         onRerun = { selectedProject?.let(::handleRunFirst) },
+                        runConfigNames = topBarRunConfigs.map { it.name },
+                        onRunConfig = { index ->
+                            selectedProject?.let { project ->
+                                topBarRunConfigs.getOrNull(index)?.let { config -> handleRun(project, config) }
+                            }
+                        },
                         isRunning = runningProjectId != null,
                         terminalBusy = terminalBusy,
                         terminalHasUnseen = terminalHasUnseen,
@@ -2938,13 +2984,13 @@ private fun WorkspacePanel(
                         runConfigVersion = runConfigVersion,
                         debugUi = LocalDebugSession.current,
                         onRun = runActions.onRun,
-                        onDebug = { _, config -> runActions.onDebug(config) },
+                        onDebug = runActions.onDebug,
                         onBuild = runActions.onBuild,
                         onStop = runActions.onStop,
                         onOpenInBrowser = runActions.onOpenInBrowser,
                         onConfigureRun = runActions.onConfigureRun,
                         onConfigureBuild = runActions.onConfigureBuild,
-                        onAddRunPreset = { project, config -> runActions.onSaveRun(project, null, config) },
+                        onAddRunPresets = { project, configs -> runActions.onSaveRuns(project, configs) },
                         onAddBuildPreset = { project, config -> runActions.onSaveBuild(project, null, config) },
                         onDeleteRun = runActions.onDeleteRun,
                         onDeleteBuild = runActions.onDeleteBuild,
@@ -3019,6 +3065,8 @@ private fun EditorWorkspace(
     onRun: () -> Unit,
     onStop: () -> Unit,
     onRerun: () -> Unit,
+    runConfigNames: List<String>,
+    onRunConfig: (Int) -> Unit,
     isRunning: Boolean,
     terminalBusy: Boolean,
     terminalHasUnseen: Boolean,
@@ -3062,6 +3110,8 @@ private fun EditorWorkspace(
                         onRun = onRun,
                         onStop = onStop,
                         onRerun = onRerun,
+                        runConfigNames = runConfigNames,
+                        onRunConfig = onRunConfig,
                         isRunning = isRunning,
                         terminalBusy = terminalBusy,
                         terminalHasUnseen = terminalHasUnseen,

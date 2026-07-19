@@ -6,7 +6,6 @@ import dev.jcode.design.jcIcon
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,10 +20,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,8 +45,6 @@ import dev.jcode.core.config.BuildConfig
 import dev.jcode.core.config.RunConfig
 import dev.jcode.core.debug.DebugState
 import dev.jcode.design.CompactOutlinedButton
-import dev.jcode.design.LocalWebPreviewBrowsers
-import dev.jcode.design.WebPreviewBrowsers
 import dev.jcode.fs.Project
 import dev.jcode.run.ProjectRunner
 import dev.jcode.workbench.DebugSessionUi
@@ -61,8 +55,8 @@ import kotlinx.coroutines.withContext
 /**
  * The "Run" side-panel. In a User Workspace it first lists projects; tapping one opens a Build | Run
  * segmented detail. In the Default Workspace it goes straight to the open project's detail. The Run
- * segment lists run configs (each with Run ▷ / Debug 🐞 / Configure) plus the live debug session; the
- * Build segment lists build tasks (each with Build ▷ / Configure). Multiple configs of each kind are
+ * segment lists run configs (each with Run ▷ / Debug 🐞 / Configure) plus the live debug session; the Build
+ * segment lists build tasks (each with Build ▷ / Configure). Multiple configs of each kind are
  * supported. Execution is orchestrated by the workbench shell via the callbacks.
  */
 @Composable
@@ -82,7 +76,7 @@ internal fun RunPanel(
     onOpenInBrowser: () -> Unit,
     onConfigureRun: (Project, Int?) -> Unit,
     onConfigureBuild: (Project, Int?) -> Unit,
-    onAddRunPreset: (Project, RunConfig) -> Unit,
+    onAddRunPresets: (Project, List<RunConfig>) -> Unit,
     onAddBuildPreset: (Project, BuildConfig) -> Unit,
     onDeleteRun: (Project, Int) -> Unit,
     onDeleteBuild: (Project, Int) -> Unit,
@@ -138,7 +132,7 @@ internal fun RunPanel(
                 onOpenInBrowser = onOpenInBrowser,
                 onConfigureRun = onConfigureRun,
                 onConfigureBuild = onConfigureBuild,
-                onAddRunPreset = onAddRunPreset,
+                onAddRunPresets = onAddRunPresets,
                 onAddBuildPreset = onAddBuildPreset,
                 onDeleteRun = onDeleteRun,
                 onDeleteBuild = onDeleteBuild,
@@ -165,7 +159,7 @@ private fun ProjectRunBuildDetail(
     onOpenInBrowser: () -> Unit,
     onConfigureRun: (Project, Int?) -> Unit,
     onConfigureBuild: (Project, Int?) -> Unit,
-    onAddRunPreset: (Project, RunConfig) -> Unit,
+    onAddRunPresets: (Project, List<RunConfig>) -> Unit,
     onAddBuildPreset: (Project, BuildConfig) -> Unit,
     onDeleteRun: (Project, Int) -> Unit,
     onDeleteBuild: (Project, Int) -> Unit,
@@ -201,7 +195,6 @@ private fun ProjectRunBuildDetail(
                     onOpenInBrowser = onOpenInBrowser,
                     onConfigure = { onConfigureRun(project, index) },
                     onDelete = { onDeleteRun(project, index) },
-                    projectKey = project.id.toString(),
                 )
             }
             AddRow("Add run config", onClick = { showAddRun = true })
@@ -229,7 +222,7 @@ private fun ProjectRunBuildDetail(
     if (showAddRun) {
         AddRunConfigDialog(
             load = { withContext(Dispatchers.IO) { ProjectRunner.suggestRunTriggers(project, runPresets) } },
-            onPick = { cfg -> onAddRunPreset(project, cfg); showAddRun = false },
+            onPickAll = { configs -> onAddRunPresets(project, configs); showAddRun = false },
             onCustom = { showAddRun = false; onConfigureRun(project, null) },
             onDismiss = { showAddRun = false },
         )
@@ -325,57 +318,63 @@ private fun ChoiceRow(
 }
 
 /**
- * Two-level "Add run config" picker: level 1 lists the project's trigger files (each `.csproj`,
- * `package.json`, `gradlew`, or extension preset); tapping one drills into level 2, its run options
- * (a `.csproj` → Run / Debug; a `package.json` → one per script). Picking an option appends that
- * config via [onPick]; "Custom (blank)" opens the editor on an empty config.
+ * Framework-first "Add run config" picker: level 1 groups the detected triggers by framework
+ * ([ProjectRunner.RunTrigger.kind] — e.g. "C# · ASP.NET Core", "Node", "Gradle", or a contributing
+ * extension) and lists each with its project-file count; level 2 lists that framework's project
+ * files. Tapping a file creates ALL of its run configs at once via [onPickAll] (for a `.csproj`
+ * that's the debug + release pair). "Custom (blank)" opens the editor on an empty config.
  */
 @Composable
 private fun AddRunConfigDialog(
     load: suspend () -> List<ProjectRunner.RunTrigger>,
-    onPick: (RunConfig) -> Unit,
+    onPickAll: (List<RunConfig>) -> Unit,
     onCustom: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     var triggers by remember { mutableStateOf<List<ProjectRunner.RunTrigger>?>(null) }
-    var selected by remember { mutableStateOf<ProjectRunner.RunTrigger?>(null) }
+    var framework by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { triggers = load() }
     val listMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.5f).coerceIn(160f, 360f).dp
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 6.dp) {
             Column(modifier = Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                val sel = selected
+                val fw = framework
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (sel != null) {
-                        IconButton(onClick = { selected = null }, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to files", modifier = Modifier.size(20.dp))
+                    if (fw != null) {
+                        IconButton(onClick = { framework = null }, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to frameworks", modifier = Modifier.size(20.dp))
                         }
                     }
-                    Text(sel?.label ?: "Add run config", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(fw ?: "Pick a framework", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 val list = triggers
+                val frameworks = remember(list) { list?.groupBy { it.kind } ?: emptyMap() }
                 when {
                     list == null -> HintText("Scanning project…")
-                    sel != null -> {
-                        HintText(sel.kind)
+                    fw != null -> {
+                        HintText("Pick a project file — every run config it offers is added.")
                         Column(modifier = Modifier.heightIn(max = listMaxHeight).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            sel.options.forEach { opt -> ChoiceRow(opt.label, opt.source, onClick = { onPick(opt.config) }) }
-                        }
-                    }
-                    list.isEmpty() -> HintText("No run trigger detected — start from a blank config.")
-                    else -> {
-                        HintText("Pick a project file, then a run option.")
-                        Column(modifier = Modifier.heightIn(max = listMaxHeight).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            list.forEach { t ->
-                                ChoiceRow(t.label, t.kind, onClick = { selected = t }, trailing = Icons.AutoMirrored.Rounded.KeyboardArrowRight)
+                            frameworks[fw].orEmpty().forEach { t ->
+                                ChoiceRow(t.label, t.detail, onClick = { onPickAll(t.options.map { it.config }) })
                             }
                         }
                     }
+                    frameworks.isEmpty() -> {
+                        HintText("No run trigger detected — start from a blank config.")
+                        ChoiceRow("Custom (blank)", "Start from an empty run config", onClick = onCustom)
+                    }
+                    else -> {
+                        HintText("Pick a framework, then a project file.")
+                        Column(modifier = Modifier.heightIn(max = listMaxHeight).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            frameworks.keys.sorted().forEach { kind ->
+                                val count = frameworks[kind]?.size ?: 0
+                                ChoiceRow(kind, "$count project file(s)", onClick = { framework = kind }, trailing = Icons.AutoMirrored.Rounded.KeyboardArrowRight)
+                            }
+                            ChoiceRow("Custom (blank)", "Start from an empty run config", onClick = onCustom)
+                        }
+                    }
                 }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    CompactOutlinedButton(text = "Custom (blank)", onClick = onCustom, modifier = Modifier.weight(1f))
-                    CompactOutlinedButton(text = "Cancel", onClick = onDismiss, modifier = Modifier.weight(1f))
-                }
+                CompactOutlinedButton(text = "Cancel", onClick = onDismiss, modifier = Modifier.fillMaxWidth())
             }
         }
     }
@@ -446,9 +445,12 @@ private fun RunConfigRow(
     onOpenInBrowser: () -> Unit,
     onConfigure: () -> Unit,
     onDelete: () -> Unit,
-    projectKey: String,
 ) {
-    val subline = if (config.readyPort > 0) ":${config.readyPort}" else "${config.terminals.size} terminal(s)"
+    val subline = if (config.readyPort > 0) {
+        ":${config.readyPort}"
+    } else {
+        config.terminals.firstOrNull()?.command?.lineSequence()?.firstOrNull { it.isNotBlank() }?.take(32).orEmpty()
+    }
     val status = when {
         running && runInProgress -> "Building…"
         running -> "Running"
@@ -470,8 +472,10 @@ private fun RunConfigRow(
                 if (running) {
                     IconAction(jcIcon(JCodeIcon.Stop), "Stop", MaterialTheme.colorScheme.error, onStop, size = 20)
                 } else {
-                    IconAction(jcIcon(JCodeIcon.Run), "Run", MaterialTheme.colorScheme.primary, onRun, enabled = config.terminals.isNotEmpty(), size = 20)
-                    IconAction(jcIcon(JCodeIcon.Debug), "Debug", MaterialTheme.colorScheme.primary, onDebug, enabled = config.debugEntry.isNotBlank(), size = 20)
+                    IconAction(jcIcon(JCodeIcon.Run), "Run", MaterialTheme.colorScheme.primary, onRun, enabled = config.terminals.any { it.command.isNotBlank() }, size = 20)
+                    // Launch under the debugger (VS-style): set gutter breakpoints, tap Debug, pause on hit.
+                    // The entry is auto-derived from the command / active file — no manual field to fill in.
+                    IconAction(jcIcon(JCodeIcon.Debug), "Debug", MaterialTheme.colorScheme.tertiary, onDebug, size = 20)
                 }
                 IconAction(jcIcon(JCodeIcon.Settings), "Configure", MaterialTheme.colorScheme.onSurfaceVariant, onConfigure, size = 18)
                 if (!running && deletable) IconAction(Icons.Rounded.DeleteOutline, "Delete", MaterialTheme.colorScheme.onSurfaceVariant, onDelete, size = 18)
@@ -485,7 +489,6 @@ private fun RunConfigRow(
                 RunStatusChip(status, active = running)
                 Text(subline, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             }
-            if (config.readyPort > 0) WebPreviewSelector(projectKey = projectKey)
         }
     }
 }
@@ -542,38 +545,6 @@ private fun IconAction(
 @Composable
 private fun HintText(text: String) {
     Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-}
-
-/** Per-project "Open web previews in" override; INHERIT falls back to the Settings global default. */
-@Composable
-private fun WebPreviewSelector(projectKey: String) {
-    val webPreview = LocalWebPreviewBrowsers.current
-    var open by remember { mutableStateOf(false) }
-    val raw = webPreview.projectChoice(projectKey)
-    val shown = if (raw == WebPreviewBrowsers.INHERIT) "Default (${webPreview.label(webPreview.globalChoice)})" else webPreview.label(raw)
-    val options = buildList {
-        add(WebPreviewBrowsers.INHERIT); add(WebPreviewBrowsers.SYSTEM); add(WebPreviewBrowsers.ASK); add(WebPreviewBrowsers.BUILTIN)
-        webPreview.available.forEach { add(it.packageName) }
-    }
-    Box {
-        Row(
-            modifier = Modifier.fillMaxWidth().clickable { open = true }.padding(start = 10.dp, end = 8.dp, top = 2.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
-            Text("Preview in: $shown", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            options.forEach { choice ->
-                DropdownMenuItem(
-                    text = { Text(webPreview.label(choice)) },
-                    leadingIcon = { if (choice == raw) Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                    onClick = { webPreview.onSetProject(projectKey, choice); open = false },
-                )
-            }
-        }
-    }
 }
 
 @Composable

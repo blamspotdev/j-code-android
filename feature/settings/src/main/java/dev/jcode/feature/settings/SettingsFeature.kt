@@ -530,45 +530,71 @@ object SettingsFeature {
                     onReset = { perf.onSetMaxTerminalSessions(SettingsDefaults.MAX_TERMINAL_SESSIONS) },
                 )
             }
+            } // end Global-only cards; the Web preview card below renders on every scope tab.
 
+            // "Open web previews in" edits the app-wide default on the GLOBAL tab and a per-project
+            // override on the PROJECT tab (INHERIT = fall back to that default). It renders on every
+            // tab; the raw selected tab (not [selectedScope], which coalesces GLOBAL into Project when
+            // a project is open) decides which it edits, so the GLOBAL tab always edits the default.
+            val projectBrowserScope =
+                tabScopes[safeTab] == ConfigScope.Project && webPreview.currentProjectKey.isNotBlank()
             SettingsSectionHeader("Web preview")
             SettingsCard(
                 title = "Open web previews in",
-                description = "The browser used when you open a running dev server (Build & Run) or tap a URL " +
-                    "in the terminal. A project can override this in its Build & Run panel.",
+                description = if (projectBrowserScope) {
+                    "The browser this project uses when you open a running dev server (Build & Run) or " +
+                        "tap a URL in the terminal. \"Use global default\" defers to the app-wide setting."
+                } else {
+                    "The browser used when you open a running dev server (Build & Run) or tap a URL in " +
+                        "the terminal. A local project can override this on its Project settings tab."
+                },
                 keywords = "browser web preview open url chrome firefox default run dev server " +
-                    "system always ask chooser built-in builtin " +
+                    "system always ask chooser built-in builtin inherit global project override " +
                     webPreview.available.joinToString(" ") { it.label },
             ) {
-                val globalOptions = buildList {
+                val options = buildList {
+                    if (projectBrowserScope) add(WebPreviewBrowsers.INHERIT)
                     add(WebPreviewBrowsers.SYSTEM)
                     add(WebPreviewBrowsers.ASK)
                     add(WebPreviewBrowsers.BUILTIN)
                     webPreview.available.forEach { add(it.packageName) }
                 }
-                globalOptions.forEach { choice ->
+                val selectedChoice = if (projectBrowserScope) {
+                    webPreview.projectChoice(webPreview.currentProjectKey)
+                } else {
+                    webPreview.globalChoice
+                }
+                options.forEach { choice ->
                     BundleRow(
                         name = webPreview.label(choice),
                         description = when (choice) {
+                            WebPreviewBrowsers.INHERIT -> "Fall back to the app-wide default"
                             WebPreviewBrowsers.SYSTEM -> "The device's default browser app"
                             WebPreviewBrowsers.ASK -> "Show the Android app chooser each time"
                             WebPreviewBrowsers.BUILTIN -> "JCode's own in-editor browser, with DevTools"
                             else -> choice
                         },
-                        selected = webPreview.globalChoice == choice,
+                        selected = selectedChoice == choice,
                         swatch = emptyList(),
-                        onClick = { webPreview.onSetGlobal(choice) },
+                        onClick = {
+                            if (projectBrowserScope) {
+                                webPreview.onSetProject(webPreview.currentProjectKey, choice)
+                            } else {
+                                webPreview.onSetGlobal(choice)
+                            }
+                        },
                     )
                 }
             }
 
+            if (showGlobalTab) {
             SettingsSectionHeader("Environment")
             SettingsCard(
                 title = "Environment",
                 description = "Environment setup: proot, distro bootstrap, and the final smoke test. " +
                     "Install, switch between, or remove environments from the setup page.",
                 keywords = "environment proot distro toolchain smoke test bind runtime setup manage refresh install " +
-                    "ready passed failed not installed not run unknown " +
+                    "ready passed failed not installed not run unknown update upgrade packages apt system " +
                     environmentState.runtime.selectedDistro.label,
             ) {
                 SummaryRow(
@@ -640,6 +666,19 @@ object SettingsFeature {
                         OutlinedButton(onClick = envBackup.onRestore, modifier = Modifier.weight(1f)) {
                             Text("Restore…")
                         }
+                    }
+                    Text(
+                        text = "Refresh package lists and upgrade installed packages " +
+                            "(apt-get update && upgrade). Runs in the Setup terminal — can be slow and use data.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(
+                        onClick = envBackup.onUpdatePackages,
+                        enabled = !envBackup.updatingPackages,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(if (envBackup.updatingPackages) "Updating packages…" else "Update system packages")
                     }
                 }
             }

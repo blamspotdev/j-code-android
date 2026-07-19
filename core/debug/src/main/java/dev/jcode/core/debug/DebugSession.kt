@@ -60,6 +60,14 @@ class DebugSession(
     var onOutput: ((String, String) -> Unit)? = null
     var onTerminated: (() -> Unit)? = null
 
+    /**
+     * The adapter asked us (a DAP reverse request) to open a CHILD debug session — js-debug's
+     * multi-session model, where the debuggee actually runs and breakpoints bind. Args are
+     * (request = "launch"|"attach", configuration = the child session's launch/attach config, which
+     * carries `__jsDebugChildServer` = the port to connect the child to). The handler spawns the child.
+     */
+    var onStartDebugging: ((request: String, configuration: JSONObject) -> Unit)? = null
+
     private var onInitialized: (suspend () -> Unit)? = null
     var capabilities: JSONObject = JSONObject(); private set
 
@@ -99,6 +107,9 @@ class DebugSession(
                 put("columnsStartAt1", true)
                 put("pathFormat", "path")
                 put("supportsRunInTerminalRequest", false)
+                // js-debug (multi-session) asks us to open child sessions via `startDebugging`; advertise
+                // it so the adapter delegates the debuggee to a child instead of stalling on launch.
+                put("supportsStartDebuggingRequest", true)
                 put("supportsVariableType", true)
             })
 
@@ -229,7 +240,45 @@ class DebugSession(
                 }
             }
             "event" -> handleEvent(json.optString("event"), json.optJSONObject("body") ?: JSONObject())
+            "request" -> handleReverseRequest(json)
         }
+    }
+
+    /**
+     * Handle a reverse request (the adapter calling us). js-debug uses `startDebugging` to ask the client
+     * to open the CHILD session that runs the debuggee + binds breakpoints — hand it to [onStartDebugging]
+     * and ack success so the adapter proceeds. Anything else (e.g. `runInTerminal`, which we don't
+     * advertise) is rejected so the adapter never blocks waiting on us.
+     */
+    private fun handleReverseRequest(json: JSONObject) {
+        val command = json.optString("command")
+        val requestSeq = json.optInt("seq", -1)
+        val args = json.optJSONObject("arguments") ?: JSONObject()
+        when (command) {
+            "startDebugging" -> {
+                runCatching {
+                    onStartDebugging?.invoke(
+                        args.optString("request", "launch"),
+                        args.optJSONObject("configuration") ?: JSONObject(),
+                    )
+                }
+                scope.launch { runCatching { sendResponse(requestSeq, command, success = true) } }
+            }
+            else -> scope.launch {
+                runCatching { sendResponse(requestSeq, command, success = false, message = "$command is not supported") }
+            }
+        }
+    }
+
+    private suspend fun sendResponse(requestSeq: Int, command: String, success: Boolean, message: String? = null) {
+        writeMessage(JSONObject().apply {
+            put("seq", seq.incrementAndGet())
+            put("type", "response")
+            put("request_seq", requestSeq)
+            put("success", success)
+            put("command", command)
+            if (message != null) put("message", message)
+        })
     }
 
     private fun handleEvent(event: String, body: JSONObject) {
