@@ -1,8 +1,12 @@
 # JCode JVM debugging — implementation plan (java-debug adapter)
 
-Status: **WIP.** Kotlin integration is done and compiles (this branch,
-`fa45cc9`). The adapter jar itself, its GitHub release, and on-device
-verification are not done — see "Remaining work". Confidence in the approach: 90%.
+Status: **Adapter built and desktop-verified.** The `tools/java-dap` module
+(7cb615e) compiles against the real `com.microsoft.java:com.microsoft.java.debug.core:0.53.1`,
+and a DAP stdio spike on a HelloWorld loop passes end-to-end (breakpoint binds +
+hits, call stack, live variables `total=0/i=1`, `continue` loop re-hits, clean
+terminate) — verified both via classpath and via the assembled fat jar
+(`java -jar`). The Kotlin integration (`fa45cc9`) compiles. Remaining: on-device
+leg-2 verification (in progress) and publishing the jar as a GitHub release.
 
 ## Why this is the only viable of the three engines
 
@@ -100,23 +104,29 @@ resolution lives in the JDT plugin we don't ship — which is exactly what
 
 ## Remaining work
 
-1. **`tools/java-dap` Gradle module** (Java 17, `shadowJar`, depend on
-   `com.microsoft.java.debug:com.microsoft.java.debug.core:0.53.1`, Main-Class
-   `dev.jcode.javadap.Main`). Prefer a standalone Gradle project over an AGP
-   subproject to avoid plugin interference. Files: `build.gradle`, `Main.java`,
-   `JCodeSourceLookUpProvider.java`, the four stub providers.
-2. **De-risk with a desktop JVM spike first** (no Android): hit a breakpoint in a
-   plain `javac` HelloWorld over stdio before touching the app. This is the main
-   engineering unknown — standing up `ProtocolServer` + core handlers + stub
-   providers outside the JDT plugin.
-3. **Build the shaded jar**, publish it as a GitHub release asset (the catalog
-   `installCommand` currently points at a placeholder
-   `java-dap-v1/jcode-java-dap.jar` URL — publish the real asset, then confirm the
-   URL matches).
-4. **Rebuild the app.**
-5. **On-device verification (the real gate).** Install the `jdk` toolchain,
-   install the java-debug adapter (wget), open a `.java` with `main`, set a
-   breakpoint, Debug, and confirm it **pauses**.
+1. ~~`tools/java-dap` Gradle module~~ — **DONE** (7cb615e). Note: the Maven
+   groupId is `com.microsoft.java` (not `.debug`); all five providers are
+   mandatory (`SetBreakpointsRequestHandler.initialize()` subscribes to
+   `IHotCodeReplaceProvider.getEventHub()` in the `DebugAdapter` constructor);
+   `--add-modules jdk.jdi` at compile time.
+2. ~~De-risk with a desktop JVM spike~~ — **DONE, PASS.** A HelloWorld breakpoint
+   over stdio binds (`verified:true`) and hits; call stack, live variables, loop
+   re-hits on `continue`, output streaming, clean terminate all work — via both
+   classpath and `java -jar jcode-java-dap.jar`. The trailing RxJava
+   VMDisconnect stack trace is java-debug-core's benign teardown noise (fires
+   after `terminated`). The main engineering unknown (core handlers + providers
+   outside the JDT plugin) is resolved.
+3. **On-device leg-2 verification (in progress — the real remaining gate).** Runs
+   the same stdio spike *inside proot* against the real fat jar: `javac`-compile
+   a HelloWorld in the guest, launch it via the adapter, confirm the breakpoint
+   pauses. Exercises the adapter→debuggee JDWP `dt_socket` loopback under proot.
+   If it stalls (like js-debug's leg 1), fall back to attach mode with an
+   explicit `address=127.0.0.1:<port>,server=y,suspend=y`.
+4. **Publish the shaded jar as a GitHub release asset** (the catalog
+   `installCommand` points at a placeholder `java-dap-v1/jcode-java-dap.jar` URL —
+   publish the real asset, then confirm the URL matches). *Outward-facing —
+   needs explicit approval.*
+5. **Rebuild the app** and run the final UI-first debug test on a `.java` file.
 
 ## Honest risks
 
