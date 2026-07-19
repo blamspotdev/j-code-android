@@ -189,9 +189,11 @@ private val midnightBundle = ThemeBundle(
         onSecondary = Color(0xFF11061F),
         tertiary = Color(0xFF4FD6BE),
         onTertiary = Color(0xFF00201A),
+        // background stays true #000000 (unlit OLED pixels) for the main canvas + editor content;
+        // surface is a faint grey so the drawers/sheets and the editor gutter lift off the black.
         background = Color(0xFF000000),
         onBackground = Color(0xFFC8D3F5),
-        surface = Color(0xFF000000),
+        surface = Color(0xFF181A21),
         onSurface = Color(0xFFC8D3F5),
         surfaceVariant = Color(0xFF262A40),
         onSurfaceVariant = Color(0xFFA9B2D0),

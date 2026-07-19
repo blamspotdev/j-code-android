@@ -398,6 +398,9 @@ class EditorView @JvmOverloads constructor(
             invalidate()
         }.launchIn(scope)
         editorState.decorations.onEach { invalidate() }.launchIn(scope)
+        // Repaint when the color theme changes (e.g. switching to the OLED bundle): the renderer reads
+        // state.theme.value every frame, so the view just needs to be told to redraw.
+        editorState.theme.onEach { invalidate() }.launchIn(scope)
         // Follow the caret while typing: keep a collapsed cursor in view as it moves. Selections don't
         // auto-scroll, so select-all / drag-select don't yank the viewport around.
         editorState.carets.onEach { carets ->
