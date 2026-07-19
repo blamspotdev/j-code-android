@@ -146,6 +146,17 @@ class DebugController(
         scope.launch {
             runCatching { s.start(plan.adapterCommand, "launch", plan.config, distroBreakpoints) }
                 .onFailure { pushOutput("Debug failed: ${it.message}\n"); _state.value = DebugState.ERROR }
+            // start() swallows a failed adapter launch (bad transport / handshake) into DISCONNECTED
+            // without rethrowing, and the STARTING guard on the state collector can eat that final
+            // DISCONNECTED — leaving the panel stuck on "Starting…" forever. If we never advanced past
+            // STARTING, the adapter never became reachable: surface it as an error instead of hanging.
+            if (_state.value == DebugState.STARTING) {
+                pushOutput(
+                    "Couldn't reach the ${engine.name} debug adapter — it started but the connection " +
+                        "timed out. See the log (tag JCodeDAP-adapter) for details.\n",
+                )
+                _state.value = DebugState.ERROR
+            }
         }
     }
 
@@ -533,6 +544,11 @@ private class TcpTransport private constructor(
                 "adapter never became reachable on $host:$port within ${timeoutMs}ms; output:\n" +
                     tail.joinToString("\n"),
             )
+            // Best-effort teardown of the still-running adapter. NOTE: a TCP adapter that we never
+            // connected to (js-debug) can't be told to `disconnect`, and destroy() doesn't reliably
+            // trip proot's --kill-on-exit here, so the node/proot tree may linger until the app is
+            // restarted. This only happens on the js-debug transport failure (see JCodeDAP-adapter log).
+            runCatching { process.destroy() }
             return null
         }
     }
