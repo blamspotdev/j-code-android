@@ -1,0 +1,15 @@
+name: no-host-root guard
+
+# Fails the build if any host-root escalation appears in the sources. JCode must
+# run entirely in its proot userspace sandbox (see scripts/check-no-host-root.sh).
+on:
+  push:
+  pull_request:
+
+jobs:
+  no-host-root:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce no host-root escalation
+        run: sh scripts/check-no-host-root.sh

@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# JCode pre-commit guard: block host-root escalation before it is committed.
+# Enable once (repo-local):  git config core.hooksPath .githooks
+#   or run:  sh scripts/install-git-hooks.sh
+exec sh "$(git rev-parse --show-toplevel)/scripts/check-no-host-root.sh"
