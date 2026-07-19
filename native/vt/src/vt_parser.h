@@ -135,7 +135,11 @@ typedef struct {
 
     // UTF-8 decode accumulator for the GROUND state. utf8_left > 0 means we are in the middle of a
     // multi-byte sequence and expect that many more continuation bytes before emitting utf8_acc.
+    // utf8_min is the smallest codepoint the sequence length may legally encode — anything below it
+    // is an overlong encoding and becomes U+FFFD (an overlong NUL would otherwise forge the ch == 0
+    // wide-continuation marker and corrupt neighboring cells via pair repair).
     uint32_t utf8_acc;
+    uint32_t utf8_min;
     int utf8_left;
 
     // CSI parameter storage

@@ -268,6 +268,16 @@ class TerminalView @JvmOverloads constructor(
         return rowBuf
     }
 
+    // Reused whole-grid buffer for VtParser.readScreen (main-thread only): one JNI call per
+    // re-recorded frame instead of one per visible row.
+    private var screenBuf = IntArray(0)
+
+    private fun screenBufFor(rowCount: Int, cols: Int): IntArray {
+        val needed = rowCount * cols * VtParser.CELL_STRIDE
+        if (screenBuf.size < needed) screenBuf = IntArray(needed)
+        return screenBuf
+    }
+
     // Reused buffer for a batched glyph run: consecutive same-colour/same-attr ASCII cells are drawn
     // with one canvas.drawText(char[]) call instead of one per cell.
     private var runGlyphs = CharArray(0)
@@ -1171,8 +1181,14 @@ class TerminalView @JvmOverloads constructor(
         bgPaint.color = Color.BLACK
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
 
-        val buf = rowBufFor(parser)
+        // One JNI crossing for the whole visible grid (readScreen) instead of one per row: the
+        // per-row crossings + per-cell resolution were ~50 calls per re-recorded frame.
         val stride = VtParser.CELL_STRIDE
+        val parserCols = parser.cols
+        val visRows = min(rows, parser.rows)
+        val buf = screenBufFor(visRows, parserCols)
+        parser.readScreen(-scrollOffset, visRows, buf)
+        var rowBase = 0
 
         // Raw SGR colors of a cell (before inverse/selection): bg 0 = default (transparent over
         // the black canvas), fg defaults to white.
@@ -1214,7 +1230,7 @@ class TerminalView @JvmOverloads constructor(
         // the fg color.
         fun cellBg(logicalRow: Int, col: Int): Int {
             if (isSelected(logicalRow, col)) return selectionColorArgb
-            val base = col * stride
+            val base = rowBase + col * stride
             return if ((VtParser.metaAttrs(buf[base + 3]) and VtParser.ATTR_INVERSE) != 0) {
                 sgrFg(base)
             } else {
@@ -1225,16 +1241,16 @@ class TerminalView @JvmOverloads constructor(
         // Selected cells keep their RAW fg: the translucent tint over black plus an inverse cell's
         // swapped-in (dark) fg would render htop/less/vim highlights unreadable when selected.
         fun glyphFg(logicalRow: Int, col: Int): Int {
-            val base = col * stride
+            val base = rowBase + col * stride
             return if (isSelected(logicalRow, col)) sgrFg(base) else effFg(base)
         }
 
         // Draw cells. When scrolled back, view row N shows logical row (N - scrollOffset);
         // negative logical rows come from the scrollback buffer.
-        for (row in 0 until min(rows, parser.rows)) {
+        for (row in 0 until visRows) {
             val logicalRow = row - scrollOffset
-            val filled = parser.readRow(logicalRow, buf)
-            val colBound = min(min(cols, filled), parser.cols)
+            rowBase = row * parserCols * stride
+            val colBound = min(cols, parserCols)
             val yTop = row * cellHeight
 
             // Background / selection runs: merge adjacent cells sharing an effective colour.
@@ -1256,8 +1272,10 @@ class TerminalView @JvmOverloads constructor(
             val runs = runGlyphsFor(colBound)
             c = 0
             while (c < colBound) {
-                val base = c * stride
+                val base = rowBase + c * stride
                 val cp = buf[base]
+                // cp == 0 is the continuation cell of a wide character: its background was drawn
+                // in the bg pass (it carries the lead's colors); the lead's glyph spans it.
                 if (cp == 0 || cp == ' '.code) { c++; continue }
                 val attrs = VtParser.metaAttrs(buf[base + 3])
                 if ((attrs and VtParser.ATTR_HIDDEN) != 0) { c++; continue }
@@ -1266,7 +1284,7 @@ class TerminalView @JvmOverloads constructor(
                     var e = c
                     var len = 0
                     while (e < colBound) {
-                        val b2 = e * stride
+                        val b2 = rowBase + e * stride
                         val cp2 = buf[b2]
                         if (cp2 !in 0x20..0x7E || glyphFg(logicalRow, e) != fg || VtParser.metaAttrs(buf[b2 + 3]) != attrs) break
                         runs[len++] = cp2.toChar()
@@ -1279,10 +1297,12 @@ class TerminalView @JvmOverloads constructor(
                 } else {
                     applyGlyphPaint(fg, attrs)
                     val x = c * cellWidth
+                    // A wide character's decorations span both its cells.
+                    val cellsWide = if (c + 1 < colBound && buf[rowBase + (c + 1) * stride] == 0) 2 else 1
                     val glyphLen = Character.toChars(cp, glyphBuf, 0)
                     canvas.drawText(glyphBuf, 0, glyphLen, x, baseY, textPaint)
-                    drawRunDecorations(canvas, attrs, x, x + cellWidth, yTop)
-                    c++
+                    drawRunDecorations(canvas, attrs, x, x + cellWidth * cellsWide, yTop)
+                    c += cellsWide
                 }
             }
         }
@@ -1331,6 +1351,7 @@ class TerminalView @JvmOverloads constructor(
                 var cp = ' '.code
                 var blockColor = Color.WHITE
                 var glyphColor = Color.BLACK
+                var blockCells = 1
                 if (cursorCol < filled) {
                     val base = cursorCol * VtParser.CELL_STRIDE
                     cp = buf[base]
@@ -1340,20 +1361,25 @@ class TerminalView @JvmOverloads constructor(
                     val inverse = (VtParser.metaAttrs(meta) and VtParser.ATTR_INVERSE) != 0
                     blockColor = if (inverse) rawBg else rawFg
                     glyphColor = if (inverse) rawFg else rawBg
+                    // On a wide character's lead cell the block covers both cells.
+                    if (cursorCol + 1 < filled && buf[(cursorCol + 1) * VtParser.CELL_STRIDE] == 0) {
+                        blockCells = 2
+                    }
                 }
                 val x = cursorCol * cellWidth
                 val y = cursorRow * cellHeight
+                val blockW = cellWidth * blockCells
                 if (!hasFocus()) {
                     // Unfocused: hollow rectangle.
                     cursorOutlinePaint.color = blockColor
                     canvas.drawRect(
-                        x + 1f, y + 1f, x + cellWidth - 1f, y + cellHeight - 1f, cursorOutlinePaint,
+                        x + 1f, y + 1f, x + blockW - 1f, y + cellHeight - 1f, cursorOutlinePaint,
                     )
                 } else if (cursorBlinkOn) {
                     // Focused + blink "on": solid block, then redraw the underlying glyph in the
                     // cell's effective background colour so it remains visible.
                     cursorPaint.color = blockColor
-                    canvas.drawRect(x, y, x + cellWidth, y + cellHeight, cursorPaint)
+                    canvas.drawRect(x, y, x + blockW, y + cellHeight, cursorPaint)
                     if (cp != ' '.code && cp != 0) {
                         val saved = textPaint.color
                         val savedBold = textPaint.isFakeBoldText

@@ -14,6 +14,74 @@ static void clear_cells(VtCell* p, int count) {
     for (int i = 0; i < count; i++) p[i] = VT_BLANK;
 }
 
+// ---- Character cell width (wcwidth) ----------------------------------------------------------
+// A wide (2-cell) character occupies its lead cell plus a continuation cell with ch == 0 carrying
+// the same colors/attrs; renderers and text extractors skip ch == 0. Zero-width characters
+// (combining marks, ZWJ, variation selectors) are dropped rather than folded — column geometry
+// stays correct and the base character keeps its default presentation.
+
+typedef struct { uint32_t first, last; } VtCpRange;
+
+// East Asian Wide/Fullwidth plus the emoji blocks mainstream terminals render two cells wide
+// (Unicode EastAsianWidth W/F, the same set musl's wcwidth uses). Sorted for binary search.
+static const VtCpRange VT_WIDE_RANGES[] = {
+    {0x1100, 0x115F},   {0x231A, 0x231B},   {0x2329, 0x232A},   {0x23E9, 0x23EC},
+    {0x23F0, 0x23F0},   {0x23F3, 0x23F3},   {0x25FD, 0x25FE},   {0x2614, 0x2615},
+    {0x2648, 0x2653},   {0x267F, 0x267F},   {0x2693, 0x2693},   {0x26A1, 0x26A1},
+    {0x26AA, 0x26AB},   {0x26BD, 0x26BE},   {0x26C4, 0x26C5},   {0x26CE, 0x26CE},
+    {0x26D4, 0x26D4},   {0x26EA, 0x26EA},   {0x26F2, 0x26F3},   {0x26F5, 0x26F5},
+    {0x26FA, 0x26FA},   {0x26FD, 0x26FD},   {0x2705, 0x2705},   {0x270A, 0x270B},
+    {0x2728, 0x2728},   {0x274C, 0x274C},   {0x274E, 0x274E},   {0x2753, 0x2755},
+    {0x2757, 0x2757},   {0x2795, 0x2797},   {0x27B0, 0x27B0},   {0x27BF, 0x27BF},
+    {0x2B1B, 0x2B1C},   {0x2B50, 0x2B50},   {0x2B55, 0x2B55},   {0x2E80, 0x2FFB},
+    {0x3000, 0x303E},   {0x3041, 0x33FF},   {0x3400, 0x4DBF},   {0x4E00, 0x9FFF},
+    {0xA000, 0xA4CF},   {0xA960, 0xA97F},   {0xAC00, 0xD7A3},   {0xF900, 0xFAFF},
+    {0xFE10, 0xFE19},   {0xFE30, 0xFE52},   {0xFE54, 0xFE66},   {0xFE68, 0xFE6B},
+    {0xFF00, 0xFF60},   {0xFFE0, 0xFFE6},   {0x16FE0, 0x16FE4}, {0x17000, 0x187F7},
+    {0x18800, 0x18CD5}, {0x1B000, 0x1B2FB}, {0x1F004, 0x1F004}, {0x1F0CF, 0x1F0CF},
+    {0x1F18E, 0x1F18E}, {0x1F191, 0x1F19A}, {0x1F200, 0x1F202}, {0x1F210, 0x1F23B},
+    {0x1F240, 0x1F248}, {0x1F250, 0x1F251}, {0x1F260, 0x1F265}, {0x1F300, 0x1F320},
+    {0x1F32D, 0x1F335}, {0x1F337, 0x1F37C}, {0x1F37E, 0x1F393}, {0x1F3A0, 0x1F3CA},
+    {0x1F3CF, 0x1F3D3}, {0x1F3E0, 0x1F3F0}, {0x1F3F4, 0x1F3F4}, {0x1F3F8, 0x1F43E},
+    {0x1F440, 0x1F440}, {0x1F442, 0x1F4FC}, {0x1F4FF, 0x1F53D}, {0x1F54B, 0x1F54E},
+    {0x1F550, 0x1F567}, {0x1F57A, 0x1F57A}, {0x1F595, 0x1F596}, {0x1F5A4, 0x1F5A4},
+    {0x1F5FB, 0x1F64F}, {0x1F680, 0x1F6C5}, {0x1F6CC, 0x1F6CC}, {0x1F6D0, 0x1F6D2},
+    {0x1F6D5, 0x1F6D7}, {0x1F6DC, 0x1F6DF}, {0x1F6EB, 0x1F6EC}, {0x1F6F4, 0x1F6FC},
+    {0x1F7E0, 0x1F7EB}, {0x1F7F0, 0x1F7F0}, {0x1F90C, 0x1F9FF}, {0x1FA70, 0x1FAFF},
+    {0x20000, 0x2FFFD}, {0x30000, 0x3FFFD},
+};
+
+// Zero-width: format controls, joiners, variation selectors, and the common combining blocks.
+// (The long tail of script-specific combining marks is omitted — those degrade to width 1,
+// exactly the pre-wcwidth behavior, rather than mis-shifting columns.)
+static const VtCpRange VT_ZERO_RANGES[] = {
+    {0x0300, 0x036F},   {0x0483, 0x0489},   {0x0591, 0x05BD},   {0x05BF, 0x05BF},
+    {0x05C1, 0x05C2},   {0x05C4, 0x05C5},   {0x05C7, 0x05C7},   {0x0610, 0x061A},
+    {0x064B, 0x065F},   {0x0670, 0x0670},   {0x06D6, 0x06DC},   {0x06DF, 0x06E4},
+    {0x06E7, 0x06E8},   {0x06EA, 0x06ED},   {0x1AB0, 0x1AFF},   {0x1DC0, 0x1DFF},
+    {0x200B, 0x200F},   {0x202A, 0x202E},   {0x2060, 0x2064},   {0x20D0, 0x20FF},
+    {0x302A, 0x302D},   {0x3099, 0x309A},   {0xFE00, 0xFE0F},   {0xFE20, 0xFE2F},
+    {0xFEFF, 0xFEFF},   {0xE0100, 0xE01EF},
+};
+
+static bool cp_in_ranges(uint32_t cp, const VtCpRange* ranges, int count) {
+    int lo = 0, hi = count - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        if (cp < ranges[mid].first) hi = mid - 1;
+        else if (cp > ranges[mid].last) lo = mid + 1;
+        else return true;
+    }
+    return false;
+}
+
+static int vt_wcwidth(uint32_t cp) {
+    if (cp < 0x0300) return 1;  // ASCII + Latin-1/Extended: the overwhelmingly common case
+    if (cp_in_ranges(cp, VT_ZERO_RANGES, (int)(sizeof(VT_ZERO_RANGES) / sizeof(VT_ZERO_RANGES[0])))) return 0;
+    if (cp_in_ranges(cp, VT_WIDE_RANGES, (int)(sizeof(VT_WIDE_RANGES) / sizeof(VT_WIDE_RANGES[0])))) return 2;
+    return 1;
+}
+
 // Helper to allocate screen
 static VtScreen* screen_create(int rows, int cols) {
     VtScreen* screen = (VtScreen*)calloc(1, sizeof(VtScreen));
@@ -75,11 +143,35 @@ static void scrollback_push(VtParser* parser, const VtCell* line, int line_cols)
     parser->scrollback_pushed++;
 }
 
+// Repair wide pairs a write to cells [start, end) of `row` is about to split: overwriting a
+// continuation orphans its lead (blank it), overwriting a lead orphans its continuation.
+static void blank_split_pairs(VtScreen* screen, int row, int start, int end) {
+    VtCell* line = &screen->cells[row * screen->cols];
+    if (start > 0 && start < screen->cols && line[start].ch == 0) line[start - 1] = VT_BLANK;
+    if (end > 0 && end < screen->cols && line[end].ch == 0) line[end] = VT_BLANK;
+}
+
+// Re-validate wide pairs across a row after a horizontal shift (ICH/DCH): a continuation whose
+// lead shifted away, or a lead whose continuation did, is blanked (xterm behavior). Iterating
+// skips valid pairs, so any continuation actually visited is an orphan.
+static void repair_row_pairs(VtScreen* screen, int row) {
+    VtCell* line = &screen->cells[row * screen->cols];
+    for (int col = 0; col < screen->cols; col++) {
+        if (line[col].ch == 0) {
+            line[col] = VT_BLANK;
+        } else if (vt_wcwidth(line[col].ch) == 2) {
+            if (col + 1 < screen->cols && line[col + 1].ch == 0) col++;
+            else line[col] = VT_BLANK;
+        }
+    }
+}
+
 static void clear_row_range(VtScreen* screen, int row, int col_from, int col_to) {
     if (row < 0 || row >= screen->rows) return;
     if (col_from < 0) col_from = 0;
     if (col_to >= screen->cols) col_to = screen->cols - 1;
     if (col_from > col_to) return;
+    blank_split_pairs(screen, row, col_from, col_to + 1);
     clear_cells(&screen->cells[row * screen->cols + col_from], col_to - col_from + 1);
 }
 
@@ -137,8 +229,15 @@ static void screen_scroll_down(VtParser* parser, int n) {
 
 // Write character at cursor position
 static void screen_write_char(VtParser* parser, uint32_t ch) {
+    // ch == 0 is the structural wide-continuation marker — never write it as content (the decoder
+    // maps forged NULs to U+FFFD; this guard keeps the invariant even for future callers).
+    if (ch == 0) return;
+    int width = vt_wcwidth(ch);
+    // Zero-width (combining marks, ZWJ, variation selectors): dropped — no cell, no cursor move.
+    if (width == 0) return;
     VtScreen* screen = parser->active;
-    
+    if (width == 2 && screen->cols < 2) width = 1;
+
     // Handle line wrap (deferred: the cursor parks past the last column until the next printable).
     // With autowrap off (DECRST ?7) the last column is overwritten in place instead.
     if (screen->cursor_col >= screen->cols) {
@@ -154,21 +253,49 @@ static void screen_write_char(VtParser* parser, uint32_t ch) {
             }
         }
     }
+    // A wide char that doesn't fit in the last column: xterm blanks the column and wraps the
+    // whole character (with autowrap off it is written against the right edge instead).
+    if (width == 2 && screen->cursor_col == screen->cols - 1) {
+        if (!parser->decawm) {
+            screen->cursor_col = screen->cols - 2;
+        } else {
+            blank_split_pairs(screen, screen->cursor_row, screen->cursor_col, screen->cursor_col + 1);
+            screen->cells[screen->cursor_row * screen->cols + screen->cursor_col] = VT_BLANK;
+            if (parser->dirty_rows) parser->dirty_rows[screen->cursor_row] = true;
+            screen->cursor_col = 0;
+            screen->cursor_row++;
+            if (screen->cursor_row > screen->scroll_bottom) {
+                screen_scroll_up(parser, 1);
+                screen->cursor_row = screen->scroll_bottom;
+            }
+        }
+    }
 
+    if (screen->cursor_row < 0 || screen->cursor_row >= screen->rows) return;
+    blank_split_pairs(screen, screen->cursor_row, screen->cursor_col, screen->cursor_col + width);
     VtCell* cell = screen_cell_at(screen, screen->cursor_row, screen->cursor_col);
     if (cell) {
         cell->ch = ch;
         cell->fg = parser->fg;
         cell->bg = parser->bg;
         cell->attrs = parser->attrs;
-        
+
+        if (width == 2) {
+            // Continuation cell: ch == 0 with the lead's colors, skipped by renderer/extractors.
+            VtCell* cont = cell + 1;
+            cont->ch = 0;
+            cont->fg = parser->fg;
+            cont->bg = parser->bg;
+            cont->attrs = parser->attrs;
+        }
+
         // Mark row as dirty
         if (parser->dirty_rows) {
             parser->dirty_rows[screen->cursor_row] = true;
         }
     }
-    
-    screen->cursor_col++;
+
+    screen->cursor_col += width;
 }
 
 // Newline
@@ -569,7 +696,8 @@ static void handle_csi(VtParser* parser, char final_char) {
             if (n > screen->cols - col) n = screen->cols - col;
             VtCell* line = &screen->cells[row * screen->cols];
             memmove(&line[col + n], &line[col], (size_t)(screen->cols - col - n) * sizeof(VtCell));
-            clear_row_range(screen, row, col, col + n - 1);
+            clear_cells(&line[col], n);
+            repair_row_pairs(screen, row);
             if (parser->dirty_rows) parser->dirty_rows[row] = true;
             break;
         }
@@ -581,7 +709,8 @@ static void handle_csi(VtParser* parser, char final_char) {
             if (n > screen->cols - col) n = screen->cols - col;
             VtCell* line = &screen->cells[row * screen->cols];
             memmove(&line[col], &line[col + n], (size_t)(screen->cols - col - n) * sizeof(VtCell));
-            clear_row_range(screen, row, screen->cols - n, screen->cols - 1);
+            clear_cells(&line[screen->cols - n], n);
+            repair_row_pairs(screen, row);
             if (parser->dirty_rows) parser->dirty_rows[row] = true;
             break;
         }
@@ -788,7 +917,15 @@ static void parser_transition(VtParser* parser, uint8_t ch) {
                 if ((ch & 0xC0) == 0x80) {
                     parser->utf8_acc = (parser->utf8_acc << 6) | (uint32_t)(ch & 0x3F);
                     if (--parser->utf8_left == 0) {
-                        screen_write_char(parser, parser->utf8_acc);
+                        uint32_t cp = parser->utf8_acc;
+                        // Reject overlong encodings (C0 80 would decode to U+0000 and forge the
+                        // ch == 0 continuation marker), surrogates, and beyond-Unicode sequences
+                        // (a stored cp > 0x10FFFF crashes the renderer's Character.toChars).
+                        if (cp < parser->utf8_min || cp > 0x10FFFF ||
+                            (cp >= 0xD800 && cp <= 0xDFFF)) {
+                            cp = 0xFFFD;
+                        }
+                        screen_write_char(parser, cp);
                     }
                     break;
                 }
@@ -828,12 +965,15 @@ static void parser_transition(VtParser* parser, uint8_t ch) {
                 if ((ch & 0xE0) == 0xC0) {        // 110xxxxx -> 1 continuation byte
                     parser->utf8_acc = (uint32_t)(ch & 0x1F);
                     parser->utf8_left = 1;
+                    parser->utf8_min = 0x80;
                 } else if ((ch & 0xF0) == 0xE0) { // 1110xxxx -> 2 continuation bytes
                     parser->utf8_acc = (uint32_t)(ch & 0x0F);
                     parser->utf8_left = 2;
+                    parser->utf8_min = 0x800;
                 } else if ((ch & 0xF8) == 0xF0) { // 11110xxx -> 3 continuation bytes
                     parser->utf8_acc = (uint32_t)(ch & 0x07);
                     parser->utf8_left = 3;
+                    parser->utf8_min = 0x10000;
                 } else {
                     // Stray continuation byte or invalid lead -> replacement glyph.
                     screen_write_char(parser, 0xFFFD);
@@ -1212,6 +1352,7 @@ void vt_parser_feed(VtParser* parser, const uint8_t* data, size_t len) {
                 size_t max_run = (size_t)(s->cols - s->cursor_col);
                 if (max_run > len - i) max_run = len - i;
                 VtCell* cell = &s->cells[s->cursor_row * s->cols + s->cursor_col];
+                bool start_was_cont = cell[0].ch == 0;
                 size_t run = 0;
                 while (run < max_run && data[i + run] >= 0x20 && data[i + run] < 0x80) {
                     cell[run].ch = data[i + run];
@@ -1221,6 +1362,10 @@ void vt_parser_feed(VtParser* parser, const uint8_t* data, size_t len) {
                     run++;
                 }
                 if (run > 0) {
+                    // Repair wide pairs the run split: overwriting a continuation orphans the
+                    // lead before the run; overwriting a lead orphans the continuation after it.
+                    if (start_was_cont && s->cursor_col > 0) cell[-1] = VT_BLANK;
+                    if (s->cursor_col + (int)run < s->cols && cell[run].ch == 0) cell[run] = VT_BLANK;
                     s->cursor_col += (int)run;
                     if (parser->dirty_rows) parser->dirty_rows[s->cursor_row] = true;
                     i += run - 1;
@@ -1375,6 +1520,7 @@ void vt_parser_reset(VtParser* parser) {
     vt_parser_osc_clear(parser);
     parser->response_len = 0;
     parser->utf8_acc = 0;
+    parser->utf8_min = 0;
     parser->utf8_left = 0;
     parser->attrs = 0;
     parser->fg.mode = 0;

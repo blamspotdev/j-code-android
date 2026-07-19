@@ -259,6 +259,60 @@ Java_dev_jcode_core_term_VtParser_nativeReadRow(JNIEnv* env, jclass clazz, jlong
     return cols;
 }
 
+// Packs `rowCount` whole rows starting at logical `topRow` (negative = scrollback) in ONE JNI
+// crossing — the renderer previously paid one nativeReadRow crossing per visible row per frame.
+// Same 4-int cell encoding as nativeReadRow; out-of-range rows pack as blanks. Returns the number
+// of rows packed. Critical section: no JNI calls may happen inside (see nativeFeed).
+JNIEXPORT jint JNICALL
+Java_dev_jcode_core_term_VtParser_nativeReadScreen(JNIEnv* env, jclass clazz, jlong handle, jint topRow, jint rowCount, jintArray out) {
+    (void)clazz;
+    VtParser* parser = (VtParser*)handle;
+    if (!parser || !out || rowCount <= 0) return 0;
+    const VtScreen* screen = vt_parser_get_screen(parser);
+    if (!screen || screen->cols <= 0) return 0;
+
+    int cols = screen->cols;
+    jsize capacity = (*env)->GetArrayLength(env, out);
+    // 64-bit product: a huge rowCount would overflow jint, bypass this clamp, and run the pack
+    // loop off the end of the array inside the critical section.
+    if ((jlong)rowCount * cols * 4 > (jlong)capacity) rowCount = (jint)(capacity / ((jlong)cols * 4));
+    if (rowCount <= 0) return 0;
+
+    jint* buf = (*env)->GetPrimitiveArrayCritical(env, out, NULL);
+    if (!buf) return 0;
+    for (int r = 0; r < rowCount; r++) {
+        int row = topRow + r;
+        const VtCell* base = vt_parser_row_ptr(parser, row);
+        int avail = 0;
+        if (base) {
+            avail = vt_parser_row_cols(parser, row);
+            if (avail > cols) avail = cols;
+        }
+        jint* dst = buf + (size_t)r * cols * 4;
+        for (int col = 0; col < cols; col++) {
+            jint* cell_out = dst + col * 4;
+            if (col >= avail) {
+                cell_out[0] = ' ';
+                cell_out[1] = -1;
+                cell_out[2] = -1;
+                cell_out[3] = 0;
+                continue;
+            }
+            const VtCell* cell = base + col;
+            cell_out[0] = (jint)cell->ch;
+            cell_out[1] = cell->fg.mode == 1 ? cell->fg.index
+                        : cell->fg.mode == 2 ? ((cell->fg.r << 16) | (cell->fg.g << 8) | cell->fg.b)
+                        : -1;
+            cell_out[2] = cell->bg.mode == 1 ? cell->bg.index
+                        : cell->bg.mode == 2 ? ((cell->bg.r << 16) | (cell->bg.g << 8) | cell->bg.b)
+                        : -1;
+            cell_out[3] = (cell->fg.mode & 0x3) | ((cell->bg.mode & 0x3) << 2) | ((jint)cell->attrs << 4);
+        }
+    }
+    (*env)->ReleasePrimitiveArrayCritical(env, out, buf, 0);
+    return rowCount;
+}
+
 JNIEXPORT jint JNICALL
 Java_dev_jcode_core_term_VtParser_nativeGetScrollbackSize(JNIEnv* env, jclass clazz, jlong handle) {
     (void)env; (void)clazz;

@@ -160,14 +160,26 @@ class VtParser(rows: Int, cols: Int) : AutoCloseable {
 
     /**
      * Read a whole row of cells in a single JNI call — [CELL_STRIDE] ints per cell:
-     * `out[i*4]` = codepoint, `out[i*4+1]` = fg, `out[i*4+2]` = bg (-1 default, 0-255 indexed, packed
-     * RGB truecolor), `out[i*4+3]` = packed meta decoded via [metaFgMode]/[metaBgMode]/[metaAttrs].
-     * Returns the number of cells written (bounded by the screen width and `out.size / 4`).
-     * Row semantics match [getCellCodePoint]: negative rows address scrollback.
+     * `out[i*4]` = codepoint (0 = continuation cell of a wide character — skip it), `out[i*4+1]` =
+     * fg, `out[i*4+2]` = bg (-1 default, 0-255 indexed, packed RGB truecolor), `out[i*4+3]` =
+     * packed meta decoded via [metaFgMode]/[metaBgMode]/[metaAttrs]. Returns the number of cells
+     * written (bounded by the screen width and `out.size / 4`). Row semantics match
+     * [getCellCodePoint]: negative rows address scrollback.
      */
     fun readRow(row: Int, out: IntArray): Int {
         check(nativeHandle != 0L) { "Parser is closed" }
         return nativeReadRow(nativeHandle, row, out)
+    }
+
+    /**
+     * Read [rowCount] whole rows starting at logical [topRow] in ONE JNI crossing (the renderer's
+     * per-frame path — one crossing per frame instead of one per row). Cell encoding matches
+     * [readRow]; each row occupies `cols * CELL_STRIDE` ints. Out-of-range rows pack as blanks.
+     * Returns the number of rows packed.
+     */
+    fun readScreen(topRow: Int, rowCount: Int, out: IntArray): Int {
+        check(nativeHandle != 0L) { "Parser is closed" }
+        return nativeReadScreen(nativeHandle, topRow, rowCount, out)
     }
 
     /**
@@ -234,6 +246,8 @@ class VtParser(rows: Int, cols: Int) : AutoCloseable {
         private external fun nativeGetCellChar(handle: Long, row: Int, col: Int): Int
         @JvmStatic
         private external fun nativeReadRow(handle: Long, row: Int, out: IntArray): Int
+        @JvmStatic
+        private external fun nativeReadScreen(handle: Long, topRow: Int, rowCount: Int, out: IntArray): Int
         @JvmStatic
         private external fun nativeTakeResponses(handle: Long): ByteArray?
         @JvmStatic
