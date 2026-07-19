@@ -396,12 +396,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (abortOnFail) return false
             }
         }
+        // resolveAndInstallSdk installs each SDK's own transitive requiredSdks first (e.g. android-sdk →
+        // android-prereqs); installRequiredSdk alone skips that, so an extension requiring android-sdk
+        // aborted because android-sdk's script needs the tools android-prereqs provides. Shared with the
+        // direct-toolchain/LSP/debugger install paths, which already resolve prerequisites this way.
+        val sdkVisiting = mutableSetOf<String>()
         for (sdkId in deps.sdks) {
-            if (sdkId in distroService.sdkCatalogState.value.installedEntryIds) continue
-            _messages.tryEmit("Installing required toolchain: $sdkId…")
-            if (!installRequiredSdk(sdkId)) {
-                val reason = distroService.sdkCatalogState.value.errorMessage ?: "install failed"
-                _messages.tryEmit("$sourceName: required toolchain '$sdkId' — $reason")
+            if (!resolveAndInstallSdk(sdkId, sourceName, sdkVisiting)) {
                 if (abortOnFail) return false
             }
         }
