@@ -212,6 +212,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import dev.jcode.design.DeveloperSetting
 import dev.jcode.design.LocalDeveloperSetting
+import dev.jcode.design.EditorFontSizeSetting
+import dev.jcode.design.EditorWordWrapSetting
+import dev.jcode.design.LocalEditorFontSizeSetting
+import dev.jcode.design.LocalEditorWordWrapSetting
 import dev.jcode.design.LocalMarkdownPreviewSetting
 import dev.jcode.workbench.ExtensionDevState
 import dev.jcode.workbench.LocalExtensionDevState
@@ -573,6 +577,14 @@ fun JCodeApp(
     val markdownWrapPortrait by viewModel.markdownWrapPortrait.collectAsStateWithLifecycle()
     val markdownPreviewSetting = remember(markdownWrapPortrait) {
         MarkdownPreviewSetting(wrapInPortrait = markdownWrapPortrait, onSetWrapInPortrait = viewModel::setMarkdownWrapPortrait)
+    }
+    val editorFontSizeGlobal by viewModel.editorFontSizeGlobal.collectAsStateWithLifecycle()
+    val editorFontSizeSetting = remember(editorFontSizeGlobal) {
+        EditorFontSizeSetting(value = editorFontSizeGlobal, onChange = viewModel::setEditorFontSizeGlobal)
+    }
+    val editorWordWrap by viewModel.editorWordWrap.collectAsStateWithLifecycle()
+    val editorWordWrapSetting = remember(editorWordWrap) {
+        EditorWordWrapSetting(enabled = editorWordWrap, onChange = viewModel::setEditorWordWrap)
     }
     // Developer options: reveals the Extension Dev right-drawer tab + unsigned .jext sideloading.
     val developerOptions by viewModel.developerOptions.collectAsStateWithLifecycle()
@@ -1130,6 +1142,8 @@ fun JCodeApp(
         LocalEnvironmentBackup provides environmentBackupActions,
         LocalCommandPaletteSetting provides commandPaletteSetting,
         LocalMarkdownPreviewSetting provides markdownPreviewSetting,
+        LocalEditorFontSizeSetting provides editorFontSizeSetting,
+        LocalEditorWordWrapSetting provides editorWordWrapSetting,
         LocalDeveloperSetting provides developerSetting,
         LocalExtensionDevState provides extensionDevState,
         LocalExtensionSettingsUi provides extensionSettingsUi,
@@ -1237,6 +1251,7 @@ fun JCodeApp(
             onOpenExtensionDetail = viewModel::openExtensionDetailPage,
             onOpenExtensionPermissions = viewModel::openExtensionPermissionsPage,
             onOpenExtensionApp = viewModel::openExtensionAppPage,
+            onOpenExtensionConfig = { id -> viewModel.openExtensionViewPage(id, "config", "Git Configuration") },
             onExtensionExec = viewModel::runtimeExecJson,
             onExtensionApiRequest = { extId, envelope ->
                 val ext = viewModel.installedExtensions.value.firstOrNull { it.id == extId }
@@ -1497,11 +1512,14 @@ private fun JCodeShell(
     // NOT keyed on orientation/size: an open right drawer must survive a rotation. Keying it on
     // isLandscape/widthClass re-ran the initializer on every rotation and slammed it shut.
     var rightSidebarVisible by rememberSaveable { mutableStateOf(false) }
-    // Opening a file from the terminal should surface the editor; in modal layouts the terminal
-    // sits in a drawer over the editor, so close it.
+    // Opening a file or an editor-area page should surface the editor; in modal layouts the terminal
+    // sits in a right drawer over the editor and the tools sit in the left drawer, so close both.
     LaunchedEffect(bringEditorToFront, usesModalWorkspace) {
         bringEditorToFront.collect {
-            if (usesModalWorkspace) rightSidebarVisible = false
+            if (usesModalWorkspace) {
+                rightSidebarVisible = false
+                compactDrawerState.close()
+            }
         }
     }
     var rightPanelTab by rememberSaveable {
@@ -2610,12 +2628,17 @@ private fun JCodeShell(
                                             onInstall = managerActions.onInstallExtension,
                                             onUninstall = managerActions.onUninstallExtension,
                                             onOpenApp = managerActions.onOpenExtensionApp,
+                                            onOpenExtensionDetail = managerActions.onOpenExtensionDetail,
+                                            onOpenSdkDetail = managerActions.onOpenSdkDetail,
+                                            onOpenLspDetail = managerActions.onOpenLspDetail,
+                                            onOpenDebugEngineDetail = managerActions.onOpenDebugEngineDetail,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
                                 }
                                 EditorPageKind.ExtensionPermissions -> ExtensionPermissionsPage(
                                     installed = installedExtensions,
+                                    onOpenConfig = managerActions.onOpenExtensionConfig,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                                 EditorPageKind.Browser -> BrowserPage(modifier = Modifier.fillMaxSize())
@@ -3036,6 +3059,7 @@ private fun WorkspacePanel(
                         onApiRequest = managerActions.onExtensionApiRequest,
                         events = managerActions.extensionEvents,
                         projectKey = selectedProject?.id,
+                        onOpenConfig = managerActions.onOpenExtensionConfig,
                         modifier = Modifier.fillMaxSize(),
                     )
 
@@ -3582,8 +3606,8 @@ private fun WorkbenchRightSidebar(
                     )
                 }
                 WorkbenchIconActionButton(
-                    icon = jcIcon(JCodeIcon.ChevronRight),
-                    contentDescription = "Hide",
+                    icon = jcIcon(JCodeIcon.Close),
+                    contentDescription = "Close",
                     onClick = onHide,
                 )
             }

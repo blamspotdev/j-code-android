@@ -23,6 +23,8 @@ object SettingsDefaults {
     const val HIDDEN_ROOT_PATTERNS = ".jcode"
     const val RESPECT_DEVICE_CUTOUT = false
     const val MARKDOWN_WRAP_PORTRAIT = true
+    const val EDITOR_FONT_SIZE = 14f
+    const val EDITOR_WORD_WRAP = false
     const val DEVELOPER_OPTIONS = false
     val VOLUME_UP_ACTION = VolumeKeyAction.SystemDefault
     val VOLUME_DOWN_ACTION = VolumeKeyAction.SystemDefault

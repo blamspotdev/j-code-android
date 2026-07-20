@@ -148,6 +148,9 @@ internal data class WorkbenchManagerActions(
     val onOpenExtensionPermissions: () -> Unit,
     /** Opens an extension's bundled web-frontend ("Manage"/DB-manager) screen by extension id. */
     val onOpenExtensionApp: (String) -> Unit,
+    /** Opens an extension's web frontend at its `#config` route by extension id (e.g. Source Control
+     *  git identity/credentials), reachable without an open project. */
+    val onOpenExtensionConfig: (String) -> Unit,
     /** Runs a command in the Linux runtime for an extension web frontend; returns a JSON result. */
     val onExtensionExec: suspend (command: String, timeoutMs: Long) -> String,
     /** Extension API v1 envelope handler: (extensionId, requestJson) -> response JSON. */

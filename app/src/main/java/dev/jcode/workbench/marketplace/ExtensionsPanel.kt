@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
@@ -21,6 +22,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -276,6 +278,7 @@ internal fun ScmPanel(
     onApiRequest: suspend (extensionId: String, envelopeJson: String) -> String,
     events: SharedFlow<Pair<String, String>>?,
     projectKey: Any? = null,
+    onOpenConfig: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val ext = installed.firstOrNull { it.type == ExtensionType.Scm && it.hasWebUi }
@@ -307,6 +310,14 @@ internal fun ScmPanel(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Text(
+                "You can still set up your Git identity and authentication without a project open.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FilledTonalButton(onClick = { onOpenConfig(ext.id) }) {
+                Text("Config")
+            }
         }
         return
     }
@@ -399,6 +410,10 @@ internal fun ExtensionDetailPage(
     onInstall: (MarketplaceEntry) -> Unit,
     onUninstall: (String) -> Unit,
     onOpenApp: (String) -> Unit,
+    onOpenExtensionDetail: (String) -> Unit,
+    onOpenSdkDetail: (String) -> Unit,
+    onOpenLspDetail: (String) -> Unit,
+    onOpenDebugEngineDetail: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val id = entry?.id ?: installed?.id ?: return
@@ -467,8 +482,14 @@ internal fun ExtensionDetailPage(
                     title = "Requirements",
                     description = "Toolchains and extensions this extension needs or suggests.",
                 ) {
-                    RequirementList("Required", requires, available, installedIds, autoInstalled = true)
-                    RequirementList("Suggested", suggests, available, installedIds, autoInstalled = false)
+                    RequirementList(
+                        "Required", requires, available, installedIds, autoInstalled = true,
+                        onOpenExtensionDetail, onOpenSdkDetail, onOpenLspDetail, onOpenDebugEngineDetail,
+                    )
+                    RequirementList(
+                        "Suggested", suggests, available, installedIds, autoInstalled = false,
+                        onOpenExtensionDetail, onOpenSdkDetail, onOpenLspDetail, onOpenDebugEngineDetail,
+                    )
                 }
             }
         },
@@ -496,6 +517,7 @@ internal fun ExtensionDetailPage(
 @Composable
 internal fun ExtensionPermissionsPage(
     installed: List<InstalledExtension>,
+    onOpenConfig: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -525,8 +547,19 @@ internal fun ExtensionPermissionsPage(
                         authorLabel(ext.primaryAuthor, ext.otherAuthors),
                         ext.type.name.lowercase(),
                     ).joinToString(" · "),
+                    collapsible = true,
                 ) {
                     ExtensionSettingsControls(extensionId = ext.id)
+                    if (ext.type == ExtensionType.Scm && ext.hasWebUi) {
+                        Text(
+                            "Set up your Git identity (name/email) and authentication for this device.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        FilledTonalButton(onClick = { onOpenConfig(ext.id) }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Configure Git…")
+                        }
+                    }
                     ActivationSelector(extensionId = ext.id)
                     if (ext.apiCapabilities.isNotEmpty()) {
                         CapabilityToggles(extensionId = ext.id, capabilities = ext.apiCapabilities)
@@ -838,17 +871,25 @@ private fun RequirementList(
     available: List<MarketplaceEntry>,
     installedIds: Set<String>,
     autoInstalled: Boolean,
+    onOpenExtensionDetail: (String) -> Unit,
+    onOpenSdkDetail: (String) -> Unit,
+    onOpenLspDetail: (String) -> Unit,
+    onOpenDebugEngineDetail: (String) -> Unit,
 ) {
     if (deps.isEmpty) return
     Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
     val pendingSuffix = if (autoInstalled) "installs automatically" else "optional"
     deps.extensions.forEach { id ->
         val name = available.firstOrNull { it.id == id }?.name ?: id
-        DependencyRow(name = name, kind = if (id in installedIds) "extension · installed" else "extension · $pendingSuffix")
+        DependencyRow(
+            name = name,
+            kind = if (id in installedIds) "extension · installed" else "extension · $pendingSuffix",
+            onClick = { onOpenExtensionDetail(id) },
+        )
     }
-    deps.sdks.forEach { id -> DependencyRow(name = id, kind = "toolchain · $pendingSuffix") }
-    deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server · $pendingSuffix") }
-    deps.dbg.forEach { id -> DependencyRow(name = id, kind = "debugger · $pendingSuffix") }
+    deps.sdks.forEach { id -> DependencyRow(name = id, kind = "toolchain · $pendingSuffix", onClick = { onOpenSdkDetail(id) }) }
+    deps.lsps.forEach { id -> DependencyRow(name = id, kind = "language server · $pendingSuffix", onClick = { onOpenLspDetail(id) }) }
+    deps.dbg.forEach { id -> DependencyRow(name = id, kind = "debugger · $pendingSuffix", onClick = { onOpenDebugEngineDetail(id) }) }
 }
 
 @Composable
@@ -941,9 +982,16 @@ private fun SuggestedGroup(
 }
 
 @Composable
-private fun DependencyRow(name: String, kind: String, trailing: @Composable () -> Unit = {}) {
+private fun DependencyRow(
+    name: String,
+    kind: String,
+    onClick: (() -> Unit)? = null,
+    trailing: @Composable () -> Unit = {},
+) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -952,6 +1000,14 @@ private fun DependencyRow(name: String, kind: String, trailing: @Composable () -
             Text(kind, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         trailing()
+        if (onClick != null) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+        }
     }
 }
 

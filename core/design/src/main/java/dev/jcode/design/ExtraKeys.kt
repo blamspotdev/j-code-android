@@ -12,8 +12,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -25,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -153,6 +161,7 @@ fun ExtraKeysRow(
                     val active = (key == ExtraKey.Ctrl && state.ctrl) || (key == ExtraKey.Alt && state.alt)
                     ExtraKeyChip(
                         label = key.label,
+                        icon = extraKeyIcon(key),
                         active = active,
                         onClick = {
                             when (key) {
@@ -182,8 +191,20 @@ fun ExtraKeysRow(
     }
 }
 
+/** Vector glyph for the directional keys. Drawn instead of the enum's Unicode label so arrows never
+ *  render as tofu on devices whose system font lacks the ←↑↓→ glyphs. */
+private fun extraKeyIcon(key: ExtraKey): ImageVector? = when (key) {
+    ExtraKey.Left -> Icons.AutoMirrored.Rounded.KeyboardArrowLeft
+    ExtraKey.Up -> Icons.Rounded.KeyboardArrowUp
+    ExtraKey.Down -> Icons.Rounded.KeyboardArrowDown
+    ExtraKey.Right -> Icons.AutoMirrored.Rounded.KeyboardArrowRight
+    else -> null
+}
+
 @Composable
-private fun ExtraKeyChip(label: String, active: Boolean, onClick: () -> Unit) {
+private fun ExtraKeyChip(label: String, active: Boolean, onClick: () -> Unit, icon: ImageVector? = null) {
+    val contentColor = if (active) MaterialTheme.colorScheme.primary
+    else MaterialTheme.colorScheme.onSurfaceVariant
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(6.dp))
@@ -196,12 +217,20 @@ private fun ExtraKeyChip(label: String, active: Boolean, onClick: () -> Unit) {
             .padding(horizontal = 10.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = if (active) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (icon != null) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = contentColor,
+                modifier = Modifier.size(20.dp),
+            )
+        } else {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = contentColor,
+            )
+        }
     }
 }

@@ -61,6 +61,8 @@ import dev.jcode.design.ExtraKeysVisibility
 import dev.jcode.design.LocalBottomBarSetting
 import dev.jcode.design.LocalFontSettings
 import dev.jcode.design.LocalEditorDragMovesCursor
+import dev.jcode.design.LocalEditorFontSizeSetting
+import dev.jcode.design.LocalEditorWordWrapSetting
 import dev.jcode.design.LocalExtraKeysSetting
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.ExplorerExcludeEffect
@@ -761,6 +763,31 @@ object SettingsFeature {
             }
 
             SettingsSectionHeader("Editor")
+            SettingsCard(
+                title = "Editor defaults",
+                description = "Default font size and word wrap for the code editor. A workspace or " +
+                    "project can override the font size on its own settings tab.",
+                keywords = "editor font size text scale sp word wrap soft wrap line long lines default global",
+            ) {
+                val editorFontSizeSetting = LocalEditorFontSizeSetting.current
+                val editorWordWrapSetting = LocalEditorWordWrapSetting.current
+                StepperRow(
+                    label = "Font size",
+                    value = "${editorFontSizeSetting.value.toInt()} sp",
+                    onDecrease = { editorFontSizeSetting.onChange((editorFontSizeSetting.value - 1f).coerceAtLeast(8f)) },
+                    onIncrease = { editorFontSizeSetting.onChange((editorFontSizeSetting.value + 1f).coerceAtMost(72f)) },
+                    modified = editorFontSizeSetting.value != SettingsDefaults.EDITOR_FONT_SIZE,
+                    onReset = { editorFontSizeSetting.onChange(SettingsDefaults.EDITOR_FONT_SIZE) },
+                )
+                ToggleRow(
+                    label = "Word wrap",
+                    supporting = "Wrap long lines to the editor width instead of scrolling horizontally.",
+                    checked = editorWordWrapSetting.enabled,
+                    onCheckedChange = { editorWordWrapSetting.onChange(it) },
+                    modified = editorWordWrapSetting.enabled != SettingsDefaults.EDITOR_WORD_WRAP,
+                    onReset = { editorWordWrapSetting.onChange(SettingsDefaults.EDITOR_WORD_WRAP) },
+                )
+            }
             SettingsCard(
                 title = "Editor gestures",
                 description = "How touch input behaves in the editor. Applies app-wide.",

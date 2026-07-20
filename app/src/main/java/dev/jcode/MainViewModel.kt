@@ -7,6 +7,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -1066,6 +1067,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val editorFontSizeGlobalKey = floatPreferencesKey("editor_font_size_global")
+
+    /** App-level (Global settings) editor font-size default, applied when no workspace/project .jcode
+     *  override exists. Pushed into [ConfigService] so it feeds the effective font-size merge. */
+    val editorFontSizeGlobal: StateFlow<Float> = uiPreferences.data
+        .map { prefs -> (prefs[editorFontSizeGlobalKey] ?: SettingsDefaults.EDITOR_FONT_SIZE).coerceIn(8f, 72f) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.EDITOR_FONT_SIZE)
+
+    fun setEditorFontSizeGlobal(size: Float) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[editorFontSizeGlobalKey] = size.coerceIn(8f, 72f) }
+        }
+    }
+
+    private val editorWordWrapKey = booleanPreferencesKey("editor_word_wrap")
+
+    /** App-level (Global settings) editor word-wrap toggle. Drives [dev.jcode.core.editor.RenderConfig]
+     *  soft-wrap for every open editor tab. */
+    val editorWordWrap: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[editorWordWrapKey] ?: SettingsDefaults.EDITOR_WORD_WRAP }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.EDITOR_WORD_WRAP)
+
+    fun setEditorWordWrap(enabled: Boolean) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[editorWordWrapKey] = enabled }
+        }
+    }
+
     private val developerOptionsKey = booleanPreferencesKey("developer_options")
 
     /** Developer options (off by default): reveals extension-authoring tools — the Extension Dev
@@ -1501,10 +1530,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        // Feed the Global-settings font-size default into the config merge; setGlobalEditorFontSize
+        // re-publishes effectiveConfig, so the collector below live-updates open editors.
         viewModelScope.launch {
-            effectiveConfig.collectLatest { config ->
-                applyEffectiveConfigToOpenTabs(config)
-            }
+            editorFontSizeGlobal.collect { configService.setGlobalEditorFontSize(it) }
+        }
+
+        viewModelScope.launch {
+            combine(effectiveConfig, editorWordWrap) { config, wrap -> config to wrap }
+                .collectLatest { (config, wrap) -> applyEffectiveConfigToOpenTabs(config, wrap) }
         }
 
         viewModelScope.launch {
@@ -2547,6 +2581,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Open (or focus) the in-editor Settings page as an editor tab. */
     fun openSettingsPage() {
+        _bringEditorToFront.tryEmit(Unit)
         val existing = _editorGroup.value.tabs.firstOrNull { it.pageKind == EditorPageKind.Settings }
         if (existing != null) {
             _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
@@ -2557,6 +2592,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openEnvironmentPage() {
+        _bringEditorToFront.tryEmit(Unit)
         val existing = _editorGroup.value.tabs.firstOrNull { it.pageKind == EditorPageKind.Environment }
         if (existing != null) {
             _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
@@ -3331,6 +3367,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Open (or focus) the Extension Settings page (per-extension settings + permissions). */
     fun openExtensionPermissionsPage() {
+        _bringEditorToFront.tryEmit(Unit)
         val existing = _editorGroup.value.tabs.firstOrNull { it.pageKind == EditorPageKind.ExtensionPermissions }
         if (existing != null) {
             _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
@@ -3356,6 +3393,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Open/focus a per-type detail tab: focus if already open, else replace any other tab of [kind]. */
     private fun openDetailPage(tabId: String, kind: EditorPageKind, title: () -> String) {
+        _bringEditorToFront.tryEmit(Unit)
         var group = _editorGroup.value
         val existing = group.tabs.firstOrNull { it.id == tabId }
         if (existing != null) {
@@ -4149,19 +4187,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return hasLocalProject
     }
 
-    private fun applyEffectiveConfigToOpenTabs(config: EffectiveConfig) {
+    private fun applyEffectiveConfigToOpenTabs(config: EffectiveConfig, wordWrap: Boolean = editorWordWrap.value) {
         _editorGroup.value.tabs.forEach { tab ->
-            applyConfigToTab(tab, config)
+            applyConfigToTab(tab, config, wordWrap)
         }
     }
 
-    private fun applyConfigToTab(tab: EditorTab, config: EffectiveConfig) {
+    private fun applyConfigToTab(tab: EditorTab, config: EffectiveConfig, wordWrap: Boolean = editorWordWrap.value) {
         val editorState = tab.editorState ?: return
         editorState.updateRenderConfig { current ->
             current.copy(
                 fontSizeSp = config.editor.fontSize,
                 tabWidth = config.editor.tabSize,
                 ligatures = config.editor.ligatures,
+                wordWrap = wordWrap,
             )
         }
     }
