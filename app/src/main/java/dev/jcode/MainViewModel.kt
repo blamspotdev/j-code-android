@@ -175,12 +175,12 @@ sealed interface PendingFolderType {
 
 /** An actionable prompt the shell shows as a snackbar with a single button. */
 sealed interface WorkbenchPrompt {
-    /** An extension was updated while a copy was live — offer to reload its webviews. */
-    data class ReloadExtension(val extensionId: String, val name: String) : WorkbenchPrompt
-
     /** A change only applies on a fresh process — offer to restart the app. */
     data class RestartApp(val message: String) : WorkbenchPrompt
 }
+
+/** An updated extension awaiting a reload; surfaced as a compact banner atop the Extensions panel. */
+data class PendingReload(val id: String, val name: String)
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     val workspaceManager: WorkspaceManager = WorkspaceServiceLocator.workspaceManager(application)
@@ -268,16 +268,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Reload an extension's live webviews with its freshly-installed code (from the update prompt).
+    // Extensions updated this session that are waiting for a reload — shown as a compact banner at
+    // the top of the Extensions panel. Cleared per-id on reload.
+    private val _pendingReload = MutableStateFlow<List<PendingReload>>(emptyList())
+    val pendingReload: StateFlow<List<PendingReload>> = _pendingReload.asStateFlow()
+
+    private fun markPendingReload(id: String, name: String) {
+        _pendingReload.update { list -> list.filterNot { it.id == id } + PendingReload(id, name) }
+    }
+
+    /** Reload an extension's live webviews with its freshly-installed code (from the panel banner).
      *  A plain update leaves an already-open extension tab running the OLD bundle; a `reload` event
      *  makes each of that extension's live [ExtensionWebViewPage]s re-fetch the updated on-disk page,
      *  and the SCM/background host is torn down (no-op otherwise) so it too recreates fresh. */
     fun reloadExtension(id: String) {
         _extensionEvents.tryEmit("reload" to JSONObject().put("extensionId", id).toString())
         runCatching { dev.jcode.workbench.ScmWebViewHolder.destroy(id) }
+        _pendingReload.update { list -> list.filterNot { it.id == id } }
     }
 
-    /** Actionable prompts surfaced as a snackbar with a button (reload an extension, restart the app). */
+    /** Reload every extension awaiting one (the banner's "Reload" button). */
+    fun reloadPendingExtensions() {
+        _pendingReload.value.map { it.id }.forEach { reloadExtension(it) }
+    }
+
+    /** Actionable prompts surfaced as a snackbar with a button (restart the app). */
     private val _prompts = MutableSharedFlow<WorkbenchPrompt>(extraBufferCapacity = 4)
     val prompts = _prompts.asSharedFlow()
 
@@ -310,7 +325,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         else "Loaded '${r.extension.name}' (unsigned dev extension).",
                     )
                     if (r.extension.id in installedBefore) {
-                        _prompts.tryEmit(WorkbenchPrompt.ReloadExtension(r.extension.id, r.extension.name))
+                        markPendingReload(r.extension.id, r.extension.name)
                     }
                 }
                 .onFailure { emitMessage("Sideload failed: ${it.message ?: "invalid .jext"}") }
@@ -340,9 +355,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             refreshInstalledExtensions()
             // An update replaced an extension that may be running an old copy in an open tab/panel;
-            // prompt to reload it (a fresh install has nothing live to reload).
+            // surface a reload banner (a fresh install has nothing live to reload).
             if (wasInstalled && _installedExtensions.value.any { it.id == entry.id }) {
-                _prompts.tryEmit(WorkbenchPrompt.ReloadExtension(entry.id, entry.name))
+                markPendingReload(entry.id, entry.name)
             }
         }
     }

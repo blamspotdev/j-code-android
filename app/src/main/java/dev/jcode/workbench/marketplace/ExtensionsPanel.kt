@@ -1,6 +1,8 @@
 package dev.jcode.workbench.marketplace
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -72,6 +74,8 @@ internal fun ExtensionsPanel(
     onRefreshMarketplace: () -> Unit,
     onOpenDetail: (String) -> Unit,
     onOpenPermissions: () -> Unit,
+    pendingReloadNames: List<String> = emptyList(),
+    onReloadPending: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     LaunchedEffect(Unit) { if (available.isEmpty()) onRefreshMarketplace() }
@@ -99,6 +103,39 @@ internal fun ExtensionsPanel(
             onManage = onOpenPermissions,
             manageContentDescription = "Extension settings",
         )
+
+        if (pendingReloadNames.isNotEmpty()) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+            ) {
+                Row(
+                    modifier = Modifier.padding(start = 12.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = if (pendingReloadNames.size == 1) {
+                            "Updated ${pendingReloadNames.first()} — reload to apply"
+                        } else {
+                            "${pendingReloadNames.size} extensions updated — reload to apply"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+                    )
+                    TextButton(
+                        onClick = onReloadPending,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    ) {
+                        Text("Reload", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+        }
 
         Surface(
             modifier = Modifier.fillMaxWidth(),

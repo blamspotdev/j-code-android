@@ -278,6 +278,8 @@ import dev.jcode.workbench.LocalDebugCatalogState
 import dev.jcode.workbench.LocalDebugEditorState
 import dev.jcode.workbench.LocalDebugSession
 import dev.jcode.workbench.LocalExtensionInstallPhases
+import dev.jcode.workbench.LocalPendingReload
+import dev.jcode.workbench.PendingReloadUi
 import dev.jcode.workbench.LocalRunConfigPresets
 import dev.jcode.workbench.LocalSetupTerminalSessionId
 import dev.jcode.design.PerformanceSettings
@@ -586,6 +588,10 @@ fun JCodeApp(
     val editorWordWrapSetting = remember(editorWordWrap) {
         EditorWordWrapSetting(enabled = editorWordWrap, onChange = viewModel::setEditorWordWrap)
     }
+    val pendingReloadList by viewModel.pendingReload.collectAsStateWithLifecycle()
+    val pendingReloadUi = remember(pendingReloadList) {
+        PendingReloadUi(pendingReloadList.map { it.name }, viewModel::reloadPendingExtensions)
+    }
     // Developer options: reveals the Extension Dev right-drawer tab + unsigned .jext sideloading.
     val developerOptions by viewModel.developerOptions.collectAsStateWithLifecycle()
     val jextPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -814,18 +820,11 @@ fun JCodeApp(
         }
     }
 
-    // Actionable prompts (reload an updated extension, restart the app) as a snackbar with a button.
+    // Actionable prompt (restart the app) as a snackbar with a button. Extension-reload prompts render
+    // as a compact banner atop the Extensions panel instead (see ExtensionsPanel).
     LaunchedEffect(viewModel) {
         viewModel.prompts.collect { prompt ->
             when (prompt) {
-                is WorkbenchPrompt.ReloadExtension -> {
-                    val result = snackbarHostState.showSnackbar(
-                        message = "Updated ${prompt.name} — reload to apply",
-                        actionLabel = "Reload",
-                        duration = SnackbarDuration.Long,
-                    )
-                    if (result == SnackbarResult.ActionPerformed) viewModel.reloadExtension(prompt.extensionId)
-                }
                 is WorkbenchPrompt.RestartApp -> {
                     val result = snackbarHostState.showSnackbar(
                         message = prompt.message,
@@ -1155,6 +1154,7 @@ fun JCodeApp(
         LocalVcsActions provides vcsActions,
         LocalDebugCatalogState provides debugCatalogState,
         LocalExtensionInstallPhases provides extensionInstallPhases,
+        LocalPendingReload provides pendingReloadUi,
         LocalRunConfigPresets provides contributedRunPresets,
         LocalSetupTerminalSessionId provides setupTerminalSessionId,
         LocalDebugSession provides debugSessionUi,
@@ -3114,16 +3114,21 @@ private fun WorkspacePanel(
                         modifier = Modifier.fillMaxSize(),
                     )
 
-                    WorkbenchTool.Extensions -> ExtensionsPanel(
-                        installed = installedExtensions,
-                        available = marketplaceEntries,
-                        busy = marketplaceBusy,
-                        installPhases = LocalExtensionInstallPhases.current,
-                        onRefreshMarketplace = managerActions.onRefreshMarketplace,
-                        onOpenDetail = managerActions.onOpenExtensionDetail,
-                        onOpenPermissions = managerActions.onOpenExtensionPermissions,
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    WorkbenchTool.Extensions -> {
+                        val pendingReload = LocalPendingReload.current
+                        ExtensionsPanel(
+                            installed = installedExtensions,
+                            available = marketplaceEntries,
+                            busy = marketplaceBusy,
+                            installPhases = LocalExtensionInstallPhases.current,
+                            onRefreshMarketplace = managerActions.onRefreshMarketplace,
+                            onOpenDetail = managerActions.onOpenExtensionDetail,
+                            onOpenPermissions = managerActions.onOpenExtensionPermissions,
+                            pendingReloadNames = pendingReload.names,
+                            onReloadPending = pendingReload.onReload,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
 
                     WorkbenchTool.ToolchainManager -> ToolchainManagerPanel(
                         sdkState = sdkCatalogState,

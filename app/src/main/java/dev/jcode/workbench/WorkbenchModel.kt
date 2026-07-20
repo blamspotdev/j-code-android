@@ -38,6 +38,11 @@ internal val LocalDebugCatalogState = compositionLocalOf { DebugEngineCatalogSta
  *  under the ART register limit. */
 internal val LocalExtensionInstallPhases = compositionLocalOf<Map<String, String>> { emptyMap() }
 
+/** Names of extensions updated this session and awaiting a reload, plus the reload action — shown as a
+ *  compact banner atop the Extensions panel. A CompositionLocal for the same register-limit reason. */
+internal data class PendingReloadUi(val names: List<String> = emptyList(), val onReload: () -> Unit = {})
+internal val LocalPendingReload = compositionLocalOf { PendingReloadUi() }
+
 /** Run-config presets active extensions contribute, matched against the project's files on the
  *  Configure Run page. Same register-limit rationale as above. */
 internal val LocalRunConfigPresets =
