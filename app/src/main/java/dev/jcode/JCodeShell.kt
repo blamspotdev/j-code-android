@@ -1900,7 +1900,10 @@ private fun JCodeShell(
     fun handleRunFirst(project: Project) {
         val config = ProjectRunner.effectiveRuns(project).firstOrNull()
         if (config == null) {
-            scope.launch { snackbarHostState.showSnackbar("No run config for ${project.name}. Tap Configure to set one up.") }
+            // No run config yet — open the Run panel so the user can add one (framework-detected or
+            // blank), instead of dead-ending on a toast.
+            selectedTool = WorkbenchTool.RunDebug
+            if (usesModalWorkspace) scope.launch { compactDrawerState.open() } else leftSidebarExpanded = true
             return
         }
         handleRun(project, config)
