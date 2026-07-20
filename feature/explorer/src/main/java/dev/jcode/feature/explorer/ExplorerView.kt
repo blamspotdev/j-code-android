@@ -518,10 +518,14 @@ private fun RowOverflowMenu(
                     add(ContextAction(JCodeIcon.Add, "Import files…") { onAction(row, RowAction.ImportHere) })
                 }
                 add(ContextAction(JCodeIcon.Save, "Export…") { onAction(row, RowAction.Export) })
-                scmUi.onContextAction?.let { dispatch ->
-                    scmUi.contextActions
-                        .filter { explorerActionAppliesTo(it, row.node.name, isDir) }
-                        .forEach { a -> add(ContextAction(a.icon, a.label) { dispatch(a, row.node) }) }
+                // Extension-contributed actions (e.g. "Add to .gitignore") target a path inside the
+                // repo — the project root isn't a valid target, so omit them there.
+                if (!isProjectRoot) {
+                    scmUi.onContextAction?.let { dispatch ->
+                        scmUi.contextActions
+                            .filter { explorerActionAppliesTo(it, row.node.name, isDir) }
+                            .forEach { a -> add(ContextAction(a.icon, a.label) { dispatch(a, row.node) }) }
+                    }
                 }
             },
         )
