@@ -1,9 +1,8 @@
 package dev.jcode.workbench
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,6 +34,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -59,9 +60,47 @@ private const val MIN_QUERY_LENGTH = 2
 
 /** Where the Search tool looks for matches. */
 internal enum class SearchScope(val label: String, val placeholder: String) {
-    Content("File content", "Search in files"),
-    Names("File name", "Search file names"),
-    CurrentDoc("Current doc", "Search in current document"),
+    Content("Content", "Search in files"),
+    Names("Names", "Search file names"),
+    CurrentDoc("Current", "Search in current document"),
+}
+
+/** Compact 3-way scope switch: a segmented control that fills its row so the labels always fit
+ *  (equal thirds, no horizontal scroll, no truncation) regardless of drawer width. */
+@Composable
+private fun SearchScopeSelector(
+    selected: SearchScope,
+    onSelect: (SearchScope) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f))
+            .padding(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        SearchScope.entries.forEach { s ->
+            val sel = s == selected
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (sel) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else Color.Transparent)
+                    .clickable { onSelect(s) }
+                    .padding(vertical = 5.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = s.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = if (sel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -179,14 +218,17 @@ internal fun SearchToolPanel(
                 placeholder = scope.placeholder,
             )
             Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 ManagerFilterChip(selected = caseSensitive, label = "Aa") { caseSensitive = !caseSensitive }
                 ManagerFilterChip(selected = regex, label = ".*") { regex = !regex }
-                SearchScope.entries.forEach { s ->
-                    ManagerFilterChip(selected = scope == s, label = s.label) { scope = s }
-                }
+                SearchScopeSelector(
+                    selected = scope,
+                    onSelect = { scope = it },
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
