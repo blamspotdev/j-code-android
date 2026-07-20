@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import java.io.File
 import java.util.regex.Pattern
 
@@ -87,6 +88,61 @@ class SearchEngine {
             }
         }
     }.buffer(1024)
+
+    /**
+     * Match [SearchOptions.query] against file names (not contents) under [rootDir]. Kotlin-only:
+     * a name walk reads no file contents, so the native engine buys nothing here. Each match
+     * carries the file's relative path, with [SearchMatch.lineText] set to the file name and the
+     * column range covering the matched part of the name.
+     */
+    fun searchFileNames(rootDir: File, options: SearchOptions): Flow<SearchMatch> = flow {
+        val pattern = compilePattern(options)
+        var resultCount = 0
+        rootDir.walkTopDown()
+            .filter { it.isFile }
+            .filter { file -> shouldInclude(file, rootDir, options, checkSize = false) }
+            .forEach { file ->
+                if (resultCount >= options.maxResults) return@forEach
+                val matcher = pattern.matcher(file.name)
+                if (matcher.find()) {
+                    emit(
+                        SearchMatch(
+                            filePath = file.relativeTo(rootDir).path,
+                            lineNumber = 0,
+                            columnStart = matcher.start(),
+                            columnEnd = matcher.end(),
+                            lineText = file.name,
+                            matchText = matcher.group(),
+                        )
+                    )
+                    resultCount++
+                }
+            }
+    }.flowOn(Dispatchers.IO)
+
+    /**
+     * Search [lineCount] lines of an in-memory document served by [lineText] — used for the active
+     * editor buffer, which may be dirtier than what is on disk. [filePath] is stamped onto matches.
+     */
+    fun searchLines(
+        lineCount: Int,
+        lineText: (Int) -> String,
+        options: SearchOptions,
+        filePath: String,
+    ): Flow<SearchMatch> = flow {
+        val pattern = compilePattern(options)
+        var resultCount = 0
+        for (line in 0 until lineCount) {
+            if (resultCount >= options.maxResults) break
+            val text = lineText(line)
+            val matcher = pattern.matcher(text)
+            while (matcher.find()) {
+                if (resultCount >= options.maxResults) break
+                emit(SearchMatch(filePath, line, matcher.start(), matcher.end(), text, matcher.group()))
+                resultCount++
+            }
+        }
+    }.flowOn(Dispatchers.IO)
 
     private fun javaSearch(rootDir: File, options: SearchOptions): Flow<SearchMatch> = flow {
         val pattern = compilePattern(options)
@@ -203,7 +259,12 @@ class SearchEngine {
         return Pattern.compile(regex, flags)
     }
 
-    private fun shouldInclude(file: File, rootDir: File, options: SearchOptions): Boolean {
+    private fun shouldInclude(
+        file: File,
+        rootDir: File,
+        options: SearchOptions,
+        checkSize: Boolean = true,
+    ): Boolean {
         val relativePath = file.relativeTo(rootDir).path.replace("\\", "/")
 
         // Check exclude patterns
@@ -228,8 +289,8 @@ class SearchEngine {
         // Skip hidden files unless requested
         if (!options.includeHidden && file.name.startsWith(".")) return false
 
-        // Skip likely binary files (> 1MB)
-        if (file.length() > 1_000_000) return false
+        // Skip likely binary files (> 1MB) — content modes only; a name match has no size concern
+        if (checkSize && file.length() > 1_000_000) return false
 
         return true
     }

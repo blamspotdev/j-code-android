@@ -2,15 +2,17 @@ entries:
   - id: clangd
     category: languages
     name: C/C++
-    description: Installs clang, clangd, lldb, and gdb for C-family projects.
+    description: Installs clang, clangd, clang-format, lldb, and gdb for C-family projects.
     installScript: |
       sudo apt-get update
-      sudo apt-get install -y clang clangd lldb gdb
+      sudo apt-get install -y clang clangd clang-format lldb gdb
     verifyScript: |
       command -v clang >/dev/null 2>&1 && command -v clangd >/dev/null 2>&1 && echo ready
     uninstallScript: |
-      sudo apt-get remove -y clang clangd lldb gdb
-    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(clang|clangd|lldb|gdb)/'"
+      sudo apt-get remove -y clang clangd clang-format lldb gdb
+    # (-[0-9]+)? also matches the versioned llvm-toolchain packages (clang-18, lldb-18, …) that
+    # carry the actual updates; the unversioned metas almost never rev within a release.
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(clang|clangd|clang-format|lldb|gdb)(-[0-9]+)?/'"
 
   - id: python
     category: languages
@@ -23,7 +25,9 @@ entries:
       command -v python3 >/dev/null 2>&1 && python3 -m venv /tmp/_jcodevenv >/dev/null 2>&1 && rm -rf /tmp/_jcodevenv && echo ready
     uninstallScript: |
       sudo apt-get remove -y python3 python3-venv python3-pip
-    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(python3|python3-venv|python3-pip)/'"
+    # Versioned interpreter packages (python3.12, python3.12-venv, libpython3.12-stdlib) carry the
+    # real updates; the python3/python3-venv metas almost never rev within a release.
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(python3(\\.[0-9]+)?(-venv|-pip|-minimal)?|libpython3[^/]*)/'"
 
   - id: nodejs
     category: languages
@@ -34,7 +38,9 @@ entries:
     # Ship upstream Node (unpatched npm) into /usr/local so it shadows any distro node on PATH.
     installScript: |
       set -e
-      command -v curl >/dev/null 2>&1 || sudo apt-get install -y curl ca-certificates
+      # The fallback needs its own apt-get update: on a fresh minimal rootfs the onboarding update is
+      # best-effort and may have failed, and `apt-get install` never refreshes stale lists itself.
+      command -v curl >/dev/null 2>&1 || { sudo apt-get update; sudo apt-get install -y curl ca-certificates; }
       # Newest LTS line from the release index (column 10 = LTS codename, "-" = not LTS).
       NODE_VERSION=$(curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 && $10!="-" {print $1; exit}')
       [ -n "$NODE_VERSION" ]
@@ -74,6 +80,37 @@ entries:
       sudo apt-get remove -y openjdk-21-jdk-headless
       sudo rm -f /usr/local/bin/ktlint
     updateCheckScript: ""
+
+  - id: go
+    category: languages
+    name: Go
+    description: The latest stable Go toolchain (resolved at install time) from the official tarball, installed into /usr/local/go.
+    installScript: |
+      set -e
+      command -v curl >/dev/null 2>&1 || sudo apt-get install -y curl ca-certificates
+      GO_VERSION=$(curl -fsSL "https://go.dev/VERSION?m=text" | head -1)
+      [ -n "$GO_VERSION" ]
+      case "$(uname -m)" in
+        aarch64|arm64) GO_ARCH=arm64 ;;
+        x86_64|amd64)  GO_ARCH=amd64 ;;
+        *) echo "Unsupported architecture: $(uname -m)"; exit 1 ;;
+      esac
+      TARBALL="${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
+      curl -fsSL -o "/tmp/${TARBALL}" "https://go.dev/dl/${TARBALL}"
+      sudo rm -rf /usr/local/go
+      sudo tar -xzf "/tmp/${TARBALL}" -C /usr/local
+      rm -f "/tmp/${TARBALL}"
+      sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go
+      sudo ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+      go version
+    verifyScript: |
+      command -v go >/dev/null 2>&1 && echo ready
+    uninstallScript: |
+      sudo rm -rf /usr/local/go "$HOME/go"
+      sudo rm -f /usr/local/bin/go /usr/local/bin/gofmt
+    updateCheckScript: |
+      L=$(curl -fsSL "https://go.dev/VERSION?m=text" | head -1)
+      [ -n "$L" ] && [ "$(go version 2>/dev/null | awk '{print $3}')" != "$L" ]
 
   - id: rust
     category: build-tools
@@ -161,7 +198,9 @@ entries:
         kill -0 "$SDK_PID" 2>/dev/null || break
         sleep 10
       done
-      pkill -f sdkmanager 2>/dev/null || true
+      # The [r] class keeps the pattern from matching its own literal occurrence in this script's
+      # argv — without it, the quiet exec path (sh -c '<whole script>') pkills itself and proot.
+      pkill -f 'sdkmanage[r]' 2>/dev/null || true
       if [ ! -f "$ANDROID_HOME/platforms/$PLAT_DIR/android.jar" ] || [ ! -x "$ANDROID_HOME/build-tools/$BT_VER/aapt2" ]; then
         echo "sdkmanager failed to install $PLATFORM / $BUILD_TOOLS:"
         tail -n 20 /tmp/android-sdk-install.log 2>/dev/null || true
@@ -236,21 +275,17 @@ entries:
 
   - id: postgresql
     category: databases
-    name: PostgreSQL
-    description: Full-featured SQL database server. Runs as the jcode user via pg_ctl, no systemd needed.
+    name: PostgreSQL Client
+    description: psql and the PostgreSQL client tools for connecting to a remote, VM, or container server. (The PostgreSQL server itself cannot run under the proot runtime, so no local server is installed.)
     installScript: |
       sudo apt-get update
-      sudo apt-get install -y postgresql postgresql-contrib
-      sudo -u postgres pg_ctlcluster "$(ls /etc/postgresql | sort -V | tail -1)" main start
-      sudo -u postgres createuser --superuser jcode
-      createdb jcode
+      sudo apt-get install -y postgresql-client
     verifyScript: |
-      pg_isready -U jcode -d jcode >/dev/null 2>&1 && echo ready
+      command -v psql >/dev/null 2>&1 && echo ready
     uninstallScript: |
-      for v in $(ls /etc/postgresql 2>/dev/null); do sudo -u postgres pg_ctlcluster "$v" main stop 2>/dev/null || true; done
-      sudo apt-get remove -y postgresql postgresql-contrib
-      sudo rm -rf /var/lib/postgresql
-    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(postgresql|postgresql-contrib)/'"
+      sudo apt-get remove -y postgresql-client
+      sudo apt-get autoremove -y
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^postgresql-client'"
 
   - id: mariadb
     category: databases
@@ -261,13 +296,17 @@ entries:
       sudo apt-get install -y mariadb-server mariadb-client
       sudo service mariadb start
       mysql -u root -e "CREATE USER IF NOT EXISTS 'jcode'@'localhost'; GRANT ALL PRIVILEGES ON *.* TO 'jcode'@'localhost' WITH GRANT OPTION; FLUSH PRIVILEGES;"
+    # Presence check, not liveness: the daemon dies with each proot session (--kill-on-exit, no
+    # systemd), so a `mysql -u jcode` probe flips an intact install back to "not installed" after
+    # every app restart. Start the server from a terminal (`sudo service mariadb start`) to use it.
     verifyScript: |
-      mysql -u jcode -e "SELECT 1" >/dev/null 2>&1 && echo ready
+      command -v mariadbd >/dev/null 2>&1 && command -v mysql >/dev/null 2>&1 && echo ready
     uninstallScript: |
       sudo service mariadb stop 2>/dev/null || true
       sudo apt-get remove -y mariadb-server mariadb-client
+      sudo apt-get autoremove -y
       sudo rm -rf /var/lib/mysql
-    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(mariadb-server|mariadb-client)/'"
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(mariadb-|libmariadb)'"
 
   - id: redis
     category: databases
@@ -276,13 +315,16 @@ entries:
     installScript: |
       sudo apt-get update
       sudo apt-get install -y redis-server
-      redis-server --daemonize yes
+    # Presence check, not liveness: a daemonized redis cannot outlive the install exec (each catalog
+    # script runs in its own proot with --kill-on-exit), so pinging one would fail every verify.
+    # Start it from a terminal (`redis-server --daemonize yes`) to use it.
     verifyScript: |
-      redis-cli ping 2>/dev/null | grep -q PONG && echo ready
+      command -v redis-server >/dev/null 2>&1 && redis-cli --version >/dev/null 2>&1 && echo ready
     uninstallScript: |
       redis-cli shutdown 2>/dev/null || true
       sudo apt-get remove -y redis-server
-    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(redis-server)/'"
+      sudo apt-get autoremove -y
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^redis'"
 
   - id: sqlcmd
     category: databases
@@ -400,8 +442,10 @@ entries:
       set -e
       sudo npm install -g @anthropic-ai/claude-code
       echo "installed: claude $(claude --version 2>/dev/null | tail -1)"
+    # Run --version rather than a presence check: npm leaves a non-functional stub bin when the
+    # postinstall platform-binary download fails, and a stub must not report as installed.
     verifyScript: |
-      command -v claude >/dev/null 2>&1 && echo ready
+      claude --version >/dev/null 2>&1 && echo ready
     uninstallScript: |
       sudo npm rm -g @anthropic-ai/claude-code
     updateCheckScript: ""

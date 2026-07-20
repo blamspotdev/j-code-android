@@ -12,7 +12,7 @@ plugins {
 // git-commit-count scheme and produced downgrades). Pre-release suffixes (e.g. -beta) are
 // ignored by the derivation. The formula must match scripts/build-release.ps1 ($Code) and
 // build-release-common.sh (CODE).
-val jcodeVersion = "1.3.4"
+val jcodeVersion = "1.3.5"
 
 val jcodeVersionName: String =
     (project.findProperty("jcodeVersionName") as? String)?.trim()?.takeIf { it.isNotBlank() }

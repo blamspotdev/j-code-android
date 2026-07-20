@@ -2,6 +2,8 @@ package dev.jcode.workbench
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,6 +47,7 @@ import dev.jcode.core.search.SearchOptions
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.LocalIconBundle
 import dev.jcode.design.ManagerFilterChip
+import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
 import kotlinx.coroutines.flow.debounce
@@ -54,14 +57,25 @@ import java.io.File
 private const val MAX_DISPLAY_RESULTS = 2000
 private const val MIN_QUERY_LENGTH = 2
 
+/** Where the Search tool looks for matches. */
+internal enum class SearchScope(val label: String, val placeholder: String) {
+    Content("File content", "Search in files"),
+    Names("File name", "Search file names"),
+    CurrentDoc("Current doc", "Search in current document"),
+}
+
 /**
  * Find in Files panel (left-drawer Search tool). Streams matches from [SearchModule.engine]
  * (native ripgrep FFI when present, Kotlin fallback otherwise) and opens a tapped result at its
  * line/column via [onOpenResult], which expects a `path:line:col` token (1-based).
+ *
+ * Three scopes: file content across the project (default), file names only, and the current
+ * document — the active editor tab's live buffer, so unsaved edits are searched too.
  */
 @Composable
 internal fun SearchToolPanel(
     project: Project?,
+    activeTab: EditorTab?,
     onOpenResult: (String) -> Unit,
     seed: Pair<Int, String>? = null,
     onSeedConsumed: () -> Unit = {},
@@ -84,20 +98,27 @@ internal fun SearchToolPanel(
     }
     var caseSensitive by remember { mutableStateOf(false) }
     var regex by remember { mutableStateOf(false) }
+    var scope by remember { mutableStateOf(SearchScope.Content) }
     var searching by remember { mutableStateOf(false) }
     var truncated by remember { mutableStateOf(false) }
     val results = remember { mutableStateListOf<SearchMatch>() }
 
+    // Page tabs and never-saved buffers have no path to reopen a result at, so Current Doc needs a
+    // real file-backed tab.
+    val activeDocTab = activeTab?.takeIf {
+        !it.isPage && it.editorState != null && it.filePath.path.isNotBlank()
+    }
+
     // Re-run on any input change, debounced so each keystroke doesn't spawn a walk. Changing the key
     // cancels the prior collection, which closes the flow and stops the native search.
-    LaunchedEffect(rootFile, caseSensitive, regex) {
+    LaunchedEffect(rootFile, caseSensitive, regex, scope, activeDocTab?.id) {
         snapshotFlow { query }
             .debounce(250)
             .distinctUntilChanged()
             .collect { q ->
                 results.clear()
                 truncated = false
-                if (q.length < MIN_QUERY_LENGTH) {
+                if (q.length < MIN_QUERY_LENGTH || (scope == SearchScope.CurrentDoc && activeDocTab == null)) {
                     searching = false
                     return@collect
                 }
@@ -108,8 +129,22 @@ internal fun SearchToolPanel(
                     caseSensitive = caseSensitive,
                     maxResults = MAX_DISPLAY_RESULTS,
                 )
+                val matches = when (scope) {
+                    SearchScope.Content -> SearchModule.engine.search(rootFile, options)
+                    SearchScope.Names -> SearchModule.engine.searchFileNames(rootFile, options)
+                    SearchScope.CurrentDoc -> {
+                        val snap = activeDocTab!!.editorState!!.snapshot.value
+                        SearchModule.engine.searchLines(
+                            lineCount = snap.lineCount,
+                            lineText = snap::lineText,
+                            options = options,
+                            filePath = activeDocTab.filePath.relativeToOrNull(rootFile)?.path
+                                ?: activeDocTab.filePath.name,
+                        )
+                    }
+                }
                 try {
-                    SearchModule.engine.search(rootFile, options).collect { match ->
+                    matches.collect { match ->
                         if (results.size < MAX_DISPLAY_RESULTS) {
                             results.add(match)
                         } else {
@@ -122,15 +157,36 @@ internal fun SearchToolPanel(
             }
     }
 
+    // Current Doc results live outside the project-relative token scheme the other scopes use.
+    val openMatch: (SearchMatch) -> Unit = { match ->
+        val base = if (scope == SearchScope.CurrentDoc) {
+            activeDocTab?.filePath?.absolutePath
+        } else {
+            File(rootFile, match.filePath).absolutePath
+        }
+        base?.let { onOpenResult("$it:${match.lineNumber + 1}:${match.columnStart + 1}") }
+    }
+
     Column(modifier = modifier.fillMaxSize()) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            SearchField(query = query, onQueryChange = { query = it }, searching = searching)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            SearchField(
+                query = query,
+                onQueryChange = { query = it },
+                searching = searching,
+                placeholder = scope.placeholder,
+            )
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 ManagerFilterChip(selected = caseSensitive, label = "Aa") { caseSensitive = !caseSensitive }
                 ManagerFilterChip(selected = regex, label = ".*") { regex = !regex }
+                SearchScope.entries.forEach { s ->
+                    ManagerFilterChip(selected = scope == s, label = s.label) { scope = s }
+                }
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
@@ -144,11 +200,16 @@ internal fun SearchToolPanel(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val plus = if (truncated) "+" else ""
             val summary = when {
+                scope == SearchScope.CurrentDoc && activeDocTab == null ->
+                    "Open a file to search the current document"
                 query.length < MIN_QUERY_LENGTH -> "Type at least $MIN_QUERY_LENGTH characters"
                 results.isEmpty() && searching -> "Searching…"
                 results.isEmpty() -> "No results"
-                else -> "${results.size}${if (truncated) "+" else ""} results in $fileCount file${if (fileCount == 1) "" else "s"}"
+                scope == SearchScope.Names ->
+                    "${results.size}$plus file${if (results.size == 1) "" else "s"}"
+                else -> "${results.size}$plus results in $fileCount file${if (fileCount == 1) "" else "s"}"
             }
             Text(
                 text = summary,
@@ -158,27 +219,59 @@ internal fun SearchToolPanel(
         }
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            grouped.forEach { (path, matches) ->
-                item(key = "file:$path") {
-                    Text(
-                        text = path,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 4.dp),
-                    )
+            if (scope == SearchScope.Names) {
+                items(results, key = { it.filePath }) { match ->
+                    FileNameRow(match) { openMatch(match) }
                 }
-                items(matches, key = { "${path}:${it.lineNumber}:${it.columnStart}" }) { match ->
-                    MatchRow(match) {
-                        val token = File(rootFile, match.filePath).absolutePath +
-                            ":${match.lineNumber + 1}:${match.columnStart + 1}"
-                        onOpenResult(token)
+            } else {
+                grouped.forEach { (path, matches) ->
+                    item(key = "file:$path") {
+                        Text(
+                            text = path,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 4.dp),
+                        )
+                    }
+                    items(matches, key = { "${path}:${it.lineNumber}:${it.columnStart}" }) { match ->
+                        MatchRow(match) { openMatch(match) }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun FileNameRow(match: SearchMatch, onClick: () -> Unit) {
+    val parent = match.filePath.replace('\\', '/').substringBeforeLast('/', "")
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = match.lineText,
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (parent.isNotEmpty()) {
+            Text(
+                text = parent,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -211,7 +304,12 @@ private fun MatchRow(match: SearchMatch, onClick: () -> Unit) {
 /** Compact single-line search field (~36dp) matching the manager panels — the default
  *  OutlinedTextField's 56dp min height is too bulky for this dense left-drawer panel. */
 @Composable
-private fun SearchField(query: String, onQueryChange: (String) -> Unit, searching: Boolean) {
+private fun SearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    searching: Boolean,
+    placeholder: String,
+) {
     Surface(
         shape = RoundedCornerShape(10.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
@@ -232,7 +330,7 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit, searchin
             Box(modifier = Modifier.weight(1f)) {
                 if (query.isEmpty()) {
                     Text(
-                        "Search in files",
+                        placeholder,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
