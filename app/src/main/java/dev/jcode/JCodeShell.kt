@@ -814,6 +814,30 @@ fun JCodeApp(
         }
     }
 
+    // Actionable prompts (reload an updated extension, restart the app) as a snackbar with a button.
+    LaunchedEffect(viewModel) {
+        viewModel.prompts.collect { prompt ->
+            when (prompt) {
+                is WorkbenchPrompt.ReloadExtension -> {
+                    val result = snackbarHostState.showSnackbar(
+                        message = "Updated ${prompt.name} — reload to apply",
+                        actionLabel = "Reload",
+                        duration = SnackbarDuration.Long,
+                    )
+                    if (result == SnackbarResult.ActionPerformed) viewModel.reloadExtension(prompt.extensionId)
+                }
+                is WorkbenchPrompt.RestartApp -> {
+                    val result = snackbarHostState.showSnackbar(
+                        message = prompt.message,
+                        actionLabel = "Restart",
+                        duration = SnackbarDuration.Long,
+                    )
+                    if (result == SnackbarResult.ActionPerformed) viewModel.restartApp()
+                }
+            }
+        }
+    }
+
     // Surface an "update available" toast (with an Update action) once per launch when the startup
     // GitHub-release check finds a newer version. The Settings > About card offers a manual re-check.
     var updateToastShown by remember { mutableStateOf(false) }

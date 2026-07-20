@@ -173,6 +173,15 @@ sealed interface PendingFolderType {
     }
 }
 
+/** An actionable prompt the shell shows as a snackbar with a single button. */
+sealed interface WorkbenchPrompt {
+    /** An extension was updated while a copy was live — offer to reload its webviews. */
+    data class ReloadExtension(val extensionId: String, val name: String) : WorkbenchPrompt
+
+    /** A change only applies on a fresh process — offer to restart the app. */
+    data class RestartApp(val message: String) : WorkbenchPrompt
+}
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     val workspaceManager: WorkspaceManager = WorkspaceServiceLocator.workspaceManager(application)
     val configService: ConfigService = ConfigServiceLocator.configService()
@@ -259,6 +268,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Reload an extension's live webviews with its freshly-installed code (from the update prompt).
+     *  A plain update leaves an already-open extension tab running the OLD bundle; a `reload` event
+     *  makes each of that extension's live [ExtensionWebViewPage]s re-fetch the updated on-disk page,
+     *  and the SCM/background host is torn down (no-op otherwise) so it too recreates fresh. */
+    fun reloadExtension(id: String) {
+        _extensionEvents.tryEmit("reload" to JSONObject().put("extensionId", id).toString())
+        runCatching { dev.jcode.workbench.ScmWebViewHolder.destroy(id) }
+    }
+
+    /** Actionable prompts surfaced as a snackbar with a button (reload an extension, restart the app). */
+    private val _prompts = MutableSharedFlow<WorkbenchPrompt>(extraBufferCapacity = 4)
+    val prompts = _prompts.asSharedFlow()
+
     /**
      * Sideload an extension from a picked `.jext` [uri] (Developer options). Streams it to a cache
      * file, installs it (unsigned → marked debuggable; signed → installed normally), refreshes, and
@@ -266,6 +288,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun sideloadExtension(uri: android.net.Uri) {
         viewModelScope.launch {
+            val installedBefore = _installedExtensions.value.map { it.id }.toSet()
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val tmp = File.createTempFile("sideload", ".jext", appContext.cacheDir)
@@ -286,6 +309,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         if (r.signed) "Installed '${r.extension.name}' (signed — not debuggable)."
                         else "Loaded '${r.extension.name}' (unsigned dev extension).",
                     )
+                    if (r.extension.id in installedBefore) {
+                        _prompts.tryEmit(WorkbenchPrompt.ReloadExtension(r.extension.id, r.extension.name))
+                    }
                 }
                 .onFailure { emitMessage("Sideload failed: ${it.message ?: "invalid .jext"}") }
         }
@@ -304,6 +330,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun installExtension(entry: MarketplaceEntry) {
         viewModelScope.launch {
+            val wasInstalled = _installedExtensions.value.any { it.id == entry.id }
             _marketplaceBusy.value = true
             try {
                 installExtensionResolvingDeps(entry, visiting = mutableSetOf())
@@ -312,6 +339,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _extensionInstallPhases.value = emptyMap()
             }
             refreshInstalledExtensions()
+            // An update replaced an extension that may be running an old copy in an open tab/panel;
+            // prompt to reload it (a fresh install has nothing live to reload).
+            if (wasInstalled && _installedExtensions.value.any { it.id == entry.id }) {
+                _prompts.tryEmit(WorkbenchPrompt.ReloadExtension(entry.id, entry.name))
+            }
         }
     }
 
@@ -655,10 +687,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.HARDWARE_ACCELERATION)
 
     fun setHardwareAcceleration(enabled: Boolean) {
+        val changed = enabled != hardwareAcceleration.value
         getApplication<Application>()
             .getSharedPreferences(MainActivity.UI_STARTUP_PREFS, Context.MODE_PRIVATE)
             .edit().putBoolean(MainActivity.KEY_HW_ACCELERATION, enabled).apply()
         viewModelScope.launch { uiPreferences.edit { it[hardwareAccelerationKey] = enabled } }
+        // The window flag is read once at startup (see MainActivity), so only a fresh process applies it.
+        if (changed) _prompts.tryEmit(WorkbenchPrompt.RestartApp("Restart JCode to apply the hardware acceleration change."))
     }
 
     // Explorer "hide files at the project root" preference: a mode + the user's newline-separated
@@ -3298,6 +3333,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopAllRuntimeServices() {
         runtimeServices.values.forEach { runCatching { it.destroy() } }
         runtimeServices.clear()
+    }
+
+    /**
+     * Fully restart the app: save the session, stop the Linux runtime (proot/terminals/services), then
+     * relaunch a fresh process. Used for changes that only apply at startup (e.g. hardware acceleration),
+     * which a mere Activity recreate can't pick up. The fresh task is started while this (foreground)
+     * process is still alive — so it isn't blocked by background-activity-launch rules — and the launch
+     * request survives the immediate [Runtime.exit], which the system carries out in a new process.
+     */
+    fun restartApp() {
+        runCatching { flushSessionNow() }
+        runCatching { stopAllRuntimeServices() }
+        runCatching { dev.jcode.workbench.ScmWebViewHolder.destroyAll() }
+        val ctx = getApplication<Application>()
+        ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)?.component?.let { component ->
+            ctx.startActivity(android.content.Intent.makeRestartActivityTask(component))
+        }
+        Runtime.getRuntime().exit(0)
     }
 
     // --- Background extensions (Task Manager "Background extensions" section) -----------------------
