@@ -36,6 +36,11 @@ data class ExplorerScmUi(
 
 val LocalExplorerScmUi = compositionLocalOf { ExplorerScmUi() }
 
+/** [dev.jcode.fs.FsPath.stableId] of the open project's root folder, or null when unknown. The
+ *  explorer suppresses move (Cut) and Delete on this row — the project root must not be moved or
+ *  deleted from the file tree. */
+val LocalProjectRootId = compositionLocalOf<String?> { null }
+
 /** True when [action] applies to a row: kind allowed by [ExplorerContextAction.targets] and, for
  *  files, the name matches [ExplorerContextAction.fileExtensions]. */
 fun explorerActionAppliesTo(action: ExplorerContextAction, name: String, isDirectory: Boolean): Boolean {

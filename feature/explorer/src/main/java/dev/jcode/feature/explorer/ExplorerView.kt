@@ -39,6 +39,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -303,6 +304,7 @@ fun ExplorerView(
         }
     }
 
+    CompositionLocalProvider(LocalProjectRootId provides project.fsPath.stableId) {
     Column(modifier = modifier.fillMaxSize()) {
         // Compact action toolbar (always visible) with create/refresh/paste. The Tree|List view mode
         // is set in Settings, not here.
@@ -387,6 +389,7 @@ fun ExplorerView(
                 }
             }
         }
+    }
     }
 
     // Create dialog
@@ -480,6 +483,8 @@ private fun RowOverflowMenu(
 ) {
     val isDir = row.node.kind == FsKind.Directory
     val scmUi = LocalExplorerScmUi.current
+    // The project root must not be moved or deleted from the tree, so Cut/Delete are hidden on it.
+    val isProjectRoot = LocalProjectRootId.current == row.node.path.stableId
     Box {
         JcTooltip("More actions") {
             IconButton(
@@ -497,12 +502,14 @@ private fun RowOverflowMenu(
         CompactContextMenu(
             expanded = expanded,
             onDismissRequest = { onExpandedChange(false) },
-            quickActions = listOf(
-                ContextAction(JCodeIcon.Copy, "Copy") { onAction(row, RowAction.Copy) },
-                ContextAction(JCodeIcon.Cut, "Cut") { onAction(row, RowAction.Cut) },
-                ContextAction(JCodeIcon.Rename, "Rename") { onAction(row, RowAction.Rename) },
-                ContextAction(JCodeIcon.Delete, "Delete", destructive = true) { onAction(row, RowAction.Delete) },
-            ),
+            quickActions = buildList {
+                add(ContextAction(JCodeIcon.Copy, "Copy") { onAction(row, RowAction.Copy) })
+                if (!isProjectRoot) add(ContextAction(JCodeIcon.Cut, "Cut") { onAction(row, RowAction.Cut) })
+                add(ContextAction(JCodeIcon.Rename, "Rename") { onAction(row, RowAction.Rename) })
+                if (!isProjectRoot) {
+                    add(ContextAction(JCodeIcon.Delete, "Delete", destructive = true) { onAction(row, RowAction.Delete) })
+                }
+            },
             listActions = buildList {
                 if (!isDir) add(ContextAction(JCodeIcon.Open, "Open") { onAction(row, RowAction.Open) })
                 if (isDir) {
