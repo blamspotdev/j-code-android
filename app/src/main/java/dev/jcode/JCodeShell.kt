@@ -1251,7 +1251,9 @@ fun JCodeApp(
             onOpenExtensionDetail = viewModel::openExtensionDetailPage,
             onOpenExtensionPermissions = viewModel::openExtensionPermissionsPage,
             onOpenExtensionApp = viewModel::openExtensionAppPage,
-            onOpenExtensionConfig = { id -> viewModel.openExtensionViewPage(id, "config", "Git Configuration") },
+            // The Source Control extension renders its git-identity + GitHub-auth screen at its
+            // `#github` route (a global-config screen that works with no project open).
+            onOpenExtensionConfig = { id -> viewModel.openExtensionViewPage(id, "github", "Git Configuration") },
             onExtensionExec = viewModel::runtimeExecJson,
             onExtensionApiRequest = { extId, envelope ->
                 val ext = viewModel.installedExtensions.value.firstOrNull { it.id == extId }
