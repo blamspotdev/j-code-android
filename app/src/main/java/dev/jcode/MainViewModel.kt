@@ -2574,13 +2574,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Open an extension's web frontend at a named view (loaded as `#view`) as a full editor page and
-     *  bring the editor to front — used by the `workbench.openView` Extension API. */
-    fun openExtensionViewPage(extensionId: String, view: String, title: String? = null) {
+     *  bring the editor to front — used by the `workbench.openView` Extension API. By default one
+     *  ExtensionApp tab exists at a time (opening a view replaces the previous one, matching the SCM
+     *  diff-peek pattern); [coexist] opts into a genuine additional tab (Mermaid "View in New Tab"). */
+    fun openExtensionViewPage(extensionId: String, view: String, title: String? = null, coexist: Boolean = false) {
         _bringEditorToFront.tryEmit(Unit)
         val ext = _installedExtensions.value.firstOrNull { it.id == extensionId }
         val viewLabel = when (view) { "github" -> "GitHub"; "" -> null; else -> view.replaceFirstChar { it.uppercaseChar() } }
-        openDetailPage(EXT_APP_PREFIX + extensionId + "#" + view, EditorPageKind.ExtensionApp) {
+        // A blank view IS the app/root view — focus the existing app tab instead of minting a
+        // distinct `<id>#` tab that renders identically and collides with it on the render key.
+        if (view.isBlank()) { openExtensionAppPage(extensionId); return }
+        val tabId = EXT_APP_PREFIX + extensionId + "#" + view
+        val titleOf: () -> String = {
             title?.takeIf { it.isNotBlank() } ?: listOfNotNull(ext?.name, viewLabel).joinToString(" · ").ifBlank { "View" }
+        }
+        if (coexist) openExtensionPage(tabId, titleOf) else openDetailPage(tabId, EditorPageKind.ExtensionApp, titleOf)
+    }
+
+    /** Open/focus an ExtensionApp page WITHOUT evicting other extension pages, so distinct routes
+     *  (e.g. a Mermaid document preview and a single chart opened from "View in New Tab") coexist as
+     *  separate tabs. Same id → refocus (no reload); new id → added beside the others. Only reached
+     *  when the caller explicitly opts into coexistence (see [openExtensionViewPage]). */
+    private fun openExtensionPage(tabId: String, title: () -> String) {
+        val group = _editorGroup.value
+        val existing = group.tabs.firstOrNull { it.id == tabId }
+        _editorGroup.value = if (existing != null) {
+            group.withActiveTabChanged(existing.id)
+        } else {
+            group.withTabAdded(EditorTab.page(tabId, title(), EditorPageKind.ExtensionApp))
         }
     }
 
@@ -2861,7 +2882,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // An extension opening one of ITS OWN views in the editor — needs the caller id, which the
         // stateless dispatch below doesn't have.
         if (type == "workbench.openView") {
-            openExtensionViewPage(ext.id, payload.optString("view"), payload.optString("title").ifBlank { null })
+            openExtensionViewPage(
+                ext.id,
+                payload.optString("view"),
+                payload.optString("title").ifBlank { null },
+                coexist = payload.optBoolean("newTab", false),
+            )
             return apiOk(JSONObject())
         }
         // The last editor context-menu tap targeting this extension, if any — consumed on read. Pages

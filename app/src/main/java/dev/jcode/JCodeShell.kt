@@ -849,11 +849,26 @@ fun JCodeApp(
     val menuTabId = menuTab?.id
     val menuIsFileTab = menuTab?.editorState != null
     val menuFileName = menuTab?.let { t -> t.filePath.name.ifBlank { t.title } }.orEmpty()
+    // "Go to line" / "Find text" from the editor menu. The menu is built in this parent scope but the
+    // go-to-line dialog and search panel live inside JCodeShell, so the taps bump trigger state that
+    // is passed down as params and reacted to there (find carries a nonce so the same word re-seeds).
+    var editorGoToLineNonce by remember { mutableStateOf(0) }
+    var editorFindRequest by remember { mutableStateOf<Pair<Int, String>?>(null) }
     val editorMenuExtras = remember(viewModel, menuTabId, menuIsFileTab, menuFileName, contributedContextActions) {
         val fileExt = menuFileName.substringAfterLast('.', "").lowercase()
         EditorMenuExtras(
             previewToggle = if (menuIsFileTab && menuTabId != null && SyntaxHighlighter.isMarkdownFile(menuFileName)) {
                 { viewModel.toggleTabPreview(menuTabId) }
+            } else {
+                null
+            },
+            onGoToLine = if (menuIsFileTab) {
+                { editorGoToLineNonce++ }
+            } else {
+                null
+            },
+            onFindText = if (menuIsFileTab) {
+                { word -> editorFindRequest = ((editorFindRequest?.first ?: 0) + 1) to word }
             } else {
                 null
             },
@@ -1131,6 +1146,8 @@ fun JCodeApp(
     ) {
     JCodeShell(
         modifier = modifier,
+        editorGoToLineNonce = editorGoToLineNonce,
+        editorFindRequest = editorFindRequest,
         windowInfo = windowInfo,
         workspace = workspace,
         selectedProject = selectedProject,
@@ -1295,6 +1312,8 @@ fun JCodeApp(
 @OptIn(ExperimentalLayoutApi::class) // WindowInsets.imeAnimationTarget (snap IME padding)
 @Composable
 private fun JCodeShell(
+    editorGoToLineNonce: Int,
+    editorFindRequest: Pair<Int, String>?,
     windowInfo: JCodeWindowInfo,
     workspace: Workspace?,
     selectedProject: Project?,
@@ -1535,6 +1554,18 @@ private fun JCodeShell(
     var goToLineVisible by remember { mutableStateOf(false) }
     var colorPickActive by remember { mutableStateOf(false) }
     var sampledColor by remember { mutableStateOf<Int?>(null) }
+    // Seed for the Find-in-Files panel when "Find text" is chosen from the editor menu, threaded down
+    // to the search panel. Driven by the parent's editor-menu trigger params.
+    var editorSearchSeed by remember { mutableStateOf<Pair<Int, String>?>(null) }
+    LaunchedEffect(editorGoToLineNonce) {
+        if (editorGoToLineNonce > 0) goToLineVisible = true
+    }
+    LaunchedEffect(editorFindRequest) {
+        val req = editorFindRequest ?: return@LaunchedEffect
+        editorSearchSeed = req
+        selectedTool = WorkbenchTool.Search
+        if (usesModalWorkspace) scope.launch { compactDrawerState.open() } else leftSidebarExpanded = true
+    }
     val fullscreenMode by WindowModeState.fullscreen.collectAsStateWithLifecycle()
     val keepAwakeMode by WindowModeState.keepAwake.collectAsStateWithLifecycle()
     val orientationLockedMode by WindowModeState.orientationLocked.collectAsStateWithLifecycle()
@@ -2250,6 +2281,8 @@ private fun JCodeShell(
                 selectedTool = selectedTool,
                 workspace = workspace,
                 selectedProject = selectedProject,
+                searchSeed = editorSearchSeed,
+                onSearchSeedConsumed = { editorSearchSeed = null },
                 editorGroup = editorGroup,
                 effectiveConfig = effectiveConfig,
                 environmentState = environmentState,
@@ -2641,6 +2674,8 @@ private fun JCodeShell(
                             selectedTool = selectedTool,
                             workspace = workspace,
                             selectedProject = selectedProject,
+                            searchSeed = editorSearchSeed,
+                            onSearchSeedConsumed = { editorSearchSeed = null },
                             editorGroup = editorGroup,
                             effectiveConfig = effectiveConfig,
                             environmentState = environmentState,
@@ -2847,6 +2882,8 @@ private fun WorkspacePanel(
     selectedTool: WorkbenchTool,
     workspace: Workspace?,
     selectedProject: Project?,
+    searchSeed: Pair<Int, String>? = null,
+    onSearchSeedConsumed: () -> Unit = {},
     editorGroup: EditorGroup,
     effectiveConfig: EffectiveConfig,
     environmentState: DistroEnvironmentState,
@@ -2987,6 +3024,8 @@ private fun WorkspacePanel(
                     WorkbenchTool.Search -> SearchToolPanel(
                         project = selectedProject,
                         onOpenResult = onOpenPathAtLine,
+                        seed = searchSeed,
+                        onSeedConsumed = onSearchSeedConsumed,
                         modifier = Modifier.fillMaxSize(),
                     )
 

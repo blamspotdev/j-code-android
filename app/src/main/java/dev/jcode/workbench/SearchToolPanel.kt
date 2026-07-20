@@ -63,6 +63,8 @@ private const val MIN_QUERY_LENGTH = 2
 internal fun SearchToolPanel(
     project: Project?,
     onOpenResult: (String) -> Unit,
+    seed: Pair<Int, String>? = null,
+    onSeedConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val rootFile = (project?.fsPath as? FsPath.Local)?.file
@@ -73,6 +75,13 @@ internal fun SearchToolPanel(
     }
 
     var query by remember { mutableStateOf("") }
+    // Seed the query when "Find text" is invoked from the editor menu (keyed by the request nonce so
+    // repeating the same word re-seeds), then consume it one-shot so re-entering the panel (e.g.
+    // switching sidebar tools and back) doesn't re-inject over a query the user cleared or edited.
+    LaunchedEffect(seed?.first) {
+        seed?.second?.takeIf { it.isNotBlank() }?.let { query = it }
+        if (seed != null) onSeedConsumed()
+    }
     var caseSensitive by remember { mutableStateOf(false) }
     var regex by remember { mutableStateOf(false) }
     var searching by remember { mutableStateOf(false) }

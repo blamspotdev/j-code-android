@@ -20,6 +20,10 @@ data class EditorMenuContribution(
  */
 data class EditorMenuExtras(
     val previewToggle: (() -> Unit)? = null,
+    /** Opens the shared Go-to-line dialog for the active file tab. */
+    val onGoToLine: (() -> Unit)? = null,
+    /** Opens the Find-in-Files panel seeded with the pressed word (may be empty). */
+    val onFindText: ((String) -> Unit)? = null,
     val contributions: List<EditorMenuContribution> = emptyList(),
     val onContribution: (EditorMenuContribution, String) -> Unit = { _, _ -> },
 )
