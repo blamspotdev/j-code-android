@@ -271,15 +271,17 @@ fun ManagerListRow(
 }
 
 /** A titled section/header card used in the manager panels. When [collapsible] is set, the header
- *  toggles a chevron and hides its body; collapse state is session-only, keyed by [title]. */
+ *  toggles a chevron and hides its body; collapse state is session-only, keyed by [title], and starts
+ *  from [defaultExpanded]. */
 @Composable
 fun ManagerSectionCard(
     title: String,
     description: String,
     collapsible: Boolean = false,
+    defaultExpanded: Boolean = true,
     content: @Composable () -> Unit,
 ) {
-    var expanded by rememberSaveable(title) { mutableStateOf(true) }
+    var expanded by rememberSaveable(title) { mutableStateOf(defaultExpanded) }
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f)) {
         Column(
             modifier = Modifier.padding(10.dp),

@@ -548,6 +548,7 @@ internal fun ExtensionPermissionsPage(
                         ext.type.name.lowercase(),
                     ).joinToString(" · "),
                     collapsible = true,
+                    defaultExpanded = false,
                 ) {
                     ExtensionSettingsControls(extensionId = ext.id)
                     if (ext.type == ExtensionType.Scm && ext.hasWebUi) {
