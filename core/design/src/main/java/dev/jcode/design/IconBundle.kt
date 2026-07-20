@@ -39,11 +39,13 @@ import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.FileOpen
 import androidx.compose.material.icons.rounded.FormatAlignLeft
+import androidx.compose.material.icons.rounded.FormatListNumbered
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.IntegrationInstructions
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.ManageSearch
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.MoreVert
@@ -84,10 +86,10 @@ enum class JCodeIcon {
     Continue, Rerun, StepInto, StepOver, StepOut,
     Output, Logs, Problems, Radar, Debug, Tasks, Chat, Cursor,
     Browser, DevTools, Image,
-    DropDown, ChevronDown, ChevronRight, ArrowUp, MenuToggle, Help,
+    DropDown, ChevronDown, ChevronUp, ChevronRight, ArrowUp, MenuToggle, Help,
     Copy, Cut, Delete, Open, Rename, SelectAll, Clear, Definition, References, Format,
     Preview, Pin, Palette, CommandPalette, ScreenRotation, Fullscreen, KeepAwake,
-    TextIncrease, TextDecrease,
+    TextIncrease, TextDecrease, GoToLine,
 }
 
 /**
@@ -167,6 +169,7 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.Cursor to Icons.Rounded.TextFields,
         JCodeIcon.DropDown to Icons.Rounded.ArrowDropDown,
         JCodeIcon.ChevronDown to Icons.Rounded.KeyboardArrowDown,
+        JCodeIcon.ChevronUp to Icons.Rounded.KeyboardArrowUp,
         JCodeIcon.ChevronRight to Icons.AutoMirrored.Rounded.KeyboardArrowRight,
         JCodeIcon.ArrowUp to Icons.Rounded.ArrowUpward,
         JCodeIcon.MenuToggle to Icons.AutoMirrored.Rounded.MenuOpen,
@@ -183,6 +186,7 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.Format to Icons.Rounded.FormatAlignLeft,
         JCodeIcon.Preview to Icons.Rounded.Visibility,
         JCodeIcon.Pin to Icons.Rounded.PushPin,
+        JCodeIcon.GoToLine to Icons.Rounded.FormatListNumbered,
     ),
 )
 

@@ -8,9 +8,21 @@ import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -20,9 +32,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -33,8 +47,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material3.ColorScheme
 import android.content.res.Configuration
 import dev.jcode.design.CompactContextMenu
+import dev.jcode.design.CompactSearchField
 import dev.jcode.design.ContextAction
 import dev.jcode.design.JCodeIcon
+import dev.jcode.design.jcIcon
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalMarkdownPreviewSetting
 import dev.jcode.findActivity
@@ -69,6 +85,7 @@ fun MarkdownPreviewPage(
     tab: EditorTab,
     dark: Boolean,
     languagePacks: List<InstalledExtension>,
+    mermaidScript: File? = null,
     modifier: Modifier = Modifier,
 ) {
     val state = tab.editorState ?: return
@@ -88,6 +105,15 @@ fun MarkdownPreviewPage(
     // The next long-press's own touch-down collapses the page selection before any query could run,
     // so the selection must be captured when it is MADE, not when the menu reopens.
     var selectedText by remember { mutableStateOf("") }
+    // Find-in-page (native WebView.findAllAsync) + Go-to-line, both from the long-press menu.
+    var findVisible by remember { mutableStateOf(false) }
+    var findQuery by remember { mutableStateOf("") }
+    var findMatches by remember { mutableStateOf(0) }
+    var findActive by remember { mutableStateOf(0) }
+    var goToLineVisible by remember { mutableStateOf(false) }
+    // Read the latest find state from the (non-recomposing) body-injection JS callback.
+    val findVisibleState = rememberUpdatedState(findVisible)
+    val findQueryState = rememberUpdatedState(findQuery)
 
     val palette = if (dark) TokenPalette.DARK else TokenPalette.LIGHT
     val packResolver = remember(languagePacks) {
@@ -111,7 +137,9 @@ fun MarkdownPreviewPage(
                 }
                 val body = runCatching { MarkdownHtml.render(text, palette, packResolver, budgetedImages) }
                     .getOrDefault("<pre>Preview unavailable.</pre>")
-                "document.getElementById('md').innerHTML = " + JSONObject.quote(body) + ";"
+                // The mermaid pass is a no-op stub unless the shell loaded the extension's engine.
+                "document.getElementById('md').innerHTML = " + JSONObject.quote(body) + ";" +
+                    "window.jcodeRenderMermaid&&window.jcodeRenderMermaid();"
             }
         }
     }
@@ -124,7 +152,16 @@ fun MarkdownPreviewPage(
         val js = latestBodyJs ?: return@LaunchedEffect
         if (!pageReady) return@LaunchedEffect
         val view = webView ?: return@LaunchedEffect
-        view.evaluateJavascript(js, null)
+        // Re-run the find AFTER the innerHTML swap completes (the JS callback), so an open find bar's
+        // highlights + counter refresh against the new DOM instead of going stale — this also covers
+        // the first body after a renderer-crash rebuild, where the initial findAllAsync hit an empty
+        // page. Keyed on findVisible/findQuery via rememberUpdatedState so the callback sees current
+        // values without re-running this effect.
+        view.evaluateJavascript(js) {
+            if (findVisibleState.value) {
+                if (findQueryState.value.isBlank()) view.clearMatches() else view.findAllAsync(findQueryState.value)
+            }
+        }
         if (restoredScroll) return@LaunchedEffect
         restoredScroll = true
         val (x, y) = PreviewScrollCache.load(tab.id) ?: return@LaunchedEffect
@@ -187,9 +224,17 @@ fun MarkdownPreviewPage(
         }
     }
 
+    // Re-run the native find as the query changes (debounced like the body re-render); blank clears.
+    LaunchedEffect(findQuery, webView) {
+        val view = webView ?: return@LaunchedEffect
+        delay(120)
+        if (findQuery.isBlank()) view.clearMatches() else view.findAllAsync(findQuery)
+    }
+
     DisposableEffect(tab.id) {
         onDispose {
             webView?.let { view ->
+                view.clearMatches()
                 PreviewScrollCache.save(tab.id, view.scrollX, view.scrollY)
                 view.destroy()
             }
@@ -207,6 +252,10 @@ fun MarkdownPreviewPage(
                     WebView(ctx).apply {
                         setBackgroundColor(backgroundArgb)
                         settings.javaScriptEnabled = true
+                        setFindListener { activeOrdinal, total, _ ->
+                            findActive = if (total == 0) 0 else activeOrdinal + 1
+                            findMatches = total
+                        }
                         webViewClient = object : WebViewClient() {
                             override fun onPageFinished(view: WebView, url: String) {
                                 view.evaluateJavascript(themeJsState.value, null)
@@ -256,11 +305,25 @@ fun MarkdownPreviewPage(
                             menuAt = downX to downY
                             true
                         }
-                        val shell = shellDocument(colorScheme, semantic)
-                        loadUrl(
-                            "data:text/html;charset=utf-8;base64," +
-                                Base64.encodeToString(shell.toByteArray(Charsets.UTF_8), Base64.NO_WRAP),
-                        )
+                        val shell = shellDocument(colorScheme, semantic, dark, mermaidScript != null)
+                        if (mermaidScript != null) {
+                            // A data: page may not load file:// subresources, so the shell loads
+                            // with the extension's www/ as its file base — the relative
+                            // <script src="./mermaid.min.js"> then resolves to the bundled engine.
+                            settings.allowFileAccess = true
+                            loadDataWithBaseURL(
+                                "file://${mermaidScript.parentFile?.absolutePath}/",
+                                shell,
+                                "text/html",
+                                "utf-8",
+                                null,
+                            )
+                        } else {
+                            loadUrl(
+                                "data:text/html;charset=utf-8;base64," +
+                                    Base64.encodeToString(shell.toByteArray(Charsets.UTF_8), Base64.NO_WRAP),
+                            )
+                        }
                         webView = this
                     }
                 },
@@ -283,12 +346,99 @@ fun MarkdownPreviewPage(
                                 selectedText = decodeJsString(res)
                             }
                         },
+                        ContextAction(JCodeIcon.Search, "Find text") { findVisible = true },
+                        ContextAction(JCodeIcon.GoToLine, "Go to line") { goToLineVisible = true },
                         menuExtras.previewToggle?.let { toggle ->
                             ContextAction(JCodeIcon.Code, "View Source Code") { toggle() }
                         },
                     ),
                 )
             }
+
+            if (findVisible) {
+                FindBar(
+                    query = findQuery,
+                    onQueryChange = { findQuery = it },
+                    active = findActive,
+                    total = findMatches,
+                    onPrev = { webView?.findNext(false) },
+                    onNext = { webView?.findNext(true) },
+                    onClose = {
+                        webView?.clearMatches()
+                        findQuery = ""
+                        findVisible = false
+                    },
+                    modifier = Modifier.align(Alignment.TopCenter),
+                )
+            }
+
+            if (goToLineVisible) {
+                dev.jcode.GoToLineDialog(
+                    lineCount = state.snapshot.value.lineCount,
+                    onDismiss = { goToLineVisible = false },
+                    onGo = { line, col ->
+                        // Same reveal path the palette command uses; flipping to source lets the
+                        // source EditorView consume the (replayed) reveal request when it mounts.
+                        state.requestReveal((line - 1).coerceAtLeast(0), (col - 1).coerceAtLeast(0))
+                        menuExtras.previewToggle?.invoke()
+                    },
+                )
+            }
+    }
+}
+
+/** Compact in-page find bar over the preview WebView: a search field, a live match counter, and
+ *  prev/next/close. Matches are driven natively via WebView.findAllAsync/findNext. */
+@Composable
+private fun FindBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    active: Int,
+    total: Int,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    BackHandler(enabled = true, onBack = onClose)
+    Surface(
+        modifier = modifier
+            .padding(8.dp)
+            .fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 3.dp,
+        shadowElevation = 4.dp,
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            CompactSearchField(
+                query = query,
+                onQueryChange = onQueryChange,
+                placeholder = "Find",
+                autoFocus = true,
+                onImeAction = onNext,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = if (query.isBlank()) "" else "$active/$total",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            IconButton(onClick = onPrev, enabled = total > 0, modifier = Modifier.size(32.dp)) {
+                Icon(jcIcon(JCodeIcon.ChevronUp), contentDescription = "Previous match")
+            }
+            IconButton(onClick = onNext, enabled = total > 0, modifier = Modifier.size(32.dp)) {
+                Icon(jcIcon(JCodeIcon.ChevronDown), contentDescription = "Next match")
+            }
+            IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                Icon(jcIcon(JCodeIcon.Close), contentDescription = "Close find")
+            }
+        }
     }
 }
 
@@ -361,13 +511,56 @@ private fun themeVars(colorScheme: ColorScheme, semantic: JCodeSemanticColors): 
     )
 }
 
-/** Empty themed shell; the rendered body is injected into `#md` once the page is ready. */
-private fun shellDocument(colorScheme: ColorScheme, semantic: JCodeSemanticColors): String {
+/** Empty themed shell; the rendered body is injected into `#md` once the page is ready. With
+ *  [withMermaid] the shell loads the Mermaid Preview extension's bundled engine (relative to the
+ *  page's file base) and defines the render pass that swaps `pre.mermaid-src` blocks for drawn
+ *  diagrams — cached by source hash so live typing only re-renders the fence being edited. */
+private fun shellDocument(
+    colorScheme: ColorScheme,
+    semantic: JCodeSemanticColors,
+    dark: Boolean,
+    withMermaid: Boolean,
+): String {
     val rootVars = themeVars(colorScheme, semantic).joinToString("") { (k, v) -> "$k:$v;" }
+    val mermaidTags = if (!withMermaid) "" else """
+<script src="./mermaid.min.js"></script>
+<script>
+(function(){
+if(!window.mermaid)return;
+mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:'${if (dark) "dark" else "default"}',
+fontFamily:'-apple-system,Roboto,sans-serif'});
+var cache={},seq=0;
+function h(s){var x=5381;for(var i=0;i<s.length;i++){x=((x<<5)+x+s.charCodeAt(i))|0;}
+return (x>>>0).toString(36)+':'+s.length;}
+window.jcodeRenderMermaid=function(){
+document.querySelectorAll('pre.mermaid-src:not([data-mmd])').forEach(function(pre){
+pre.setAttribute('data-mmd','1');
+var src=(pre.textContent||'').trim();
+if(!src)return;
+var key=h(src);
+var holder=document.createElement('div');
+holder.className='mmd-diagram';
+if(cache[key]){holder.innerHTML=cache[key];pre.replaceWith(holder);return;}
+var id='mmdjc'+(seq++);
+mermaid.render(id,src).then(function(r){
+cache[key]=r.svg;
+holder.innerHTML=r.svg;
+if(pre.parentNode)pre.replaceWith(holder);
+}).catch(function(e){
+var el=document.getElementById('d'+id);if(el)el.remove();
+if(pre.parentNode){pre.classList.add('mmd-err');pre.setAttribute('title',String(e&&e.message||e));}
+});
+});
+};
+})();
+</script>"""
     return """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 :root{$rootVars}
+.mmd-diagram{margin:.7em 0;overflow-x:auto}
+.mmd-diagram svg{max-width:100%;height:auto}
+pre.mermaid-src.mmd-err{border:1px solid var(--jcode-error)}
 html,body{margin:0;padding:0;background:var(--jcode-background);color:var(--jcode-on-surface);
 font-family:-apple-system,Roboto,'Segoe UI',sans-serif;font-size:14px;line-height:1.55;
 -webkit-text-size-adjust:100%;word-wrap:break-word}
@@ -392,7 +585,7 @@ th,td{border:1px solid var(--jcode-outline-variant);padding:5px 10px}
 th{background:var(--jcode-surface-variant)}
 img{max-width:100%;border-radius:4px}
 input[type=checkbox]{vertical-align:middle;margin-right:4px}
-</style></head><body><div id="md"></div></body></html>"""
+</style>$mermaidTags</head><body><div id="md"></div></body></html>"""
 }
 
 /** Inline a local (relative or absolute) image referenced by the Markdown as a data: URI, so it

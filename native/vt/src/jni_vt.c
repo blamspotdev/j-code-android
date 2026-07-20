@@ -79,8 +79,19 @@ Java_dev_jcode_core_term_VtParser_nativeDrainOsc(JNIEnv* env, jclass clazz, jlon
         return NULL;
     }
 
-    // One scratch buffer reused for every event: "<code>;" prefix + payload.
-    jchar* chars = (jchar*)malloc((VT_OSC_BUFFER_CAP + 16) * sizeof(jchar));
+    // One scratch buffer reused for every event, sized to the largest payload — the OSC
+    // accumulator grows past VT_OSC_BUFFER_CAP now (clipboard writes), so a fixed size would
+    // truncate what the parser preserved.
+    size_t scratch = 64;
+    for (int idx = 0; idx < count; idx++) {
+        int code = 0;
+        const char* payload = "";
+        if (vt_parser_osc_event_at(parser, idx, &code, &payload)) {
+            size_t need = strlen(payload) + 16;
+            if (need > scratch) scratch = need;
+        }
+    }
+    jchar* chars = (jchar*)malloc(scratch * sizeof(jchar));
     if (!chars) {
         vt_parser_osc_clear(parser);
         return NULL;
@@ -95,7 +106,7 @@ Java_dev_jcode_core_term_VtParser_nativeDrainOsc(JNIEnv* env, jclass clazz, jlon
         if (n > (int)sizeof(prefix) - 1) n = (int)sizeof(prefix) - 1;
         int total = 0;
         for (int k = 0; k < n; k++) chars[total++] = (jchar)prefix[k];
-        for (const char* p = payload; *p && total < VT_OSC_BUFFER_CAP + 16; p++) {
+        for (const char* p = payload; *p && total < (int)scratch; p++) {
             chars[total++] = (jchar)(uint8_t)*p;
         }
         jstring s = (*env)->NewString(env, chars, total);
@@ -106,6 +117,30 @@ Java_dev_jcode_core_term_VtParser_nativeDrainOsc(JNIEnv* env, jclass clazz, jlon
     free(chars);
     vt_parser_osc_clear(parser);
     return result;
+}
+
+// Drains the pending answerback bytes (DA/DSR/CPR/DECRQM/OSC-color replies) queued during feed.
+// Returns NULL when nothing is pending — the common case. The reader loop writes the returned
+// bytes straight to the PTY, completing the query round-trip terminal programs expect.
+JNIEXPORT jbyteArray JNICALL
+Java_dev_jcode_core_term_VtParser_nativeTakeResponses(JNIEnv* env, jclass clazz, jlong handle) {
+    (void)clazz;
+    VtParser* parser = (VtParser*)handle;
+    if (!parser || parser->response_len == 0) return NULL;
+    uint8_t buf[VT_RESPONSE_CAP];
+    int n = vt_parser_take_responses(parser, buf, (int)sizeof(buf));
+    if (n <= 0) return NULL;
+    jbyteArray out = (*env)->NewByteArray(env, n);
+    if (!out) return NULL;
+    (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte*)buf);
+    return out;
+}
+
+// Packed VT_MODE_* snapshot of the input-affecting DEC private modes (see vt_parser.h / VtParser.kt).
+JNIEXPORT jint JNICALL
+Java_dev_jcode_core_term_VtParser_nativeGetInputModes(JNIEnv* env, jclass clazz, jlong handle) {
+    (void)env; (void)clazz;
+    return vt_parser_input_modes((VtParser*)handle);
 }
 
 JNIEXPORT void JNICALL
@@ -190,10 +225,19 @@ Java_dev_jcode_core_term_VtParser_nativeReadRow(JNIEnv* env, jclass clazz, jlong
     if (cols * 4 > capacity) cols = capacity / 4;
     if (cols <= 0) return 0;
 
+    // Resolve the row base once — the per-cell vt_parser_cell_at re-ran the live/scrollback
+    // resolution (bounds checks + ring modulo) for every one of the ~5k cells packed per frame.
+    const VtCell* base = vt_parser_row_ptr(parser, row);
+    int avail = 0;
+    if (base) {
+        avail = vt_parser_row_cols(parser, row);
+        if (avail > cols) avail = cols;
+    }
+
     jint* buf = (*env)->GetIntArrayElements(env, out, NULL);
     if (!buf) return 0;
     for (int col = 0; col < cols; col++) {
-        const VtCell* cell = vt_parser_cell_at(parser, row, col);
+        const VtCell* cell = col < avail ? base + col : NULL;
         jint* dst = buf + col * 4;
         if (!cell) {
             dst[0] = ' ';
@@ -215,35 +259,74 @@ Java_dev_jcode_core_term_VtParser_nativeReadRow(JNIEnv* env, jclass clazz, jlong
     return cols;
 }
 
+// Packs `rowCount` whole rows starting at logical `topRow` (negative = scrollback) in ONE JNI
+// crossing — the renderer previously paid one nativeReadRow crossing per visible row per frame.
+// Same 4-int cell encoding as nativeReadRow; out-of-range rows pack as blanks. Returns the number
+// of rows packed. Critical section: no JNI calls may happen inside (see nativeFeed).
+JNIEXPORT jint JNICALL
+Java_dev_jcode_core_term_VtParser_nativeReadScreen(JNIEnv* env, jclass clazz, jlong handle, jint topRow, jint rowCount, jintArray out) {
+    (void)clazz;
+    VtParser* parser = (VtParser*)handle;
+    if (!parser || !out || rowCount <= 0) return 0;
+    const VtScreen* screen = vt_parser_get_screen(parser);
+    if (!screen || screen->cols <= 0) return 0;
+
+    int cols = screen->cols;
+    jsize capacity = (*env)->GetArrayLength(env, out);
+    // 64-bit product: a huge rowCount would overflow jint, bypass this clamp, and run the pack
+    // loop off the end of the array inside the critical section.
+    if ((jlong)rowCount * cols * 4 > (jlong)capacity) rowCount = (jint)(capacity / ((jlong)cols * 4));
+    if (rowCount <= 0) return 0;
+
+    jint* buf = (*env)->GetPrimitiveArrayCritical(env, out, NULL);
+    if (!buf) return 0;
+    for (int r = 0; r < rowCount; r++) {
+        int row = topRow + r;
+        const VtCell* base = vt_parser_row_ptr(parser, row);
+        int avail = 0;
+        if (base) {
+            avail = vt_parser_row_cols(parser, row);
+            if (avail > cols) avail = cols;
+        }
+        jint* dst = buf + (size_t)r * cols * 4;
+        for (int col = 0; col < cols; col++) {
+            jint* cell_out = dst + col * 4;
+            if (col >= avail) {
+                cell_out[0] = ' ';
+                cell_out[1] = -1;
+                cell_out[2] = -1;
+                cell_out[3] = 0;
+                continue;
+            }
+            const VtCell* cell = base + col;
+            cell_out[0] = (jint)cell->ch;
+            cell_out[1] = cell->fg.mode == 1 ? cell->fg.index
+                        : cell->fg.mode == 2 ? ((cell->fg.r << 16) | (cell->fg.g << 8) | cell->fg.b)
+                        : -1;
+            cell_out[2] = cell->bg.mode == 1 ? cell->bg.index
+                        : cell->bg.mode == 2 ? ((cell->bg.r << 16) | (cell->bg.g << 8) | cell->bg.b)
+                        : -1;
+            cell_out[3] = (cell->fg.mode & 0x3) | ((cell->bg.mode & 0x3) << 2) | ((jint)cell->attrs << 4);
+        }
+    }
+    (*env)->ReleasePrimitiveArrayCritical(env, out, buf, 0);
+    return rowCount;
+}
+
 JNIEXPORT jint JNICALL
 Java_dev_jcode_core_term_VtParser_nativeGetScrollbackSize(JNIEnv* env, jclass clazz, jlong handle) {
     (void)env; (void)clazz;
     return vt_parser_scrollback_count((VtParser*)handle);
 }
 
-JNIEXPORT void JNICALL
-Java_dev_jcode_core_term_VtParser_nativeClearDirty(JNIEnv* env, jobject thiz) {
-    VtParser* parser = get_parser(env, thiz);
-    if (parser) {
-        vt_parser_clear_dirty(parser);
-    }
-}
-
-JNIEXPORT jboolean JNICALL
-Java_dev_jcode_core_term_VtParser_nativeIsRowDirty(JNIEnv* env, jobject thiz, jint row) {
-    VtParser* parser = get_parser(env, thiz);
-    if (!parser || !parser->dirty_rows) return JNI_FALSE;
-    const VtScreen* screen = vt_parser_get_screen(parser);
-    if (!screen) return JNI_FALSE;
-    
-    if (row < 0 || row >= screen->rows) return JNI_FALSE;
-    return parser->dirty_rows[row] ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_dev_jcode_core_term_VtParser_nativeNeedsFullRefresh(JNIEnv* env, jobject thiz) {
-    VtParser* parser = get_parser(env, thiz);
-    return parser && parser->full_refresh ? JNI_TRUE : JNI_FALSE;
+// Monotonic count of lines ever pushed into scrollback — unlike scrollback size, it keeps growing
+// once the ring is full, so a scrolled-back view can tell "content shifted under me" from "nothing
+// I can see changed" (the render-skip + anchor logic in TerminalView.onUpdate).
+JNIEXPORT jlong JNICALL
+Java_dev_jcode_core_term_VtParser_nativeGetScrollbackPushed(JNIEnv* env, jclass clazz, jlong handle) {
+    (void)env; (void)clazz;
+    const VtParser* parser = (const VtParser*)handle;
+    return parser ? (jlong)parser->scrollback_pushed : 0;
 }
 
 JNIEXPORT jint JNICALL

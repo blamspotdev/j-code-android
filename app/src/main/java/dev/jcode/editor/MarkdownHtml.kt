@@ -53,9 +53,18 @@ object MarkdownHtml {
                         code.append(lines[j]).append('\n')
                         j++
                     }
-                    out.append("<pre><code>")
-                        .append(coloredCode(code.toString(), info, ctx))
-                        .append("</code></pre>")
+                    if (info.trim().lowercase() == "mermaid") {
+                        // Mermaid fence: emit the ESCAPED source in a marked block. When the
+                        // Mermaid Preview extension is installed the shell's render pass swaps it
+                        // for the drawn diagram; otherwise it stays a plain code block.
+                        out.append("<pre class=\"mermaid-src\"><code>")
+                            .append(escStr(code.toString()))
+                            .append("</code></pre>")
+                    } else {
+                        out.append("<pre><code>")
+                            .append(coloredCode(code.toString(), info, ctx))
+                            .append("</code></pre>")
+                    }
                     i = if (j < lines.size) j + 1 else j
                 }
 

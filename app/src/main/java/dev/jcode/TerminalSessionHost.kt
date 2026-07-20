@@ -108,6 +108,17 @@ object TerminalSessionHost {
                 mgr.onOutput = { sessionId, data, length ->
                     OutputLog.appendRaw(sessionId, data, length)
                 }
+                // A guest OSC 52 clipboard write (Claude Code's copy-on-select, tmux `set-clipboard`)
+                // fires off the reader thread; the Android clipboard requires the main thread.
+                mgr.onClipboardWrite = { text ->
+                    mainHandler.post {
+                        runCatching {
+                            val cm = context.applicationContext
+                                .getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            cm.setPrimaryClip(android.content.ClipData.newPlainText("Terminal", text))
+                        }
+                    }
+                }
             }
         }
     }

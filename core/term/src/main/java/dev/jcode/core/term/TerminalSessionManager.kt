@@ -49,6 +49,11 @@ class TerminalSessionManager(
         /** Invoked off the main thread after new output is parsed, so a bound view can repaint. */
         @Volatile var onUpdate: (() -> Unit)? = null
 
+        /** The parser's packed [VtParser] mode snapshot, published by the reader after each feed.
+         *  The UI thread reads THIS instead of calling into the native parser, so it always sees a
+         *  mutually-consistent modes + alt-screen pair and never races feed or close. */
+        @Volatile var inputModesSnapshot: Int = 0
+
         /** Resize both the PTY and the parser together (parser realloc is synchronized against the
          *  reader's feed). Safe to call from the UI thread. */
         fun resize(newCols: Int, newRows: Int) {
@@ -99,6 +104,11 @@ class TerminalSessionManager(
      *  via OSC 7713. The payload is `<token>;<exitCode>` — see the Setup-terminal task runner. */
     @Volatile
     var onTaskComplete: ((String, String) -> Unit)? = null
+
+    /** Invoked (off the reader thread) with decoded text when a guest program writes the clipboard
+     *  via OSC 52 (e.g. Claude Code's copy-on-select), so the host can set the Android clipboard. */
+    @Volatile
+    var onClipboardWrite: ((String) -> Unit)? = null
 
     @Volatile
     var activeSessionId: String? = null
@@ -257,8 +267,21 @@ class TerminalSessionManager(
         session.readerJob = readerScope.launch {
             val buffer = ByteArray(8192)
             var exited = false
+            // Epoch millis when an open ?2026 synchronized update started suppressing repaints, or 0.
+            var syncSince = 0L
             val oscHandler: (Int, String) -> Unit = { code, payload ->
                 when (code) {
+                    52 -> {
+                        // OSC 52 clipboard write: "c;<base64>". "?" is a clipboard READ query —
+                        // never answered (the guest must not see the user's clipboard uninvited).
+                        val data = payload.substringAfter(';', "")
+                        if (data.isNotEmpty() && data != "?") {
+                            runCatching {
+                                val text = String(android.util.Base64.decode(data, android.util.Base64.DEFAULT), Charsets.UTF_8)
+                                if (text.isNotEmpty()) onClipboardWrite?.invoke(text)
+                            }
+                        }
+                    }
                     7711 -> onOpenFileRequest?.invoke(payload.trim())
                     7712 -> {
                         val title = payload.trim()
@@ -280,21 +303,61 @@ class TerminalSessionManager(
                     n > 0 -> {
                         session.lastActivityAt = System.currentTimeMillis()
                         // Feed straight from the reused read buffer (the native feed is length-aware,
-                        // so no per-chunk copy), then collect the shell-integration OSC events the
-                        // parser queued from this chunk and dispatch them outside the lock.
-                        val oscEvents = synchronized(session) {
+                        // so no per-chunk copy), then collect the shell-integration OSC events, the
+                        // query replies, and the mode snapshot the parser holds after this chunk —
+                        // all under the session lock, which closeSession also takes before closing
+                        // the parser, so none of these calls can race a close. Dispatch happens
+                        // outside the lock; replies (DA/DSR/CPR/DECRQM) go straight back to the PTY.
+                        val parsed = synchronized(session) {
+                            if (!session.parser.isOpen) return@synchronized null
                             session.parser.feed(buffer, n)
-                            session.parser.drainOsc()
-                        }
+                            val oscEvents = session.parser.drainOsc()
+                            val replies = session.parser.takeResponses()
+                            val modes = session.parser.inputModes()
+                            session.inputModesSnapshot = modes
+                            Triple(oscEvents, replies, modes)
+                        } ?: break
+                        val (oscEvents, replies, modes) = parsed
+                        replies?.let { runCatching { session.pty.write(it) } }
                         oscEvents.forEach { (code, payload) -> oscHandler(code, payload) }
                         onOutput?.invoke(session.id, buffer, n)
-                        session.onUpdate?.invoke()
+                        // ?2026 synchronized output: hold repaints while an update is open so a
+                        // TUI's multi-write frame lands atomically — but never longer than 100ms
+                        // (the idle branch below enforces the deadline even when no further output
+                        // arrives). A chunk that both opens and closes the update (the common
+                        // case) suppresses nothing.
+                        val syncOpen = (modes and VtParser.MODE_SYNC_OUTPUT) != 0
+                        val now = System.currentTimeMillis()
+                        if (!syncOpen) {
+                            syncSince = 0L
+                            session.onUpdate?.invoke()
+                        } else if (syncSince == 0L) {
+                            syncSince = now
+                        } else if (now - syncSince >= 100) {
+                            syncSince = now
+                            session.onUpdate?.invoke()
+                        }
                     }
                     n < 0 -> { exited = true; break }   // EOF: the shell/process exited
                     // No data yet: park in the kernel until output arrives (readerScope is
                     // Dispatchers.IO, so blocking is fine). The 1s timeout bounds how long a
                     // cancelled/closed session's reader can linger before it re-checks isActive.
-                    else -> session.pty.awaitReadable(1000)
+                    // With a ?2026 update still open, park only until the 100ms deadline and then
+                    // force the suppressed frame out — a lost 2026l (killed TUI) must not leave
+                    // the screen frozen on pre-update content.
+                    else -> {
+                        if (syncSince != 0L) {
+                            val remaining = 100 - (System.currentTimeMillis() - syncSince)
+                            if (remaining <= 0) {
+                                syncSince = 0L
+                                session.onUpdate?.invoke()
+                            } else {
+                                session.pty.awaitReadable(remaining.toInt())
+                            }
+                        } else {
+                            session.pty.awaitReadable(1000)
+                        }
+                    }
                 }
             }
             // Reap a session that ended on its own (EOF) so its PTY fd + parser are freed and the
@@ -320,14 +383,22 @@ class TerminalSessionManager(
     }
 
     /**
-     * Close a terminal session, killing the PTY process and its reader.
+     * Close a terminal session, killing the PTY process and its reader. The parser closes under
+     * the session lock (mutually exclusive with the reader's feed/drain block), and the PTY only
+     * closes once the reader coroutine has actually finished — cancellation is cooperative, so an
+     * in-flight iteration may still read/write the PTY for up to its poll timeout.
      */
     fun closeSession(id: String) {
-        val session = synchronized(sessionsLock) { _sessions.remove(id) }
-        session?.readerJob?.cancel()
-        session?.onUpdate = null
-        session?.parser?.close()
-        session?.pty?.close()
+        val session = synchronized(sessionsLock) { _sessions.remove(id) } ?: return
+        val readerJob = session.readerJob
+        readerJob?.cancel()
+        session.onUpdate = null
+        synchronized(session) { session.parser.close() }
+        if (readerJob != null) {
+            readerJob.invokeOnCompletion { runCatching { session.pty.close() } }
+        } else {
+            session.pty.close()
+        }
         if (activeSessionId == id) {
             activeSessionId = synchronized(sessionsLock) { _sessions.keys.firstOrNull() }
         }
@@ -409,11 +480,16 @@ class TerminalSessionManager(
             _sessions.clear()
             copy
         }
-        all.forEach {
-            it.readerJob?.cancel()
-            it.onUpdate = null
-            it.parser.close()
-            it.pty.close()
+        all.forEach { session ->
+            val readerJob = session.readerJob
+            readerJob?.cancel()
+            session.onUpdate = null
+            synchronized(session) { session.parser.close() }
+            if (readerJob != null) {
+                readerJob.invokeOnCompletion { runCatching { session.pty.close() } }
+            } else {
+                session.pty.close()
+            }
         }
         activeSessionId = null
     }

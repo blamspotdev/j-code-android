@@ -100,7 +100,10 @@ class TerminalView @JvmOverloads constructor(
     // Scrollback view state
     private var scrollOffset = 0        // lines scrolled up from the live bottom (0 = follow output)
     private var scrollAccumY = 0f       // sub-cell scroll accumulator for smooth panning
-    private var lastScrollbackSize = 0  // keeps the scrolled-up view stable as history grows
+    // Keeps the scrolled-up view stable as history grows: the parser's monotonic pushed-line count
+    // (NOT scrollback size, which stops growing once the ring is full — anchoring on size made a
+    // scrolled-back view drift once 2000 lines of history had accumulated).
+    private var lastScrollbackPushed = 0L
 
     // Gesture detector: long-press selection, vertical pan to scroll history, tap to focus.
     private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
@@ -124,7 +127,7 @@ class TerminalView @JvmOverloads constructor(
             val lines = (scrollAccumY / cellHeight).toInt()
             if (lines != 0) {
                 scrollAccumY -= lines * cellHeight
-                setScrollOffset(scrollOffset + lines)
+                dispatchScroll(lines, e2.x, e2.y, gesture = true)
             }
             return true
         }
@@ -136,9 +139,14 @@ class TerminalView @JvmOverloads constructor(
 
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
             // With a selection active, a tap elsewhere dismisses it (and must not also open a
-            // link). Otherwise a confirmed single tap opens a link/path under the finger.
+            // link). With mouse tracking on, the tap belongs to the TUI (Claude Code's fullscreen
+            // menus, htop's columns) as a click, not to the token-open shortcut. Otherwise a
+            // confirmed single tap opens a link/path under the finger.
+            val modes = currentInputModes()
             if (isSelecting) {
                 clearSelection()
+            } else if (VtParser.modeMouseMode(modes) != VtParser.MOUSE_OFF && appConsumesMouse(modes)) {
+                sendMouseClick(e.x, e.y)
             } else {
                 handleTokenTap(e.x, e.y)
             }
@@ -206,36 +214,39 @@ class TerminalView @JvmOverloads constructor(
     // Reused per background/selection run so a row of same-colored cells is one drawRect.
     private val runBgPaint = Paint().apply { style = Paint.Style.FILL }
 
-    // 256-color palette (standard xterm colors)
+    // 256-color palette (standard xterm colors). The 0-15 values and cube levels match xterm's
+    // defaults — the previous fully-saturated Android constants made colors 4/12 and 7/15
+    // identical, losing the normal-vs-bright distinction TUIs rely on.
     private val colorPalette = IntArray(256).apply {
         // Standard colors (0-7)
-        this[0] = Color.BLACK
-        this[1] = Color.RED
-        this[2] = Color.GREEN
-        this[3] = Color.YELLOW
-        this[4] = Color.BLUE
-        this[5] = Color.MAGENTA
-        this[6] = Color.CYAN
-        this[7] = Color.WHITE
-        
+        this[0] = Color.rgb(0, 0, 0)
+        this[1] = Color.rgb(205, 0, 0)
+        this[2] = Color.rgb(0, 205, 0)
+        this[3] = Color.rgb(205, 205, 0)
+        this[4] = Color.rgb(0, 0, 238)
+        this[5] = Color.rgb(205, 0, 205)
+        this[6] = Color.rgb(0, 205, 205)
+        this[7] = Color.rgb(229, 229, 229)
+
         // Bright colors (8-15)
-        this[8] = Color.rgb(128, 128, 128)
+        this[8] = Color.rgb(127, 127, 127)
         this[9] = Color.rgb(255, 0, 0)
         this[10] = Color.rgb(0, 255, 0)
         this[11] = Color.rgb(255, 255, 0)
-        this[12] = Color.rgb(0, 0, 255)
+        this[12] = Color.rgb(92, 92, 255)
         this[13] = Color.rgb(255, 0, 255)
         this[14] = Color.rgb(0, 255, 255)
-        this[15] = Color.WHITE
-        
-        // 216 color cube (16-231)
+        this[15] = Color.rgb(255, 255, 255)
+
+        // 216 color cube (16-231): xterm levels 0/95/135/175/215/255, not a linear ramp.
+        val levels = intArrayOf(0, 95, 135, 175, 215, 255)
         for (i in 0 until 216) {
-            val r = (i / 36) % 6
-            val g = (i / 6) % 6
-            val b = i % 6
-            this[16 + i] = Color.rgb(r * 51, g * 51, b * 51)
+            val r = levels[(i / 36) % 6]
+            val g = levels[(i / 6) % 6]
+            val b = levels[i % 6]
+            this[16 + i] = Color.rgb(r, g, b)
         }
-        
+
         // Grayscale (232-255)
         for (i in 0 until 24) {
             val gray = 8 + i * 10
@@ -255,6 +266,16 @@ class TerminalView @JvmOverloads constructor(
         val needed = parser.cols * VtParser.CELL_STRIDE
         if (rowBuf.size < needed) rowBuf = IntArray(needed)
         return rowBuf
+    }
+
+    // Reused whole-grid buffer for VtParser.readScreen (main-thread only): one JNI call per
+    // re-recorded frame instead of one per visible row.
+    private var screenBuf = IntArray(0)
+
+    private fun screenBufFor(rowCount: Int, cols: Int): IntArray {
+        val needed = rowCount * cols * VtParser.CELL_STRIDE
+        if (screenBuf.size < needed) screenBuf = IntArray(needed)
+        return screenBuf
     }
 
     // Reused buffer for a batched glyph run: consecutive same-colour/same-attr ASCII cells are drawn
@@ -332,6 +353,8 @@ class TerminalView @JvmOverloads constructor(
             }
             val gestureHandled = gestureDetector.onTouchEvent(event)
             if (event.action == MotionEvent.ACTION_DOWN) {
+                // Fresh gesture: leftover wheel-travel fractions must not bleed into this drag.
+                wheelAccum = 0
                 // Claim the gesture: a touch starting in the terminal belongs to it (scroll / text
                 // selection), so the nav drawer's swipe-to-open can't steal a drag and pop the drawer.
                 v.parent?.requestDisallowInterceptTouchEvent(true)
@@ -498,12 +521,27 @@ class TerminalView @JvmOverloads constructor(
             val isImage = type?.startsWith("image/") == true || clip.description?.hasMimeType("image/*") == true
             if (isImage) {
                 val guestPath = onPasteImage?.invoke(uri)
-                if (guestPath != null) sendInput(shellQuote(guestPath) + " ") else toast("Couldn't paste image")
+                if (guestPath != null) sendPaste(shellQuote(guestPath) + " ") else toast("Couldn't paste image")
                 return
             }
         }
         val text = item.coerceToText(context)?.toString()
-        if (!text.isNullOrEmpty()) sendInput(text)
+        if (!text.isNullOrEmpty()) sendPaste(text)
+    }
+
+    /** Write pasted text to the PTY the way xterm does: newlines become CR, and when the app
+     *  requested bracketed paste (?2004) the text is wrapped in ESC[200~ / ESC[201~ so multi-line
+     *  pastes don't execute line-by-line (shells) or get misread as typed keys (TUIs). Any end
+     *  marker embedded in the pasted text is stripped — it would terminate the bracket early and
+     *  let the remainder run as keyboard input. */
+    private fun sendPaste(text: String) {
+        val normalized = text.replace("\r\n", "\r").replace("\n", "\r")
+        val modes = currentInputModes()
+        if ((modes and VtParser.MODE_BRACKETED_PASTE) != 0) {
+            sendInput("\u001B[200~" + normalized.replace("\u001B[201~", "") + "\u001B[201~")
+        } else {
+            sendInput(normalized)
+        }
     }
 
     /** Single-quote a path for the shell so any spaces or specials in it are treated literally. */
@@ -606,7 +644,7 @@ class TerminalView @JvmOverloads constructor(
         scrollOffset = 0
         scrollAccumY = 0f
         isSelecting = false
-        lastScrollbackSize = session.parser.scrollbackSize
+        lastScrollbackPushed = session.parser.scrollbackPushed
         gridDirty = true  // new session's content must be re-recorded, not the previous grid replayed
         // Repaint whenever the session parses new output. Called off the main thread by the session
         // reader, so hop to main; only the visible session repaints, and a scrolled-back view stays
@@ -618,17 +656,51 @@ class TerminalView @JvmOverloads constructor(
                 postOnAnimation {
                     repaintPending.set(false)
                     if (boundSession === session && session.parser.isOpen) {
-                        val sb = session.parser.scrollbackSize
-                        if (scrollOffset > 0 && sb > lastScrollbackSize) {
-                            scrollOffset = (scrollOffset + (sb - lastScrollbackSize)).coerceAtMost(sb)
+                        // Size + pushed must be one consistent pair: the reader mutates both under
+                        // the session lock during feed, and a torn read near the top of history
+                        // would mis-anchor the view by the missed lines.
+                        val state = synchronized(session) {
+                            if (session.parser.isOpen) {
+                                session.parser.scrollbackSize to session.parser.scrollbackPushed
+                            } else null
                         }
-                        lastScrollbackSize = sb
-                        // New output shifts rows under a persistent selection — drop it (the
-                        // terminal's equivalent of the editor's text-change dismissal) rather
-                        // than highlight the wrong cells.
-                        clearSelection()
-                        invalidateGrid()
-                        resetBlink()
+                        if (state != null) {
+                            val (sb, pushed) = state
+                            val pushedDelta = (pushed - lastScrollbackPushed).coerceAtLeast(0L)
+                            lastScrollbackPushed = pushed
+                            val offsetBefore = scrollOffset
+                            var anchorClamped = false
+                            if (scrollOffset > 0 && pushedDelta > 0) {
+                                // Long math: a session streaming for hours in the background can
+                                // accumulate a delta that overflows Int and would wrap the offset
+                                // negative (blank screen).
+                                val want = scrollOffset.toLong() + pushedDelta
+                                scrollOffset = want.coerceAtMost(sb.toLong()).toInt()
+                                anchorClamped = scrollOffset.toLong() != want
+                            }
+                            if (scrollOffset > sb) {
+                                // Scrollback can SHRINK (ED 3 / reset) — an offset past the new
+                                // end would render blank rows.
+                                scrollOffset = sb
+                                anchorClamped = true
+                            }
+                            // While the viewport sat entirely inside scrollback (append-only) both
+                            // BEFORE and after the shift — the cached frame may contain live rows
+                            // otherwise — and the anchor absorbed the shift without clamping,
+                            // streaming output below changes no visible pixels: skip the full grid
+                            // re-record that made reading history during a build/claude stream
+                            // cost a frame of work per output chunk. The cursor is hidden while
+                            // scrolled back, so blink state needs no reset either.
+                            if (!isSelecting && !anchorClamped && offsetBefore >= rows) {
+                                return@postOnAnimation
+                            }
+                            // New output shifts rows under a persistent selection — drop it (the
+                            // terminal's equivalent of the editor's text-change dismissal) rather
+                            // than highlight the wrong cells.
+                            clearSelection()
+                            invalidateGrid()
+                            resetBlink()
+                        }
                     }
                 }
             }
@@ -724,10 +796,108 @@ class TerminalView @JvmOverloads constructor(
         }
     }
 
-    /** Scroll the scrollback by [delta] lines (positive = up into history, negative = toward the live
-     *  bottom). Drives external scroll bindings (e.g. volume keys). */
+    /** The reader-published DEC-mode snapshot of the bound session (0 when unbound). Reading the
+     *  snapshot instead of the native parser keeps modes + alt-screen mutually consistent and
+     *  never races the reader's feed or a session close. */
+    private fun currentInputModes(): Int = boundSession?.inputModesSnapshot ?: 0
+
+    /** A latched mouse mode (TUI killed without resetting) must not swallow taps/scrolls at the
+     *  shell prompt: only route mouse reports while a program is plausibly consuming them — on
+     *  the alternate screen, or with a foreground program reported via shell integration. */
+    private fun appConsumesMouse(modes: Int): Boolean =
+        (modes and VtParser.MODE_ALT_SCREEN) != 0 || boundSession?.foreground != null
+
+    // Touch travel accumulated toward the next wheel event (reset per gesture): TUIs scroll
+    // several rows per wheel notch (htop: 10), so one event per cell of finger travel reads as
+    // wildly amplified. One event per 3 cells tracks content roughly 1:1.
+    private var wheelAccum = 0
+    private val wheelCellsPerEvent = 3
+
+    /**
+     * Route a scroll of [lines] (positive = toward earlier content) the way a desktop terminal
+     * routes its wheel: to the application as wheel events when it enabled mouse tracking (Claude
+     * Code's fullscreen TUI, htop), as arrow keys on the alternate screen under ?1007
+     * alternate-scroll (default on — vim/less), and into local scrollback otherwise. [x]/[y]
+     * locate the pointer for the wheel report; [gesture] rate-divides touch travel.
+     */
+    private fun dispatchScroll(lines: Int, x: Float, y: Float, gesture: Boolean = false) {
+        val modes = currentInputModes()
+        val onAltScreen = (modes and VtParser.MODE_ALT_SCREEN) != 0
+        // ?9 (X10) tracking reports presses only — wheel events don't exist there.
+        val wheelToApp = VtParser.modeMouseMode(modes) >= VtParser.MOUSE_NORMAL && appConsumesMouse(modes)
+        val steps = min(kotlin.math.abs(lines), rows.coerceAtLeast(1))
+        when {
+            wheelToApp -> {
+                var events = lines
+                if (gesture) {
+                    wheelAccum += lines
+                    events = wheelAccum / wheelCellsPerEvent
+                    wheelAccum -= events * wheelCellsPerEvent
+                }
+                if (events != 0) {
+                    val button = if (events > 0) 64 else 65
+                    repeat(min(kotlin.math.abs(events), rows.coerceAtLeast(1))) {
+                        sendMouseEvent(button, x, y, press = true, modes = modes)
+                    }
+                }
+            }
+            onAltScreen && (modes and VtParser.MODE_ALT_SCROLL) != 0 -> {
+                val app = (modes and VtParser.MODE_APP_CURSOR_KEYS) != 0
+                val seq = when {
+                    lines > 0 -> if (app) "\u001BOA" else "\u001B[A"
+                    else -> if (app) "\u001BOB" else "\u001B[B"
+                }
+                sendInput(seq.repeat(steps))
+            }
+            else -> setScrollOffset(scrollOffset + lines)
+        }
+    }
+
+    /** Report a tap as a mouse press (+ release when the tracking level includes releases). */
+    private fun sendMouseClick(x: Float, y: Float) {
+        val modes = currentInputModes()
+        sendMouseEvent(button = 0, x = x, y = y, press = true, modes = modes)
+        if (VtParser.modeMouseMode(modes) >= VtParser.MOUSE_NORMAL) {
+            sendMouseEvent(button = 0, x = x, y = y, press = false, modes = modes)
+        }
+    }
+
+    /** Write a synthetic terminal report (mouse/focus) to the PTY without [sendInput]'s keystroke
+     *  side effects — a report must never snap a scrolled-back view to the live bottom. */
+    private fun sendReport(text: String) {
+        pty?.takeIf { it.isOpen }?.write(text)
+    }
+
+    private fun sendReport(data: ByteArray) {
+        pty?.takeIf { it.isOpen }?.write(data)
+    }
+
+    /** Encode one mouse event at view position ([x], [y]) in the negotiated encoding. Wheel
+     *  events (buttons 64/65) are press-only. */
+    private fun sendMouseEvent(button: Int, x: Float, y: Float, press: Boolean, modes: Int) {
+        if (cellWidth <= 0f || cellHeight <= 0f) return
+        val col = ((x / cellWidth).toInt() + 1).coerceIn(1, cols)
+        val row = ((y / cellHeight).toInt() + 1).coerceIn(1, rows)
+        when (VtParser.modeMouseEncoding(modes)) {
+            VtParser.MOUSE_ENC_SGR ->
+                sendReport("\u001B[<$button;$col;$row${if (press) 'M' else 'm'}")
+            VtParser.MOUSE_ENC_URXVT ->
+                sendReport("\u001B[${(if (press) button else 3) + 32};$col;${row}M")
+            else -> {
+                // Legacy X10 bytes (also the ?1005 fallback): 32+button / 32+coord, undefined past
+                // coordinate 223 — such events are dropped, matching Termux.
+                if (col > 223 || row > 223) return
+                val b = (if (press) button else 3) + 32
+                sendReport(byteArrayOf(0x1B, '['.code.toByte(), 'M'.code.toByte(), b.toByte(), (32 + col).toByte(), (32 + row).toByte()))
+            }
+        }
+    }
+
+    /** Scroll by [delta] lines (positive = up into history, negative = toward the live bottom).
+     *  Drives external scroll bindings (e.g. volume keys); routed like a touch scroll, so a TUI
+     *  with mouse tracking sees wheel events at the screen center. */
     fun scrollByLines(delta: Int) {
-        setScrollOffset(scrollOffset + delta)
+        dispatchScroll(delta, width / 2f, height / 2f)
     }
 
     /** Jump back to the live bottom of the terminal (following new output). */
@@ -746,6 +916,10 @@ class TerminalView @JvmOverloads constructor(
     fun sendKey(keyCode: Int, event: KeyEvent?): Boolean {
         val isCtrl = event?.isCtrlPressed == true
         val isAlt = event?.isAltPressed == true
+        // DECCKM: cursor/Home/End keys switch to the SS3 form while an app holds application
+        // cursor-keys mode (vim, less, Claude Code's fullscreen TUI). Modified (Alt/Ctrl)
+        // sequences stay CSI, matching xterm.
+        val appCursor = (currentInputModes() and VtParser.MODE_APP_CURSOR_KEYS) != 0
 
         val bytes = when {
             // Ctrl+C → SIGINT (interrupt)
@@ -775,10 +949,10 @@ class TerminalView @JvmOverloads constructor(
             // Standard keys
             keyCode == KeyEvent.KEYCODE_ENTER -> byteArrayOf(0x0D)
             keyCode == KeyEvent.KEYCODE_DEL -> byteArrayOf(0x7F)
-            keyCode == KeyEvent.KEYCODE_DPAD_UP -> "\u001B[A".toByteArray()
-            keyCode == KeyEvent.KEYCODE_DPAD_DOWN -> "\u001B[B".toByteArray()
-            keyCode == KeyEvent.KEYCODE_DPAD_RIGHT -> "\u001B[C".toByteArray()
-            keyCode == KeyEvent.KEYCODE_DPAD_LEFT -> "\u001B[D".toByteArray()
+            keyCode == KeyEvent.KEYCODE_DPAD_UP -> (if (appCursor) "\u001BOA" else "\u001B[A").toByteArray()
+            keyCode == KeyEvent.KEYCODE_DPAD_DOWN -> (if (appCursor) "\u001BOB" else "\u001B[B").toByteArray()
+            keyCode == KeyEvent.KEYCODE_DPAD_RIGHT -> (if (appCursor) "\u001BOC" else "\u001B[C").toByteArray()
+            keyCode == KeyEvent.KEYCODE_DPAD_LEFT -> (if (appCursor) "\u001BOD" else "\u001B[D").toByteArray()
             keyCode == KeyEvent.KEYCODE_TAB -> byteArrayOf(0x09)
             keyCode == KeyEvent.KEYCODE_ESCAPE -> byteArrayOf(0x1B)
             // Function keys (F1-F12)
@@ -795,8 +969,8 @@ class TerminalView @JvmOverloads constructor(
             keyCode == KeyEvent.KEYCODE_F11 -> "\u001B[23~".toByteArray()
             keyCode == KeyEvent.KEYCODE_F12 -> "\u001B[24~".toByteArray()
             // Home/End/PageUp/PageDown
-            keyCode == KeyEvent.KEYCODE_MOVE_HOME -> "\u001B[H".toByteArray()
-            keyCode == KeyEvent.KEYCODE_MOVE_END -> "\u001B[F".toByteArray()
+            keyCode == KeyEvent.KEYCODE_MOVE_HOME -> (if (appCursor) "\u001BOH" else "\u001B[H").toByteArray()
+            keyCode == KeyEvent.KEYCODE_MOVE_END -> (if (appCursor) "\u001BOF" else "\u001B[F").toByteArray()
             keyCode == KeyEvent.KEYCODE_PAGE_UP -> "\u001B[5~".toByteArray()
             keyCode == KeyEvent.KEYCODE_PAGE_DOWN -> "\u001B[6~".toByteArray()
             // Insert/Delete
@@ -887,7 +1061,7 @@ class TerminalView @JvmOverloads constructor(
         // size changed under us, so any prior scroll offset would point at the wrong content.
         scrollOffset = 0
         scrollAccumY = 0f
-        lastScrollbackSize = vtParser?.scrollbackSize ?: 0
+        lastScrollbackPushed = vtParser?.scrollbackPushed ?: 0L
 
         invalidateGrid()
     }
@@ -1007,38 +1181,76 @@ class TerminalView @JvmOverloads constructor(
         bgPaint.color = Color.BLACK
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
 
-        val buf = rowBufFor(parser)
+        // One JNI crossing for the whole visible grid (readScreen) instead of one per row: the
+        // per-row crossings + per-cell resolution were ~50 calls per re-recorded frame.
         val stride = VtParser.CELL_STRIDE
+        val parserCols = parser.cols
+        val visRows = min(rows, parser.rows)
+        val buf = screenBufFor(visRows, parserCols)
+        parser.readScreen(-scrollOffset, visRows, buf)
+        var rowBase = 0
 
-        // Effective background of a cell (0 = none): selection tint wins, else the SGR background.
-        // Selection rows are logical, so the highlight tracks the content through scrollback.
-        fun cellBg(logicalRow: Int, col: Int): Int {
-            if (isSelecting && logicalRow in selectionStartRow..selectionEndRow &&
-                (logicalRow != selectionStartRow || col >= selectionStartCol) &&
-                (logicalRow != selectionEndRow || col <= selectionEndCol)
-            ) {
-                return selectionColorArgb
-            }
-            val base = col * stride
-            return when (VtParser.metaBgMode(buf[base + 3])) {
-                1 -> buf[base + 2].let { if (it in 0..255) colorPalette[it] else Color.BLACK }
-                2 -> buf[base + 2].let { Color.rgb((it shr 16) and 0xFF, (it shr 8) and 0xFF, it and 0xFF) }
-                else -> 0
-            }
+        // Raw SGR colors of a cell (before inverse/selection): bg 0 = default (transparent over
+        // the black canvas), fg defaults to white.
+        fun sgrBg(base: Int): Int = when (VtParser.metaBgMode(buf[base + 3])) {
+            1 -> buf[base + 2].let { if (it in 0..255) colorPalette[it] else Color.BLACK }
+            2 -> buf[base + 2].let { Color.rgb((it shr 16) and 0xFF, (it shr 8) and 0xFF, it and 0xFF) }
+            else -> 0
         }
 
-        fun cellFg(base: Int): Int = when (VtParser.metaFgMode(buf[base + 3])) {
+        fun sgrFg(base: Int): Int = when (VtParser.metaFgMode(buf[base + 3])) {
             1 -> buf[base + 1].let { if (it in 0..255) colorPalette[it] else Color.WHITE }
             2 -> buf[base + 1].let { Color.rgb((it shr 16) and 0xFF, (it shr 8) and 0xFF, it and 0xFF) }
             else -> Color.WHITE
         }
 
+        // Effective glyph color after SGR 7 inverse and SGR 2 dim. htop's selection bar, less's
+        // status line and vim's visual highlight are inverse-video — without the swap they render
+        // as plain text and the highlight is invisible.
+        fun effFg(base: Int): Int {
+            val attrs = VtParser.metaAttrs(buf[base + 3])
+            var color = if ((attrs and VtParser.ATTR_INVERSE) != 0) {
+                sgrBg(base).let { if (it == 0) Color.BLACK else it }
+            } else {
+                sgrFg(base)
+            }
+            if ((attrs and VtParser.ATTR_DIM) != 0) {
+                color = Color.rgb(Color.red(color) * 2 / 3, Color.green(color) * 2 / 3, Color.blue(color) * 2 / 3)
+            }
+            return color
+        }
+
+        // Selection rows are logical, so the highlight tracks through scrollback.
+        fun isSelected(logicalRow: Int, col: Int): Boolean =
+            isSelecting && logicalRow in selectionStartRow..selectionEndRow &&
+                (logicalRow != selectionStartRow || col >= selectionStartCol) &&
+                (logicalRow != selectionEndRow || col <= selectionEndCol)
+
+        // Effective background of a cell (0 = none): selection tint wins, then inverse swaps in
+        // the fg color.
+        fun cellBg(logicalRow: Int, col: Int): Int {
+            if (isSelected(logicalRow, col)) return selectionColorArgb
+            val base = rowBase + col * stride
+            return if ((VtParser.metaAttrs(buf[base + 3]) and VtParser.ATTR_INVERSE) != 0) {
+                sgrFg(base)
+            } else {
+                sgrBg(base)
+            }
+        }
+
+        // Selected cells keep their RAW fg: the translucent tint over black plus an inverse cell's
+        // swapped-in (dark) fg would render htop/less/vim highlights unreadable when selected.
+        fun glyphFg(logicalRow: Int, col: Int): Int {
+            val base = rowBase + col * stride
+            return if (isSelected(logicalRow, col)) sgrFg(base) else effFg(base)
+        }
+
         // Draw cells. When scrolled back, view row N shows logical row (N - scrollOffset);
         // negative logical rows come from the scrollback buffer.
-        for (row in 0 until min(rows, parser.rows)) {
+        for (row in 0 until visRows) {
             val logicalRow = row - scrollOffset
-            val filled = parser.readRow(logicalRow, buf)
-            val colBound = min(min(cols, filled), parser.cols)
+            rowBase = row * parserCols * stride
+            val colBound = min(cols, parserCols)
             val yTop = row * cellHeight
 
             // Background / selection runs: merge adjacent cells sharing an effective colour.
@@ -1060,18 +1272,21 @@ class TerminalView @JvmOverloads constructor(
             val runs = runGlyphsFor(colBound)
             c = 0
             while (c < colBound) {
-                val base = c * stride
+                val base = rowBase + c * stride
                 val cp = buf[base]
+                // cp == 0 is the continuation cell of a wide character: its background was drawn
+                // in the bg pass (it carries the lead's colors); the lead's glyph spans it.
                 if (cp == 0 || cp == ' '.code) { c++; continue }
-                val fg = cellFg(base)
                 val attrs = VtParser.metaAttrs(buf[base + 3])
+                if ((attrs and VtParser.ATTR_HIDDEN) != 0) { c++; continue }
+                val fg = glyphFg(logicalRow, c)
                 if (cp in 0x20..0x7E) {
                     var e = c
                     var len = 0
                     while (e < colBound) {
-                        val b2 = e * stride
+                        val b2 = rowBase + e * stride
                         val cp2 = buf[b2]
-                        if (cp2 !in 0x20..0x7E || cellFg(b2) != fg || VtParser.metaAttrs(buf[b2 + 3]) != attrs) break
+                        if (cp2 !in 0x20..0x7E || glyphFg(logicalRow, e) != fg || VtParser.metaAttrs(buf[b2 + 3]) != attrs) break
                         runs[len++] = cp2.toChar()
                         e++
                     }
@@ -1082,10 +1297,12 @@ class TerminalView @JvmOverloads constructor(
                 } else {
                     applyGlyphPaint(fg, attrs)
                     val x = c * cellWidth
+                    // A wide character's decorations span both its cells.
+                    val cellsWide = if (c + 1 < colBound && buf[rowBase + (c + 1) * stride] == 0) 2 else 1
                     val glyphLen = Character.toChars(cp, glyphBuf, 0)
                     canvas.drawText(glyphBuf, 0, glyphLen, x, baseY, textPaint)
-                    drawRunDecorations(canvas, attrs, x, x + cellWidth, yTop)
-                    c++
+                    drawRunDecorations(canvas, attrs, x, x + cellWidth * cellsWide, yTop)
+                    c += cellsWide
                 }
             }
         }
@@ -1111,6 +1328,13 @@ class TerminalView @JvmOverloads constructor(
         return runGlyphs
     }
 
+    /** Resolve a packed cell color channel ([VtParser.readRow] encoding) to ARGB. */
+    private fun resolveCellColor(value: Int, mode: Int, default: Int): Int = when (mode) {
+        1 -> if (value in 0..255) colorPalette[value] else default
+        2 -> Color.rgb((value shr 16) and 0xFF, (value shr 8) and 0xFF, value and 0xFF)
+        else -> default
+    }
+
     private fun drawCursor(canvas: Canvas, parser: VtParser) {
         // Draw cursor (only at the live bottom; hidden while scrolled back into history).
         // Focused: a solid block that blinks (with the glyph under it inverted so it stays readable).
@@ -1119,23 +1343,48 @@ class TerminalView @JvmOverloads constructor(
             val cursorRow = parser.cursorRow
             val cursorCol = parser.cursorCol
             if (cursorRow in 0 until rows && cursorCol in 0 until cols) {
+                // Cursor colors derive from the cell's EFFECTIVE colors: an inverse-video cell
+                // already renders fg/bg-swapped, so a hardcoded white block over it would be
+                // pixel-identical to the cell and the cursor would vanish (vim visual mode).
+                val buf = rowBufFor(parser)
+                val filled = parser.readRow(cursorRow, buf)
+                var cp = ' '.code
+                var blockColor = Color.WHITE
+                var glyphColor = Color.BLACK
+                var blockCells = 1
+                if (cursorCol < filled) {
+                    val base = cursorCol * VtParser.CELL_STRIDE
+                    cp = buf[base]
+                    val meta = buf[base + 3]
+                    val rawFg = resolveCellColor(buf[base + 1], VtParser.metaFgMode(meta), Color.WHITE)
+                    val rawBg = resolveCellColor(buf[base + 2], VtParser.metaBgMode(meta), Color.BLACK)
+                    val inverse = (VtParser.metaAttrs(meta) and VtParser.ATTR_INVERSE) != 0
+                    blockColor = if (inverse) rawBg else rawFg
+                    glyphColor = if (inverse) rawFg else rawBg
+                    // On a wide character's lead cell the block covers both cells.
+                    if (cursorCol + 1 < filled && buf[(cursorCol + 1) * VtParser.CELL_STRIDE] == 0) {
+                        blockCells = 2
+                    }
+                }
                 val x = cursorCol * cellWidth
                 val y = cursorRow * cellHeight
+                val blockW = cellWidth * blockCells
                 if (!hasFocus()) {
                     // Unfocused: hollow rectangle.
+                    cursorOutlinePaint.color = blockColor
                     canvas.drawRect(
-                        x + 1f, y + 1f, x + cellWidth - 1f, y + cellHeight - 1f, cursorOutlinePaint,
+                        x + 1f, y + 1f, x + blockW - 1f, y + cellHeight - 1f, cursorOutlinePaint,
                     )
                 } else if (cursorBlinkOn) {
                     // Focused + blink "on": solid block, then redraw the underlying glyph in the
-                    // background colour so a character beneath the cursor remains visible.
-                    canvas.drawRect(x, y, x + cellWidth, y + cellHeight, cursorPaint)
-                    val cp = parser.getCellCodePoint(cursorRow, cursorCol)
+                    // cell's effective background colour so it remains visible.
+                    cursorPaint.color = blockColor
+                    canvas.drawRect(x, y, x + blockW, y + cellHeight, cursorPaint)
                     if (cp != ' '.code && cp != 0) {
                         val saved = textPaint.color
                         val savedBold = textPaint.isFakeBoldText
                         val savedSkew = textPaint.textSkewX
-                        textPaint.color = Color.BLACK
+                        textPaint.color = glyphColor
                         textPaint.isFakeBoldText = false
                         textPaint.textSkewX = 0f
                         val glyphLen = Character.toChars(cp, glyphBuf, 0)
@@ -1218,6 +1467,11 @@ class TerminalView @JvmOverloads constructor(
     override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
         if (gainFocus) startBlink() else stopBlink()
+        // ?1004 focus reporting: apps that asked for it (Claude Code pauses its spinner, vim
+        // ends insert mode) get FocusIn/FocusOut as the view gains/loses input focus.
+        if ((currentInputModes() and VtParser.MODE_FOCUS_EVENTS) != 0) {
+            sendReport(if (gainFocus) "\u001B[I" else "\u001B[O")
+        }
         onFocusStateChanged?.invoke(gainFocus)
     }
 
