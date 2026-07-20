@@ -75,11 +75,16 @@ object DebugEngineCatalog {
             category = "Systems",
             name = "lldb-dap (C / C++ / Rust)",
             description = "LLVM's native debug adapter for C, C++, and Rust. Installed with the LLDB package.",
-            installCommand = "sudo apt-get update && sudo apt-get install -y lldb && " +
-                "sudo ln -sf \"\$(command -v lldb-dap || command -v lldb-dap-18 || command -v lldb-vscode-18 || command -v lldb-vscode)\" /usr/local/bin/lldb-dap 2>/dev/null || true",
-            verifyCommand = "lldb-dap --version 2>/dev/null || lldb-dap-18 --version 2>/dev/null || lldb-vscode-18 -h",
-            uninstallCommand = "sudo rm -f /usr/local/bin/lldb-dap; sudo apt-get remove -y lldb",
-            adapterCommand = "sh -c 'command -v lldb-dap >/dev/null 2>&1 && exec lldb-dap || (command -v lldb-dap-18 >/dev/null 2>&1 && exec lldb-dap-18 || exec lldb-vscode-18)'",
+            installCommand = "set -e; sudo apt-get update && sudo apt-get install -y lldb; " +
+                "TARGET=\$(command -v lldb-dap || command -v lldb-dap-18 || ls /usr/bin/lldb-dap-* 2>/dev/null | head -1); " +
+                "[ -n \"\$TARGET\" ] && sudo ln -sf \"\$TARGET\" /usr/local/bin/lldb-dap || true",
+            // Never launch lldb-dap to verify: LLVM 18's lldb-dap ignores --version and falls through
+            // into its DAP stdin loop, blocking until the verify times out (120s) and misreporting the
+            // install as failed. A presence check is faithful to install success and can't hang.
+            verifyCommand = "command -v lldb-dap >/dev/null 2>&1 || command -v lldb-dap-18 >/dev/null 2>&1 || " +
+                "{ set -- /usr/bin/lldb-dap-*; [ -x \"\$1\" ]; }",
+            uninstallCommand = "sudo rm -f /usr/local/bin/lldb-dap; sudo apt-get remove -y lldb; sudo apt-get autoremove -y",
+            adapterCommand = "sh -c 'command -v lldb-dap >/dev/null 2>&1 && exec lldb-dap; command -v lldb-dap-18 >/dev/null 2>&1 && exec lldb-dap-18; set -- /usr/bin/lldb-dap-*; exec \"\$1\"'",
             transport = "stdio",
             debugType = "lldb",
             updateCheckCommand = "apt list --upgradable 2>/dev/null | grep -qE '^lldb'",
@@ -91,8 +96,10 @@ object DebugEngineCatalog {
             category = ".NET",
             name = "netcoredbg (.NET / C#)",
             description = "Samsung's DAP debugger for .NET. Download the ARM64 release; needs the .NET runtime.",
+            // curl (not wget) for the download: the required dotnet SDK guarantees curl; wget is
+            // absent from the minimal base rootfs and no SDK in the chain installs it.
             installCommand = "set -e; sudo mkdir -p /opt/netcoredbg && " +
-                "wget -qO /tmp/netcoredbg.tar.gz https://github.com/Samsung/netcoredbg/releases/latest/download/netcoredbg-linux-arm64.tar.gz && " +
+                "curl -fsSL -o /tmp/netcoredbg.tar.gz https://github.com/Samsung/netcoredbg/releases/latest/download/netcoredbg-linux-arm64.tar.gz && " +
                 "sudo tar xzf /tmp/netcoredbg.tar.gz -C /opt && rm -f /tmp/netcoredbg.tar.gz && " +
                 "sudo ln -sf /opt/netcoredbg/netcoredbg /usr/local/bin/netcoredbg",
             verifyCommand = "netcoredbg --version",
@@ -113,7 +120,7 @@ object DebugEngineCatalog {
             // release that has one (the API lists releases newest-first).
             installCommand = "set -e; " +
                 "URL=\$(curl -fsSL 'https://api.github.com/repos/microsoft/vscode-js-debug/releases?per_page=10' | grep -oE 'https://[^\"]*js-debug-dap-v[0-9.]+\\.tar\\.gz' | head -n1); " +
-                "[ -n \"\$URL\" ] && wget -qO /tmp/js-debug.tar.gz \"\$URL\" && " +
+                "[ -n \"\$URL\" ] && curl -fsSL -o /tmp/js-debug.tar.gz \"\$URL\" && " +
                 "rm -rf \"\$HOME/js-debug\" && mkdir -p \"\$HOME/js-debug\" && tar xzf /tmp/js-debug.tar.gz -C \"\$HOME/js-debug\" --strip-components=1 && rm -f /tmp/js-debug.tar.gz && " +
                 "basename \"\$URL\" > \"\$HOME/js-debug/.release\"",
             verifyCommand = "test -f \"\$HOME/js-debug/src/dapDebugServer.js\" && node -e \"process.exit(0)\"",
@@ -133,10 +140,14 @@ object DebugEngineCatalog {
             name = "Java (JDWP/JDI)",
             description = "JVM debug adapter (Microsoft java-debug core, DAP over stdio). Breakpoints, " +
                 "stepping, call stack, and variables for javac-compiled Java. Needs a JDK.",
+            // curl (not wget) for the download: the required jdk SDK guarantees curl; wget is absent
+            // from the minimal base rootfs.
             installCommand = "set -e; mkdir -p \"\$HOME/java-dap\"; " +
-                "wget -qO \"\$HOME/java-dap/jcode-java-dap.jar\" " +
+                "curl -fsSL -o \"\$HOME/java-dap/jcode-java-dap.jar\" " +
                 "https://github.com/blamspotdev/j-code-android/releases/download/java-dap-v1/jcode-java-dap.jar",
-            verifyCommand = "test -f \"\$HOME/java-dap/jcode-java-dap.jar\" && java -version 2>&1 | head -1",
+            // `... | head -1` would return head's exit code (0) even when java is missing; check the
+            // JVM with a real exit-code test so a JDK-less environment fails verify honestly.
+            verifyCommand = "test -f \"\$HOME/java-dap/jcode-java-dap.jar\" && command -v java >/dev/null 2>&1",
             uninstallCommand = "rm -rf \"\$HOME/java-dap\"",
             adapterCommand = "java -Djava.net.preferIPv4Stack=true -cp \"\$HOME/java-dap/jcode-java-dap.jar\" dev.jcode.javadap.Main",
             transport = "stdio",

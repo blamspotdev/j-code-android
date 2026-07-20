@@ -3023,6 +3023,7 @@ private fun WorkspacePanel(
 
                     WorkbenchTool.Search -> SearchToolPanel(
                         project = selectedProject,
+                        activeTab = editorGroup.activeTab,
                         onOpenResult = onOpenPathAtLine,
                         seed = searchSeed,
                         onSeedConsumed = onSearchSeedConsumed,
