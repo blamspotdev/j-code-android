@@ -128,15 +128,22 @@ private suspend fun renameSaf(context: Context, from: FsPath, newName: String): 
 }
 
 /**
- * Soft-delete a file/directory to the project's trash.
- * Moves the item to `<project-root>/.jcode/trash/<timestamp>/<original-name>`.
+ * Permanently delete a file/directory (recursively). There is no trash bin — recovery is expected
+ * via git (`git restore` / `git checkout`) for tracked files, so deletes here are irreversible.
  */
-suspend fun deleteToTrash(fs: Fs, context: Context, path: FsPath, projectRoot: FsPath): FsPath =
+suspend fun deletePermanently(fs: Fs, context: Context, path: FsPath) {
     when (fs) {
-        is PosixFs -> deleteToTrashPosix(path, projectRoot)
-        is SafFs -> deleteToTrashSaf(context, path, projectRoot)
+        is PosixFs -> {
+            val file = path.requireLocal()
+            check(file.deleteRecursively()) { "Delete failed: ${file.path}" }
+        }
+        is SafFs -> {
+            val doc = path.toDocumentFile(context)
+            check(doc.delete()) { "Delete failed: ${doc.uri}" }
+        }
         else -> error("Unsupported Fs implementation: ${fs::class}")
     }
+}
 
 /** Copy a file/directory from [source] to [targetParent] with optional [newName]. */
 suspend fun copyFileOrDir(fs: Fs, context: Context, source: FsPath, targetParent: FsPath, newName: String? = null): FsPath =
@@ -145,42 +152,6 @@ suspend fun copyFileOrDir(fs: Fs, context: Context, source: FsPath, targetParent
         is SafFs -> copySaf(context, source, targetParent, newName)
         else -> error("Unsupported Fs implementation: ${fs::class}")
     }
-
-private suspend fun deleteToTrashPosix(path: FsPath, projectRoot: FsPath): FsPath {
-    val file = path.requireLocal()
-    val root = projectRoot.requireLocal()
-    val trashDir = File(root, ".jcode/trash/${System.currentTimeMillis()}")
-    trashDir.mkdirs()
-    val trashTarget = File(trashDir, file.name)
-    check(file.renameTo(trashTarget)) { "Trash move failed: ${file.path}" }
-    return FsPath.Local(trashTarget)
-}
-
-private suspend fun deleteToTrashSaf(context: Context, path: FsPath, projectRoot: FsPath): FsPath {
-    val doc = path.toDocumentFile(context)
-    val rootDoc = projectRoot.toDocumentFile(context)
-    val jcodeDir = rootDoc.findFile(".jcode")
-        ?: rootDoc.createDirectory(".jcode") ?: error("Cannot create .jcode")
-    val trashDir = jcodeDir.findFile("trash")
-        ?: jcodeDir.createDirectory("trash") ?: error("Cannot create trash")
-    val timestampDir = trashDir.createDirectory(System.currentTimeMillis().toString())
-        ?: error("Cannot create timestamp dir")
-
-    // DocumentFile doesn't have moveTo; copy content then delete original
-    val targetName = doc.name ?: "deleted_file"
-    val target = if (doc.isDirectory) {
-        timestampDir.createDirectory(targetName)
-            ?: error("Cannot create trash directory")
-    } else {
-        // For files, we need to copy content — stub: just mark as deleted
-        timestampDir.createFile("application/octet-stream", targetName)
-            ?: error("Cannot create trash file")
-    }
-
-    // Delete the original
-    runCatching { doc.delete() }
-    return FsPath.Saf(target.uri)
-}
 
 private suspend fun copyPosix(source: FsPath, targetParent: FsPath, newName: String?): FsPath {
     val sourceFile = source.requireLocal()

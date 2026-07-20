@@ -212,6 +212,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import dev.jcode.design.DeveloperSetting
 import dev.jcode.design.LocalDeveloperSetting
+import dev.jcode.design.EditorFontSizeSetting
+import dev.jcode.design.EditorWordWrapSetting
+import dev.jcode.design.LocalEditorFontSizeSetting
+import dev.jcode.design.LocalEditorWordWrapSetting
 import dev.jcode.design.LocalMarkdownPreviewSetting
 import dev.jcode.workbench.ExtensionDevState
 import dev.jcode.workbench.LocalExtensionDevState
@@ -274,6 +278,8 @@ import dev.jcode.workbench.LocalDebugCatalogState
 import dev.jcode.workbench.LocalDebugEditorState
 import dev.jcode.workbench.LocalDebugSession
 import dev.jcode.workbench.LocalExtensionInstallPhases
+import dev.jcode.workbench.LocalPendingReload
+import dev.jcode.workbench.PendingReloadUi
 import dev.jcode.workbench.LocalRunConfigPresets
 import dev.jcode.workbench.LocalSetupTerminalSessionId
 import dev.jcode.design.PerformanceSettings
@@ -574,6 +580,18 @@ fun JCodeApp(
     val markdownPreviewSetting = remember(markdownWrapPortrait) {
         MarkdownPreviewSetting(wrapInPortrait = markdownWrapPortrait, onSetWrapInPortrait = viewModel::setMarkdownWrapPortrait)
     }
+    val editorFontSizeGlobal by viewModel.editorFontSizeGlobal.collectAsStateWithLifecycle()
+    val editorFontSizeSetting = remember(editorFontSizeGlobal) {
+        EditorFontSizeSetting(value = editorFontSizeGlobal, onChange = viewModel::setEditorFontSizeGlobal)
+    }
+    val editorWordWrap by viewModel.editorWordWrap.collectAsStateWithLifecycle()
+    val editorWordWrapSetting = remember(editorWordWrap) {
+        EditorWordWrapSetting(enabled = editorWordWrap, onChange = viewModel::setEditorWordWrap)
+    }
+    val pendingReloadList by viewModel.pendingReload.collectAsStateWithLifecycle()
+    val pendingReloadUi = remember(pendingReloadList) {
+        PendingReloadUi(pendingReloadList.map { it.name }, viewModel::reloadPendingExtensions)
+    }
     // Developer options: reveals the Extension Dev right-drawer tab + unsigned .jext sideloading.
     val developerOptions by viewModel.developerOptions.collectAsStateWithLifecycle()
     val jextPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -799,6 +817,23 @@ fun JCodeApp(
     LaunchedEffect(viewModel) {
         viewModel.messages.collectLatest { message ->
             snackbarHostState.showSnackbar(message)
+        }
+    }
+
+    // Actionable prompt (restart the app) as a snackbar with a button. Extension-reload prompts render
+    // as a compact banner atop the Extensions panel instead (see ExtensionsPanel).
+    LaunchedEffect(viewModel) {
+        viewModel.prompts.collect { prompt ->
+            when (prompt) {
+                is WorkbenchPrompt.RestartApp -> {
+                    val result = snackbarHostState.showSnackbar(
+                        message = prompt.message,
+                        actionLabel = "Restart",
+                        duration = SnackbarDuration.Long,
+                    )
+                    if (result == SnackbarResult.ActionPerformed) viewModel.restartApp()
+                }
+            }
         }
     }
 
@@ -1119,6 +1154,7 @@ fun JCodeApp(
         LocalVcsActions provides vcsActions,
         LocalDebugCatalogState provides debugCatalogState,
         LocalExtensionInstallPhases provides extensionInstallPhases,
+        LocalPendingReload provides pendingReloadUi,
         LocalRunConfigPresets provides contributedRunPresets,
         LocalSetupTerminalSessionId provides setupTerminalSessionId,
         LocalDebugSession provides debugSessionUi,
@@ -1130,6 +1166,8 @@ fun JCodeApp(
         LocalEnvironmentBackup provides environmentBackupActions,
         LocalCommandPaletteSetting provides commandPaletteSetting,
         LocalMarkdownPreviewSetting provides markdownPreviewSetting,
+        LocalEditorFontSizeSetting provides editorFontSizeSetting,
+        LocalEditorWordWrapSetting provides editorWordWrapSetting,
         LocalDeveloperSetting provides developerSetting,
         LocalExtensionDevState provides extensionDevState,
         LocalExtensionSettingsUi provides extensionSettingsUi,
@@ -1237,6 +1275,9 @@ fun JCodeApp(
             onOpenExtensionDetail = viewModel::openExtensionDetailPage,
             onOpenExtensionPermissions = viewModel::openExtensionPermissionsPage,
             onOpenExtensionApp = viewModel::openExtensionAppPage,
+            // The Source Control extension renders its git-identity + GitHub-auth screen at its
+            // `#github` route (a global-config screen that works with no project open).
+            onOpenExtensionConfig = { id -> viewModel.openExtensionViewPage(id, "github", "Git Configuration") },
             onExtensionExec = viewModel::runtimeExecJson,
             onExtensionApiRequest = { extId, envelope ->
                 val ext = viewModel.installedExtensions.value.firstOrNull { it.id == extId }
@@ -1497,11 +1538,14 @@ private fun JCodeShell(
     // NOT keyed on orientation/size: an open right drawer must survive a rotation. Keying it on
     // isLandscape/widthClass re-ran the initializer on every rotation and slammed it shut.
     var rightSidebarVisible by rememberSaveable { mutableStateOf(false) }
-    // Opening a file from the terminal should surface the editor; in modal layouts the terminal
-    // sits in a drawer over the editor, so close it.
+    // Opening a file or an editor-area page should surface the editor; in modal layouts the terminal
+    // sits in a right drawer over the editor and the tools sit in the left drawer, so close both.
     LaunchedEffect(bringEditorToFront, usesModalWorkspace) {
         bringEditorToFront.collect {
-            if (usesModalWorkspace) rightSidebarVisible = false
+            if (usesModalWorkspace) {
+                rightSidebarVisible = false
+                compactDrawerState.close()
+            }
         }
     }
     var rightPanelTab by rememberSaveable {
@@ -1856,7 +1900,10 @@ private fun JCodeShell(
     fun handleRunFirst(project: Project) {
         val config = ProjectRunner.effectiveRuns(project).firstOrNull()
         if (config == null) {
-            scope.launch { snackbarHostState.showSnackbar("No run config for ${project.name}. Tap Configure to set one up.") }
+            // No run config yet — open the Run panel so the user can add one (framework-detected or
+            // blank), instead of dead-ending on a toast.
+            selectedTool = WorkbenchTool.RunDebug
+            if (usesModalWorkspace) scope.launch { compactDrawerState.open() } else leftSidebarExpanded = true
             return
         }
         handleRun(project, config)
@@ -2610,12 +2657,17 @@ private fun JCodeShell(
                                             onInstall = managerActions.onInstallExtension,
                                             onUninstall = managerActions.onUninstallExtension,
                                             onOpenApp = managerActions.onOpenExtensionApp,
+                                            onOpenExtensionDetail = managerActions.onOpenExtensionDetail,
+                                            onOpenSdkDetail = managerActions.onOpenSdkDetail,
+                                            onOpenLspDetail = managerActions.onOpenLspDetail,
+                                            onOpenDebugEngineDetail = managerActions.onOpenDebugEngineDetail,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
                                 }
                                 EditorPageKind.ExtensionPermissions -> ExtensionPermissionsPage(
                                     installed = installedExtensions,
+                                    onOpenConfig = managerActions.onOpenExtensionConfig,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                                 EditorPageKind.Browser -> BrowserPage(modifier = Modifier.fillMaxSize())
@@ -3036,6 +3088,7 @@ private fun WorkspacePanel(
                         onApiRequest = managerActions.onExtensionApiRequest,
                         events = managerActions.extensionEvents,
                         projectKey = selectedProject?.id,
+                        onOpenConfig = managerActions.onOpenExtensionConfig,
                         modifier = Modifier.fillMaxSize(),
                     )
 
@@ -3064,16 +3117,21 @@ private fun WorkspacePanel(
                         modifier = Modifier.fillMaxSize(),
                     )
 
-                    WorkbenchTool.Extensions -> ExtensionsPanel(
-                        installed = installedExtensions,
-                        available = marketplaceEntries,
-                        busy = marketplaceBusy,
-                        installPhases = LocalExtensionInstallPhases.current,
-                        onRefreshMarketplace = managerActions.onRefreshMarketplace,
-                        onOpenDetail = managerActions.onOpenExtensionDetail,
-                        onOpenPermissions = managerActions.onOpenExtensionPermissions,
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    WorkbenchTool.Extensions -> {
+                        val pendingReload = LocalPendingReload.current
+                        ExtensionsPanel(
+                            installed = installedExtensions,
+                            available = marketplaceEntries,
+                            busy = marketplaceBusy,
+                            installPhases = LocalExtensionInstallPhases.current,
+                            onRefreshMarketplace = managerActions.onRefreshMarketplace,
+                            onOpenDetail = managerActions.onOpenExtensionDetail,
+                            onOpenPermissions = managerActions.onOpenExtensionPermissions,
+                            pendingReloadNames = pendingReload.names,
+                            onReloadPending = pendingReload.onReload,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
 
                     WorkbenchTool.ToolchainManager -> ToolchainManagerPanel(
                         sdkState = sdkCatalogState,
@@ -3582,8 +3640,8 @@ private fun WorkbenchRightSidebar(
                     )
                 }
                 WorkbenchIconActionButton(
-                    icon = jcIcon(JCodeIcon.ChevronRight),
-                    contentDescription = "Hide",
+                    icon = jcIcon(JCodeIcon.Close),
+                    contentDescription = "Close",
                     onClick = onHide,
                 )
             }

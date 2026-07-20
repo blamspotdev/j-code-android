@@ -39,6 +39,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -78,7 +79,7 @@ import dev.jcode.fs.copyFileOrDir
 import dev.jcode.fs.copyLocalTreeToDocumentTree
 import dev.jcode.fs.createFile
 import dev.jcode.fs.createDirectory
-import dev.jcode.fs.deleteToTrash
+import dev.jcode.fs.deletePermanently
 import dev.jcode.fs.exportFileToUri
 import dev.jcode.fs.importContentUris
 import dev.jcode.fs.renameFile
@@ -143,6 +144,7 @@ fun ExplorerView(
 
     var showCreateDialog by remember { mutableStateOf<CreateTarget?>(null) }
     var showRenameDialog by remember { mutableStateOf<RenameTarget?>(null) }
+    var showDeleteConfirm by remember { mutableStateOf<TreeRow?>(null) }
 
     // Clipboard for copy/cut operations
     var clipboard by remember { mutableStateOf<ClipboardEntry?>(null) }
@@ -274,14 +276,7 @@ fun ExplorerView(
                 clipboard = ClipboardEntry(row.node.path, row.node.name, isCut = true)
                 onSnackbar?.invoke("Cut '${row.node.name}'")
             }
-            RowAction.Delete -> scope.launch {
-                runCatching {
-                    deleteToTrash(fs, context, row.node.path, project.fsPath)
-                    viewModel.refresh()
-                    scmUi.onFsActivity?.invoke()
-                    onSnackbar?.invoke("Moved '${row.node.name}' to trash")
-                }.onFailure { onSnackbar?.invoke("Delete failed: ${it.message}") }
-            }
+            RowAction.Delete -> showDeleteConfirm = row
             RowAction.ImportHere -> {
                 importTarget = fsPathToken(row.node.path)
                 importLauncher.launch(arrayOf("*/*"))
@@ -303,6 +298,7 @@ fun ExplorerView(
         }
     }
 
+    CompositionLocalProvider(LocalProjectRootId provides project.fsPath.stableId) {
     Column(modifier = modifier.fillMaxSize()) {
         // Compact action toolbar (always visible) with create/refresh/paste. The Tree|List view mode
         // is set in Settings, not here.
@@ -328,7 +324,7 @@ fun ExplorerView(
                             viewModel.refresh()
                             onSnackbar?.invoke("Pasted '${entry.name}'")
                             if (entry.isCut) {
-                                deleteToTrash(fs, context, entry.sourcePath, project.fsPath)
+                                deletePermanently(fs, context, entry.sourcePath)
                                 viewModel.refresh()
                             }
                             clipboard = null
@@ -388,6 +384,7 @@ fun ExplorerView(
             }
         }
     }
+    }
 
     // Create dialog
     showCreateDialog?.let { target ->
@@ -436,6 +433,38 @@ fun ExplorerView(
             },
         )
     }
+
+    // Delete confirmation — deletes are permanent (no trash bin); git is the recovery path.
+    showDeleteConfirm?.let { target ->
+        val isDir = target.node.kind == FsKind.Directory
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = null },
+            title = { Text("Delete '${target.node.name}'?") },
+            text = {
+                Text(
+                    "This permanently deletes the ${if (isDir) "folder and its contents" else "file"}. " +
+                        "If the project is under git, you can restore it there.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val node = target.node
+                    showDeleteConfirm = null
+                    scope.launch {
+                        runCatching {
+                            deletePermanently(fs, context, node.path)
+                            viewModel.refresh()
+                            scmUi.onFsActivity?.invoke()
+                            onSnackbar?.invoke("Deleted '${node.name}'")
+                        }.onFailure { onSnackbar?.invoke("Delete failed: ${it.message}") }
+                    }
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = null }) { Text("Cancel") }
+            },
+        )
+    }
 }
 
 data class CreateTarget(val parentPath: FsPath, val isDirectory: Boolean)
@@ -480,6 +509,8 @@ private fun RowOverflowMenu(
 ) {
     val isDir = row.node.kind == FsKind.Directory
     val scmUi = LocalExplorerScmUi.current
+    // The project root must not be moved or deleted from the tree, so Cut/Delete are hidden on it.
+    val isProjectRoot = LocalProjectRootId.current == row.node.path.stableId
     Box {
         JcTooltip("More actions") {
             IconButton(
@@ -497,12 +528,14 @@ private fun RowOverflowMenu(
         CompactContextMenu(
             expanded = expanded,
             onDismissRequest = { onExpandedChange(false) },
-            quickActions = listOf(
-                ContextAction(JCodeIcon.Copy, "Copy") { onAction(row, RowAction.Copy) },
-                ContextAction(JCodeIcon.Cut, "Cut") { onAction(row, RowAction.Cut) },
-                ContextAction(JCodeIcon.Rename, "Rename") { onAction(row, RowAction.Rename) },
-                ContextAction(JCodeIcon.Delete, "Delete", destructive = true) { onAction(row, RowAction.Delete) },
-            ),
+            quickActions = buildList {
+                add(ContextAction(JCodeIcon.Copy, "Copy") { onAction(row, RowAction.Copy) })
+                if (!isProjectRoot) add(ContextAction(JCodeIcon.Cut, "Cut") { onAction(row, RowAction.Cut) })
+                add(ContextAction(JCodeIcon.Rename, "Rename") { onAction(row, RowAction.Rename) })
+                if (!isProjectRoot) {
+                    add(ContextAction(JCodeIcon.Delete, "Delete", destructive = true) { onAction(row, RowAction.Delete) })
+                }
+            },
             listActions = buildList {
                 if (!isDir) add(ContextAction(JCodeIcon.Open, "Open") { onAction(row, RowAction.Open) })
                 if (isDir) {
@@ -511,10 +544,14 @@ private fun RowOverflowMenu(
                     add(ContextAction(JCodeIcon.Add, "Import files…") { onAction(row, RowAction.ImportHere) })
                 }
                 add(ContextAction(JCodeIcon.Save, "Export…") { onAction(row, RowAction.Export) })
-                scmUi.onContextAction?.let { dispatch ->
-                    scmUi.contextActions
-                        .filter { explorerActionAppliesTo(it, row.node.name, isDir) }
-                        .forEach { a -> add(ContextAction(a.icon, a.label) { dispatch(a, row.node) }) }
+                // Extension-contributed actions (e.g. "Add to .gitignore") target a path inside the
+                // repo — the project root isn't a valid target, so omit them there.
+                if (!isProjectRoot) {
+                    scmUi.onContextAction?.let { dispatch ->
+                        scmUi.contextActions
+                            .filter { explorerActionAppliesTo(it, row.node.name, isDir) }
+                            .forEach { a -> add(ContextAction(a.icon, a.label) { dispatch(a, row.node) }) }
+                    }
                 }
             },
         )

@@ -323,9 +323,60 @@ class EditorView @JvmOverloads constructor(
         return (cfg.fontSizeSp * density * cfg.lineHeightMultiplier).toInt().coerceAtLeast(1)
     }
 
+    // --- soft word-wrap (RenderConfig.wordWrap) ------------------------------------------------
+    // The wrap layout is rebuilt only when its inputs change (snapshot, or the char-per-row count
+    // derived from width/font/gutter), so per-frame scroll/hit-test queries are cache hits. Null
+    // whenever wrap is off or the width isn't known yet — callers then use the linear path.
+    private var wrapMap: WrapMap? = null
+    private var wrapSnapshot: dev.jcode.core.buffer.Snapshot? = null
+    private var wrapCharsPerRow: Int = -1
+
+    private fun currentWrapMap(state: EditorState): WrapMap? {
+        val config = state.renderConfig.value
+        if (!config.wordWrap) return null
+        val vp = state.viewport.value
+        if (vp.widthPx <= 0) return null
+        val snapshot = state.snapshot.value
+        val gutter = computeGutterWidth(snapshot, config)
+        val advance = asciiAdvance(measurePaintFor(config))
+        val cpr = WrapMap.charsPerRow((vp.widthPx - gutter - 8).toFloat(), advance)
+        if (cpr <= 0) return null
+        val cached = wrapMap
+        if (cached != null && wrapSnapshot === snapshot && wrapCharsPerRow == cpr) return cached
+        return WrapMap(snapshot, cpr).also {
+            wrapMap = it
+            wrapSnapshot = snapshot
+            wrapCharsPerRow = cpr
+        }
+    }
+
+    /** 0-based column at [xInText] px within a single [text] run (monospace fast path + fallback). */
+    private fun columnInText(text: String, xInText: Float, config: RenderConfig): Int {
+        val paint = measurePaintFor(config)
+        var allAscii = true
+        for (i in text.indices) {
+            if (text[i].code !in 0x20..0x7E) { allAscii = false; break }
+        }
+        return if (allAscii) {
+            val advance = asciiAdvance(paint)
+            if (advance <= 0f) 0 else (xInText / advance).toInt().coerceIn(0, text.length)
+        } else {
+            var c = 0
+            var measured = 0f
+            for (i in text.indices) {
+                val charWidth = paint.measureText(text[i].toString())
+                if (measured + charWidth > xInText) break
+                measured += charWidth
+                c++
+            }
+            c
+        }
+    }
+
     private fun maxScrollY(state: EditorState): Int {
         val vp = state.viewport.value
-        return (state.snapshot.value.lineCount * lineHeightPx(state) - vp.heightPx).coerceAtLeast(0)
+        val rows = currentWrapMap(state)?.totalRows ?: state.snapshot.value.lineCount
+        return (rows * lineHeightPx(state) - vp.heightPx).coerceAtLeast(0)
     }
 
     /** Scroll the viewport by [lines] text lines (positive = toward the end of the file). Drives
@@ -340,6 +391,8 @@ class EditorView @JvmOverloads constructor(
     /** How far the widest VISIBLE line allows scrolling right. Cheap (one batched line read) and
      *  stable while dragging; longer off-screen lines extend the range as they scroll into view. */
     private fun maxScrollX(state: EditorState): Int {
+        // Soft wrap fits every line to the text area, so there is nothing to scroll horizontally.
+        if (state.renderConfig.value.wordWrap) return 0
         val vp = state.viewport.value
         val snapshot = state.snapshot.value
         val cfg = state.renderConfig.value
@@ -455,7 +508,8 @@ class EditorView @JvmOverloads constructor(
         val lineHeight = (cfg.fontSizeSp * density * cfg.lineHeightMultiplier).toInt().coerceAtLeast(1)
         runBlocking { state.setSelection(listOf(Caret(offset, offset))) }
         // Park the target a couple of lines below the top so there's context above it.
-        val targetScrollY = (targetLine * lineHeight - lineHeight * 2).coerceIn(0, maxScrollY(state))
+        val targetRow = currentWrapMap(state)?.firstRowOf(targetLine) ?: targetLine
+        val targetScrollY = (targetRow * lineHeight - lineHeight * 2).coerceIn(0, maxScrollY(state))
         state.updateViewport { it.copy(scrollX = 0, scrollY = targetScrollY) }
         state.clearReveal()
         requestFocus()
@@ -475,8 +529,15 @@ class EditorView @JvmOverloads constructor(
         val snapshot = state.snapshot.value
         val cfg = state.renderConfig.value
         val lineHeight = (cfg.fontSizeSp * density * cfg.lineHeightMultiplier).toInt().coerceAtLeast(1)
+        val wrap = currentWrapMap(state)
         val (caretLine, _) = snapshot.offsetToLineColumn(caret.head)
-        val caretTop = caretLine * lineHeight
+        val caretRow = if (wrap != null) {
+            val ls = snapshot.lineAt(caretLine).first
+            wrap.rowOf(caretLine, snapshot.readRangeAsUtf16(ls, caret.head).length)
+        } else {
+            caretLine
+        }
+        val caretTop = caretRow * lineHeight
         val caretBottom = caretTop + lineHeight
         // Breathing room around the caret line, capped so the line itself still fully fits a short
         // (keyboard-squeezed) viewport instead of being clipped at an edge.
@@ -488,21 +549,24 @@ class EditorView @JvmOverloads constructor(
         }.coerceIn(0, maxScrollY(state))
 
         // Horizontal: follow the caret past either edge of the text area (typing along a long line).
-        val (lineStart, _) = snapshot.lineAt(caretLine)
-        val prefix = snapshot.readRangeAsUtf16(lineStart, caret.head)
-        val paint = measurePaintFor(cfg)
-        var allAscii = true
-        for (i in prefix.indices) {
-            if (prefix[i].code !in 0x20..0x7E) { allAscii = false; break }
+        // Soft wrap keeps every line within the text area, so there is no horizontal follow.
+        val newScrollX = if (wrap != null) 0 else {
+            val (lineStart, _) = snapshot.lineAt(caretLine)
+            val prefix = snapshot.readRangeAsUtf16(lineStart, caret.head)
+            val paint = measurePaintFor(cfg)
+            var allAscii = true
+            for (i in prefix.indices) {
+                if (prefix[i].code !in 0x20..0x7E) { allAscii = false; break }
+            }
+            val caretX = if (allAscii) prefix.length * asciiAdvance(paint) else paint.measureText(prefix)
+            val textArea = (vp.widthPx - computeGutterWidth(snapshot, cfg) - 8).coerceAtLeast(1)
+            val xMargin = asciiAdvance(paint) * 2
+            when {
+                caretX - vp.scrollX > textArea - xMargin -> (caretX - textArea + xMargin).toInt()
+                caretX < vp.scrollX + xMargin -> (caretX - xMargin).toInt()
+                else -> vp.scrollX
+            }.coerceAtLeast(0)
         }
-        val caretX = if (allAscii) prefix.length * asciiAdvance(paint) else paint.measureText(prefix)
-        val textArea = (vp.widthPx - computeGutterWidth(snapshot, cfg) - 8).coerceAtLeast(1)
-        val xMargin = asciiAdvance(paint) * 2
-        val newScrollX = when {
-            caretX - vp.scrollX > textArea - xMargin -> (caretX - textArea + xMargin).toInt()
-            caretX < vp.scrollX + xMargin -> (caretX - xMargin).toInt()
-            else -> vp.scrollX
-        }.coerceAtLeast(0)
 
         if (newScrollY != vp.scrollY || newScrollX != vp.scrollX) {
             // Cancel only when actually moving, so a no-op caret emission can't kill a live fling;
@@ -572,8 +636,10 @@ class EditorView @JvmOverloads constructor(
         // Draw background
         canvas.drawColor(theme.background.toInt())
 
+        val wrap = currentWrapMap(state)
+
         if (!canvas.isHardwareAccelerated || viewport.widthPx <= 0 || viewport.heightPx <= 0) {
-            renderer.draw(canvas, snapshot, viewport, config, carets, decorations = decorations, theme = theme)
+            renderer.draw(canvas, snapshot, viewport, config, carets, decorations = decorations, theme = theme, wrapMap = wrap)
             drawSelectionHandles(canvas, theme)
             return
         }
@@ -612,7 +678,7 @@ class EditorView @JvmOverloads constructor(
             val rc = node.beginRecording(viewport.widthPx, recordHeight)
             try {
                 rc.drawColor(theme.background.toInt())
-                renderer.draw(rc, snapshot, viewport.copy(heightPx = recordHeight), config, carets, decorations = decorations, theme = theme)
+                renderer.draw(rc, snapshot, viewport.copy(heightPx = recordHeight), config, carets, decorations = decorations, theme = theme, wrapMap = wrap)
             } finally {
                 node.endRecording()
             }
@@ -792,9 +858,16 @@ class EditorView @JvmOverloads constructor(
         val gutterWidth = computeGutterWidth(snapshot, config)
         if (x >= gutterWidth) return null
         val lineHeightPx = (config.fontSizeSp * density * config.lineHeightMultiplier).toInt().coerceAtLeast(1)
-        // Screen y of line L is (L - visibleLineTop)*lineHeight - scrollY % lineHeight (see Renderer).
-        val lineIndex = state.viewport.value.visibleLineTop +
-            ((y + state.viewport.value.scrollY % lineHeightPx) / lineHeightPx).toInt()
+        val wrap = currentWrapMap(state)
+        val lineIndex = if (wrap != null) {
+            val row = (state.viewport.value.scrollY + y.toInt()) / lineHeightPx
+            if (row < 0 || row >= wrap.totalRows) return null
+            wrap.rowToLine(row).line
+        } else {
+            // Screen y of line L is (L - visibleLineTop)*lineHeight - scrollY % lineHeight (see Renderer).
+            state.viewport.value.visibleLineTop +
+                ((y + state.viewport.value.scrollY % lineHeightPx) / lineHeightPx).toInt()
+        }
         if (lineIndex < 0 || lineIndex >= snapshot.lineCount) return null
         return lineIndex
     }
@@ -806,34 +879,27 @@ class EditorView @JvmOverloads constructor(
         val config = state.renderConfig.value
         val lineHeightPx = (config.fontSizeSp * density * config.lineHeightMultiplier).toInt().coerceAtLeast(1)
         val gutterWidth = computeGutterWidth(snapshot, config)
+        val wrap = currentWrapMap(state)
+        if (wrap != null) {
+            val row = (state.viewport.value.scrollY + y.toInt()) / lineHeightPx
+            if (row < 0 || row >= wrap.totalRows) return null
+            val rs = wrap.rowToLine(row)
+            val (lineStart, lineEnd) = snapshot.lineAt(rs.line)
+            val lineText = snapshot.readRangeAsUtf16(lineStart, lineEnd)
+            val startCol = rs.startColumn.coerceIn(0, lineText.length)
+            val endCol = rs.endColumn.coerceIn(startCol, lineText.length)
+            val xInText = x - gutterWidth - 8f // no horizontal scroll while wrapping
+            val col = (startCol + columnInText(lineText.substring(startCol, endCol), xInText, config))
+                .coerceIn(0, lineText.length)
+            return snapshot.lineColumnToOffset(rs.line, WrapMap.charIndexToByteCol(lineText, col))
+        }
         val lineIndex = state.viewport.value.visibleLineTop +
             ((y + state.viewport.value.scrollY % lineHeightPx) / lineHeightPx).toInt()
         if (lineIndex < 0 || lineIndex >= snapshot.lineCount) return null
         val (lineStart, lineEnd) = snapshot.lineAt(lineIndex)
         val lineText = snapshot.readRangeAsUtf16(lineStart, lineEnd)
         val xInText = x - gutterWidth - 8f + state.viewport.value.scrollX
-        val paint = measurePaintFor(config)
-        // Fast path: an all-printable-ASCII line advances by a constant amount in a monospace font, so
-        // the column is a single division. Non-ASCII (tabs, wide glyphs) falls back to per-char measure.
-        var allAscii = true
-        for (i in lineText.indices) {
-            if (lineText[i].code !in 0x20..0x7E) { allAscii = false; break }
-        }
-        val col = if (allAscii) {
-            val advance = asciiAdvance(paint)
-            if (advance <= 0f) 0 else (xInText / advance).toInt().coerceIn(0, lineText.length)
-        } else {
-            var c = 0
-            var measured = 0f
-            for (i in lineText.indices) {
-                val charWidth = paint.measureText(lineText[i].toString())
-                if (measured + charWidth > xInText) break
-                measured += charWidth
-                c++
-            }
-            c
-        }
-        return snapshot.lineColumnToOffset(lineIndex, col)
+        return snapshot.lineColumnToOffset(lineIndex, columnInText(lineText, xInText, config))
     }
 
     /** The identifier word at an offset: (startOffset, endOffset, text), or null. */
@@ -893,9 +959,23 @@ class EditorView @JvmOverloads constructor(
         val snapshot = state.snapshot.value
         val config = state.renderConfig.value
         val lineHeight = (config.fontSizeSp * density * config.lineHeightMultiplier).toInt().coerceAtLeast(1)
+        val gutter = computeGutterWidth(snapshot, config)
+        val wrap = currentWrapMap(state)
+        if (wrap != null) {
+            val (ol, _) = snapshot.offsetToLineColumn(offset)
+            val (ls, le) = snapshot.lineAt(ol)
+            val lineText = snapshot.readRangeAsUtf16(ls, le)
+            val ocChar = snapshot.readRangeAsUtf16(ls, offset).length
+            val row = wrap.rowOf(ol, ocChar)
+            val rowStartCol = wrap.rowToLine(row).startColumn
+            val rowStartOffset = ls + WrapMap.charIndexToByteCol(lineText, rowStartCol)
+            val rowPrefix = snapshot.readRangeAsUtf16(rowStartOffset, offset)
+            val x = gutter + 8f + measurePaintFor(config).measureText(rowPrefix)
+            val y = ((row + 1) * lineHeight - state.viewport.value.scrollY).toFloat()
+            return x to y
+        }
         val (lineStart, _) = snapshot.lineAt(line)
         val prefixText = snapshot.readRangeAsUtf16(lineStart, offset)
-        val gutter = computeGutterWidth(snapshot, config)
         val x = gutter + 8f + measurePaintFor(config).measureText(prefixText) - state.viewport.value.scrollX
         val y = ((line + 1) * lineHeight - state.viewport.value.scrollY).toFloat()
         return x to y

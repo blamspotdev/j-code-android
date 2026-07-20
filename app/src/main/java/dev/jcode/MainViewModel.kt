@@ -7,6 +7,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -172,6 +173,15 @@ sealed interface PendingFolderType {
     }
 }
 
+/** An actionable prompt the shell shows as a snackbar with a single button. */
+sealed interface WorkbenchPrompt {
+    /** A change only applies on a fresh process — offer to restart the app. */
+    data class RestartApp(val message: String) : WorkbenchPrompt
+}
+
+/** An updated extension awaiting a reload; surfaced as a compact banner atop the Extensions panel. */
+data class PendingReload(val id: String, val name: String)
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     val workspaceManager: WorkspaceManager = WorkspaceServiceLocator.workspaceManager(application)
     val configService: ConfigService = ConfigServiceLocator.configService()
@@ -258,6 +268,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // Extensions updated this session that are waiting for a reload — shown as a compact banner at
+    // the top of the Extensions panel. Cleared per-id on reload.
+    private val _pendingReload = MutableStateFlow<List<PendingReload>>(emptyList())
+    val pendingReload: StateFlow<List<PendingReload>> = _pendingReload.asStateFlow()
+
+    private fun markPendingReload(id: String, name: String) {
+        _pendingReload.update { list -> list.filterNot { it.id == id } + PendingReload(id, name) }
+    }
+
+    /** Reload an extension's live webviews with its freshly-installed code (from the panel banner).
+     *  A plain update leaves an already-open extension tab running the OLD bundle; a `reload` event
+     *  makes each of that extension's live [ExtensionWebViewPage]s re-fetch the updated on-disk page,
+     *  and the SCM/background host is torn down (no-op otherwise) so it too recreates fresh. */
+    fun reloadExtension(id: String) {
+        _extensionEvents.tryEmit("reload" to JSONObject().put("extensionId", id).toString())
+        runCatching { dev.jcode.workbench.ScmWebViewHolder.destroy(id) }
+        _pendingReload.update { list -> list.filterNot { it.id == id } }
+    }
+
+    /** Reload every extension awaiting one (the banner's "Reload" button). */
+    fun reloadPendingExtensions() {
+        _pendingReload.value.map { it.id }.forEach { reloadExtension(it) }
+    }
+
+    /** Actionable prompts surfaced as a snackbar with a button (restart the app). */
+    private val _prompts = MutableSharedFlow<WorkbenchPrompt>(extraBufferCapacity = 4)
+    val prompts = _prompts.asSharedFlow()
+
     /**
      * Sideload an extension from a picked `.jext` [uri] (Developer options). Streams it to a cache
      * file, installs it (unsigned → marked debuggable; signed → installed normally), refreshes, and
@@ -265,6 +303,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun sideloadExtension(uri: android.net.Uri) {
         viewModelScope.launch {
+            val installedBefore = _installedExtensions.value.map { it.id }.toSet()
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val tmp = File.createTempFile("sideload", ".jext", appContext.cacheDir)
@@ -285,6 +324,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         if (r.signed) "Installed '${r.extension.name}' (signed — not debuggable)."
                         else "Loaded '${r.extension.name}' (unsigned dev extension).",
                     )
+                    if (r.extension.id in installedBefore) {
+                        markPendingReload(r.extension.id, r.extension.name)
+                    }
                 }
                 .onFailure { emitMessage("Sideload failed: ${it.message ?: "invalid .jext"}") }
         }
@@ -303,6 +345,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun installExtension(entry: MarketplaceEntry) {
         viewModelScope.launch {
+            val wasInstalled = _installedExtensions.value.any { it.id == entry.id }
             _marketplaceBusy.value = true
             try {
                 installExtensionResolvingDeps(entry, visiting = mutableSetOf())
@@ -311,6 +354,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _extensionInstallPhases.value = emptyMap()
             }
             refreshInstalledExtensions()
+            // An update replaced an extension that may be running an old copy in an open tab/panel;
+            // surface a reload banner (a fresh install has nothing live to reload).
+            if (wasInstalled && _installedExtensions.value.any { it.id == entry.id }) {
+                markPendingReload(entry.id, entry.name)
+            }
         }
     }
 
@@ -654,10 +702,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.HARDWARE_ACCELERATION)
 
     fun setHardwareAcceleration(enabled: Boolean) {
+        val changed = enabled != hardwareAcceleration.value
         getApplication<Application>()
             .getSharedPreferences(MainActivity.UI_STARTUP_PREFS, Context.MODE_PRIVATE)
             .edit().putBoolean(MainActivity.KEY_HW_ACCELERATION, enabled).apply()
         viewModelScope.launch { uiPreferences.edit { it[hardwareAccelerationKey] = enabled } }
+        // The window flag is read once at startup (see MainActivity), so only a fresh process applies it.
+        if (changed) _prompts.tryEmit(WorkbenchPrompt.RestartApp("Restart JCode to apply the hardware acceleration change."))
     }
 
     // Explorer "hide files at the project root" preference: a mode + the user's newline-separated
@@ -1063,6 +1114,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setMarkdownWrapPortrait(enabled: Boolean) {
         viewModelScope.launch {
             uiPreferences.edit { prefs -> prefs[markdownWrapPortraitKey] = enabled }
+        }
+    }
+
+    private val editorFontSizeGlobalKey = floatPreferencesKey("editor_font_size_global")
+
+    /** App-level (Global settings) editor font-size default, applied when no workspace/project .jcode
+     *  override exists. Pushed into [ConfigService] so it feeds the effective font-size merge. */
+    val editorFontSizeGlobal: StateFlow<Float> = uiPreferences.data
+        .map { prefs -> (prefs[editorFontSizeGlobalKey] ?: SettingsDefaults.EDITOR_FONT_SIZE).coerceIn(8f, 72f) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.EDITOR_FONT_SIZE)
+
+    fun setEditorFontSizeGlobal(size: Float) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[editorFontSizeGlobalKey] = size.coerceIn(8f, 72f) }
+        }
+    }
+
+    private val editorWordWrapKey = booleanPreferencesKey("editor_word_wrap")
+
+    /** App-level (Global settings) editor word-wrap toggle. Drives [dev.jcode.core.editor.RenderConfig]
+     *  soft-wrap for every open editor tab. */
+    val editorWordWrap: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[editorWordWrapKey] ?: SettingsDefaults.EDITOR_WORD_WRAP }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.EDITOR_WORD_WRAP)
+
+    fun setEditorWordWrap(enabled: Boolean) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[editorWordWrapKey] = enabled }
         }
     }
 
@@ -1501,10 +1580,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        // Feed the Global-settings font-size default into the config merge; setGlobalEditorFontSize
+        // re-publishes effectiveConfig, so the collector below live-updates open editors.
         viewModelScope.launch {
-            effectiveConfig.collectLatest { config ->
-                applyEffectiveConfigToOpenTabs(config)
-            }
+            editorFontSizeGlobal.collect { configService.setGlobalEditorFontSize(it) }
+        }
+
+        viewModelScope.launch {
+            combine(effectiveConfig, editorWordWrap) { config, wrap -> config to wrap }
+                .collectLatest { (config, wrap) -> applyEffectiveConfigToOpenTabs(config, wrap) }
         }
 
         viewModelScope.launch {
@@ -2547,6 +2631,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Open (or focus) the in-editor Settings page as an editor tab. */
     fun openSettingsPage() {
+        _bringEditorToFront.tryEmit(Unit)
         val existing = _editorGroup.value.tabs.firstOrNull { it.pageKind == EditorPageKind.Settings }
         if (existing != null) {
             _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
@@ -2557,6 +2642,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openEnvironmentPage() {
+        _bringEditorToFront.tryEmit(Unit)
         val existing = _editorGroup.value.tabs.firstOrNull { it.pageKind == EditorPageKind.Environment }
         if (existing != null) {
             _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
@@ -3264,6 +3350,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runtimeServices.clear()
     }
 
+    /**
+     * Fully restart the app: save the session, stop the Linux runtime (proot/terminals/services), then
+     * relaunch a fresh process. Used for changes that only apply at startup (e.g. hardware acceleration),
+     * which a mere Activity recreate can't pick up. The fresh task is started while this (foreground)
+     * process is still alive — so it isn't blocked by background-activity-launch rules — and the launch
+     * request survives the immediate [Runtime.exit], which the system carries out in a new process.
+     */
+    fun restartApp() {
+        runCatching { flushSessionNow() }
+        runCatching { stopAllRuntimeServices() }
+        runCatching { dev.jcode.workbench.ScmWebViewHolder.destroyAll() }
+        val ctx = getApplication<Application>()
+        ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)?.component?.let { component ->
+            ctx.startActivity(android.content.Intent.makeRestartActivityTask(component))
+        }
+        Runtime.getRuntime().exit(0)
+    }
+
     // --- Background extensions (Task Manager "Background extensions" section) -----------------------
     // A "background extension" is one running a persistent WebView host (the SCM sidebar or OpenChamber
     // Chat) and/or a service.start server. Stop reaps its services and tears down its host; the SCM
@@ -3331,6 +3435,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Open (or focus) the Extension Settings page (per-extension settings + permissions). */
     fun openExtensionPermissionsPage() {
+        _bringEditorToFront.tryEmit(Unit)
         val existing = _editorGroup.value.tabs.firstOrNull { it.pageKind == EditorPageKind.ExtensionPermissions }
         if (existing != null) {
             _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
@@ -3356,6 +3461,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Open/focus a per-type detail tab: focus if already open, else replace any other tab of [kind]. */
     private fun openDetailPage(tabId: String, kind: EditorPageKind, title: () -> String) {
+        _bringEditorToFront.tryEmit(Unit)
         var group = _editorGroup.value
         val existing = group.tabs.firstOrNull { it.id == tabId }
         if (existing != null) {
@@ -4149,19 +4255,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return hasLocalProject
     }
 
-    private fun applyEffectiveConfigToOpenTabs(config: EffectiveConfig) {
+    private fun applyEffectiveConfigToOpenTabs(config: EffectiveConfig, wordWrap: Boolean = editorWordWrap.value) {
         _editorGroup.value.tabs.forEach { tab ->
-            applyConfigToTab(tab, config)
+            applyConfigToTab(tab, config, wordWrap)
         }
     }
 
-    private fun applyConfigToTab(tab: EditorTab, config: EffectiveConfig) {
+    private fun applyConfigToTab(tab: EditorTab, config: EffectiveConfig, wordWrap: Boolean = editorWordWrap.value) {
         val editorState = tab.editorState ?: return
         editorState.updateRenderConfig { current ->
             current.copy(
                 fontSizeSp = config.editor.fontSize,
                 tabWidth = config.editor.tabSize,
                 ligatures = config.editor.ligatures,
+                wordWrap = wordWrap,
             )
         }
     }

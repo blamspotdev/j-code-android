@@ -270,6 +270,16 @@ fun ExtensionWebViewPage(
     if (events != null) {
         LaunchedEffect(extension.id) {
             events.collect { (name, json) ->
+                // A `reload` after an update re-fetches THIS extension's updated on-disk page (a plain
+                // update otherwise leaves the open tab running the old bundle). Handled natively — never
+                // forwarded to the page's JS bridge.
+                if (name == "reload") {
+                    val target = runCatching { JSONObject(json).optString("extensionId") }.getOrNull()
+                    if (target.isNullOrEmpty() || target == extension.id) {
+                        webView?.post { webView?.reload() }
+                    }
+                    return@collect
+                }
                 // `config` / `contextAction` events are scoped to one extension — skip other
                 // extensions' WebViews so they don't react to traffic that isn't theirs. A
                 // `contextAction` is further targeted at the view showing the action's route, so a

@@ -69,6 +69,7 @@ data class RenderConfig(
     val tabWidth: Int = 4,
     val showWhitespace: Boolean = false,
     val ligatures: Boolean = true,
+    val wordWrap: Boolean = false,
 )
 
 /** Language descriptor attached to an editor. */

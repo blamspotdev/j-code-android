@@ -77,8 +77,21 @@ class ConfigService {
     private val _projectError = MutableStateFlow<String?>(null)
     val projectError: StateFlow<String?> = _projectError.asStateFlow()
 
+    // App-level (Global settings) editor font-size default, pushed in from the DataStore-backed
+    // setting. It is the base of the font-size merge (below workspace/project .jcode), so a Global
+    // change re-publishes the effective config and live-updates open editors with no scope override.
+    private var globalEditorFontSize: Float = 14f
+
     private val _effectiveConfig = MutableStateFlow(computeEffective(null, null))
     val effectiveConfig: StateFlow<EffectiveConfig> = _effectiveConfig.asStateFlow()
+
+    /** Set the Global-settings editor font-size default and re-publish if it changed. */
+    fun setGlobalEditorFontSize(size: Float) {
+        val coerced = size.coerceIn(8f, 72f)
+        if (coerced == globalEditorFontSize) return
+        globalEditorFontSize = coerced
+        publishEffective()
+    }
 
     suspend fun bindLocalConfigFiles(
         workspaceRoot: File?,
@@ -467,7 +480,7 @@ class ConfigService {
         val wsEditor = workspace?.editor
         val prjEditor = project?.editor
         val editor = EffectiveEditorConfig(
-            fontSize = prjEditor?.fontSize ?: wsEditor?.fontSize ?: defaults.editor.fontSize ?: 14f,
+            fontSize = prjEditor?.fontSize ?: wsEditor?.fontSize ?: defaults.editor.fontSize ?: globalEditorFontSize,
             tabSize = prjEditor?.tabSize ?: wsEditor?.tabSize ?: defaults.editor.tabSize ?: 4,
             insertSpaces = prjEditor?.insertSpaces ?: wsEditor?.insertSpaces ?: defaults.editor.insertSpaces ?: true,
             wordWrap = prjEditor?.wordWrap ?: wsEditor?.wordWrap ?: defaults.editor.wordWrap ?: false,

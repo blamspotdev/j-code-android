@@ -75,7 +75,7 @@ class Renderer(
     private var cachedSpanSource: List<Decoration>? = null
     private var cachedSpans: List<ColoredSpan> = emptyList()
 
-    fun draw(canvas: Canvas, snapshot: Snapshot, viewport: Viewport, config: RenderConfig, carets: List<Caret>, decorations: DecorationSet = DecorationSet.EMPTY, theme: EditorTheme = EditorTheme.DARK) {
+    fun draw(canvas: Canvas, snapshot: Snapshot, viewport: Viewport, config: RenderConfig, carets: List<Caret>, decorations: DecorationSet = DecorationSet.EMPTY, theme: EditorTheme = EditorTheme.DARK, wrapMap: WrapMap? = null) {
         // Configure paint for current config. fontSizeSp is in sp; Paint.textSize is in px, so convert
         // via the display density (a missing conversion renders text ~density× too small).
         val fontSizePx = config.fontSizeSp * density
@@ -110,6 +110,11 @@ class Renderer(
 
         // Draw gutter background
         canvas.drawRect(0f, 0f, gutterWidth.toFloat(), viewport.heightPx.toFloat(), gutterBgPaint)
+
+        if (wrapMap != null) {
+            drawWrapped(canvas, snapshot, viewport, config, carets, decorations, theme, wrapMap, lineHeightPx, gutterWidth, coloredSpans, caretLines)
+            return
+        }
 
         // Sub-line scroll remainder. visibleLineTop floors scrollY, so line L's screen top is
         // (L - visibleTop)*lineHeightPx MINUS the remainder — content shifts up as scrollY grows.
@@ -250,6 +255,164 @@ class Renderer(
                 } else {
                     canvas.drawCircle(cx, cy, radius, breakpointPaint)
                 }
+            }
+        }
+    }
+
+    /**
+     * Soft word-wrap render pass: iterates flat visual rows (see [WrapMap]) instead of logical lines.
+     * Each visual row draws its logical line's `[startColumn, endColumn)` slice at the text-area left
+     * (no horizontal scroll); line numbers and gutter markers draw only on a line's first row.
+     */
+    private fun drawWrapped(
+        canvas: Canvas,
+        snapshot: Snapshot,
+        viewport: Viewport,
+        config: RenderConfig,
+        carets: List<Caret>,
+        decorations: DecorationSet,
+        theme: EditorTheme,
+        wrapMap: WrapMap,
+        lineHeightPx: Int,
+        gutterWidth: Int,
+        coloredSpans: List<ColoredSpan>,
+        caretLines: Set<Int>,
+    ) {
+        val totalRows = wrapMap.totalRows
+        val firstRow = (viewport.scrollY / lineHeightPx).coerceIn(0, (totalRows - 1).coerceAtLeast(0))
+        val yRem = viewport.scrollY % lineHeightPx
+        val rowsVisible = viewport.heightPx / lineHeightPx + 2
+        val lastRow = (firstRow + rowsVisible).coerceAtMost(totalRows)
+        if (firstRow >= lastRow) return
+        // No horizontal scroll while wrapping — every row starts at the text-area left.
+        val textLeft = gutterWidth + 8f
+
+        // One batched read of the logical lines the visible rows touch.
+        val firstLine = wrapMap.rowToLine(firstRow).line
+        val lastLine = wrapMap.rowToLine(lastRow - 1).line
+        val window = snapshot.readLines(firstLine, (lastLine - firstLine + 1).coerceAtLeast(1))
+
+        // Selection (line,col) bounds, resolved once per caret: [sLine, sCol, eLine, eCol].
+        val selections = carets.filter { it.isSelection }.map {
+            val (sl, sc) = snapshot.offsetToLineColumn(it.start)
+            val (el, ec) = snapshot.offsetToLineColumn(it.end)
+            intArrayOf(sl, sc, el, ec)
+        }
+        val lineHighlights = decorations.atLayer(Layer.BACKGROUND).filterIsInstance<LineHighlightDecoration>()
+
+        canvas.save()
+        canvas.clipRect(gutterWidth.toFloat(), 0f, canvas.width.toFloat(), canvas.height.toFloat())
+
+        for (vr in firstRow until lastRow) {
+            val rs = wrapMap.rowToLine(vr)
+            val line = rs.line
+            if (!window.contains(line)) continue
+            val lineText = window.text(line)
+            val startCol = rs.startColumn.coerceIn(0, lineText.length)
+            val endCol = rs.endColumn.coerceIn(startCol, lineText.length)
+            val y = (vr - firstRow) * lineHeightPx - yRem
+            val yF = y.toFloat()
+            val yBottom = (y + lineHeightPx).toFloat()
+
+            for (hl in lineHighlights) {
+                if (hl.line == line) {
+                    lineHighlightPaint.color = hl.color
+                    canvas.drawRect(gutterWidth.toFloat(), yF, canvas.width.toFloat(), yBottom, lineHighlightPaint)
+                }
+            }
+
+            for (sel in selections) {
+                if (line < sel[0] || line > sel[2]) continue
+                val selStart = if (line == sel[0]) WrapMap.byteColToCharIndex(lineText, sel[1]) else 0
+                val selEnd = if (line == sel[2]) WrapMap.byteColToCharIndex(lineText, sel[3]) else lineText.length
+                val a0 = maxOf(selStart, startCol).coerceIn(startCol, endCol)
+                val a1 = minOf(selEnd, endCol).coerceIn(a0, endCol)
+                if (a0 < a1) {
+                    val xStart = textLeft + measureTextWidth(lineText.substring(startCol, a0), config)
+                    val xEnd = textLeft + measureTextWidth(lineText.substring(startCol, a1), config)
+                    canvas.drawRect(xStart, yF, xEnd, yBottom, selectionPaint)
+                }
+            }
+
+            val rowText = lineText.substring(startCol, endCol)
+            val baseline = y + lineHeightPx * 0.7f
+            if (coloredSpans.isNotEmpty()) {
+                drawLineWithSpans(canvas, rowText, window.byteStart(line) + startCol, coloredSpans, textLeft, baseline, config)
+            } else {
+                textPaint.color = theme.foreground.toInt()
+                canvas.drawText(rowText, textLeft, baseline, textPaint)
+            }
+        }
+
+        val squiggles = decorations.atLayer(Layer.SQUIGGLY).filterIsInstance<SquiggleDecoration>()
+        for (sq in squiggles) {
+            val sqStart = sq.startByte.coerceAtLeast(0)
+            val sqEnd = sq.endByte.coerceAtLeast(sqStart)
+            val (startLine, startColB) = snapshot.offsetToLineColumn(sqStart)
+            val (endLine, endColB) = snapshot.offsetToLineColumn(sqEnd)
+            for (vr in firstRow until lastRow) {
+                val rs = wrapMap.rowToLine(vr)
+                val line = rs.line
+                if (line < startLine || line > endLine || !window.contains(line)) continue
+                val lineText = window.text(line)
+                val startCol = rs.startColumn.coerceIn(0, lineText.length)
+                val endCol = rs.endColumn.coerceIn(startCol, lineText.length)
+                val c0all = if (line == startLine) WrapMap.byteColToCharIndex(lineText, startColB) else 0
+                val c1all = if (line == endLine) WrapMap.byteColToCharIndex(lineText, endColB) else lineText.length
+                if (c1all < startCol || c0all > endCol) continue
+                val a0 = maxOf(c0all, startCol).coerceIn(startCol, endCol)
+                val a1 = minOf(c1all, endCol).coerceIn(a0, endCol)
+                val xStart = textLeft + measureTextWidth(lineText.substring(startCol, a0), config)
+                var xEnd = textLeft + measureTextWidth(lineText.substring(startCol, a1), config)
+                if (xEnd < xStart + 12f) xEnd = xStart + 12f
+                val y = (vr - firstRow) * lineHeightPx - yRem
+                squigglePaint.color = sq.severity.color
+                SquiggleDecoration.drawSquiggle(canvas, squigglePaint, xStart, xEnd, y + lineHeightPx * 0.7f + 5f)
+            }
+        }
+
+        for (caret in carets) {
+            val (cl, cc) = snapshot.offsetToLineColumn(caret.head)
+            if (!window.contains(cl)) continue
+            val lineText = window.text(cl)
+            val ccChar = WrapMap.byteColToCharIndex(lineText, cc)
+            val crow = wrapMap.rowOf(cl, ccChar)
+            if (crow < firstRow || crow >= lastRow) continue
+            val rs = wrapMap.rowToLine(crow)
+            val startCol = rs.startColumn.coerceIn(0, lineText.length)
+            val col = ccChar.coerceIn(startCol, lineText.length)
+            val x = textLeft + measureTextWidth(lineText.substring(startCol, col), config)
+            val y = (crow - firstRow) * lineHeightPx - yRem
+            canvas.drawLine(x, y.toFloat(), x, (y + lineHeightPx).toFloat(), cursorPaint)
+        }
+
+        canvas.restore()
+
+        // Line numbers — only on a logical line's first visual row.
+        for (vr in firstRow until lastRow) {
+            val rs = wrapMap.rowToLine(vr)
+            if (wrapMap.firstRowOf(rs.line) != vr) continue
+            val y = (vr - firstRow) * lineHeightPx - yRem
+            lineNumberPaint.color = if (rs.line in caretLines) theme.lineNumberActive.toInt() else theme.lineNumber.toInt()
+            canvas.drawText("${rs.line + 1}", gutterWidth - 12f, y + lineHeightPx * 0.7f, lineNumberPaint)
+        }
+
+        val gutterMarkers = decorations.atLayer(Layer.GUTTER).filterIsInstance<GutterMarkerDecoration>()
+        for (marker in gutterMarkers) {
+            val mrow = wrapMap.firstRowOf(marker.line)
+            if (mrow < firstRow || mrow >= lastRow) continue
+            val y = (mrow - firstRow) * lineHeightPx - yRem
+            val radius = lineHeightPx * 0.24f
+            val cx = radius + 6f
+            val cy = y + lineHeightPx / 2f
+            breakpointPaint.color = marker.color
+            if (marker.kind == GutterMarkerDecoration.Kind.CurrentLine) {
+                val p = android.graphics.Path().apply {
+                    moveTo(cx - radius, cy - radius); lineTo(cx + radius, cy); lineTo(cx - radius, cy + radius); close()
+                }
+                canvas.drawPath(p, breakpointPaint)
+            } else {
+                canvas.drawCircle(cx, cy, radius, breakpointPaint)
             }
         }
     }
