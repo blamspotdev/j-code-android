@@ -25,6 +25,11 @@ fun JcTooltip(
         tooltip = { PlainTooltip { Text(label) } },
         state = rememberTooltipState(),
         modifier = modifier,
+        // Non-focusable: a focusable tooltip popup consumes the click that follows a mouse hover
+        // (dismiss-on-outside-click) instead of forwarding it to the wrapped button. The label is
+        // plain text with nothing to focus, so this is safe and makes every tooltip button clickable
+        // with a mouse on the first click.
+        focusable = false,
     ) {
         content()
     }

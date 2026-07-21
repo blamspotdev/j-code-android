@@ -96,6 +96,7 @@ fun EditorPane(
     onTabClosed: (String) -> Unit = {},
     onOpenFile: () -> Unit = {},
     onSave: () -> Unit = {},
+    onFind: () -> Unit = {},
     languageActionsEnabled: Boolean = false,
     onLanguageAction: (EditorLanguageAction, String) -> Unit = { _, _ -> },
     breakpointLinesFor: (EditorTab) -> Set<Int> = { emptySet() },
@@ -133,6 +134,7 @@ fun EditorPane(
                     EditorViewHost(
                         editorState = editorState,
                         onSave = onSave,
+                        onFind = onFind,
                         languageActionsEnabled = languageActionsEnabled,
                         onLanguageAction = onLanguageAction,
                         breakpointLines = breakpointLinesFor(activeTab),
@@ -346,6 +348,7 @@ fun EditorViewHost(
     editorState: dev.jcode.core.editor.EditorState,
     modifier: Modifier = Modifier,
     onSave: () -> Unit = {},
+    onFind: () -> Unit = {},
     languageActionsEnabled: Boolean = false,
     onLanguageAction: (EditorLanguageAction, String) -> Unit = { _, _ -> },
     breakpointLines: Set<Int> = emptySet(),
@@ -444,6 +447,7 @@ fun EditorViewHost(
                     attach(editorState)
                     onContextRequest = { menu = it }
                     onSaveRequest = { onSave() }
+                    onFindRequest = { onFind() }
                     onCompletionAnchorChanged = { completionAnchor = it }
                     onGutterTap = { onToggleBreakpoint(it) }
                     onWordLongPress = wordLongPressHandler
@@ -471,6 +475,7 @@ fun EditorViewHost(
                 v.attach(editorState)
                 v.onContextRequest = { menu = it }
                 v.onSaveRequest = { onSave() }
+                v.onFindRequest = { onFind() }
                 v.onCompletionAnchorChanged = { completionAnchor = it }
                 v.onGutterTap = { onToggleBreakpoint(it) }
                 v.onWordLongPress = wordLongPressHandler

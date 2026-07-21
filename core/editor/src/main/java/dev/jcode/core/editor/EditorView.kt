@@ -178,6 +178,9 @@ class EditorView @JvmOverloads constructor(
     /** Invoked when the user requests a save (Ctrl+S); the host writes the buffer to disk. */
     var onSaveRequest: (() -> Unit)? = null
 
+    /** Invoked when the user requests Find (Ctrl+F); the host opens the find panel. */
+    var onFindRequest: (() -> Unit)? = null
+
     /** Invoked after edits/caret moves with the current completion prefix anchor (null = dismiss). */
     var onCompletionAnchorChanged: ((CompletionAnchor?) -> Unit)? = null
 
@@ -1080,6 +1083,36 @@ class EditorView @JvmOverloads constructor(
             return true
         }
 
+        // Ctrl+A/C/X/V/F: select-all, clipboard, and find from a hardware keyboard (touch uses the
+        // long-press context menu). Acted on key-down; both down and up are consumed.
+        if (event.isCtrlPressed && !event.isAltPressed) {
+            val ctrlHandled = when (event.keyCode) {
+                KeyEvent.KEYCODE_A, KeyEvent.KEYCODE_C, KeyEvent.KEYCODE_X,
+                KeyEvent.KEYCODE_V, KeyEvent.KEYCODE_F -> true
+                else -> false
+            }
+            if (ctrlHandled) {
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    when (event.keyCode) {
+                        KeyEvent.KEYCODE_A -> selectAll()
+                        KeyEvent.KEYCODE_C -> copySelection()
+                        KeyEvent.KEYCODE_X -> cutSelection()
+                        KeyEvent.KEYCODE_V -> pasteClipboard()
+                        KeyEvent.KEYCODE_F -> onFindRequest?.invoke()
+                    }
+                }
+                return true
+            }
+        }
+
+        // Escape collapses a selection; with nothing to collapse it bubbles (e.g. to close a panel)
+        // instead of being silently swallowed while the editor holds focus.
+        if (event.keyCode == KeyEvent.KEYCODE_ESCAPE) {
+            if (caretOrNull(state)?.isSelection != true) return super.dispatchKeyEvent(event)
+            if (event.action == KeyEvent.ACTION_DOWN) collapseSelection(state)
+            return true
+        }
+
         // Editing keys arrive as key events (the soft IME sends them via sendKeyEvent), so they must
         // be handled here — commitText only covers printable characters.
         if (event.keyCode in HANDLED_KEYS || (event.unicodeChar != 0 && !event.isCtrlPressed && !event.isAltPressed)) {
@@ -1088,7 +1121,7 @@ class EditorView @JvmOverloads constructor(
                 KeyEvent.KEYCODE_DEL -> deleteAtCaret(state, forward = false)
                 KeyEvent.KEYCODE_FORWARD_DEL -> deleteAtCaret(state, forward = true)
                 KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> insertAtCaret(state, "\n")
-                KeyEvent.KEYCODE_TAB -> insertAtCaret(state, "    ")
+                KeyEvent.KEYCODE_TAB -> if (event.isShiftPressed) dedentAtCaret(state) else insertAtCaret(state, "    ")
                 KeyEvent.KEYCODE_DPAD_LEFT -> moveCaret(state, -1)
                 KeyEvent.KEYCODE_DPAD_RIGHT -> moveCaret(state, 1)
                 KeyEvent.KEYCODE_DPAD_UP -> moveCaretLine(state, -1)
@@ -1097,7 +1130,6 @@ class EditorView @JvmOverloads constructor(
                 KeyEvent.KEYCODE_MOVE_END -> moveCaretLineEdge(state, toStart = false)
                 KeyEvent.KEYCODE_PAGE_UP -> moveCaretLine(state, -visiblePageLines(state))
                 KeyEvent.KEYCODE_PAGE_DOWN -> moveCaretLine(state, visiblePageLines(state))
-                KeyEvent.KEYCODE_ESCAPE -> collapseSelection(state)
                 else -> insertAtCaret(state, event.unicodeChar.toChar().toString())
             }
             return true
@@ -1136,6 +1168,30 @@ class EditorView @JvmOverloads constructor(
             state.applyEdit(EditTx.insert(at, text))
             val newPos = at + text.toByteArray(Charsets.UTF_8).size
             state.setSelection(listOf(Caret(newPos, newPos)))
+        }
+        invalidate()
+        updateImeCursor()
+    }
+
+    /** Remove one indent level (up to 4 leading spaces, or a leading tab) from the caret's line. */
+    private fun dedentAtCaret(state: EditorState) {
+        val caret = caretOrNull(state) ?: return
+        val snapshot = state.snapshot.value
+        val (line, _) = snapshot.offsetToLineColumn(caret.head)
+        val lineStart = snapshot.lineColumnToOffset(line, 0)
+        val lead = snapshot.readRange(lineStart, min(snapshot.byteLength, lineStart + 4))
+        var remove = 0
+        if (lead.isNotEmpty() && lead[0].toInt() == '\t'.code) {
+            remove = 1
+        } else {
+            while (remove < lead.size && lead[remove].toInt() == ' '.code) remove++
+        }
+        if (remove == 0) return
+        val head = caret.head
+        runBlocking {
+            state.applyEdit(EditTx.delete(lineStart, lineStart + remove))
+            val newHead = max(lineStart, head - remove)
+            state.setSelection(listOf(Caret(newHead, newHead)))
         }
         invalidate()
         updateImeCursor()

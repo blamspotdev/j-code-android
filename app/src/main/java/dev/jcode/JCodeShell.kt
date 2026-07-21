@@ -1186,6 +1186,7 @@ fun JCodeApp(
         modifier = modifier,
         editorGoToLineNonce = editorGoToLineNonce,
         editorFindRequest = editorFindRequest,
+        onEditorFind = { editorFindRequest = ((editorFindRequest?.first ?: 0) + 1) to "" },
         windowInfo = windowInfo,
         workspace = workspace,
         selectedProject = selectedProject,
@@ -1355,6 +1356,7 @@ fun JCodeApp(
 private fun JCodeShell(
     editorGoToLineNonce: Int,
     editorFindRequest: Pair<Int, String>?,
+    onEditorFind: () -> Unit,
     windowInfo: JCodeWindowInfo,
     workspace: Workspace?,
     selectedProject: Project?,
@@ -2488,6 +2490,7 @@ private fun JCodeShell(
                         onSelectEditorTab = onSelectEditorTab,
                         onCloseEditorTab = onCloseEditorTab,
                         onSave = onSaveActiveTab,
+                        onFind = onEditorFind,
                         onOpenFileRequest = {
                             selectedTool = WorkbenchTool.Explorer
                             if (usesModalWorkspace) {
@@ -3201,6 +3204,7 @@ private fun EditorWorkspace(
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
     onSave: () -> Unit,
+    onFind: () -> Unit,
     onOpenFileRequest: () -> Unit,
     languageActionsEnabled: Boolean,
     onEditorLanguageAction: (EditorLanguageAction, String) -> Unit,
@@ -3268,6 +3272,7 @@ private fun EditorWorkspace(
                     onTabClosed = onCloseEditorTab,
                     onOpenFile = onOpenFileRequest,
                     onSave = onSave,
+                    onFind = onFind,
                     languageActionsEnabled = languageActionsEnabled,
                     onLanguageAction = onEditorLanguageAction,
                     breakpointLinesFor = { tab -> dbg.breakpoints[tab.filePath.path].orEmpty() },
