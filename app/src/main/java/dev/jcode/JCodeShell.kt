@@ -181,6 +181,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -887,6 +888,17 @@ fun JCodeApp(
             }
             else -> Unit
         }
+    }
+
+    // Recover a stuck in-app update: if the system installer was dismissed without completing, clear
+    // the "Installing…" state when we return to the foreground so the Update button works again.
+    val updateLifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(updateLifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.onAppResumed()
+        }
+        updateLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { updateLifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // Keep clean editor tabs mirrored to disk: re-sync on every foreground regain and on a slow tick

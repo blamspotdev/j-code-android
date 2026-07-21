@@ -12,7 +12,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -31,6 +33,11 @@ import java.net.URL
  */
 object AppUpdateInstaller {
     const val INSTALL_ACTION = "dev.jcode.action.APP_INSTALL_STATUS"
+
+    /** Upper bound on how long [State.Installing] may wait for a session-status broadcast before we
+     *  treat the install as abandoned. Generous, because the user may be reading the system installer
+     *  / Play Protect prompt; the resume-time [recoverIfStuck] handles the common dismiss case sooner. */
+    private const val INSTALL_WATCHDOG_MS = 180_000L
 
     sealed interface State {
         data object Idle : State
@@ -85,9 +92,32 @@ object AppUpdateInstaller {
         try {
             _state.value = State.Installing
             withContext(Dispatchers.IO) { commit(app, apk) }
-            // Terminal state (Success/Failed) is set by AppInstallReceiver when the session reports.
+            // The terminal status (Success/Failed) arrives asynchronously via AppInstallReceiver once
+            // the system installer resolves. Never hang on it: if the user dismisses the system
+            // installer (or Play Protect) without an explicit cancel, no status is broadcast — time out
+            // into a recoverable failure so the button can't pin on "Installing…" forever.
+            val settled = withTimeoutOrNull(INSTALL_WATCHDOG_MS) {
+                state.first { it !is State.Installing }
+            }
+            if (settled == null && _state.value is State.Installing) {
+                _state.value = State.Failed("Installation didn't finish. Tap Update to try again.")
+            }
         } catch (e: Exception) {
             _state.value = State.Failed(e.message ?: "Install failed")
+        }
+    }
+
+    /**
+     * Called when the app returns to the foreground. If we're still [State.Installing] but control is
+     * back in our own UI, the system installer was dismissed without completing — a real success would
+     * have replaced and restarted the app. Give any in-flight status broadcast a moment to land, then
+     * clear the stuck state so the Update button is usable again.
+     */
+    suspend fun recoverIfStuck() {
+        if (_state.value !is State.Installing) return
+        val settled = withTimeoutOrNull(1_000L) { state.first { it !is State.Installing } }
+        if (settled == null && _state.value is State.Installing) {
+            _state.value = State.Idle
         }
     }
 
@@ -140,7 +170,11 @@ object AppUpdateInstaller {
                 apk.inputStream().use { it.copyTo(dest) }
                 session.fsync(dest)
             }
-            val intent = Intent(INSTALL_ACTION).setPackage(context.packageName)
+            // The status PendingIntent MUST target AppInstallReceiver explicitly (by component). The
+            // receiver has no <intent-filter>, so an implicit action-only intent is never delivered —
+            // the session status, including STATUS_PENDING_USER_ACTION, would be silently dropped and
+            // the UI would stick on "Installing…" with no confirmation dialog ever shown.
+            val intent = Intent(context, AppInstallReceiver::class.java).setAction(INSTALL_ACTION)
             var flags = PendingIntent.FLAG_UPDATE_CURRENT
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) flags = flags or PendingIntent.FLAG_MUTABLE
             val pending = PendingIntent.getBroadcast(context, sessionId, intent, flags)
