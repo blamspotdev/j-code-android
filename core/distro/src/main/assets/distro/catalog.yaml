@@ -434,20 +434,32 @@ entries:
     category: ai
     name: Claude Code
     description: >-
-      Anthropic's Claude Code CLI coding agent. Installed globally via npm (needs Node.js). Bring an
-      API key or a Claude subscription, then run `claude` in the terminal.
+      Anthropic's Claude Code CLI coding agent, installed as a self-contained native build via the
+      official installer. Bring an API key or a Claude subscription, then run `claude` in the terminal.
     supportedArches: [arm64]
-    requiredSdks: [nodejs]
     installScript: |
       set -e
-      sudo npm install -g @anthropic-ai/claude-code
-      echo "installed: claude $(claude --version 2>/dev/null | tail -1)"
-    # Run --version rather than a presence check: npm leaves a non-functional stub bin when the
-    # postinstall platform-binary download fails, and a stub must not report as installed.
+      # Install the self-contained native build via Anthropic's official installer. npm is deliberately
+      # NOT used: under proot's --link2symlink, npm hard-links the platform binary
+      # (@anthropic-ai/claude-code-linux-arm64) and the hard link becomes a dangling ".l2s" symlink, so
+      # the installed `claude` is broken ("No such file or directory"). The native build has no
+      # node_modules and no hard links, so it sidesteps that entirely. HOME is pinned to /root so the
+      # install matches the (root) terminal's HOME, keeping `claude update`, auth (~/.claude) and the
+      # binary co-located.
+      export HOME=/root
+      command -v curl >/dev/null 2>&1 || { sudo apt-get update; sudo apt-get install -y curl ca-certificates; }
+      curl -fsSL https://claude.ai/install.sh | bash
+      # The installer drops the binary at $HOME/.local/bin/claude, which is on neither the verify PATH
+      # nor the terminal's PATH — so symlink it onto the global PATH (mirrors the opencode entry).
+      [ -x "$HOME/.local/bin/claude" ] && sudo ln -sf "$HOME/.local/bin/claude" /usr/local/bin/claude
+      claude --version
+    # Run --version rather than a presence check so a half-finished install can't report as ready.
     verifyScript: |
       claude --version >/dev/null 2>&1 && echo ready
     uninstallScript: |
-      sudo npm rm -g @anthropic-ai/claude-code
+      sudo npm rm -g @anthropic-ai/claude-code 2>/dev/null || true
+      sudo rm -f /usr/local/bin/claude
+      for h in /root /home/*; do rm -rf "$h/.local/share/claude" "$h/.local/bin/claude" 2>/dev/null || true; done
     updateCheckScript: ""
   - id: codex
     category: ai
