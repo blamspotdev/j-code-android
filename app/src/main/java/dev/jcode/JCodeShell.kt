@@ -473,20 +473,23 @@ fun JCodeApp(
     val autoCloseIdleTerminals by viewModel.autoCloseIdleTerminals.collectAsStateWithLifecycle()
     val idleTimeoutMinutes by viewModel.idleTimeoutMinutes.collectAsStateWithLifecycle()
     val maxTerminalSessions by viewModel.maxTerminalSessions.collectAsStateWithLifecycle()
+    val nestedShellTabs by viewModel.nestedShellTabs.collectAsStateWithLifecycle()
     val exitOnSwipeAway by viewModel.exitOnSwipeAway.collectAsStateWithLifecycle()
-    val performanceSettings = remember(hardwareAcceleration, confirmCloseRunning, autoCloseIdleTerminals, idleTimeoutMinutes, maxTerminalSessions, exitOnSwipeAway) {
+    val performanceSettings = remember(hardwareAcceleration, confirmCloseRunning, autoCloseIdleTerminals, idleTimeoutMinutes, maxTerminalSessions, nestedShellTabs, exitOnSwipeAway) {
         PerformanceSettings(
             hardwareAcceleration = hardwareAcceleration,
             confirmCloseRunning = confirmCloseRunning,
             autoCloseIdleTerminals = autoCloseIdleTerminals,
             idleTimeoutMinutes = idleTimeoutMinutes,
             maxTerminalSessions = maxTerminalSessions,
+            nestedShellTabs = nestedShellTabs,
             exitOnSwipeAway = exitOnSwipeAway,
             onSetHardwareAcceleration = viewModel::setHardwareAcceleration,
             onSetConfirmCloseRunning = viewModel::setConfirmCloseRunning,
             onSetAutoCloseIdleTerminals = viewModel::setAutoCloseIdleTerminals,
             onSetIdleTimeoutMinutes = viewModel::setIdleTimeoutMinutes,
             onSetMaxTerminalSessions = viewModel::setMaxTerminalSessions,
+            onSetNestedShellTabs = viewModel::setNestedShellTabs,
             onSetExitOnSwipeAway = viewModel::setExitOnSwipeAway,
         )
     }
@@ -1723,7 +1726,21 @@ private fun JCodeShell(
     LaunchedEffect(terminalSessionManager, configuredMaxTerminals) {
         terminalSessionManager.maxSessions = configuredMaxTerminals
     }
-    val terminalShellCommand = effectiveConfig.terminal.shellLinux?.takeIf { it.isNotBlank() } ?: "/bin/bash --login"
+    // Relocate interactive sub-shells into their own tab (OSC 7715). Pushed to the manager so
+    // createSession installs (or removes) the guest shell wrappers to match on the next session.
+    val nestedShellTabsEnabled = LocalPerformanceSettings.current.nestedShellTabs
+    LaunchedEffect(terminalSessionManager, nestedShellTabsEnabled) {
+        terminalSessionManager.nestedShellTabs = nestedShellTabsEnabled
+    }
+    val rawShellCommand = effectiveConfig.terminal.shellLinux?.takeIf { it.isNotBlank() } ?: "/bin/bash --login"
+    // A bare (non-absolute) shell name PATH-resolves to our nested-shell wrapper and would wrongly
+    // relocate the tab's own top shell; mark it so the wrapper inlines just this invocation (the shell's
+    // own sub-shells still relocate). The default "/bin/bash --login" is absolute and never affected.
+    val terminalShellCommand = if (nestedShellTabsEnabled && !rawShellCommand.trimStart().startsWith("/")) {
+        "JCODE_NSH_TOP=1 $rawShellCommand"
+    } else {
+        rawShellCommand
+    }
     val terminalReady = environmentState.prootInstalled && environmentState.distroInstalled == true
 
     // Core session spawner shared by the manual "+" terminal and the Run pipeline. Returns the new
@@ -1789,6 +1806,24 @@ private fun JCodeShell(
         spawnTerminalSession()
     }
 
+    // Relocate an interactive sub-shell (OSC 7715 from the guest wrapper) into its own temporary tab,
+    // focused and linked to its parent so exiting/closing it returns focus to the parent. A no-op if the
+    // feature is off, the parent tab is gone, or the payload is malformed — the guest wrapper's watchdog
+    // then falls back to running the sub-shell inline in the parent tab.
+    fun spawnRelocatedChild(parentId: String, payload: String) {
+        // Read the manager's live flag, not the composition-captured `nestedShellTabsEnabled` val: this
+        // runs from a listener registered once (DisposableEffect), so a captured val would be stale.
+        if (!terminalSessionManager.nestedShellTabs) return
+        if (parentId !in terminalSessionIds) return
+        val parts = payload.split(";", limit = 3)
+        if (parts.size < 3 || parts[0] != "open") return
+        val child = terminalSessionManager.createNestedShellSession(parentId, parts[1], parts[2]) ?: return
+        terminalSessionIds = terminalSessionIds + child.id
+        selectedTerminalSessionId = child.id
+        terminalSessionManager.switchSession(child.id)
+        TerminalSessionHost.onSessionStarted(appContext, child.id)
+    }
+
     fun selectTerminalSession(sessionId: String) {
         selectedTerminalSessionId = sessionId
         terminalSessionManager.switchSession(sessionId)
@@ -1852,16 +1887,29 @@ private fun JCodeShell(
 
     DisposableEffect(Unit) {
         TerminalSessionHost.setUiExitListener { exitedId ->
+            // A relocated sub-shell that exits returns focus to its parent tab (Windows-CMD style),
+            // not just the last tab. relocationParentOf survives the manager's reap so it's readable here.
+            val parentId = terminalSessionManager.relocationParentOf(exitedId)
             terminalSessionIds = terminalSessionIds.filterNot { it == exitedId }
             terminalTitles.remove(exitedId)
             if (selectedTerminalSessionId == exitedId) {
-                selectedTerminalSessionId = terminalSessionIds.lastOrNull().orEmpty()
-                selectedTerminalSessionId.takeIf { it.isNotEmpty() }
-                    ?.let { terminalSessionManager.switchSession(it) }
+                val next = parentId?.takeIf { it in terminalSessionIds }
+                    ?: terminalSessionIds.lastOrNull().orEmpty()
+                selectedTerminalSessionId = next
+                next.takeIf { it.isNotEmpty() }?.let { terminalSessionManager.switchSession(it) }
             }
+            terminalSessionManager.clearRelocation(exitedId)
             onRunSessionGone(exitedId)
         }
         onDispose { TerminalSessionHost.setUiExitListener(null) }
+    }
+
+    // Relocate an interactive sub-shell into its own temporary tab when a guest wrapper asks (OSC 7715).
+    DisposableEffect(Unit) {
+        TerminalSessionHost.setUiNestedShellListener { parentId, payload ->
+            spawnRelocatedChild(parentId, payload)
+        }
+        onDispose { TerminalSessionHost.setUiNestedShellListener(null) }
     }
 
     // A run command reporting completion (OSC 7713, emitted after the command) marks that terminal
@@ -1996,20 +2044,23 @@ private fun JCodeShell(
     }
 
     fun closeTerminalSession(sessionId: String) {
+        val parentId = terminalSessionManager.relocationParentOf(sessionId)
+        // Closing a parent strands its blocked relocated child(ren); close them first (this recurses and
+        // mutates terminalSessionIds), then compute the remaining list from the current state.
+        terminalSessionManager.childrenOf(sessionId).forEach { closeTerminalSession(it) }
         val remaining = terminalSessionIds.filterNot { it == sessionId }
         terminalSessionManager.closeSession(sessionId)
         TerminalSessionHost.onSessionStopped(sessionId)
         terminalTitles.remove(sessionId)
+        terminalSessionManager.clearRelocation(sessionId)
         terminalSessionIds = remaining
         // Manual close doesn't fire the EOF exit listener, so clear run state here too (Build & Run row).
         onRunSessionGone(sessionId)
         if (selectedTerminalSessionId == sessionId) {
-            if (remaining.isNotEmpty()) {
-                selectedTerminalSessionId = remaining.last()
-                terminalSessionManager.switchSession(selectedTerminalSessionId)
-            } else {
-                selectedTerminalSessionId = ""
-            }
+            // A relocated child returns focus to its parent; otherwise fall back to the last tab.
+            val next = parentId?.takeIf { it in remaining } ?: remaining.lastOrNull().orEmpty()
+            selectedTerminalSessionId = next
+            next.takeIf { it.isNotEmpty() }?.let { terminalSessionManager.switchSession(it) }
         }
     }
 
@@ -2019,6 +2070,7 @@ private fun JCodeShell(
         ids.forEach { id ->
             terminalSessionManager.closeSession(id)
             TerminalSessionHost.onSessionStopped(id)
+            terminalSessionManager.clearRelocation(id)
             onRunSessionGone(id)
         }
         terminalSessionIds = emptyList()
@@ -3949,6 +4001,9 @@ private fun TerminalSidebarContent(
                 orderedSessionIds.forEach { sessionId ->
                     val isActive = sessionId == selectedTerminalSessionId
                     val isPinned = sessionId in pinnedTerminalIds
+                    // Relocated interactive sub-shell tabs (OSC 7715) are transient: marked with ↳ and
+                    // not pinnable (they close automatically when their sub-shell exits).
+                    val isRelocated = terminalSessionFor(sessionId)?.relocationParentId != null
                     Box {
                         Row(
                             modifier = Modifier
@@ -3972,6 +4027,13 @@ private fun TerminalSidebarContent(
                                     contentDescription = "Pinned",
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(12.dp),
+                                )
+                            }
+                            if (isRelocated && !isPinned) {
+                                Text(
+                                    text = "↳",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
                                 )
                             }
                             MiddleEllipsisText(
@@ -4013,24 +4075,26 @@ private fun TerminalSidebarContent(
                             quickActions = listOf(
                                 ContextAction(JCodeIcon.Close, "Close") { requestCloseTerminals(listOf(sessionId)) },
                             ),
-                            listActions = listOf(
-                                ContextAction(JCodeIcon.Pin, if (isPinned) "Unpin" else "Pin") {
-                                    pinnedTerminalIds = if (isPinned) {
-                                        pinnedTerminalIds - sessionId
-                                    } else {
-                                        pinnedTerminalIds + sessionId
-                                    }
-                                },
-                                ContextAction(JCodeIcon.Clear, "Clear") {
+                            listActions = buildList {
+                                if (!isRelocated) {
+                                    add(ContextAction(JCodeIcon.Pin, if (isPinned) "Unpin" else "Pin") {
+                                        pinnedTerminalIds = if (isPinned) {
+                                            pinnedTerminalIds - sessionId
+                                        } else {
+                                            pinnedTerminalIds + sessionId
+                                        }
+                                    })
+                                }
+                                add(ContextAction(JCodeIcon.Clear, "Clear") {
                                     terminalSessionFor(sessionId)?.pty?.write(byteArrayOf(0x0C))
-                                },
-                                ContextAction(JCodeIcon.Close, "Close others") {
+                                })
+                                add(ContextAction(JCodeIcon.Close, "Close others") {
                                     requestCloseTerminals(terminalSessionIds.filter { it != sessionId && it !in pinnedTerminalIds })
-                                },
-                                ContextAction(JCodeIcon.Close, "Close all") {
+                                })
+                                add(ContextAction(JCodeIcon.Close, "Close all") {
                                     requestCloseTerminals(terminalSessionIds.filter { it !in pinnedTerminalIds })
-                                },
-                            ),
+                                })
+                            },
                         )
                     }
                 }

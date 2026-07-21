@@ -493,7 +493,7 @@ object SettingsFeature {
                 title = "Resource management",
                 description = "Keep the Linux runtime lean by stopping work you're done with. Each terminal, " +
                     "run, and debug session holds a proot process tree in memory.",
-                keywords = "performance memory cpu battery proot process terminal kill close idle background resource optimize swipe away warn running max instances timeout auto-close",
+                keywords = "performance memory cpu battery proot process terminal kill close idle background resource optimize swipe away warn running max instances timeout auto-close nested sub-shell subshell relocate tab bash zsh",
             ) {
                 ToggleRow(
                     label = "Warn before closing running processes",
@@ -539,6 +539,16 @@ object SettingsFeature {
                     onIncrease = { perf.onSetMaxTerminalSessions((perf.maxTerminalSessions + 1).coerceAtMost(24)) },
                     modified = perf.maxTerminalSessions != SettingsDefaults.MAX_TERMINAL_SESSIONS,
                     onReset = { perf.onSetMaxTerminalSessions(SettingsDefaults.MAX_TERMINAL_SESSIONS) },
+                )
+                ToggleRow(
+                    label = "Sub-shells open in their own tab",
+                    supporting = "When you start an interactive shell (bash, zsh, …) inside a terminal, open it in a " +
+                        "temporary tab that closes when the sub-shell exits, returning to the parent — like a new " +
+                        "console window. Scripts and piped shells stay in the current tab.",
+                    checked = perf.nestedShellTabs,
+                    onCheckedChange = perf.onSetNestedShellTabs,
+                    modified = perf.nestedShellTabs != SettingsDefaults.NESTED_SHELL_TABS,
+                    onReset = { perf.onSetNestedShellTabs(SettingsDefaults.NESTED_SHELL_TABS) },
                 )
             }
             } // end Global-only cards; the Web preview card below renders on every scope tab.

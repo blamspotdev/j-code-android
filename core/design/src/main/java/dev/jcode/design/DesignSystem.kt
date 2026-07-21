@@ -258,12 +258,14 @@ class PerformanceSettings(
     val autoCloseIdleTerminals: Boolean = false,
     val idleTimeoutMinutes: Int = 30,
     val maxTerminalSessions: Int = 12,
+    val nestedShellTabs: Boolean = false,
     val exitOnSwipeAway: Boolean = true,
     val onSetHardwareAcceleration: (Boolean) -> Unit = {},
     val onSetConfirmCloseRunning: (Boolean) -> Unit = {},
     val onSetAutoCloseIdleTerminals: (Boolean) -> Unit = {},
     val onSetIdleTimeoutMinutes: (Int) -> Unit = {},
     val onSetMaxTerminalSessions: (Int) -> Unit = {},
+    val onSetNestedShellTabs: (Boolean) -> Unit = {},
     val onSetExitOnSwipeAway: (Boolean) -> Unit = {},
 )
 

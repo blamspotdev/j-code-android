@@ -858,6 +858,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { uiPreferences.edit { it[maxTerminalSessionsKey] = count.coerceIn(1, 24) } }
     }
 
+    private val nestedShellTabsKey = booleanPreferencesKey("perf_nested_shell_tabs")
+
+    /** When true, typing an interactive shell (`bash`/`zsh`/…) at a terminal relocates it into its own
+     *  temporary tab that closes when the sub-shell exits, returning focus to the parent (OSC 7715). */
+    val nestedShellTabs: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[nestedShellTabsKey] ?: SettingsDefaults.NESTED_SHELL_TABS }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.NESTED_SHELL_TABS)
+
+    fun setNestedShellTabs(enabled: Boolean) {
+        viewModelScope.launch { uiPreferences.edit { it[nestedShellTabsKey] = enabled } }
+    }
+
     private val hideStatusBarWithKeyboardKey = booleanPreferencesKey("hide_status_bar_with_keyboard")
 
     /** When true, the system status bar is hidden while the soft keyboard is up (more room to edit). */

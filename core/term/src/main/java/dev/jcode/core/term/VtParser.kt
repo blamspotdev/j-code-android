@@ -35,9 +35,10 @@ class VtParser(rows: Int, cols: Int) : AutoCloseable {
 
     /**
      * Drain the JCode shell-integration OSC events (7711 open-file, 7712 tab-title, 7713
-     * task-complete) queued by the native parser during [feed]. Each native entry is encoded
-     * "<code>;<payload>" and split at the FIRST ';' — payloads may themselves contain ';'
-     * (7713's is "<token>;<exitCode>"). Returns an empty list when nothing is queued.
+     * task-complete, 7714 open-url, 7715 nested-shell open) queued by the native parser during
+     * [feed]. Each native entry is encoded "<code>;<payload>" and split at the FIRST ';' — payloads
+     * may themselves contain ';' (7713's is "<token>;<exitCode>"; 7715's is
+     * "open;<token>;<b64label>;<b64cwd>;<b64user>"). Returns an empty list when nothing is queued.
      */
     fun drainOsc(): List<Pair<Int, String>> {
         check(nativeHandle != 0L) { "Parser is closed" }

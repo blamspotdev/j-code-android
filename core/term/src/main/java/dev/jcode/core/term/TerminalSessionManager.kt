@@ -54,6 +54,18 @@ class TerminalSessionManager(
          *  mutually-consistent modes + alt-screen pair and never races feed or close. */
         @Volatile var inputModesSnapshot: Int = 0
 
+        /** For a relocated nested sub-shell tab (OSC 7715): the parent session to refocus when this
+         *  child ends. Non-null marks a temporary child tab; null for a normal session. */
+        @Volatile var relocationParentId: String? = null
+
+        /** Host path of the guest FIFO the parent shell blocks on. Used to write the exit-code
+         *  backstop when this child is force-closed before its launcher reports. */
+        @Volatile var relocationFifoHost: File? = null
+
+        /** Spawn parameters captured so a nested-shell child can be created cloning this session's
+         *  distro/binds/user/arch/workdir (OSC 7715). Null for sessions created before this existed. */
+        @Volatile var spawnSpec: SpawnSpec? = null
+
         /** Resize both the PTY and the parser together (parser realloc is synchronized against the
          *  reader's feed). Safe to call from the UI thread. */
         fun resize(newCols: Int, newRows: Int) {
@@ -65,6 +77,16 @@ class TerminalSessionManager(
             runCatching { pty.resize(newCols, newRows) }
         }
     }
+
+    /** Immutable spawn parameters of a session, captured on [createSession] so a relocated nested
+     *  sub-shell (OSC 7715) can be created in the same distro/binds/user/arch/workdir as its parent. */
+    data class SpawnSpec(
+        val distroId: String,
+        val binds: List<DistroBind>,
+        val user: String,
+        val rootfsArch: Arch,
+        val workdir: String,
+    )
 
     // Process-lifetime scope that keeps every session's PTY drained and parsed regardless of the UI.
     private val readerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -109,6 +131,22 @@ class TerminalSessionManager(
      *  via OSC 52 (e.g. Claude Code's copy-on-select), so the host can set the Android clipboard. */
     @Volatile
     var onClipboardWrite: ((String) -> Unit)? = null
+
+    /** Invoked (off the reader thread) with (parentSessionId, payload) when a guest shell wrapper asks
+     *  to relocate an interactive sub-shell into its own tab via OSC 7715. Payload is
+     *  `open;<token>;<label>`. See [createNestedShellSession] and GUEST nested-shell wrapper. */
+    @Volatile
+    var onNestedShellOpen: ((String, String) -> Unit)? = null
+
+    /** When true, [createSession] installs the nested-shell PATH wrappers so typing an interactive
+     *  shell (`bash`/`zsh`/…) on the app's PTY relocates it to a temporary tab. Pushed from Settings. */
+    @Volatile
+    var nestedShellTabs: Boolean = false
+
+    // childId -> parentId for relocated nested-shell tabs. Outlives reapExitedSession/closeSession
+    // (unlike Session) so the UI's exit path can still find the parent to refocus. Cleared by the host
+    // via clearRelocation once the exit is handled, or wholesale by closeAll.
+    private val relocationParents = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     @Volatile
     var activeSessionId: String? = null
@@ -191,6 +229,28 @@ class TerminalSessionManager(
             }
         }
 
+        // Nested-shell wrappers (OSC 7715): when enabled, shadow interactive shell binaries early on
+        // PATH so typing `bash`/`zsh`/… on the app's own PTY relocates the sub-shell into its own tab.
+        // The absolute real shell path is baked in (no runtime PATH scan on the hot `sh -c` path). When
+        // disabled, only our own marker-guarded wrappers are removed, so toggling off is clean. Guarded
+        // writes (content compare) keep this a cheap no-op once installed.
+        runCatching {
+            val localBin = File(rootfsPath, "usr/local/bin").apply { mkdirs() }
+            for (name in NESTED_SHELL_NAMES) {
+                val wrapper = File(localBin, name)
+                if (nestedShellTabs) {
+                    val real = resolveGuestShell(rootfsPath, name) ?: continue
+                    val body = nestedShellWrapper(real, name)
+                    if (!wrapper.exists() || wrapper.readText() != body) {
+                        wrapper.writeText(body)
+                        wrapper.setExecutable(true, false)
+                    }
+                } else if (wrapper.exists() && wrapper.readText().startsWith(NSH_MARKER)) {
+                    wrapper.delete()
+                }
+            }
+        }
+
         // Foreign-arch environment: ensure the QEMU emulator is extracted before spawning.
         if (prootManager.needsQemu(rootfsArch) && !prootManager.isQemuInstalled(rootfsArch)) {
             val qemuOk = kotlinx.coroutines.runBlocking { prootManager.ensureQemuInstalled(rootfsArch) }
@@ -250,6 +310,7 @@ class TerminalSessionManager(
                 rows = 24,
             )
             val session = Session(sessionId, sessionLabel, pty)
+            session.spawnSpec = SpawnSpec(distroId, binds, user, rootfsArch, workdir)
             synchronized(sessionsLock) { _sessions[sessionId] = session }
             activeSessionId = sessionId
             startReader(session)
@@ -291,6 +352,7 @@ class TerminalSessionManager(
                     }
                     7713 -> onTaskComplete?.invoke(session.id, payload.trim())
                     7714 -> onOpenUrlRequest?.invoke(payload.trim())
+                    7715 -> onNestedShellOpen?.invoke(session.id, payload.trim())
                 }
             }
             while (isActive) {
@@ -390,6 +452,9 @@ class TerminalSessionManager(
      */
     fun closeSession(id: String) {
         val session = synchronized(sessionsLock) { _sessions.remove(id) } ?: return
+        // If this is a relocated child being force-closed, unblock its parent with a real code before
+        // the PTY dies (the parent would otherwise only get EOF → exit 0). No-op for normal sessions.
+        writeRelocationBackstop(session, "E 143\n")
         val readerJob = session.readerJob
         readerJob?.cancel()
         session.onUpdate = null
@@ -442,6 +507,67 @@ class TerminalSessionManager(
     fun hasForegroundProcess(): Boolean =
         synchronized(sessionsLock) { _sessions.values.any { it.foreground != null } }
 
+    /** Parent session to refocus when the relocated child [childId] ends, or null. */
+    fun relocationParentOf(childId: String): String? = relocationParents[childId]
+
+    /** Relocated child tabs whose parent is [parentId] (for cascade-close). */
+    fun childrenOf(parentId: String): List<String> =
+        relocationParents.entries.filter { it.value == parentId }.map { it.key }
+
+    /** True if [parentId] has a live relocated child — its shell is blocked waiting on the child, so
+     *  it must be treated as busy (never idle-reaped, warned before close). */
+    fun hasLiveRelocatedChild(parentId: String): Boolean = relocationParents.containsValue(parentId)
+
+    /** Forget the relocation link for [childId] once the host has handled its exit. */
+    fun clearRelocation(childId: String) { relocationParents.remove(childId) }
+
+    /**
+     * Spawn a temporary child tab for a relocated interactive sub-shell (OSC 7715). Clones [parentId]'s
+     * distro/binds/user/arch/workdir and runs the guest launcher /tmp/.jcode-nsh-<token>.sh, linking
+     * child→parent so the host refocuses the parent on the child's exit. Returns null if the token is
+     * malformed, the parent is unknown, or the session cap is reached (the guest wrapper then falls
+     * back to running the sub-shell inline via its watchdog timeout).
+     */
+    fun createNestedShellSession(parentId: String, token: String, label: String): Session? {
+        if (!NSH_TOKEN_RE.matches(token)) return null
+        val parent = getSession(parentId) ?: return null
+        val spec = parent.spawnSpec ?: return null
+        val child = createSession(
+            distroId = spec.distroId,
+            binds = spec.binds,
+            workdir = spec.workdir,
+            user = spec.user,
+            shellCommand = "/bin/sh /tmp/.jcode-nsh-$token.sh",
+            rootfsArch = spec.rootfsArch,
+            label = label.ifBlank { "shell" }.take(24),
+        ) ?: return null
+        child.relocationParentId = parentId
+        child.relocationFifoHost = File(rootfsManager.getRootfsPath(spec.distroId), "tmp/.jcode-nsh-$token.fifo")
+        relocationParents[child.id] = parentId
+        return child
+    }
+
+    /** Best-effort: unblock a relocated child's parent by writing an exit line to the shared FIFO,
+     *  O_WRONLY|O_NONBLOCK so it never blocks (ENXIO = parent already gone → no-op). The parent's read
+     *  also gets EOF when the child's launcher fd closes on kill; this only improves exit-code fidelity
+     *  on a force-close. */
+    private fun writeRelocationBackstop(session: Session, exitLine: String) {
+        val fifo = session.relocationFifoHost ?: return
+        runCatching {
+            val fd = android.system.Os.open(
+                fifo.absolutePath,
+                android.system.OsConstants.O_WRONLY or android.system.OsConstants.O_NONBLOCK,
+                0,
+            )
+            try {
+                val bytes = exitLine.toByteArray()
+                android.system.Os.write(fd, bytes, 0, bytes.size)
+            } finally {
+                android.system.Os.close(fd)
+            }
+        }
+    }
+
     /**
      * Close sessions that are idle — no foreground program and no I/O for [idleMillis] — to free their
      * proot process trees and memory. Fires [onSessionExit] for each closed session so the host drops
@@ -450,8 +576,12 @@ class TerminalSessionManager(
     fun reapIdle(idleMillis: Long): List<String> {
         val now = System.currentTimeMillis()
         val stale = synchronized(sessionsLock) {
+            // Never reap a relocation chain: a parent blocked on its child reports foreground == null,
+            // and a relocated child sitting at its own prompt does too — reaping either strands the
+            // other and hangs the FIFO.
+            val protected = relocationParents.keys.toSet() + relocationParents.values.toSet()
             _sessions.values
-                .filter { it.foreground == null && now - it.lastActivityAt >= idleMillis }
+                .filter { it.foreground == null && it.id !in protected && now - it.lastActivityAt >= idleMillis }
                 .map { it.id }
         }
         stale.forEach { id ->
@@ -491,6 +621,7 @@ class TerminalSessionManager(
                 session.pty.close()
             }
         }
+        relocationParents.clear()
         activeSessionId = null
     }
 
@@ -544,6 +675,124 @@ fi
 // the session reader routes to the host's web-preview / chosen browser.
 private val GUEST_OPEN_URL_SHIM = """#!/bin/sh
 printf '\033]7714;%s\007' "${'$'}1" >/dev/tty 2>/dev/null || printf '\033]7714;%s\007' "${'$'}1"
+"""
+
+// Shell names shadowed by the nested-shell wrapper when the feature is on. Includes `sh`: the wrapper
+// inlines the heavy non-interactive `sh -c`/scripted traffic cheaply, and only relocates a bare
+// interactive `sh` on the app's own PTY. A shell not present in the distro is simply skipped.
+private val NESTED_SHELL_NAMES = listOf("bash", "dash", "ash", "zsh", "ksh", "mksh", "sh")
+
+// Leading bytes of every wrapper, used to remove only our own /usr/local/bin files when the feature
+// is toggled off (a distro's real shell there, if any, is left alone).
+private const val NSH_MARKER = "#!/bin/sh\n# jcode-nsh-wrapper"
+
+// Relocation tokens are interpolated into guest and host paths, so restrict them to a safe charset.
+private val NSH_TOKEN_RE = Regex("[A-Za-z0-9_]+")
+
+/** Absolute GUEST path of the real shell [name] — scans system bindirs but skips usr/local (where
+ *  our wrappers live), or null when the distro ships no such shell. Baked into the wrapper at install
+ *  time so the hot non-interactive path costs no runtime PATH scan. */
+private fun resolveGuestShell(rootfsPath: File, name: String): String? {
+    for (dir in listOf("usr/bin", "bin", "usr/sbin", "sbin")) {
+        val f = File(rootfsPath, "$dir/$name")
+        if (f.exists() && !f.isDirectory) return "/$dir/$name"
+    }
+    return null
+}
+
+/** The wrapper script for interactive shell [name] with the absolute [realPath] baked in. */
+private fun nestedShellWrapper(realPath: String, name: String): String =
+    NESTED_SHELL_WRAPPER_TEMPLATE.replace("__REAL__", realPath).replace("__SELF__", name)
+
+// Nested-shell wrapper (OSC 7715). Detects a bare interactive sub-shell on the app's own PTY and asks
+// the host to relocate it into its own temporary tab; anything else (pipe/redirect/`-c`/script, or a
+// PTY the app doesn't own like tmux/ssh) execs the real shell inline. The parent shell then blocks on
+// a FIFO until the child exits (or a 1.5s watchdog proves nobody's listening → inline fallback).
+private val NESTED_SHELL_WRAPPER_TEMPLATE = """#!/bin/sh
+# jcode-nsh-wrapper v1 — relocate an interactive sub-shell into its own tab (OSC 7715).
+self=__SELF__
+real='__REAL__'; [ -x "${'$'}real" ] || real="/bin/${'$'}self"
+
+# One-shot guard: the app marks a tab's own top shell (JCODE_NSH_TOP) so it never relocates itself;
+# clearing it here lets that shell's own interactive sub-shells still relocate.
+[ -n "${'$'}{JCODE_NSH_TOP:-}" ] && { unset JCODE_NSH_TOP; exec "${'$'}real" "${'$'}@"; }
+# Not a real terminal on both ends (pipe / ${'$'}(...) / redirect / cron) => run inline.
+[ -t 0 ] && [ -t 1 ] || exec "${'$'}real" "${'$'}@"
+# Explicit per-invocation opt-out.
+[ -n "${'$'}{JCODE_NSH_INLINE:-}" ] && exec "${'$'}real" "${'$'}@"
+
+# Relocate only a bare interactive shell: bail to inline on -c, a script operand, or an operand after --.
+relocate=1; want_arg=0; ddash=0
+for a in "${'$'}@"; do
+  if [ "${'$'}ddash" = 1 ]; then relocate=0; break; fi
+  if [ "${'$'}want_arg" = 1 ]; then want_arg=0; continue; fi
+  case "${'$'}a" in
+    --) ddash=1 ;;
+    -c|--command) relocate=0; break ;;
+    --rcfile|--init-file|-O|+O) want_arg=1 ;;
+    -) : ;;
+    --*) : ;;
+    -*) case "${'$'}a" in *c*) relocate=0; break ;; esac ;;
+    *) relocate=0; break ;;
+  esac
+done
+[ "${'$'}relocate" = 1 ] || exec "${'$'}real" "${'$'}@"
+
+# --- relocate: hand this interactive shell to a new tab -----------------------------------------
+tok=${'$'}(tr -dc 'a-f0-9' < /proc/sys/kernel/random/uuid 2>/dev/null)
+[ -n "${'$'}tok" ] || tok="${'$'}${'$'}_${'$'}(date +%s 2>/dev/null)"
+d=${'$'}{TMPDIR:-/tmp}
+fifo="${'$'}d/.jcode-nsh-${'$'}tok.fifo"
+launcher="${'$'}d/.jcode-nsh-${'$'}tok.sh"
+abort="${'$'}d/.jcode-nsh-${'$'}tok.abort"
+label=${'$'}self
+cwd=${'$'}(pwd)
+trap 'rm -f "${'$'}fifo" "${'$'}launcher" "${'$'}abort" 2>/dev/null' EXIT
+
+esc() { printf '%s' "${'$'}1" | sed "s/'/'\\''/g"; }
+qcwd=${'$'}(esc "${'$'}cwd")
+qargs=; for a in "${'$'}@"; do qargs="${'$'}qargs '${'$'}(esc "${'$'}a")'"; done
+
+rm -f "${'$'}fifo" "${'$'}launcher" 2>/dev/null
+mkfifo -m 600 "${'$'}fifo" 2>/dev/null || exec "${'$'}real" "${'$'}@"
+
+# Generate the launcher the app runs in the NEW tab. printf keeps ${'$'}/`/% literal; the real shell
+# runs with fd4 closed (won't inherit the fifo), then we report its exit code back to the parent.
+{
+  printf '#!/bin/sh\n'
+  printf "[ -e '%s' ] && exit 0\n" "${'$'}abort"
+  printf "cd '%s' 2>/dev/null || true\n" "${'$'}qcwd"
+  printf "exec 4> '%s'\n" "${'$'}fifo"
+  printf 'printf %s >&4\n' "'A\n'"
+  printf "trap '' HUP\n"
+  printf "'%s'%s 4>&-\n" "${'$'}real" "${'$'}qargs"
+  printf 'printf %s "${'$'}?" >&4\n' "'E %s\n'"
+  printf "rm -f '%s'\n" "${'$'}launcher"
+} > "${'$'}launcher"
+
+# Watchdog: if no ACK within 3s nobody is listening (tmux/ssh PTY, or app declined) => set the abort
+# marker (so a slow-spawning launcher exits instead of blocking) and fall back to inline.
+( sleep 3; : > "${'$'}abort" 2>/dev/null; printf 'T\n' > "${'$'}fifo" 2>/dev/null ) &
+wd=${'$'}!
+# Parent tab is now inert; a stray Ctrl-C/Ctrl-Z there must not kill us and orphan the child tab.
+trap '' INT QUIT TSTP
+seq='\033]7715;open;'"${'$'}tok"';'"${'$'}label"'\007'
+printf "${'$'}seq" > /dev/tty 2>/dev/null || printf "${'$'}seq"
+
+exec 3< "${'$'}fifo"
+IFS= read -r verdict <&3
+case "${'$'}verdict" in
+  A*)
+    kill "${'$'}wd" 2>/dev/null
+    IFS= read -r result <&3
+    exec 3<&-; trap - INT QUIT TSTP
+    case "${'$'}result" in E\ *) exit "${'$'}{result#E }";; *) exit 0;; esac ;;
+  *)
+    : > "${'$'}abort" 2>/dev/null
+    kill "${'$'}wd" 2>/dev/null
+    exec 3<&-; trap - INT QUIT TSTP
+    exec "${'$'}real" "${'$'}@" ;;
+esac
 """
 
 // Default htop config seeded into a fresh $HOME/.config/htop/htoprc. A compact, phone-width column
