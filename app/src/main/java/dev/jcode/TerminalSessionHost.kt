@@ -41,6 +41,16 @@ object TerminalSessionHost {
         uiExitListener = listener
     }
 
+    // Optional UI hook so a session created by any subsystem (e.g. the background Setup runner) is
+    // surfaced as a tab. Set via a DisposableEffect and cleared on dispose, so it never outlives the
+    // composition that owns it.
+    @Volatile
+    private var uiCreatedListener: ((String) -> Unit)? = null
+
+    fun setUiCreatedListener(listener: ((String) -> Unit)?) {
+        uiCreatedListener = listener
+    }
+
     // Optional UI hook so a guest `code`/`jcode <path>` command can open + focus a file in the editor.
     // Set via a DisposableEffect and cleared on dispose, so it never outlives its composition.
     @Volatile
@@ -87,6 +97,12 @@ object TerminalSessionHost {
                 mgr.onSessionExit = { sessionId ->
                     onSessionStopped(sessionId)
                     uiExitListener?.let { listener -> mainHandler.post { listener(sessionId) } }
+                }
+                // A session created by any path (manual, Run, or the background Setup runner) is
+                // surfaced as a tab through this: hop to the main thread and hand the id to the active
+                // UI listener, which adds it (guarded, without stealing focus).
+                mgr.onSessionCreated = { sessionId ->
+                    uiCreatedListener?.let { listener -> mainHandler.post { listener(sessionId) } }
                 }
                 // A guest `code`/`jcode <path>` command (OSC 7711) fires this off the reader thread;
                 // hop to the main thread and hand the path token to the active UI listener.

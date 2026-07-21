@@ -79,6 +79,12 @@ class TerminalSessionManager(
      *  so the host can release the session's foreground-service hold and the UI can drop its tab. */
     var onSessionExit: ((String) -> Unit)? = null
 
+    /** Invoked (on the creating thread) right after a new session is registered, so the host/UI can
+     *  surface it as a terminal tab regardless of which subsystem created it — the manual "+"/Run
+     *  paths self-register, but the background Setup runner (toolchain installs / scaffolds) reaches
+     *  the tab list only through this. Mirrors [onSessionExit]. */
+    var onSessionCreated: ((String) -> Unit)? = null
+
     /** Invoked (off the main thread) when a guest `code`/`jcode <path>[:line[:col]]` command runs,
      *  carrying the path token so the host can open + focus it in the editor. */
     @Volatile
@@ -253,6 +259,7 @@ class TerminalSessionManager(
             synchronized(sessionsLock) { _sessions[sessionId] = session }
             activeSessionId = sessionId
             startReader(session)
+            onSessionCreated?.invoke(sessionId)
             session
         } catch (e: Exception) {
             android.util.Log.e("TerminalSessionManager", "Failed to create session", e)

@@ -9,8 +9,6 @@ import dev.jcode.core.term.TerminalSessionManager
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -34,10 +32,10 @@ class SetupTerminalRunner(
     private val mutex = Mutex()
     private val tokenCounter = AtomicInteger()
 
+    // Tracks the live Setup session so ensureSession can reuse it across tasks. The session surfaces
+    // as a (non-focused) terminal tab via TerminalSessionManager.onSessionCreated, so no UI-facing
+    // StateFlow is needed here.
     private val _sessionId = MutableStateFlow<String?>(null)
-
-    /** The live Setup session id, for the UI to surface as a (non-focused) terminal tab. */
-    val sessionId: StateFlow<String?> = _sessionId.asStateFlow()
 
     private class Pending(val token: String, val sessionId: String) {
         val exit = CompletableDeferred<Int>()

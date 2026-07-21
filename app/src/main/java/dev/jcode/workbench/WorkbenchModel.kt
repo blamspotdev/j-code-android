@@ -60,10 +60,6 @@ internal data class ExtensionDevState(
 
 internal val LocalExtensionDevState = compositionLocalOf { ExtensionDevState() }
 
-/** Session id of the background "Setup" terminal (toolchain installs / project scaffolds), or null
- *  while none has been started. Same register-limit rationale as above. */
-internal val LocalSetupTerminalSessionId = compositionLocalOf<String?> { null }
-
 /** Editor-facing debug state (breakpoints + current stopped location + toggle), provided via a
  *  CompositionLocal so the giant [dev.jcode.JCodeShell] composable stays under the register limit. */
 internal data class DebugEditorState(

@@ -281,7 +281,6 @@ import dev.jcode.workbench.LocalExtensionInstallPhases
 import dev.jcode.workbench.LocalPendingReload
 import dev.jcode.workbench.PendingReloadUi
 import dev.jcode.workbench.LocalRunConfigPresets
-import dev.jcode.workbench.LocalSetupTerminalSessionId
 import dev.jcode.design.PerformanceSettings
 import dev.jcode.design.ExtensionSettingSpec
 import dev.jcode.design.ExtensionSettingsGroup
@@ -460,7 +459,6 @@ fun JCodeApp(
     val marketplaceEntries by viewModel.marketplaceEntries.collectAsStateWithLifecycle()
     val marketplaceBusy by viewModel.marketplaceBusy.collectAsStateWithLifecycle()
     val extensionInstallPhases by viewModel.extensionInstallPhases.collectAsStateWithLifecycle()
-    val setupTerminalSessionId by viewModel.setupTerminalRunner.sessionId.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val themeBundleId by viewModel.themeBundleId.collectAsStateWithLifecycle()
     val iconBundleId by viewModel.iconBundleId.collectAsStateWithLifecycle()
@@ -1187,7 +1185,6 @@ fun JCodeApp(
         LocalExtensionInstallPhases provides extensionInstallPhases,
         LocalPendingReload provides pendingReloadUi,
         LocalRunConfigPresets provides contributedRunPresets,
-        LocalSetupTerminalSessionId provides setupTerminalSessionId,
         LocalDebugSession provides debugSessionUi,
         LocalPerformanceSettings provides performanceSettings,
         LocalExplorerHiddenSetting provides explorerHiddenSetting,
@@ -1775,15 +1772,20 @@ private fun JCodeShell(
         terminalSessionManager.switchSession(sessionId)
     }
 
-    // Surface the background "Setup" terminal (toolchain installs / project scaffolds) as a tab
-    // WITHOUT focusing it or opening the drawer — the unseen-badge is the only attention cue.
-    val setupTerminalSessionId = LocalSetupTerminalSessionId.current
-    LaunchedEffect(setupTerminalSessionId) {
-        val id = setupTerminalSessionId ?: return@LaunchedEffect
-        if (terminalSessionManager.getSession(id) != null && id !in terminalSessionIds) {
-            terminalSessionIds = terminalSessionIds + id
-            if (selectedTerminalSessionId.isEmpty()) selectedTerminalSessionId = id
+    // Surface every newly created session as a tab. The manual "+" and Run paths self-register (see
+    // spawnTerminalSession), but sessions spawned by other subsystems — the background "Setup"
+    // terminal for toolchain installs / project scaffolds — reach the tab list only through this
+    // callback. Added WITHOUT stealing focus or opening the drawer (selection changes only when
+    // nothing is selected), so the unseen-badge stays the only attention cue. Mirrors the exit
+    // listener below; together they keep the tab list in sync with the manager's live sessions.
+    DisposableEffect(Unit) {
+        TerminalSessionHost.setUiCreatedListener { id ->
+            if (id !in terminalSessionIds) {
+                terminalSessionIds = terminalSessionIds + id
+                if (selectedTerminalSessionId.isEmpty()) selectedTerminalSessionId = id
+            }
         }
+        onDispose { TerminalSessionHost.setUiCreatedListener(null) }
     }
 
     // Run state: the URL of the most recent run (for "Open in browser") and whether we're still
@@ -2143,23 +2145,42 @@ private fun JCodeShell(
 
     var terminalAutoStarted by rememberSaveable { mutableStateOf(false) }
 
-    // Reconcile restored session ids with the process-lifetime manager's live sessions. Covers:
-    //  - Activity recreation: the manager survived, so adopt its live sessions (and their scrollback).
-    //  - Process restart: ids may be restored from saved state but the PTYs are gone -> clear stale
-    //    ids and allow auto-start to spawn a fresh shell.
-    LaunchedEffect(Unit) {
-        val live = terminalSessionManager.sessions.keys.toList()
-        if (live.isNotEmpty()) {
-            terminalSessionIds = live
-            if (selectedTerminalSessionId !in live) selectedTerminalSessionId = live.last()
-            terminalSessionManager.switchSession(selectedTerminalSessionId)
-            terminalAutoStarted = true
-        } else {
-            if (terminalSessionIds.isNotEmpty()) {
-                terminalSessionIds = emptyList()
-                selectedTerminalSessionId = ""
-            }
-            terminalAutoStarted = false
+    // Keep the UI tab list in sync with the process-lifetime manager's live sessions. ADOPT any live
+    // session not yet shown — sessions that survived an Activity recreation, or the background Setup
+    // terminal — and PRUNE tabs whose shell has exited, including exits that happened while the app was
+    // backgrounded (when the live exit listener below was torn down and its drop was missed). Existing
+    // tabs keep their order so tab numbers don't shuffle; adopted sessions append at the end. The
+    // boundary is manager sessions only — child subprocesses, LSP/DAP, and extension servers are not
+    // sessions and never become tabs. Pruned ids get the same title/run cleanup as the exit listener.
+    // seedAutoStart is true only at mount: with no live sessions it re-arms the launch auto-start (a
+    // process restart left stale saved ids with dead PTYs); on resume it must not, or returning to an
+    // intentionally-empty terminal would spawn a shell the user didn't ask for.
+    fun reconcileTerminalTabs(seedAutoStart: Boolean) {
+        val live = terminalSessionManager.sessions.keys
+        val next = (terminalSessionIds + live).distinct().filter { it in live }
+        if (next != terminalSessionIds) {
+            val removed = terminalSessionIds.filterNot { it in live }
+            terminalSessionIds = next
+            removed.forEach { terminalTitles.remove(it); onRunSessionGone(it) }
+        }
+        if (selectedTerminalSessionId !in live) selectedTerminalSessionId = next.lastOrNull().orEmpty()
+        selectedTerminalSessionId.takeIf { it.isNotEmpty() }?.let { terminalSessionManager.switchSession(it) }
+        when {
+            live.isNotEmpty() -> terminalAutoStarted = true
+            seedAutoStart -> terminalAutoStarted = false
+        }
+    }
+
+    // Once at composition entry (adopt survivors of an Activity recreation, or clear stale ids after a
+    // process restart) ...
+    LaunchedEffect(Unit) { reconcileTerminalTabs(seedAutoStart = true) }
+    // ... and again on every return to the foreground, so a shell that exited while backgrounded drops
+    // its tab and any session created while away is adopted (manager.sessions isn't Compose-observable,
+    // so nothing recomposes on an out-of-band change — resume is the reliable re-sync point).
+    val terminalReconcileLifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(terminalReconcileLifecycleOwner) {
+        terminalReconcileLifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            reconcileTerminalTabs(seedAutoStart = false)
         }
     }
 
