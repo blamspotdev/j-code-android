@@ -1544,6 +1544,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun resetUpdateInstall() = AppUpdateInstaller.reset()
 
+    /** On returning to the foreground, clear a stuck in-app-update "Installing…" state left behind when
+     *  the user dismisses the system installer without completing it (see [AppUpdateInstaller.recoverIfStuck]). */
+    fun onAppResumed() {
+        viewModelScope.launch { AppUpdateInstaller.recoverIfStuck() }
+    }
+
     init {
         checkForUpdate()
     }

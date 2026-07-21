@@ -730,6 +730,8 @@ object SettingsFeature {
                         )
                     }
                 }
+                // A single button: "Install Update" when a newer release is available (its label shows
+                // download/install progress while running), otherwise "Check for updates".
                 if (appUpdate.updateAvailable) {
                     FilledTonalButton(
                         onClick = appUpdate.onInstallUpdate,
@@ -738,19 +740,20 @@ object SettingsFeature {
                     ) {
                         Text(
                             when {
-                                !appUpdate.installing -> "Update to v${appUpdate.latestVersion}"
+                                !appUpdate.installing -> "Install Update"
                                 appUpdate.installProgress in 1..99 -> "Downloading… ${appUpdate.installProgress}%"
                                 else -> "Installing…"
                             },
                         )
                     }
-                }
-                OutlinedButton(
-                    onClick = appUpdate.onCheck,
-                    enabled = !appUpdate.checking,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(if (appUpdate.checking) "Checking…" else "Check for updates")
+                } else {
+                    OutlinedButton(
+                        onClick = appUpdate.onCheck,
+                        enabled = !appUpdate.checking,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(if (appUpdate.checking) "Checking…" else "Check for updates")
+                    }
                 }
             }
 
