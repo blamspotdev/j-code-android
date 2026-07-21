@@ -4,12 +4,17 @@
 #                                      beta = side-by-side app (dev.jcode.beta / "JCode (beta)") that
 #                                      installs ALONGSIDE the release build instead of replacing it.
 #   -PreReleaseLabel <label>         : label appended to a beta versionName (default: beta -> 1.0.2-beta)
+#   -KeystorePath <file.jks>         : signing keystore to use (overrides $env:JCODE_KEYSTORE and the
+#                                      default). Omit it and, if no keystore is auto-found, a terminal
+#                                      file picker lets you BROWSE to your backed-up .jks so a fresh
+#                                      machine never silently mints a new (signature-breaking) key.
 [CmdletBinding()]
 param(
     [switch]$Yes,
     [ValidateSet('release', 'beta', 'prerelease')]
     [string]$Variant,
-    [string]$PreReleaseLabel = 'beta'
+    [string]$PreReleaseLabel = 'beta',
+    [string]$KeystorePath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -289,13 +294,61 @@ function New-ReleaseKeystore($KsPath, $PassFile) {
     return @{ Keystore = $KsPath; Pass = $pw }
 }
 
+# Terminal file picker: browse folders and pick a keystore (.jks/.keystore/.p12/.bks). Returns the
+# chosen file's full path, or $null if cancelled. Number = open folder / pick file; type a path to
+# jump straight there; 'q' cancels.
+function Select-KeystoreTui([string]$StartDir) {
+    $dir = if ($StartDir -and (Test-Path $StartDir)) { (Resolve-Path $StartDir).Path } else { $HOME }
+    $exts = @('.jks', '.keystore', '.p12', '.bks')
+    while ($true) {
+        Write-Host ''
+        Say 'Locate keystore - current folder:'
+        Write-Host "  $dir" -ForegroundColor Gray
+        $items = @()
+        $parent = Split-Path $dir -Parent
+        if ($parent) { $items += [pscustomobject]@{ Kind = 'up'; Label = '..  (up)'; Path = $parent } }
+        Get-ChildItem -LiteralPath $dir -Directory -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
+            $items += [pscustomobject]@{ Kind = 'dir'; Label = "[ $($_.Name) ]"; Path = $_.FullName }
+        }
+        Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue |
+            Where-Object { $exts -contains $_.Extension.ToLower() } | Sort-Object Name | ForEach-Object {
+            $items += [pscustomobject]@{ Kind = 'file'; Label = "$($_.Name)  ($([math]::Round($_.Length / 1KB, 1)) KB)"; Path = $_.FullName }
+        }
+        if (($items | Where-Object { $_.Kind -eq 'file' }).Count -eq 0) {
+            Write-Host '  (no keystore files in this folder - open one that holds your .jks)' -ForegroundColor DarkYellow
+        }
+        for ($i = 0; $i -lt $items.Count; $i++) {
+            $it = $items[$i]
+            $col = switch ($it.Kind) { 'file' { 'Green' } 'up' { 'DarkGray' } default { 'Cyan' } }
+            Write-Host ("  [{0,2}] {1}" -f ($i + 1), $it.Label) -ForegroundColor $col
+        }
+        Write-Host '  number = open/pick, a path = jump there, q = cancel' -ForegroundColor Gray
+        $sel = Read-Host 'Select'
+        if ($sel -match '^(q|quit|cancel)$') { return $null }
+        if ($sel -match '^\d+$') {
+            $idx = [int]$sel - 1
+            if ($idx -ge 0 -and $idx -lt $items.Count) {
+                $it = $items[$idx]
+                if ($it.Kind -eq 'file') { return $it.Path } else { $dir = $it.Path }
+            } else { Warn 'Out of range.' }
+        } elseif ($sel) {
+            $p = $sel.Trim().Trim('"')
+            if (Test-Path $p -PathType Leaf) { return (Resolve-Path $p).Path }
+            elseif (Test-Path $p -PathType Container) { $dir = (Resolve-Path $p).Path }
+            else { Warn "Not found: $p" }
+        }
+    }
+}
+
 # Resolve the signing keystore: explicit env wins; else the default JCode keystore; else create one.
 $KeystoreDefault = Join-Path $env:USERPROFILE '.jcode\jcode-release.jks'
 $KeystorePassFile = Join-Path $env:USERPROFILE '.jcode\jcode-release.password.txt'
-$Keystore = $env:JCODE_KEYSTORE
+# -KeystorePath wins, then $env:JCODE_KEYSTORE, then the default JCode keystore, then interactive.
+$Keystore = if ($KeystorePath) { $KeystorePath.Trim().Trim('"') } else { $env:JCODE_KEYSTORE }
 $KeystorePass = $env:JCODE_KEYSTORE_PASS
 $KeyAlias = $env:JCODE_KEY_ALIAS
 $KeyPass = $env:JCODE_KEY_PASS
+$created = $null
 if (-not $Keystore -and (Test-Path $KeystoreDefault)) {
     $Keystore = $KeystoreDefault
     if (-not $KeyAlias) { $KeyAlias = 'jcode' }
@@ -303,9 +356,37 @@ if (-not $Keystore -and (Test-Path $KeystoreDefault)) {
     if (-not $KeyPass) { $KeyPass = $KeystorePass }
     Say "Using release keystore $Keystore"
 }
-if (-not $Keystore -and (Ask "No release keystore found. Create one now at $KeystoreDefault and sign with it?")) {
-    $created = New-ReleaseKeystore $KeystoreDefault $KeystorePassFile
-    if ($created) { $Keystore = $created.Keystore; $KeystorePass = $created.Pass; $KeyAlias = 'jcode'; $KeyPass = $created.Pass }
+# Nothing auto-resolved: pick interactively (browse/enter/create/skip). With -Yes, create at default.
+if (-not $Keystore) {
+    if ($Yes) {
+        $created = New-ReleaseKeystore $KeystoreDefault $KeystorePassFile
+        if ($created) { $Keystore = $created.Keystore; $KeystorePass = $created.Pass; $KeyAlias = 'jcode'; $KeyPass = $created.Pass }
+    } elseif (-not [Console]::IsInputRedirected) {
+        Write-Host ''
+        Say 'No release keystore configured. Reuse the SAME key for every release:'
+        Write-Host '  [1] Locate an existing keystore  (browse folders - recommended)' -ForegroundColor Gray
+        Write-Host '  [2] Enter a keystore path' -ForegroundColor Gray
+        Write-Host "  [3] Create a NEW keystore at $KeystoreDefault  (only for a first-ever release)" -ForegroundColor Gray
+        Write-Host '  [4] Skip (build unsigned / debug-sign)' -ForegroundColor Gray
+        switch -Regex (Read-Host 'Select [1]') {
+            '^2$' { $p = Read-Host 'Keystore path'; if ($p) { $Keystore = $p.Trim().Trim('"') } }
+            '^3$' {
+                $created = New-ReleaseKeystore $KeystoreDefault $KeystorePassFile
+                if ($created) { $Keystore = $created.Keystore; $KeystorePass = $created.Pass; $KeyAlias = 'jcode'; $KeyPass = $created.Pass }
+            }
+            '^4$' { }
+            default { $Keystore = Select-KeystoreTui $HOME }
+        }
+    }
+}
+# A located/entered existing keystore (not one we just created): ask for its password + alias if unknown.
+if ($Keystore -and -not $created -and (Test-Path $Keystore)) {
+    if (-not $KeystorePass) {
+        $sec = Read-Host "Password for $(Split-Path $Keystore -Leaf)" -AsSecureString
+        $KeystorePass = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+    }
+    if (-not $KeyAlias) { $a = Read-Host 'Key alias [jcode]'; $KeyAlias = if ($a) { $a.Trim() } else { 'jcode' } }
+    if (-not $KeyPass) { $KeyPass = $KeystorePass }
 }
 
 $signState = 'unsigned'
