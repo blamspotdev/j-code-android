@@ -12,15 +12,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -32,7 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -145,6 +138,9 @@ fun ExtraKeysRow(
     // F1-F12 append behind the setting, only for surfaces that consume them (the terminal).
     val showFunctionKeys = LocalExtraKeysSetting.current.functionKeys && target.supportsFunctionKeys
     val keys = if (showFunctionKeys) target.keys + EXTRA_FUNCTION_KEYS else target.keys
+    // Directional glyphs (←↑↓→) render from a bundled font the host supplies, so they look the same on
+    // every device instead of depending on the manufacturer's system-font coverage.
+    val glyphFont = LocalExtraKeysGlyphFontFamily.current
     Surface(color = MaterialTheme.colorScheme.surface, modifier = modifier.fillMaxWidth()) {
         Column {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
@@ -161,7 +157,7 @@ fun ExtraKeysRow(
                     val active = (key == ExtraKey.Ctrl && state.ctrl) || (key == ExtraKey.Alt && state.alt)
                     ExtraKeyChip(
                         label = key.label,
-                        icon = extraKeyIcon(key),
+                        glyphFont = if (key.isDirectional) glyphFont else null,
                         active = active,
                         onClick = {
                             when (key) {
@@ -191,18 +187,16 @@ fun ExtraKeysRow(
     }
 }
 
-/** Vector glyph for the directional keys. Drawn instead of the enum's Unicode label so arrows never
- *  render as tofu on devices whose system font lacks the ←↑↓→ glyphs. */
-private fun extraKeyIcon(key: ExtraKey): ImageVector? = when (key) {
-    ExtraKey.Left -> Icons.AutoMirrored.Rounded.KeyboardArrowLeft
-    ExtraKey.Up -> Icons.Rounded.KeyboardArrowUp
-    ExtraKey.Down -> Icons.Rounded.KeyboardArrowDown
-    ExtraKey.Right -> Icons.AutoMirrored.Rounded.KeyboardArrowRight
-    else -> null
-}
+/** Font family the host supplies (from a BUNDLED font that ships the ←↑↓→ glyphs) for the directional
+ *  keys, so the arrows render identically everywhere rather than relying on the device's system font,
+ *  whose charset coverage and metrics vary by manufacturer. Null falls back to the default font. */
+val LocalExtraKeysGlyphFontFamily = compositionLocalOf<FontFamily?> { null }
+
+private val ExtraKey.isDirectional: Boolean
+    get() = this == ExtraKey.Left || this == ExtraKey.Up || this == ExtraKey.Down || this == ExtraKey.Right
 
 @Composable
-private fun ExtraKeyChip(label: String, active: Boolean, onClick: () -> Unit, icon: ImageVector? = null) {
+private fun ExtraKeyChip(label: String, active: Boolean, onClick: () -> Unit, glyphFont: FontFamily? = null) {
     val contentColor = if (active) MaterialTheme.colorScheme.primary
     else MaterialTheme.colorScheme.onSurfaceVariant
     Box(
@@ -217,20 +211,12 @@ private fun ExtraKeyChip(label: String, active: Boolean, onClick: () -> Unit, ic
             .padding(horizontal = 10.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
-        if (icon != null) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = contentColor,
-                modifier = Modifier.size(20.dp),
-            )
-        } else {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = contentColor,
-            )
-        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            fontFamily = glyphFont,
+            fontWeight = FontWeight.SemiBold,
+            color = contentColor,
+        )
     }
 }

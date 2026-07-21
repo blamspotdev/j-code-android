@@ -78,6 +78,7 @@ import dev.jcode.design.tabColorToHex
 import dev.jcode.design.ExtraKey
 import dev.jcode.design.ExtraKeysTarget
 import dev.jcode.design.LocalEditorDragMovesCursor
+import dev.jcode.design.LocalEditorSaveActions
 import dev.jcode.design.LocalEditorTabActions
 import dev.jcode.design.LocalEditorTypeface
 import dev.jcode.design.LocalExtraKeysState
@@ -135,6 +136,7 @@ fun EditorPane(
                         editorState = editorState,
                         onSave = onSave,
                         onFind = onFind,
+                        onCloseTab = { onTabClosed(activeTab.id) },
                         languageActionsEnabled = languageActionsEnabled,
                         onLanguageAction = onLanguageAction,
                         breakpointLines = breakpointLinesFor(activeTab),
@@ -349,6 +351,7 @@ fun EditorViewHost(
     modifier: Modifier = Modifier,
     onSave: () -> Unit = {},
     onFind: () -> Unit = {},
+    onCloseTab: () -> Unit = {},
     languageActionsEnabled: Boolean = false,
     onLanguageAction: (EditorLanguageAction, String) -> Unit = { _, _ -> },
     breakpointLines: Set<Int> = emptySet(),
@@ -373,6 +376,7 @@ fun EditorViewHost(
     }
     val completionSource = LocalCompletionSource.current
     val menuExtras = LocalEditorMenuExtras.current
+    val saveActions = LocalEditorSaveActions.current
     val dragSetting = LocalEditorDragMovesCursor.current
     val dragCursorEnabled = dragSetting.enabled
     val dragCursorVLevel = dragSetting.verticalLevel
@@ -447,7 +451,10 @@ fun EditorViewHost(
                     attach(editorState)
                     onContextRequest = { menu = it }
                     onSaveRequest = { onSave() }
+                    onSaveAllRequest = { saveActions.onSaveAll() }
                     onFindRequest = { onFind() }
+                    onGoToLineRequest = { menuExtras.onGoToLine?.invoke() }
+                    onCloseTabRequest = { onCloseTab() }
                     onCompletionAnchorChanged = { completionAnchor = it }
                     onGutterTap = { onToggleBreakpoint(it) }
                     onWordLongPress = wordLongPressHandler
@@ -475,7 +482,10 @@ fun EditorViewHost(
                 v.attach(editorState)
                 v.onContextRequest = { menu = it }
                 v.onSaveRequest = { onSave() }
+                v.onSaveAllRequest = { saveActions.onSaveAll() }
                 v.onFindRequest = { onFind() }
+                v.onGoToLineRequest = { menuExtras.onGoToLine?.invoke() }
+                v.onCloseTabRequest = { onCloseTab() }
                 v.onCompletionAnchorChanged = { completionAnchor = it }
                 v.onGutterTap = { onToggleBreakpoint(it) }
                 v.onWordLongPress = wordLongPressHandler

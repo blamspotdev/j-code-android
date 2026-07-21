@@ -178,8 +178,17 @@ class EditorView @JvmOverloads constructor(
     /** Invoked when the user requests a save (Ctrl+S); the host writes the buffer to disk. */
     var onSaveRequest: (() -> Unit)? = null
 
+    /** Invoked when the user requests Save All (Ctrl+Shift+S); the host saves every open tab. */
+    var onSaveAllRequest: (() -> Unit)? = null
+
     /** Invoked when the user requests Find (Ctrl+F); the host opens the find panel. */
     var onFindRequest: (() -> Unit)? = null
+
+    /** Invoked when the user requests Go to Line (Ctrl+G); the host opens the go-to-line dialog. */
+    var onGoToLineRequest: (() -> Unit)? = null
+
+    /** Invoked when the user requests Close Tab (Ctrl+W); the host closes the active editor tab. */
+    var onCloseTabRequest: (() -> Unit)? = null
 
     /** Invoked after edits/caret moves with the current completion prefix anchor (null = dismiss). */
     var onCompletionAnchorChanged: ((CompletionAnchor?) -> Unit)? = null
@@ -1077,18 +1086,21 @@ class EditorView @JvmOverloads constructor(
             return true
         }
 
-        // Ctrl+S to save the buffer to disk
+        // Ctrl+S saves the buffer; Ctrl+Shift+S saves every open tab.
         if (event.isCtrlPressed && event.keyCode == KeyEvent.KEYCODE_S) {
-            if (event.action == KeyEvent.ACTION_DOWN) onSaveRequest?.invoke()
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                if (event.isShiftPressed) onSaveAllRequest?.invoke() else onSaveRequest?.invoke()
+            }
             return true
         }
 
-        // Ctrl+A/C/X/V/F: select-all, clipboard, and find from a hardware keyboard (touch uses the
-        // long-press context menu). Acted on key-down; both down and up are consumed.
+        // Ctrl+A/C/X/V/F/G/W: select-all, clipboard, find, go-to-line, and close-tab from a hardware
+        // keyboard (touch uses the long-press context menu). Acted on key-down; both down and up consumed.
         if (event.isCtrlPressed && !event.isAltPressed) {
             val ctrlHandled = when (event.keyCode) {
                 KeyEvent.KEYCODE_A, KeyEvent.KEYCODE_C, KeyEvent.KEYCODE_X,
-                KeyEvent.KEYCODE_V, KeyEvent.KEYCODE_F -> true
+                KeyEvent.KEYCODE_V, KeyEvent.KEYCODE_F,
+                KeyEvent.KEYCODE_G, KeyEvent.KEYCODE_W -> true
                 else -> false
             }
             if (ctrlHandled) {
@@ -1099,6 +1111,8 @@ class EditorView @JvmOverloads constructor(
                         KeyEvent.KEYCODE_X -> cutSelection()
                         KeyEvent.KEYCODE_V -> pasteClipboard()
                         KeyEvent.KEYCODE_F -> onFindRequest?.invoke()
+                        KeyEvent.KEYCODE_G -> onGoToLineRequest?.invoke()
+                        KeyEvent.KEYCODE_W -> onCloseTabRequest?.invoke()
                     }
                 }
                 return true
