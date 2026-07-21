@@ -853,6 +853,25 @@ class TerminalView @JvmOverloads constructor(
         }
     }
 
+    /** Physical mouse / external scroll wheel: Android delivers wheel notches as ACTION_SCROLL
+     *  generic-motion events, not touch gestures, so they bypass the GestureDetector. Route them
+     *  through the same logic as a touch scroll so a mouse wheel scrolls a foreground TUI (Claude
+     *  Code), an alt-screen pager, or local scrollback correctly — instead of falling through to the
+     *  surrounding view, which scrolled the panel like a document. */
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (event.action == MotionEvent.ACTION_SCROLL) {
+            val vscroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+            if (vscroll != 0f) {
+                // AXIS_VSCROLL > 0 = wheel up = toward earlier content. gesture=true reuses the
+                // per-notch accumulation so one wheel notch is one app wheel-event but ~3 lines of
+                // local scrollback, matching a desktop terminal.
+                dispatchScroll(if (vscroll > 0) 3 else -3, event.x, event.y, gesture = true)
+                return true
+            }
+        }
+        return super.onGenericMotionEvent(event)
+    }
+
     /** Report a tap as a mouse press (+ release when the tracking level includes releases). */
     private fun sendMouseClick(x: Float, y: Float) {
         val modes = currentInputModes()
