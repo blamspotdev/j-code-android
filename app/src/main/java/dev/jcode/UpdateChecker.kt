@@ -11,6 +11,9 @@ data class UpdateInfo(
     val currentVersion: String,
     val latestVersion: String,
     val releaseUrl: String,
+    /** Direct download URL of the release's `.apk` asset, or null if the release has none published
+     *  (then the in-app updater falls back to opening [releaseUrl]). */
+    val apkUrl: String?,
     val updateAvailable: Boolean,
 )
 
@@ -47,6 +50,7 @@ object UpdateChecker {
                         currentVersion = currentVersion,
                         latestVersion = latest,
                         releaseUrl = url,
+                        apkUrl = pickApkAsset(obj.optJSONArray("assets")),
                         updateAvailable = isNewer(latest, currentVersion),
                     )
                 } finally {
@@ -72,4 +76,20 @@ object UpdateChecker {
         version.split('.', '-', '+')
             .map { part -> part.takeWhile(Char::isDigit).toIntOrNull() ?: 0 }
             .let { nums -> if (nums.isEmpty()) listOf(0) else nums }
+
+    /** The release's `.apk` download URL: prefer a real release APK (skip beta/debug/unsigned asset
+     *  names), else the first `.apk`, else null when the release publishes no APK. */
+    private fun pickApkAsset(assets: org.json.JSONArray?): String? {
+        if (assets == null) return null
+        var fallback: String? = null
+        for (i in 0 until assets.length()) {
+            val a = assets.optJSONObject(i) ?: continue
+            val name = a.optString("name").lowercase()
+            if (!name.endsWith(".apk")) continue
+            val url = a.optString("browser_download_url").ifBlank { null } ?: continue
+            if (fallback == null) fallback = url
+            if (!name.contains("beta") && !name.contains("debug") && !name.contains("unsigned")) return url
+        }
+        return fallback
+    }
 }

@@ -552,24 +552,34 @@ fun JCodeApp(
     }
     val updateInfo by viewModel.updateInfo.collectAsStateWithLifecycle()
     val updateChecking by viewModel.updateChecking.collectAsStateWithLifecycle()
+    val updateInstallState by viewModel.updateInstallState.collectAsStateWithLifecycle()
     val updateContext = LocalContext.current
-    val appUpdateSetting = remember(updateInfo, updateChecking) {
+    val openReleasePage: () -> Unit = {
+        val url = updateInfo?.releaseUrl
+            ?: "https://github.com/blamspotdev/j-code-android/releases/latest"
+        runCatching {
+            updateContext.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+        Unit
+    }
+    val appUpdateSetting = remember(updateInfo, updateChecking, updateInstallState) {
         AppUpdateSetting(
             currentVersion = BuildConfig.VERSION_NAME,
             latestVersion = updateInfo?.latestVersion,
             updateAvailable = updateInfo?.updateAvailable == true,
             checking = updateChecking,
             onCheck = viewModel::checkForUpdate,
-            onOpenRelease = {
-                val url = updateInfo?.releaseUrl
-                    ?: "https://github.com/blamspotdev/j-code-android/releases/latest"
-                runCatching {
-                    updateContext.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                    )
-                }
+            onOpenRelease = openReleasePage,
+            onInstallUpdate = {
+                // In-app install when the release ships an APK; otherwise open the release page.
+                if (updateInfo?.apkUrl != null) viewModel.installUpdate(updateContext) else openReleasePage()
             },
+            installing = updateInstallState is AppUpdateInstaller.State.Downloading ||
+                updateInstallState is AppUpdateInstaller.State.Installing,
+            installProgress = (updateInstallState as? AppUpdateInstaller.State.Downloading)?.percent ?: 0,
         )
     }
     val paletteDisabledCommands by viewModel.paletteDisabledCommands.collectAsStateWithLifecycle()
@@ -849,7 +859,28 @@ fun JCodeApp(
                 actionLabel = "Update",
                 duration = SnackbarDuration.Long,
             )
-            if (result == SnackbarResult.ActionPerformed) appUpdateSetting.onOpenRelease()
+            if (result == SnackbarResult.ActionPerformed) appUpdateSetting.onInstallUpdate()
+        }
+    }
+
+    // In-app updater feedback: prompt for the "install unknown apps" permission, surface a failure,
+    // and confirm success. Download progress shows on the Settings → About "Update" button.
+    LaunchedEffect(updateInstallState) {
+        when (val s = updateInstallState) {
+            is AppUpdateInstaller.State.NeedsUnknownSourcePermission -> {
+                viewModel.resetUpdateInstall()
+                AppUpdateInstaller.openUnknownSourceSettings(updateContext)
+                snackbarHostState.showSnackbar("Allow JCode to install apps, then tap Update again.")
+            }
+            is AppUpdateInstaller.State.Failed -> {
+                viewModel.resetUpdateInstall()
+                snackbarHostState.showSnackbar("Update failed: ${s.message}")
+            }
+            is AppUpdateInstaller.State.Success -> {
+                viewModel.resetUpdateInstall()
+                snackbarHostState.showSnackbar("Update installed — v${updateInfo?.latestVersion ?: ""}.")
+            }
+            else -> Unit
         }
     }
 
@@ -1186,6 +1217,7 @@ fun JCodeApp(
         modifier = modifier,
         editorGoToLineNonce = editorGoToLineNonce,
         editorFindRequest = editorFindRequest,
+        onEditorFind = { editorFindRequest = ((editorFindRequest?.first ?: 0) + 1) to "" },
         windowInfo = windowInfo,
         workspace = workspace,
         selectedProject = selectedProject,
@@ -1355,6 +1387,7 @@ fun JCodeApp(
 private fun JCodeShell(
     editorGoToLineNonce: Int,
     editorFindRequest: Pair<Int, String>?,
+    onEditorFind: () -> Unit,
     windowInfo: JCodeWindowInfo,
     workspace: Workspace?,
     selectedProject: Project?,
@@ -2488,6 +2521,7 @@ private fun JCodeShell(
                         onSelectEditorTab = onSelectEditorTab,
                         onCloseEditorTab = onCloseEditorTab,
                         onSave = onSaveActiveTab,
+                        onFind = onEditorFind,
                         onOpenFileRequest = {
                             selectedTool = WorkbenchTool.Explorer
                             if (usesModalWorkspace) {
@@ -3088,7 +3122,6 @@ private fun WorkspacePanel(
                         onApiRequest = managerActions.onExtensionApiRequest,
                         events = managerActions.extensionEvents,
                         projectKey = selectedProject?.id,
-                        onOpenConfig = managerActions.onOpenExtensionConfig,
                         modifier = Modifier.fillMaxSize(),
                     )
 
@@ -3201,6 +3234,7 @@ private fun EditorWorkspace(
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
     onSave: () -> Unit,
+    onFind: () -> Unit,
     onOpenFileRequest: () -> Unit,
     languageActionsEnabled: Boolean,
     onEditorLanguageAction: (EditorLanguageAction, String) -> Unit,
@@ -3268,6 +3302,7 @@ private fun EditorWorkspace(
                     onTabClosed = onCloseEditorTab,
                     onOpenFile = onOpenFileRequest,
                     onSave = onSave,
+                    onFind = onFind,
                     languageActionsEnabled = languageActionsEnabled,
                     onLanguageAction = onEditorLanguageAction,
                     breakpointLinesFor = { tab -> dbg.breakpoints[tab.filePath.path].orEmpty() },

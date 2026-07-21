@@ -10,20 +10,24 @@ CMAKE_PKG="cmake;3.22.1"
 ASSUME_YES=0
 VARIANT="${JCODE_VARIANT:-}"
 PRERELEASE_LABEL="${JCODE_PRERELEASE_LABEL:-beta}"
+KEYSTORE_ARG=""
 for arg in "$@"; do
     case "$arg" in
         -y|--yes) ASSUME_YES=1 ;;
         --release) VARIANT="release" ;;
         --beta|--prerelease|--pre) VARIANT="beta" ;;
         --label=*) PRERELEASE_LABEL="${arg#--label=}" ;;
+        --keystore=*) KEYSTORE_ARG="${arg#--keystore=}" ;;
         -h|--help)
-            echo "Usage: $(basename "$0") [-y|--yes] [--release|--beta] [--label=<s>]"
+            echo "Usage: $(basename "$0") [-y|--yes] [--release|--beta] [--label=<s>] [--keystore=<f>]"
             echo "Builds a release APK of JCode into ./builds."
             echo "  -y, --yes       auto-accept install prompts"
             echo "  --release       final build (default; dev.jcode / \"JCode\"; version from app/build.gradle.kts)"
             echo "  --beta          side-by-side testing build (dev.jcode.beta / \"JCode (beta)\") that"
             echo "                  installs ALONGSIDE the release app; versionName gets a -label suffix"
             echo "  --label=<s>     beta version label (default: beta -> 1.0.2-beta)"
+            echo "  --keystore=<f>  signing keystore (overrides \$JCODE_KEYSTORE + the default). Omit it"
+            echo "                  and, if none is auto-found, a picker lets you BROWSE to your .jks."
             echo "Without --release/--beta you're prompted interactively."
             exit 0
             ;;
@@ -277,9 +281,62 @@ create_release_keystore() {
     warn "KEEP this keystore + password — reuse it to sign every future release."
 }
 
-# Resolve the signing keystore: explicit env wins; else the default JCode keystore; else create one.
+# Terminal file picker: browse folders and pick a keystore (.jks/.keystore/.p12/.bks). Prints the
+# chosen path to stdout (all UI goes to stderr); empty output = cancelled. Number = open/pick a row,
+# type a path to jump straight there, q cancels.
+select_keystore_tui() {
+    local dir="${1:-$HOME}"
+    [ -d "$dir" ] || dir="$HOME"
+    while true; do
+        local -a k_kind=() k_label=() k_path=()
+        local parent; parent="$(dirname "$dir")"
+        [ "$parent" != "$dir" ] && { k_kind+=("up"); k_label+=(".. (up)"); k_path+=("$parent"); }
+        local d f hasfile=0
+        while IFS= read -r d; do
+            k_kind+=("dir"); k_label+=("[ $(basename "$d") ]"); k_path+=("$d")
+        done < <(find "$dir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+        while IFS= read -r f; do
+            k_kind+=("file"); k_label+=("$(basename "$f")"); k_path+=("$f"); hasfile=1
+        done < <(find "$dir" -mindepth 1 -maxdepth 1 -type f \
+            \( -iname '*.jks' -o -iname '*.keystore' -o -iname '*.p12' -o -iname '*.bks' \) 2>/dev/null | sort)
+        printf '\n' >&2
+        say "Locate keystore - current folder:" >&2
+        printf '  %s\n' "$dir" >&2
+        [ "$hasfile" = 0 ] && printf '  \033[33m(no keystore files here - open one that holds your .jks)\033[0m\n' >&2
+        local i n=${#k_kind[@]}
+        for ((i = 0; i < n; i++)); do
+            local color='0;36'
+            [ "${k_kind[$i]}" = file ] && color='0;32'
+            [ "${k_kind[$i]}" = up ] && color='1;30'
+            printf '  \033[%sm[%2d] %s\033[0m\n' "$color" "$((i + 1))" "${k_label[$i]}" >&2
+        done
+        printf '  number = open/pick, a path = jump there, q = cancel\n' >&2
+        local choice; read -r -p 'Select ' choice
+        case "$choice" in
+            q | quit | cancel) return 0 ;;
+            '') : ;;
+            *[!0-9]*)
+                local p="${choice%\"}"; p="${p#\"}"
+                if [ -f "$p" ]; then printf '%s\n' "$p"; return 0
+                elif [ -d "$p" ]; then dir="$p"
+                else warn "Not found: $p" >&2; fi
+                ;;
+            *)
+                local idx=$((choice - 1))
+                if [ "$idx" -ge 0 ] && [ "$idx" -lt "$n" ]; then
+                    if [ "${k_kind[$idx]}" = file ]; then printf '%s\n' "${k_path[$idx]}"; return 0
+                    else dir="${k_path[$idx]}"; fi
+                else warn "Out of range." >&2; fi
+                ;;
+        esac
+    done
+}
+
+# Resolve the signing keystore: --keystore=/$JCODE_KEYSTORE win, then the default, then interactive.
 JCODE_KEYSTORE_DEFAULT="$HOME/.jcode/jcode-release.jks"
 JCODE_KEYSTORE_PASS_FILE="$HOME/.jcode/jcode-release.password.txt"
+[ -n "${KEYSTORE_ARG:-}" ] && JCODE_KEYSTORE="$KEYSTORE_ARG"
+JUST_CREATED=0
 if [ -z "${JCODE_KEYSTORE:-}" ] && [ -f "$JCODE_KEYSTORE_DEFAULT" ]; then
     JCODE_KEYSTORE="$JCODE_KEYSTORE_DEFAULT"
     JCODE_KEY_ALIAS="${JCODE_KEY_ALIAS:-jcode}"
@@ -289,8 +346,35 @@ if [ -z "${JCODE_KEYSTORE:-}" ] && [ -f "$JCODE_KEYSTORE_DEFAULT" ]; then
     JCODE_KEY_PASS="${JCODE_KEY_PASS:-${JCODE_KEYSTORE_PASS:-}}"
     say "Using release keystore $JCODE_KEYSTORE"
 fi
-if [ -z "${JCODE_KEYSTORE:-}" ] && ask "No release keystore found. Create one now at $JCODE_KEYSTORE_DEFAULT and sign with it?"; then
-    create_release_keystore || true
+# Nothing auto-resolved: pick interactively (browse/enter/create/skip). With -y, create at default.
+if [ -z "${JCODE_KEYSTORE:-}" ]; then
+    if [ "$ASSUME_YES" = 1 ]; then
+        create_release_keystore && JUST_CREATED=1 || true
+    elif [ -t 0 ]; then
+        printf '\n'
+        say 'No release keystore configured. Reuse the SAME key for every release:'
+        printf '  [1] Locate an existing keystore  (browse folders - recommended)\n'
+        printf '  [2] Enter a keystore path\n'
+        printf '  [3] Create a NEW keystore at %s  (only for a first-ever release)\n' "$JCODE_KEYSTORE_DEFAULT"
+        printf '  [4] Skip (build unsigned / debug-sign)\n'
+        _c=""; read -r -p 'Select [1] ' _c
+        case "$_c" in
+            2) _p=""; read -r -p 'Keystore path ' _p; [ -n "$_p" ] && { _p="${_p%\"}"; JCODE_KEYSTORE="${_p#\"}"; } ;;
+            3) create_release_keystore && JUST_CREATED=1 || true ;;
+            4) : ;;
+            *) JCODE_KEYSTORE="$(select_keystore_tui "$HOME")" ;;
+        esac
+    fi
+fi
+# A located/entered existing keystore (not one we just made): prompt for password + alias if unknown.
+if [ -n "${JCODE_KEYSTORE:-}" ] && [ "$JUST_CREATED" = 0 ] && [ -f "$JCODE_KEYSTORE" ] && [ -t 0 ]; then
+    if [ -z "${JCODE_KEYSTORE_PASS:-}" ]; then
+        read -r -s -p "Password for $(basename "$JCODE_KEYSTORE"): " JCODE_KEYSTORE_PASS; printf '\n'
+    fi
+    if [ -z "${JCODE_KEY_ALIAS:-}" ]; then
+        _a=""; read -r -p 'Key alias [jcode] ' _a; JCODE_KEY_ALIAS="${_a:-jcode}"
+    fi
+    JCODE_KEY_PASS="${JCODE_KEY_PASS:-$JCODE_KEYSTORE_PASS}"
 fi
 
 SIGN_STATE="unsigned"

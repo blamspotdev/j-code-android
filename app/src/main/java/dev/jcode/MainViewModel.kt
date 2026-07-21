@@ -1531,6 +1531,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** In-app updater state (download progress + install result), driven by [AppUpdateInstaller]. */
+    val updateInstallState = AppUpdateInstaller.state
+
+    /** Download + install the latest release APK in-app. No-op when the release published no `.apk`
+     *  asset — the UI then falls back to opening the release page. */
+    fun installUpdate(context: android.content.Context) {
+        val apkUrl = _updateInfo.value?.apkUrl ?: return
+        val appContext = context.applicationContext
+        viewModelScope.launch { AppUpdateInstaller.downloadAndInstall(appContext, apkUrl) }
+    }
+
+    fun resetUpdateInstall() = AppUpdateInstaller.reset()
+
     init {
         checkForUpdate()
     }

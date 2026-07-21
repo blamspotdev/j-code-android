@@ -36,10 +36,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.jcode.design.JCodeIcon
+import dev.jcode.design.jcIcon
 import dev.jcode.design.LocalExtensionSettingsUi
 import dev.jcode.design.ManagerDetailScreen
 import dev.jcode.design.ManagerItemStatus
@@ -315,47 +319,16 @@ internal fun ScmPanel(
     onApiRequest: suspend (extensionId: String, envelopeJson: String) -> String,
     events: SharedFlow<Pair<String, String>>?,
     projectKey: Any? = null,
-    onOpenConfig: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val ext = installed.firstOrNull { it.type == ExtensionType.Scm && it.hasWebUi }
     if (ext == null) {
-        Column(
-            modifier = modifier.fillMaxSize().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("Source Control", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Text(
-                "Install a Source Control extension from Extensions to manage git here.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        return
-    }
-    // No project open (no bind target): the background SCM host only boots for an open project, so its
-    // holder entry never arrives and the decorations branch below would render a permanently-blank Box.
-    // Show guidance instead.
-    if (projectKey == null) {
-        Column(
-            modifier = modifier.fillMaxSize().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("Source Control", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Text(
-                "Open a project or folder with a Git repository to manage source control here.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                "You can still set up your Git identity and authentication without a project open.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            FilledTonalButton(onClick = { onOpenConfig(ext.id) }) {
-                Text("Config")
-            }
-        }
+        PanelEmptyState(
+            icon = jcIcon(JCodeIcon.Scm),
+            title = "Source Control",
+            message = "Install a Source Control extension to manage Git here.",
+            modifier = modifier,
+        )
         return
     }
     // A decorations-contributing extension lives in the persistent background host's WebView (one
@@ -370,17 +343,18 @@ internal fun ScmPanel(
         key(ext.id, projectKey) { ScmHostWebView(holderEntry, modifier.fillMaxSize()) }
         return
     }
-    if (ext.contributes.explorerDecorations && LocalExtensionActivation.current.modeFor(ext.id) != ExtensionActivation.Manual) {
-        // Host hasn't (re)created the entry yet (project switch in flight); the generation bump
-        // recomposes this into the attach branch moments later. Manual activation falls through to
-        // the panel-owned WebView below instead — there is no background host to wait for.
+    if (projectKey != null && ext.contributes.explorerDecorations && LocalExtensionActivation.current.modeFor(ext.id) != ExtensionActivation.Manual) {
+        // A project is open but the background host hasn't (re)created its entry yet (project switch in
+        // flight); the generation bump recomposes this into the attach branch moments later. Manual
+        // activation, and the no-project case, fall through to the panel-owned WebView below instead.
         Box(modifier = modifier.fillMaxSize())
         return
     }
-    // Key by (extension id, open project) so the panel owns one WebView for the installed SCM extension
-    // and, critically, re-creates it — re-running the extension's boot()/repo detection — whenever the
-    // selected project changes. Without the project in the key, opening a folder while this panel is
-    // already showing leaves it stuck on the stale "Open a project" screen until a manual Refresh.
+    // Panel-owned WebView: for the no-project state the SCM extension renders its OWN placeholder (its
+    // "Open a project to use Source Control" notice), and it also serves Manual activation and
+    // non-decorations extensions. Keyed by (extension id, open project) so it re-creates — re-running
+    // the extension's boot()/repo detection — whenever the selected project changes; without the project
+    // in the key, opening a folder would leave it stuck on the stale "Open a project" screen.
     key(ext.id, projectKey) {
         ExtensionWebViewPage(
             extension = ext,
@@ -389,6 +363,45 @@ internal fun ScmPanel(
             events = events,
             modifier = modifier.fillMaxSize(),
         )
+    }
+}
+
+/**
+ * Compact centered empty state for a left-drawer panel: a tinted rounded icon, a title, one concise
+ * line of guidance, and an optional action. Replaces the sparse top-aligned text blocks these panels
+ * used to show, and keeps them consistent with the editor's "No file open" state.
+ */
+@Composable
+private fun PanelEmptyState(
+    icon: ImageVector,
+    title: String,
+    message: String,
+    modifier: Modifier = Modifier,
+    action: (@Composable () -> Unit)? = null,
+) {
+    Box(modifier = modifier.fillMaxSize().padding(20.dp), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Surface(
+                modifier = Modifier.size(48.dp),
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(
+                message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            action?.invoke()
+        }
     }
 }
 

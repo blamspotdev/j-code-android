@@ -11,6 +11,11 @@
          via the system settings toggle, checked with Environment.isExternalStorageManager(). -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
+    <!-- In-app updater: install a downloaded release APK from Settings → About → Update. The system
+         still shows its install confirmation / Play Protect scan for an unrecognized build; a
+         same-signature self-update can be silent. Gated at runtime by canRequestPackageInstalls(). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- Package visibility (targetSdk 30+): the "Open web previews in" picker enumerates
          installed browsers via queryIntentActivities(ACTION_VIEW http/https). -->
     <queries>
@@ -73,6 +78,12 @@
                 <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
             </intent-filter>
         </provider>
+
+        <!-- Receives PackageInstaller session status for the in-app updater (see AppUpdateInstaller).
+             Not exported: it only handles the PendingIntent this app hands to its own commit(). -->
+        <receiver
+            android:name=".AppInstallReceiver"
+            android:exported="false" />
 
     </application>
 

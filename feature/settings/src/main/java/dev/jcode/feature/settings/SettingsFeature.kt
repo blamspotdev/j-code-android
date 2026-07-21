@@ -732,10 +732,17 @@ object SettingsFeature {
                 }
                 if (appUpdate.updateAvailable) {
                     FilledTonalButton(
-                        onClick = appUpdate.onOpenRelease,
+                        onClick = appUpdate.onInstallUpdate,
+                        enabled = !appUpdate.installing,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("Update to v${appUpdate.latestVersion}")
+                        Text(
+                            when {
+                                !appUpdate.installing -> "Update to v${appUpdate.latestVersion}"
+                                appUpdate.installProgress in 1..99 -> "Downloading… ${appUpdate.installProgress}%"
+                                else -> "Installing…"
+                            },
+                        )
                     }
                 }
                 OutlinedButton(

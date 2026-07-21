@@ -853,6 +853,25 @@ class TerminalView @JvmOverloads constructor(
         }
     }
 
+    /** Physical mouse / external scroll wheel: Android delivers wheel notches as ACTION_SCROLL
+     *  generic-motion events, not touch gestures, so they bypass the GestureDetector. Route them
+     *  through the same logic as a touch scroll so a mouse wheel scrolls a foreground TUI (Claude
+     *  Code), an alt-screen pager, or local scrollback correctly — instead of falling through to the
+     *  surrounding view, which scrolled the panel like a document. */
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (event.action == MotionEvent.ACTION_SCROLL) {
+            val vscroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+            if (vscroll != 0f) {
+                // AXIS_VSCROLL > 0 = wheel up = toward earlier content. gesture=true reuses the
+                // per-notch accumulation so one wheel notch is one app wheel-event but ~3 lines of
+                // local scrollback, matching a desktop terminal.
+                dispatchScroll(if (vscroll > 0) 3 else -3, event.x, event.y, gesture = true)
+                return true
+            }
+        }
+        return super.onGenericMotionEvent(event)
+    }
+
     /** Report a tap as a mouse press (+ release when the tracking level includes releases). */
     private fun sendMouseClick(x: Float, y: Float) {
         val modes = currentInputModes()
@@ -909,6 +928,17 @@ class TerminalView @JvmOverloads constructor(
         }
     }
 
+    /** The xterm control byte for Ctrl+[ch], or null when the char has no control mapping. */
+    private fun ctrlByteFor(ch: Char): Byte? {
+        val c = ch.uppercaseChar()
+        return when {
+            c in '@'..'_' -> (c.code and 0x1F).toByte()
+            ch == ' ' -> 0
+            ch == '/' -> 0x1F
+            else -> null
+        }
+    }
+
     /**
      * Send a key event to the terminal.
      * Supports TUI apps (vim, htop, nano, mc) with special key combinations.
@@ -916,28 +946,28 @@ class TerminalView @JvmOverloads constructor(
     fun sendKey(keyCode: Int, event: KeyEvent?): Boolean {
         val isCtrl = event?.isCtrlPressed == true
         val isAlt = event?.isAltPressed == true
+        val isShift = event?.isShiftPressed == true
         // DECCKM: cursor/Home/End keys switch to the SS3 form while an app holds application
         // cursor-keys mode (vim, less, Claude Code's fullscreen TUI). Modified (Alt/Ctrl)
         // sequences stay CSI, matching xterm.
         val appCursor = (currentInputModes() and VtParser.MODE_APP_CURSOR_KEYS) != 0
 
+        // Ctrl+<printable> -> the xterm control byte (Ctrl+C=0x03, Ctrl+R=0x12, Ctrl+L=0x0C, ...).
+        // Covers every readline/TUI binding rather than a hand-picked few, and matches the on-screen
+        // sticky-Ctrl chip. Keys with no printable base (arrows, F-keys) report unicodeChar 0 here
+        // and fall through to the table below. Ctrl+L now sends raw 0x0C so the running program
+        // (readline, vim, Claude Code) decides what to do, instead of us injecting a clear sequence.
+        if (isCtrl && !isAlt) {
+            val base = event?.getUnicodeChar(0) ?: 0
+            if (base != 0) {
+                ctrlByteFor(base.toChar())?.let { sendInput(byteArrayOf(it)); return true }
+            }
+        }
+
         val bytes = when {
-            // Ctrl+C → SIGINT (interrupt)
-            isCtrl && keyCode == KeyEvent.KEYCODE_C -> byteArrayOf(0x03)
-            // Ctrl+Z → SIGTSTP (suspend)
-            isCtrl && keyCode == KeyEvent.KEYCODE_Z -> byteArrayOf(0x1A)
-            // Ctrl+D → EOF
-            isCtrl && keyCode == KeyEvent.KEYCODE_D -> byteArrayOf(0x04)
-            // Ctrl+L → Clear screen (VT sequence)
-            isCtrl && keyCode == KeyEvent.KEYCODE_L -> "\u001B[H\u001B[2J".toByteArray()
-            // Ctrl+U → Clear line
-            isCtrl && keyCode == KeyEvent.KEYCODE_U -> byteArrayOf(0x15)
-            // Ctrl+W → Delete word
-            isCtrl && keyCode == KeyEvent.KEYCODE_W -> byteArrayOf(0x17)
-            // Ctrl+A → Home
-            isCtrl && keyCode == KeyEvent.KEYCODE_A -> byteArrayOf(0x01)
-            // Ctrl+E → End
-            isCtrl && keyCode == KeyEvent.KEYCODE_E -> byteArrayOf(0x05)
+            // Ctrl+Left/Right -> word-wise cursor motion (xterm modifier form).
+            isCtrl && keyCode == KeyEvent.KEYCODE_DPAD_LEFT -> "[1;5D".toByteArray()
+            isCtrl && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT -> "[1;5C".toByteArray()
             // Alt+arrow keys (TUI navigation in vim, mc, etc.)
             isAlt && keyCode == KeyEvent.KEYCODE_DPAD_UP -> "\u001B\u001B[A".toByteArray()
             isAlt && keyCode == KeyEvent.KEYCODE_DPAD_DOWN -> "\u001B\u001B[B".toByteArray()
@@ -947,12 +977,13 @@ class TerminalView @JvmOverloads constructor(
             isAlt && keyCode == KeyEvent.KEYCODE_F1 -> "\u001B\u001BOP".toByteArray()
             isAlt && keyCode == KeyEvent.KEYCODE_F2 -> "\u001B\u001BOQ".toByteArray()
             // Standard keys
-            keyCode == KeyEvent.KEYCODE_ENTER -> byteArrayOf(0x0D)
+            keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER -> byteArrayOf(0x0D)
             keyCode == KeyEvent.KEYCODE_DEL -> byteArrayOf(0x7F)
             keyCode == KeyEvent.KEYCODE_DPAD_UP -> (if (appCursor) "\u001BOA" else "\u001B[A").toByteArray()
             keyCode == KeyEvent.KEYCODE_DPAD_DOWN -> (if (appCursor) "\u001BOB" else "\u001B[B").toByteArray()
             keyCode == KeyEvent.KEYCODE_DPAD_RIGHT -> (if (appCursor) "\u001BOC" else "\u001B[C").toByteArray()
             keyCode == KeyEvent.KEYCODE_DPAD_LEFT -> (if (appCursor) "\u001BOD" else "\u001B[D").toByteArray()
+            isShift && keyCode == KeyEvent.KEYCODE_TAB -> "[Z".toByteArray()
             keyCode == KeyEvent.KEYCODE_TAB -> byteArrayOf(0x09)
             keyCode == KeyEvent.KEYCODE_ESCAPE -> byteArrayOf(0x1B)
             // Function keys (F1-F12)
@@ -989,6 +1020,20 @@ class TerminalView @JvmOverloads constructor(
      */
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (pty?.isOpen != true) return super.onKeyDown(keyCode, event)
+        // Control/navigation keys first: some hardware keyboards report a unicodeChar for Enter
+        // (e.g. '\n'), which must not be sent verbatim — Enter must always resolve to CR (0x0D) via
+        // sendKey so a TUI like Claude Code submits the line instead of inserting a newline.
+        if (sendKey(keyCode, event)) {
+            // A handled special key still consumes the one-shot sticky Ctrl/Alt chip so it can't
+            // leak onto the next keystroke (e.g. sticky Ctrl + Tab must not turn the next letter
+            // into a control byte).
+            if (pendingCtrl || pendingAlt) {
+                pendingCtrl = false
+                pendingAlt = false
+                onPendingModifiersConsumed?.invoke()
+            }
+            return true
+        }
         if (!event.isCtrlPressed && !event.isAltPressed) {
             val uch = event.unicodeChar
             if (uch != 0) {
@@ -997,7 +1042,6 @@ class TerminalView @JvmOverloads constructor(
                 return true
             }
         }
-        if (sendKey(keyCode, event)) return true
         return super.onKeyDown(keyCode, event)
     }
 
@@ -1489,15 +1533,7 @@ class TerminalView @JvmOverloads constructor(
         onPendingModifiersConsumed?.invoke()
         if (text.length != 1) return false
         val ch = text[0]
-        val ctrlByte: Byte? = if (ctrl) {
-            val c = ch.uppercaseChar()
-            when {
-                c in '@'..'_' -> (c.code and 0x1F).toByte()
-                ch == ' ' -> 0
-                ch == '/' -> 0x1F
-                else -> null
-            }
-        } else null
+        val ctrlByte: Byte? = if (ctrl) ctrlByteFor(ch) else null
         if (ctrl && ctrlByte == null && !alt) return false
         val body = ctrlByte?.let { byteArrayOf(it) } ?: text.toByteArray(Charsets.UTF_8)
         sendInput(if (alt) byteArrayOf(0x1B) + body else body)
