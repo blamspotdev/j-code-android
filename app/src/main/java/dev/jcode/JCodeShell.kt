@@ -696,7 +696,7 @@ fun JCodeApp(
     val fontContext = LocalContext.current
     val envFontPaths = remember(environmentFonts) { environmentFonts.associate { it.id to it.path } }
     val editorTypeface = remember(editorFontId, envFontPaths) { MonoFontCatalog.resolve(fontContext, editorFontId, envFontPaths) }
-    val terminalTypeface = remember(terminalFontId, envFontPaths) { MonoFontCatalog.resolve(fontContext, terminalFontId, envFontPaths) }
+    val terminalTypeface = remember(terminalFontId, envFontPaths) { MonoFontCatalog.resolve(fontContext, terminalFontId, envFontPaths, systemFallback = true) }
     val fontSettings = remember(editorFontId, terminalFontId, environmentFonts) {
         FontSettings(
             options = MonoFontCatalog.options + environmentFonts.map { FontOption(it.id, it.name) },
@@ -1364,6 +1364,7 @@ fun JCodeApp(
             onDiscard = { viewModel.resolveEditorClose(EditorCloseChoice.DISCARD) },
             onThird = { viewModel.resolveEditorClose(EditorCloseChoice.CLOSE_SAVED) },
             onDismiss = { viewModel.resolveEditorClose(EditorCloseChoice.CANCEL) },
+            onCancel = { viewModel.resolveEditorClose(EditorCloseChoice.CANCEL) },
         )
     }
 
@@ -2424,6 +2425,13 @@ private fun JCodeShell(
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     if ((event.isCtrlPressed || event.isMetaPressed) && event.isShiftPressed && event.key == Key.P) {
                         commandPaletteVisible = true
+                        return@onPreviewKeyEvent true
+                    }
+                    // Ctrl+Shift+S saves all open editor tabs. This root preview handler runs before the
+                    // focused editor/terminal AndroidView, so it wins in every focus state; the identical
+                    // per-view handlers are a fallback should that Compose interop ordering ever change.
+                    if ((event.isCtrlPressed || event.isMetaPressed) && event.isShiftPressed && event.key == Key.S) {
+                        editorActions.onSaveAll()
                         return@onPreviewKeyEvent true
                     }
                     if (event.key == Key.Escape && commandPaletteVisible) {
@@ -3788,6 +3796,9 @@ private fun UnsavedChangesDialog(
     onDiscard: () -> Unit,
     onThird: () -> Unit,
     onDismiss: () -> Unit,
+    // When set, a visible "Cancel" button that aborts the close (keeping everything). Omitted where the
+    // third button already serves as Cancel, so the row never shows two cancels.
+    onCancel: (() -> Unit)? = null,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -3809,7 +3820,11 @@ private fun UnsavedChangesDialog(
             TextButton(onClick = onThird) { Text(thirdLabel) }
             TextButton(onClick = onSave) { Text("Save") }
         },
-        dismissButton = {},
+        dismissButton = {
+            onCancel?.let { cancel ->
+                TextButton(onClick = cancel) { Text("Cancel") }
+            }
+        },
     )
 }
 
@@ -4058,6 +4073,7 @@ private fun TerminalSidebarContent(
             val tapConfig = LocalTerminalTapConfig.current
             val extraKeys = LocalExtraKeysState.current
             val terminalTypeface = LocalTerminalTypeface.current
+            val termSaveActions = LocalEditorSaveActions.current
             var termMenu by remember { mutableStateOf<TerminalMenuRequest?>(null) }
             // Points the extra-keys row at whichever terminal owns the IME; cleared on focus loss so
             // the row never acts on (or shows for) a surface that isn't being typed into.
@@ -4088,6 +4104,8 @@ private fun TerminalSidebarContent(
                                     onTapToken = tapConfig.onToken
                                     onContextMenu = { x, y -> termMenu = TerminalMenuRequest(x, y, this) }
                                     onPasteImage = tapConfig.onPasteImage
+                                    onCloseTabRequest = { requestCloseTerminals(listOf(sessionId)) }
+                                    onSaveAllRequest = { termSaveActions.onSaveAll() }
                                     wireExtraKeys(this)
                                     bind(session)
                                 }
@@ -4097,6 +4115,8 @@ private fun TerminalSidebarContent(
                                 view.onTapToken = tapConfig.onToken
                                 view.onContextMenu = { x, y -> termMenu = TerminalMenuRequest(x, y, view) }
                                 view.onPasteImage = tapConfig.onPasteImage
+                                view.onCloseTabRequest = { requestCloseTerminals(listOf(sessionId)) }
+                                view.onSaveAllRequest = { termSaveActions.onSaveAll() }
                                 view.bind(session) // no-op if already bound to this session
                                 view.setActive(isActive)
                             },

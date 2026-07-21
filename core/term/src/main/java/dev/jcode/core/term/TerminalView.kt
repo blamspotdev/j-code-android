@@ -66,6 +66,12 @@ class TerminalView @JvmOverloads constructor(
     var onPasteImage: ((android.net.Uri) -> String?)? = null
     // Focus reporting for the extra-keys row: the host points the row at whichever surface owns the IME.
     var onFocusStateChanged: ((Boolean) -> Unit)? = null
+    // Invoked when the user presses Ctrl+Shift+W; the host closes this terminal tab. Ctrl+W itself is
+    // left to the shell (readline word-erase / vim window prefix). Null = fall through to terminal input.
+    var onCloseTabRequest: (() -> Unit)? = null
+    // Invoked when the user presses Ctrl+Shift+S; the host saves every open editor tab (instead of the
+    // shell receiving XOFF/0x13). Null = fall through to normal terminal input.
+    var onSaveAllRequest: (() -> Unit)? = null
 
     // One-shot sticky modifiers armed by the extra-keys row (Termux-style): applied to the NEXT
     // typed character, then cleared. CTRL turns a letter into its control byte; ALT prefixes ESC.
@@ -947,6 +953,15 @@ class TerminalView @JvmOverloads constructor(
         val isCtrl = event?.isCtrlPressed == true
         val isAlt = event?.isAltPressed == true
         val isShift = event?.isShiftPressed == true
+
+        // Workbench shortcuts intercepted before the shell sees them: Ctrl+Shift+W closes this terminal
+        // tab and Ctrl+Shift+S saves all editor tabs. Ctrl+W is deliberately NOT taken — it stays the
+        // shell's readline word-erase / vim's window-navigation prefix. Only intercept when the host
+        // wired a handler, so a bare terminal keeps the keys.
+        if (isCtrl && isShift && !isAlt) {
+            if (keyCode == KeyEvent.KEYCODE_W) onCloseTabRequest?.let { it(); return true }
+            if (keyCode == KeyEvent.KEYCODE_S) onSaveAllRequest?.let { it(); return true }
+        }
         // DECCKM: cursor/Home/End keys switch to the SS3 form while an app holds application
         // cursor-keys mode (vim, less, Claude Code's fullscreen TUI). Modified (Alt/Ctrl)
         // sequences stay CSI, matching xterm.
