@@ -209,6 +209,11 @@ class AppUpdateSetting(
     val checking: Boolean = false,
     val onCheck: () -> Unit = {},
     val onOpenRelease: () -> Unit = {},
+    /** Download + install the update in-app; falls back to [onOpenRelease] when the release has no APK. */
+    val onInstallUpdate: () -> Unit = {},
+    /** True while the in-app updater is downloading/installing; [installProgress] is the download %. */
+    val installing: Boolean = false,
+    val installProgress: Int = 0,
 )
 
 val LocalAppUpdate = compositionLocalOf { AppUpdateSetting() }
