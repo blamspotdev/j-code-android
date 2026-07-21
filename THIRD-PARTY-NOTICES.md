@@ -105,12 +105,14 @@ Bundled into the APK (`classes.dex` / merged resources). Unless noted, each is
 ## 4. Bundled fonts
 
 Shipped as Android font resources and rendered by JCode's own views (the code
-editor). The font files are unmodified upstream releases; per the OFL's Reserved
-Font Name rules they must not be subset or otherwise modified without renaming.
+editor and terminal). The font files are unmodified upstream releases; per the
+OFL's Reserved Font Name rules they must not be subset or otherwise modified
+without renaming.
 
 | Component | Version | License | Source |
 |---|---|---|---|
 | JetBrains Mono (`JetBrainsMono-Regular.ttf`, shipped as `core/editor/src/main/res/font/jetbrains_mono_regular.ttf`) | 2.304 | OFL-1.1 | https://github.com/JetBrains/JetBrainsMono |
+| Noto Sans Symbols 2 (`NotoSansSymbols2-Regular.ttf`, shipped as `app/src/main/res/font/noto_sans_symbols2.ttf`) | 2.008 | OFL-1.1 | https://github.com/notofonts/symbols |
 
 Copyright 2020 The JetBrains Mono Project Authors
 (https://github.com/JetBrains/JetBrainsMono). Licensed under the SIL Open Font
@@ -119,6 +121,14 @@ License, Version 1.1 — the full license text ships in this repository at
 (upstream `OFL.txt`, verbatim); the font file's own metadata carries the
 copyright notice and a license pointer. The OFL applies to the font files only —
 it does not extend to JCode's code or to documents rendered with the font.
+
+Copyright 2022 The Noto Project Authors
+(https://github.com/notofonts/symbols). Licensed under the SIL Open Font
+License, Version 1.1 — the full license text ships at
+[`licenses/OFL-1.1-NotoSansSymbols2.txt`](licenses/OFL-1.1-NotoSansSymbols2.txt)
+(upstream `OFL.txt`, verbatim). JCode bundles it, unmodified, as a terminal glyph
+fallback so media/technical symbols that TUIs emit (e.g. U+23F5, which Claude
+Code shows for auto-accept) still render on devices whose system fonts omit them.
 
 ---
 

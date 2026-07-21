@@ -26,6 +26,7 @@ import dev.jcode.design.LocalTerminalTypeface
 import dev.jcode.design.ExtraKeysSetting
 import dev.jcode.design.ExtraKeysState
 import dev.jcode.design.LocalBottomBarSetting
+import dev.jcode.design.LocalExtraKeysGlyphFontFamily
 import dev.jcode.design.LocalExtraKeysSetting
 import dev.jcode.design.LocalExtraKeysState
 import dev.jcode.design.RestoreSessionSetting
@@ -96,6 +97,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.rememberScrollState
@@ -697,6 +699,9 @@ fun JCodeApp(
     val envFontPaths = remember(environmentFonts) { environmentFonts.associate { it.id to it.path } }
     val editorTypeface = remember(editorFontId, envFontPaths) { MonoFontCatalog.resolve(fontContext, editorFontId, envFontPaths) }
     val terminalTypeface = remember(terminalFontId, envFontPaths) { MonoFontCatalog.resolve(fontContext, terminalFontId, envFontPaths, systemFallback = true) }
+    // Bundled JetBrains Mono as a Compose family for the extra-keys arrows (←↑↓→) — it ships those
+    // glyphs, so the row never falls back to a manufacturer font that might lack or misalign them.
+    val extraKeysGlyphFont = remember { FontFamily(Font(dev.jcode.core.editor.R.font.jetbrains_mono_regular)) }
     val fontSettings = remember(editorFontId, terminalFontId, environmentFonts) {
         FontSettings(
             options = MonoFontCatalog.options + environmentFonts.map { FontOption(it.id, it.name) },
@@ -1143,6 +1148,7 @@ fun JCodeApp(
         LocalFontSettings provides fontSettings,
         LocalEditorTypeface provides editorTypeface,
         LocalTerminalTypeface provides terminalTypeface,
+        LocalExtraKeysGlyphFontFamily provides extraKeysGlyphFont,
         LocalEditorTabActions provides remember {
             EditorTabActions(
                 onTogglePin = viewModel::toggleEditorTabPinned,

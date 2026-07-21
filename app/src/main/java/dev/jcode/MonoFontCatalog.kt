@@ -49,25 +49,30 @@ object MonoFontCatalog {
     ): Typeface {
         if (id.startsWith(ENV_PREFIX)) {
             val path = envFontPaths[id] ?: return Typeface.MONOSPACE
-            if (systemFallback) withSystemFallback { Font.Builder(File(path)).build() }?.let { return it }
+            if (systemFallback) withSystemFallback(context) { Font.Builder(File(path)).build() }?.let { return it }
             return runCatching { Typeface.createFromFile(File(path)) }.getOrNull() ?: Typeface.MONOSPACE
         }
         val entry = entries.firstOrNull { it.id == id } ?: entries.first()
         if (systemFallback) {
-            withSystemFallback { Font.Builder(context.resources, entry.resId).build() }?.let { return it }
+            withSystemFallback(context) { Font.Builder(context.resources, entry.resId).build() }?.let { return it }
         }
         return runCatching { ResourcesCompat.getFont(context, entry.resId) }.getOrNull() ?: Typeface.MONOSPACE
     }
 
     /**
-     * Build a [Typeface] whose primary family is [buildFont] but that falls back to the system monospace
-     * chain for any missing glyph. Returns null on failure so callers keep the plain typeface.
+     * Build a [Typeface] whose primary family is [buildPrimary], falling back first to the bundled
+     * Noto Sans Symbols 2 (media/technical/geometric glyphs that TUIs like Claude Code emit — e.g. the
+     * "auto-accept" indicator U+23F5 — which the device's *subsetted* system symbol fonts don't ship),
+     * then to the system monospace chain (CJK, other symbols). Returns null on failure so callers keep
+     * the plain typeface. The bundled fallback is best-effort: skipped if its resource can't load.
      */
-    private fun withSystemFallback(buildFont: () -> Font): Typeface? = runCatching {
-        val family = FontFamily.Builder(buildFont()).build()
-        Typeface.CustomFallbackBuilder(family)
-            .setSystemFallback("monospace")
-            .build()
+    private fun withSystemFallback(context: Context, buildPrimary: () -> Font): Typeface? = runCatching {
+        val builder = Typeface.CustomFallbackBuilder(FontFamily.Builder(buildPrimary()).build())
+        runCatching {
+            val symbols = Font.Builder(context.resources, dev.jcode.R.font.noto_sans_symbols2).build()
+            builder.addCustomFallback(FontFamily.Builder(symbols).build())
+        }
+        builder.setSystemFallback("monospace").build()
     }.getOrNull()
 
     /** Id prefix marking a font discovered from the Linux environment (vs a built-in). */
