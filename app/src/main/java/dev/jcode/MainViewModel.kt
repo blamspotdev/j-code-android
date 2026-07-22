@@ -3643,32 +3643,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * updatable, then re-check so the "Update available" markers clear. Deps are already present, so
      * this re-runs each tool's install command directly through the shared Setup terminal.
      */
-    fun updateAllToolchains() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val session = SessionRegistry.registerSession(
-                context = getApplication(),
-                kind = BackendSessionKind.JOB,
-                name = "toolchains:update-all",
-            )
-            try {
-                distroService.sdkCatalogState.value.updatableEntryIds.toList().forEach {
-                    distroService.runSdkCatalogAction(it, SdkCatalogAction.Install)
-                }
-                distroService.lspCatalogState.value.updatableEntryIds.toList().forEach {
-                    distroService.runLspCatalogAction(it, LspCatalogAction.Install)
-                }
-                distroService.debugCatalogState.value.updatableEntryIds.toList().forEach {
-                    distroService.runDebugEngineCatalogAction(it, DebugEngineAction.Install)
-                }
-            } finally {
-                session.close()
-            }
-            distroService.checkSdkStatuses()
-            distroService.checkLspStatuses()
-            distroService.checkDebugEngineStatuses()
-        }
-    }
-
     /** Open the detail page for a single debug engine. Reuses one debug-detail tab (replaces any other). */
     fun openDebugEngineDetailPage(entryId: String) {
         openDetailPage(DEBUG_ENGINE_DETAIL_PREFIX + entryId, EditorPageKind.DebugEngineDetail) {
