@@ -185,6 +185,7 @@ internal fun ProjectRoster(
                         }
                         Text(
                             text = project.name,
+                            style = MaterialTheme.typography.bodyMedium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
