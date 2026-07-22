@@ -8,6 +8,7 @@ import dev.jcode.core.distro.SdkCatalogEntry
 import dev.jcode.core.distro.SdkCatalogState
 import dev.jcode.design.ManagerDetailScreen
 import dev.jcode.design.ManagerItemStatus
+import dev.jcode.design.VersionOption
 
 /**
  * SDK detail page (install/verify/remove one SDK). Browsing lives in the merged Toolchains panel;
@@ -25,10 +26,13 @@ object SdkManagerFeature {
         onUpdate: (String) -> Unit,
         onUninstall: (String) -> Unit,
         onVerify: (String) -> Unit,
+        onInstallVersion: (String, String) -> Unit = { _, _ -> },
+        onUninstallVersion: (String, String) -> Unit = { _, _ -> },
         modifier: Modifier = Modifier,
     ) {
         val environmentReady = environmentState.distroInstalled == true && environmentState.jcodeUserReady == true
         val running = state.runningEntryId == entry.id
+        val versioned = entry.versionsScript.isNotBlank()
         ManagerDetailScreen(
             title = entry.name,
             subtitle = entry.category.label,
@@ -46,6 +50,16 @@ object SdkManagerFeature {
             onUpdate = { onUpdate(entry.id) },
             onUninstall = { onUninstall(entry.id) },
             onVerify = { onVerify(entry.id) },
+            availableVersions = if (versioned) {
+                state.availableVersions[entry.id].orEmpty().map { VersionOption(it.version, it.tag.ifBlank { null }) }
+            } else {
+                emptyList()
+            },
+            installedVersions = if (versioned) state.installedVersions[entry.id].orEmpty() else emptyList(),
+            multiVersion = entry.multiVersion,
+            versionsLoading = versioned && state.versionsLoadingEntryId == entry.id,
+            onInstallVersion = { version -> onInstallVersion(entry.id, version) },
+            onUninstallVersion = { version -> onUninstallVersion(entry.id, version) },
             modifier = modifier,
         )
     }

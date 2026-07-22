@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -48,6 +50,10 @@ import androidx.compose.ui.unit.dp
 
 /** Install state shown across the SDK / LSP / Extension managers. */
 enum class ManagerItemStatus { NotInstalled, Installed, UpdateAvailable }
+
+/** One installable version in a detail-page picker: the clean [value] used for install plus an optional
+ *  presentational [tag] (e.g. "LTS Jod") shown as a badge. */
+data class VersionOption(val value: String, val tag: String? = null)
 
 /** Compact status chip used in the manager list rows and detail headers. */
 @Composable
@@ -421,8 +427,23 @@ fun ManagerDetailScreen(
     leading: (@Composable () -> Unit)? = null,
     onManage: (() -> Unit)? = null,
     manageLabel: String = "Manage",
+    /** Installable versions, newest first (index 0 is treated as "latest"), each with an optional tag
+     *  (e.g. "LTS Jod"). Empty = no version picker. */
+    availableVersions: List<VersionOption> = emptyList(),
+    /** Currently-installed versions, newest first. For [multiVersion] the first is the default (on PATH). */
+    installedVersions: List<String> = emptyList(),
+    /** When true, several versions coexist and each is removable independently. */
+    multiVersion: Boolean = false,
+    /** Whether the available-versions list is still being fetched (shows a spinner in the picker). */
+    versionsLoading: Boolean = false,
+    onInstallVersion: (String) -> Unit = {},
+    onUninstallVersion: (String) -> Unit = {},
     extra: @Composable () -> Unit = {},
 ) {
+    val hasVersions = availableVersions.isNotEmpty() || versionsLoading
+    var selectedVersion by remember(availableVersions) {
+        mutableStateOf(availableVersions.firstOrNull()?.value ?: "latest")
+    }
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
@@ -450,6 +471,19 @@ fun ManagerDetailScreen(
 
         extra()
 
+        if (showActions && hasVersions) {
+            VersionSection(
+                multiVersion = multiVersion,
+                availableVersions = availableVersions,
+                installedVersions = installedVersions,
+                selectedVersion = selectedVersion,
+                loading = versionsLoading,
+                enabled = actionsEnabled,
+                onSelectVersion = { selectedVersion = it },
+                onUninstallVersion = onUninstallVersion,
+            )
+        }
+
         if (onManage != null) {
             CompactFilledButton(manageLabel, onClick = onManage, enabled = actionsEnabled, modifier = Modifier.fillMaxWidth())
         }
@@ -457,7 +491,15 @@ fun ManagerDetailScreen(
         if (showActions) {
             val installed = status == ManagerItemStatus.Installed || status == ManagerItemStatus.UpdateAvailable
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!installed) {
+                if (hasVersions) {
+                    val versionInstalled = selectedVersion in installedVersions
+                    CompactFilledButton(
+                        text = (if (versionInstalled) "Reinstall " else "Install ") + shortVersionLabel(selectedVersion),
+                        onClick = { onInstallVersion(selectedVersion) },
+                        enabled = actionsEnabled && !versionsLoading,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else if (!installed) {
                     CompactFilledButton("Install", onClick = onInstall, enabled = actionsEnabled, modifier = Modifier.weight(1f))
                 } else {
                     CompactFilledButton(
@@ -470,8 +512,157 @@ fun ManagerDetailScreen(
                 if (showVerify) {
                     CompactOutlinedButton("Verify", onClick = onVerify, enabled = actionsEnabled, modifier = Modifier.weight(1f))
                 }
-                CompactOutlinedButton("Uninstall", onClick = onUninstall, enabled = installed && actionsEnabled, modifier = Modifier.weight(1f))
+                // Multi-version tools are removed per-version in the list above; single-version keeps a global Uninstall.
+                if (!(hasVersions && multiVersion)) {
+                    CompactOutlinedButton("Uninstall", onClick = onUninstall, enabled = installed && actionsEnabled, modifier = Modifier.weight(1f))
+                }
             }
         }
     }
 }
+
+/** Newest-first version chosen from a picker, plus the installed-versions list for [multiVersion] tools. */
+@Composable
+private fun VersionSection(
+    multiVersion: Boolean,
+    availableVersions: List<VersionOption>,
+    installedVersions: List<String>,
+    selectedVersion: String,
+    loading: Boolean,
+    enabled: Boolean,
+    onSelectVersion: (String) -> Unit,
+    onUninstallVersion: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = if (multiVersion) "Versions" else "Version",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (multiVersion && installedVersions.isNotEmpty()) {
+            installedVersions.forEachIndexed { index, version ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(text = version, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    if (index == 0) {
+                        Text(
+                            text = "default",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    CompactOutlinedButton("Remove", onClick = { onUninstallVersion(version) }, enabled = enabled)
+                }
+            }
+            Text(
+                text = "Install another version",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        VersionDropdown(
+            versions = availableVersions,
+            selected = selectedVersion,
+            installedVersions = installedVersions,
+            loading = loading,
+            enabled = enabled,
+            onSelect = onSelectVersion,
+        )
+    }
+}
+
+@Composable
+private fun VersionDropdown(
+    versions: List<VersionOption>,
+    selected: String,
+    installedVersions: List<String>,
+    loading: Boolean,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val latest = versions.firstOrNull()?.value
+    val selectedTag = versions.firstOrNull { it.value == selected }?.tag
+    Box {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(
+                modifier = Modifier
+                    .clickable(enabled = enabled && !loading && versions.isNotEmpty()) { expanded = true }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (loading) {
+                    CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                    Text(
+                        text = "Loading versions…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    Text(
+                        text = versionLabel(selected, latest),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (selectedTag != null) VersionBadge(selectedTag)
+                    Spacer(modifier = Modifier.weight(1f))
+                    Text(text = "▾", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            versions.forEach { option ->
+                DropdownMenuItem(
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(versionLabel(option.value, latest))
+                            if (option.tag != null) VersionBadge(option.tag)
+                            if (option.value in installedVersions) {
+                                Text(
+                                    text = "installed",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    },
+                    onClick = {
+                        onSelect(option.value)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** Small accent pill for a version tag such as "LTS Jod". */
+@Composable
+private fun VersionBadge(text: String) {
+    Surface(
+        shape = RoundedCornerShape(4.dp),
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+    }
+}
+
+private fun versionLabel(version: String, latest: String?): String =
+    if (latest != null && version == latest) "$version · latest" else version
+
+private fun shortVersionLabel(version: String): String =
+    if (version.length > 14) version.take(13) + "…" else version

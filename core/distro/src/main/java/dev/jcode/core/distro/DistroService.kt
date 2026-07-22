@@ -291,6 +291,7 @@ class DistroService(
     suspend fun runSdkCatalogAction(
         entryId: String,
         action: SdkCatalogAction,
+        version: String? = null,
     ) {
         lock.withLock {
             val entry = _sdkCatalogState.value.entries.firstOrNull { it.id == entryId }
@@ -326,16 +327,17 @@ class DistroService(
                 logLines = appendCatalogLogLines(
                     existing = _sdkCatalogState.value.logLines,
                     lines = buildList {
-                        add("== ${action.label} ${entry.name} (${_environmentState.value.runtime.selectedDistro.label}) ==")
-                        addAll(entry.scriptFor(action).lineSequence().map { line -> "$ $line" })
+                        val versionSuffix = version?.let { " [$it]" }.orEmpty()
+                        add("== ${action.label} ${entry.name}$versionSuffix (${_environmentState.value.runtime.selectedDistro.label}) ==")
+                        addAll(applyVersion(entry.scriptFor(action), version).lineSequence().map { line -> "$ $line" })
                     },
                 ),
             )
 
             val actionResult = when (action) {
-                SdkCatalogAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installScript, timeoutMs = 1_800_000L)
+                SdkCatalogAction.Install -> execCatalogAction("${action.label} ${entry.name}", applyVersion(entry.installScript, version), timeoutMs = catalogInstallTimeoutMs)
                 SdkCatalogAction.Verify -> execCatalogScript(entry.verifyScript, timeoutMs = 120_000L)
-                SdkCatalogAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", entry.uninstallScript, timeoutMs = 900_000L)
+                SdkCatalogAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", applyVersion(entry.uninstallScript, version), timeoutMs = 900_000L)
             }
             val verifyResult = when (action) {
                 SdkCatalogAction.Verify -> actionResult
@@ -354,6 +356,14 @@ class DistroService(
             }.toSet()
             persistInstalledCatalogEntries(distroId, updatedInstalledEntries)
 
+            val refreshedInstalledVersions =
+                if (entry.versionsScript.isNotBlank() && action != SdkCatalogAction.Verify) {
+                    _sdkCatalogState.value.installedVersions.toMutableMap()
+                        .apply { put(entry.id, readInstalledVersionsForEntry(entry)) }
+                } else {
+                    _sdkCatalogState.value.installedVersions
+                }
+
             val errorMessage = when {
                 !actionResult.succeeded -> actionResult.internalError
                     ?: actionResult.stderr.lineSequence().firstOrNull { it.isNotBlank() }
@@ -371,6 +381,7 @@ class DistroService(
 
             _sdkCatalogState.value = _sdkCatalogState.value.copy(
                 installedEntryIds = updatedInstalledEntries,
+                installedVersions = refreshedInstalledVersions,
                 runningEntryId = null,
                 runningAction = null,
                 executionLabel = "${action.label} ${entry.name}",
@@ -386,6 +397,41 @@ class DistroService(
                         installedNow = installedNow,
                     ),
                 ),
+            )
+        }
+    }
+
+    /**
+     * Populate [SdkCatalogState.availableVersions] / [SdkCatalogState.installedVersions] for a versioned
+     * entry (one whose [SdkCatalogEntry.versionsScript] is set). Called lazily when a detail page opens.
+     * Sets [SdkCatalogState.versionsLoadingEntryId] up-front so the picker can show a spinner, then runs
+     * the (possibly network-bound) listing scripts under [lock] to serialize against installs. Cached:
+     * a second open is a no-op unless [force] is set.
+     */
+    suspend fun fetchCatalogVersions(entryId: String, force: Boolean = false) {
+        val entry = _sdkCatalogState.value.entries.firstOrNull { it.id == entryId } ?: return
+        if (entry.versionsScript.isBlank()) return
+        if (_environmentState.value.distroInstalled != true || _environmentState.value.jcodeUserReady != true) return
+        if (!force && _sdkCatalogState.value.availableVersions[entryId]?.isNotEmpty() == true) return
+
+        _sdkCatalogState.value = _sdkCatalogState.value.copy(versionsLoadingEntryId = entryId)
+        lock.withLock {
+            val availableResult = execCatalogScript(entry.versionsScript, timeoutMs = 180_000L)
+            val available = if (availableResult.succeeded) parseVersionOptions(availableResult.stdout) else emptyList()
+            val installed = readInstalledVersionsForEntry(entry)
+            _sdkCatalogState.value = _sdkCatalogState.value.copy(
+                availableVersions = _sdkCatalogState.value.availableVersions.toMutableMap()
+                    .apply { if (available.isNotEmpty()) put(entryId, available) },
+                installedVersions = _sdkCatalogState.value.installedVersions.toMutableMap()
+                    .apply { put(entryId, installed) },
+                // Compare-and-clear: only drop the spinner if this entry is still the one loading — a
+                // slower concurrent fetch for another entry must keep its own spinner.
+                versionsLoadingEntryId = _sdkCatalogState.value.versionsLoadingEntryId.takeIf { it != entryId },
+                errorMessage = if (available.isEmpty()) {
+                    "Couldn't list installable versions for ${entry.name}."
+                } else {
+                    _sdkCatalogState.value.errorMessage
+                },
             )
         }
     }
@@ -442,7 +488,7 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                LspCatalogAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installCommand, timeoutMs = 1_800_000L)
+                LspCatalogAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installCommand, timeoutMs = catalogInstallTimeoutMs)
                 LspCatalogAction.Verify -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
                 LspCatalogAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", entry.uninstallCommand, timeoutMs = 900_000L)
             }
@@ -678,7 +724,7 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                DebugEngineAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installCommand, timeoutMs = 1_800_000L)
+                DebugEngineAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installCommand, timeoutMs = catalogInstallTimeoutMs)
                 DebugEngineAction.Verify -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
                 DebugEngineAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", entry.uninstallCommand, timeoutMs = 900_000L)
             }
@@ -1421,6 +1467,12 @@ class DistroService(
     @Volatile
     var interactiveCatalogRunner: (suspend (label: String, script: String, timeoutMs: Long) -> ExecResult?)? = null
 
+    /** Timeout (ms) for a catalog INSTALL action (SDK/LSP/debugger), set from the "Toolchain install
+     *  timeout" setting. Verify/uninstall keep their own fixed budgets. Default is the pre-setting
+     *  30-minute value; large SDKs on a slow connection may need more. */
+    @Volatile
+    var catalogInstallTimeoutMs: Long = 1_800_000L
+
     /** Long-running catalog actions go through the Setup terminal when wired; verify stays quiet so
      *  its exit code and output remain capturable.
      *
@@ -1918,6 +1970,41 @@ class DistroService(
             SdkCatalogAction.Verify -> verifyScript
             SdkCatalogAction.Uninstall -> uninstallScript
         }
+    }
+
+    /** Substitute a chosen version into a catalog script: replaces the `{{version}}` placeholder and
+     *  exports `JCODE_VERSION` so scripts can branch on it. No-op when [version] is null/blank. */
+    private fun applyVersion(script: String, version: String?): String {
+        if (version.isNullOrBlank()) return script
+        val quoted = "'" + version.replace("'", "'\\''") + "'"
+        return "export JCODE_VERSION=$quoted\n" + script.replace("{{version}}", version)
+    }
+
+    private fun parseVersionLines(stdout: String): List<String> =
+        stdout.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .toList()
+
+    /** Parse a [SdkCatalogEntry.versionsScript] into tagged versions. Each line is `version` or
+     *  `version<TAB>tag` (e.g. `v22.23.1\tLTS Jod`); the tag column is optional and display-only. */
+    private fun parseVersionOptions(stdout: String): List<CatalogVersion> =
+        stdout.lineSequence()
+            .map { it.trimEnd('\r', '\n') }
+            .filter { it.isNotBlank() }
+            .map { line ->
+                val parts = line.split('\t', limit = 2)
+                CatalogVersion(version = parts[0].trim(), tag = parts.getOrNull(1)?.trim().orEmpty())
+            }
+            .filter { it.version.isNotEmpty() }
+            .distinctBy { it.version }
+            .toList()
+
+    private fun readInstalledVersionsForEntry(entry: SdkCatalogEntry): List<String> {
+        if (entry.installedVersionsScript.isBlank()) return emptyList()
+        val result = execCatalogScript(entry.installedVersionsScript, timeoutMs = 60_000L)
+        return if (result.succeeded) parseVersionLines(result.stdout) else emptyList()
     }
 
     private fun installedEntriesKey(distroId: String) =

@@ -27,7 +27,6 @@ import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.core.distro.LspCatalogState
 import dev.jcode.core.distro.SdkCatalogState
 import androidx.compose.ui.Alignment
-import dev.jcode.design.CompactFilledButton
 import dev.jcode.design.ManagerItemStatus
 import dev.jcode.design.ManagerListRow
 import dev.jcode.design.ManagerNoticeCard
@@ -62,7 +61,6 @@ internal fun ToolchainManagerPanel(
     debugState: DebugEngineCatalogState,
     environmentState: DistroEnvironmentState,
     onRefreshAll: () -> Unit,
-    onUpdateAll: () -> Unit,
     onOpenSdkDetail: (String) -> Unit,
     onOpenLspDetail: (String) -> Unit,
     onOpenDebugDetail: (String) -> Unit,
@@ -147,9 +145,6 @@ internal fun ToolchainManagerPanel(
     val installedTotal = sdkState.installedEntryIds.size +
         lspState.installedEntryIds.size +
         debugState.installedEntryIds.size
-    val updatableTotal = sdkState.updatableEntryIds.size +
-        lspState.updatableEntryIds.size +
-        debugState.updatableEntryIds.size
     val busy = sdkState.checking || lspState.checking || debugState.checking
 
     Column(
@@ -187,40 +182,6 @@ internal fun ToolchainManagerPanel(
                     selected = filter == kind,
                     label = kind.chip,
                     onClick = { filterName = if (filter == kind) "" else kind.name },
-                )
-            }
-        }
-
-        // Update-check result: an actionable banner when tools are behind, a quiet reassurance when
-        // everything's current — so it's clear the check ran and what it found.
-        if (environmentReady && installedTotal > 0) {
-            when {
-                updatableTotal > 0 -> Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            text = "$updatableTotal update${if (updatableTotal == 1) "" else "s"} available",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.weight(1f),
-                        )
-                        CompactFilledButton("Update all", onClick = onUpdateAll, enabled = !busy)
-                    }
-                }
-                !busy -> Text(
-                    text = "All toolchains up to date.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 2.dp),
                 )
             }
         }

@@ -103,7 +103,6 @@ internal fun ProjectRoster(
     onRemoveProject: (Long) -> Unit,
     onOpenProjectSettings: (Long) -> Unit,
     onExportProject: (Project) -> Unit,
-    onCreateProject: () -> Unit,
 ) {
     var renameTarget by remember { mutableStateOf<Project?>(null) }
     var openMenuId by remember { mutableStateOf<Long?>(null) }
@@ -114,22 +113,11 @@ internal fun ProjectRoster(
             .padding(horizontal = 10.dp, vertical = 3.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = "PROJECTS",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            WorkbenchIconActionButton(
-                icon = jcIcon(JCodeIcon.Add),
-                contentDescription = "New project in this workspace",
-                onClick = onCreateProject,
-            )
-        }
+        Text(
+            text = "PROJECTS",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             projects.forEach { project ->
@@ -171,21 +159,14 @@ internal fun ProjectRoster(
                                 )
                             }
                         }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = project.name,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                            )
-                            Text(
-                                text = project.distroBindTarget,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
+                        Text(
+                            text = project.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            modifier = Modifier.weight(1f),
+                        )
                         Box {
                             JcTooltip("Project actions") {
                                 IconButton(onClick = { openMenuId = project.id }, modifier = Modifier.size(32.dp)) {

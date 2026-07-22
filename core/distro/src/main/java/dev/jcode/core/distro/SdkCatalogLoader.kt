@@ -45,6 +45,9 @@ internal class SdkCatalogLoader(
                 verifyScript = verifyScript.trim(),
                 uninstallScript = uninstallScript.trim(),
                 updateCheckScript = updateCheckScript,
+                multiVersion = entry.bool("multiVersion") ?: false,
+                versionsScript = entry.string("versionsScript")?.trim().orEmpty(),
+                installedVersionsScript = entry.string("installedVersionsScript")?.trim().orEmpty(),
                 supportedDistros = entry.stringList("supportedDistros"),
                 supportedArches = entry.stringList("supportedArches"),
                 requiredSdks = entry.stringList("requiredSdks"),
@@ -65,6 +68,15 @@ internal class SdkCatalogLoader(
             null -> null
             is String -> value.takeIf { it.isNotBlank() }
             else -> value.toString().takeIf { it.isNotBlank() }
+        }
+    }
+
+    private fun Map<String, Any?>.bool(key: String): Boolean? {
+        return when (val value = this[key]) {
+            null -> null
+            is Boolean -> value
+            is String -> value.trim().lowercase().let { if (it == "true") true else if (it == "false") false else null }
+            else -> null
         }
     }
 

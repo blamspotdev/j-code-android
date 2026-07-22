@@ -68,6 +68,24 @@ object TerminalSessionHost {
         uiTitleListener = listener
     }
 
+    // Optional UI hook so a guest shell wrapper can relocate an interactive sub-shell into its own tab
+    // (OSC 7715). Unlike the fire-and-forget hooks above, a dropped 7715 would hang the parent shell
+    // (it blocks on a FIFO), so events are buffered while the listener is transiently detached (Activity
+    // recreation) and replayed when it re-attaches.
+    @Volatile
+    private var uiNestedShellListener: ((String, String) -> Unit)? = null
+    private val pendingNestedOpens = java.util.concurrent.ConcurrentLinkedQueue<Pair<String, String>>()
+
+    fun setUiNestedShellListener(listener: ((String, String) -> Unit)?) {
+        uiNestedShellListener = listener
+        if (listener != null) {
+            while (true) {
+                val ev = pendingNestedOpens.poll() ?: break
+                mainHandler.post { listener(ev.first, ev.second) }
+            }
+        }
+    }
+
     fun manager(context: Context): TerminalSessionManager {
         manager?.let { return it }
         return synchronized(this) {
@@ -118,6 +136,14 @@ object TerminalSessionHost {
                             cm.setPrimaryClip(android.content.ClipData.newPlainText("Terminal", text))
                         }
                     }
+                }
+                // A guest shell wrapper requests a relocated sub-shell tab (OSC 7715), off the reader
+                // thread. Hop to the main thread; buffer if the UI listener is transiently detached so a
+                // dropped request can't strand the blocked parent shell.
+                mgr.onNestedShellOpen = { parentId, payload ->
+                    val listener = uiNestedShellListener
+                    if (listener != null) mainHandler.post { listener(parentId, payload) }
+                    else pendingNestedOpens.offer(parentId to payload)
                 }
             }
         }

@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
@@ -856,6 +857,92 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setMaxTerminalSessions(count: Int) {
         viewModelScope.launch { uiPreferences.edit { it[maxTerminalSessionsKey] = count.coerceIn(1, 24) } }
+    }
+
+    private val nestedShellTabsKey = booleanPreferencesKey("perf_nested_shell_tabs")
+
+    /** When true, typing an interactive shell (`bash`/`zsh`/…) at a terminal relocates it into its own
+     *  temporary tab that closes when the sub-shell exits, returning focus to the parent (OSC 7715). */
+    val nestedShellTabs: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[nestedShellTabsKey] ?: SettingsDefaults.NESTED_SHELL_TABS }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.NESTED_SHELL_TABS)
+
+    fun setNestedShellTabs(enabled: Boolean) {
+        viewModelScope.launch { uiPreferences.edit { it[nestedShellTabsKey] = enabled } }
+    }
+
+    private val installTimeoutMinKey = intPreferencesKey("perf_install_timeout_minutes")
+
+    /** Timeout (minutes, 5…180) for a toolchain INSTALL from the catalog (SDK/LSP/debugger). Large SDKs
+     *  on a slow connection can exceed the 30-min default; pushed to [DistroService.catalogInstallTimeoutMs]. */
+    val installTimeoutMinutes: StateFlow<Int> = uiPreferences.data
+        .map { prefs -> (prefs[installTimeoutMinKey] ?: SettingsDefaults.INSTALL_TIMEOUT_MINUTES).coerceIn(5, 180) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.INSTALL_TIMEOUT_MINUTES)
+
+    fun setInstallTimeoutMinutes(minutes: Int) {
+        viewModelScope.launch { uiPreferences.edit { it[installTimeoutMinKey] = minutes.coerceIn(5, 180) } }
+    }
+
+    // Keep DistroService's install timeout in sync with the setting (this init runs after the flow above
+    // is initialized; the main init block at the top of the class runs too early to reference it).
+    init {
+        viewModelScope.launch {
+            installTimeoutMinutes.collect { distroService.catalogInstallTimeoutMs = it * 60_000L }
+        }
+    }
+
+    private val envVarsKey = stringPreferencesKey("env_vars_json")
+
+    /** User-defined environment variables (Settings → Env Var), applied to every terminal/run session.
+     *  Stored as a JSON object (name → value); pushed to [TerminalSessionManager.userEnvVars]. */
+    val envVars: StateFlow<Map<String, String>> = uiPreferences.data
+        .map { prefs -> parseEnvVars(prefs[envVarsKey]) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** Add or update [name]=[value]. Renames via [oldName]: when it differs from [name], the old key is
+     *  dropped so an in-place rename doesn't leave a stale variable behind. */
+    fun setEnvVar(name: String, value: String, oldName: String? = null) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val current = parseEnvVars(prefs[envVarsKey]).toMutableMap()
+                if (oldName != null && oldName != trimmed) current.remove(oldName)
+                current[trimmed] = value
+                prefs[envVarsKey] = serializeEnvVars(current)
+            }
+        }
+    }
+
+    fun removeEnvVar(name: String) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val current = parseEnvVars(prefs[envVarsKey]).toMutableMap()
+                current.remove(name)
+                prefs[envVarsKey] = serializeEnvVars(current)
+            }
+        }
+    }
+
+    private fun parseEnvVars(json: String?): Map<String, String> {
+        if (json.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val obj = org.json.JSONObject(json)
+            buildMap { obj.keys().forEach { k -> put(k, obj.optString(k)) } }
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun serializeEnvVars(map: Map<String, String>): String {
+        val obj = org.json.JSONObject()
+        map.forEach { (k, v) -> obj.put(k, v) }
+        return obj.toString()
+    }
+
+    // Apply the user env vars to every session the terminal manager spawns (terminals + run/build).
+    init {
+        viewModelScope.launch {
+            envVars.collect { TerminalSessionHost.manager(appContext).userEnvVars = it }
+        }
     }
 
     private val hideStatusBarWithKeyboardKey = booleanPreferencesKey("hide_status_bar_with_keyboard")
@@ -1936,7 +2023,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             workspaceManager.isWorkspaceFolder(resolved) &&
                 workspaceManager.enterFolderAsWorkspace(resolved) != null -> clearEditorTabs()
 
-            workspaceManager.folderNeedsType(resolved) ->
+            // Inside a User Workspace, "add existing folder" always means adding a project to this
+            // workspace — never prompt to make the pick a (nested) workspace.
+            workspaceManager.folderNeedsType(resolved) && breadcrumb.value.size <= 1 ->
                 _openFolderTypePrompt.value = PendingFolderType.OpenInPlace(resolved)
 
             else -> {
@@ -1991,7 +2080,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             workspaceManager.isWorkspaceFolder(stagedPath) ->
                 adoptStagedGuarded(staged, WorkspaceNodeType.Workspace)?.let { emitMessage("Imported Workspace '${it.name}'.") }
 
-            workspaceManager.folderNeedsType(stagedPath) ->
+            workspaceManager.folderNeedsType(stagedPath) && breadcrumb.value.size <= 1 ->
                 _openFolderTypePrompt.value = PendingFolderType.AdoptStaged(staged)
 
             else ->
@@ -2535,6 +2624,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun uninstallSdkCatalogEntry(entryId: String) {
         runSdkCatalogAction(entryId, SdkCatalogAction.Uninstall)
+    }
+
+    /** Install a specific [version] of a catalog entry (from the detail-page version picker). */
+    fun installSdkCatalogVersion(entryId: String, version: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val entry = distroService.sdkCatalogState.value.entries.firstOrNull { it.id == entryId }
+            if (entry != null && !installRequiredSdks(entry.requiredSdks, entry.name)) return@launch
+            runCatalogInstall("sdk", entryId) {
+                distroService.runSdkCatalogAction(entryId, SdkCatalogAction.Install, version = version)
+            }
+        }
+    }
+
+    /** Remove one installed [version] of a multi-version catalog entry (from the version list). */
+    fun uninstallSdkCatalogVersion(entryId: String, version: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = SessionRegistry.registerSession(
+                context = getApplication(),
+                kind = BackendSessionKind.JOB,
+                name = "sdk:uninstall:$entryId",
+            )
+            try {
+                distroService.runSdkCatalogAction(entryId, SdkCatalogAction.Uninstall, version = version)
+            } finally {
+                session.close()
+            }
+        }
     }
 
     fun installLspCatalogEntry(entryId: String) {
@@ -3469,6 +3585,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         openDetailPage(SDK_DETAIL_PREFIX + entryId, EditorPageKind.SdkDetail) {
             distroService.sdkCatalogState.value.entries.firstOrNull { it.id == entryId }?.name ?: entryId
         }
+        val entry = distroService.sdkCatalogState.value.entries.firstOrNull { it.id == entryId }
+        if (entry?.versionsScript?.isNotBlank() == true) {
+            viewModelScope.launch(Dispatchers.IO) { distroService.fetchCatalogVersions(entryId) }
+        }
     }
 
     /** Open the detail page for a single language server. Reuses one LSP-detail tab (replaces any other). */
@@ -3525,32 +3645,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * updatable, then re-check so the "Update available" markers clear. Deps are already present, so
      * this re-runs each tool's install command directly through the shared Setup terminal.
      */
-    fun updateAllToolchains() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val session = SessionRegistry.registerSession(
-                context = getApplication(),
-                kind = BackendSessionKind.JOB,
-                name = "toolchains:update-all",
-            )
-            try {
-                distroService.sdkCatalogState.value.updatableEntryIds.toList().forEach {
-                    distroService.runSdkCatalogAction(it, SdkCatalogAction.Install)
-                }
-                distroService.lspCatalogState.value.updatableEntryIds.toList().forEach {
-                    distroService.runLspCatalogAction(it, LspCatalogAction.Install)
-                }
-                distroService.debugCatalogState.value.updatableEntryIds.toList().forEach {
-                    distroService.runDebugEngineCatalogAction(it, DebugEngineAction.Install)
-                }
-            } finally {
-                session.close()
-            }
-            distroService.checkSdkStatuses()
-            distroService.checkLspStatuses()
-            distroService.checkDebugEngineStatuses()
-        }
-    }
-
     /** Open the detail page for a single debug engine. Reuses one debug-detail tab (replaces any other). */
     fun openDebugEngineDetailPage(entryId: String) {
         openDetailPage(DEBUG_ENGINE_DETAIL_PREFIX + entryId, EditorPageKind.DebugEngineDetail) {

@@ -32,36 +32,87 @@ entries:
   - id: nodejs
     category: languages
     name: Node.js
-    description: The newest LTS Node.js runtime and npm (resolved at install time) for TypeScript, JavaScript, and frontend tooling.
-    # Ubuntu's apt "npm" (Debian-patched) fails under proot with a phantom
-    # `mkdir '/home' ENOENT` inside Arborist, breaking all `npm install`/`npm create`.
-    # Ship upstream Node (unpatched npm) into /usr/local so it shadows any distro node on PATH.
+    description: Node.js runtimes and npm managed with nvm — install multiple versions side by side; the newest installed is the default on PATH.
+    multiVersion: true
+    # Managed with nvm so several Node versions coexist. nvm is a shell function (not a binary on PATH),
+    # and JCode's terminals / build-run use `sh -c` without sourcing a profile — so after install the
+    # default version's node/npm/npx/corepack are symlinked into /usr/local/bin to keep them on PATH.
+    # nvm ships upstream (unpatched) npm, avoiding Ubuntu's Debian-patched npm which fails under proot
+    # with a phantom `mkdir '/home' ENOENT`. "Newest installed" is kept as the default.
     installScript: |
       set -e
-      # The fallback needs its own apt-get update: on a fresh minimal rootfs the onboarding update is
-      # best-effort and may have failed, and `apt-get install` never refreshes stale lists itself.
+      export NVM_DIR="$HOME/.nvm"
       command -v curl >/dev/null 2>&1 || { sudo apt-get update; sudo apt-get install -y curl ca-certificates; }
-      # Newest LTS line from the release index (column 10 = LTS codename, "-" = not LTS).
-      NODE_VERSION=$(curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 && $10!="-" {print $1; exit}')
-      [ -n "$NODE_VERSION" ]
-      case "$(uname -m)" in
-        aarch64|arm64) NODE_ARCH=arm64 ;;
-        x86_64|amd64)  NODE_ARCH=x64 ;;
-        *) echo "Unsupported architecture: $(uname -m)"; exit 1 ;;
-      esac
-      TARBALL="node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz"
-      curl -fsSL -o "/tmp/${TARBALL}" "https://nodejs.org/dist/${NODE_VERSION}/${TARBALL}"
-      sudo tar -xzf "/tmp/${TARBALL}" -C /usr/local --strip-components=1
-      rm -f "/tmp/${TARBALL}"
+      if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+        curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+      fi
+      . "$NVM_DIR/nvm.sh"
+      # A version chosen in the picker arrives as JCODE_VERSION; otherwise install the newest LTS.
+      if [ -n "${JCODE_VERSION:-}" ]; then nvm install "$JCODE_VERSION"; else nvm install --lts; fi
+      # Keep the newest installed version as the default and expose it on PATH via /usr/local/bin.
+      DEFAULT_VER="$(nvm version node)"
+      nvm alias default "$DEFAULT_VER"
+      DEFAULT_DIR="$NVM_DIR/versions/node/$DEFAULT_VER"
+      for b in node npm npx corepack; do
+        if [ -x "$DEFAULT_DIR/bin/$b" ]; then sudo ln -sf "$DEFAULT_DIR/bin/$b" "/usr/local/bin/$b"; fi
+      done
       node --version && npm --version
     verifyScript: |
       command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 && echo ready
     uninstallScript: |
-      sudo rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
-      sudo rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack
-    updateCheckScript: |
-      L=$(curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 && $10!="-" {print $1; exit}')
-      [ -n "$L" ] && [ "$(node --version 2>/dev/null)" != "$L" ]
+      export NVM_DIR="$HOME/.nvm"
+      [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" || true
+      # Per-version remove from the picker passes JCODE_VERSION; a bare remove tears down nvm entirely.
+      if [ -n "${JCODE_VERSION:-}" ]; then
+        nvm uninstall "$JCODE_VERSION" || true
+      else
+        rm -rf "$NVM_DIR"
+      fi
+      # Re-point the default + PATH symlinks at the newest remaining version, or remove them if none left.
+      if [ -s "$NVM_DIR/nvm.sh" ] && [ -n "$(ls -1 "$NVM_DIR/versions/node" 2>/dev/null)" ]; then
+        . "$NVM_DIR/nvm.sh"
+        DEFAULT_VER="$(nvm version node)"
+        nvm alias default "$DEFAULT_VER"
+        DEFAULT_DIR="$NVM_DIR/versions/node/$DEFAULT_VER"
+        for b in node npm npx corepack; do
+          if [ -x "$DEFAULT_DIR/bin/$b" ]; then sudo ln -sf "$DEFAULT_DIR/bin/$b" "/usr/local/bin/$b"; else sudo rm -f "/usr/local/bin/$b"; fi
+        done
+      else
+        sudo rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+      fi
+    updateCheckScript: ""
+    # Newest release of each major line, newest first (first entry = "latest"), emitted as
+    # "version<TAB>tag". A line is badged "LTS <codename>" only while it is a *currently-supported* LTS
+    # (its major has an `lts` date in the official release schedule and today is on/before its `end` date),
+    # so EOL former-LTS lines (e.g. v18 Hydrogen) are not mislabelled as supported. curl failures propagate
+    # (captured, not masked by `| head`); a failed schedule fetch degrades gracefully to no badges.
+    versionsScript: |
+      command -v curl >/dev/null 2>&1 || { echo "curl not found" >&2; exit 1; }
+      TODAY=$(date -u +%Y-%m-%d)
+      SCHEDFILE=$(mktemp)
+      curl -fsSL https://raw.githubusercontent.com/nodejs/Release/main/schedule.json -o "$SCHEDFILE" 2>/dev/null || true
+      INDEX=$(curl -fsSL https://nodejs.org/dist/index.tab) || { rm -f "$SCHEDFILE"; exit 1; }
+      [ -n "$INDEX" ] || { rm -f "$SCHEDFILE"; exit 1; }
+      printf '%s\n' "$INDEX" | awk -F'\t' -v today="$TODAY" -v schedfile="$SCHEDFILE" '
+        FILENAME==schedfile {
+          if ($0 ~ /^[ \t]*"v[0-9]/)   { cur=$0; sub(/^[ \t]*"/,"",cur); sub(/".*/,"",cur) }
+          else if ($0 ~ /"lts":/)      { v=$0; sub(/.*"lts":[ \t]*"/,"",v); sub(/".*/,"",v); ltsstart[cur]=v }
+          else if ($0 ~ /"end":/)      { v=$0; sub(/.*"end":[ \t]*"/,"",v); sub(/".*/,"",v); endd[cur]=v }
+          else if ($0 ~ /"codename":/) { v=$0; sub(/.*"codename":[ \t]*"/,"",v); sub(/".*/,"",v); code[cur]=v }
+          next
+        }
+        FNR>1 {
+          ver=$1; major=ver; sub(/\..*/,"",major)
+          if (!seen[major]++) {
+            tag=""
+            if ((major in ltsstart) && code[major]!="" && (major in endd) && today <= endd[major]) tag="LTS " code[major]
+            printf "%s\t%s\n", ver, tag
+          }
+        }
+      ' "$SCHEDFILE" - | head -24
+      rm -f "$SCHEDFILE"
+    installedVersionsScript: |
+      ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -rV
 
   - id: jdk
     category: languages
@@ -169,16 +220,19 @@ entries:
       if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
         CLT_ZIP=$(grep -oE 'commandlinetools-linux-[0-9]+_latest\.zip' /tmp/android-repo.xml | sort -u -V | tail -1)
         [ -n "$CLT_ZIP" ]
-        wget -q -O /tmp/clt.zip "https://dl.google.com/android/repository/$CLT_ZIP"
+        wget -q --show-progress --timeout=60 --tries=3 -O /tmp/clt.zip "https://dl.google.com/android/repository/$CLT_ZIP"
         rm -rf /tmp/cmdline-tools && (cd /tmp && unzip -q clt.zip)
         mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
         mv /tmp/cmdline-tools/* "$ANDROID_HOME/cmdline-tools/latest/"
         rm -rf /tmp/cmdline-tools /tmp/clt.zip
       fi
-      # Newest stable platform and build-tools named in the manifest (previews use codename
-      # platform paths and -rcN build-tools suffixes, so both are filtered out).
-      PLATFORM=$(grep -oE 'platforms;android-[0-9]+(\.[0-9]+)?' /tmp/android-repo.xml | sort -u -V | tail -1)
-      BUILD_TOOLS=$(grep -oE 'build-tools;[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?' /tmp/android-repo.xml | grep -v -- '-rc' | sort -u -V | tail -1)
+      # Newest RELEASED platform and build-tools. Match the FULL quoted package path (path="…") so a
+      # numeric prefix of a preview or extension package is never picked: the old unanchored regex
+      # truncated e.g. platforms;android-37.2-beta1 to the non-existent "platforms;android-37.2"
+      # (sdkmanager then reports "Failed to find package" and stalls). Anchoring to the closing quote
+      # drops -beta1 previews, -extNN extension SDKs, and -rcN build-tools in one step.
+      PLATFORM=$(grep -oE 'path="platforms;android-[0-9]+(\.[0-9]+)?"' /tmp/android-repo.xml | sed -E 's/^path="//; s/"$//' | sort -u -V | tail -1)
+      BUILD_TOOLS=$(grep -oE 'path="build-tools;[0-9]+\.[0-9]+\.[0-9]+"' /tmp/android-repo.xml | sed -E 's/^path="//; s/"$//' | sort -u -V | tail -1)
       rm -f /tmp/android-repo.xml
       [ -n "$PLATFORM" ] && [ -n "$BUILD_TOOLS" ]
       PLAT_DIR="${PLATFORM#platforms;}"
@@ -191,11 +245,18 @@ entries:
       # sdkmanager downloads only when fed 'yes' on stdin, but then HANGS after finishing. Run it in
       # the background, wait for the platform + build-tools to land, then stop it — bailing out
       # early if it dies instead of hanging.
-      ( timeout 1900 yes | "$SDKM" --sdk_root="$ANDROID_HOME" "$PLATFORM" "$BUILD_TOOLS" "platform-tools" >/tmp/android-sdk-install.log 2>&1 ) &
+      ( timeout 1900 yes | "$SDKM" --sdk_root="$ANDROID_HOME" "$PLATFORM" "$BUILD_TOOLS" "platform-tools" 2>&1 | tee /tmp/android-sdk-install.log ) &
       SDK_PID=$!
+      last_size=0; stalled=0
       for i in $(seq 1 180); do
         [ -f "$ANDROID_HOME/platforms/$PLAT_DIR/android.jar" ] && [ -x "$ANDROID_HOME/build-tools/$BT_VER/aapt2" ] && break
         kill -0 "$SDK_PID" 2>/dev/null || break
+        # Abort a stalled download / dropped connection instead of hanging until the outer timeout: the
+        # tee'd log stops growing when nothing is being fetched. Allow ~150s of no growth for
+        # sdkmanager's slow "Computing updates" phase under proot before declaring it stalled.
+        cur_size=$(wc -c < /tmp/android-sdk-install.log 2>/dev/null || echo 0)
+        if [ "$cur_size" -eq "$last_size" ]; then stalled=$((stalled + 1)); else stalled=0; last_size=$cur_size; fi
+        if [ "$stalled" -ge 15 ]; then echo; echo "No download progress for ~150s — the network connection may have dropped. Aborting."; break; fi
         sleep 10
       done
       # The [r] class keeps the pattern from matching its own literal occurrence in this script's
@@ -214,7 +275,7 @@ entries:
       GRADLE_VERSION=$(wget -qO- https://services.gradle.org/versions/current | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
       [ -n "$GRADLE_VERSION" ]
       if [ ! -x "/opt/gradle/gradle-$GRADLE_VERSION/bin/gradle" ]; then
-        wget -q -O /tmp/gradle.zip "https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip"
+        wget -q --show-progress --timeout=60 --tries=3 -O /tmp/gradle.zip "https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip"
         sudo mkdir -p /opt/gradle && (cd /opt/gradle && sudo unzip -q /tmp/gradle.zip) && rm -f /tmp/gradle.zip
       fi
       # Stable paths so run recipes and projects never hardcode a Gradle version.

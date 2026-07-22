@@ -28,7 +28,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -69,6 +72,8 @@ import dev.jcode.design.ExplorerExcludeEffect
 import dev.jcode.design.ExplorerHiddenMode
 import dev.jcode.design.LocalAppUpdate
 import dev.jcode.design.LocalSettingsBackup
+import dev.jcode.design.EnvVarSettings
+import dev.jcode.design.LocalEnvVarSettings
 import dev.jcode.design.LocalEnvironmentBackup
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
@@ -154,10 +159,12 @@ object SettingsFeature {
             if (projectOverridesAvailable) add(ConfigScope.Project)
             if (size == 1) add(ConfigScope.Workspace)
         }
-        val safeTab = selectedTab.coerceIn(0, tabScopes.lastIndex)
+        // The trailing "ENV VAR" tab lives at index tabScopes.size (it is not a ConfigScope).
+        val safeTab = selectedTab.coerceIn(0, tabScopes.size)
+        val isEnvVarTab = safeTab == tabScopes.size
         // Scoped cards also render while a search is active (from any tab); they then edit the most
-        // specific scope available.
-        val selectedScope = tabScopes[safeTab]
+        // specific scope available. getOrNull guards the ENV VAR tab index (out of tabScopes range).
+        val selectedScope = tabScopes.getOrNull(safeTab)
             ?: if (projectOverridesAvailable) ConfigScope.Project else ConfigScope.Workspace
 
         val scopedEditor = when (selectedScope) {
@@ -221,14 +228,33 @@ object SettingsFeature {
                             },
                         )
                     }
+                    // Trailing content tab (not a scope): the environment-variable editor.
+                    Tab(
+                        selected = isEnvVarTab,
+                        onClick = { selectedTab = tabScopes.size },
+                        modifier = Modifier.height(40.dp),
+                        selectedContentColor = MaterialTheme.colorScheme.primary,
+                        unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        text = {
+                            Text(
+                                text = "ENV VAR",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        },
+                    )
                 }
             }
+            if (isEnvVarTab) {
+                EnvVarEditor(LocalEnvVarSettings.current)
+            } else {
             SettingsSearchField(query = query, onQueryChange = { query = it })
+            }
             // Search is scoped to the SELECTED tab (like VS Code's User/Workspace split): the GLOBAL
             // tab shows only app-level settings, WORKSPACE/PROJECT only the .jcode-scoped ones — so a
             // search on the Project tab never surfaces global settings that aren't project-overridable.
             val showGlobalTab = safeTab == 0
-            val showScopedTab = safeTab >= 1
+            val showScopedTab = safeTab in 1 until tabScopes.size
             if (showGlobalTab) {
             SettingsSectionHeader("Appearance")
             SettingsCard(
@@ -493,7 +519,7 @@ object SettingsFeature {
                 title = "Resource management",
                 description = "Keep the Linux runtime lean by stopping work you're done with. Each terminal, " +
                     "run, and debug session holds a proot process tree in memory.",
-                keywords = "performance memory cpu battery proot process terminal kill close idle background resource optimize swipe away warn running max instances timeout auto-close",
+                keywords = "performance memory cpu battery proot process terminal kill close idle background resource optimize swipe away warn running max instances timeout auto-close nested sub-shell subshell relocate tab bash zsh install toolchain sdk download timeout minutes android",
             ) {
                 ToggleRow(
                     label = "Warn before closing running processes",
@@ -540,6 +566,26 @@ object SettingsFeature {
                     modified = perf.maxTerminalSessions != SettingsDefaults.MAX_TERMINAL_SESSIONS,
                     onReset = { perf.onSetMaxTerminalSessions(SettingsDefaults.MAX_TERMINAL_SESSIONS) },
                 )
+                StepperRow(
+                    label = "Toolchain install timeout",
+                    supporting = "How long a toolchain install (SDK, language server, debugger) may run before " +
+                        "it's cancelled. Increase it for large SDKs like the Android SDK on a slow connection.",
+                    value = "${perf.installTimeoutMinutes} min",
+                    onDecrease = { perf.onSetInstallTimeoutMinutes((perf.installTimeoutMinutes - 5).coerceAtLeast(5)) },
+                    onIncrease = { perf.onSetInstallTimeoutMinutes((perf.installTimeoutMinutes + 5).coerceAtMost(180)) },
+                    modified = perf.installTimeoutMinutes != SettingsDefaults.INSTALL_TIMEOUT_MINUTES,
+                    onReset = { perf.onSetInstallTimeoutMinutes(SettingsDefaults.INSTALL_TIMEOUT_MINUTES) },
+                )
+                ToggleRow(
+                    label = "Sub-shells open in their own tab",
+                    supporting = "When you start an interactive shell (bash, zsh, …) inside a terminal, open it in a " +
+                        "temporary tab that closes when the sub-shell exits, returning to the parent — like a new " +
+                        "console window. Scripts and piped shells stay in the current tab.",
+                    checked = perf.nestedShellTabs,
+                    onCheckedChange = perf.onSetNestedShellTabs,
+                    modified = perf.nestedShellTabs != SettingsDefaults.NESTED_SHELL_TABS,
+                    onReset = { perf.onSetNestedShellTabs(SettingsDefaults.NESTED_SHELL_TABS) },
+                )
             }
             } // end Global-only cards; the Web preview card below renders on every scope tab.
 
@@ -547,8 +593,10 @@ object SettingsFeature {
             // override on the PROJECT tab (INHERIT = fall back to that default). It renders on every
             // tab; the raw selected tab (not [selectedScope], which coalesces GLOBAL into Project when
             // a project is open) decides which it edits, so the GLOBAL tab always edits the default.
+            // Web preview renders on every scope tab, but not on the ENV VAR content tab.
+            if (!isEnvVarTab) {
             val projectBrowserScope =
-                tabScopes[safeTab] == ConfigScope.Project && webPreview.currentProjectKey.isNotBlank()
+                tabScopes.getOrNull(safeTab) == ConfigScope.Project && webPreview.currentProjectKey.isNotBlank()
             SettingsSectionHeader("Web preview")
             SettingsCard(
                 title = "Open web previews in",
@@ -597,6 +645,7 @@ object SettingsFeature {
                     )
                 }
             }
+            } // end web-preview (hidden on the ENV VAR tab)
 
             if (showGlobalTab) {
             SettingsSectionHeader("Environment")
@@ -1114,7 +1163,7 @@ object SettingsFeature {
             } // end Project/Workspace tab
 
             // Composed after every card, so matchSink.count reflects the whole page.
-            if (query.isNotBlank() && matchSink.count == 0) {
+            if (!isEnvVarTab && query.isNotBlank() && matchSink.count == 0) {
                 SettingsNoResults(query)
             }
         }
@@ -1465,6 +1514,124 @@ private fun SummaryRow(
 }
 
 @Composable
+private fun EnvVarEditor(settings: EnvVarSettings) {
+    // Dialog state: null = closed; [adding] distinguishes a brand-new variable from editing [editTarget].
+    var editTarget by remember { mutableStateOf<String?>(null) }
+    var adding by remember { mutableStateOf(false) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SettingsSectionHeader("Environment variables")
+        Text(
+            text = "Exported into every terminal and Build & Run session (e.g. API keys, GOPRIVATE, " +
+                "JAVA_OPTS). Applied to newly opened terminals.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        val entries = settings.vars.entries.sortedBy { it.key.lowercase() }
+        if (entries.isEmpty()) {
+            Text(
+                text = "No variables yet. Tap “Add variable” to create one.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 8.dp),
+            )
+        } else {
+            entries.forEach { (name, value) ->
+                SettingsResettableRow(modified = false, onReset = null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            Text(
+                                text = value.ifEmpty { "(empty)" },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        OutlinedButton(onClick = { editTarget = name; adding = false }) { Text("Edit") }
+                        OutlinedButton(onClick = { settings.onRemove(name) }) { Text("Delete") }
+                    }
+                }
+            }
+        }
+        FilledTonalButton(
+            onClick = { editTarget = ""; adding = true },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Add variable")
+        }
+    }
+
+    val target = editTarget
+    if (target != null) {
+        EnvVarDialog(
+            initialName = if (adding) "" else target,
+            initialValue = if (adding) "" else (settings.vars[target] ?: ""),
+            existingNames = settings.vars.keys,
+            editingName = if (adding) null else target,
+            onDismiss = { editTarget = null },
+            onSave = { name, value ->
+                settings.onSet(name, value, if (adding) null else target)
+                editTarget = null
+            },
+        )
+    }
+}
+
+@Composable
+private fun EnvVarDialog(
+    initialName: String,
+    initialValue: String,
+    existingNames: Set<String>,
+    editingName: String?,
+    onDismiss: () -> Unit,
+    onSave: (name: String, value: String) -> Unit,
+) {
+    var name by remember { mutableStateOf(initialName) }
+    var value by remember { mutableStateOf(initialValue) }
+    val nameValid = name.matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))
+    val duplicate = name != editingName && name in existingNames
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (editingName == null) "Add variable" else "Edit variable") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.trim() },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    isError = name.isNotEmpty() && (!nameValid || duplicate),
+                    supportingText = {
+                        if (duplicate) {
+                            Text("A variable named \"$name\" already exists")
+                        } else if (name.isNotEmpty() && !nameValid) {
+                            Text("Letters, digits and underscore only; can't start with a digit")
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it },
+                    label = { Text("Value") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(name, value) }, enabled = nameValid && !duplicate) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
 private fun StepperRow(
     label: String,
     value: String,
@@ -1472,6 +1639,7 @@ private fun StepperRow(
     onIncrease: () -> Unit,
     modified: Boolean = false,
     onReset: (() -> Unit)? = null,
+    supporting: String? = null,
 ) {
     SettingsResettableRow(modified = modified, onReset = onReset) {
         Row(
@@ -1481,6 +1649,13 @@ private fun StepperRow(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                if (supporting != null) {
+                    Text(
+                        text = supporting,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Text(
                     text = value,
                     style = MaterialTheme.typography.bodySmall,
