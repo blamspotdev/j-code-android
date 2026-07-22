@@ -3160,8 +3160,6 @@ private fun WorkspacePanel(
                                     onRemoveProject = onRemoveProject,
                                     onOpenProjectSettings = { id -> onSelectProject(id); onOpenProjectConfig() },
                                     onExportProject = onExportProject,
-                                    onCreateProject = onCreateProject,
-                                    onAddExistingFolder = onOpenExternalFolder,
                                 )
                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                             }

@@ -103,12 +103,9 @@ internal fun ProjectRoster(
     onRemoveProject: (Long) -> Unit,
     onOpenProjectSettings: (Long) -> Unit,
     onExportProject: (Project) -> Unit,
-    onCreateProject: () -> Unit,
-    onAddExistingFolder: () -> Unit,
 ) {
     var renameTarget by remember { mutableStateOf<Project?>(null) }
     var openMenuId by remember { mutableStateOf<Long?>(null) }
-    var addMenuOpen by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -116,32 +113,11 @@ internal fun ProjectRoster(
             .padding(horizontal = 10.dp, vertical = 3.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = "PROJECTS",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Box {
-                WorkbenchIconActionButton(
-                    icon = jcIcon(JCodeIcon.Add),
-                    contentDescription = "Add project",
-                    onClick = { addMenuOpen = true },
-                )
-                CompactContextMenu(
-                    expanded = addMenuOpen,
-                    onDismissRequest = { addMenuOpen = false },
-                    listActions = listOf(
-                        ContextAction(JCodeIcon.Add, "New Project") { onCreateProject() },
-                        ContextAction(JCodeIcon.Destinations, "Add Existing Folder") { onAddExistingFolder() },
-                    ),
-                )
-            }
-        }
+        Text(
+            text = "PROJECTS",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             projects.forEach { project ->
