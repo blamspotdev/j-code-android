@@ -319,7 +319,6 @@ internal fun ScmPanel(
     onApiRequest: suspend (extensionId: String, envelopeJson: String) -> String,
     events: SharedFlow<Pair<String, String>>?,
     projectKey: Any? = null,
-    hasAnyProject: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val ext = installed.firstOrNull { it.type == ExtensionType.Scm && it.hasWebUi }
@@ -328,18 +327,6 @@ internal fun ScmPanel(
             icon = jcIcon(JCodeIcon.Scm),
             title = "Source Control",
             message = "Install a Source Control extension to manage Git here.",
-            modifier = modifier,
-        )
-        return
-    }
-    // No folder open anywhere: show the app's own centered empty state instead of booting the
-    // extension's WebView just to render its (top-anchored) "open a folder" placeholder — the native
-    // one follows the panel bounds so its top can't clip under the tab strip.
-    if (!hasAnyProject) {
-        PanelEmptyState(
-            icon = jcIcon(JCodeIcon.Scm),
-            title = "Source Control",
-            message = "Open a folder to start managing changes with Git.",
             modifier = modifier,
         )
         return
