@@ -32,48 +32,87 @@ entries:
   - id: nodejs
     category: languages
     name: Node.js
-    description: The newest LTS Node.js runtime and npm (resolved at install time) for TypeScript, JavaScript, and frontend tooling.
-    # Ubuntu's apt "npm" (Debian-patched) fails under proot with a phantom
-    # `mkdir '/home' ENOENT` inside Arborist, breaking all `npm install`/`npm create`.
-    # Ship upstream Node (unpatched npm) into /usr/local so it shadows any distro node on PATH.
+    description: Node.js runtimes and npm managed with nvm — install multiple versions side by side; the newest installed is the default on PATH.
+    multiVersion: true
+    # Managed with nvm so several Node versions coexist. nvm is a shell function (not a binary on PATH),
+    # and JCode's terminals / build-run use `sh -c` without sourcing a profile — so after install the
+    # default version's node/npm/npx/corepack are symlinked into /usr/local/bin to keep them on PATH.
+    # nvm ships upstream (unpatched) npm, avoiding Ubuntu's Debian-patched npm which fails under proot
+    # with a phantom `mkdir '/home' ENOENT`. "Newest installed" is kept as the default.
     installScript: |
       set -e
-      # The fallback needs its own apt-get update: on a fresh minimal rootfs the onboarding update is
-      # best-effort and may have failed, and `apt-get install` never refreshes stale lists itself.
+      export NVM_DIR="$HOME/.nvm"
       command -v curl >/dev/null 2>&1 || { sudo apt-get update; sudo apt-get install -y curl ca-certificates; }
-      # A version chosen in the detail-page picker arrives as JCODE_VERSION; otherwise resolve the
-      # newest LTS line from the release index (column 10 = LTS codename, "-" = not LTS).
-      NODE_VERSION="${JCODE_VERSION:-}"
-      [ -n "$NODE_VERSION" ] || NODE_VERSION=$(curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 && $10!="-" {print $1; exit}')
-      [ -n "$NODE_VERSION" ]
-      case "$(uname -m)" in
-        aarch64|arm64) NODE_ARCH=arm64 ;;
-        x86_64|amd64)  NODE_ARCH=x64 ;;
-        *) echo "Unsupported architecture: $(uname -m)"; exit 1 ;;
-      esac
-      TARBALL="node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz"
-      curl -fsSL -o "/tmp/${TARBALL}" "https://nodejs.org/dist/${NODE_VERSION}/${TARBALL}"
-      sudo tar -xzf "/tmp/${TARBALL}" -C /usr/local --strip-components=1
-      rm -f "/tmp/${TARBALL}"
+      if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+        curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+      fi
+      . "$NVM_DIR/nvm.sh"
+      # A version chosen in the picker arrives as JCODE_VERSION; otherwise install the newest LTS.
+      if [ -n "${JCODE_VERSION:-}" ]; then nvm install "$JCODE_VERSION"; else nvm install --lts; fi
+      # Keep the newest installed version as the default and expose it on PATH via /usr/local/bin.
+      DEFAULT_VER="$(nvm version node)"
+      nvm alias default "$DEFAULT_VER"
+      DEFAULT_DIR="$NVM_DIR/versions/node/$DEFAULT_VER"
+      for b in node npm npx corepack; do
+        if [ -x "$DEFAULT_DIR/bin/$b" ]; then sudo ln -sf "$DEFAULT_DIR/bin/$b" "/usr/local/bin/$b"; fi
+      done
       node --version && npm --version
     verifyScript: |
       command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 && echo ready
     uninstallScript: |
-      sudo rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
-      sudo rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack
-    updateCheckScript: |
-      L=$(curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 && $10!="-" {print $1; exit}')
-      [ -n "$L" ] && [ "$(node --version 2>/dev/null)" != "$L" ]
-    # Newest release of each major line, newest first (first entry = "latest"). Column 10 of the release
-    # index is the LTS codename ("-" when not an LTS line); emit it as a tab-separated tag so LTS releases
-    # are badged in the picker, e.g. "v22.23.1<TAB>LTS Jod".
+      export NVM_DIR="$HOME/.nvm"
+      [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" || true
+      # Per-version remove from the picker passes JCODE_VERSION; a bare remove tears down nvm entirely.
+      if [ -n "${JCODE_VERSION:-}" ]; then
+        nvm uninstall "$JCODE_VERSION" || true
+      else
+        rm -rf "$NVM_DIR"
+      fi
+      # Re-point the default + PATH symlinks at the newest remaining version, or remove them if none left.
+      if [ -s "$NVM_DIR/nvm.sh" ] && [ -n "$(ls -1 "$NVM_DIR/versions/node" 2>/dev/null)" ]; then
+        . "$NVM_DIR/nvm.sh"
+        DEFAULT_VER="$(nvm version node)"
+        nvm alias default "$DEFAULT_VER"
+        DEFAULT_DIR="$NVM_DIR/versions/node/$DEFAULT_VER"
+        for b in node npm npx corepack; do
+          if [ -x "$DEFAULT_DIR/bin/$b" ]; then sudo ln -sf "$DEFAULT_DIR/bin/$b" "/usr/local/bin/$b"; else sudo rm -f "/usr/local/bin/$b"; fi
+        done
+      else
+        sudo rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+      fi
+    updateCheckScript: ""
+    # Newest release of each major line, newest first (first entry = "latest"), emitted as
+    # "version<TAB>tag". A line is badged "LTS <codename>" only while it is a *currently-supported* LTS
+    # (its major has an `lts` date in the official release schedule and today is on/before its `end` date),
+    # so EOL former-LTS lines (e.g. v18 Hydrogen) are not mislabelled as supported. curl failures propagate
+    # (captured, not masked by `| head`); a failed schedule fetch degrades gracefully to no badges.
     versionsScript: |
-      curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 {
-        ver=$1; lts=$10; major=ver; sub(/\..*/, "", major)
-        if (!seen[major]++) { printf "%s\t%s\n", ver, (lts=="-" ? "" : "LTS " lts) }
-      }' | head -24
+      command -v curl >/dev/null 2>&1 || { echo "curl not found" >&2; exit 1; }
+      TODAY=$(date -u +%Y-%m-%d)
+      SCHEDFILE=$(mktemp)
+      curl -fsSL https://raw.githubusercontent.com/nodejs/Release/main/schedule.json -o "$SCHEDFILE" 2>/dev/null || true
+      INDEX=$(curl -fsSL https://nodejs.org/dist/index.tab) || { rm -f "$SCHEDFILE"; exit 1; }
+      [ -n "$INDEX" ] || { rm -f "$SCHEDFILE"; exit 1; }
+      printf '%s\n' "$INDEX" | awk -F'\t' -v today="$TODAY" -v schedfile="$SCHEDFILE" '
+        FILENAME==schedfile {
+          if ($0 ~ /^[ \t]*"v[0-9]/)   { cur=$0; sub(/^[ \t]*"/,"",cur); sub(/".*/,"",cur) }
+          else if ($0 ~ /"lts":/)      { v=$0; sub(/.*"lts":[ \t]*"/,"",v); sub(/".*/,"",v); ltsstart[cur]=v }
+          else if ($0 ~ /"end":/)      { v=$0; sub(/.*"end":[ \t]*"/,"",v); sub(/".*/,"",v); endd[cur]=v }
+          else if ($0 ~ /"codename":/) { v=$0; sub(/.*"codename":[ \t]*"/,"",v); sub(/".*/,"",v); code[cur]=v }
+          next
+        }
+        FNR>1 {
+          ver=$1; major=ver; sub(/\..*/,"",major)
+          if (!seen[major]++) {
+            tag=""
+            if ((major in ltsstart) && code[major]!="" && (major in endd) && today <= endd[major]) tag="LTS " code[major]
+            printf "%s\t%s\n", ver, tag
+          }
+        }
+      ' "$SCHEDFILE" - | head -24
+      rm -f "$SCHEDFILE"
     installedVersionsScript: |
-      node --version 2>/dev/null || true
+      ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -rV
 
   - id: jdk
     category: languages
