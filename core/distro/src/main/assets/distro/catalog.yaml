@@ -64,9 +64,14 @@ entries:
     updateCheckScript: |
       L=$(curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 && $10!="-" {print $1; exit}')
       [ -n "$L" ] && [ "$(node --version 2>/dev/null)" != "$L" ]
-    # Newest release of each major line, newest first — the first entry is treated as "latest".
+    # Newest release of each major line, newest first (first entry = "latest"). Column 10 of the release
+    # index is the LTS codename ("-" when not an LTS line); emit it as a tab-separated tag so LTS releases
+    # are badged in the picker, e.g. "v22.23.1<TAB>LTS Jod".
     versionsScript: |
-      curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 {print $1}' | awk -F. '!seen[$1]++' | head -24
+      curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 {
+        ver=$1; lts=$10; major=ver; sub(/\..*/, "", major)
+        if (!seen[major]++) { printf "%s\t%s\n", ver, (lts=="-" ? "" : "LTS " lts) }
+      }' | head -24
     installedVersionsScript: |
       node --version 2>/dev/null || true
 

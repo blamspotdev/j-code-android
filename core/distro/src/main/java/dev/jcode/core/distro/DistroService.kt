@@ -417,7 +417,7 @@ class DistroService(
         _sdkCatalogState.value = _sdkCatalogState.value.copy(versionsLoadingEntryId = entryId)
         lock.withLock {
             val availableResult = execCatalogScript(entry.versionsScript, timeoutMs = 180_000L)
-            val available = if (availableResult.succeeded) parseVersionLines(availableResult.stdout) else emptyList()
+            val available = if (availableResult.succeeded) parseVersionOptions(availableResult.stdout) else emptyList()
             val installed = readInstalledVersionsForEntry(entry)
             _sdkCatalogState.value = _sdkCatalogState.value.copy(
                 availableVersions = _sdkCatalogState.value.availableVersions.toMutableMap()
@@ -1983,6 +1983,20 @@ class DistroService(
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .distinct()
+            .toList()
+
+    /** Parse a [SdkCatalogEntry.versionsScript] into tagged versions. Each line is `version` or
+     *  `version<TAB>tag` (e.g. `v22.23.1\tLTS Jod`); the tag column is optional and display-only. */
+    private fun parseVersionOptions(stdout: String): List<CatalogVersion> =
+        stdout.lineSequence()
+            .map { it.trimEnd('\r', '\n') }
+            .filter { it.isNotBlank() }
+            .map { line ->
+                val parts = line.split('\t', limit = 2)
+                CatalogVersion(version = parts[0].trim(), tag = parts.getOrNull(1)?.trim().orEmpty())
+            }
+            .filter { it.version.isNotEmpty() }
+            .distinctBy { it.version }
             .toList()
 
     private fun readInstalledVersionsForEntry(entry: SdkCatalogEntry): List<String> {

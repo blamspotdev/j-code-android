@@ -74,6 +74,10 @@ enum class SdkCatalogAction(val label: String) {
     Uninstall("Remove"),
 }
 
+/** One installable version, with an optional presentational [tag] (e.g. "LTS Jod") emitted by a
+ *  [SdkCatalogEntry.versionsScript] as a tab-separated second column. */
+data class CatalogVersion(val version: String, val tag: String = "")
+
 data class SdkCatalogState(
     val entries: List<SdkCatalogEntry> = emptyList(),
     val installedEntryIds: Set<String> = emptySet(),
@@ -85,9 +89,9 @@ data class SdkCatalogState(
     val logLines: List<String> = emptyList(),
     val selectedDistroId: String? = null,
     val errorMessage: String? = null,
-    /** Installable versions per entry id, newest first (index 0 is "latest"). Populated lazily when a
-     *  detail page opens for an entry whose [SdkCatalogEntry.versionsScript] is set. */
-    val availableVersions: Map<String, List<String>> = emptyMap(),
+    /** Installable versions per entry id, newest first (index 0 is "latest"), each with an optional tag.
+     *  Populated lazily when a detail page opens for an entry whose [SdkCatalogEntry.versionsScript] is set. */
+    val availableVersions: Map<String, List<CatalogVersion>> = emptyMap(),
     /** Currently-installed versions per entry id, newest first (index 0 is the default on PATH). */
     val installedVersions: Map<String, List<String>> = emptyMap(),
     /** Entry id whose version list is currently being fetched (drives the picker spinner). */
