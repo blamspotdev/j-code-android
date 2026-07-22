@@ -41,8 +41,10 @@ entries:
       # The fallback needs its own apt-get update: on a fresh minimal rootfs the onboarding update is
       # best-effort and may have failed, and `apt-get install` never refreshes stale lists itself.
       command -v curl >/dev/null 2>&1 || { sudo apt-get update; sudo apt-get install -y curl ca-certificates; }
-      # Newest LTS line from the release index (column 10 = LTS codename, "-" = not LTS).
-      NODE_VERSION=$(curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 && $10!="-" {print $1; exit}')
+      # A version chosen in the detail-page picker arrives as JCODE_VERSION; otherwise resolve the
+      # newest LTS line from the release index (column 10 = LTS codename, "-" = not LTS).
+      NODE_VERSION="${JCODE_VERSION:-}"
+      [ -n "$NODE_VERSION" ] || NODE_VERSION=$(curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 && $10!="-" {print $1; exit}')
       [ -n "$NODE_VERSION" ]
       case "$(uname -m)" in
         aarch64|arm64) NODE_ARCH=arm64 ;;
@@ -62,6 +64,11 @@ entries:
     updateCheckScript: |
       L=$(curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 && $10!="-" {print $1; exit}')
       [ -n "$L" ] && [ "$(node --version 2>/dev/null)" != "$L" ]
+    # Newest release of each major line, newest first — the first entry is treated as "latest".
+    versionsScript: |
+      curl -fsSL https://nodejs.org/dist/index.tab | awk -F'\t' 'NR>1 {print $1}' | awk -F. '!seen[$1]++' | head -24
+    installedVersionsScript: |
+      node --version 2>/dev/null || true
 
   - id: jdk
     category: languages

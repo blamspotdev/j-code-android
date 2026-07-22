@@ -1322,6 +1322,8 @@ fun JCodeApp(
         managerActions = remember(viewModel) { WorkbenchManagerActions(
             onCheckSdkStatuses = viewModel::checkSdkStatuses,
             onInstallSdkCatalogEntry = viewModel::installSdkCatalogEntry,
+            onInstallSdkCatalogVersion = viewModel::installSdkCatalogVersion,
+            onUninstallSdkCatalogVersion = viewModel::uninstallSdkCatalogVersion,
             onVerifySdkCatalogEntry = viewModel::verifySdkCatalogEntry,
             onUninstallSdkCatalogEntry = viewModel::uninstallSdkCatalogEntry,
             onOpenSdkDetail = viewModel::openSdkDetailPage,
@@ -2692,6 +2694,8 @@ private fun JCodeShell(
                                             onUpdate = managerActions.onInstallSdkCatalogEntry,
                                             onUninstall = managerActions.onUninstallSdkCatalogEntry,
                                             onVerify = managerActions.onVerifySdkCatalogEntry,
+                                            onInstallVersion = managerActions.onInstallSdkCatalogVersion,
+                                            onUninstallVersion = managerActions.onUninstallSdkCatalogVersion,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }

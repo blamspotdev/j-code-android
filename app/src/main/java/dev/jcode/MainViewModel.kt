@@ -2624,6 +2624,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runSdkCatalogAction(entryId, SdkCatalogAction.Uninstall)
     }
 
+    /** Install a specific [version] of a catalog entry (from the detail-page version picker). */
+    fun installSdkCatalogVersion(entryId: String, version: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val entry = distroService.sdkCatalogState.value.entries.firstOrNull { it.id == entryId }
+            if (entry != null && !installRequiredSdks(entry.requiredSdks, entry.name)) return@launch
+            runCatalogInstall("sdk", entryId) {
+                distroService.runSdkCatalogAction(entryId, SdkCatalogAction.Install, version = version)
+            }
+        }
+    }
+
+    /** Remove one installed [version] of a multi-version catalog entry (from the version list). */
+    fun uninstallSdkCatalogVersion(entryId: String, version: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = SessionRegistry.registerSession(
+                context = getApplication(),
+                kind = BackendSessionKind.JOB,
+                name = "sdk:uninstall:$entryId",
+            )
+            try {
+                distroService.runSdkCatalogAction(entryId, SdkCatalogAction.Uninstall, version = version)
+            } finally {
+                session.close()
+            }
+        }
+    }
+
     fun installLspCatalogEntry(entryId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val entry = LspServerCatalog.findById(entryId)
@@ -3555,6 +3582,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun openSdkDetailPage(entryId: String) {
         openDetailPage(SDK_DETAIL_PREFIX + entryId, EditorPageKind.SdkDetail) {
             distroService.sdkCatalogState.value.entries.firstOrNull { it.id == entryId }?.name ?: entryId
+        }
+        val entry = distroService.sdkCatalogState.value.entries.firstOrNull { it.id == entryId }
+        if (entry?.versionsScript?.isNotBlank() == true) {
+            viewModelScope.launch(Dispatchers.IO) { distroService.fetchCatalogVersions(entryId) }
         }
     }
 

@@ -132,6 +132,8 @@ internal data class WorkbenchRunActions(
 internal data class WorkbenchManagerActions(
     val onCheckSdkStatuses: () -> Unit,
     val onInstallSdkCatalogEntry: (String) -> Unit,
+    val onInstallSdkCatalogVersion: (String, String) -> Unit,
+    val onUninstallSdkCatalogVersion: (String, String) -> Unit,
     val onVerifySdkCatalogEntry: (String) -> Unit,
     val onUninstallSdkCatalogEntry: (String) -> Unit,
     val onOpenSdkDetail: (String) -> Unit,

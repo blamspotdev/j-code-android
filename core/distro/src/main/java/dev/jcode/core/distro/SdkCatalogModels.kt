@@ -10,6 +10,17 @@ data class SdkCatalogEntry(
     val uninstallScript: String,
     /** Optional: exits 0 when a newer version is available. Empty = update detection skipped. */
     val updateCheckScript: String = "",
+    /** When true, several versions coexist; the newest installed one is the default (on PATH). When
+     *  false, installing a version replaces the current one. */
+    val multiVersion: Boolean = false,
+    /** Optional: prints the installable versions, one per line, newest first (line 1 is treated as
+     *  "latest"). Empty = no version picker; [installScript] resolves the latest version itself.
+     *  The chosen version is substituted for the `{{version}}` placeholder in the install/uninstall
+     *  scripts (and exported as `JCODE_VERSION`); "latest" is passed through so the script can resolve it. */
+    val versionsScript: String = "",
+    /** For [multiVersion]: prints the currently-installed versions, one per line. Empty = fall back to
+     *  the binary [verifyScript] (installed / not-installed only). */
+    val installedVersionsScript: String = "",
     /** Distro ids this entry supports. Empty = every distro. */
     val supportedDistros: List<String> = emptyList(),
     /** Arch keys (Arch.rootfsKey: "arm64"/"amd64") this entry supports. Empty = every arch. */
@@ -74,4 +85,11 @@ data class SdkCatalogState(
     val logLines: List<String> = emptyList(),
     val selectedDistroId: String? = null,
     val errorMessage: String? = null,
+    /** Installable versions per entry id, newest first (index 0 is "latest"). Populated lazily when a
+     *  detail page opens for an entry whose [SdkCatalogEntry.versionsScript] is set. */
+    val availableVersions: Map<String, List<String>> = emptyMap(),
+    /** Currently-installed versions per entry id, newest first (index 0 is the default on PATH). */
+    val installedVersions: Map<String, List<String>> = emptyMap(),
+    /** Entry id whose version list is currently being fetched (drives the picker spinner). */
+    val versionsLoadingEntryId: String? = null,
 )
