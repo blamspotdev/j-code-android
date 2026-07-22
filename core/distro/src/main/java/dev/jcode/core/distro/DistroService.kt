@@ -424,7 +424,9 @@ class DistroService(
                     .apply { if (available.isNotEmpty()) put(entryId, available) },
                 installedVersions = _sdkCatalogState.value.installedVersions.toMutableMap()
                     .apply { put(entryId, installed) },
-                versionsLoadingEntryId = null,
+                // Compare-and-clear: only drop the spinner if this entry is still the one loading — a
+                // slower concurrent fetch for another entry must keep its own spinner.
+                versionsLoadingEntryId = _sdkCatalogState.value.versionsLoadingEntryId.takeIf { it != entryId },
                 errorMessage = if (available.isEmpty()) {
                     "Couldn't list installable versions for ${entry.name}."
                 } else {
