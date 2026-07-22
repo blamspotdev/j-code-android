@@ -104,9 +104,11 @@ internal fun ProjectRoster(
     onOpenProjectSettings: (Long) -> Unit,
     onExportProject: (Project) -> Unit,
     onCreateProject: () -> Unit,
+    onAddExistingFolder: () -> Unit,
 ) {
     var renameTarget by remember { mutableStateOf<Project?>(null) }
     var openMenuId by remember { mutableStateOf<Long?>(null) }
+    var addMenuOpen by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -124,11 +126,21 @@ internal fun ProjectRoster(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            WorkbenchIconActionButton(
-                icon = jcIcon(JCodeIcon.Add),
-                contentDescription = "New project in this workspace",
-                onClick = onCreateProject,
-            )
+            Box {
+                WorkbenchIconActionButton(
+                    icon = jcIcon(JCodeIcon.Add),
+                    contentDescription = "Add project",
+                    onClick = { addMenuOpen = true },
+                )
+                CompactContextMenu(
+                    expanded = addMenuOpen,
+                    onDismissRequest = { addMenuOpen = false },
+                    listActions = listOf(
+                        ContextAction(JCodeIcon.Add, "New Project") { onCreateProject() },
+                        ContextAction(JCodeIcon.Destinations, "Add Existing Folder") { onAddExistingFolder() },
+                    ),
+                )
+            }
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {

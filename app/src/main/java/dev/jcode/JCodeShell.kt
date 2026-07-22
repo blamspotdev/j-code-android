@@ -1370,6 +1370,7 @@ fun JCodeApp(
             onDismiss = viewModel::dismissNewDialog,
             onConfirm = viewModel::createNewItem,
             resolveDynamicOptions = viewModel::runTemplateOptionsCommand,
+            allowWorkspaceType = breadcrumb.size <= 1,
         )
     }
 
@@ -3160,6 +3161,7 @@ private fun WorkspacePanel(
                                     onOpenProjectSettings = { id -> onSelectProject(id); onOpenProjectConfig() },
                                     onExportProject = onExportProject,
                                     onCreateProject = onCreateProject,
+                                    onAddExistingFolder = onOpenExternalFolder,
                                 )
                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                             }

@@ -2023,7 +2023,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             workspaceManager.isWorkspaceFolder(resolved) &&
                 workspaceManager.enterFolderAsWorkspace(resolved) != null -> clearEditorTabs()
 
-            workspaceManager.folderNeedsType(resolved) ->
+            // Inside a User Workspace, "add existing folder" always means adding a project to this
+            // workspace — never prompt to make the pick a (nested) workspace.
+            workspaceManager.folderNeedsType(resolved) && breadcrumb.value.size <= 1 ->
                 _openFolderTypePrompt.value = PendingFolderType.OpenInPlace(resolved)
 
             else -> {
@@ -2078,7 +2080,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             workspaceManager.isWorkspaceFolder(stagedPath) ->
                 adoptStagedGuarded(staged, WorkspaceNodeType.Workspace)?.let { emitMessage("Imported Workspace '${it.name}'.") }
 
-            workspaceManager.folderNeedsType(stagedPath) ->
+            workspaceManager.folderNeedsType(stagedPath) && breadcrumb.value.size <= 1 ->
                 _openFolderTypePrompt.value = PendingFolderType.AdoptStaged(staged)
 
             else ->

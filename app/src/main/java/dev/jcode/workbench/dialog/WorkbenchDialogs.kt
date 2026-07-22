@@ -196,8 +196,11 @@ internal fun NewItemDialog(
     onDismiss: () -> Unit,
     onConfirm: (MainViewModel.NewItemRequest) -> Unit,
     resolveDynamicOptions: suspend (String) -> List<String> = { emptyList() },
+    /** When false (already inside a User Workspace), the Project/Workspace type toggle is hidden and
+     *  the dialog only creates a project — you don't create a workspace inside a workspace. */
+    allowWorkspaceType: Boolean = true,
 ) {
-    var isWorkspace by rememberSaveable { mutableStateOf(false) }
+    var isWorkspace by rememberSaveable(allowWorkspaceType) { mutableStateOf(false) }
     var name by rememberSaveable { mutableStateOf("") }
     var selectedTemplateId by rememberSaveable(templates) {
         mutableStateOf(templates.firstOrNull()?.id)
@@ -234,20 +237,22 @@ internal fun NewItemDialog(
 
     // Left column: folder type + name. Right column (Project): template list; (Workspace): a hint.
     val primarySection: @Composable () -> Unit = {
-        Text("Folder type", style = MaterialTheme.typography.labelLarge)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TypeOption(
-                label = "Project",
-                selected = !isWorkspace,
-                onSelect = { isWorkspace = false },
-                modifier = Modifier.weight(1f),
-            )
-            TypeOption(
-                label = "Workspace",
-                selected = isWorkspace,
-                onSelect = { isWorkspace = true },
-                modifier = Modifier.weight(1f),
-            )
+        if (allowWorkspaceType) {
+            Text("Folder type", style = MaterialTheme.typography.labelLarge)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TypeOption(
+                    label = "Project",
+                    selected = !isWorkspace,
+                    onSelect = { isWorkspace = false },
+                    modifier = Modifier.weight(1f),
+                )
+                TypeOption(
+                    label = "Workspace",
+                    selected = isWorkspace,
+                    onSelect = { isWorkspace = true },
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
         TextField(
             value = name,
@@ -283,7 +288,15 @@ internal fun NewItemDialog(
         onDismissRequest = onDismiss,
         modifier = if (isLandscape && step == 0) Modifier.fillMaxWidth(0.82f).widthIn(max = 760.dp) else Modifier,
         properties = DialogProperties(usePlatformDefaultWidth = !(isLandscape && step == 0)),
-        title = { Text(if (step == 1 && selectedTemplate != null) selectedTemplate.name else "New") },
+        title = {
+            Text(
+                when {
+                    step == 1 && selectedTemplate != null -> selectedTemplate.name
+                    !allowWorkspaceType -> "New Project"
+                    else -> "New"
+                },
+            )
+        },
         text = {
             if (step == 1 && selectedTemplate != null) {
                 Column(
