@@ -143,6 +143,11 @@ class TerminalSessionManager(
     @Volatile
     var nestedShellTabs: Boolean = false
 
+    /** User-defined environment variables (Settings → Env Var) merged into every terminal/run session's
+     *  environment; they override the built-in defaults for the same name. Pushed from Settings. */
+    @Volatile
+    var userEnvVars: Map<String, String> = emptyMap()
+
     // childId -> parentId for relocated nested-shell tabs. Outlives reapExitedSession/closeSession
     // (unlike Session) so the UI's exit path can still find the parent to refocus. Cleared by the host
     // via clearRelocation once the exit is handled, or wholesale by closeAll.
@@ -285,7 +290,7 @@ class TerminalSessionManager(
             // Browser-openers consult $BROWSER first; point it at the OSC 7714 shim (see below) so
             // guest tools open URLs through the host instead of failing on the missing X11/dbus stack.
             "BROWSER" to "/usr/local/bin/xdg-open",
-        )
+        ) + userEnvVars.filterKeys { ENV_NAME_RE.matches(it) }
 
         val prootArgs = prootManager.buildShellCommand(
             rootfsPath = rootfsPath,
@@ -688,6 +693,10 @@ private const val NSH_MARKER = "#!/bin/sh\n# jcode-nsh-wrapper"
 
 // Relocation tokens are interpolated into guest and host paths, so restrict them to a safe charset.
 private val NSH_TOKEN_RE = Regex("[A-Za-z0-9_]+")
+
+// Valid POSIX environment-variable name — user env vars with an invalid name are dropped (the name is
+// exported unquoted as `export NAME=...`, so a bad name would break the shell command).
+private val ENV_NAME_RE = Regex("[A-Za-z_][A-Za-z0-9_]*")
 
 /** Absolute GUEST path of the real shell [name] — scans system bindirs but skips usr/local (where
  *  our wrappers live), or null when the distro ships no such shell. Baked into the wrapper at install

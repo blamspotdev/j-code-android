@@ -169,16 +169,19 @@ entries:
       if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
         CLT_ZIP=$(grep -oE 'commandlinetools-linux-[0-9]+_latest\.zip' /tmp/android-repo.xml | sort -u -V | tail -1)
         [ -n "$CLT_ZIP" ]
-        wget -q -O /tmp/clt.zip "https://dl.google.com/android/repository/$CLT_ZIP"
+        wget -q --show-progress --timeout=60 --tries=3 -O /tmp/clt.zip "https://dl.google.com/android/repository/$CLT_ZIP"
         rm -rf /tmp/cmdline-tools && (cd /tmp && unzip -q clt.zip)
         mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
         mv /tmp/cmdline-tools/* "$ANDROID_HOME/cmdline-tools/latest/"
         rm -rf /tmp/cmdline-tools /tmp/clt.zip
       fi
-      # Newest stable platform and build-tools named in the manifest (previews use codename
-      # platform paths and -rcN build-tools suffixes, so both are filtered out).
-      PLATFORM=$(grep -oE 'platforms;android-[0-9]+(\.[0-9]+)?' /tmp/android-repo.xml | sort -u -V | tail -1)
-      BUILD_TOOLS=$(grep -oE 'build-tools;[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?' /tmp/android-repo.xml | grep -v -- '-rc' | sort -u -V | tail -1)
+      # Newest RELEASED platform and build-tools. Match the FULL quoted package path (path="…") so a
+      # numeric prefix of a preview or extension package is never picked: the old unanchored regex
+      # truncated e.g. platforms;android-37.2-beta1 to the non-existent "platforms;android-37.2"
+      # (sdkmanager then reports "Failed to find package" and stalls). Anchoring to the closing quote
+      # drops -beta1 previews, -extNN extension SDKs, and -rcN build-tools in one step.
+      PLATFORM=$(grep -oE 'path="platforms;android-[0-9]+(\.[0-9]+)?"' /tmp/android-repo.xml | sed -E 's/^path="//; s/"$//' | sort -u -V | tail -1)
+      BUILD_TOOLS=$(grep -oE 'path="build-tools;[0-9]+\.[0-9]+\.[0-9]+"' /tmp/android-repo.xml | sed -E 's/^path="//; s/"$//' | sort -u -V | tail -1)
       rm -f /tmp/android-repo.xml
       [ -n "$PLATFORM" ] && [ -n "$BUILD_TOOLS" ]
       PLAT_DIR="${PLATFORM#platforms;}"
@@ -191,11 +194,18 @@ entries:
       # sdkmanager downloads only when fed 'yes' on stdin, but then HANGS after finishing. Run it in
       # the background, wait for the platform + build-tools to land, then stop it — bailing out
       # early if it dies instead of hanging.
-      ( timeout 1900 yes | "$SDKM" --sdk_root="$ANDROID_HOME" "$PLATFORM" "$BUILD_TOOLS" "platform-tools" >/tmp/android-sdk-install.log 2>&1 ) &
+      ( timeout 1900 yes | "$SDKM" --sdk_root="$ANDROID_HOME" "$PLATFORM" "$BUILD_TOOLS" "platform-tools" 2>&1 | tee /tmp/android-sdk-install.log ) &
       SDK_PID=$!
+      last_size=0; stalled=0
       for i in $(seq 1 180); do
         [ -f "$ANDROID_HOME/platforms/$PLAT_DIR/android.jar" ] && [ -x "$ANDROID_HOME/build-tools/$BT_VER/aapt2" ] && break
         kill -0 "$SDK_PID" 2>/dev/null || break
+        # Abort a stalled download / dropped connection instead of hanging until the outer timeout: the
+        # tee'd log stops growing when nothing is being fetched. Allow ~150s of no growth for
+        # sdkmanager's slow "Computing updates" phase under proot before declaring it stalled.
+        cur_size=$(wc -c < /tmp/android-sdk-install.log 2>/dev/null || echo 0)
+        if [ "$cur_size" -eq "$last_size" ]; then stalled=$((stalled + 1)); else stalled=0; last_size=$cur_size; fi
+        if [ "$stalled" -ge 15 ]; then echo; echo "No download progress for ~150s — the network connection may have dropped. Aborting."; break; fi
         sleep 10
       done
       # The [r] class keeps the pattern from matching its own literal occurrence in this script's
@@ -214,7 +224,7 @@ entries:
       GRADLE_VERSION=$(wget -qO- https://services.gradle.org/versions/current | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
       [ -n "$GRADLE_VERSION" ]
       if [ ! -x "/opt/gradle/gradle-$GRADLE_VERSION/bin/gradle" ]; then
-        wget -q -O /tmp/gradle.zip "https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip"
+        wget -q --show-progress --timeout=60 --tries=3 -O /tmp/gradle.zip "https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip"
         sudo mkdir -p /opt/gradle && (cd /opt/gradle && sudo unzip -q /tmp/gradle.zip) && rm -f /tmp/gradle.zip
       fi
       # Stable paths so run recipes and projects never hardcode a Gradle version.

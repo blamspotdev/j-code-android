@@ -333,7 +333,7 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                SdkCatalogAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installScript, timeoutMs = 1_800_000L)
+                SdkCatalogAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installScript, timeoutMs = catalogInstallTimeoutMs)
                 SdkCatalogAction.Verify -> execCatalogScript(entry.verifyScript, timeoutMs = 120_000L)
                 SdkCatalogAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", entry.uninstallScript, timeoutMs = 900_000L)
             }
@@ -442,7 +442,7 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                LspCatalogAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installCommand, timeoutMs = 1_800_000L)
+                LspCatalogAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installCommand, timeoutMs = catalogInstallTimeoutMs)
                 LspCatalogAction.Verify -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
                 LspCatalogAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", entry.uninstallCommand, timeoutMs = 900_000L)
             }
@@ -678,7 +678,7 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                DebugEngineAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installCommand, timeoutMs = 1_800_000L)
+                DebugEngineAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installCommand, timeoutMs = catalogInstallTimeoutMs)
                 DebugEngineAction.Verify -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
                 DebugEngineAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", entry.uninstallCommand, timeoutMs = 900_000L)
             }
@@ -1420,6 +1420,12 @@ class DistroService(
      */
     @Volatile
     var interactiveCatalogRunner: (suspend (label: String, script: String, timeoutMs: Long) -> ExecResult?)? = null
+
+    /** Timeout (ms) for a catalog INSTALL action (SDK/LSP/debugger), set from the "Toolchain install
+     *  timeout" setting. Verify/uninstall keep their own fixed budgets. Default is the pre-setting
+     *  30-minute value; large SDKs on a slow connection may need more. */
+    @Volatile
+    var catalogInstallTimeoutMs: Long = 1_800_000L
 
     /** Long-running catalog actions go through the Setup terminal when wired; verify stays quiet so
      *  its exit code and output remain capturable.

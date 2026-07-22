@@ -285,6 +285,7 @@ import dev.jcode.workbench.LocalPendingReload
 import dev.jcode.workbench.PendingReloadUi
 import dev.jcode.workbench.LocalRunConfigPresets
 import dev.jcode.workbench.LocalSetupTerminalSessionId
+import dev.jcode.design.EnvVarSettings
 import dev.jcode.design.PerformanceSettings
 import dev.jcode.design.ExtensionSettingSpec
 import dev.jcode.design.ExtensionSettingsGroup
@@ -314,6 +315,7 @@ import dev.jcode.design.LocalVolumeKeysSetting
 import dev.jcode.design.VolumeKeyAction
 import dev.jcode.design.VolumeKeysSetting
 import dev.jcode.design.LocalExtensionSettingsUi
+import dev.jcode.design.LocalEnvVarSettings
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.WebPreviewBrowsers
 import dev.jcode.design.LocalWebPreviewBrowsers
@@ -474,8 +476,9 @@ fun JCodeApp(
     val idleTimeoutMinutes by viewModel.idleTimeoutMinutes.collectAsStateWithLifecycle()
     val maxTerminalSessions by viewModel.maxTerminalSessions.collectAsStateWithLifecycle()
     val nestedShellTabs by viewModel.nestedShellTabs.collectAsStateWithLifecycle()
+    val installTimeoutMinutes by viewModel.installTimeoutMinutes.collectAsStateWithLifecycle()
     val exitOnSwipeAway by viewModel.exitOnSwipeAway.collectAsStateWithLifecycle()
-    val performanceSettings = remember(hardwareAcceleration, confirmCloseRunning, autoCloseIdleTerminals, idleTimeoutMinutes, maxTerminalSessions, nestedShellTabs, exitOnSwipeAway) {
+    val performanceSettings = remember(hardwareAcceleration, confirmCloseRunning, autoCloseIdleTerminals, idleTimeoutMinutes, maxTerminalSessions, nestedShellTabs, installTimeoutMinutes, exitOnSwipeAway) {
         PerformanceSettings(
             hardwareAcceleration = hardwareAcceleration,
             confirmCloseRunning = confirmCloseRunning,
@@ -483,6 +486,7 @@ fun JCodeApp(
             idleTimeoutMinutes = idleTimeoutMinutes,
             maxTerminalSessions = maxTerminalSessions,
             nestedShellTabs = nestedShellTabs,
+            installTimeoutMinutes = installTimeoutMinutes,
             exitOnSwipeAway = exitOnSwipeAway,
             onSetHardwareAcceleration = viewModel::setHardwareAcceleration,
             onSetConfirmCloseRunning = viewModel::setConfirmCloseRunning,
@@ -490,7 +494,16 @@ fun JCodeApp(
             onSetIdleTimeoutMinutes = viewModel::setIdleTimeoutMinutes,
             onSetMaxTerminalSessions = viewModel::setMaxTerminalSessions,
             onSetNestedShellTabs = viewModel::setNestedShellTabs,
+            onSetInstallTimeoutMinutes = viewModel::setInstallTimeoutMinutes,
             onSetExitOnSwipeAway = viewModel::setExitOnSwipeAway,
+        )
+    }
+    val envVarsMap by viewModel.envVars.collectAsStateWithLifecycle()
+    val envVarSettings = remember(envVarsMap) {
+        EnvVarSettings(
+            vars = envVarsMap,
+            onSet = { name, value, oldName -> viewModel.setEnvVar(name, value, oldName) },
+            onRemove = viewModel::removeEnvVar,
         )
     }
     val webPreviewBrowserGlobal by viewModel.webPreviewBrowser.collectAsStateWithLifecycle()
@@ -1211,6 +1224,7 @@ fun JCodeApp(
         LocalSetupTerminalSessionId provides setupTerminalSessionId,
         LocalDebugSession provides debugSessionUi,
         LocalPerformanceSettings provides performanceSettings,
+        LocalEnvVarSettings provides envVarSettings,
         LocalExplorerHiddenSetting provides explorerHiddenSetting,
         LocalCutoutSetting provides cutoutSetting,
         LocalAppUpdate provides appUpdateSetting,
