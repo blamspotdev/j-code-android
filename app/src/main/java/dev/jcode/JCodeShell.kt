@@ -3217,6 +3217,7 @@ private fun WorkspacePanel(
                         onApiRequest = managerActions.onExtensionApiRequest,
                         events = managerActions.extensionEvents,
                         projectKey = selectedProject?.id,
+                        hasAnyProject = selectedProject != null || workspace?.projects?.isNotEmpty() == true,
                         modifier = Modifier.fillMaxSize(),
                     )
 
