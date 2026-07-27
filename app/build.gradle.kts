@@ -1,7 +1,33 @@
+import java.io.File
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+}
+
+apply(from = rootProject.file("gradle/android-platform.gradle.kts"))
+
+val androidSdkDir = extra["androidSdkDir"] as File
+val androidPlatformJar = extra["androidPlatformJar"] as File
+
+// The on-device display server ships as a standalone dex asset (see the appsandbox package): JCode
+// base64s it onto the device through adb, where `app_process` loads it as the shell user. It is NOT
+// part of the app's own dex — it never runs in this process.
+val displayServerDexDir = layout.buildDirectory.dir("generated/displayServer/dex")
+val displayServerAssetsDir = layout.buildDirectory.dir("generated/displayServer/assets")
+
+val displayServerJar: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isTransitive = false
+    attributes {
+        attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage::class.java, Usage.JAVA_RUNTIME))
+        attribute(Category.CATEGORY_ATTRIBUTE, objects.named(Category::class.java, Category.LIBRARY))
+        attribute(
+            LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE,
+            objects.named(LibraryElements::class.java, LibraryElements.JAR),
+        )
+    }
 }
 
 // The app version — actual Android metadata, single source of truth (VERSION.txt is gone).
@@ -97,6 +123,17 @@ android {
         buildConfig = true
     }
 
+    sourceSets.getByName("main") {
+        // The app sandbox client speaks the display server's wire protocol, so it compiles the
+        // server's Protocol.java itself rather than restating the constants. That file is
+        // import-free on purpose; the rest of the server needs hidden platform APIs and must stay
+        // out of the app, hence the exact-file filter (the app has no Java sources of its own).
+        java.srcDir(rootProject.file("tools/display-server/src/main/java"))
+        java.filter.setIncludes(setOf("**/Protocol.java"))
+
+        assets.srcDir(displayServerAssetsDir)
+    }
+
     packaging {
         jniLibs {
             // proot + its loaders are exec'd as files from nativeLibraryDir (the only app-owned
@@ -113,6 +150,8 @@ android {
 }
 
 dependencies {
+    add("displayServerJar", project(":tools:display-server"))
+
     // Compose
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
@@ -189,3 +228,35 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.espresso.core)
 }
+
+val dexDisplayServer = tasks.register<JavaExec>("dexDisplayServer") {
+    group = "build"
+    description = "Dexes the on-device display server into a standalone classes.dex."
+    classpath = files(File(androidSdkDir, "build-tools/${android.buildToolsVersion}/lib/d8.jar"))
+    mainClass.set("com.android.tools.r8.D8")
+    inputs.files(displayServerJar).withPropertyName("displayServerJar")
+    outputs.dir(displayServerDexDir).withPropertyName("dexDir")
+    argumentProviders.add(
+        CommandLineArgumentProvider {
+            listOf(
+                "--release",
+                "--min-api", requireNotNull(android.defaultConfig.minSdk).toString(),
+                // d8 always desugars lambdas, which needs the platform hierarchy to resolve.
+                "--lib", androidPlatformJar.absolutePath,
+                "--output", displayServerDexDir.get().asFile.absolutePath,
+            ) + displayServerJar.files.map { it.absolutePath }
+        },
+    )
+    doFirst { displayServerDexDir.get().asFile.mkdirs() }
+}
+
+val displayServerDexAsset = tasks.register<Sync>("displayServerDexAsset") {
+    from(dexDisplayServer) {
+        include("classes.dex")
+        rename { "jcode-display-server.dex" }
+    }
+    into(displayServerAssetsDir.map { it.dir("tools") })
+}
+
+tasks.matching { it.name == "mergeDebugAssets" || it.name == "mergeReleaseAssets" }
+    .configureEach { dependsOn(displayServerDexAsset) }

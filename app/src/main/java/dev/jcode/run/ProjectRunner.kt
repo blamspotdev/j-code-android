@@ -513,6 +513,9 @@ object ProjectRunner {
         appendLine("adb install -r -t \"\$APK\"")
         appendLine("if [ -n \"\$ACT\" ]; then adb shell am start -n \"\$PKG/\$ACT\"; else adb shell monkey -p \"\$PKG\" -c android.intent.category.LAUNCHER 1; fi")
         appendLine("echo \"Launched \$PKG\"")
+        // OSC 7716 hands the application id back to the host, which reveals the app-sandbox tab for
+        // it. The id is only known here — it was read out of the APK a few lines up.
+        appendLine("printf '\\033]7716;%s\\007' \"\$PKG\"")
     }
 
     private fun dotnetPublishCommand(csprojGuest: String, stageName: String): String = buildString {

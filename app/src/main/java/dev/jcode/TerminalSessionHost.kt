@@ -140,6 +140,13 @@ object TerminalSessionHost {
                 // A guest shell wrapper requests a relocated sub-shell tab (OSC 7715), off the reader
                 // thread. Hop to the main thread; buffer if the UI listener is transiently detached so a
                 // dropped request can't strand the blocked parent shell.
+                // An Android run script reports the app it just launched (OSC 7716), off the reader
+                // thread. AppSandbox is a process singleton whose reveal signal the shell already
+                // collects, so this needs no UI listener — only a hop to the main thread, since the
+                // signal is Compose snapshot state.
+                mgr.onAppSandboxRequest = { packageName ->
+                    mainHandler.post { dev.jcode.workbench.appsandbox.AppSandbox.requestOpen(packageName) }
+                }
                 mgr.onNestedShellOpen = { parentId, payload ->
                     val listener = uiNestedShellListener
                     if (listener != null) mainHandler.post { listener(parentId, payload) }

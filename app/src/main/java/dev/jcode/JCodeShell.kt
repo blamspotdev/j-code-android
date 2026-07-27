@@ -261,6 +261,8 @@ import dev.jcode.workbench.marketplace.LocalExtensionKeepAlive
 import dev.jcode.workbench.ExtensionWebViewPage
 import dev.jcode.workbench.ADB_CATALOG_ID
 import dev.jcode.workbench.AndroidDevicePage
+import dev.jcode.workbench.appsandbox.AppSandbox
+import dev.jcode.workbench.appsandbox.AppSandboxPage
 import dev.jcode.workbench.adbStatusLabel
 import dev.jcode.workbench.BrowserPage
 import dev.jcode.workbench.BuiltinBrowser
@@ -346,7 +348,6 @@ import dev.jcode.workbench.CloseTarget
 import dev.jcode.workbench.IssueActions
 import dev.jcode.workbench.LocalIssueActions
 import dev.jcode.core.debug.DebugState
-import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.workbench.LocalTerminalTapConfig
 import dev.jcode.workbench.TerminalExtraKeysTarget
 import dev.jcode.workbench.WorkbenchExtraKeysBar
@@ -758,14 +759,13 @@ fun JCodeApp(
     // Debug launch target = the active source file, if it has an installed debug engine (stdio adapters
     // and js-debug's TCP adapter are both supported now).
     val activeDebugFile = editorGroup.activeTab?.takeIf { !it.isPage }?.filePath
-    val activeDebugEngine = remember(activeDebugFile?.path) {
-        activeDebugFile?.let { f ->
-            val ext = "." + f.name.substringAfterLast('.', "")
-            DebugEngineCatalog.BUILT_IN.firstOrNull { ext in it.extensions }
-        }
+    // Resolved through the ViewModel rather than by matching the catalog's `extensions` here: `.kt`
+    // maps to an engine only inside an Android app project, which a plain extension match misses.
+    val activeDebugEngineId = remember(activeDebugFile?.path) {
+        activeDebugFile?.path?.let { viewModel.debugEngineIdFor(it) }
     }
-    val canDebug = activeDebugEngine != null &&
-        activeDebugEngine.id in debugCatalogState.installedEntryIds
+    val canDebug = activeDebugEngineId != null &&
+        activeDebugEngineId in debugCatalogState.installedEntryIds
     // remember-ed so the holder is stable across recompositions (its callbacks are bound viewModel
     // refs, which allocate a fresh — thus unequal — instance every pass; an unremembered holder
     // provided as a CompositionLocal invalidates every reader on any JCodeApp recomposition).
@@ -821,6 +821,12 @@ fun JCodeApp(
     LaunchedEffect(Unit) {
         snapshotFlow { BuiltinBrowser.revealSignal.value }.collect { if (it > 0) viewModel.openBrowserTab() }
     }
+    // Same pattern for the app sandbox: the run flow only bumps AppSandbox.revealSignal.
+    LaunchedEffect(Unit) {
+        snapshotFlow { AppSandbox.revealSignal.value }.collect { if (it > 0) viewModel.openAppSandboxTab() }
+    }
+    // A page tab has no close callback, so a sandbox session is reaped by watching the tab list.
+    LaunchedEffect(editorGroup.tabs) { viewModel.pruneAppSandboxSessions() }
     val snackbarHostState = remember { SnackbarHostState() }
     val openFolderLauncher = rememberOpenFolderLauncher(
         onFolderPicked = viewModel::openExternalFolder,
@@ -2822,6 +2828,12 @@ private fun JCodeShell(
                                     adbInstalled = ADB_CATALOG_ID in sdkCatalogState.installedEntryIds,
                                     onOpenAdbToolchain = { managerActions.onOpenSdkDetail(ADB_CATALOG_ID) },
                                     onPair = managerActions.onAdbPair,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                                EditorPageKind.AppSandbox -> AppSandboxPage(
+                                    tabId = tab.id,
+                                    screenshotDir = (selectedProject?.fsPath as? FsPath.Local)
+                                        ?.file?.let { File(it, ".jcode/sandbox-screenshots") },
                                     modifier = Modifier.fillMaxSize(),
                                 )
                                 EditorPageKind.Browser -> BrowserPage(modifier = Modifier.fillMaxSize())

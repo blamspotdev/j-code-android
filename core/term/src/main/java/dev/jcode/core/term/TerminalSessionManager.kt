@@ -111,6 +111,11 @@ class TerminalSessionManager(
     @Volatile
     var onOpenUrlRequest: ((String) -> Unit)? = null
 
+    /** Invoked (off the main thread) with an Android application id when a run script reports that it
+     *  launched an app (OSC 7716), so the host can reveal the app-sandbox tab for it. */
+    @Volatile
+    var onAppSandboxRequest: ((String) -> Unit)? = null
+
     /** Invoked (off the main thread) with (sessionId, title) when the shell reports the running
      *  program via OSC 7712, so the UI can name the terminal tab after the foreground process. */
     @Volatile
@@ -390,6 +395,7 @@ class TerminalSessionManager(
                     7713 -> onTaskComplete?.invoke(session.id, payload.trim())
                     7714 -> onOpenUrlRequest?.invoke(payload.trim())
                     7715 -> onNestedShellOpen?.invoke(session.id, payload.trim())
+                    7716 -> onAppSandboxRequest?.invoke(payload.trim())
                 }
             }
             while (isActive) {

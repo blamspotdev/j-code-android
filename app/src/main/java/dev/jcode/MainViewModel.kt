@@ -67,6 +67,8 @@ import dev.jcode.feature.marketplace.ProjectTemplate
 import dev.jcode.feature.marketplace.TemplateCatalog
 import dev.jcode.feature.marketplace.TemplateScaffolder
 import dev.jcode.workbench.SetupTerminalRunner
+import dev.jcode.workbench.appsandbox.AppSandbox
+import dev.jcode.workbench.appsandbox.AppSandboxSessions
 import dev.jcode.fs.FsKind
 import dev.jcode.fs.FsNode
 import dev.jcode.fs.FsPath
@@ -94,6 +96,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -844,6 +847,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             adbBridge.state.collect { state ->
                 TerminalSessionHost.manager(appContext).adbRelayPort =
                     (state as? AdbBridgeState.Ready)?.relayPort ?: 0
+            }
+        }
+        // A sandbox belongs to the app of the project that opened it, and its tab survives a project
+        // switch (page tabs always do), so the session is stopped rather than left streaming.
+        viewModelScope.launch {
+            selectedProject.map { it?.id }.distinctUntilChanged().drop(1).collect {
+                AppSandboxSessions.destroyAll("The project was switched.")
             }
         }
     }
@@ -3588,6 +3598,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         stopAllRuntimeServices()
+        AppSandboxSessions.destroyAll("JCode closed the workbench.")
         adbBridge.stop()
         super.onCleared()
     }
@@ -3653,6 +3664,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Open (or focus) the Android device page — the adb pairing wizard for this phone. */
     fun openAndroidDevicePage() {
         openDetailPage(ANDROID_DEVICE_TAB_ID, EditorPageKind.AndroidDevice) { "Android Device" }
+    }
+
+    /** Open (or focus) the app sandbox tab. The package is carried by
+     *  [dev.jcode.workbench.appsandbox.AppSandbox] (set via its `requestOpen`), like the browser's URL. */
+    fun openAppSandboxTab() {
+        openDetailPage(APP_SANDBOX_TAB_ID, EditorPageKind.AppSandbox) {
+            AppSandbox.pendingPackage.value?.substringAfterLast('.')?.let { "Sandbox: $it" } ?: "App sandbox"
+        }
+    }
+
+    /**
+     * Close any sandbox session whose editor tab is gone. Page tabs get no close callback, so the shell
+     * calls this whenever the tab list changes.
+     */
+    fun pruneAppSandboxSessions() {
+        AppSandboxSessions.retainOnly(_editorGroup.value.tabs.map { it.id }.toSet())
     }
 
     /**
@@ -3826,6 +3853,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * in a run command (`node dbg.js`, `python3 app/main.py`), then the active editor tab. Only files
      * whose language has a built-in DAP engine qualify. Returns a host absolute path, or null.
      */
+    /** Catalog id of the engine that would debug [hostPath]. Matching the catalog's `extensions` in
+     *  the UI cannot resolve `.kt`, which only maps to an engine inside an Android app project. */
+    fun debugEngineIdFor(hostPath: String): String? = debugController.debugEngineIdFor(hostPath)
+
     private fun deriveDebugEntryHost(project: Project, config: dev.jcode.core.config.RunConfig): String? {
         val projHost = (project.fsPath as? FsPath.Local)?.file
         val bind = project.distroBindTarget.trimEnd('/')
@@ -3844,7 +3875,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         hostOf(config.debugEntry)?.takeIf { it.isFile }?.let { return it.absolutePath }
 
         // 2. A source file named in any run command.
-        val rx = Regex("""(?:\./)?[\w./-]+\.(?:py|pyw|js|jsx|ts|tsx|mjs|cjs|cs|c|cpp|cc|rs)""")
+        val rx = Regex("""(?:\./)?[\w./-]+\.(?:py|pyw|js|jsx|ts|tsx|mjs|cjs|cs|c|cpp|cc|rs|kt|java)""")
         for (t in config.terminals) {
             for (m in rx.findAll(t.command)) {
                 hostOf(m.value)?.takeIf { it.isFile && debugController.canDebugFile(it.absolutePath) }
@@ -4532,6 +4563,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val BROWSER_TAB_ID = "jcode://browser"
         /** Stable id of the single Android device (adb pairing) editor tab. */
         const val ANDROID_DEVICE_TAB_ID = "jcode://android-device"
+        /** Stable id of the single app sandbox editor tab — the server owns one virtual display. */
+        const val APP_SANDBOX_TAB_ID = "jcode://app-sandbox"
         /** `adb pair` is one round trip to adbd; anything past this is a wrong port or a closed dialog. */
         private const val ADB_PAIR_TIMEOUT_MS = 60_000L
         /** host:port, with nothing a shell could read as anything but a literal. */
