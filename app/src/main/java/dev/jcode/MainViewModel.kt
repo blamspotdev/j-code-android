@@ -33,6 +33,9 @@ import dev.jcode.debug.DebugController
 import dev.jcode.core.distro.SdkCatalogAction
 import dev.jcode.core.distro.DistroService
 import dev.jcode.core.distro.DistroServiceLocator
+import dev.jcode.core.distro.adb.AdbBridge
+import dev.jcode.core.distro.adb.AdbBridgeLocator
+import dev.jcode.core.distro.adb.AdbBridgeState
 import dev.jcode.core.lsp.Diagnostic as LspDiagnostic
 import dev.jcode.core.lsp.DiagnosticSeverity as LspDiagnosticSeverity
 import dev.jcode.core.resource.ResourceManager
@@ -91,6 +94,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.SharedFlow
@@ -187,6 +191,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val workspaceManager: WorkspaceManager = WorkspaceServiceLocator.workspaceManager(application)
     val configService: ConfigService = ConfigServiceLocator.configService()
     val distroService: DistroService = DistroServiceLocator.distroService(application)
+    val adbBridge: AdbBridge = AdbBridgeLocator.adbBridge(application)
     val resourceManager: ResourceManager = ResourceManagerLocator.resourceManager(application)
     val currentWorkspace: StateFlow<Workspace?> = workspaceManager.currentWorkspace
     val breadcrumb: StateFlow<List<WorkspaceCrumb>> = workspaceManager.breadcrumb
@@ -820,9 +825,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         // Keep the static mirror BackendService reads in sync, and register the runtime teardown it
         // runs on a swipe-away exit. (Placed after the property declarations it references.)
-        runtimeTeardown = { runCatching { stopAllRuntimeServices() } }
+        runtimeTeardown = {
+            runCatching { stopAllRuntimeServices() }
+            runCatching { adbBridge.stop() }
+        }
         sessionFlushBlocking = { runCatching { runBlocking { persistSession() } } }
         viewModelScope.launch { exitOnSwipeAway.collect { exitOnSwipeAwayEnabled = it } }
+        // Bring the adb bridge back up, but only once a serial has been restored — i.e. only for a
+        // device that was paired before. Otherwise every cold start of a fresh install would pay a
+        // full mDNS discovery plus an `adb start-server` in the distro for nothing.
+        viewModelScope.launch {
+            adbBridge.serial.filterNotNull().first()
+            adbBridge.ensureConnected()
+        }
+        // Point guest tooling at the relay while it is up (bare `adb`, `gradlew installDebug`,
+        // `flutter run` then target this phone with no -s flag), and unset it when it is not.
+        viewModelScope.launch {
+            adbBridge.state.collect { state ->
+                TerminalSessionHost.manager(appContext).adbRelayPort =
+                    (state as? AdbBridgeState.Ready)?.relayPort ?: 0
+            }
+        }
     }
 
     private val autoCloseIdleKey = booleanPreferencesKey("perf_auto_close_idle_terminals")
@@ -3565,6 +3588,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         stopAllRuntimeServices()
+        adbBridge.stop()
         super.onCleared()
     }
 
@@ -3624,6 +3648,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             group.withTabAdded(EditorTab.page(BROWSER_TAB_ID, "Browser", EditorPageKind.Browser))
         }
+    }
+
+    /** Open (or focus) the Android device page — the adb pairing wizard for this phone. */
+    fun openAndroidDevicePage() {
+        openDetailPage(ANDROID_DEVICE_TAB_ID, EditorPageKind.AndroidDevice) { "Android Device" }
+    }
+
+    /**
+     * Run `adb pair <target> <code>` in the Linux runtime for the pairing wizard. Returns null once the
+     * command exits 0, otherwise the failure text.
+     *
+     * It runs as the DEFAULT runtime user and NEVER as root: adb keeps its identity in
+     * `$HOME/.android/adbkey`, so a root run would start a second adb server holding a second, unpaired
+     * key — the pairing would apply to a server the bridge never talks to, and the two servers would
+     * then fight over port 5037. The code is passed straight to the one-shot script and never stored.
+     */
+    suspend fun pairAdbDevice(target: String, code: String): String? {
+        val digits = code.filter(Char::isDigit)
+        if (digits.isEmpty()) return "Enter the 6-digit pairing code shown on this device."
+        if (!ADB_TARGET_RE.matches(target)) return "\"$target\" is not a valid host:port."
+        val result = setupTerminalRunner.run(
+            label = "adb pair $target",
+            script = "adb pair '$target' '$digits'",
+            workdir = null,
+            asUser = distroService.environmentState.value.runtime.user,
+            timeoutMs = ADB_PAIR_TIMEOUT_MS,
+        ) ?: return "Could not start the Setup terminal — is the Linux environment installed?"
+        if (result.exitCode == 0) return null
+        return result.internalError
+            ?: "adb pair failed (exit ${result.exitCode ?: -1}) — check the code and port, then retry. " +
+            "The pairing dialog must still be open."
     }
 
     /** Full status re-check (installed + update-available) for the SDK catalog; runs async, no-op if already running. */
@@ -4475,6 +4530,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val BUILD_CONFIG_PREFIX = "jcode://build-config/"
         /** Stable id of the single built-in browser editor tab (see [openBrowserPage]). */
         const val BROWSER_TAB_ID = "jcode://browser"
+        /** Stable id of the single Android device (adb pairing) editor tab. */
+        const val ANDROID_DEVICE_TAB_ID = "jcode://android-device"
+        /** `adb pair` is one round trip to adbd; anything past this is a wrong port or a closed dialog. */
+        private const val ADB_PAIR_TIMEOUT_MS = 60_000L
+        /** host:port, with nothing a shell could read as anything but a literal. */
+        private val ADB_TARGET_RE = Regex("""[A-Za-z0-9._\[\]:-]+:\d{1,5}""")
         /** Extensions routed to the built-in image viewer instead of the text editor. */
         val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico")
     }

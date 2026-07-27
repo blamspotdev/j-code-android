@@ -204,6 +204,7 @@ import dev.jcode.core.distro.RootfsDownloader
 import dev.jcode.core.distro.RootfsManager
 import dev.jcode.core.distro.LspCatalogState
 import dev.jcode.core.distro.SdkCatalogState
+import dev.jcode.core.distro.adb.AdbBridgeState
 import dev.jcode.core.term.TerminalSessionManager
 import dev.jcode.core.term.TerminalView
 import dev.jcode.design.ChromeControls
@@ -258,6 +259,9 @@ import dev.jcode.workbench.marketplace.ExtensionKeepAliveSetting
 import dev.jcode.workbench.marketplace.LocalExtensionCapabilities
 import dev.jcode.workbench.marketplace.LocalExtensionKeepAlive
 import dev.jcode.workbench.ExtensionWebViewPage
+import dev.jcode.workbench.ADB_CATALOG_ID
+import dev.jcode.workbench.AndroidDevicePage
+import dev.jcode.workbench.adbStatusLabel
 import dev.jcode.workbench.BrowserPage
 import dev.jcode.workbench.BuiltinBrowser
 import dev.jcode.workbench.DevtoolsSidebarContent
@@ -309,6 +313,8 @@ import dev.jcode.design.LocalSettingsBackup
 import dev.jcode.design.SettingsBackupActions
 import dev.jcode.design.EnvironmentBackupActions
 import dev.jcode.design.LocalEnvironmentBackup
+import dev.jcode.design.AndroidDeviceSetting
+import dev.jcode.design.LocalAndroidDevice
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalVolumeKeysSetting
@@ -1150,6 +1156,16 @@ fun JCodeApp(
             updatingPackages = systemPackagesUpdating,
         )
     }
+    val adbBridgeState by viewModel.adbBridge.state.collectAsStateWithLifecycle()
+    val adbSerial by viewModel.adbBridge.serial.collectAsStateWithLifecycle()
+    val androidDeviceSetting = remember(adbBridgeState, adbSerial) {
+        AndroidDeviceSetting(
+            ready = adbBridgeState is AdbBridgeState.Ready,
+            status = adbStatusLabel(adbBridgeState),
+            serial = adbSerial,
+            onOpenPage = viewModel::openAndroidDevicePage,
+        )
+    }
     val envBackupStatus by viewModel.envBackupStatus.collectAsStateWithLifecycle()
     envBackupStatus?.let { status ->
         AlertDialog(
@@ -1230,6 +1246,7 @@ fun JCodeApp(
         LocalAppUpdate provides appUpdateSetting,
         LocalSettingsBackup provides settingsBackupActions,
         LocalEnvironmentBackup provides environmentBackupActions,
+        LocalAndroidDevice provides androidDeviceSetting,
         LocalCommandPaletteSetting provides commandPaletteSetting,
         LocalMarkdownPreviewSetting provides markdownPreviewSetting,
         LocalEditorFontSizeSetting provides editorFontSizeSetting,
@@ -1346,6 +1363,7 @@ fun JCodeApp(
             // The Source Control extension renders its git-identity + GitHub-auth screen at its
             // `#github` route (a global-config screen that works with no project open).
             onOpenExtensionConfig = { id -> viewModel.openExtensionViewPage(id, "github", "Git Configuration") },
+            onAdbPair = viewModel::pairAdbDevice,
             onExtensionExec = viewModel::runtimeExecJson,
             onExtensionApiRequest = { extId, envelope ->
                 val ext = viewModel.installedExtensions.value.firstOrNull { it.id == extId }
@@ -2798,6 +2816,12 @@ private fun JCodeShell(
                                 EditorPageKind.ExtensionPermissions -> ExtensionPermissionsPage(
                                     installed = installedExtensions,
                                     onOpenConfig = managerActions.onOpenExtensionConfig,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                                EditorPageKind.AndroidDevice -> AndroidDevicePage(
+                                    adbInstalled = ADB_CATALOG_ID in sdkCatalogState.installedEntryIds,
+                                    onOpenAdbToolchain = { managerActions.onOpenSdkDetail(ADB_CATALOG_ID) },
+                                    onPair = managerActions.onAdbPair,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                                 EditorPageKind.Browser -> BrowserPage(modifier = Modifier.fillMaxSize())

@@ -70,6 +70,7 @@ import dev.jcode.design.LocalExtraKeysSetting
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.ExplorerExcludeEffect
 import dev.jcode.design.ExplorerHiddenMode
+import dev.jcode.design.LocalAndroidDevice
 import dev.jcode.design.LocalAppUpdate
 import dev.jcode.design.LocalSettingsBackup
 import dev.jcode.design.EnvVarSettings
@@ -740,6 +741,20 @@ object SettingsFeature {
                     ) {
                         Text(if (envBackup.updatingPackages) "Updating packages…" else "Update system packages")
                     }
+                }
+            }
+
+            SettingsCard(
+                title = "Android device",
+                description = "Pair JCode with this phone's own adb so builds install and launch on it.",
+                keywords = "android device adb bridge wireless debugging pair pairing code relay serial apk " +
+                    "install launch logcat gradle installdebug flutter run",
+            ) {
+                val androidDevice = LocalAndroidDevice.current
+                SummaryRow(label = "ADB bridge", value = androidDevice.status)
+                androidDevice.serial?.let { SummaryRow(label = "Serial", value = it) }
+                FilledTonalButton(onClick = androidDevice.onOpenPage, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (androidDevice.ready) "Manage device" else "Set up ADB")
                 }
             }
 

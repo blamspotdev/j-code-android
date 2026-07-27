@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +46,7 @@ import dev.jcode.core.config.BuildConfig
 import dev.jcode.core.config.RunConfig
 import dev.jcode.core.debug.DebugState
 import dev.jcode.design.CompactOutlinedButton
+import dev.jcode.design.LocalAndroidDevice
 import dev.jcode.fs.Project
 import dev.jcode.run.ProjectRunner
 import dev.jcode.workbench.DebugSessionUi
@@ -180,6 +182,9 @@ private fun ProjectRunBuildDetail(
 
     when (segment) {
         Segment.Run -> {
+            // Show the device row only for a project that actually drives adb — an Android app's
+            // "Run on this device" recipe, or any hand-written config that shells out to adb.
+            if (runs.any { run -> run.terminals.any { it.command.contains("adb ") } }) AdbDeviceRow()
             if (runs.isEmpty()) HintText("No run config yet — add one.")
             runs.forEachIndexed { index, config ->
                 val running = isRunning && (runningRunName == null || runningRunName == config.name)
@@ -505,6 +510,42 @@ private fun BuildConfigRow(config: BuildConfig, deletable: Boolean, onBuild: () 
             IconAction(jcIcon(JCodeIcon.Run), "Build", MaterialTheme.colorScheme.primary, onBuild, enabled = config.command.isNotBlank())
             IconAction(jcIcon(JCodeIcon.Settings), "Configure", MaterialTheme.colorScheme.onSurfaceVariant, onConfigure, size = 18)
             if (deletable) IconAction(Icons.Rounded.DeleteOutline, "Delete", MaterialTheme.colorScheme.onSurfaceVariant, onDelete, size = 18)
+        }
+    }
+}
+
+/** Live ADB bridge status for a project that runs on this device, with a link into the pairing page. */
+@Composable
+private fun AdbDeviceRow() {
+    val device = LocalAndroidDevice.current
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = device.onOpenPage)
+                .padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                Icons.Rounded.PhoneAndroid,
+                contentDescription = null,
+                tint = if (device.ready) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text("This device", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1)
+                Text(
+                    text = if (device.ready) device.serial ?: "Connected" else device.status,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (device.ready) {
+                RunStatusChip("Connected", active = true)
+            } else {
+                Text("Set up ADB", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            }
         }
     }
 }
