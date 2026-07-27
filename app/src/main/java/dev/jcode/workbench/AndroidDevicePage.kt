@@ -195,8 +195,11 @@ internal fun AndroidDevicePage(
 
         ManagerSectionCard(
             title = "3. Pair",
-            description = "In Wireless debugging, tap \"Pair device with pairing code\". The port fills " +
-                "itself in as soon as that dialog opens; the code is used once and never stored.",
+            description = "Put JCode and Settings side by side in split-screen FIRST, then tap \"Pair " +
+                "device with pairing code\" in Wireless debugging. Android stops listening for the " +
+                "pairing the instant that dialog leaves the foreground, so simply switching back to " +
+                "JCode to type the code cancels it — the code will always be reported as wrong. The " +
+                "port fills itself in while the dialog is up; the code is used once and never stored.",
         ) {
             SettingsTextFieldRow(
                 label = "Pairing code",
