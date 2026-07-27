@@ -76,7 +76,7 @@ public class JCodeSourceLookUpProvider implements ISourceLookUpProvider {
     @Override
     @Deprecated
     public String[] getFullyQualifiedName(String uri, int[] lines, int[] columns) throws DebugException {
-        ParsedSource parsed = ParsedSource.parse(readSource(uri));
+        ParsedSource parsed = parseSource(uri);
         int n = (lines == null) ? 0 : lines.length;
         String[] result = new String[n];
         for (int i = 0; i < n; i++) {
@@ -89,7 +89,7 @@ public class JCodeSourceLookUpProvider implements ISourceLookUpProvider {
     @Override
     public JavaBreakpointLocation[] getBreakpointLocations(String sourceUri, SourceBreakpoint[] sourceBreakpoints)
             throws DebugException {
-        ParsedSource parsed = ParsedSource.parse(readSource(sourceUri));
+        ParsedSource parsed = parseSource(sourceUri);
         int n = (sourceBreakpoints == null) ? 0 : sourceBreakpoints.length;
         // Must return exactly one location per input, in order: the caller iterates
         // locations.length and indexes sourceBreakpoints[i] in lockstep.
@@ -134,6 +134,12 @@ public class JCodeSourceLookUpProvider implements ISourceLookUpProvider {
     // ---------------------------------------------------------------------------------
     // File helpers
     // ---------------------------------------------------------------------------------
+
+    private ParsedSource parseSource(String uri) {
+        Path p = toPath(uri);
+        String fileName = (p == null || p.getFileName() == null) ? "" : p.getFileName().toString();
+        return ParsedSource.parse(readSource(uri), fileName);
+    }
 
     private String readSource(String uri) {
         Path p = toPath(uri);
@@ -230,6 +236,12 @@ public class JCodeSourceLookUpProvider implements ISourceLookUpProvider {
         private static final Pattern PACKAGE =
                 Pattern.compile("\\bpackage\\s+([A-Za-z_$][\\w$]*(?:\\s*\\.\\s*[A-Za-z_$][\\w$]*)*)\\s*;");
 
+        // Kotlin package declarations carry no terminating semicolon. Without a separate pattern the
+        // package is silently dropped from every FQN, the ClassPrepareRequest filter never matches,
+        // and no breakpoint in a Kotlin file can bind.
+        private static final Pattern PACKAGE_KT = Pattern.compile(
+                "^\\s*package\\s+([A-Za-z_][\\w$]*(?:\\s*\\.\\s*[A-Za-z_][\\w$]*)*)", Pattern.MULTILINE);
+
         private final String packageName;
         private final List<TypeRange> ranges;
 
@@ -272,14 +284,15 @@ public class JCodeSourceLookUpProvider implements ISourceLookUpProvider {
             return packageName.isEmpty() ? best.binaryName : packageName + "." + best.binaryName;
         }
 
-        static ParsedSource parse(String source) {
+        static ParsedSource parse(String source, String fileName) {
             if (source == null || source.isEmpty()) {
                 return new ParsedSource("", Collections.emptyList());
             }
+            boolean kotlin = fileName != null && fileName.toLowerCase().endsWith(".kt");
             String cleaned = blankCommentsAndLiterals(source);
 
             String packageName = "";
-            Matcher pm = PACKAGE.matcher(cleaned);
+            Matcher pm = (kotlin ? PACKAGE_KT : PACKAGE).matcher(cleaned);
             if (pm.find()) {
                 packageName = pm.group(1).replaceAll("\\s+", "");
             }
@@ -291,6 +304,7 @@ public class JCodeSourceLookUpProvider implements ISourceLookUpProvider {
             StringBuilder word = new StringBuilder();
             boolean expectName = false;
             boolean sawPublic = false;
+            boolean sawCompanion = false;
             boolean dotBefore = false;
             String pendingName = null;
             int pendingLine = 1;
@@ -320,9 +334,18 @@ public class JCodeSourceLookUpProvider implements ISourceLookUpProvider {
                         expectName = true;
                     } else if ("interface".equals(w) || "enum".equals(w) || "record".equals(w)) {
                         expectName = true;
+                    } else if (kotlin && "object".equals(w) && !dotBefore) {
+                        // `companion object` compiles to a nested Companion type. A name may still
+                        // follow and override it (`companion object Named`).
+                        if (sawCompanion) {
+                            pendingName = "Companion";
+                            pendingLine = line;
+                        }
+                        expectName = true;
                     } else if ("public".equals(w)) {
                         sawPublic = true;
                     }
+                    sawCompanion = kotlin && "companion".equals(w);
                     dotBefore = false;
                 }
 
@@ -377,9 +400,24 @@ public class JCodeSourceLookUpProvider implements ISourceLookUpProvider {
                         // whitespace: preserve dotBefore across gaps (e.g. `Foo . class`)
                         break;
                     default:
-                        // any other symbol ('(', ')', '<', '>', ',', '=', '@', ...) breaks a dot chain
+                        // any other symbol ('(', ')', '<', '>', ',', '=', '@', ':', ...) breaks a dot
+                        // chain, and closes a pending type-name slot so the supertype in
+                        // `companion object : Base()` isn't mistaken for the type's own name
+                        expectName = false;
                         dotBefore = false;
                         break;
+                }
+            }
+
+            if (kotlin) {
+                // Top-level functions and properties belong to no type; kotlinc emits them on a
+                // <FileName>Kt facade class. Spanning the whole file makes this the last resort
+                // only: fqnForLine prefers the innermost (smallest) enclosing range, so a real
+                // class still wins for any line inside its body.
+                String base = fileName.substring(0, fileName.length() - ".kt".length());
+                if (!base.isEmpty()) {
+                    String facade = Character.toUpperCase(base.charAt(0)) + base.substring(1) + "Kt";
+                    ranges.add(new TypeRange(facade, 1, line, true, true));
                 }
             }
 

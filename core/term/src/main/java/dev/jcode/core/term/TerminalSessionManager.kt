@@ -148,6 +148,21 @@ class TerminalSessionManager(
     @Volatile
     var userEnvVars: Map<String, String> = emptyMap()
 
+    /** Loopback port of the JCode ADB relay, or 0 when the bridge is off. Non-zero makes bare `adb`,
+     *  `gradlew installDebug` and `flutter run` target this phone with no `-s` flag. Pushed from
+     *  AdbBridge. */
+    @Volatile
+    var adbRelayPort: Int = 0
+
+    private fun adbEnvVars(): Map<String, String> {
+        val port = adbRelayPort
+        if (port <= 0) return emptyMap()
+        return mapOf(
+            "JCODE_ADB_PORT" to port.toString(),
+            "ANDROID_SERIAL" to "127.0.0.1:$port",
+        )
+    }
+
     // childId -> parentId for relocated nested-shell tabs. Outlives reapExitedSession/closeSession
     // (unlike Session) so the UI's exit path can still find the parent to refocus. Cleared by the host
     // via clearRelocation once the exit is handled, or wholesale by closeAll.
@@ -256,6 +271,23 @@ class TerminalSessionManager(
             }
         }
 
+        // ADB bridge: point guest tooling at the relay. This duplicates the env map below on purpose —
+        // BASH_ENV names only jcode-open.sh, so non-interactive run scripts (`bash .jcode/run-*.sh`)
+        // never source profile.d, while a shell the user starts by hand outside our env map only sees
+        // profile.d. Neither mechanism covers both cases alone. Guarded write, marker-scoped delete.
+        runCatching {
+            val profileD = File(rootfsPath, "etc/profile.d").apply { mkdirs() }
+            val script = File(profileD, "jcode-adb.sh")
+            val port = adbRelayPort
+            if (port > 0) {
+                val body = "$ADB_PROFILE_MARKER\nJCODE_ADB_PORT=$port\nexport JCODE_ADB_PORT\n" +
+                    "export ANDROID_SERIAL=\"127.0.0.1:\$JCODE_ADB_PORT\"\n"
+                if (!script.exists() || script.readText() != body) script.writeText(body)
+            } else if (script.exists() && script.readText().startsWith(ADB_PROFILE_MARKER)) {
+                script.delete()
+            }
+        }
+
         // Foreign-arch environment: ensure the QEMU emulator is extracted before spawning.
         if (prootManager.needsQemu(rootfsArch) && !prootManager.isQemuInstalled(rootfsArch)) {
             val qemuOk = kotlinx.coroutines.runBlocking { prootManager.ensureQemuInstalled(rootfsArch) }
@@ -290,7 +322,7 @@ class TerminalSessionManager(
             // Browser-openers consult $BROWSER first; point it at the OSC 7714 shim (see below) so
             // guest tools open URLs through the host instead of failing on the missing X11/dbus stack.
             "BROWSER" to "/usr/local/bin/xdg-open",
-        ) + userEnvVars.filterKeys { ENV_NAME_RE.matches(it) }
+        ) + adbEnvVars() + userEnvVars.filterKeys { ENV_NAME_RE.matches(it) }
 
         val prootArgs = prootManager.buildShellCommand(
             rootfsPath = rootfsPath,
@@ -690,6 +722,8 @@ private val NESTED_SHELL_NAMES = listOf("bash", "dash", "ash", "zsh", "ksh", "mk
 // Leading bytes of every wrapper, used to remove only our own /usr/local/bin files when the feature
 // is toggled off (a distro's real shell there, if any, is left alone).
 private const val NSH_MARKER = "#!/bin/sh\n# jcode-nsh-wrapper"
+
+private const val ADB_PROFILE_MARKER = "# jcode-adb (generated — edits are overwritten)"
 
 // Relocation tokens are interpolated into guest and host paths, so restrict them to a safe charset.
 private val NSH_TOKEN_RE = Regex("[A-Za-z0-9_]+")

@@ -272,6 +272,10 @@ entries:
       for b in aapt2 aapt zipalign; do
         if [ -e "$DEB/$b" ]; then cp -f "$DEB/$b" "$ANDROID_HOME/build-tools/$BT_VER/$b"; fi
       done
+      # Same treatment for adb, which platform-tools also ships x86_64-only. AGP invokes it by
+      # ABSOLUTE path ($ANDROID_HOME/platform-tools/adb) rather than through PATH, so a native adb
+      # earlier in PATH does not save it: installDebug dies with "Exec format error" without this.
+      if [ -x /usr/bin/adb ]; then cp -f /usr/bin/adb "$ANDROID_HOME/platform-tools/adb"; fi
       GRADLE_VERSION=$(wget -qO- https://services.gradle.org/versions/current | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
       [ -n "$GRADLE_VERSION" ]
       if [ ! -x "/opt/gradle/gradle-$GRADLE_VERSION/bin/gradle" ]; then
@@ -291,6 +295,25 @@ entries:
       [ -d "$HOME/android-sdk/platforms" ] || exit 1
       A=$(wget -qO- https://dl.google.com/android/repository/repository2-3.xml | grep -oE 'platforms;android-[0-9]+(\.[0-9]+)?' | sort -u -V | tail -1)
       [ -n "$A" ] && [ ! -f "$HOME/android-sdk/platforms/${A#platforms;}/android.jar" ]
+
+  - id: adb
+    category: android
+    name: ADB (Android Debug Bridge)
+    description: The distro's native aarch64 adb client. With the JCode ADB bridge paired, adb, ./gradlew installDebug, adb logcat and flutter run inside the runtime all target this phone. Google's platform-tools ship an x86_64-only adb that cannot execute here, so this is the one that actually runs.
+    supportedArches: [arm64]
+    installScript: |
+      sudo apt-get update
+      sudo apt-get install -y adb
+      # Fail loudly at install time rather than halfway through the pairing wizard: wireless
+      # pairing needs the Android 11+ `adb pair` subcommand, which older builds lack.
+      adb help 2>&1 | grep -qE '^[[:space:]]*pair ' || echo "WARNING: this adb has no 'pair' subcommand — wireless pairing will not work."
+      # Mirror of the swap in the android-sdk entry, so the two can be installed in either order.
+      if [ -d "$HOME/android-sdk/platform-tools" ]; then cp -f /usr/bin/adb "$HOME/android-sdk/platform-tools/adb"; fi
+    verifyScript: |
+      command -v adb >/dev/null 2>&1 && adb version >/dev/null 2>&1 && echo ready
+    uninstallScript: |
+      sudo apt-get remove -y adb
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^adb/'"
 
   - id: dotnet
     category: dotnet

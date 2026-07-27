@@ -204,11 +204,19 @@ object AppUpdateInstaller {
     }
 }
 
-/** Manifest receiver for the [PackageInstaller] session status PendingIntent — see [AppUpdateInstaller]. */
+/**
+ * Manifest receiver for [PackageInstaller] session status PendingIntents. Shared by the app's own
+ * updater ([AppUpdateInstaller]) and by project-APK installs
+ * ([dev.jcode.run.ApkInstaller]), which are told apart by the action they were committed with.
+ */
 class AppInstallReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == AppUpdateInstaller.INSTALL_ACTION) {
-            AppUpdateInstaller.onSessionStatus(context.applicationContext, intent)
+        when (intent.action) {
+            AppUpdateInstaller.INSTALL_ACTION ->
+                AppUpdateInstaller.onSessionStatus(context.applicationContext, intent)
+
+            dev.jcode.run.ApkInstaller.INSTALL_ACTION ->
+                dev.jcode.run.ApkInstaller.onSessionStatus(context.applicationContext, intent)
         }
     }
 }
