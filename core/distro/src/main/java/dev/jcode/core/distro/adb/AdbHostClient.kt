@@ -67,6 +67,19 @@ class AdbHostClient(
         }
     }
 
+    /** Removes a forward installed by [forward]. Failures are swallowed: this is teardown, and a
+     *  forward that is already gone is the outcome the caller wanted. */
+    suspend fun killForward(serial: String, local: String): Unit = withContext(Dispatchers.IO) {
+        val service = "host-serial:$serial:killforward:$local"
+        runCatching {
+            session().use { session ->
+                session.request(service)
+                session.readTrailingStatus(service)
+            }
+        }
+        Unit
+    }
+
     /**
      * Runs [cmd] over the `exec:` service: a single unframed stream with stderr folded into stdout and
      * NO exit code — use [shellV2] whenever the exit status matters.
