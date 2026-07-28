@@ -22,7 +22,6 @@ import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.PhoneAndroid
-import androidx.compose.material.icons.rounded.Smartphone
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -52,7 +51,6 @@ import dev.jcode.fs.Project
 import dev.jcode.run.ProjectRunner
 import dev.jcode.workbench.DebugSessionUi
 import dev.jcode.workbench.LocalRunConfigPresets
-import dev.jcode.workbench.appsandbox.AppSandbox
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -544,13 +542,6 @@ private fun AdbDeviceRow() {
                 )
             }
             if (device.ready) {
-                IconAction(
-                    Icons.Rounded.Smartphone,
-                    "App sandbox",
-                    MaterialTheme.colorScheme.primary,
-                    { AppSandbox.requestOpen(null) },
-                    size = 18,
-                )
                 RunStatusChip("Connected", active = true)
             } else {
                 Text("Set up ADB", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)

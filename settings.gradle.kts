@@ -69,6 +69,3 @@ include(":native:vt")
 include(":native:wasmtime-ffi")
 include(":native:grammars")
 include(":native:proot")
-
-// Tools — not shipped as libraries. :tools:display-server is dexed into an app asset.
-include(":tools:display-server")

@@ -261,8 +261,6 @@ import dev.jcode.workbench.marketplace.LocalExtensionKeepAlive
 import dev.jcode.workbench.ExtensionWebViewPage
 import dev.jcode.workbench.ADB_CATALOG_ID
 import dev.jcode.workbench.AndroidDevicePage
-import dev.jcode.workbench.appsandbox.AppSandbox
-import dev.jcode.workbench.appsandbox.AppSandboxPage
 import dev.jcode.workbench.adbStatusLabel
 import dev.jcode.workbench.BrowserPage
 import dev.jcode.workbench.BuiltinBrowser
@@ -821,12 +819,6 @@ fun JCodeApp(
     LaunchedEffect(Unit) {
         snapshotFlow { BuiltinBrowser.revealSignal.value }.collect { if (it > 0) viewModel.openBrowserTab() }
     }
-    // Same pattern for the app sandbox: the run flow only bumps AppSandbox.revealSignal.
-    LaunchedEffect(Unit) {
-        snapshotFlow { AppSandbox.revealSignal.value }.collect { if (it > 0) viewModel.openAppSandboxTab() }
-    }
-    // A page tab has no close callback, so a sandbox session is reaped by watching the tab list.
-    LaunchedEffect(editorGroup.tabs) { viewModel.pruneAppSandboxSessions() }
     val snackbarHostState = remember { SnackbarHostState() }
     val openFolderLauncher = rememberOpenFolderLauncher(
         onFolderPicked = viewModel::openExternalFolder,
@@ -2828,12 +2820,6 @@ private fun JCodeShell(
                                     adbInstalled = ADB_CATALOG_ID in sdkCatalogState.installedEntryIds,
                                     onOpenAdbToolchain = { managerActions.onOpenSdkDetail(ADB_CATALOG_ID) },
                                     onPair = managerActions.onAdbPair,
-                                    modifier = Modifier.fillMaxSize(),
-                                )
-                                EditorPageKind.AppSandbox -> AppSandboxPage(
-                                    tabId = tab.id,
-                                    screenshotDir = (selectedProject?.fsPath as? FsPath.Local)
-                                        ?.file?.let { File(it, ".jcode/sandbox-screenshots") },
                                     modifier = Modifier.fillMaxSize(),
                                 )
                                 EditorPageKind.Browser -> BrowserPage(modifier = Modifier.fillMaxSize())
