@@ -206,7 +206,7 @@ entries:
   - id: android-sdk
     category: android
     name: Android SDK
-    description: Command-line tools, the newest stable Android platform and build-tools, and the latest Gradle — all resolved at install time and wired with the ARM-native aapt2 so on-device Gradle builds (assembleDebug) produce a real APK. Gradle is exposed at /opt/gradle/current and on PATH. Requires the Android SDK prerequisites. Large download.
+    description: Command-line tools, an Android platform, build-tools and the latest Gradle, wired with the ARM-native aapt2 so on-device Gradle builds (assembleDebug) produce a real APK. The platform is the newest one this device's aapt2 can actually read, which is NOT the newest that exists — the install prints the compileSdk to use, and records it in android-sdk/jcode-compile-sdk.txt. Gradle is exposed at /opt/gradle/current and on PATH. Requires the Android SDK prerequisites. Large download.
     supportedArches: [arm64]
     requiredSdks: [android-prereqs]
     installScript: |
@@ -226,16 +226,21 @@ entries:
         mv /tmp/cmdline-tools/* "$ANDROID_HOME/cmdline-tools/latest/"
         rm -rf /tmp/cmdline-tools /tmp/clt.zip
       fi
-      # Newest RELEASED platform and build-tools. Match the FULL quoted package path (path="…") so a
-      # numeric prefix of a preview or extension package is never picked: the old unanchored regex
-      # truncated e.g. platforms;android-37.2-beta1 to the non-existent "platforms;android-37.2"
-      # (sdkmanager then reports "Failed to find package" and stalls). Anchoring to the closing quote
-      # drops -beta1 previews, -extNN extension SDKs, and -rcN build-tools in one step.
-      PLATFORM=$(grep -oE 'path="platforms;android-[0-9]+(\.[0-9]+)?"' /tmp/android-repo.xml | sed -E 's/^path="//; s/"$//' | sort -u -V | tail -1)
+      # Newest RELEASED build-tools. Match the FULL quoted package path (path="…") so a numeric
+      # prefix of a preview or extension package is never picked: the old unanchored regex truncated
+      # e.g. platforms;android-37.2-beta1 to the non-existent "platforms;android-37.2" (sdkmanager
+      # then reports "Failed to find package" and stalls). Anchoring to the closing quote drops
+      # -beta1 previews, -extNN extension SDKs, and -rcN build-tools in one step.
       BUILD_TOOLS=$(grep -oE 'path="build-tools;[0-9]+\.[0-9]+\.[0-9]+"' /tmp/android-repo.xml | sed -E 's/^path="//; s/"$//' | sort -u -V | tail -1)
+      # Platform candidates, NEWEST FIRST — not a single pick. The newest platform that exists is
+      # usually not one this device can build against: Google ships no arm64 aapt2, so we run
+      # Debian's, which is frozen at 2.19 (build-tools 29.0.3) and cannot parse the resource tables
+      # newer platforms ship. Measured on an Odin2: android-34 links, 35/36/37 all fail with
+      # "RES_TABLE_TYPE_TYPE entry offsets overlap actual entry data". Each candidate is installed
+      # and probed below; the first that links wins.
+      CANDIDATES=$(grep -oE 'path="platforms;android-[0-9]+(\.[0-9]+)?"' /tmp/android-repo.xml | sed -E 's/^path="//; s/"$//' | sort -u -Vr | head -8)
       rm -f /tmp/android-repo.xml
-      [ -n "$PLATFORM" ] && [ -n "$BUILD_TOOLS" ]
-      PLAT_DIR="${PLATFORM#platforms;}"
+      [ -n "$BUILD_TOOLS" ] && [ -n "$CANDIDATES" ]
       BT_VER="${BUILD_TOOLS#build-tools;}"
       SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
       # Accept licenses. Both pipeline members need their own timeout: sdkmanager hangs after
@@ -245,11 +250,11 @@ entries:
       # sdkmanager downloads only when fed 'yes' on stdin, but then HANGS after finishing. Run it in
       # the background, wait for the platform + build-tools to land, then stop it — bailing out
       # early if it dies instead of hanging.
-      ( timeout 1900 yes | "$SDKM" --sdk_root="$ANDROID_HOME" "$PLATFORM" "$BUILD_TOOLS" "platform-tools" 2>&1 | tee /tmp/android-sdk-install.log ) &
+      ( timeout 1900 yes | "$SDKM" --sdk_root="$ANDROID_HOME" "$BUILD_TOOLS" "platform-tools" 2>&1 | tee /tmp/android-sdk-install.log ) &
       SDK_PID=$!
       last_size=0; stalled=0
       for i in $(seq 1 180); do
-        [ -f "$ANDROID_HOME/platforms/$PLAT_DIR/android.jar" ] && [ -x "$ANDROID_HOME/build-tools/$BT_VER/aapt2" ] && break
+        [ -x "$ANDROID_HOME/build-tools/$BT_VER/aapt2" ] && break
         kill -0 "$SDK_PID" 2>/dev/null || break
         # Abort a stalled download / dropped connection instead of hanging until the outer timeout: the
         # tee'd log stops growing when nothing is being fetched. Allow ~150s of no growth for
@@ -262,8 +267,8 @@ entries:
       # The [r] class keeps the pattern from matching its own literal occurrence in this script's
       # argv — without it, the quiet exec path (sh -c '<whole script>') pkills itself and proot.
       pkill -f 'sdkmanage[r]' 2>/dev/null || true
-      if [ ! -f "$ANDROID_HOME/platforms/$PLAT_DIR/android.jar" ] || [ ! -x "$ANDROID_HOME/build-tools/$BT_VER/aapt2" ]; then
-        echo "sdkmanager failed to install $PLATFORM / $BUILD_TOOLS:"
+      if [ ! -x "$ANDROID_HOME/build-tools/$BT_VER/aapt2" ]; then
+        echo "sdkmanager failed to install $BUILD_TOOLS:"
         tail -n 20 /tmp/android-sdk-install.log 2>/dev/null || true
         exit 1
       fi
@@ -290,6 +295,47 @@ entries:
         fi
         echo "$LINE" >> "$GH/gradle.properties" 2>/dev/null || sudo sh -c "echo '$LINE' >> '$GH/gradle.properties'"
       done
+      # Pick the newest platform this device's aapt2 can actually LINK against, installing candidates
+      # newest-first and stopping at the first that works. `link` is the probe because it is exactly
+      # what the build performs (LinkApplicationAndroidResources) and it fails in milliseconds;
+      # `aapt2 dump resources` was measured spinning for 13 minutes on a jar it half-understands,
+      # which would be indistinguishable from a hung install.
+      NATIVE_AAPT2="$ANDROID_HOME/build-tools/$BT_VER/aapt2"
+      printf '%s\n' '<?xml version="1.0" encoding="utf-8"?>' '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="jcode.probe">' '  <application />' '</manifest>' > /tmp/jcode-probe-manifest.xml
+      CHOSEN=""
+      for CAND in $CANDIDATES; do
+        CDIR="${CAND#platforms;}"
+        API=$(printf '%s' "$CDIR" | sed -E 's/^android-//; s/\..*$//')
+        case "$API" in ''|*[!0-9]*) continue ;; esac
+        # Floor: below this the platform is too old to be worth building against at all.
+        [ "$API" -ge 30 ] || continue
+        echo "== Android platform $CDIR: downloading and probing =="
+        if [ ! -f "$ANDROID_HOME/platforms/$CDIR/android.jar" ]; then
+          ( timeout 900 yes | "$SDKM" --sdk_root="$ANDROID_HOME" "$CAND" >/dev/null 2>&1 ) || true
+          pkill -f 'sdkmanage[r]' 2>/dev/null || true
+        fi
+        JAR="$ANDROID_HOME/platforms/$CDIR/android.jar"
+        [ -f "$JAR" ] || { echo "   could not download $CDIR — trying the next one"; continue; }
+        if timeout 60 "$NATIVE_AAPT2" link -I "$JAR" --manifest /tmp/jcode-probe-manifest.xml -o /tmp/jcode-probe.apk >/dev/null 2>&1; then
+          CHOSEN="$CDIR"
+          echo "   aapt2 links against $CDIR — using it"
+          break
+        fi
+        echo "   aapt2 cannot read $CDIR's resource table — removing it and stepping down"
+        rm -rf "$ANDROID_HOME/platforms/$CDIR"
+      done
+      rm -f /tmp/jcode-probe.apk /tmp/jcode-probe-manifest.xml
+      if [ -z "$CHOSEN" ]; then
+        AAPT2_VER=$("$NATIVE_AAPT2" version 2>&1 | head -1)
+        echo "No available Android platform can be read by this device's aapt2 ($AAPT2_VER)."
+        echo "Install an older one by hand, e.g.: sdkmanager 'platforms;android-34'"
+        exit 1
+      fi
+      PLAT_DIR="$CHOSEN"
+      COMPILE_SDK=$(printf '%s' "$PLAT_DIR" | sed -E 's/^android-//')
+      # Recorded so the Run/Build recipes and the user can see which compileSdk actually works here;
+      # a project written against a newer one still fails, and the number is not guessable.
+      printf '%s\n' "$COMPILE_SDK" > "$ANDROID_HOME/jcode-compile-sdk.txt"
       GRADLE_VERSION=$(wget -qO- https://services.gradle.org/versions/current | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
       [ -n "$GRADLE_VERSION" ]
       if [ ! -x "/opt/gradle/gradle-$GRADLE_VERSION/bin/gradle" ]; then
@@ -299,16 +345,25 @@ entries:
       # Stable paths so run recipes and projects never hardcode a Gradle version.
       sudo ln -sfn "/opt/gradle/gradle-$GRADLE_VERSION" /opt/gradle/current
       sudo ln -sf /opt/gradle/current/bin/gradle /usr/local/bin/gradle
+      echo
+      echo "================================================================"
+      echo " Android SDK ready. Use compileSdk $COMPILE_SDK in your build.gradle."
+      echo " Newer platforms exist, but the only arm64 aapt2 available cannot"
+      echo " read their resources, so a higher compileSdk will fail to link."
+      echo "================================================================"
     verifyScript: |
       ls "$HOME"/android-sdk/platforms/*/android.jar >/dev/null 2>&1 && [ -x /opt/gradle/current/bin/gradle ] && BT=$(ls -d "$HOME"/android-sdk/build-tools/*/ 2>/dev/null | sort -V | tail -1) && "${BT}aapt2" version >/dev/null 2>&1 && echo ready
     uninstallScript: |
       rm -rf "$HOME/android-sdk"
       sudo rm -rf /opt/gradle
       sudo rm -f /usr/local/bin/gradle
+    # Deliberately does NOT compare against the newest platform: the installed one is capped by what
+    # this device's aapt2 can read, so "newer platform exists" is the normal steady state and would
+    # nag forever. Only a newer Gradle is actionable.
     updateCheckScript: |
       [ -d "$HOME/android-sdk/platforms" ] || exit 1
-      A=$(wget -qO- https://dl.google.com/android/repository/repository2-3.xml | grep -oE 'platforms;android-[0-9]+(\.[0-9]+)?' | sort -u -V | tail -1)
-      [ -n "$A" ] && [ ! -f "$HOME/android-sdk/platforms/${A#platforms;}/android.jar" ]
+      G=$(wget -qO- https://services.gradle.org/versions/current | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
+      [ -n "$G" ] && [ ! -x "/opt/gradle/gradle-$G/bin/gradle" ]
 
   - id: adb
     category: android
