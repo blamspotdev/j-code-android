@@ -48,7 +48,7 @@ is enough. From this directory, with a JDK 17+ on PATH:
 
 ```powershell
 $sdk = "$env:LOCALAPPDATA\Android\Sdk"; $jar = "$sdk\platforms\android-33\android.jar"; $bt = "$sdk\build-tools\36.1.0"
-javac -source 11 -target 11 -nowarn -cp $jar -d out (Get-ChildItem src -Recurse -Filter *.java | % FullName)
+javac -source 11 -target 11 -encoding UTF-8 -nowarn -cp $jar -d out (Get-ChildItem src -Recurse -Filter *.java | % FullName)
 & "$bt\d8.bat" --min-api 24 --lib $jar --output out (Get-ChildItem out -Recurse -Filter *.class | % FullName)
 & "$bt\aapt2.exe" link -o base.apk --manifest AndroidManifest.xml -I $jar --min-sdk-version 24 --target-sdk-version 33
 Push-Location out; jar uf ..\base.apk classes.dex; Pop-Location
