@@ -261,6 +261,19 @@ class AndroidDeviceSetting(
 val LocalAndroidDevice = compositionLocalOf { AndroidDeviceSetting() }
 
 /**
+ * "Run in a virtual device" preference, shared (via [LocalVirtualDevice]) with the settings screen and
+ * the run flow without threading a param through JCodeShell (ART register limit). When [enabled], an
+ * Android run config that builds for the container starts its APK inside J Code once the build
+ * finishes, instead of installing it through adb; [onChange] toggles it.
+ */
+class VirtualDeviceSetting(
+    val enabled: Boolean = false,
+    val onChange: (Boolean) -> Unit = {},
+)
+
+val LocalVirtualDevice = compositionLocalOf { VirtualDeviceSetting() }
+
+/**
  * Performance / resource-management preferences, shared (via [LocalPerformanceSettings]) with both the
  * settings screen and JCodeShell without threading params through the latter (ART register limit).
  * [confirmCloseRunning] warns before closing a project/workspace that still has a running terminal

@@ -315,6 +315,9 @@ import dev.jcode.design.EnvironmentBackupActions
 import dev.jcode.design.LocalEnvironmentBackup
 import dev.jcode.design.AndroidDeviceSetting
 import dev.jcode.design.LocalAndroidDevice
+import dev.jcode.design.LocalVirtualDevice
+import dev.jcode.design.VirtualDeviceSetting
+import dev.jcode.vdevice.VirtualDevice
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalVolumeKeysSetting
@@ -1164,6 +1167,10 @@ fun JCodeApp(
             onOpenPage = viewModel::openAndroidDevicePage,
         )
     }
+    val runInVirtualDevice by viewModel.runInVirtualDevice.collectAsStateWithLifecycle()
+    val virtualDeviceSetting = remember(runInVirtualDevice) {
+        VirtualDeviceSetting(enabled = runInVirtualDevice, onChange = viewModel::setRunInVirtualDevice)
+    }
     val envBackupStatus by viewModel.envBackupStatus.collectAsStateWithLifecycle()
     envBackupStatus?.let { status ->
         AlertDialog(
@@ -1245,6 +1252,7 @@ fun JCodeApp(
         LocalSettingsBackup provides settingsBackupActions,
         LocalEnvironmentBackup provides environmentBackupActions,
         LocalAndroidDevice provides androidDeviceSetting,
+        LocalVirtualDevice provides virtualDeviceSetting,
         LocalCommandPaletteSetting provides commandPaletteSetting,
         LocalMarkdownPreviewSetting provides markdownPreviewSetting,
         LocalEditorFontSizeSetting provides editorFontSizeSetting,
@@ -1518,6 +1526,10 @@ private fun JCodeShell(
     // the editor-page dispatch is invoked in a subcomposition where the local would fall back to default.
     val vcs = LocalVcsActions.current
     val appContext = LocalContext.current.applicationContext
+    // The guest runs in J Code's task, so the container is handed the hosting activity when there is
+    // one (the application context would push it into a task of its own).
+    val hostActivity = LocalContext.current.findActivity()
+    val virtualDevice = LocalVirtualDevice.current
     val configuration = LocalConfiguration.current
     val focusRequester = remember { FocusRequester() }
     val compactDrawerState = rememberDrawerState(DrawerValue.Closed)
@@ -1886,6 +1898,9 @@ private fun JCodeShell(
     // Run terminals whose command reported completion (OSC 7713); the run is "done" once all have.
     var runDoneSessionIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var runPollJob by remember { mutableStateOf<Job?>(null) }
+    // Where the running config drops its APK, when it is an Android run that ends in the virtual
+    // device. Set at Run and consumed when the build reports completion.
+    var pendingVirtualDeviceApkDir by remember { mutableStateOf<File?>(null) }
 
     // Clear the ACTIVE-run status (so the UI shows Run again) without touching [runSessionIds] — the
     // terminals stay for teardown-on-next-run. A run is no longer active once its command is done/killed.
@@ -1896,6 +1911,7 @@ private fun JCodeShell(
         runUrl = null
         runningProjectId = null
         runningRunName = null
+        pendingVirtualDeviceApkDir = null
     }
 
     // A run terminal going away — the server crashed/exited (EOF), the user closed the tab, or killed
@@ -1944,15 +1960,40 @@ private fun JCodeShell(
         onDispose { TerminalSessionHost.setUiNestedShellListener(null) }
     }
 
+    // Hand the APK a finished virtual-device build produced to the container. The build ran in the
+    // guest runtime, so nothing but the freshest file on disk says what it just wrote.
+    fun startVirtualDevice(apkDir: File, exitCode: Int) {
+        fun fail(message: String) {
+            OutputLog.append("✗ $message", OutputKind.Error)
+            scope.launch { snackbarHostState.showSnackbar(message) }
+        }
+        if (exitCode != 0) {
+            fail("Build failed (exit $exitCode) — nothing started in the virtual device.")
+            return
+        }
+        val apk = ProjectRunner.freshestApk(apkDir)
+        if (apk == null) {
+            fail("Build reported success but left no APK in ${apkDir.absolutePath}.")
+            return
+        }
+        VirtualDevice.launch(hostActivity ?: appContext, apk.absolutePath)
+            .onSuccess { OutputLog.append("✓ Starting ${it.label} (${it.packageName}) in the virtual device") }
+            .onFailure { fail("Virtual device: ${it.message ?: it.toString()}") }
+    }
+
     // A run command reporting completion (OSC 7713, emitted after the command) marks that terminal
     // done. The run is done once every one of its commands has completed — then the active status
     // clears (UI shows Run again), but the terminals stay open with their output until the next run
     // tears them down. Non-run sessions (setup/manual) aren't in runSessionIds, so they're ignored.
     LaunchedEffect(runTerminalCompletions) {
-        runTerminalCompletions.collect { (sessionId, _) ->
+        runTerminalCompletions.collect { (sessionId, exitCode) ->
             if (sessionId in runSessionIds) {
                 runDoneSessionIds = runDoneSessionIds + sessionId
-                if (runSessionIds.all { it in runDoneSessionIds }) clearRunActiveStatus()
+                if (runSessionIds.all { it in runDoneSessionIds }) {
+                    val apkDir = pendingVirtualDeviceApkDir
+                    clearRunActiveStatus()
+                    apkDir?.let { startVirtualDevice(it, exitCode) }
+                }
             }
         }
     }
@@ -2000,6 +2041,16 @@ private fun JCodeShell(
         if (startedIds.isEmpty()) return
         runSessionIds = startedIds
         runDoneSessionIds = emptySet()
+        // A virtual-device config only builds; the container takes over when the build reports done.
+        // With the setting off it stays a plain build, which is silent enough to be worth saying.
+        val virtualApkDir = ProjectRunner.virtualDeviceApkDir(project, config)
+        pendingVirtualDeviceApkDir = virtualApkDir?.takeIf { virtualDevice.enabled }
+        if (virtualApkDir != null && !virtualDevice.enabled) {
+            OutputLog.append(
+                "'${config.name}' only builds the APK — turn on Settings → Environment → " +
+                    "\"Run in a virtual device\" to start it here.",
+            )
+        }
         runningProjectId = project.id
         runningRunName = config.name
         selectTerminalSession(startedIds.last()) // focus the frontend terminal

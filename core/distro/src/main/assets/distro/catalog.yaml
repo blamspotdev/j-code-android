@@ -276,6 +276,20 @@ entries:
       # ABSOLUTE path ($ANDROID_HOME/platform-tools/adb) rather than through PATH, so a native adb
       # earlier in PATH does not save it: installDebug dies with "Exec format error" without this.
       if [ -x /usr/bin/adb ]; then cp -f /usr/bin/adb "$ANDROID_HOME/platform-tools/adb"; fi
+      # AGP 8+ resolves its OWN aapt2 as a Maven artifact (aapt2-<ver>-linux), which is x86_64 only,
+      # so replacing the copy in build-tools above is not enough — the Maven one wins and the build
+      # dies with "AAPT2 ... Daemon startup failed". Point AGP at the native binary instead. Written
+      # to both Gradle homes because the SDK installs as the runtime user while run terminals build
+      # as root, and Gradle reads gradle.properties from whichever home is in effect.
+      for GH in "$HOME/.gradle" /root/.gradle; do
+        mkdir -p "$GH" 2>/dev/null || sudo mkdir -p "$GH"
+        LINE="android.aapt2FromMavenOverride=$ANDROID_HOME/build-tools/$BT_VER/aapt2"
+        if [ -f "$GH/gradle.properties" ]; then
+          grep -v '^android.aapt2FromMavenOverride=' "$GH/gradle.properties" > "$GH/gradle.properties.tmp" 2>/dev/null || true
+          mv "$GH/gradle.properties.tmp" "$GH/gradle.properties" 2>/dev/null || true
+        fi
+        echo "$LINE" >> "$GH/gradle.properties" 2>/dev/null || sudo sh -c "echo '$LINE' >> '$GH/gradle.properties'"
+      done
       GRADLE_VERSION=$(wget -qO- https://services.gradle.org/versions/current | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
       [ -n "$GRADLE_VERSION" ]
       if [ ! -x "/opt/gradle/gradle-$GRADLE_VERSION/bin/gradle" ]; then

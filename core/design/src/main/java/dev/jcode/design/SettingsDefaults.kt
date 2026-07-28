@@ -28,6 +28,7 @@ object SettingsDefaults {
     const val EDITOR_FONT_SIZE = 14f
     const val EDITOR_WORD_WRAP = false
     const val DEVELOPER_OPTIONS = false
+    const val RUN_IN_VIRTUAL_DEVICE = false
     val VOLUME_UP_ACTION = VolumeKeyAction.SystemDefault
     val VOLUME_DOWN_ACTION = VolumeKeyAction.SystemDefault
     // Default to ephemeral Random so the feature is visible out of the box WITHOUT silently writing

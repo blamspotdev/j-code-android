@@ -914,6 +914,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val runInVirtualDeviceKey = booleanPreferencesKey("run_in_virtual_device")
+
+    /** When true, an Android run config built for the container starts its APK inside J Code's own
+     *  process (no install, no adb) once the build finishes — see [dev.jcode.vdevice.VirtualDevice]. */
+    val runInVirtualDevice: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[runInVirtualDeviceKey] ?: SettingsDefaults.RUN_IN_VIRTUAL_DEVICE }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.RUN_IN_VIRTUAL_DEVICE)
+
+    fun setRunInVirtualDevice(enabled: Boolean) {
+        viewModelScope.launch { uiPreferences.edit { it[runInVirtualDeviceKey] = enabled } }
+    }
+
     private val envVarsKey = stringPreferencesKey("env_vars_json")
 
     /** User-defined environment variables (Settings → Env Var), applied to every terminal/run session.

@@ -321,6 +321,17 @@ object ProjectRunner {
                         ),
                     ),
                 )
+                options += RunSuggestion(
+                    label = "Run in a virtual device",
+                    source = "android · no install",
+                    config = RunConfig(
+                        name = "Android app (virtual device)",
+                        readyPort = 0,
+                        terminals = listOf(
+                            RunConfigTerminal("Build", androidVirtualDeviceCommand(guestDir, modulePath)),
+                        ),
+                    ),
+                )
             }
             options += RunSuggestion(
                 label = "assembleDebug",
@@ -497,8 +508,8 @@ object ProjectRunner {
      *  instead of parsed from Gradle: flavors, `applicationIdSuffix` and build types all rewrite the
      *  final id, so only the APK knows what it actually is. */
     private fun androidRunCommand(guestDir: String, modulePath: String): String = buildString {
-        val task = if (modulePath.isEmpty()) "assembleDebug" else ":${modulePath.replace('/', ':')}:assembleDebug"
-        val apkDir = if (modulePath.isEmpty()) "build/outputs/apk/debug" else "$modulePath/build/outputs/apk/debug"
+        val task = androidAssembleTask(modulePath)
+        val apkDir = androidApkDir(modulePath)
         appendLine("clear"); appendLine("set -e")
         appendLine("cd \"$guestDir\"")
         appendLine("echo '== JCode: building =='")
@@ -514,6 +525,45 @@ object ProjectRunner {
         appendLine("if [ -n \"\$ACT\" ]; then adb shell am start -n \"\$PKG/\$ACT\"; else adb shell monkey -p \"\$PKG\" -c android.intent.category.LAUNCHER 1; fi")
         appendLine("echo \"Launched \$PKG\"")
     }
+
+    /** Build the debug APK and stop there: the app is started by the container, in J Code's own
+     *  process, once the workbench sees the run finish. Nothing is installed and adb is never used, so
+     *  this recipe works on a device that was never paired. The APK directory is stamped into the
+     *  script as [VDEVICE_MARKER] — that, not the terminal output, is how the workbench finds the
+     *  build's APK afterwards ([virtualDeviceApkDir]). */
+    private fun androidVirtualDeviceCommand(guestDir: String, modulePath: String): String = buildString {
+        appendLine("clear"); appendLine("set -e")
+        appendLine("# $VDEVICE_MARKER ${androidApkDir(modulePath)}")
+        appendLine("cd \"$guestDir\"")
+        appendLine("echo '== JCode: building for the virtual device =='")
+        appendLine("bash gradlew --console=plain ${androidAssembleTask(modulePath)}")
+        appendLine("echo 'Build finished.'")
+    }
+
+    private fun androidAssembleTask(modulePath: String): String =
+        if (modulePath.isEmpty()) "assembleDebug" else ":${modulePath.replace('/', ':')}:assembleDebug"
+
+    private fun androidApkDir(modulePath: String): String =
+        if (modulePath.isEmpty()) "build/outputs/apk/debug" else "$modulePath/build/outputs/apk/debug"
+
+    /** The host directory a virtual-device run config builds its APK into, or null when [config] is
+     *  not one (i.e. its script carries no [VDEVICE_MARKER]). */
+    fun virtualDeviceApkDir(project: Project, config: RunConfig): File? {
+        val root = (project.fsPath as? FsPath.Local)?.file ?: return null
+        val relative = config.terminals
+            .firstNotNullOfOrNull { VDEVICE_MARKER_RE.find(it.command)?.groupValues?.get(1)?.trim() }
+            ?.takeIf { it.isNotEmpty() }
+            ?: return null
+        return File(root, relative)
+    }
+
+    /** The most recently written `.apk` under [apkDir] (searched recursively, since a flavoured build
+     *  nests its output), or null when the build produced none. */
+    fun freshestApk(apkDir: File): File? =
+        apkDir.takeIf(File::isDirectory)
+            ?.walkTopDown()
+            ?.filter { it.isFile && it.extension.equals("apk", ignoreCase = true) }
+            ?.maxByOrNull(File::lastModified)
 
     private fun dotnetPublishCommand(csprojGuest: String, stageName: String): String = buildString {
         appendLine("clear"); appendLine("set -e")
@@ -781,6 +831,9 @@ object ProjectRunner {
         }.joinToString("")
         return cleaned.trim('-').ifBlank { "project" }
     }
+
+    private const val VDEVICE_MARKER = "jcode-virtual-device:"
+    private val VDEVICE_MARKER_RE = Regex("^# $VDEVICE_MARKER (.+)$", RegexOption.MULTILINE)
 
     private const val ASPNET_PORT = 5080
     private const val VITE_PORT = 5173

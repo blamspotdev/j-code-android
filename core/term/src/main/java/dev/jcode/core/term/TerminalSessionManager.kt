@@ -154,6 +154,29 @@ class TerminalSessionManager(
     @Volatile
     var adbRelayPort: Int = 0
 
+    /**
+     * `ANDROID_HOME`/`ANDROID_SDK_ROOT` for the SDK the Toolchains manager installed, or empty when
+     * none is present. Without these, every Android Gradle build fails configuration with "SDK
+     * location not found" even though the SDK is sitting right there.
+     *
+     * The location is probed rather than derived from `$HOME`: the catalog installs the SDK as the
+     * runtime user (`/home/<user>/android-sdk`) while a run terminal usually executes as root, so
+     * `$HOME/android-sdk` resolves to the wrong place for exactly the sessions that run builds.
+     */
+    private fun androidSdkEnvVars(rootfsPath: File): Map<String, String> {
+        val guestPath = androidSdkGuestPath(rootfsPath) ?: return emptyMap()
+        return mapOf("ANDROID_HOME" to guestPath, "ANDROID_SDK_ROOT" to guestPath)
+    }
+
+    private fun androidSdkGuestPath(root: File): String? {
+        if (File(root, "root/android-sdk/platforms").isDirectory) return "/root/android-sdk"
+        val homes = File(root, "home").listFiles()?.sortedBy(File::getName).orEmpty()
+        for (home in homes) {
+            if (File(home, "android-sdk/platforms").isDirectory) return "/home/${home.name}/android-sdk"
+        }
+        return null
+    }
+
     private fun adbEnvVars(): Map<String, String> {
         val port = adbRelayPort
         if (port <= 0) return emptyMap()
@@ -322,7 +345,7 @@ class TerminalSessionManager(
             // Browser-openers consult $BROWSER first; point it at the OSC 7714 shim (see below) so
             // guest tools open URLs through the host instead of failing on the missing X11/dbus stack.
             "BROWSER" to "/usr/local/bin/xdg-open",
-        ) + adbEnvVars() + userEnvVars.filterKeys { ENV_NAME_RE.matches(it) }
+        ) + adbEnvVars() + androidSdkEnvVars(rootfsPath) + userEnvVars.filterKeys { ENV_NAME_RE.matches(it) }
 
         val prootArgs = prootManager.buildShellCommand(
             rootfsPath = rootfsPath,
