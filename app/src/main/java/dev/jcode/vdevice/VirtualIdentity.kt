@@ -15,7 +15,9 @@ import android.util.Log
  */
 internal object VirtualIdentity {
 
-    const val MODEL = "JCode Virtual Device"
+    // Space, not underscore: `adb devices -l` renders it as JCode_vDevice, while Build.MODEL stays
+    // shaped like a real model name ("Pixel 7", "Odin2") rather than an identifier.
+    const val MODEL = "JCode vDevice"
     const val DEVICE = "jcode_vdevice"
     const val PRODUCT = "jcode_vdevice"
     const val SERIAL = "JCODEVD00000000"
