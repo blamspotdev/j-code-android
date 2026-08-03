@@ -16,9 +16,6 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
 
-/** An adb server refused a request, or answered with something this client cannot parse. */
-class AdbProtocolException(message: String) : IOException(message)
-
 /**
  * Speaks the adb HOST protocol to a running adb server.
  *
