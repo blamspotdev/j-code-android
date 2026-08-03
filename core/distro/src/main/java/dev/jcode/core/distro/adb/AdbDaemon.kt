@@ -148,7 +148,10 @@ class AdbDaemon(
     }
 
     private fun bind(): ServerSocket {
-        val loopback = InetAddress.getLoopbackAddress()
+        // IPv4 loopback explicitly, NOT InetAddress.getLoopbackAddress(): that resolves to ::1 here,
+        // and an adb client dialling 127.0.0.1 then gets "Connection refused" against a listener that
+        // /proc/net/tcp6 shows as perfectly healthy. Measured on-device.
+        val loopback = InetAddress.getByName(AdbHostClient.LOOPBACK)
         for (candidate in PREFERRED_PORT..LAST_PORT) {
             val bound = runCatching { ServerSocket(candidate, BACKLOG, loopback) }.getOrNull()
             if (bound != null) return bound

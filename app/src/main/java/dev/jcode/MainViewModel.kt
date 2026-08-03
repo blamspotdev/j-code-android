@@ -33,9 +33,11 @@ import dev.jcode.debug.DebugController
 import dev.jcode.core.distro.SdkCatalogAction
 import dev.jcode.core.distro.DistroService
 import dev.jcode.core.distro.DistroServiceLocator
+import dev.jcode.adb.VirtualDeviceAdbService
 import dev.jcode.core.distro.adb.AdbBridge
 import dev.jcode.core.distro.adb.AdbBridgeLocator
 import dev.jcode.core.distro.adb.AdbBridgeState
+import dev.jcode.core.distro.adb.AdbDaemon
 import dev.jcode.core.lsp.Diagnostic as LspDiagnostic
 import dev.jcode.core.lsp.DiagnosticSeverity as LspDiagnosticSeverity
 import dev.jcode.core.resource.ResourceManager
@@ -828,6 +830,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runtimeTeardown = {
             runCatching { stopAllRuntimeServices() }
             runCatching { adbBridge.stop() }
+            runCatching { stopVirtualDeviceAdb() }
         }
         sessionFlushBlocking = { runCatching { runBlocking { persistSession() } } }
         viewModelScope.launch { exitOnSwipeAway.collect { exitOnSwipeAwayEnabled = it } }
@@ -846,6 +849,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     (state as? AdbBridgeState.Ready)?.relayPort ?: 0
             }
         }
+    }
+
+    private val virtualDeviceAdb: AdbDaemon by lazy { VirtualDeviceAdbService.daemon(appContext) }
+
+    private suspend fun startVirtualDeviceAdb() {
+        val port = runCatching { virtualDeviceAdb.start() }.getOrElse { error ->
+            OutputLog.append("Virtual device adb failed to start: ${error.message}\n", OutputKind.Error)
+            return
+        }
+        TerminalSessionHost.manager(appContext).virtualDeviceAdbPort = port
+        // The daemon only trusts the distro's own adbkey.pub, and adb does not create one until it
+        // has run once — so mint it before connecting, or the first connection is refused for want
+        // of a key rather than because anything is wrong.
+        runCatching {
+            distroService.exec(
+                "mkdir -p \"\$HOME/.android\" && " +
+                    "{ [ -f \"\$HOME/.android/adbkey.pub\" ] || adb keygen \"\$HOME/.android/adbkey\"; } && " +
+                    "adb connect 127.0.0.1:$port",
+                timeoutMs = VIRTUAL_DEVICE_CONNECT_TIMEOUT_MS,
+            )
+        }.onFailure { error ->
+            OutputLog.append("Virtual device adb connect failed: ${error.message}\n", OutputKind.Error)
+        }
+    }
+
+    private fun stopVirtualDeviceAdb() {
+        runCatching { virtualDeviceAdb.stop() }
+        TerminalSessionHost.manager(appContext).virtualDeviceAdbPort = 0
     }
 
     private val autoCloseIdleKey = booleanPreferencesKey("perf_auto_close_idle_terminals")
@@ -924,6 +955,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setRunInVirtualDevice(enabled: Boolean) {
         viewModelScope.launch { uiPreferences.edit { it[runInVirtualDeviceKey] = enabled } }
+    }
+
+    // A second init block, deliberately: it collects [runInVirtualDevice], which is declared above
+    // but well below the main init block — referencing it from there reads an uninitialised field
+    // and crashes the ViewModel's construction.
+    init {
+        // JCode's own adbd runs only while the setting is on: it is an authenticated listener on
+        // loopback, and there is no reason to hold a port open for a feature that is switched off.
+        viewModelScope.launch {
+            runInVirtualDevice.collect { enabled ->
+                if (enabled) startVirtualDeviceAdb() else stopVirtualDeviceAdb()
+            }
+        }
     }
 
     private val envVarsKey = stringPreferencesKey("env_vars_json")
@@ -4512,6 +4556,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
+        /** `adb keygen` plus the first `adb connect` both start a JVM under proot; 60s is slack. */
+        private const val VIRTUAL_DEVICE_CONNECT_TIMEOUT_MS = 60_000L
+
         /** Free space to leave on app storage after importing an off-ext4 folder into /sources. */
         private const val IMPORT_FREE_SPACE_HEADROOM_BYTES = 64L * 1024 * 1024
 

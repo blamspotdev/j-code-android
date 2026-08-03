@@ -177,8 +177,14 @@ class TerminalSessionManager(
         return null
     }
 
+    /** Loopback port of JCode's OWN adbd — the virtual device — or 0 when it is not running. Takes
+     *  precedence over [adbRelayPort]: when both are up, guest tooling should address the virtual
+     *  device, since running it at all means the user asked not to go through the host phone. */
+    @Volatile
+    var virtualDeviceAdbPort: Int = 0
+
     private fun adbEnvVars(): Map<String, String> {
-        val port = adbRelayPort
+        val port = virtualDeviceAdbPort.takeIf { it > 0 } ?: adbRelayPort
         if (port <= 0) return emptyMap()
         return mapOf(
             "JCODE_ADB_PORT" to port.toString(),
