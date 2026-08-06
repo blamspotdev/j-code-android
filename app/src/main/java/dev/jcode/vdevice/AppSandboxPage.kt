@@ -1,8 +1,13 @@
 package dev.jcode.vdevice
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -37,6 +42,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -49,10 +56,21 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jcode.core.distro.WorkspaceHostPaths
 import dev.jcode.design.CompactFilledButton
 import dev.jcode.design.CompactOutlinedButton
+import dev.jcode.design.FloatingRestorePill
+import dev.jcode.design.JCodeIcon
 import dev.jcode.design.ManagerNoticeCard
 import dev.jcode.design.ManagerSectionCard
 import dev.jcode.design.SettingsTextFieldRow
+import dev.jcode.design.jcIcon
 import java.io.File
+import kotlinx.coroutines.delay
+
+/**
+ * How long the sandbox toolbar stays up once it is left alone. Long enough to reach a second control
+ * without the bar going out from under the finger, short enough that the app under test is not
+ * covered while it is being watched.
+ */
+private const val TOOLBAR_IDLE_COLLAPSE_MS = 4_000L
 
 /**
  * Editor tab that runs one of the user's own Android apps inside J Code.
@@ -108,21 +126,6 @@ internal fun AppSandboxPage(modifier: Modifier = Modifier) {
         session.restart(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
 
     Column(modifier) {
-        if (showing) {
-            SandboxToolbar(
-                onBack = { session.back() },
-                onKeyboard = { surfaceView?.showKeyboard() },
-                onRestart = { restart() },
-                onFullScreen = { runFullScreen() },
-                onStop = {
-                    surfaceView?.hideKeyboard()
-                    session.close()
-                    showing = false
-                },
-            )
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-        }
-
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (showing) {
                 SandboxStage(
@@ -137,6 +140,17 @@ internal fun AppSandboxPage(modifier: Modifier = Modifier) {
                         showing = false
                     },
                     modifier = Modifier.fillMaxSize(),
+                )
+                SandboxControls(
+                    onBack = { session.back() },
+                    onKeyboard = { surfaceView?.showKeyboard() },
+                    onRestart = { restart() },
+                    onFullScreen = { runFullScreen() },
+                    onStop = {
+                        surfaceView?.hideKeyboard()
+                        session.close()
+                        showing = false
+                    },
                 )
             } else {
                 SandboxSetup(
@@ -254,6 +268,75 @@ private fun StageFallback(
                 CompactOutlinedButton(text = "Close", onClick = onDismiss, modifier = Modifier.weight(1f))
             }
         }
+    }
+}
+
+/**
+ * The tab's controls, floating over the guest instead of taking a band out of it.
+ *
+ * An embedded guest lays itself out against the phone's screen rather than the tab, so tall content
+ * already runs past the bottom edge; every row of tab handed back to it is a row of the app that can
+ * actually be seen. The bar therefore collapses itself once it has been left alone, and comes back
+ * through the same pill the workbench's hidden chrome uses.
+ */
+@Composable
+private fun BoxScope.SandboxControls(
+    onBack: () -> Unit,
+    onKeyboard: () -> Unit,
+    onRestart: () -> Unit,
+    onFullScreen: () -> Unit,
+    onStop: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(true) }
+
+    AnimatedVisibility(
+        visible = expanded,
+        modifier = Modifier.align(Alignment.TopCenter),
+        enter = expandVertically(animationSpec = tween(200)),
+        exit = shrinkVertically(animationSpec = tween(200)),
+    ) {
+        // Remembered with the bar rather than with the page, so a press that the collapse animation
+        // cut short cannot strand the timer once the pill brings the bar back.
+        var pressed by remember { mutableStateOf(false) }
+        LaunchedEffect(pressed) {
+            if (!pressed) {
+                delay(TOOLBAR_IDLE_COLLAPSE_MS)
+                expanded = false
+            }
+        }
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                // Watched on the initial pass, never consumed: the buttons still get their taps, a
+                // finger still down holds the bar open, and the guest below is spared both.
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            pressed = awaitPointerEvent(PointerEventPass.Initial)
+                                .changes.any { it.pressed }
+                        }
+                    }
+                },
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 3.dp,
+        ) {
+            Column {
+                SandboxToolbar(onBack, onKeyboard, onRestart, onFullScreen, onStop)
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            }
+        }
+    }
+
+    if (!expanded) {
+        FloatingRestorePill(
+            icon = jcIcon(JCodeIcon.ChevronDown),
+            contentDescription = "Show the app controls",
+            onClick = { expanded = true },
+            modifier = Modifier.align(Alignment.TopStart).padding(4.dp),
+            // The workbench's own pill is translucent over J Code's background; this one floats over
+            // whatever the guest happens to be drawing, so it keeps its own contrast.
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        )
     }
 }
 

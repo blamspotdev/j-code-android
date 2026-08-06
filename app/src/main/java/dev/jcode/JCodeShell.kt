@@ -17,6 +17,7 @@ import dev.jcode.design.LocalRestoreSession
 import dev.jcode.design.LocalTabCloseButtonSetting
 import dev.jcode.design.BottomBarSetting
 import dev.jcode.design.EditorTabActions
+import dev.jcode.design.FloatingRestorePill
 import dev.jcode.design.FontOption
 import dev.jcode.design.FontSettings
 import dev.jcode.design.LocalEditorTabActions
@@ -3496,25 +3497,14 @@ private fun EditorWorkspace(
             }
         }
         if (chrome.chromeHidden) {
-            // 44dp box (≥ the 48dp min once IconButton's own touch expansion is added) keeps the only
-            // exit from hidden-chrome mode comfortably tappable.
-            Box(
+            FloatingRestorePill(
+                icon = jcIcon(JCodeIcon.ChevronDown),
+                contentDescription = "Show header and tabs",
+                onClick = { chrome.onSetChromeHidden(false) },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(4.dp)
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
-                    .clickable { chrome.onSetChromeHidden(false) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = jcIcon(JCodeIcon.ChevronDown),
-                    contentDescription = "Show header and tabs",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
+                    .padding(4.dp),
+            )
         }
         }
     }
