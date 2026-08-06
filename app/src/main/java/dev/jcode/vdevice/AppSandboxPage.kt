@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.jcode.core.distro.WorkspaceHostPaths
 import dev.jcode.design.CompactFilledButton
 import dev.jcode.design.CompactOutlinedButton
 import dev.jcode.design.ManagerNoticeCard
@@ -79,6 +80,7 @@ internal fun AppSandboxPage(modifier: Modifier = Modifier) {
     val tier = if (hardwareAccelerated) AppSandboxTier.Embedded else AppSandboxTier.FullScreen
 
     var apkPath by AppSandbox.apkPath
+    val activityClass by AppSandbox.activityClass
     var showing by AppSandbox.showing
     var size by remember { mutableStateOf(IntSize.Zero) }
     var surfaceView by remember { mutableStateOf<AppSandboxSurfaceView?>(null) }
@@ -88,24 +90,29 @@ internal fun AppSandboxPage(modifier: Modifier = Modifier) {
     // The guest display is the tab, so the surface's own pixel size is what the container is asked
     // for — which keeps forwarded touches in the guest's coordinates with no mapping at all.
     LaunchedEffect(size, showing, apkPath, surfaceView) {
-        if (showing) session.ensureStarted(apkPath, size.width, size.height, surfaceView?.hostToken())
+        if (showing) {
+            session.ensureStarted(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
+        }
     }
     LaunchedEffect(surface, surfaceView) {
         surface?.let { surfaceView?.adopt(it) }
     }
 
     fun runFullScreen() {
-        VirtualDevice.launch(context, apkPath.trim())
+        VirtualDevice.launch(context, apkPath.trim(), activityClass)
             .onSuccess { notice = "Started ${it.label} full screen." }
             .onFailure { notice = it.message ?: "Could not start the app." }
     }
+
+    fun restart() =
+        session.restart(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
 
     Column(modifier) {
         if (showing) {
             SandboxToolbar(
                 onBack = { session.back() },
                 onKeyboard = { surfaceView?.showKeyboard() },
-                onRestart = { session.restart(apkPath, size.width, size.height, surfaceView?.hostToken()) },
+                onRestart = { restart() },
                 onFullScreen = { runFullScreen() },
                 onStop = {
                     surfaceView?.hideKeyboard()
@@ -123,7 +130,7 @@ internal fun AppSandboxPage(modifier: Modifier = Modifier) {
                     status = status,
                     onSurface = { surfaceView = it },
                     onSized = { width, height -> size = IntSize(width, height) },
-                    onRetry = { session.restart(apkPath, size.width, size.height, surfaceView?.hostToken()) },
+                    onRetry = { restart() },
                     onFullScreen = { runFullScreen() },
                     onDismiss = {
                         session.close()
@@ -135,7 +142,11 @@ internal fun AppSandboxPage(modifier: Modifier = Modifier) {
                 SandboxSetup(
                     tier = tier,
                     apkPath = apkPath,
-                    onApkPathChange = { apkPath = it },
+                    onApkPathChange = {
+                        apkPath = it
+                        // The activity a launch named belongs to the APK it named, not to this one.
+                        AppSandbox.activityClass.value = null
+                    },
                     onRunHere = { showing = true },
                     onRunFullScreen = { runFullScreen() },
                     modifier = Modifier.fillMaxSize(),
@@ -289,7 +300,11 @@ private fun SandboxSetup(
     onRunFullScreen: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val readable = remember(apkPath) { apkPath.isNotBlank() && File(apkPath.trim()).canRead() }
+    val problem = remember(apkPath) { apkProblem(apkPath) }
+    val readable = apkPath.isNotBlank() && problem == null
+    // Projects live on app-private ext4, not the shared /storage tree an older build used, so the
+    // example path is resolved rather than written out.
+    val projectsRoot = remember { WorkspaceHostPaths.projectsRoot }
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -326,15 +341,22 @@ private fun SandboxSetup(
         ManagerSectionCard(
             title = "App",
             description = "The APK to run. A virtual-device run config fills this in with whatever it " +
-                "just built.",
+                "just built, and `adb shell am start` opens it here too.",
         ) {
             SettingsTextFieldRow(
                 label = "APK path",
                 value = apkPath,
                 onValueChange = onApkPathChange,
-                placeholder = "/storage/emulated/0/JCode/…/app-debug.apk",
+                placeholder = "$projectsRoot/…/app-debug.apk",
                 monospace = true,
             )
+            problem?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             if (tier == AppSandboxTier.Embedded) {
                 CompactFilledButton(
                     text = "Run in this tab",
@@ -353,9 +375,24 @@ private fun SandboxSetup(
 
         ManagerNoticeCard(
             title = "What an embedded guest gives up",
-            message = "The app runs without an activity of its own, so dialogs, popup menus and the " +
-                "soft keyboard it raises itself do not work, and it measures this phone's screen " +
-                "rather than the tab. Run it full screen — or install it — before trusting what you see.",
+            message = "The app runs without an activity of its own, so it cannot raise the soft " +
+                "keyboard itself — use the keyboard button — and it lays itself out against this " +
+                "phone's screen rather than the tab, which can leave content past the edges. Run it " +
+                "full screen, or install it, before trusting what you see.",
         )
+    }
+}
+
+/** Why this path cannot be run, in the user's terms — null when it can. */
+private fun apkProblem(path: String): String? {
+    val trimmed = path.trim()
+    if (trimmed.isEmpty()) return null
+    val file = File(trimmed)
+    return when {
+        file.isDirectory -> "That is a folder — point this at the .apk file inside it."
+        !file.exists() -> "Nothing is at that path. A debug build leaves its APK under " +
+            "app/build/outputs/apk/debug/ inside the project."
+        !file.canRead() -> "J Code cannot read that file."
+        else -> null
     }
 }

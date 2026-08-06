@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.ApplicationInfo
 import android.os.Binder
+import android.os.IBinder
 import android.util.Log
 
 /**
@@ -98,19 +99,20 @@ internal object GuestRuntime {
      * `ActivityThread`'s declared methods entirely at `targetSdk` 33, measured on Android 13, so it
      * is denied rather than greylisted and there is nothing to reflect at.
      *
-     * The activity gives up everything hanging off a real activity token: `Dialog`, `PopupWindow`
-     * and option menus cannot be added to the window manager, and the system drives none of its
-     * lifecycle — see [resumeEmbedded] and [EmbeddedGuest].
+     * The system drives none of the resulting activity's lifecycle — see [resumeEmbedded]. Its child
+     * windows are hosted by [windowToken], the token of the `SurfaceControlViewHost` the decor view
+     * is going into; without one, `Dialog`, `PopupWindow` and option menus have no window to attach
+     * to and the window manager refuses them.
      */
-    fun embed(apkPath: String, activityClass: String?): Activity {
+    fun embed(apkPath: String, activityClass: String?, windowToken: IBinder?): Activity {
         val guest = GuestLoader.load(host, apkPath)
         active = guest
         val target = activityClass?.takeIf { guest.activities.containsKey(it) } ?: guest.launchActivity
-        return embed(stubIntent(guest, target))
+        return embed(stubIntent(guest, target), windowToken)
     }
 
     /** Builds an embedded activity from a stub intent — the shape [rewriteOutgoing] hands its host. */
-    fun embed(stub: Intent): Activity {
+    fun embed(stub: Intent, windowToken: IBinder?): Activity {
         val instrumentation = instrumentation ?: throw VirtualDeviceException("the container is not installed")
         val component = stub.component ?: throw VirtualDeviceException("no stub component")
         val info = host.packageManager.getActivityInfo(component, 0)
@@ -132,6 +134,7 @@ internal object GuestRuntime {
             null,
         )
         GuestHooks.adoptActivityThread(activity, activityThread)
+        GuestHooks.hostWindowIn(activity, windowToken)
         // Runs through GuestInstrumentation, so bind() still lands between attach and onCreate.
         instrumentation.callActivityOnCreate(activity, null)
         return activity

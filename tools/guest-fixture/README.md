@@ -16,6 +16,11 @@ on screen, the identity it observes:
 `SecondActivity` exists so intra-app `startActivity` can be exercised, which the container has to
 intercept and route onto a stub.
 
+The dialog, popup-menu and spinner controls exist for the app-sandbox **tab**: each of those is a
+separate window rather than a view, so the embedded container has to host it in the
+`SurfaceControlViewHost`'s own windowless session, size it, place it and relay input into it. The
+"last: …" line reports what was picked, so one screenshot shows the window was interactive.
+
 ## Baseline — normally installed on an AYN Odin2 (Android 13)
 
 ```

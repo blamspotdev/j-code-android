@@ -20,11 +20,13 @@ internal const val TAG = "VDEVICE"
  *
  *  - `ContextThemeWrapper.mTheme` is `max-target-p`, so it cannot be cleared — see
  *    [GuestRuntime.onLaunchActivity], which keeps it from ever being created.
- *  - `ActivityThread.startActivityNow` and `SurfaceControlViewHost.setView(View, LayoutParams)` do
- *    not appear in their classes' declared members at all, which is what a *denied* member looks
- *    like from here. The app-sandbox tab uses the public `Instrumentation.newActivity` and the
- *    public `setView(View, int, int)` instead; the cost is only that an embedded guest renders in
- *    software.
+ *  - `ActivityThread.startActivityNow` does not appear in its class's declared members at all, which
+ *    is what a *denied* member looks like from here. The app-sandbox tab uses the public
+ *    `Instrumentation.newActivity` instead.
+ *  - **Every** non-SDK member of `SurfaceControlViewHost` is denied, its `SurfacePackage` included:
+ *    the class carries no `@UnsupportedAppUsage` at all. [EmbeddedWindows] therefore reaches the
+ *    host's view root through the container's `getParent()` and its root layer through the
+ *    `SurfacePackage`'s own `Parcelable` contract, both public.
  *  - `Activity.performStart`/`performResume` are denied the same way. [GuestRuntime.resumeEmbedded]
  *    falls back to the public `Instrumentation` calls and says so in the tab.
  *

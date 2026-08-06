@@ -9,6 +9,7 @@ import dev.jcode.core.distro.adb.AdbServiceHandler
 import dev.jcode.core.distro.adb.AdbStream
 import dev.jcode.core.distro.adb.adbCommandArgs
 import dev.jcode.core.distro.adb.unsupportedService
+import dev.jcode.vdevice.AppSandbox
 import dev.jcode.vdevice.VirtualDevice
 import dev.jcode.vdevice.VirtualIdentity
 import java.io.File
@@ -130,6 +131,17 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
         return installed().joinToString("") { "package:${it.name.removeSuffix(APK)}\n" }
     }
 
+    /**
+     * `am start -n <pkg>/<activity>`.
+     *
+     * The app opens in J Code's app-sandbox editor tab, so whoever ran this — an agent driving the
+     * terminal as much as the user — still has the IDE, and the terminal it typed into, around the
+     * running app. `--windowingMode 1` (`WINDOWING_MODE_FULLSCREEN`, the same value real `am`
+     * takes) asks for the old behaviour, where the guest takes over the screen as its own task.
+     *
+     * Either way this answers as soon as the launch is handed over: an adb client waits on the
+     * `Starting:` line, and a tab takes frames to compose that the stream must not sit through.
+     */
     private fun am(args: List<String>): String? {
         if (args.firstOrNull() != "start") return null
         val component = args.zipWithNext().firstOrNull { it.first == "-n" }?.second ?: return null
@@ -138,7 +150,17 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
         val apk = installed().firstOrNull { it.name == packageName + APK }
             ?: return "Error: Package $packageName is not installed on the virtual device\n"
         val className = activity.takeIf { it.isNotEmpty() }?.let { qualify(it, packageName) }
-        return VirtualDevice.launch(appContext, apk.absolutePath, className).fold(
+        val fullScreen =
+            args.zipWithNext().firstOrNull { it.first == "--windowingMode" }?.second == FULLSCREEN_MODE
+        val started = if (fullScreen) {
+            VirtualDevice.launch(appContext, apk.absolutePath, className)
+        } else {
+            // inspect() is the same parse launch() would do, so a broken APK still fails here rather
+            // than silently opening an empty tab.
+            VirtualDevice.inspect(appContext, apk.absolutePath)
+                .onSuccess { AppSandbox.requestOpen(apk.absolutePath, className, run = true) }
+        }
+        return started.fold(
             onSuccess = { "Starting: Intent { cmp=$component }\n" },
             onFailure = { "Error: ${it.message}\n" },
         )
@@ -164,6 +186,10 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
         private const val FEATURES = "cmd,stat_v2,ls_v2,fixed_push_mkdir,apex,fixed_push_symlink_timestamp"
 
         private const val BRAND = "JCode"
+
+        /** `WindowingMode.WINDOWING_MODE_FULLSCREEN`, what `am start --windowingMode` names. */
+        private const val FULLSCREEN_MODE = "1"
+
         private const val APPS_DIR = "vdevice/apps"
         private const val APK = ".apk"
         private const val SHELL = "shell:"

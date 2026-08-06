@@ -3716,11 +3716,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Open (or focus) the app sandbox tab. The APK is carried by [dev.jcode.vdevice.AppSandbox]
      *  (set via its `requestOpen`), like the browser's URL. */
     fun openAppSandboxTab() {
-        openDetailPage(APP_SANDBOX_TAB_ID, EditorPageKind.AppSandbox) {
-            AppSandbox.apkPath.value.takeIf { it.isNotBlank() }
-                ?.let { "Sandbox: ${File(it).name.removeSuffix(".apk")}" }
-                ?: "App sandbox"
-        }
+        val title = AppSandbox.apkPath.value.takeIf { it.isNotBlank() }
+            ?.let { "Sandbox: ${File(it).name.removeSuffix(".apk")}" }
+            ?: "App sandbox"
+        openDetailPage(APP_SANDBOX_TAB_ID, EditorPageKind.AppSandbox) { title }
+        // A second request can name a different APK — `adb shell am start` does — and the tab is
+        // reused, so the name it is wearing has to move with it.
+        _editorGroup.value.tabs.firstOrNull { it.id == APP_SANDBOX_TAB_ID && it.title != title }
+            ?.let { _editorGroup.value = _editorGroup.value.withTabUpdated(it.copy(title = title)) }
     }
 
     /** Stop the guest once its editor tab is gone. Page tabs get no close callback, so the shell

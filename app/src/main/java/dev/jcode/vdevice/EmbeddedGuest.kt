@@ -3,9 +3,9 @@ package dev.jcode.vdevice
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
-import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.os.IBinder
+import android.os.SystemClock
 import android.view.Display
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
@@ -13,7 +13,6 @@ import android.view.MotionEvent
 import android.view.SurfaceControlViewHost
 import android.view.View
 import android.view.ViewGroup
-import android.view.WindowManager
 import android.widget.FrameLayout
 
 /**
@@ -34,6 +33,10 @@ import android.widget.FrameLayout
  * over Binder from the IDE and dispatched straight into [container]. That is safe rather than
  * doubled — the IDE only ever sees an event the dispatcher did *not* give to the guest — but it does
  * cost the soft keyboard, which is why text arrives here as synthesised key events.
+ *
+ * Relaying is also why input has to pick its own target: a dialog or a popup is a *separate* window
+ * with its own view root, not a child of [container], so [EmbeddedWindows] is asked which window is
+ * on top and the event is translated into it.
  */
 internal class EmbeddedGuest(
     private val context: Context,
@@ -42,6 +45,7 @@ internal class EmbeddedGuest(
 
     private var host: SurfaceControlViewHost? = null
     private var container: FrameLayout? = null
+    private var windows: EmbeddedWindows? = null
 
     /** Embedded back stack, bottom first. Only the top activity's decor is visible. */
     private val stack = ArrayList<Activity>()
@@ -67,26 +71,32 @@ internal class EmbeddedGuest(
         val display = context.getSystemService(DisplayManager::class.java)
             ?.getDisplay(Display.DEFAULT_DISPLAY)
             ?: throw VirtualDeviceException("no default display")
-        val activity = GuestRuntime.embed(apkPath, activityClass)
+        val container = FrameLayout(context)
+        // The cast picks the long-standing IBinder overload over the InputTransferToken one.
+        val host = SurfaceControlViewHost(context, display, hostToken as IBinder?)
+        // Assigned before setView: a host that fails half-way still has a pending traversal, and
+        // only stop() can release it before that traversal crashes the process.
+        this.host = host
+        this.container = container
+        var activity: Activity? = null
         try {
-            val container = FrameLayout(context)
-            container.addView(activity.window.decorView, matchParent())
-            // The cast picks the long-standing IBinder overload over the InputTransferToken one.
-            val host = SurfaceControlViewHost(context, display, hostToken as IBinder?)
-            // Assigned before setView: a host that fails half-way still has a pending traversal, and
-            // only stop() can release it before that traversal crashes the process.
-            this.host = host
-            this.container = container
-            setView(host, container, width, height)
+            // The host is given its view before the guest exists so the guest can be built already
+            // knowing the window its dialogs belong to — that token only exists once a view root is
+            // attached to the host, and `onCreate` is too late to learn it.
+            host.setView(container, width, height)
+            windows = EmbeddedWindows.install(host, container, width, height)
 
-            stack += activity
-            fullLifecycle = GuestRuntime.resumeEmbedded(activity)
+            val guest = GuestRuntime.embed(apkPath, activityClass, windows?.token)
+            activity = guest
+            container.addView(guest.window.decorView, matchParent())
+            stack += guest
+            fullLifecycle = GuestRuntime.resumeEmbedded(guest)
             GuestRuntime.setEmbeddedLauncher(::push)
 
             return host.surfacePackage
                 ?: throw VirtualDeviceException("the view host produced no surface package")
         } catch (t: Throwable) {
-            runCatching { GuestRuntime.destroyEmbedded(activity) }
+            activity?.let { runCatching { GuestRuntime.destroyEmbedded(it) } }
             stop()
             throw t
         }
@@ -96,18 +106,30 @@ internal class EmbeddedGuest(
         host?.surfacePackage ?: throw VirtualDeviceException("no guest is running")
 
     fun resize(width: Int, height: Int) {
+        windows?.resize(width, height)
         host?.relayout(width, height)
     }
 
     fun touch(event: MotionEvent) {
-        container?.dispatchTouchEvent(event)
+        val child = topWindow()
+        if (child == null) {
+            container?.dispatchTouchEvent(event)
+        } else {
+            // The tab's coordinates are the host's; a child window's are its own.
+            event.offsetLocation(-child.frame.left.toFloat(), -child.frame.top.toFloat())
+            child.view.dispatchTouchEvent(event)
+        }
         reapFinished()
     }
 
     fun key(event: KeyEvent) {
-        container?.dispatchKeyEvent(event)
+        val child = topWindow()
+        if (child == null) container?.dispatchKeyEvent(event) else child.view.dispatchKeyEvent(event)
         reapFinished()
     }
+
+    /** The dialog, popup or drop-down the guest currently has open, if any. */
+    private fun topWindow(): EmbeddedWindow? = windows?.children()?.lastOrNull()
 
     /** Types [text] as key events: with no window, the guest's fields cannot bind an IME. */
     fun text(text: String) {
@@ -116,6 +138,14 @@ internal class EmbeddedGuest(
     }
 
     fun back() {
+        // A dialog or popup closes itself on Back, so it is sent the key rather than being reached
+        // around — dismissing it from here would skip the guest's own cancel handling.
+        topWindow()?.let { child ->
+            val now = SystemClock.uptimeMillis()
+            child.view.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK, 0))
+            child.view.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK, 0))
+            return
+        }
         if (stack.size > 1) {
             pop()
             return
@@ -133,6 +163,8 @@ internal class EmbeddedGuest(
         }
         stack.clear()
         container = null
+        windows?.release()
+        windows = null
         host?.release()
         host = null
     }
@@ -140,7 +172,7 @@ internal class EmbeddedGuest(
     /** [GuestRuntime.setEmbeddedLauncher] callback: a guest activity started another one. */
     private fun push(stub: Intent): Boolean {
         val container = container ?: return false
-        val activity = GuestRuntime.embed(stub)
+        val activity = GuestRuntime.embed(stub, windows?.token)
         stack.lastOrNull()?.window?.decorView?.visibility = View.GONE
         container.addView(activity.window.decorView, matchParent())
         stack += activity
@@ -167,31 +199,6 @@ internal class EmbeddedGuest(
      */
     private fun reapFinished() {
         while (stack.lastOrNull()?.isFinishing == true) pop()
-    }
-
-    /**
-     * The public `setView(View, int, int)` builds its layout params with no flags, which leaves the
-     * embedded hierarchy on the software renderer; the hidden overload would let
-     * `FLAG_HARDWARE_ACCELERATED` through. Measured on Android 13: the overload is filtered out of
-     * `SurfaceControlViewHost`'s declared methods, so a guest in a tab is CPU-rendered and there is
-     * nothing to reflect at. It draws correctly, just without the GPU.
-     */
-    private fun setView(host: SurfaceControlViewHost, view: View, width: Int, height: Int) {
-        val withParams = HiddenApi.method(
-            SurfaceControlViewHost::class.java,
-            "setView",
-            View::class.java,
-            WindowManager.LayoutParams::class.java,
-        )
-        val params = WindowManager.LayoutParams(
-            width,
-            height,
-            WindowManager.LayoutParams.TYPE_APPLICATION,
-            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
-            PixelFormat.TRANSPARENT,
-        )
-        if (withParams != null && runCatching { withParams.invoke(host, view, params) }.isSuccess) return
-        host.setView(view, width, height)
     }
 
     private fun matchParent() = FrameLayout.LayoutParams(

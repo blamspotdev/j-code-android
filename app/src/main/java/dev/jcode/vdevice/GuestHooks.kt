@@ -7,6 +7,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.os.Handler
+import android.os.IBinder
 import android.os.Message
 import android.util.Log
 import android.view.ContextThemeWrapper
@@ -176,6 +177,32 @@ internal object GuestHooks {
         return runCatching { field.set(activity, activityThread); true }
             .onFailure { Log.w(TAG, "embedded activity has no ActivityThread; it cannot navigate", it) }
             .getOrDefault(false)
+    }
+
+    /**
+     * Points an embedded activity's child windows at the host that is showing it.
+     *
+     * `Dialog` carries no token of its own: it adds its decor through the *activity's*
+     * `WindowManager`, and `Window.adjustLayoutParamsForSubWindow` fills the token in from the
+     * activity window's app token — which for an embedded activity is a bare `Binder` no window
+     * manager has heard of, hence `BadTokenException`. Handing that slot the
+     * `SurfaceControlViewHost`'s window token instead is what makes `WindowManagerGlobal` give the
+     * dialog the host's windowless session; see [EmbeddedWindows]. `PopupWindow`, `Spinner`
+     * drop-downs and menu panels already resolve their token off the anchor or decor view, which is
+     * inside the host's hierarchy, so they need nothing here.
+     *
+     * `setWindowManager` is public SDK — only the token being someone else's window is new.
+     */
+    fun hostWindowIn(activity: Activity, windowToken: IBinder?) {
+        if (windowToken == null) return
+        runCatching {
+            activity.window.setWindowManager(
+                activity.windowManager,
+                windowToken,
+                activity.javaClass.name,
+                true,
+            )
+        }.onFailure { Log.w(TAG, "${activity.javaClass.name} cannot open dialogs in the tab", it) }
     }
 
     /**

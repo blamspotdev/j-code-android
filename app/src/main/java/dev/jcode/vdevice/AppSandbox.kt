@@ -4,7 +4,9 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -57,14 +59,41 @@ internal object AppSandbox {
     /** APK the sandbox runs, set by a finished virtual-device build or typed into the page. */
     val apkPath = mutableStateOf("")
 
+    /** Activity in [apkPath] to start; null runs the APK's launcher activity. */
+    val activityClass = mutableStateOf<String?>(null)
+
     /** True once the user has asked for the guest, i.e. the page shows the surface, not the setup. */
     val showing = mutableStateOf(false)
 
+    private val main = Handler(Looper.getMainLooper())
+
     private var session: AppSandboxSession? = null
 
-    fun requestOpen(apkPath: String?) {
-        apkPath?.trim()?.takeIf { it.isNotEmpty() }?.let { this.apkPath.value = it }
-        revealSignal.value += 1
+    /**
+     * Asks the shell for the sandbox tab, optionally switching it to [apkPath] and — when [run] —
+     * starting it rather than leaving the tab on its setup screen.
+     *
+     * Everything here is Compose snapshot state and one of the callers is the adb daemon answering
+     * `am start` on an IO dispatcher, so the write is marshalled the way `TerminalSessionHost`
+     * marshals its OSC callbacks rather than trusting the calling thread.
+     */
+    fun requestOpen(apkPath: String?, activityClass: String? = null, run: Boolean = false) {
+        val open = Runnable {
+            // The activity only means anything next to the APK it belongs to, so the two move
+            // together — a bare reveal leaves whatever the tab was already showing alone.
+            apkPath?.trim()?.takeIf { it.isNotEmpty() }?.let {
+                // Asking for a different app is asking for a different guest; the page only starts
+                // one when the session it holds is not already running something.
+                if (it != this.apkPath.value || activityClass != this.activityClass.value) {
+                    session?.close()
+                }
+                this.apkPath.value = it
+                this.activityClass.value = activityClass
+            }
+            if (run) showing.value = true
+            revealSignal.value += 1
+        }
+        if (Looper.myLooper() == main.looper) open.run() else main.post(open)
     }
 
     /** One session per process: the container owns a single `:guest` process, so a second tab would
@@ -134,22 +163,40 @@ internal class AppSandboxSession(context: Context) {
      * re-publishes its surface. Safe to call on every layout pass; it does nothing while a start is
      * already in flight.
      */
-    fun ensureStarted(apkPath: String, width: Int, height: Int, hostToken: IBinder?) {
+    fun ensureStarted(
+        apkPath: String,
+        activityClass: String?,
+        width: Int,
+        height: Int,
+        hostToken: IBinder?,
+    ) {
         if (startup?.isActive == true || width <= 0 || height <= 0) return
         if (_status.value is SandboxStatus.Running) {
             resize(width, height)
             startup = scope.launch { _surface.value = readSurface() }
             return
         }
-        startup = scope.launch { start(apkPath, width, height, hostToken) }
+        startup = scope.launch { start(apkPath, activityClass, width, height, hostToken) }
     }
 
-    fun restart(apkPath: String, width: Int, height: Int, hostToken: IBinder?) {
+    fun restart(
+        apkPath: String,
+        activityClass: String?,
+        width: Int,
+        height: Int,
+        hostToken: IBinder?,
+    ) {
         close()
-        ensureStarted(apkPath, width, height, hostToken)
+        ensureStarted(apkPath, activityClass, width, height, hostToken)
     }
 
-    private suspend fun start(apkPath: String, width: Int, height: Int, hostToken: IBinder?) {
+    private suspend fun start(
+        apkPath: String,
+        activityClass: String?,
+        width: Int,
+        height: Int,
+        hostToken: IBinder?,
+    ) {
         _status.value = SandboxStatus.Starting
         val guest = withTimeoutOrNull(BIND_TIMEOUT_MS) {
             withContext(Dispatchers.IO) {
@@ -160,7 +207,7 @@ internal class AppSandboxSession(context: Context) {
         } ?: return fail("Could not start the guest process.")
 
         val result = withContext(Dispatchers.IO) {
-            runCatching { guest.start(apkPath, null, width, height, hostToken, callback) }
+            runCatching { guest.start(apkPath, activityClass, width, height, hostToken, callback) }
         }.getOrElse { return fail(it.message ?: "The guest process refused the app.") }
 
         result.getString(GuestSessionService.KEY_ERROR)?.let { return fail(it) }
