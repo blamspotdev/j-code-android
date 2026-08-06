@@ -5,6 +5,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -12,10 +13,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -42,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -58,7 +62,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jcode.core.distro.WorkspaceHostPaths
 import dev.jcode.design.CompactFilledButton
 import dev.jcode.design.CompactOutlinedButton
-import dev.jcode.design.FloatingRestorePill
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.ManagerNoticeCard
 import dev.jcode.design.ManagerSectionCard
@@ -73,6 +76,11 @@ import kotlinx.coroutines.delay
  * not covered while it is being watched.
  */
 private const val TOOLBAR_IDLE_COLLAPSE_MS = 4_000L
+
+/** The collapsed handle: a fifth of the device's width, sized like a sheet grabber. */
+private const val HANDLE_WIDTH_FRACTION = 0.2f
+private val HANDLE_THICKNESS = 4.dp
+private val HANDLE_TOUCH_HEIGHT = 24.dp
 
 /**
  * Editor tab holding J Code's virtual device — a screen the IDE owns, that an app can be put on and
@@ -400,16 +408,35 @@ private fun BoxScope.DeviceControls(
     }
 
     if (!expanded) {
-        FloatingRestorePill(
-            icon = jcIcon(JCodeIcon.ChevronDown),
-            contentDescription = "Show the device controls",
+        DeviceControlsHandle(
             onClick = { expanded = true },
             // Top-centre: the workbench's own chrome pill owns TopEnd in the same Box, and in
             // distraction-free mode the two would sit on top of each other.
-            modifier = Modifier.align(Alignment.TopCenter).padding(4.dp),
-            // The workbench's own pill is translucent over J Code's background; this one floats over
-            // whatever the guest happens to be drawing, so it keeps its own contrast.
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.align(Alignment.TopCenter),
+        )
+    }
+}
+
+/**
+ * The collapsed controls: a grabber line, not a button. It sits over whatever the guest is drawing,
+ * so it stays deliberately small — the touch target is taller than the line it shows, which is why
+ * the clickable box and the bar have separate sizes.
+ */
+@Composable
+private fun DeviceControlsHandle(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth(HANDLE_WIDTH_FRACTION)
+            .height(HANDLE_TOUCH_HEIGHT)
+            .clickable(onClickLabel = "Show the device controls", onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(HANDLE_THICKNESS)
+                .clip(RoundedCornerShape(percent = 50))
+                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)),
         )
     }
 }
