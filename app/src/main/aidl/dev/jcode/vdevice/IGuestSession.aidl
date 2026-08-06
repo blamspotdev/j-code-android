@@ -6,7 +6,7 @@ import android.view.MotionEvent;
 import dev.jcode.vdevice.IGuestSessionCallback;
 
 /**
- * The :guest process's side of an embedded app-sandbox tab.
+ * The :guest process's side of an embedded device-sandbox tab.
  *
  * start() answers with a SurfaceControlViewHost.SurfacePackage (in a Bundle, so a failure can come
  * back as a message rather than an exception); the IDE hands it to a SurfaceView. hostToken is that
@@ -21,6 +21,10 @@ interface IGuestSession {
     /** A fresh surface package for the running guest: a SurfaceView releases the one it was given
      *  when it detaches, so switching editor tabs and back needs a new one rather than a restart. */
     Bundle surface();
+
+    /** Writes the guest's current screen to pngPath as a PNG. The two processes share a uid and a
+     *  data directory, so a file beats a Bundle that a large screen would burst. */
+    Bundle capture(String pngPath);
 
     // Everything below is called from the IDE's UI thread, so none of it may block on the guest's.
     oneway void resize(int width, int height);

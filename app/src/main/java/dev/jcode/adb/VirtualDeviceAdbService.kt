@@ -12,16 +12,21 @@ import dev.jcode.core.distro.adb.unsupportedService
 import dev.jcode.vdevice.AppSandbox
 import dev.jcode.vdevice.VirtualDevice
 import dev.jcode.vdevice.VirtualIdentity
+import dev.jcode.vdevice.VirtualScreen
 import java.io.File
 
 /**
  * The adb services JCode's virtual device answers: everything an adb client asks of a device is
  * served out of the [VirtualDevice] container, and nothing is ever forwarded to the host phone.
  *
- * Implemented: `shell:getprop`, `shell:echo`, `shell:pm list packages`, `shell:am start -n`, and
+ * Implemented: `getprop`, `echo`, `pm list packages`, `am start -n`, `screencap`, and
  * `exec:cmd package 'install' -S <n>` — which is the single stream `adb install` uses once the
  * connection banner advertises the `cmd` feature. Everything else answers [unsupportedService] on
  * one line rather than hanging or pretending to have worked.
+ *
+ * Commands answer on `shell:` and on `exec:` alike, and the reply is bytes rather than text, so
+ * `adb exec-out screencap -p > shot.png` returns a PNG intact. Nothing here allocates a PTY — that
+ * is the line discipline which would otherwise rewrite every `\n` in it into `\r\n`.
  *
  * "Installing" here means staging the APK under the container's own storage; there is no system
  * package database involved, so a guest is still invisible to the real `pm`.
@@ -54,30 +59,53 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
 
     override suspend fun handle(stream: AdbStream) {
         val service = stream.service
-        when {
-            service.startsWith(SHELL) -> stream.write(
-                shell(adbCommandArgs(service.removePrefix(SHELL))) ?: unsupportedService(service),
-            )
+        val command = when {
+            service.startsWith(SHELL) -> service.removePrefix(SHELL)
+            service.startsWith(EXEC) -> service.removePrefix(EXEC)
+            else -> return stream.write(unsupportedService(service))
+        }
+        dispatch(adbCommandArgs(command), stream)
+    }
 
-            service.startsWith(EXEC) -> exec(adbCommandArgs(service.removePrefix(EXEC)), stream)
-            else -> stream.write(unsupportedService(service))
+    private suspend fun dispatch(args: List<String>, stream: AdbStream) {
+        when (args.firstOrNull()) {
+            "getprop" -> stream.write(getprop(args.getOrNull(1)))
+            "echo" -> stream.write(args.drop(1).joinToString(" ") + "\n")
+            "pm" -> stream.write(pm(args.drop(1)) ?: unsupportedService(stream.service))
+            "am" -> stream.write(am(args.drop(1)) ?: unsupportedService(stream.service))
+            "screencap" -> screencap(args.drop(1), stream)
+            "cmd" -> install(args, stream)
+            else -> stream.write(unsupportedService(stream.service))
         }
     }
 
-    /** Null for "this daemon does not implement that command". */
-    private fun shell(args: List<String>): String? = when (args.firstOrNull()) {
-        "getprop" -> getprop(args.getOrNull(1))
-        "echo" -> args.drop(1).joinToString(" ") + "\n"
-        "pm" -> pm(args.drop(1))
-        "am" -> am(args.drop(1))
-        else -> null
+    /**
+     * `screencap [-p] [-d <display>]`, answering the device sandbox's screen as a PNG.
+     *
+     * This is what lets whoever is driving the device *see* it, so it never fails: an idle device
+     * has a blank screen, not an error. `-p` is accepted and ignored — a PNG is the only encoding
+     * offered, because the raw form only makes sense next to a filesystem this device does not have.
+     */
+    private suspend fun screencap(args: List<String>, stream: AdbStream) {
+        var index = 0
+        while (index < args.size) {
+            val arg = args[index]
+            when {
+                arg == "-d" -> index++
+                arg.startsWith("-") -> Unit
+                else -> return stream.write(
+                    "screencap: the virtual device has no filesystem to write '$arg' to — " +
+                        "read the PNG off the stream with `adb -s ${VirtualIdentity.SERIAL} " +
+                        "exec-out screencap -p > shot.png`\n",
+                )
+            }
+            index++
+        }
+        stream.write(VirtualScreen.png(appContext))
     }
 
-    private suspend fun exec(args: List<String>, stream: AdbStream) {
-        val isInstall = args.getOrNull(0) == "cmd" &&
-            args.getOrNull(1) == "package" &&
-            args.getOrNull(2) == "install"
-        if (!isInstall) {
+    private suspend fun install(args: List<String>, stream: AdbStream) {
+        if (args.getOrNull(1) != "package" || args.getOrNull(2) != "install") {
             stream.write(unsupportedService(stream.service))
             return
         }
@@ -88,10 +116,10 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
             stream.write("Failure [INSTALL_FAILED_INVALID_ARGS: '${stream.service}' has no -S size]\n")
             return
         }
-        stream.write(install(size, stream))
+        stream.write(receiveApk(size, stream))
     }
 
-    private suspend fun install(size: Long, stream: AdbStream): String {
+    private suspend fun receiveApk(size: Long, stream: AdbStream): String {
         apps.mkdirs()
         val staged = File(apps, "staged-${System.nanoTime()}.apk")
         var received = 0L
@@ -134,10 +162,10 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
     /**
      * `am start -n <pkg>/<activity>`.
      *
-     * The app opens in J Code's app-sandbox editor tab, so whoever ran this — an agent driving the
-     * terminal as much as the user — still has the IDE, and the terminal it typed into, around the
-     * running app. `--windowingMode 1` (`WINDOWING_MODE_FULLSCREEN`, the same value real `am`
-     * takes) asks for the old behaviour, where the guest takes over the screen as its own task.
+     * The app opens on the device sandbox's screen in its editor tab, so whoever ran this — an agent
+     * driving the terminal as much as the user — still has the IDE, and the terminal it typed into,
+     * around the running app. `--windowingMode 1` (`WINDOWING_MODE_FULLSCREEN`, the same value real
+     * `am` takes) asks for the old behaviour, where the guest takes over the screen as its own task.
      *
      * Either way this answers as soon as the launch is handed over: an adb client waits on the
      * `Starting:` line, and a tab takes frames to compose that the stream must not sit through.

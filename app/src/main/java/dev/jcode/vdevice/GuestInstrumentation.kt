@@ -10,10 +10,10 @@ import java.lang.reflect.Modifier
 /**
  * The [Instrumentation] the container installs in place of `ActivityThread.mInstrumentation`.
  *
- * Both overrides are public SDK API and sit at exactly the two points the container needs:
- * `newActivity` decides which class gets instantiated, and `callActivityOnCreate` is the last moment
- * before the guest's own code runs — the activity is attached, so its context can be replaced, but
- * `onCreate` has not been called yet.
+ * Both overrides are public SDK API and sit at exactly the points the container needs: `newActivity`
+ * decides which class gets instantiated, and `callActivityOnCreate` brackets the guest's `onCreate` —
+ * before it the activity is attached but has run no code of its own, so its context can be replaced;
+ * after it the activity has a content view to hang the full-screen controls on.
  */
 internal class GuestInstrumentation(base: Instrumentation) : Instrumentation() {
 
@@ -36,6 +36,7 @@ internal class GuestInstrumentation(base: Instrumentation) : Instrumentation() {
     override fun callActivityOnCreate(activity: Activity, icicle: Bundle?) {
         GuestRuntime.bind(activity)
         super.callActivityOnCreate(activity, icicle)
+        GuestRuntime.created(activity)
     }
 
     override fun callActivityOnCreate(
@@ -45,5 +46,6 @@ internal class GuestInstrumentation(base: Instrumentation) : Instrumentation() {
     ) {
         GuestRuntime.bind(activity)
         super.callActivityOnCreate(activity, icicle, persistentState)
+        GuestRuntime.created(activity)
     }
 }

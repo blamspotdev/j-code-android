@@ -30,7 +30,7 @@ data class VirtualDeviceApp(
  * preview, not a security boundary**.
  *
  * [launch] is the full-screen path: a real activity, in its own task, with everything a real window
- * brings. The app-sandbox editor tab is the other one — see [EmbeddedGuest] — and it exists because
+ * brings. The device-sandbox editor tab is the other one — see [EmbeddedGuest] — and it exists because
  * the container instantiates the guest activity itself and so does not have to ask the system for a
  * window at all. Putting a *system-launched* activity on a display we own stays impossible for a
  * normal app: `ActivityOptions.setLaunchDisplayId` requires the signature|privileged

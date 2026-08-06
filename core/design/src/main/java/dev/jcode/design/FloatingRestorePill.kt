@@ -17,7 +17,7 @@ import androidx.compose.ui.unit.dp
 
 /**
  * The way back from a bar that has hidden itself — the workbench's distraction-free chrome and the
- * app sandbox's auto-collapsing toolbar both return through one of these.
+ * device sandbox's auto-collapsing toolbar both return through one of these.
  *
  * 44dp (≥ the 48dp minimum once the touch slop around it is counted) keeps the only exit comfortably
  * tappable. [containerColor] is translucent by default, which suits a pill floating over J Code's own

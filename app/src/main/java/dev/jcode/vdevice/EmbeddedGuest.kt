@@ -3,6 +3,9 @@ package dev.jcode.vdevice
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.hardware.display.DisplayManager
 import android.os.IBinder
 import android.os.SystemClock
@@ -14,6 +17,7 @@ import android.view.SurfaceControlViewHost
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import java.io.File
 
 /**
  * One guest app rendered into an editor tab, living in the `:guest` process.
@@ -50,7 +54,8 @@ internal class EmbeddedGuest(
     /** Embedded back stack, bottom first. Only the top activity's decor is visible. */
     private val stack = ArrayList<Activity>()
 
-    /** False once a lifecycle step had to fall back to the public `Instrumentation` calls. */
+    /** False once an activity's own `ActivityLifecycleCallbacks` proved out of reach — see
+     *  [GuestHooks.dispatchLifecycleCallback]. */
     var fullLifecycle = true
         private set
 
@@ -108,6 +113,37 @@ internal class EmbeddedGuest(
     fun resize(width: Int, height: Int) {
         windows?.resize(width, height)
         host?.relayout(width, height)
+    }
+
+    /**
+     * Draws the guest's screen into [png], for `adb shell screencap` — see [VirtualScreen] for why
+     * re-drawing is what is left once the composited layer turns out to be unreachable.
+     *
+     * The guest's dialogs and popups are separate windows, so they are drawn over the container at
+     * the frames [EmbeddedWindows] places them at rather than being missed.
+     */
+    fun capture(png: File) {
+        val container = container ?: throw VirtualDeviceException("no guest is running")
+        val bitmap = Bitmap.createBitmap(
+            container.width.coerceAtLeast(1),
+            container.height.coerceAtLeast(1),
+            Bitmap.Config.ARGB_8888,
+        )
+        try {
+            val canvas = Canvas(bitmap)
+            canvas.drawColor(Color.BLACK)
+            container.draw(canvas)
+            windows?.children()?.forEach { child ->
+                canvas.save()
+                canvas.translate(child.frame.left.toFloat(), child.frame.top.toFloat())
+                child.view.draw(canvas)
+                canvas.restore()
+            }
+            png.parentFile?.mkdirs()
+            png.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     fun touch(event: MotionEvent) {

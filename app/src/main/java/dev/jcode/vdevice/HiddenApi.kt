@@ -21,14 +21,17 @@ internal const val TAG = "VDEVICE"
  *  - `ContextThemeWrapper.mTheme` is `max-target-p`, so it cannot be cleared — see
  *    [GuestRuntime.onLaunchActivity], which keeps it from ever being created.
  *  - `ActivityThread.startActivityNow` does not appear in its class's declared members at all, which
- *    is what a *denied* member looks like from here. The app-sandbox tab uses the public
+ *    is what a *denied* member looks like from here. The device-sandbox tab uses the public
  *    `Instrumentation.newActivity` instead.
  *  - **Every** non-SDK member of `SurfaceControlViewHost` is denied, its `SurfacePackage` included:
  *    the class carries no `@UnsupportedAppUsage` at all. [EmbeddedWindows] therefore reaches the
  *    host's view root through the container's `getParent()` and its root layer through the
  *    `SurfacePackage`'s own `Parcelable` contract, both public.
- *  - `Activity.performStart`/`performResume` are denied the same way. [GuestRuntime.resumeEmbedded]
- *    falls back to the public `Instrumentation` calls and says so in the tab.
+ *  - `Activity.performStart`/`performResume` are denied the same way, and so is
+ *    `Activity.mActivityLifecycleCallbacks` — the list those two dispatch to, and the one AndroidX's
+ *    `ReportFragment` registers on. `Application.mActivityLifecycleCallbacks` *is* greylisted, so
+ *    [GuestRuntime.resumeEmbedded] dispatches that one and drives the guest's own `LifecycleRegistry`
+ *    for what the other would have reached.
  *
  * There is no way to lift that: `VMRuntime.setHiddenApiExemptions` — the usual escape hatch, reached
  * by double reflection — is itself `blocked` from Android 10 on, confirmed denied on this device.

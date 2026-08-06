@@ -1,6 +1,7 @@
 package dev.jcode.vdevice
 
 import android.app.Activity
+import android.app.Application
 import android.app.Instrumentation
 import android.content.Context
 import android.content.ContextWrapper
@@ -11,6 +12,7 @@ import android.os.IBinder
 import android.os.Message
 import android.util.Log
 import android.view.ContextThemeWrapper
+import java.lang.reflect.Field
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
@@ -18,7 +20,8 @@ import java.lang.reflect.Proxy
 
 private const val CLIENT_TRANSACTION = "android.app.servertransaction.ClientTransaction"
 private const val LAUNCH_ACTIVITY_ITEM = "android.app.servertransaction.LaunchActivityItem"
-private const val EMBEDDED_REASON = "JCode app sandbox"
+private const val CALLBACKS_FIELD = "mActivityLifecycleCallbacks"
+private const val PRE_PREFIX = "onActivityPre"
 
 /** `ActivityManager.START_SUCCESS`, which is not in the SDK. */
 private const val START_SUCCESS = 0
@@ -36,11 +39,13 @@ internal sealed interface StartAction {
 }
 
 /**
- * The three framework hooks the container installs in the guest process, and nothing else — the
- * policy that decides what to do with them lives in [GuestRuntime].
+ * The framework hooks the container installs in the guest process, and the framework calls it makes
+ * by hand — the policy that decides what to do with either lives in [GuestRuntime].
  *
- * All of this is reflection against `ActivityThread` internals and is only ever installed in
- * `:guest`, never in the IDE process. It assumes [HiddenApi.unseal] has already run.
+ * All of this is reflection against `ActivityThread` and `Activity` internals and is only ever used
+ * in `:guest`, never in the IDE process. Every member it reaches for is one [HiddenApi] documents as
+ * measured-allowed, and each step is guarded so a platform that withdraws one degrades rather than
+ * crashes.
  */
 internal object GuestHooks {
 
@@ -116,7 +121,7 @@ internal object GuestHooks {
      * and `execStartActivity` is not in the SDK, so it cannot be overridden anyway.
      *
      * [decide] returns what should happen: proceed untouched, launch a different intent, or —
-     * for the app-sandbox tab — nothing at all. [StartAction.Consumed] exists because an embedded
+     * for the device-sandbox tab — nothing at all. [StartAction.Consumed] exists because an embedded
      * activity holds a token no `ActivityRecord` answers to, so letting a guest's own
      * `startActivity` reach the task manager would at best push a second, full-screen copy of the
      * app over the IDE. The call is answered with `START_SUCCESS` instead, and the tab hosts the new
@@ -206,29 +211,66 @@ internal object GuestHooks {
     }
 
     /**
-     * Runs one of `Activity`'s `perform*` lifecycle steps.
+     * Dispatches one of the `Application.ActivityLifecycleCallbacks` steps that only
+     * `Activity.perform*` reaches.
      *
-     * The public `Instrumentation.callActivityOn*` calls are not equivalent: only `performStart` and
-     * `performResume` dispatch the `ActivityLifecycleCallbacks` that AndroidX's `ReportFragment`
-     * registers, and without those a Compose guest never advances past CREATED and its frame clock
-     * stays paused — a composed but permanently blank surface. Returns false when the member is not
-     * reachable, so the caller can fall back to the public calls and say so.
+     * `Instrumentation.callActivityOnStart/onResume/onStop` are public and run the activity's own
+     * `onStart()`/`onResume()`/`onStop()`, which dispatch the plain `onActivityStarted`-style
+     * callbacks themselves. What they skip is the `Pre`/`Post` pair `Activity.performStart` wraps
+     * them in — and `performStart`/`performResume` are `max-target-p`, so the container cannot call
+     * them at `targetSdk` 33.
+     *
+     * That pair is not a detail. On API 29+ AndroidX's `ReportFragment` drives a
+     * `ComponentActivity`'s `LifecycleRegistry` from `onActivityPostCreated`/`PostStarted`/
+     * `PostResumed`/`PreStopped` alone, registered through `Activity.registerActivityLifecycleCallbacks`
+     * — so without them a Compose guest never leaves CREATED, its frame clock is never resumed, and
+     * the surface stays blank. `onCreate` and `onPause`/`onDestroy` need nothing here: their public
+     * `Instrumentation` entry points go through `performCreate`/`performPause`/`performDestroy`,
+     * which dispatch their own.
+     *
+     * The methods invoked are public interface members; the two lists they are read off are private
+     * fields, and only one of them is within reach. Measured on Android 13 at `targetSdk` 33:
+     * `Application.mActivityLifecycleCallbacks` is greylisted and readable, while
+     * `Activity.mActivityLifecycleCallbacks` is *blocked* outright. So an app's Application-scoped
+     * listeners get the whole sequence and its activity-scoped ones do not — which is why
+     * [GuestRuntime.resumeEmbedded] also drives the guest's own `LifecycleRegistry`, doing by hand
+     * what the `ReportFragment` callbacks it cannot reach would have done. This returns false in
+     * exactly that case, and the tab says so rather than hiding it.
      */
-    fun performLifecycle(activity: Activity, name: String): Boolean {
-        val method = Activity::class.java.declaredMethods
-            .firstOrNull { it.name == name }
-            ?.apply { isAccessible = true }
-            ?: return false
-        val args: List<Any?> = method.parameterTypes.map { type ->
-            when (type) {
-                String::class.java -> EMBEDDED_REASON
-                Boolean::class.javaPrimitiveType -> false
-                else -> null
+    fun dispatchLifecycleCallback(activity: Activity, name: String): Boolean {
+        val method = runCatching {
+            Application.ActivityLifecycleCallbacks::class.java.getMethod(name, Activity::class.java)
+        }.getOrElse {
+            Log.w(TAG, "no ActivityLifecycleCallbacks#$name", it)
+            return false
+        }
+        val own = registered(activityCallbacks, activity)
+        val application = registered(applicationCallbacks, activity.application)
+        if (own == null && application == null) return false
+        // Activity.dispatchActivityPre*() runs the application's listeners first and the activity's
+        // own second; dispatchActivityPost*() is the other way round.
+        val ordered = if (name.startsWith(PRE_PREFIX)) {
+            application.orEmpty() + own.orEmpty()
+        } else {
+            own.orEmpty() + application.orEmpty()
+        }
+        ordered.forEach { callback ->
+            runCatching { method.invoke(callback, activity) }.onFailure {
+                Log.w(TAG, "$name on ${callback.javaClass.name}", (it as? InvocationTargetException)?.targetException ?: it)
             }
         }
-        return runCatching { method.invoke(activity, *args.toTypedArray()); true }
-            .onFailure { Log.w(TAG, "Activity#$name failed", (it as? InvocationTargetException)?.targetException ?: it) }
-            .getOrDefault(false)
+        return own != null
+    }
+
+    private val activityCallbacks by lazy { HiddenApi.field(Activity::class.java, CALLBACKS_FIELD) }
+
+    private val applicationCallbacks by lazy { HiddenApi.field(Application::class.java, CALLBACKS_FIELD) }
+
+    /** A snapshot of one callback list, or null when the field itself is out of reach. */
+    private fun registered(field: Field?, owner: Any?): List<Any>? {
+        if (field == null || owner == null) return null
+        val list = runCatching { field.get(owner) }.getOrNull() as? List<*> ?: return null
+        return synchronized(list) { list.filterNotNull() }
     }
 
     /**

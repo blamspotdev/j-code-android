@@ -12,6 +12,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceControlViewHost
 import androidx.compose.runtime.mutableStateOf
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -44,8 +45,11 @@ internal sealed interface SandboxStatus {
 }
 
 /**
- * Shared state for J Code's single app-sandbox tab: the run flow only asks for one, the shell opens
- * the tab, and the page reads the APK back out.
+ * Shared state for J Code's single device-sandbox tab: the run flow only asks for one, the shell
+ * opens the tab, and the page reads the APK back out.
+ *
+ * The device outlives every app that runs on it — its screen is blank rather than absent when
+ * nothing is running, which is what `screencap` answers with and what stopping an app returns to.
  */
 internal object AppSandbox {
 
@@ -62,8 +66,8 @@ internal object AppSandbox {
     /** Activity in [apkPath] to start; null runs the APK's launcher activity. */
     val activityClass = mutableStateOf<String?>(null)
 
-    /** True once the user has asked for the guest, i.e. the page shows the surface, not the setup. */
-    val showing = mutableStateOf(false)
+    /** True while an app should be on the device's screen. False is a live, blank device. */
+    val running = mutableStateOf(false)
 
     private val main = Handler(Looper.getMainLooper())
 
@@ -90,7 +94,7 @@ internal object AppSandbox {
                 this.apkPath.value = it
                 this.activityClass.value = activityClass
             }
-            if (run) showing.value = true
+            if (run) running.value = true
             revealSignal.value += 1
         }
         if (Looper.myLooper() == main.looper) open.run() else main.post(open)
@@ -102,11 +106,15 @@ internal object AppSandbox {
     fun session(context: Context): AppSandboxSession =
         session ?: AppSandboxSession(context).also { session = it }
 
+    /** The live session, if the tab has ever opened one. Null is a device with no guest bound. */
+    @Synchronized
+    fun sessionOrNull(): AppSandboxSession? = session
+
     @Synchronized
     fun close() {
         session?.close()
         session = null
-        showing.value = false
+        running.value = false
     }
 }
 
@@ -220,9 +228,22 @@ internal class AppSandboxSession(context: Context) {
         _status.value = SandboxStatus.Running(
             packageName = result.getString(GuestSessionService.KEY_PACKAGE),
             warning = if (result.getBoolean(GuestSessionService.KEY_FULL_LIFECYCLE, true)) null else
-                "The container could not drive this activity's full lifecycle, so anything that " +
-                    "waits on onStart/onResume — Compose, in particular — may not draw.",
+                "Android 13 blocks Activity.mActivityLifecycleCallbacks, so callbacks this app " +
+                    "registered on the activity itself were not sent onActivityPostStarted or " +
+                    "onActivityPostResumed. Its own Lifecycle — and so Compose — is driven directly.",
         )
+    }
+
+    /** Writes the running guest's screen into [png]; false when there is nothing to capture. */
+    suspend fun capture(png: File): Boolean {
+        if (_status.value !is SandboxStatus.Running) return false
+        val guest = service ?: return false
+        png.delete()
+        val result = withContext(Dispatchers.IO) { runCatching { guest.capture(png.absolutePath) } }
+        result.getOrNull()?.getString(GuestSessionService.KEY_ERROR)
+            ?.let { Log.w(TAG, "guest screen capture: $it") }
+        result.exceptionOrNull()?.let { Log.w(TAG, "guest screen capture failed", it) }
+        return png.isFile && png.length() > 0
     }
 
     private suspend fun readSurface(): SurfaceControlViewHost.SurfacePackage? {

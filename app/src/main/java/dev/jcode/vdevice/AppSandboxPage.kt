@@ -19,9 +19,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.PhoneAndroid
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.HorizontalDivider
@@ -66,20 +68,25 @@ import java.io.File
 import kotlinx.coroutines.delay
 
 /**
- * How long the sandbox toolbar stays up once it is left alone. Long enough to reach a second control
- * without the bar going out from under the finger, short enough that the app under test is not
- * covered while it is being watched.
+ * How long the device's controls stay up once they are left alone. Long enough to reach a second
+ * control without the bar going out from under the finger, short enough that the app under test is
+ * not covered while it is being watched.
  */
 private const val TOOLBAR_IDLE_COLLAPSE_MS = 4_000L
 
 /**
- * Editor tab that runs one of the user's own Android apps inside J Code.
+ * Editor tab holding J Code's virtual device — a screen the IDE owns, that an app can be put on and
+ * taken off again.
  *
- * The guest is built and composited by the `:guest` process ([EmbeddedGuest]) and shown here through
- * a `SurfaceControlViewHost` surface package. Embedding can fail for reasons this tab cannot fix —
- * the window may not be hardware accelerated, and the out-of-band activity creation the container
- * depends on rests on non-SDK members — so every failure lands on the same visible fallback: run the
- * app full screen, the way the container has always been able to.
+ * The device is the tab, not the app: with nothing running it is a live blank screen that `adb` can
+ * install to, launch onto and `screencap`, and stopping an app returns it to that rather than
+ * closing anything. Whatever is running is built and composited by the `:guest` process
+ * ([EmbeddedGuest]) and shown here through a `SurfaceControlViewHost` surface package.
+ *
+ * Embedding can fail for reasons this tab cannot fix — the window may not be hardware accelerated,
+ * and the out-of-band activity creation the container depends on rests on non-SDK members — so every
+ * failure lands on the same visible fallback: run the app full screen, the way the container has
+ * always been able to.
  */
 @Composable
 internal fun AppSandboxPage(modifier: Modifier = Modifier) {
@@ -99,61 +106,66 @@ internal fun AppSandboxPage(modifier: Modifier = Modifier) {
 
     var apkPath by AppSandbox.apkPath
     val activityClass by AppSandbox.activityClass
-    var showing by AppSandbox.showing
+    var running by AppSandbox.running
     var size by remember { mutableStateOf(IntSize.Zero) }
     var surfaceView by remember { mutableStateOf<AppSandboxSurfaceView?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
+    var launcherOpen by remember { mutableStateOf(false) }
     val surface by session.surface.collectAsStateWithLifecycle()
 
     // The guest display is the tab, so the surface's own pixel size is what the container is asked
     // for — which keeps forwarded touches in the guest's coordinates with no mapping at all.
-    LaunchedEffect(size, showing, apkPath, surfaceView) {
-        if (showing) {
+    LaunchedEffect(size, running, apkPath, surfaceView) {
+        if (running) {
             session.ensureStarted(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
         }
     }
     LaunchedEffect(surface, surfaceView) {
         surface?.let { surfaceView?.adopt(it) }
     }
+    // An app that closes itself leaves the device, not the tab: the screen goes back to blank and
+    // says what happened, which is the same place the Stop button lands on.
+    LaunchedEffect(status) {
+        (status as? SandboxStatus.Stopped)?.let {
+            notice = it.reason
+            session.close()
+            running = false
+        }
+    }
 
     fun runFullScreen() {
+        launcherOpen = false
         VirtualDevice.launch(context, apkPath.trim(), activityClass)
             .onSuccess { notice = "Started ${it.label} full screen." }
             .onFailure { notice = it.message ?: "Could not start the app." }
     }
 
-    fun restart() =
-        session.restart(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
+    fun stop() {
+        surfaceView?.hideKeyboard()
+        session.close()
+        running = false
+        notice = null
+    }
 
     Column(modifier) {
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            if (showing) {
-                SandboxStage(
-                    session = session,
-                    status = status,
-                    onSurface = { surfaceView = it },
-                    onSized = { width, height -> size = IntSize(width, height) },
-                    onRetry = { restart() },
-                    onFullScreen = { runFullScreen() },
-                    onDismiss = {
-                        session.close()
-                        showing = false
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                )
-                SandboxControls(
-                    onBack = { session.back() },
-                    onKeyboard = { surfaceView?.showKeyboard() },
-                    onRestart = { restart() },
-                    onFullScreen = { runFullScreen() },
-                    onStop = {
-                        surfaceView?.hideKeyboard()
-                        session.close()
-                        showing = false
-                    },
-                )
-            } else {
-                SandboxSetup(
+            DeviceScreen(
+                session = session,
+                status = status,
+                running = running,
+                onSurface = { surfaceView = it },
+                onSized = { width, height -> size = IntSize(width, height) },
+                onRetry = {
+                    session.restart(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
+                },
+                onFullScreen = { runFullScreen() },
+                onDismiss = { stop() },
+                onLaunch = { launcherOpen = true },
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            if (launcherOpen) {
+                DeviceLauncher(
                     tier = tier,
                     apkPath = apkPath,
                     onApkPathChange = {
@@ -161,9 +173,26 @@ internal fun AppSandboxPage(modifier: Modifier = Modifier) {
                         // The activity a launch named belongs to the APK it named, not to this one.
                         AppSandbox.activityClass.value = null
                     },
-                    onRunHere = { showing = true },
+                    onRunHere = {
+                        launcherOpen = false
+                        notice = null
+                        running = true
+                    },
                     onRunFullScreen = { runFullScreen() },
+                    onClose = { launcherOpen = false },
                     modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                DeviceControls(
+                    running = running,
+                    onBack = { session.back() },
+                    onKeyboard = { surfaceView?.showKeyboard() },
+                    onLaunch = { launcherOpen = true },
+                    onRestart = {
+                        session.restart(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
+                    },
+                    onFullScreen = { runFullScreen() },
+                    onStop = { stop() },
                 )
             }
         }
@@ -182,49 +211,86 @@ internal fun AppSandboxPage(modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * The device's screen. The `SurfaceView` is here whether or not an app is: it is what gives the
+ * device its resolution and the host token a guest is embedded under, so it is created with the tab
+ * and outlives every app put on it.
+ */
 @Composable
-private fun SandboxStage(
+private fun DeviceScreen(
     session: AppSandboxSession,
     status: SandboxStatus,
+    running: Boolean,
     onSurface: (AppSandboxSurfaceView?) -> Unit,
     onSized: (Int, Int) -> Unit,
     onRetry: () -> Unit,
     onFullScreen: () -> Unit,
     onDismiss: () -> Unit,
+    onLaunch: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.background(Color.Black), contentAlignment = Alignment.Center) {
         AndroidView(
             factory = { context ->
-                AppSandboxSurfaceView(context, session, onSized).also(onSurface)
+                AppSandboxSurfaceView(context, session) { width, height ->
+                    onSized(width, height)
+                    VirtualScreen.sized(width, height)
+                }.also(onSurface)
             },
             modifier = Modifier.fillMaxSize(),
         )
         DisposableEffect(Unit) { onDispose { onSurface(null) } }
 
-        when (status) {
-            SandboxStatus.Idle, SandboxStatus.Starting -> StageMessage("Starting the app…")
-            is SandboxStatus.Running -> Unit
-            is SandboxStatus.Stopped -> StageFallback(
-                title = "The app stopped",
-                message = status.reason,
-                onRetry = onRetry,
-                onFullScreen = onFullScreen,
-                onDismiss = onDismiss,
-            )
-            is SandboxStatus.Failed -> StageFallback(
-                title = "Could not run the app in this tab",
+        when {
+            !running -> IdleScreen(onLaunch)
+            status is SandboxStatus.Starting || status is SandboxStatus.Idle ->
+                ScreenMessage("Starting the app…")
+
+            status is SandboxStatus.Failed -> ScreenFallback(
                 message = status.message,
                 onRetry = onRetry,
                 onFullScreen = onFullScreen,
                 onDismiss = onDismiss,
             )
+
+            else -> Unit
         }
     }
 }
 
+/** A device with nothing on it — the tab's resting state, and what `screencap` answers black for. */
 @Composable
-private fun StageMessage(text: String) {
+private fun IdleScreen(onLaunch: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.padding(24.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.PhoneAndroid,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.35f),
+            modifier = Modifier.size(40.dp),
+        )
+        Text(
+            text = VirtualIdentity.MODEL,
+            style = MaterialTheme.typography.titleSmall,
+            color = Color.White.copy(alpha = 0.75f),
+        )
+        Text(
+            text = "The screen is on and nothing is running. Install and launch over adb, or pick " +
+                "an APK here.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.45f),
+            textAlign = TextAlign.Center,
+            modifier = Modifier.widthIn(max = 300.dp),
+        )
+        CompactOutlinedButton(text = "Run an app", onClick = onLaunch)
+    }
+}
+
+@Composable
+private fun ScreenMessage(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.bodyMedium,
@@ -233,10 +299,10 @@ private fun StageMessage(text: String) {
     )
 }
 
-/** Never a black tab: whatever went wrong, the app can still be started the old way from here. */
+/** Never a black tab with no explanation: whatever went wrong, the app can still be started the old
+ *  way from here. */
 @Composable
-private fun StageFallback(
-    title: String,
+private fun ScreenFallback(
     message: String,
     onRetry: () -> Unit,
     onFullScreen: () -> Unit,
@@ -252,7 +318,11 @@ private fun StageFallback(
             modifier = Modifier.padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(
+                text = "Could not run the app on this device",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
             Text(
                 text = message,
                 style = MaterialTheme.typography.bodySmall,
@@ -265,14 +335,14 @@ private fun StageFallback(
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 CompactOutlinedButton(text = "Try again", onClick = onRetry, modifier = Modifier.weight(1f))
-                CompactOutlinedButton(text = "Close", onClick = onDismiss, modifier = Modifier.weight(1f))
+                CompactOutlinedButton(text = "Clear", onClick = onDismiss, modifier = Modifier.weight(1f))
             }
         }
     }
 }
 
 /**
- * The tab's controls, floating over the guest instead of taking a band out of it.
+ * The device's controls, floating over its screen instead of taking a band out of it.
  *
  * An embedded guest lays itself out against the phone's screen rather than the tab, so tall content
  * already runs past the bottom edge; every row of tab handed back to it is a row of the app that can
@@ -280,9 +350,11 @@ private fun StageFallback(
  * through the same pill the workbench's hidden chrome uses.
  */
 @Composable
-private fun BoxScope.SandboxControls(
+private fun BoxScope.DeviceControls(
+    running: Boolean,
     onBack: () -> Unit,
     onKeyboard: () -> Unit,
+    onLaunch: () -> Unit,
     onRestart: () -> Unit,
     onFullScreen: () -> Unit,
     onStop: () -> Unit,
@@ -321,7 +393,7 @@ private fun BoxScope.SandboxControls(
             tonalElevation = 3.dp,
         ) {
             Column {
-                SandboxToolbar(onBack, onKeyboard, onRestart, onFullScreen, onStop)
+                DeviceToolbar(running, onBack, onKeyboard, onLaunch, onRestart, onFullScreen, onStop)
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
             }
         }
@@ -330,9 +402,11 @@ private fun BoxScope.SandboxControls(
     if (!expanded) {
         FloatingRestorePill(
             icon = jcIcon(JCodeIcon.ChevronDown),
-            contentDescription = "Show the app controls",
+            contentDescription = "Show the device controls",
             onClick = { expanded = true },
-            modifier = Modifier.align(Alignment.TopStart).padding(4.dp),
+            // Top-centre: the workbench's own chrome pill owns TopEnd in the same Box, and in
+            // distraction-free mode the two would sit on top of each other.
+            modifier = Modifier.align(Alignment.TopCenter).padding(4.dp),
             // The workbench's own pill is translucent over J Code's background; this one floats over
             // whatever the guest happens to be drawing, so it keeps its own contrast.
             containerColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -341,9 +415,11 @@ private fun BoxScope.SandboxControls(
 }
 
 @Composable
-private fun SandboxToolbar(
+private fun DeviceToolbar(
+    running: Boolean,
     onBack: () -> Unit,
     onKeyboard: () -> Unit,
+    onLaunch: () -> Unit,
     onRestart: () -> Unit,
     onFullScreen: () -> Unit,
     onStop: () -> Unit,
@@ -353,12 +429,24 @@ private fun SandboxToolbar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        ToolbarAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onBack)
-        ToolbarAction(Icons.Rounded.Keyboard, "Keyboard", onKeyboard)
+        if (running) {
+            ToolbarAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onBack)
+            ToolbarAction(Icons.Rounded.Keyboard, "Keyboard", onKeyboard)
+        } else {
+            Text(
+                text = VirtualIdentity.MODEL,
+                modifier = Modifier.padding(start = 8.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Box(modifier = Modifier.weight(1f))
-        ToolbarAction(Icons.Rounded.Fullscreen, "Run full screen", onFullScreen)
-        ToolbarAction(Icons.Rounded.RestartAlt, "Restart app", onRestart)
-        ToolbarAction(Icons.Rounded.Stop, "Stop", onStop, tint = MaterialTheme.colorScheme.error)
+        ToolbarAction(Icons.Rounded.PlayArrow, "Run an app", onLaunch)
+        if (running) {
+            ToolbarAction(Icons.Rounded.Fullscreen, "Run full screen", onFullScreen)
+            ToolbarAction(Icons.Rounded.RestartAlt, "Restart app", onRestart)
+            ToolbarAction(Icons.Rounded.Stop, "Stop", onStop, tint = MaterialTheme.colorScheme.error)
+        }
     }
 }
 
@@ -374,13 +462,15 @@ private fun ToolbarAction(
     }
 }
 
+/** Picks what to put on the device. Over the screen, not instead of it — the device stays up. */
 @Composable
-private fun SandboxSetup(
+private fun DeviceLauncher(
     tier: AppSandboxTier,
     apkPath: String,
     onApkPathChange: (String) -> Unit,
     onRunHere: () -> Unit,
     onRunFullScreen: () -> Unit,
+    onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val problem = remember(apkPath) { apkProblem(apkPath) }
@@ -388,81 +478,85 @@ private fun SandboxSetup(
     // Projects live on app-private ext4, not the shared /storage tree an older build used, so the
     // example path is resolved rather than written out.
     val projectsRoot = remember { WorkspaceHostPaths.projectsRoot }
-    Column(
-        modifier = modifier.verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(
-                imageVector = Icons.Rounded.PhoneAndroid,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(28.dp),
-            )
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("App sandbox", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-                Text(
-                    text = "Run a freshly built APK in this tab — no install, no ADB. The app runs in " +
-                        "J Code's own process under a virtual device identity.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-
-        if (tier == AppSandboxTier.FullScreen) {
-            ManagerNoticeCard(
-                title = "Hardware acceleration is off",
-                message = "The guest is composited onto a surface, which needs the GPU. Turn " +
-                    "Settings → Performance → Rendering → Hardware acceleration back on and restart " +
-                    "J Code; until then the app can only take over the whole screen.",
-            )
-        }
-
-        ManagerSectionCard(
-            title = "App",
-            description = "The APK to run. A virtual-device run config fills this in with whatever it " +
-                "just built, and `adb shell am start` opens it here too.",
+    Surface(modifier = modifier, color = MaterialTheme.colorScheme.surface) {
+        Column(
+            modifier = Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            SettingsTextFieldRow(
-                label = "APK path",
-                value = apkPath,
-                onValueChange = onApkPathChange,
-                placeholder = "$projectsRoot/…/app-debug.apk",
-                monospace = true,
-            )
-            problem?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Run an app", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = "Put a freshly built APK on ${VirtualIdentity.MODEL} — no install, no " +
+                            "ADB. It runs in J Code's own process under a virtual device identity.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                IconButton(onClick = onClose, modifier = Modifier.size(34.dp)) {
+                    Icon(
+                        Icons.Rounded.Close,
+                        contentDescription = "Close",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
+            }
+
+            if (tier == AppSandboxTier.FullScreen) {
+                ManagerNoticeCard(
+                    title = "Hardware acceleration is off",
+                    message = "The guest is composited onto a surface, which needs the GPU. Turn " +
+                        "Settings → Performance → Rendering → Hardware acceleration back on and restart " +
+                        "J Code; until then the app can only take over the whole screen.",
                 )
             }
-            if (tier == AppSandboxTier.Embedded) {
-                CompactFilledButton(
-                    text = "Run in this tab",
+
+            ManagerSectionCard(
+                title = "App",
+                description = "The APK to run. A virtual-device run config fills this in with whatever it " +
+                    "just built, and `adb shell am start` launches it here too.",
+            ) {
+                SettingsTextFieldRow(
+                    label = "APK path",
+                    value = apkPath,
+                    onValueChange = onApkPathChange,
+                    placeholder = "$projectsRoot/…/app-debug.apk",
+                    monospace = true,
+                )
+                problem?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (tier == AppSandboxTier.Embedded) {
+                    CompactFilledButton(
+                        text = "Run on this device",
+                        enabled = readable,
+                        onClick = onRunHere,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                CompactOutlinedButton(
+                    text = "Run full screen",
                     enabled = readable,
-                    onClick = onRunHere,
+                    onClick = onRunFullScreen,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
-            CompactOutlinedButton(
-                text = "Run full screen",
-                enabled = readable,
-                onClick = onRunFullScreen,
-                modifier = Modifier.fillMaxWidth(),
+
+            ManagerNoticeCard(
+                title = "What an embedded guest gives up",
+                message = "The app runs without an activity of its own, so it cannot raise the soft " +
+                    "keyboard itself — use the keyboard button — and it lays itself out against this " +
+                    "phone's screen rather than the tab, which can leave content past the edges. Its " +
+                    "own Lifecycle is driven directly, but callbacks it registers on the activity " +
+                    "with registerActivityLifecycleCallbacks miss the pre/post start, resume and stop " +
+                    "steps. Run it full screen, or install it, before trusting what you see.",
             )
         }
-
-        ManagerNoticeCard(
-            title = "What an embedded guest gives up",
-            message = "The app runs without an activity of its own, so it cannot raise the soft " +
-                "keyboard itself — use the keyboard button — and it lays itself out against this " +
-                "phone's screen rather than the tab, which can leave content past the edges. Run it " +
-                "full screen, or install it, before trusting what you see.",
-        )
     }
 }
 

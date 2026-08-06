@@ -9,10 +9,11 @@ import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
+import java.io.File
 import java.util.concurrent.CountDownLatch
 
 /**
- * The `:guest` process's entry point for the app-sandbox editor tab.
+ * The `:guest` process's entry point for the device-sandbox editor tab.
  *
  * The container has to stay out of the IDE process — it swaps `ActivityThread.mInstrumentation` and
  * rewrites `Build`, neither of which the workbench could survive — so the tab reaches it the only
@@ -86,6 +87,15 @@ class GuestSessionService : Service() {
                 .onFailure { result.putString(KEY_ERROR, it.message ?: it.toString()) }
         }
 
+        override fun capture(pngPath: String?): Bundle = Bundle().also { result ->
+            runCatching {
+                onMain { guest.capture(File(pngPath ?: throw VirtualDeviceException("no capture path"))) }
+            }.onFailure {
+                Log.w(TAG, "cannot capture the guest's screen", it)
+                result.putString(KEY_ERROR, it.message ?: it.toString())
+            }
+        }
+
         override fun resize(width: Int, height: Int) = post { guest.resize(width, height) }
 
         override fun touch(event: MotionEvent?) {
@@ -134,8 +144,8 @@ class GuestSessionService : Service() {
         const val KEY_PACKAGE = "package"
         const val KEY_ERROR = "error"
 
-        /** False when the container could not drive `Activity.performStart`/`performResume` and had
-         *  to fall back to the public `Instrumentation` calls — see [GuestRuntime.resumeEmbedded]. */
+        /** False when the container could not reach the activity's `ActivityLifecycleCallbacks` and
+         *  had to nudge the guest's own `LifecycleRegistry` — see [GuestRuntime.resumeEmbedded]. */
         const val KEY_FULL_LIFECYCLE = "fullLifecycle"
     }
 }

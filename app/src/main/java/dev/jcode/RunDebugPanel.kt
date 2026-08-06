@@ -556,7 +556,7 @@ private fun AdbDeviceRow() {
     }
 }
 
-/** Opens the app sandbox tab, which is otherwise only reached when a virtual-device build finishes. */
+/** Opens the device sandbox tab, which is otherwise only reached when a virtual-device build finishes. */
 @Composable
 private fun VirtualDeviceRow() {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {

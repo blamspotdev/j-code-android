@@ -825,7 +825,7 @@ fun JCodeApp(
     LaunchedEffect(Unit) {
         snapshotFlow { BuiltinBrowser.revealSignal.value }.collect { if (it > 0) viewModel.openBrowserTab() }
     }
-    // Same pattern for the app sandbox: a finished virtual-device build only bumps AppSandbox.revealSignal.
+    // Same pattern for the device sandbox: a finished virtual-device build only bumps AppSandbox.revealSignal.
     LaunchedEffect(Unit) {
         snapshotFlow { AppSandbox.revealSignal.value }.collect { if (it > 0) viewModel.openAppSandboxTab() }
     }
@@ -1989,7 +1989,7 @@ private fun JCodeShell(
         // the window cannot host an embedded guest, so the decision is not taken here.
         VirtualDevice.inspect(appContext, apk.absolutePath)
             .onSuccess {
-                OutputLog.append("✓ Opening ${it.label} (${it.packageName}) in the app sandbox")
+                OutputLog.append("✓ Opening ${it.label} (${it.packageName}) on the device sandbox")
                 AppSandbox.requestOpen(apk.absolutePath)
             }
             .onFailure { fail("Virtual device: ${it.message ?: it.toString()}") }

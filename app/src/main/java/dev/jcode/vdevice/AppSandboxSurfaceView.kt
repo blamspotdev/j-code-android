@@ -20,7 +20,10 @@ import android.view.inputmethod.InputMethodManager
  * A SurfaceView, never a TextureView: the guest's views are composited by SurfaceFlinger from a
  * `SurfaceControl` the `:guest` process owns, and only a SurfaceView can adopt one
  * ([SurfaceView.setChildSurfacePackage]). It also has to be hardware accelerated, which J Code's
- * window is not by default — the page checks that before ever creating this.
+ * window is not by default — the page checks that before offering to run anything in the tab.
+ *
+ * It lives as long as the tab does, with or without a guest: it is what gives the device its
+ * resolution and the host token a guest is embedded under.
  *
  * Input is forwarded by hand. The embedded hierarchy is registered with no host input token, so the
  * system delivers it nothing; the events that arrive here are already in this view's coordinates,

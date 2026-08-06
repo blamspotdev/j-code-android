@@ -3713,12 +3713,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         openDetailPage(ANDROID_DEVICE_TAB_ID, EditorPageKind.AndroidDevice) { "Android Device" }
     }
 
-    /** Open (or focus) the app sandbox tab. The APK is carried by [dev.jcode.vdevice.AppSandbox]
+    /** Open (or focus) the device sandbox tab. The APK is carried by [dev.jcode.vdevice.AppSandbox]
      *  (set via its `requestOpen`), like the browser's URL. */
     fun openAppSandboxTab() {
         val title = AppSandbox.apkPath.value.takeIf { it.isNotBlank() }
-            ?.let { "Sandbox: ${File(it).name.removeSuffix(".apk")}" }
-            ?: "App sandbox"
+            ?.let { "Device: ${File(it).name.removeSuffix(".apk")}" }
+            ?: "Device sandbox"
         openDetailPage(APP_SANDBOX_TAB_ID, EditorPageKind.AppSandbox) { title }
         // A second request can name a different APK — `adb shell am start` does — and the tab is
         // reused, so the name it is wearing has to move with it.
@@ -4616,7 +4616,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val BROWSER_TAB_ID = "jcode://browser"
         /** Stable id of the single Android device (adb pairing) editor tab. */
         const val ANDROID_DEVICE_TAB_ID = "jcode://android-device"
-        /** Stable id of the single app sandbox editor tab — the container owns one `:guest` process. */
+        /** Stable id of the single device sandbox editor tab — the container owns one `:guest` process. */
         const val APP_SANDBOX_TAB_ID = "jcode://app-sandbox"
         /** `adb pair` is one round trip to adbd; anything past this is a wrong port or a closed dialog. */
         private const val ADB_PAIR_TIMEOUT_MS = 60_000L

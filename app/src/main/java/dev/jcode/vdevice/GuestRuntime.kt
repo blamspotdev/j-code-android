@@ -22,7 +22,7 @@ import android.util.Log
  * and [bind] hands the instance a [GuestContext] — all before `onCreate` runs, and all while the
  * system remains the one performing `attach` and driving the lifecycle.
  *
- * [embed] is the same thing without the system: it builds the activity here so the app-sandbox
+ * [embed] is the same thing without the system: it builds the activity here so the device-sandbox
  * editor tab can host its decor view, and takes over driving the lifecycle in exchange.
  */
 internal object GuestRuntime {
@@ -45,7 +45,7 @@ internal object GuestRuntime {
     private var instrumentation: GuestInstrumentation? = null
     private var activityThread: Any? = null
 
-    /** Set while an app-sandbox tab is showing this process, so intra-guest navigation is hosted in
+    /** Set while a device-sandbox tab is showing this process, so intra-guest navigation is hosted in
      *  the tab instead of being bounced onto a full-screen stub. Returns true when it took the
      *  launch. */
     @Volatile
@@ -57,6 +57,9 @@ internal object GuestRuntime {
     /** The guest whose intents outgoing `startActivity` calls should be redirected for. */
     @Volatile
     private var active: LoadedGuest? = null
+
+    /** Set while [embed] is building an activity, which is what tells [created] the two apart. */
+    private var embedding = false
 
     @Synchronized
     fun install(context: Context) {
@@ -85,7 +88,7 @@ internal object GuestRuntime {
     }
 
     /**
-     * Creates a guest activity with no window of its own, for the app-sandbox editor tab.
+     * Creates a guest activity with no window of its own, for the device-sandbox editor tab.
      *
      * The system will not put a guest activity on a display we own — `setLaunchDisplayId` is refused
      * without the signature|privileged `ACTIVITY_EMBEDDING` permission, even for our own
@@ -136,8 +139,26 @@ internal object GuestRuntime {
         GuestHooks.adoptActivityThread(activity, activityThread)
         GuestHooks.hostWindowIn(activity, windowToken)
         // Runs through GuestInstrumentation, so bind() still lands between attach and onCreate.
-        instrumentation.callActivityOnCreate(activity, null)
+        embedding = true
+        try {
+            instrumentation.callActivityOnCreate(activity, null)
+        } finally {
+            embedding = false
+        }
         return activity
+    }
+
+    /**
+     * Called once a guest activity's `onCreate` has returned — the first moment its content view
+     * exists, and the last before `setContentView` could clear anything added to it.
+     *
+     * Only a full-screen guest is given the overlay: one in the tab already has the tab's controls
+     * floating over it.
+     */
+    fun created(activity: Activity) {
+        if (embedding || activity is GuestActivity || activity is GuestBootstrapActivity) return
+        if (resolve(activity.intent) == null) return
+        GuestOverlay.install(activity)
     }
 
     /** Hosts intra-guest `startActivity` calls in the tab while [launcher] is set. */
@@ -146,32 +167,54 @@ internal object GuestRuntime {
     }
 
     /**
-     * Drives one embedded activity to RESUMED.
+     * Drives one embedded activity to RESUMED, the way `ActivityThread` would.
      *
-     * `Instrumentation.callActivityOnStart/onResume` are public but skip the pre/post dispatches
-     * AndroidX's lifecycle listens to, so they are only the fallback: see
-     * [GuestHooks.performLifecycle]. Returns false when the fallback was used, which the tab reports
-     * rather than hides.
+     * `Activity.performStart`/`performResume` are denied at `targetSdk` 33, so each step is the
+     * public `Instrumentation` call wrapped in the `Pre`/`Post` lifecycle-callback dispatches those
+     * two would have made — see [GuestHooks.dispatchLifecycleCallback], which is what actually
+     * advances an AndroidX guest's `LifecycleRegistry` and so lets Compose run its frame clock.
+     *
+     * Returns false when the callback lists could not be reached at all; the tab reports that rather
+     * than hiding it.
      */
     fun resumeEmbedded(activity: Activity): Boolean {
-        val full = GuestHooks.performLifecycle(activity, "performStart") &&
-            GuestHooks.performLifecycle(activity, "performResume")
-        if (!full) {
-            instrumentation?.callActivityOnStart(activity)
-            instrumentation?.callActivityOnResume(activity)
+        val instrumentation = instrumentation ?: return false
+        GuestHooks.dispatchLifecycleCallback(activity, "onActivityPreStarted")
+        instrumentation.callActivityOnStart(activity)
+        val started = GuestHooks.dispatchLifecycleCallback(activity, "onActivityPostStarted")
+
+        GuestHooks.dispatchLifecycleCallback(activity, "onActivityPreResumed")
+        instrumentation.callActivityOnResume(activity)
+        postResume(activity)
+        val resumed = GuestHooks.dispatchLifecycleCallback(activity, "onActivityPostResumed")
+
+        if (!started || !resumed) {
             advanceLifecycle(activity, "ON_START")
             advanceLifecycle(activity, "ON_RESUME")
         }
-        return full
+        return started && resumed
     }
 
     /**
-     * Moves the guest's own AndroidX lifecycle on when the platform's `perform*` steps were denied.
+     * `Activity.performResume` calls `onPostResume` after `onResume`, and AndroidX's
+     * `FragmentActivity` is where its fragments are moved to RESUMED. Protected SDK API, so no
+     * hidden-API policy applies — only the container being outside the class.
+     */
+    private fun postResume(activity: Activity) {
+        runCatching {
+            Activity::class.java.getDeclaredMethod("onPostResume")
+                .apply { isAccessible = true }
+                .invoke(activity)
+        }.onFailure { Log.w(TAG, "Activity#onPostResume failed", it) }
+    }
+
+    /**
+     * Last-resort route to the guest's own AndroidX lifecycle, for a platform where the callback
+     * lists have gone out of reach.
      *
-     * Compose only runs its frame clock at STARTED, and the registry that gates it is fed by
-     * `Activity.dispatchActivityPostStarted` — private, and unreachable from here. This talks to
-     * `androidx.lifecycle` in the *guest's* class loader instead, which is the app's own code and so
-     * is plain reflection with no platform policy over it. Silent when the guest does not use
+     * It talks to `androidx.lifecycle` in the *guest's* class loader, which is the app's own code and
+     * so is plain reflection with no platform policy over it — the same thing
+     * `ReportFragment.dispatch` does on API 28 and below. Silent when the guest does not use
      * AndroidX at all.
      */
     private fun advanceLifecycle(activity: Activity, event: String) {
@@ -187,11 +230,20 @@ internal object GuestRuntime {
         }.onFailure { Log.w(TAG, "cannot advance the guest's lifecycle to $event", it) }
     }
 
-    /** Tears one embedded activity down, in lifecycle order. */
+    /**
+     * Tears one embedded activity down, in lifecycle order.
+     *
+     * Only the stop step needs help: `callActivityOnPause` and `callActivityOnDestroy` go through
+     * `performPause`/`performDestroy`, which dispatch their own `Pre`/`Post` callbacks, while
+     * `callActivityOnStop` calls `onStop()` straight.
+     */
     fun destroyEmbedded(activity: Activity) {
-        if (!GuestHooks.performLifecycle(activity, "performPause")) instrumentation?.callActivityOnPause(activity)
-        if (!GuestHooks.performLifecycle(activity, "performStop")) instrumentation?.callActivityOnStop(activity)
-        if (!GuestHooks.performLifecycle(activity, "performDestroy")) instrumentation?.callActivityOnDestroy(activity)
+        val instrumentation = instrumentation ?: return
+        instrumentation.callActivityOnPause(activity)
+        GuestHooks.dispatchLifecycleCallback(activity, "onActivityPreStopped")
+        instrumentation.callActivityOnStop(activity)
+        GuestHooks.dispatchLifecycleCallback(activity, "onActivityPostStopped")
+        instrumentation.callActivityOnDestroy(activity)
     }
 
     private fun onLaunchActivity(intent: Intent, info: ActivityInfo?) {
@@ -274,7 +326,7 @@ internal object GuestRuntime {
 
     /**
      * Decides what to do with an intent the guest started: nothing, if it is not one of its own
-     * activities; host it in the app-sandbox tab, if one is showing this guest; otherwise redirect it
+     * activities; host it in the device-sandbox tab, if one is showing this guest; otherwise redirect it
      * onto a free stub and let the system launch it full screen.
      */
     private fun rewriteOutgoing(intent: Intent): StartAction {
