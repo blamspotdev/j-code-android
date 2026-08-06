@@ -3,16 +3,13 @@ package dev.jcode.vdevice
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import android.util.Log
 
 /** What the container could learn about a guest APK without installing or running it. */
 data class VirtualDeviceApp(
-    val apkPath: String,
     val packageName: String,
     val label: String,
     val versionName: String?,
-    val versionCode: Long,
     /** Fully-qualified activity class names, in manifest order. */
     val activities: List<String>,
 )
@@ -57,12 +54,9 @@ object VirtualDevice {
             ?: info.packageName
 
         VirtualDeviceApp(
-            apkPath = apkPath,
             packageName = info.packageName,
             label = label,
             versionName = info.versionName,
-            versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode
-            else @Suppress("DEPRECATION") info.versionCode.toLong(),
             activities = info.activities.orEmpty().map { it.name },
         )
     }

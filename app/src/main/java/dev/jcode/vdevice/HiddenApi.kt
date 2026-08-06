@@ -15,8 +15,8 @@ internal const val TAG = "VDEVICE"
  *
  * Verified on Android 13 with J Code's `targetSdk = 33`: the members the full-screen path touches
  * are all on the `unsupported` greylist, which carries no `maxTargetSdk`, so they are *allowed* (the
- * runtime logs a warning per access and nothing more). Three are not, and each is designed around
- * rather than bypassed:
+ * runtime logs a warning per access and nothing more). The following are not, and each is designed
+ * around rather than bypassed:
  *
  *  - `ContextThemeWrapper.mTheme` is `max-target-p`, so it cannot be cleared — see
  *    [GuestRuntime.onLaunchActivity], which keeps it from ever being created.

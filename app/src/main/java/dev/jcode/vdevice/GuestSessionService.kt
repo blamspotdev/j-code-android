@@ -72,7 +72,6 @@ class GuestSessionService : Service() {
                 }
             }.onSuccess { surface ->
                 result.putParcelable(KEY_SURFACE, surface)
-                result.putString(KEY_PACKAGE, guest.packageName)
                 result.putBoolean(KEY_FULL_LIFECYCLE, guest.fullLifecycle)
             }.onFailure { error ->
                 Log.e(TAG, "cannot embed $apkPath", error)
@@ -141,7 +140,6 @@ class GuestSessionService : Service() {
 
     companion object {
         const val KEY_SURFACE = "surface"
-        const val KEY_PACKAGE = "package"
         const val KEY_ERROR = "error"
 
         /** False when the container could not reach the activity's `ActivityLifecycleCallbacks` and

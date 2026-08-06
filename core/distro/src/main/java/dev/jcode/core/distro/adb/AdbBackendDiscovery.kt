@@ -62,9 +62,6 @@ class AdbBackendDiscovery(context: Context) {
     @Volatile
     private var manualOverride: AdbEndpoint? = null
 
-    val override: AdbEndpoint?
-        get() = manualOverride
-
     /** Starts (or keeps) mDNS discovery. A manual override is published instead and suppresses it. */
     @Synchronized
     fun start() {

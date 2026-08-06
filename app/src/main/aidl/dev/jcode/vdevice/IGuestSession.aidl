@@ -10,9 +10,10 @@ import dev.jcode.vdevice.IGuestSessionCallback;
  *
  * start() answers with a SurfaceControlViewHost.SurfacePackage (in a Bundle, so a failure can come
  * back as a message rather than an exception); the IDE hands it to a SurfaceView. hostToken is that
- * SurfaceView's input token, without which the window manager refuses to grant the embedded
- * hierarchy an input channel at all; when it cannot be obtained the guest is registered with no
- * input channel and the events below carry input across by hand instead.
+ * SurfaceView's input token and is not optional: without it the window manager refuses to grant the
+ * embedded hierarchy an input channel at all, so a null one is refused with a message rather than
+ * embedded. Having the channel is still not the same as being fed by it, which is why the events
+ * below carry input across by hand.
  */
 interface IGuestSession {
     Bundle start(String apkPath, String activityClass, int width, int height, IBinder hostToken,

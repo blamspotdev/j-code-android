@@ -3897,16 +3897,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         startDebug(host)
     }
 
+    /** Catalog id of the engine that would debug [hostPath]. Matching the catalog's `extensions` in
+     *  the UI cannot resolve `.kt`, which only maps to an engine inside an Android app project. */
+    fun debugEngineIdFor(hostPath: String): String? = debugController.debugEngineIdFor(hostPath)
+
     /**
      * Resolve the source file the Debug action launches under the debugger — VS-style "just debug it",
      * no manual field. Priority: the config's explicit [RunConfig.debugEntry], then a source file named
      * in a run command (`node dbg.js`, `python3 app/main.py`), then the active editor tab. Only files
      * whose language has a built-in DAP engine qualify. Returns a host absolute path, or null.
      */
-    /** Catalog id of the engine that would debug [hostPath]. Matching the catalog's `extensions` in
-     *  the UI cannot resolve `.kt`, which only maps to an engine inside an Android app project. */
-    fun debugEngineIdFor(hostPath: String): String? = debugController.debugEngineIdFor(hostPath)
-
     private fun deriveDebugEntryHost(project: Project, config: dev.jcode.core.config.RunConfig): String? {
         val projHost = (project.fsPath as? FsPath.Local)?.file
         val bind = project.distroBindTarget.trimEnd('/')

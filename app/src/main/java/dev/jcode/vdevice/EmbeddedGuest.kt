@@ -59,9 +59,6 @@ internal class EmbeddedGuest(
     var fullLifecycle = true
         private set
 
-    val packageName: String?
-        get() = stack.lastOrNull()?.packageName
-
     fun start(
         apkPath: String,
         activityClass: String?,

@@ -39,7 +39,7 @@ internal sealed interface SandboxStatus {
     data object Starting : SandboxStatus
 
     /** [warning] is set when the guest is up but something about it is degraded. */
-    data class Running(val packageName: String?, val warning: String?) : SandboxStatus
+    data class Running(val warning: String?) : SandboxStatus
     data class Stopped(val reason: String) : SandboxStatus
     data class Failed(val message: String) : SandboxStatus
 }
@@ -226,7 +226,6 @@ internal class AppSandboxSession(context: Context) {
 
         _surface.value = surface
         _status.value = SandboxStatus.Running(
-            packageName = result.getString(GuestSessionService.KEY_PACKAGE),
             warning = if (result.getBoolean(GuestSessionService.KEY_FULL_LIFECYCLE, true)) null else
                 "Android 13 blocks Activity.mActivityLifecycleCallbacks, so callbacks this app " +
                     "registered on the activity itself were not sent onActivityPostStarted or " +
@@ -264,8 +263,6 @@ internal class AppSandboxSession(context: Context) {
     fun text(text: String) = ignoringDeath { it.text(text) }
 
     fun back() = ignoringDeath { it.back() }
-
-    /** Unbinding is the teardown: `:guest` has no other component keeping it alive. */
 
     fun close() {
         startup?.cancel()

@@ -62,11 +62,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jcode.core.distro.WorkspaceHostPaths
 import dev.jcode.design.CompactFilledButton
 import dev.jcode.design.CompactOutlinedButton
-import dev.jcode.design.JCodeIcon
 import dev.jcode.design.ManagerNoticeCard
 import dev.jcode.design.ManagerSectionCard
 import dev.jcode.design.SettingsTextFieldRow
-import dev.jcode.design.jcIcon
 import java.io.File
 import kotlinx.coroutines.delay
 

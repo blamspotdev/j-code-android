@@ -11,17 +11,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 
 /**
- * The way back from a bar that has hidden itself — the workbench's distraction-free chrome and the
- * device sandbox's auto-collapsing toolbar both return through one of these.
+ * The way back from a bar that has hidden itself — the workbench's distraction-free chrome returns
+ * through one of these.
  *
  * 44dp (≥ the 48dp minimum once the touch slop around it is counted) keeps the only exit comfortably
- * tappable. [containerColor] is translucent by default, which suits a pill floating over J Code's own
- * background; a pill floating over content J Code does not draw should pass an opaque colour.
+ * tappable. The container is translucent, which suits a pill floating over J Code's own background.
  */
 @Composable
 fun FloatingRestorePill(
@@ -29,13 +27,12 @@ fun FloatingRestorePill(
     contentDescription: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    containerColor: Color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
 ) {
     Box(
         modifier = modifier
             .size(44.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(containerColor)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

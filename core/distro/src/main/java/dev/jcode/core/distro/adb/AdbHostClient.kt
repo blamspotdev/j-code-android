@@ -2,18 +2,12 @@ package dev.jcode.core.distro.adb
 
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
-import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
 
 /**
@@ -49,8 +43,6 @@ class AdbHostClient(
     /** Returns adb's own human-readable answer, which reports failure as text rather than as `FAIL`. */
     suspend fun connect(target: String): String = hostQuery("host:connect:$target")
 
-    suspend fun disconnect(target: String): String = hostQuery("host:disconnect:$target")
-
     /**
      * Installs a port forward on [serial] without switching this socket's transport: `host-serial:`
      * addresses a device for a single host service, where `host:transport:` would rebind the socket
@@ -75,22 +67,6 @@ class AdbHostClient(
             }
         }
         Unit
-    }
-
-    /**
-     * Runs [cmd] over the `exec:` service: a single unframed stream with stderr folded into stdout and
-     * NO exit code — use [shellV2] whenever the exit status matters.
-     */
-    suspend fun exec(
-        serial: String,
-        cmd: String,
-        timeoutMs: Int = COMMAND_TIMEOUT_MS,
-    ): AdbExec = withContext(Dispatchers.IO) {
-        session(timeoutMs).use { session ->
-            session.transport(serial)
-            session.request("exec:$cmd")
-            AdbExec(stdout = session.readAll())
-        }
     }
 
     /**
@@ -126,40 +102,6 @@ class AdbHostClient(
         }
     }
 
-    /** Follows `logcat [args]` on [serial], one emission per line, until cancelled or logcat exits. */
-    fun logcat(serial: String, args: List<String> = emptyList()): Flow<String> = callbackFlow {
-        // A follow stream is idle by design between log lines, so this socket must have NO read
-        // timeout — a SocketTimeoutException would tear down a perfectly healthy follow. That leaves
-        // closing the socket as the only way to unblock the native read, so cancellation does exactly
-        // that; the blocked read then throws and the producer unwinds.
-        val session = session(soTimeoutMs = NO_TIMEOUT)
-        coroutineContext.job.invokeOnCompletion { session.close() }
-        val line = ByteArrayOutputStream()
-        try {
-            session.transport(serial)
-            session.request("shell,v2,raw:" + (listOf("logcat") + args).joinToString(" "))
-            session.readShellV2 { id, payload ->
-                if (id == ID_STDOUT || id == ID_STDERR) {
-                    for (byte in payload) {
-                        if (byte == NEWLINE) {
-                            send(line.toString(Charsets.UTF_8.name()))
-                            line.reset()
-                        } else {
-                            line.write(byte.toInt())
-                        }
-                    }
-                }
-            }
-            if (line.size() > 0) send(line.toString(Charsets.UTF_8.name()))
-        } catch (e: IOException) {
-            // Either the stream was closed by cancellation (expected) or the device went away; both
-            // end the flow, and the socket is already being closed by the completion handler above.
-            android.util.Log.d(TAG, "logcat stream on $serial ended: ${e.message}")
-        }
-        close()
-        awaitClose { session.close() }
-    }.flowOn(Dispatchers.IO)
-
     private suspend fun hostQuery(service: String): String = withContext(Dispatchers.IO) {
         session().use { session ->
             session.request(service)
@@ -194,11 +136,9 @@ class AdbHostClient(
         const val LOOPBACK: String = "127.0.0.1"
         const val DEFAULT_SERVER_PORT: Int = 5037
 
-        private const val TAG = "AdbHostClient"
         private const val CONNECT_TIMEOUT_MS = 2_000
         private const val CONTROL_TIMEOUT_MS = 10_000
         private const val COMMAND_TIMEOUT_MS = 60_000
-        private const val NO_TIMEOUT = 0
         private const val MODEL_PREFIX = "model:"
         private val FIELD_SEPARATOR = Regex("\\s+")
     }
@@ -215,7 +155,6 @@ private const val ID_EXIT = 3
 
 /** Shell v2 payloads are chunks of a live stream; anything larger is a desynchronised socket. */
 private const val MAX_FRAME_BYTES = 1 shl 20
-private const val NEWLINE = '\n'.code.toByte()
 
 /** One socket to the adb server, and the framing rules that apply to it. */
 private class AdbSession(private val socket: Socket) : Closeable {
@@ -242,8 +181,6 @@ private class AdbSession(private val socket: Socket) : Closeable {
             ?: throw AdbProtocolException("adb sent an unparseable length header")
         return String(readExactly(length), Charsets.UTF_8)
     }
-
-    fun readAll(): String = String(input.readBytes(), Charsets.UTF_8)
 
     /**
      * `forward:` is answered TWICE — once for "service accepted", once for "forward installed" — unlike

@@ -50,10 +50,6 @@ class AdbRelayServer(
     @Volatile
     private var acceptJob: Job? = null
 
-    /** The bound port, or -1 while stopped. */
-    val port: Int
-        get() = server?.takeIf { !it.isClosed }?.localPort ?: UNBOUND
-
     /** Binds and starts accepting, or returns the port of the already-running listener. */
     suspend fun start(): Int = startLock.withLock {
         server?.takeIf { !it.isClosed }?.let { return@withLock it.localPort }
@@ -164,7 +160,6 @@ class AdbRelayServer(
     companion object {
         const val PREFERRED_PORT: Int = 5580
         const val LAST_PORT: Int = 5599
-        const val UNBOUND: Int = -1
 
         private const val TAG = "AdbRelayServer"
         private const val BACKLOG = 8

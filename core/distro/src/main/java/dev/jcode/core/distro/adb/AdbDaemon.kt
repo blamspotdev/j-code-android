@@ -112,11 +112,8 @@ class AdbDaemon(
     @Volatile
     private var acceptJob: Job? = null
 
-    /** The bound port, or [UNBOUND] while stopped. `adb connect 127.0.0.1:<port>` reaches it. */
-    val port: Int
-        get() = server?.takeIf { !it.isClosed }?.localPort ?: UNBOUND
-
-    /** Binds and starts accepting, or returns the port of the already-running listener. */
+    /** Binds and starts accepting, or returns the port of the already-running listener —
+     *  `adb connect 127.0.0.1:<port>` reaches it. */
     suspend fun start(): Int = startLock.withLock {
         server?.takeIf { !it.isClosed }?.let { return@withLock it.localPort }
         val bound = withContext(Dispatchers.IO) { bind() }
@@ -349,7 +346,6 @@ class AdbDaemon(
         /** Clear of adb's emulator scan (5554-5585) and of [AdbRelayServer]'s range. */
         const val PREFERRED_PORT: Int = 5620
         const val LAST_PORT: Int = 5639
-        const val UNBOUND: Int = -1
 
         private const val BACKLOG = 4
         private const val MAX_AUTH_ATTEMPTS = 8
