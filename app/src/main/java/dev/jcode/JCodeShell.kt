@@ -317,6 +317,8 @@ import dev.jcode.design.AndroidDeviceSetting
 import dev.jcode.design.LocalAndroidDevice
 import dev.jcode.design.LocalVirtualDevice
 import dev.jcode.design.VirtualDeviceSetting
+import dev.jcode.vdevice.AppSandbox
+import dev.jcode.vdevice.AppSandboxPage
 import dev.jcode.vdevice.VirtualDevice
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
@@ -822,6 +824,12 @@ fun JCodeApp(
     LaunchedEffect(Unit) {
         snapshotFlow { BuiltinBrowser.revealSignal.value }.collect { if (it > 0) viewModel.openBrowserTab() }
     }
+    // Same pattern for the app sandbox: a finished virtual-device build only bumps AppSandbox.revealSignal.
+    LaunchedEffect(Unit) {
+        snapshotFlow { AppSandbox.revealSignal.value }.collect { if (it > 0) viewModel.openAppSandboxTab() }
+    }
+    // A page tab has no close callback, so the guest is reaped by watching the tab list.
+    LaunchedEffect(editorGroup.tabs) { viewModel.pruneAppSandbox() }
     val snackbarHostState = remember { SnackbarHostState() }
     val openFolderLauncher = rememberOpenFolderLauncher(
         onFolderPicked = viewModel::openExternalFolder,
@@ -1976,8 +1984,13 @@ private fun JCodeShell(
             fail("Build reported success but left no APK in ${apkDir.absolutePath}.")
             return
         }
-        VirtualDevice.launch(hostActivity ?: appContext, apk.absolutePath)
-            .onSuccess { OutputLog.append("✓ Starting ${it.label} (${it.packageName}) in the virtual device") }
+        // The tab is the preferred presentation; it falls back to the full-screen launch itself when
+        // the window cannot host an embedded guest, so the decision is not taken here.
+        VirtualDevice.inspect(appContext, apk.absolutePath)
+            .onSuccess {
+                OutputLog.append("✓ Opening ${it.label} (${it.packageName}) in the app sandbox")
+                AppSandbox.requestOpen(apk.absolutePath)
+            }
             .onFailure { fail("Virtual device: ${it.message ?: it.toString()}") }
     }
 
@@ -2873,6 +2886,7 @@ private fun JCodeShell(
                                     onPair = managerActions.onAdbPair,
                                     modifier = Modifier.fillMaxSize(),
                                 )
+                                EditorPageKind.AppSandbox -> AppSandboxPage(modifier = Modifier.fillMaxSize())
                                 EditorPageKind.Browser -> BrowserPage(modifier = Modifier.fillMaxSize())
                                 EditorPageKind.ImageViewer -> key(tab.id) {
                                     // Key by tab id so switching between image tabs (same call site)

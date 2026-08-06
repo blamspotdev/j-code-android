@@ -27,9 +27,14 @@ data class VirtualDeviceApp(
  * place of J Code's stubs, so the *system* still drives attach and the whole activity lifecycle.
  *
  * The guest therefore shares J Code's uid, its permissions and its process — this is a **sandboxed
- * preview, not a security boundary**. It runs full-screen in J Code's task: hosting it on a
- * `VirtualDisplay` is not possible for a normal app, because `ActivityOptions.setLaunchDisplayId`
- * requires the signature|privileged `ACTIVITY_EMBEDDING` permission.
+ * preview, not a security boundary**.
+ *
+ * [launch] is the full-screen path: a real activity, in its own task, with everything a real window
+ * brings. The app-sandbox editor tab is the other one — see [EmbeddedGuest] — and it exists because
+ * the container instantiates the guest activity itself and so does not have to ask the system for a
+ * window at all. Putting a *system-launched* activity on a display we own stays impossible for a
+ * normal app: `ActivityOptions.setLaunchDisplayId` requires the signature|privileged
+ * `ACTIVITY_EMBEDDING` permission.
  */
 object VirtualDevice {
 

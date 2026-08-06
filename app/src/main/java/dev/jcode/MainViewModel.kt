@@ -34,6 +34,7 @@ import dev.jcode.core.distro.SdkCatalogAction
 import dev.jcode.core.distro.DistroService
 import dev.jcode.core.distro.DistroServiceLocator
 import dev.jcode.adb.VirtualDeviceAdbService
+import dev.jcode.vdevice.AppSandbox
 import dev.jcode.core.distro.adb.AdbBridge
 import dev.jcode.core.distro.adb.AdbBridgeLocator
 import dev.jcode.core.distro.adb.AdbBridgeState
@@ -3644,6 +3645,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         stopAllRuntimeServices()
+        AppSandbox.close()
         adbBridge.stop()
         super.onCleared()
     }
@@ -3709,6 +3711,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Open (or focus) the Android device page — the adb pairing wizard for this phone. */
     fun openAndroidDevicePage() {
         openDetailPage(ANDROID_DEVICE_TAB_ID, EditorPageKind.AndroidDevice) { "Android Device" }
+    }
+
+    /** Open (or focus) the app sandbox tab. The APK is carried by [dev.jcode.vdevice.AppSandbox]
+     *  (set via its `requestOpen`), like the browser's URL. */
+    fun openAppSandboxTab() {
+        openDetailPage(APP_SANDBOX_TAB_ID, EditorPageKind.AppSandbox) {
+            AppSandbox.apkPath.value.takeIf { it.isNotBlank() }
+                ?.let { "Sandbox: ${File(it).name.removeSuffix(".apk")}" }
+                ?: "App sandbox"
+        }
+    }
+
+    /** Stop the guest once its editor tab is gone. Page tabs get no close callback, so the shell
+     *  calls this whenever the tab list changes. */
+    fun pruneAppSandbox() {
+        if (_editorGroup.value.tabs.none { it.pageKind == EditorPageKind.AppSandbox }) AppSandbox.close()
     }
 
     /**
@@ -4595,6 +4613,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val BROWSER_TAB_ID = "jcode://browser"
         /** Stable id of the single Android device (adb pairing) editor tab. */
         const val ANDROID_DEVICE_TAB_ID = "jcode://android-device"
+        /** Stable id of the single app sandbox editor tab — the container owns one `:guest` process. */
+        const val APP_SANDBOX_TAB_ID = "jcode://app-sandbox"
         /** `adb pair` is one round trip to adbd; anything past this is a wrong port or a closed dialog. */
         private const val ADB_PAIR_TIMEOUT_MS = 60_000L
         /** host:port, with nothing a shell could read as anything but a literal. */

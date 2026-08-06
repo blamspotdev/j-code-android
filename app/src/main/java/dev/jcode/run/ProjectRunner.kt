@@ -832,7 +832,7 @@ object ProjectRunner {
         return cleaned.trim('-').ifBlank { "project" }
     }
 
-    private const val VDEVICE_MARKER = "jcode-virtual-device:"
+    const val VDEVICE_MARKER = "jcode-virtual-device:"
     private val VDEVICE_MARKER_RE = Regex("^# $VDEVICE_MARKER (.+)$", RegexOption.MULTILINE)
 
     private const val ASPNET_PORT = 5080

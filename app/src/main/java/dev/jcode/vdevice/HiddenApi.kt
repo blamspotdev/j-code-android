@@ -13,11 +13,20 @@ internal const val TAG = "VDEVICE"
  * `ActivityThread.mH`, building a bare `AssetManager`, replacing the `IActivityTaskManager` binder
  * proxy — lives on non-SDK ("hidden") members, so **this is coupled to `targetSdk`.**
  *
- * Verified on Android 13 with J Code's `targetSdk = 33`: every member the container touches is on
- * the `unsupported` greylist, which carries no `maxTargetSdk`, so all of it is *allowed* (the runtime
- * logs a warning per access and nothing more). The one exception is
- * `ContextThemeWrapper.mTheme`, which is `max-target-p` and therefore **denied** — see
- * [GuestRuntime.onLaunchActivity] for how the container avoids ever needing it.
+ * Verified on Android 13 with J Code's `targetSdk = 33`: the members the full-screen path touches
+ * are all on the `unsupported` greylist, which carries no `maxTargetSdk`, so they are *allowed* (the
+ * runtime logs a warning per access and nothing more). Three are not, and each is designed around
+ * rather than bypassed:
+ *
+ *  - `ContextThemeWrapper.mTheme` is `max-target-p`, so it cannot be cleared — see
+ *    [GuestRuntime.onLaunchActivity], which keeps it from ever being created.
+ *  - `ActivityThread.startActivityNow` and `SurfaceControlViewHost.setView(View, LayoutParams)` do
+ *    not appear in their classes' declared members at all, which is what a *denied* member looks
+ *    like from here. The app-sandbox tab uses the public `Instrumentation.newActivity` and the
+ *    public `setView(View, int, int)` instead; the cost is only that an embedded guest renders in
+ *    software.
+ *  - `Activity.performStart`/`performResume` are denied the same way. [GuestRuntime.resumeEmbedded]
+ *    falls back to the public `Instrumentation` calls and says so in the tab.
  *
  * There is no way to lift that: `VMRuntime.setHiddenApiExemptions` — the usual escape hatch, reached
  * by double reflection — is itself `blocked` from Android 10 on, confirmed denied on this device.

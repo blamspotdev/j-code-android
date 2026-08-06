@@ -132,6 +132,16 @@
             android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|layoutDirection|fontScale|density|colorMode"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
 
+        <!-- The app-sandbox editor tab's half of the container: the workbench binds this to have the
+             guest built window-less and composited into a SurfaceView (see EmbeddedGuest). It shares
+             the stubs' :guest process on purpose — the hooks and the guest's heap must stay out of
+             the IDE — and unbinding it is what tears a session down, since nothing else keeps the
+             process alive. -->
+        <service
+            android:name=".vdevice.GuestSessionService"
+            android:process=":guest"
+            android:exported="false" />
+
     </application>
 
 </manifest>

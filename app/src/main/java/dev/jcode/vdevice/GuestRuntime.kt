@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.ApplicationInfo
+import android.os.Binder
 import android.util.Log
 
 /**
@@ -19,6 +20,9 @@ import android.util.Log
  * name the guest activity, [newActivity] instantiates that class out of the guest's class loader,
  * and [bind] hands the instance a [GuestContext] — all before `onCreate` runs, and all while the
  * system remains the one performing `attach` and driving the lifecycle.
+ *
+ * [embed] is the same thing without the system: it builds the activity here so the app-sandbox
+ * editor tab can host its decor view, and takes over driving the lifecycle in exchange.
  */
 internal object GuestRuntime {
 
@@ -26,6 +30,9 @@ internal object GuestRuntime {
     const val EXTRA_ACTIVITY = "dev.jcode.vdevice.activity"
 
     private const val STUB_COUNT = 4
+
+    /** Embedded-activity id, the `Activity.getId()` a system launch would never produce. */
+    private const val EMBEDDED_ID = "jcode-embedded"
 
     private class Target(val guest: LoadedGuest, val activityClass: String)
 
@@ -35,6 +42,13 @@ internal object GuestRuntime {
 
     private lateinit var host: Context
     private var instrumentation: GuestInstrumentation? = null
+    private var activityThread: Any? = null
+
+    /** Set while an app-sandbox tab is showing this process, so intra-guest navigation is hosted in
+     *  the tab instead of being bounced onto a full-screen stub. Returns true when it took the
+     *  launch. */
+    @Volatile
+    private var embeddedLauncher: ((Intent) -> Boolean)? = null
 
     /** Guest activity class -> stub slot, so a given guest activity always lands on the same stub. */
     private val stubSlots = LinkedHashMap<String, Int>()
@@ -51,6 +65,7 @@ internal object GuestRuntime {
 
         val activityThread = GuestHooks.currentActivityThread()
             ?: throw VirtualDeviceException("no ActivityThread in this process")
+        this.activityThread = activityThread
         instrumentation = GuestHooks.installInstrumentation(activityThread)
             ?: throw VirtualDeviceException("cannot replace ActivityThread.mInstrumentation")
 
@@ -66,6 +81,114 @@ internal object GuestRuntime {
         active = guest
         val target = activityClass?.takeIf { guest.activities.containsKey(it) } ?: guest.launchActivity
         from.startActivity(stubIntent(guest, target).addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION))
+    }
+
+    /**
+     * Creates a guest activity with no window of its own, for the app-sandbox editor tab.
+     *
+     * The system will not put a guest activity on a display we own — `setLaunchDisplayId` is refused
+     * without the signature|privileged `ACTIVITY_EMBEDDING` permission, even for our own
+     * `allowEmbedded` activity on our own virtual display — so the container asks the system for no
+     * activity at all and hands only the resulting `Window`'s decor view to a
+     * `SurfaceControlViewHost`.
+     *
+     * What builds it is `Instrumentation.newActivity`, which is *public SDK* and performs the same
+     * `Activity.attach` `performLaunchActivity` would. `ActivityThread.startActivityNow` — the entry
+     * point `LocalActivityManager` uses for exactly this — is not an option: it is filtered out of
+     * `ActivityThread`'s declared methods entirely at `targetSdk` 33, measured on Android 13, so it
+     * is denied rather than greylisted and there is nothing to reflect at.
+     *
+     * The activity gives up everything hanging off a real activity token: `Dialog`, `PopupWindow`
+     * and option menus cannot be added to the window manager, and the system drives none of its
+     * lifecycle — see [resumeEmbedded] and [EmbeddedGuest].
+     */
+    fun embed(apkPath: String, activityClass: String?): Activity {
+        val guest = GuestLoader.load(host, apkPath)
+        active = guest
+        val target = activityClass?.takeIf { guest.activities.containsKey(it) } ?: guest.launchActivity
+        return embed(stubIntent(guest, target))
+    }
+
+    /** Builds an embedded activity from a stub intent — the shape [rewriteOutgoing] hands its host. */
+    fun embed(stub: Intent): Activity {
+        val instrumentation = instrumentation ?: throw VirtualDeviceException("the container is not installed")
+        val component = stub.component ?: throw VirtualDeviceException("no stub component")
+        val info = host.packageManager.getActivityInfo(component, 0)
+        // The same rewrite the LAUNCH_ACTIVITY hook applies: guest component, guest resource ids, and
+        // above all theme 0, so no theme is built against J Code's resources before bind() runs.
+        onLaunchActivity(stub, info)
+        val target = resolve(stub) ?: throw VirtualDeviceException("$stub carries no guest identity")
+
+        val activity = instrumentation.newActivity(
+            target.guest.classLoader.loadClass(target.activityClass),
+            host,
+            Binder(),
+            null,
+            stub,
+            info,
+            target.guest.labelOf(target.activityClass),
+            null,
+            EMBEDDED_ID,
+            null,
+        )
+        GuestHooks.adoptActivityThread(activity, activityThread)
+        // Runs through GuestInstrumentation, so bind() still lands between attach and onCreate.
+        instrumentation.callActivityOnCreate(activity, null)
+        return activity
+    }
+
+    /** Hosts intra-guest `startActivity` calls in the tab while [launcher] is set. */
+    fun setEmbeddedLauncher(launcher: ((Intent) -> Boolean)?) {
+        embeddedLauncher = launcher
+    }
+
+    /**
+     * Drives one embedded activity to RESUMED.
+     *
+     * `Instrumentation.callActivityOnStart/onResume` are public but skip the pre/post dispatches
+     * AndroidX's lifecycle listens to, so they are only the fallback: see
+     * [GuestHooks.performLifecycle]. Returns false when the fallback was used, which the tab reports
+     * rather than hides.
+     */
+    fun resumeEmbedded(activity: Activity): Boolean {
+        val full = GuestHooks.performLifecycle(activity, "performStart") &&
+            GuestHooks.performLifecycle(activity, "performResume")
+        if (!full) {
+            instrumentation?.callActivityOnStart(activity)
+            instrumentation?.callActivityOnResume(activity)
+            advanceLifecycle(activity, "ON_START")
+            advanceLifecycle(activity, "ON_RESUME")
+        }
+        return full
+    }
+
+    /**
+     * Moves the guest's own AndroidX lifecycle on when the platform's `perform*` steps were denied.
+     *
+     * Compose only runs its frame clock at STARTED, and the registry that gates it is fed by
+     * `Activity.dispatchActivityPostStarted` — private, and unreachable from here. This talks to
+     * `androidx.lifecycle` in the *guest's* class loader instead, which is the app's own code and so
+     * is plain reflection with no platform policy over it. Silent when the guest does not use
+     * AndroidX at all.
+     */
+    private fun advanceLifecycle(activity: Activity, event: String) {
+        val lifecycle = runCatching { activity.javaClass.getMethod("getLifecycle").invoke(activity) }
+            .getOrNull() ?: return
+        runCatching {
+            val loader = lifecycle.javaClass.classLoader ?: return
+            val registry = loader.loadClass("androidx.lifecycle.LifecycleRegistry")
+            if (!registry.isInstance(lifecycle)) return
+            val events = loader.loadClass("androidx.lifecycle.Lifecycle\$Event")
+            val value = events.getMethod("valueOf", String::class.java).invoke(null, event)
+            registry.getMethod("handleLifecycleEvent", events).invoke(lifecycle, value)
+        }.onFailure { Log.w(TAG, "cannot advance the guest's lifecycle to $event", it) }
+    }
+
+    /** Tears one embedded activity down, in lifecycle order. */
+    fun destroyEmbedded(activity: Activity) {
+        if (!GuestHooks.performLifecycle(activity, "performPause")) instrumentation?.callActivityOnPause(activity)
+        if (!GuestHooks.performLifecycle(activity, "performStop")) instrumentation?.callActivityOnStop(activity)
+        if (!GuestHooks.performLifecycle(activity, "performDestroy")) instrumentation?.callActivityOnDestroy(activity)
     }
 
     private fun onLaunchActivity(intent: Intent, info: ActivityInfo?) {
@@ -146,22 +269,31 @@ internal object GuestRuntime {
         }.onFailure { Log.e(TAG, "guest Application $className failed", it) }
     }
 
-    /** Redirects an intent the guest aimed at one of its own activities onto a free stub. */
-    private fun rewriteOutgoing(intent: Intent): Intent? {
-        val guest = active ?: return null
+    /**
+     * Decides what to do with an intent the guest started: nothing, if it is not one of its own
+     * activities; host it in the app-sandbox tab, if one is showing this guest; otherwise redirect it
+     * onto a free stub and let the system launch it full screen.
+     */
+    private fun rewriteOutgoing(intent: Intent): StartAction {
+        val guest = active ?: return StartAction.Proceed
         val component = intent.component
         if (component == null) {
             if (intent.`package` == guest.packageName || intent.selector != null) {
                 Log.w(TAG, "implicit intents inside ${guest.packageName} are not supported: $intent")
             }
-            return null
+            return StartAction.Proceed
         }
-        if (component.packageName != guest.packageName) return null
+        if (component.packageName != guest.packageName) return StartAction.Proceed
         if (!guest.activities.containsKey(component.className)) {
             Log.w(TAG, "${guest.packageName} has no activity ${component.className}")
-            return null
+            return StartAction.Proceed
         }
-        return stubIntent(guest, component.className, Intent(intent))
+        val stub = stubIntent(guest, component.className, Intent(intent))
+        val launcher = embeddedLauncher ?: return StartAction.Redirect(stub)
+        val hosted = runCatching { launcher(stub) }
+            .onFailure { Log.e(TAG, "cannot host $intent in the sandbox tab", it) }
+            .getOrDefault(false)
+        return if (hosted) StartAction.Consumed else StartAction.Redirect(stub)
     }
 
     private fun stubIntent(guest: LoadedGuest, activityClass: String, from: Intent? = null): Intent {

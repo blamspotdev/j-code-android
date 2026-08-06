@@ -95,6 +95,9 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        // The app-sandbox tab talks to the :guest process over a Binder interface that carries a
+        // SurfaceControlViewHost.SurfacePackage and raw MotionEvents/KeyEvents.
+        aidl = true
     }
 
     packaging {

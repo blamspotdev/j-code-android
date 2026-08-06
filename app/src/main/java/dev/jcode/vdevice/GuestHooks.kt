@@ -17,6 +17,22 @@ import java.lang.reflect.Proxy
 
 private const val CLIENT_TRANSACTION = "android.app.servertransaction.ClientTransaction"
 private const val LAUNCH_ACTIVITY_ITEM = "android.app.servertransaction.LaunchActivityItem"
+private const val EMBEDDED_REASON = "JCode app sandbox"
+
+/** `ActivityManager.START_SUCCESS`, which is not in the SDK. */
+private const val START_SUCCESS = 0
+
+/** What [GuestHooks.installStartActivityHook] should do with an outgoing launch. */
+internal sealed interface StartAction {
+    /** Not the guest's; let it go out as it is. */
+    data object Proceed : StartAction
+
+    /** Launch [intent] — a stub carrying the guest activity's identity — instead. */
+    data class Redirect(val intent: Intent) : StartAction
+
+    /** Already handled inside the process; the binder call must not happen. */
+    data object Consumed : StartAction
+}
 
 /**
  * The three framework hooks the container installs in the guest process, and nothing else — the
@@ -92,13 +108,20 @@ internal object GuestHooks {
 
     /**
      * Replaces the process-wide `IActivityTaskManager` binder proxy so intents the guest starts can
-     * be redirected onto a stub before they leave the process.
+     * be redirected onto a stub, or answered outright, before they leave the process.
      *
      * Hooking the binder rather than `Instrumentation.execStartActivity` covers every entry point —
-     * `Activity.startActivity`, `Context.startActivity`, `startActivityForResult` — with one hook.
-     * [rewrite] returns a replacement intent, or null to let the call through untouched.
+     * `Activity.startActivity`, `Context.startActivity`, `startActivityForResult` — with one hook,
+     * and `execStartActivity` is not in the SDK, so it cannot be overridden anyway.
+     *
+     * [decide] returns what should happen: proceed untouched, launch a different intent, or —
+     * for the app-sandbox tab — nothing at all. [StartAction.Consumed] exists because an embedded
+     * activity holds a token no `ActivityRecord` answers to, so letting a guest's own
+     * `startActivity` reach the task manager would at best push a second, full-screen copy of the
+     * app over the IDE. The call is answered with `START_SUCCESS` instead, and the tab hosts the new
+     * activity itself.
      */
-    fun installStartActivityHook(rewrite: (Intent) -> Intent?): Boolean {
+    fun installStartActivityHook(decide: (Intent) -> StartAction): Boolean {
         try {
             val holder = HiddenApi.classOrNull("android.app.ActivityTaskManager") ?: return false
             val singleton = HiddenApi.field(holder, "IActivityTaskManagerSingleton")?.get(null) ?: return false
@@ -114,7 +137,14 @@ internal object GuestHooks {
                 override fun invoke(proxy: Any?, method: Method, args: Array<Any?>?): Any? {
                     if (args != null && method.name.startsWith("startActivity")) {
                         val slot = args.indexOfFirst { it is Intent }
-                        if (slot >= 0) rewrite(args[slot] as Intent)?.let { args[slot] = it }
+                        if (slot >= 0) {
+                            when (val action = decide(args[slot] as Intent)) {
+                                is StartAction.Proceed -> Unit
+                                is StartAction.Redirect -> args[slot] = action.intent
+                                is StartAction.Consumed ->
+                                    if (method.returnType == Int::class.javaPrimitiveType) return START_SUCCESS
+                            }
+                        }
                     }
                     return try {
                         method.invoke(real, *(args ?: emptyArray()))
@@ -130,6 +160,48 @@ internal object GuestHooks {
             Log.e(TAG, "cannot install start-activity hook", t)
             return false
         }
+    }
+
+    /**
+     * Gives an activity built out of band the `ActivityThread` a launched one would have had.
+     *
+     * `Instrumentation.newActivity` attaches with a null thread, and `Activity.startActivity` reads
+     * `mMainThread.getApplicationThread()` before anything the container hooks — so without this, an
+     * embedded guest cannot navigate at all. Best effort: the field is greylisted today, and a guest
+     * that never starts a second activity does not need it.
+     */
+    fun adoptActivityThread(activity: Activity, activityThread: Any?): Boolean {
+        if (activityThread == null) return false
+        val field = HiddenApi.field(Activity::class.java, "mMainThread") ?: return false
+        return runCatching { field.set(activity, activityThread); true }
+            .onFailure { Log.w(TAG, "embedded activity has no ActivityThread; it cannot navigate", it) }
+            .getOrDefault(false)
+    }
+
+    /**
+     * Runs one of `Activity`'s `perform*` lifecycle steps.
+     *
+     * The public `Instrumentation.callActivityOn*` calls are not equivalent: only `performStart` and
+     * `performResume` dispatch the `ActivityLifecycleCallbacks` that AndroidX's `ReportFragment`
+     * registers, and without those a Compose guest never advances past CREATED and its frame clock
+     * stays paused — a composed but permanently blank surface. Returns false when the member is not
+     * reachable, so the caller can fall back to the public calls and say so.
+     */
+    fun performLifecycle(activity: Activity, name: String): Boolean {
+        val method = Activity::class.java.declaredMethods
+            .firstOrNull { it.name == name }
+            ?.apply { isAccessible = true }
+            ?: return false
+        val args: List<Any?> = method.parameterTypes.map { type ->
+            when (type) {
+                String::class.java -> EMBEDDED_REASON
+                Boolean::class.javaPrimitiveType -> false
+                else -> null
+            }
+        }
+        return runCatching { method.invoke(activity, *args.toTypedArray()); true }
+            .onFailure { Log.w(TAG, "Activity#$name failed", (it as? InvocationTargetException)?.targetException ?: it) }
+            .getOrDefault(false)
     }
 
     /**
