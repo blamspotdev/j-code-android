@@ -155,7 +155,8 @@ class ExtensionInstaller internal constructor(context: Context) {
     suspend fun inspectVsix(file: File): Result<Pair<VsixManifest, VsixCompatibility>> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val manifest = VsixPackage.parse(readVsixPackageJson(readZipEntries(file.readBytes())))
+                val entries = readZipEntries(file.readBytes())
+                val manifest = VsixPackage.parse(readVsixPackageJson(entries), readVsixNls(entries))
                 manifest to VsixPackage.compatibilityOf(manifest)
             }
         }
@@ -167,9 +168,12 @@ class ExtensionInstaller internal constructor(context: Context) {
         return files.getValue(VsixPackage.PAYLOAD_PREFIX + "package.json").toString(Charsets.UTF_8)
     }
 
+    private fun readVsixNls(files: Map<String, ByteArray>): String? =
+        files[VsixPackage.NLS_JSON]?.toString(Charsets.UTF_8)
+
     private fun installFromVsixBytes(bytes: ByteArray, appVersion: String): VsixInstallResult {
         val files = readZipEntries(bytes)
-        val manifest = VsixPackage.parse(readVsixPackageJson(files))
+        val manifest = VsixPackage.parse(readVsixPackageJson(files), readVsixNls(files))
         val compatibility = VsixPackage.compatibilityOf(manifest)
 
         installRoot.mkdirs()

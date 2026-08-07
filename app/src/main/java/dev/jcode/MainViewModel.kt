@@ -3596,6 +3596,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return true
     }
 
+    /**
+     * Spawn a long-lived process in the Linux runtime with its stdio attached, for callers that need
+     * to talk to it rather than just start it — the `.vsix` extension host speaks JSON over stdin
+     * and stdout. Unlike [startRuntimeService] the caller owns the process and must destroy it.
+     */
+    fun spawnRuntimeProcess(command: String): Process? =
+        distroService.spawnDapProcess(command = command, userOverride = "root")
+
     fun stopRuntimeService(extId: String, id: String) {
         runtimeServices.remove(svcKey(extId, id))?.let { runCatching { it.destroy() } }
     }

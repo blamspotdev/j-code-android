@@ -46,10 +46,40 @@ object VsixPackage {
     fun looksLikeVsix(entries: Set<String>): Boolean =
         entries.contains(PACKAGE_JSON) && entries.any { it == VSIX_MANIFEST || it.startsWith(PAYLOAD_PREFIX) }
 
+    /** Where VS Code keeps the strings that `%placeholder%` manifest values refer to. */
+    const val NLS_JSON = PAYLOAD_PREFIX + "package.nls.json"
+
+    /**
+     * Resolve VS Code's `%key%` manifest placeholders against `package.nls.json`.
+     *
+     * A localised extension puts `"description": "%extension.description%"` in its manifest and the
+     * real text in a separate bundle, so showing the manifest verbatim would put the placeholder on
+     * screen. An unresolvable key keeps its own name rather than becoming blank, which at least says
+     * what was missing.
+     */
+    fun localize(value: String, strings: Map<String, String>): String {
+        if (!value.startsWith("%") || !value.endsWith("%") || value.length < 3) return value
+        val key = value.substring(1, value.length - 1)
+        return strings[key] ?: key
+    }
+
+    /** Read `package.nls.json` into a flat key/value map; empty when the extension ships none. */
+    fun parseNls(nlsJson: String?): Map<String, String> {
+        if (nlsJson.isNullOrBlank()) return emptyMap()
+        val json = runCatching { JSONObject(nlsJson) }.getOrNull() ?: return emptyMap()
+        return json.keys().asSequence().mapNotNull { key ->
+            // Newer bundles allow { "message": "...", "comment": [...] } per key.
+            val direct = json.optString(key).takeIf { it.isNotBlank() }
+            val message = json.optJSONObject(key)?.optString("message")?.takeIf { it.isNotBlank() }
+            (message ?: direct)?.let { key to it }
+        }.toMap()
+    }
+
     /** Parse `extension/package.json`. Throws with a readable reason when the archive is not usable. */
-    fun parse(packageJson: String): VsixManifest {
+    fun parse(packageJson: String, nlsJson: String? = null): VsixManifest {
         val json = runCatching { JSONObject(packageJson) }
             .getOrElse { error("$PACKAGE_JSON is not valid JSON") }
+        val strings = parseNls(nlsJson)
         val publisher = json.optString("publisher").takeIf { it.isNotBlank() }
             ?: error("$PACKAGE_JSON has no \"publisher\"")
         val name = json.optString("name").takeIf { it.isNotBlank() }
@@ -58,8 +88,9 @@ object VsixPackage {
             publisher = publisher,
             name = name,
             version = json.optString("version").takeIf { it.isNotBlank() } ?: "0.0.0",
-            displayName = json.optString("displayName").takeIf { it.isNotBlank() } ?: name,
-            description = json.optString("description"),
+            displayName = json.optString("displayName").takeIf { it.isNotBlank() }
+                ?.let { localize(it, strings) } ?: name,
+            description = localize(json.optString("description"), strings),
             main = json.optString("main").takeIf { it.isNotBlank() }?.removePrefix("./"),
             icon = json.optString("icon").takeIf { it.isNotBlank() }?.removePrefix("./"),
             engineRange = json.optJSONObject("engines")?.optString("vscode")?.takeIf { it.isNotBlank() },

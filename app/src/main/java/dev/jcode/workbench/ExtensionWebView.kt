@@ -15,7 +15,12 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -104,8 +109,25 @@ fun ExtensionWebViewPage(
     /** Optional view route appended to the loaded URL as `#route` so an extension can render an
      *  alternate screen (e.g. a full-page sign-in) from the same bundle. */
     route: String = "",
+    /** Spawns a long-lived process in the Linux runtime, used to run an imported `.vsix`. */
+    spawnProcess: ((command: String) -> Process?)? = null,
     modifier: Modifier = Modifier,
 ) {
+    // A .vsix has no page on disk to point at — its UI is built by the extension's own code — so it
+    // takes a different route entirely.
+    val vsixEntry = remember(extension.id) {
+        File(extension.dir, dev.jcode.feature.marketplace.VsixPackage.VSIX_MARKER)
+            .takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotEmpty() }
+    }
+    if (vsixEntry != null) {
+        if (spawnProcess == null) {
+            ExtensionNotice("${extension.name} needs the Linux runtime to run, and it isn't available here.", modifier)
+        } else {
+            VsixExtensionWebView(extension, spawnProcess, modifier)
+        }
+        return
+    }
+
     val scope = rememberCoroutineScope()
     var webView by remember(extension.id) { mutableStateOf<WebView?>(null) }
     // SAF file picking for extension `<input type="file">` (e.g. the SQL Client "restore from .bak"
@@ -384,6 +406,202 @@ fun ExtensionWebViewPage(
             }
         },
     )
+}
+
+/** Origin the extension's own files are served from, matching `webview.cspSource` in the host. */
+private const val VSIX_RESOURCE_ORIGIN = "https://jcode.webview"
+
+/**
+ * Renders an imported `.vsix`.
+ *
+ * Nothing can be shown until the extension has run: its HTML is produced by its own code. So the
+ * host is started, the extension activated, and the first webview view it registered resolved —
+ * whatever HTML comes back is what gets loaded. Requests to [VSIX_RESOURCE_ORIGIN] are served
+ * straight from the install directory, which is how the extension's scripts and styles resolve
+ * without the page ever learning where on disk it actually lives.
+ */
+@SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
+@Composable
+private fun VsixExtensionWebView(
+    extension: InstalledExtension,
+    spawnProcess: (command: String) -> Process?,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var status by remember(extension.id) { mutableStateOf("Starting ${extension.name}…") }
+    var failure by remember(extension.id) { mutableStateOf<String?>(null) }
+    var html by remember(extension.id) { mutableStateOf<String?>(null) }
+    var viewHandle by remember(extension.id) { mutableStateOf<String?>(null) }
+    var host by remember(extension.id) { mutableStateOf<VsCodeExtensionHost?>(null) }
+    val backgroundArgb = MaterialTheme.colorScheme.background.toArgb()
+
+    DisposableEffect(extension.id) {
+        onDispose { host?.dispose() }
+    }
+
+    LaunchedEffect(extension.id) {
+        val started = VsCodeExtensionHost(context, extension, spawnProcess) { method, params ->
+            when (method) {
+                "host/log" -> ExtensionDevLog.log(
+                    if (params.optString("level") == "error") ExtensionDevLogEntry.Kind.Error
+                    else ExtensionDevLogEntry.Kind.Console,
+                    extension.id,
+                    "[host] ${params.optString("text")}",
+                )
+                // The extension re-rendering its view is normal: it sets html whenever its state changes.
+                "webview/html" -> html = params.optString("html")
+                else -> ExtensionDevLog.log(
+                    ExtensionDevLogEntry.Kind.Event, extension.id, "$method ${params}",
+                )
+            }
+        }
+        host = started
+
+        started.start()?.let { failure = it; return@LaunchedEffect }
+        status = "Loading ${extension.name}…"
+
+        val activated = started.activate(
+            folders = listOf("workspace" to "/workspace"),
+            configuration = JSONObject(),
+        )
+        activated.optString("error").takeIf { it.isNotBlank() }?.let { failure = it; return@LaunchedEffect }
+
+        val views = activated.optJSONArray("views")
+        val viewId = (0 until (views?.length() ?: 0)).firstNotNullOfOrNull { views?.optString(it) }
+        if (viewId.isNullOrBlank()) {
+            failure = "${extension.name} registered no view to show."
+            return@LaunchedEffect
+        }
+        val resolved = started.resolveWebviewView(viewId)
+        resolved.optString("error").takeIf { it.isNotBlank() }?.let { failure = it; return@LaunchedEffect }
+        viewHandle = resolved.optString("handle")
+        html = resolved.optString("html")
+    }
+
+    val current = failure
+    if (current != null) {
+        ExtensionNotice(current, modifier)
+        return
+    }
+    val page = html
+    if (page.isNullOrBlank()) {
+        ExtensionNotice(status, modifier)
+        return
+    }
+
+    AndroidView(
+        modifier = modifier.fillMaxSize(),
+        factory = { ctx ->
+            NoFullscreenWebView(ctx).apply {
+                setBackgroundColor(backgroundArgb)
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                @Suppress("DEPRECATION")
+                settings.allowFileAccess = true
+                webViewClient = object : WebViewClient() {
+                    override fun shouldInterceptRequest(
+                        view: WebView,
+                        request: android.webkit.WebResourceRequest,
+                    ): android.webkit.WebResourceResponse? = serveExtensionResource(extension.dir, request.url)
+                }
+                webChromeClient = object : WebChromeClient() {
+                    override fun onConsoleMessage(msg: android.webkit.ConsoleMessage): Boolean {
+                        ExtensionDevLog.log(
+                            if (msg.messageLevel().name.lowercase() == "error") ExtensionDevLogEntry.Kind.Error
+                            else ExtensionDevLogEntry.Kind.Console,
+                            extension.id,
+                            "[${msg.messageLevel().name.lowercase()}] ${msg.message().orEmpty()}",
+                        )
+                        return false
+                    }
+                }
+                addJavascriptInterface(
+                    object {
+                        @JavascriptInterface
+                        fun postMessage(payload: String) {
+                            val handle = viewHandle ?: return
+                            scope.launch { host?.postToWebview(handle, payload) }
+                        }
+                    },
+                    "JCodeVsix",
+                )
+                loadDataWithBaseURL("$VSIX_RESOURCE_ORIGIN/", VSIX_BOOTSTRAP + page, "text/html", "utf-8", null)
+            }
+        },
+        update = { view ->
+            // The extension replaces its HTML whenever its own state changes; reload rather than
+            // trying to reconcile a document we did not author.
+            val stamp = page.hashCode()
+            if (view.tag != stamp) {
+                view.tag = stamp
+                view.loadDataWithBaseURL("$VSIX_RESOURCE_ORIGIN/", VSIX_BOOTSTRAP + page, "text/html", "utf-8", null)
+            }
+        },
+    )
+}
+
+/** `acquireVsCodeApi()`, the one thing every VS Code webview expects to find waiting for it. */
+private val VSIX_BOOTSTRAP = """
+<script>
+(function () {
+  var state = {};
+  var listeners = [];
+  window.acquireVsCodeApi = function () {
+    return {
+      postMessage: function (message) { window.JCodeVsix.postMessage(JSON.stringify(message)); },
+      getState: function () { return state; },
+      setState: function (next) { state = next; return next; },
+    };
+  };
+  // The host delivers extension -> page messages through here.
+  window.__jcodeDeliver = function (json) {
+    var data;
+    try { data = JSON.parse(json); } catch (e) { data = json; }
+    window.dispatchEvent(new MessageEvent('message', { data: data }));
+  };
+})();
+</script>
+""".trimIndent()
+
+/** Serve a file from the extension's install directory for [VSIX_RESOURCE_ORIGIN] requests. */
+private fun serveExtensionResource(extensionDir: File, url: Uri): android.webkit.WebResourceResponse? {
+    if (!url.toString().startsWith("$VSIX_RESOURCE_ORIGIN/")) return null
+    val relative = url.path?.trimStart('/').orEmpty()
+    if (relative.isEmpty()) return null
+    val file = File(extensionDir, relative)
+    val root = extensionDir.canonicalPath + File.separator
+    // Never serve outside the extension, whatever the page asks for.
+    if (!file.canonicalPath.startsWith(root) || !file.isFile) return null
+    val mime = when (file.extension.lowercase()) {
+        "js", "mjs", "cjs" -> "text/javascript"
+        "css" -> "text/css"
+        "html" -> "text/html"
+        "json", "map" -> "application/json"
+        "svg" -> "image/svg+xml"
+        "png" -> "image/png"
+        "jpg", "jpeg" -> "image/jpeg"
+        "gif" -> "image/gif"
+        "webp" -> "image/webp"
+        "woff" -> "font/woff"
+        "woff2" -> "font/woff2"
+        "ttf" -> "font/ttf"
+        else -> "application/octet-stream"
+    }
+    return android.webkit.WebResourceResponse(mime, "utf-8", file.inputStream())
+}
+
+/** Centred one-line message for a page that cannot be shown (yet). */
+@Composable
+private fun ExtensionNotice(text: String, modifier: Modifier = Modifier) {
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(24.dp),
+        )
+    }
 }
 
 private const val NO_UI_HTML =

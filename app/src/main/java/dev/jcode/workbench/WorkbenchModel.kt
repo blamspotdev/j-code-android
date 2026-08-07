@@ -165,6 +165,8 @@ internal data class WorkbenchManagerActions(
         { _, _ -> "ADB pairing is unavailable." },
     /** Runs a command in the Linux runtime for an extension web frontend; returns a JSON result. */
     val onExtensionExec: suspend (command: String, timeoutMs: Long) -> String,
+    /** Spawns a long-lived runtime process with stdio attached, used to run an imported `.vsix`. */
+    val onSpawnRuntimeProcess: ((command: String) -> Process?)? = null,
     /** Extension API v1 envelope handler: (extensionId, requestJson) -> response JSON. */
     val onExtensionApiRequest: suspend (extensionId: String, envelopeJson: String) -> String =
         { _, _ -> """{"ok":false,"error":"extension API unavailable"}""" },

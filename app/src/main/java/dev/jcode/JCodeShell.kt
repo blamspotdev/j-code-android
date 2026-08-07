@@ -1412,6 +1412,7 @@ fun JCodeApp(
             onOpenExtensionConfig = { id -> viewModel.openExtensionViewPage(id, "github", "Git Configuration") },
             onAdbPair = viewModel::pairAdbDevice,
             onExtensionExec = viewModel::runtimeExecJson,
+            onSpawnRuntimeProcess = viewModel::spawnRuntimeProcess,
             onExtensionApiRequest = { extId, envelope ->
                 val ext = viewModel.installedExtensions.value.firstOrNull { it.id == extId }
                 if (ext == null) """{"ok":false,"error":"unknown extension: $extId"}"""
@@ -2951,6 +2952,7 @@ private fun JCodeShell(
                                                 },
                                                 events = managerActions.extensionEvents,
                                                 route = view,
+                                                spawnProcess = managerActions.onSpawnRuntimeProcess,
                                                 modifier = Modifier.fillMaxSize(),
                                             )
                                         }

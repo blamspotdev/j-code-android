@@ -132,6 +132,10 @@ class Uri {
 
 // --- webviews ---
 
+/** Origin the app serves the extension's own files from. Also what `cspSource` reports, so an
+ *  extension that builds a Content-Security-Policy around it keeps working unchanged. */
+const RESOURCE_ORIGIN = 'https://jcode.webview';
+
 const webviewViewProviders = new Map();
 const webviews = new Map();
 let nextWebviewId = 1;
@@ -155,14 +159,16 @@ const makeWebview = (viewId) => {
       html = String(value == null ? '' : value);
       notify('webview/html', { handle, viewId, html });
     },
-    cspSource: 'jcode-webview:',
+    cspSource: RESOURCE_ORIGIN,
     onDidReceiveMessage,
     postMessage: (message) => call('webview/postMessage', { handle, message }).then(() => true),
-    // Local files are served by JCode from the extension directory, so a resource URI only has to
-    // survive the round trip and come back as something the page can fetch.
+    // The host sees the extension through the runtime's filesystem, but the page is rendered by the
+    // app, which reaches the same files by a different path. So a resource URI is expressed relative
+    // to the extension and given an origin the app serves — it resolves the side it is loaded on.
     asWebviewUri: (uri) => {
-      const rel = path.posix.relative(EXT_DIR.replace(/\\/g, '/'), String(uri.fsPath || uri.path || uri));
-      return Uri.parse(`jcode-webview://resource/${rel.split(path.sep).join('/')}`);
+      const target = String((uri && (uri.fsPath || uri.path)) || uri);
+      const rel = path.posix.relative(EXT_DIR.replace(/\\/g, '/'), target.replace(/\\/g, '/'));
+      return Uri.parse(`${RESOURCE_ORIGIN}/${rel.replace(/^\/+/, '')}`);
     },
   };
   webviews.set(handle, webview);
@@ -202,7 +208,20 @@ const configurationFor = (section) => {
 const vscode = {
   version: '1.85.0',
   Uri,
-  Disposable: { from: (...items) => disposable(() => items.forEach((i) => i && i.dispose && i.dispose())) },
+  // A class, not a plain object: extensions do `new vscode.Disposable(() => …)` as well as
+  // `vscode.Disposable.from(…)`.
+  Disposable: class Disposable {
+    constructor(callOnDispose) {
+      this._callOnDispose = callOnDispose;
+    }
+    dispose() {
+      if (typeof this._callOnDispose === 'function') this._callOnDispose();
+      this._callOnDispose = undefined;
+    }
+    static from(...items) {
+      return new Disposable(() => items.forEach((i) => i && typeof i.dispose === 'function' && i.dispose()));
+    }
+  },
   EventEmitter: class {
     constructor() {
       this.event = emitter();
@@ -393,6 +412,25 @@ const vscode = {
     },
     openExternal: (uri) => call('env/openExternal', { uri: String(uri) }).then(() => true),
     asExternalUri: (uri) => Promise.resolve(uri),
+  },
+
+  // Localisation. An extension built against a recent VS Code calls `l10n.t()` for user-facing
+  // strings, often during activate() — so this has to exist, and returning the source string is the
+  // right answer when there is no translation bundle to consult.
+  l10n: {
+    t: (...args) => {
+      const first = args[0];
+      const message = typeof first === 'string' ? first : (first && first.message) || '';
+      const values = typeof first === 'string' ? args.slice(1) : (first && first.args) || [];
+      // VS Code's own formatting: {0}, {1}, … positional, or {name} against an object of values.
+      return String(message).replace(/\{([^}]+)\}/g, (match, key) => {
+        const index = Number(key);
+        const value = Number.isInteger(index) ? values[index] : values && values[key];
+        return value === undefined ? match : String(value);
+      });
+    },
+    bundle: undefined,
+    uri: undefined,
   },
 
   languages: new Proxy({}, { get: (_t, key) => missing(`languages.${String(key)}`) }),
