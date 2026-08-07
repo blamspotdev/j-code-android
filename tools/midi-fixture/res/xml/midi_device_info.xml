@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<devices>
+    <device manufacturer="JCode" product="MIDI Fixture" tags="fixture">
+        <input-port name="fixture in" />
+        <output-port name="fixture out" />
+    </device>
+</devices>
