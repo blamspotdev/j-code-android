@@ -389,13 +389,19 @@ fun ExtensionWebViewPage(
 
 /**
  * Publishes the WebView's real size to every extension page as `--jcode-viewport-height` /
- * `--jcode-viewport-width`, kept in sync as the view resizes.
+ * `--jcode-viewport-width`, and repairs viewport-height lengths on engines that cannot resolve them.
  *
  * Android WebView is a system component many devices never update, and older builds lay a page out
  * against a viewport whose height is zero even though `window.innerHeight` reports the true size:
  * every `vh` length there resolves to 0, so an extension's dialogs and side panels — sized against
- * the viewport — render as empty slivers. A page can size against these variables instead and get
- * a height that holds on any engine.
+ * the viewport — render as empty slivers. Dynamic units (`dvh`, Chromium 108+) are rejected outright
+ * on top of that.
+ *
+ * A probe decides whether this engine is affected, so healthy WebViews do no work at all. Where it
+ * is, every viewport-height length in the page's stylesheets is rewritten against the published
+ * variable. Rules are edited in place so their `@media` / `@supports` / `@layer` context is
+ * preserved, the pass is deferred off first paint, and a `<head>` observer catches stylesheets that
+ * arrive later — a code-split bundle usually loads its CSS well after the page "finishes".
  */
 private const val VIEWPORT_SIZE_JS = """
 (function () {
@@ -406,6 +412,78 @@ private const val VIEWPORT_SIZE_JS = """
   };
   publish();
   window.addEventListener('resize', publish);
+
+  var probe = document.createElement('div');
+  probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;height:100vh';
+  (document.body || root).appendChild(probe);
+  var viewportUnitsWork = probe.getBoundingClientRect().height > 1;
+  probe.parentNode.removeChild(probe);
+  if (viewportUnitsWork || !window.innerHeight) return;
+
+  // Heights only — viewport widths resolve correctly even on the affected engines.
+  var LENGTH = /(-?\d*\.?\d+)(?:[dls])?(?:vh|vb)\b/gi;
+  var repair = function (value) {
+    return value.replace(LENGTH, function (match, amount) {
+      var fraction = parseFloat(amount) / 100;
+      return fraction === 1
+        ? 'var(--jcode-viewport-height)'
+        : 'calc(var(--jcode-viewport-height) * ' + fraction + ')';
+    });
+  };
+
+  var seen = [];
+  var repairRules = function (rules) {
+    for (var i = 0; i < rules.length; i++) {
+      var rule = rules[i];
+      if (rule.cssRules) { repairRules(rule.cssRules); continue; }
+      var style = rule.style;
+      if (!style || !style.length) continue;
+      for (var j = 0; j < style.length; j++) {
+        var prop = style[j];
+        var value = style.getPropertyValue(prop);
+        if (value.indexOf('vh') < 0 && value.indexOf('vb') < 0) continue;
+        var next = repair(value);
+        if (next !== value) { style.setProperty(prop, next, style.getPropertyPriority(prop)); repaired++; }
+      }
+    }
+  };
+
+  var scheduled = false;
+  var repaired = 0;
+  var sweep = function () {
+    scheduled = false;
+    var started = Date.now();
+    var before = repaired;
+    var sheets = document.styleSheets;
+    for (var i = 0; i < sheets.length; i++) {
+      var sheet = sheets[i];
+      if (seen.indexOf(sheet) >= 0) continue;
+      // A sheet the page cannot read, or has not parsed yet, throws. Only record it as done on
+      // success — otherwise a sheet still parsing when this runs would never be revisited.
+      try {
+        var rules = sheet.cssRules;
+        repairRules(rules);
+        seen.push(sheet);
+      } catch (e) {}
+    }
+    if (repaired > before) {
+      console.log('[jcode] viewport-height CSS repaired: ' + repaired + ' declaration(s) in '
+        + (Date.now() - started) + 'ms');
+    }
+  };
+  var schedule = function () {
+    if (scheduled) return;
+    scheduled = true;
+    if (window.requestIdleCallback) window.requestIdleCallback(sweep, { timeout: 500 });
+    else window.setTimeout(sweep, 0);
+  };
+
+  schedule();
+  // Watch <head> only: that is where a bundler injects its stylesheets, and watching the whole
+  // document would fire this callback on every render of a busy app for no benefit.
+  if (window.MutationObserver && document.head) {
+    new MutationObserver(schedule).observe(document.head, { childList: true, subtree: true });
+  }
 })();
 """
 
