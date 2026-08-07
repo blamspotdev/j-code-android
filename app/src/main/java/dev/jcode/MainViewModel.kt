@@ -62,6 +62,7 @@ import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.feature.marketplace.BundledExtensionSpec
 import dev.jcode.feature.marketplace.ExtensionActivation
 import dev.jcode.feature.marketplace.ExtensionDeps
+import dev.jcode.feature.marketplace.ExtensionInstaller
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.languageFor
 import dev.jcode.feature.marketplace.MarketplaceEntry
@@ -320,24 +321,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         appContext.contentResolver.openInputStream(uri)?.use { input ->
                             tmp.outputStream().use { input.copyTo(it) }
                         } ?: error("cannot open the selected file")
-                        extensionInstaller.installLocalJext(tmp, BuildConfig.VERSION_NAME).getOrThrow()
+                        extensionInstaller.installLocalPackage(tmp, BuildConfig.VERSION_NAME).getOrThrow()
                     } finally {
                         tmp.delete()
                     }
                 }
             }
             result
-                .onSuccess { r ->
+                .onSuccess { outcome ->
                     refreshInstalledExtensions()
                     emitMessage(
-                        if (r.signed) "Installed '${r.extension.name}' (signed — not debuggable)."
-                        else "Loaded '${r.extension.name}' (unsigned dev extension).",
+                        when (outcome) {
+                            is ExtensionInstaller.SideloadOutcome.Jext ->
+                                if (outcome.signed) "Installed '${outcome.extension.name}' (signed — not debuggable)."
+                                else "Loaded '${outcome.extension.name}' (unsigned dev extension)."
+                            // Lead with what will not work: a VS Code extension can install cleanly and
+                            // still be missing the part the user wanted.
+                            is ExtensionInstaller.SideloadOutcome.Vsix ->
+                                outcome.compatibility.warnings.firstOrNull()
+                                    ?.let { "Imported '${outcome.extension.name}' (.vsix) — $it" }
+                                    ?: "Imported '${outcome.extension.name}' (.vsix)."
+                        },
                     )
-                    if (r.extension.id in installedBefore) {
-                        markPendingReload(r.extension.id, r.extension.name)
+                    if (outcome.extension.id in installedBefore) {
+                        markPendingReload(outcome.extension.id, outcome.extension.name)
                     }
                 }
-                .onFailure { emitMessage("Sideload failed: ${it.message ?: "invalid .jext"}") }
+                .onFailure { emitMessage("Sideload failed: ${it.message ?: "unrecognised package"}") }
         }
     }
 
