@@ -46,6 +46,8 @@ class DebugController(
     private var rootTcpPort: Int? = null
     /** Guards [endSession] so a terminated event + child cleanup can't tear down twice. */
     private var ended = false
+    /** Device-side state of an Android attach, undone when the session ends. */
+    private var androidAttach: AndroidDebugAttach? = null
 
     private val _state = MutableStateFlow(DebugState.DISCONNECTED)
     val state: StateFlow<DebugState> = _state.asStateFlow()
@@ -71,6 +73,8 @@ class DebugController(
         val user: String? = null,
         /** Prepended to the adapter's PATH (e.g. /root/.dotnet). */
         val adapterPath: String = "",
+        /** DAP request: "launch" spawns the debuggee, "attach" joins one that is already running. */
+        val request: String = "launch",
     )
 
     /** Start debugging [hostPath] (its language picks the engine) with the current [bps] breakpoints. */
@@ -78,7 +82,7 @@ class DebugController(
         stop()
         currentBps = bps
         ended = false
-        val engine = engineForFile(hostPath)
+        val engine = engineForFile(hostPath, projectDir)
         _output.value = emptyList()
         if (engine == null) {
             pushOutput("No debug engine is installed for ${hostPath.substringAfterLast('/')}.\n")
@@ -144,7 +148,7 @@ class DebugController(
         val distroBreakpoints = distroBps() // DAP lines are 1-based; applied on `initialized`
         pushOutput("Starting ${engine.name} on ${hostPath.substringAfterLast('/')}…\n")
         scope.launch {
-            runCatching { s.start(plan.adapterCommand, "launch", plan.config, distroBreakpoints) }
+            runCatching { s.start(plan.adapterCommand, plan.request, plan.config, distroBreakpoints) }
                 .onFailure { pushOutput("Debug failed: ${it.message}\n"); _state.value = DebugState.ERROR }
             // start() swallows a failed adapter launch (bad transport / handshake) into DISCONNECTED
             // without rethrowing, and the STARTING guard on the state collector can eat that final
@@ -174,7 +178,7 @@ class DebugController(
                 tcpPort = null,
             )
             "coreclr" -> prepareDotnet(engine, hostPath, projectDir)
-            "java" -> prepareJava(engine, hostPath, projectDir)
+            "java" -> prepareJvm(engine, hostPath, projectDir)
             "pwa-node" -> {
                 val port = randomDebugPort()
                 LaunchPlan(
@@ -272,6 +276,47 @@ class DebugController(
         return dll?.let { hostToDistro(it.path) }
     }
 
+    /** JVM sources take one of two shapes: an Android app (already built, installed and running on a
+     *  device — the debugger attaches to its ART process) or a plain source tree javac can compile and
+     *  launch here in the distro. */
+    private suspend fun prepareJvm(engine: DebugEngineEntry, hostPath: String, projectDir: String): LaunchPlan {
+        val module = withContext(Dispatchers.IO) { AndroidAppProject.appModuleFor(hostPath, projectDir) }
+        return if (module != null) prepareAndroidAttach(engine, projectDir, module)
+        else prepareJava(engine, hostPath, projectDir)
+    }
+
+    /**
+     * Attach to the Android app built from [module], running on the device behind the ADB bridge.
+     *
+     * There is nothing to launch: an APK's process is started by the system, and ART exposes JDWP only
+     * through adb's `jdwp:<pid>` service. [AndroidDebugAttach] marks the app debuggable-on-launch,
+     * resolves its pid and forwards that channel to a local TCP port; the adapter — which runs inside
+     * proot, sharing the app's network namespace — then attaches to 127.0.0.1:port like any socket JVM.
+     */
+    private suspend fun prepareAndroidAttach(
+        engine: DebugEngineEntry,
+        projectDir: String,
+        module: java.io.File,
+    ): LaunchPlan {
+        pushOutput("Android app module: ${module.name}\n")
+        val attach = AndroidDebugAttach(distroService, ::hostToDistro, ::pushOutput)
+        androidAttach = attach
+        val port = attach.attach(module)
+
+        val distroCwd = hostToDistro(projectDir)
+        val sourcePaths = AndroidAppProject.sourceRoots(module).map { hostToDistro(it.path) }
+        val config = baseConfig("java", distroCwd, request = "attach").apply {
+            put("hostName", "127.0.0.1")
+            put("port", port)
+            put("projectName", module.name)
+            put("sourcePaths", JSONArray().apply { sourcePaths.forEach { put(it) } })
+        }
+        // The adapter also takes source roots on its command line, which it parses itself — so
+        // stack-frame -> file resolution works even if the attach arguments don't carry sourcePaths.
+        val adapterCommand = engine.adapterCommand + sourcePaths.joinToString("") { " --source-path '$it'" }
+        return LaunchPlan(distroCwd, config, adapterCommand, tcpPort = null, request = "attach")
+    }
+
     /** Compile the enclosing Java sources with javac and launch the main class under the java-debug
      *  adapter (source alone won't run). The adapter speaks DAP over stdio, so there's no TCP leg. */
     private suspend fun prepareJava(engine: DebugEngineEntry, hostPath: String, projectDir: String): LaunchPlan {
@@ -313,9 +358,9 @@ class DebugController(
         return LaunchPlan(distroCwd, config, engine.adapterCommand, tcpPort = null)
     }
 
-    private fun baseConfig(type: String, cwd: String): JSONObject = JSONObject().apply {
+    private fun baseConfig(type: String, cwd: String, request: String = "launch"): JSONObject = JSONObject().apply {
         put("type", type)
-        put("request", "launch")
+        put("request", request)
         put("name", "JCode Debug")
         put("cwd", cwd)
         put("console", "internalConsole")
@@ -451,6 +496,7 @@ class DebugController(
 
     fun stop() {
         ended = true // a late `terminated` event must not resurrect the session as TERMINATED
+        releaseAndroidAttachment()
         children.forEach { runCatching { it.close() } }
         children.clear()
         session?.close()
@@ -465,6 +511,7 @@ class DebugController(
         if (ended) return
         ended = true
         _location.value = null
+        releaseAndroidAttachment()
         children.forEach { runCatching { it.close() } }
         children.clear()
         // Close the root so proot's --kill-on-exit reaps the adapter tree instead of leaking it.
@@ -472,6 +519,13 @@ class DebugController(
         session = null
         activeSession = null
         _state.value = DebugState.TERMINATED
+    }
+
+    /** Clear the device-side `set-debug-app -w` flag left by an Android attach, exactly once. */
+    private fun releaseAndroidAttachment() {
+        val attach = androidAttach ?: return
+        androidAttach = null
+        scope.launch { runCatching { attach.detach() } }
     }
 
     private inline fun withThread(crossinline block: suspend (DebugSession, Int) -> Unit) {
@@ -485,17 +539,34 @@ class DebugController(
         if (line.isNotEmpty()) _output.value = (_output.value + line).takeLast(500)
     }
 
-    private fun engineForFile(hostPath: String): DebugEngineEntry? {
+    private fun engineForFile(hostPath: String, projectDir: String? = null): DebugEngineEntry? {
         val ext = "." + hostPath.substringAfterLast('.', "")
-        return DebugEngineCatalog.BUILT_IN.firstOrNull { ext in it.extensions }
+        DebugEngineCatalog.BUILT_IN.firstOrNull { ext in it.extensions }?.let { return it }
+        // Kotlin ships no engine of its own. In an Android app it compiles to JVM bytecode that the
+        // java-debug adapter debugs over ART's JDWP, so .kt resolves there — and only there, since
+        // outside an Android project nothing would be running to attach to.
+        if (ext == KOTLIN_EXT && AndroidAppProject.appModuleFor(hostPath, projectDir) != null) {
+            return DebugEngineCatalog.findById(JAVA_ENGINE_ID)
+        }
+        return null
     }
 
     /** True if [hostPath]'s language has a built-in DAP engine — the single source of truth for
      *  whether the Debug action can launch it (used by run-config entry derivation). */
     fun canDebugFile(hostPath: String): Boolean = engineForFile(hostPath) != null
 
+    /** The catalog id of the engine that would debug [hostPath], for callers that also have to check
+     *  the engine is installed. Resolves .kt in an Android app to java-debug, which a plain extension
+     *  match over the catalog cannot. */
+    fun debugEngineIdFor(hostPath: String): String? = engineForFile(hostPath)?.id
+
     private fun hostToDistro(p: String): String =
         dev.jcode.core.distro.WorkspaceHostPaths.hostToGuest(p).replace("\\", "/")
+
+    private companion object {
+        const val KOTLIN_EXT = ".kt"
+        const val JAVA_ENGINE_ID = "java-debug"
+    }
 }
 
 /** Adapts a proot child process's stdio pipes to [DapTransport] (blocking reads, no PTY echo). */

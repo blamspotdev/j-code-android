@@ -157,6 +157,9 @@ internal data class WorkbenchManagerActions(
     /** Opens an extension's web frontend at its `#config` route by extension id (e.g. Source Control
      *  git identity/credentials), reachable without an open project. */
     val onOpenExtensionConfig: (String) -> Unit,
+    /** Runs `adb pair <target> <code>` in the Linux runtime; null = paired, else the failure text. */
+    val onAdbPair: suspend (target: String, code: String) -> String? =
+        { _, _ -> "ADB pairing is unavailable." },
     /** Runs a command in the Linux runtime for an extension web frontend; returns a JSON result. */
     val onExtensionExec: suspend (command: String, timeoutMs: Long) -> String,
     /** Extension API v1 envelope handler: (extensionId, requestJson) -> response JSON. */

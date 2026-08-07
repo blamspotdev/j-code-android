@@ -306,21 +306,47 @@ object ProjectRunner {
         }
 
         if (File(root, "gradlew").isFile) {
-            triggers += RunTrigger(
-                label = "gradlew",
-                kind = "Gradle",
-                detail = "assembleDebug",
-                options = listOf(
-                    RunSuggestion(
-                        label = "assembleDebug",
-                        source = "build",
-                        config = RunConfig(
-                            name = "Gradle build (assembleDebug)",
-                            readyPort = 0,
-                            terminals = listOf(RunConfigTerminal("Build", "clear\nset -e\ncd \"$guestDir\"\nbash gradlew assembleDebug")),
+            val appModule = androidAppModule(root, files)
+            val options = mutableListOf<RunSuggestion>()
+            if (appModule != null) {
+                val modulePath = appModule.relativeTo(root).invariantSeparatorsPath
+                options += RunSuggestion(
+                    label = "Run on this device",
+                    source = "android",
+                    config = RunConfig(
+                        name = "Android app",
+                        readyPort = 0,
+                        terminals = listOf(
+                            RunConfigTerminal("Run", androidRunCommand(guestDir, modulePath)),
                         ),
                     ),
+                )
+                options += RunSuggestion(
+                    label = "Run in a virtual device",
+                    source = "android · no install",
+                    config = RunConfig(
+                        name = "Android app (virtual device)",
+                        readyPort = 0,
+                        terminals = listOf(
+                            RunConfigTerminal("Build", androidVirtualDeviceCommand(guestDir, modulePath)),
+                        ),
+                    ),
+                )
+            }
+            options += RunSuggestion(
+                label = "assembleDebug",
+                source = "build",
+                config = RunConfig(
+                    name = "Gradle build (assembleDebug)",
+                    readyPort = 0,
+                    terminals = listOf(RunConfigTerminal("Build", "clear\nset -e\ncd \"$guestDir\"\nbash gradlew assembleDebug")),
                 ),
+            )
+            triggers += RunTrigger(
+                label = "gradlew",
+                kind = if (appModule != null) "Android" else "Gradle",
+                detail = if (appModule != null) "build, install & launch" else "assembleDebug",
+                options = options,
             )
         }
 
@@ -444,6 +470,100 @@ object ProjectRunner {
         }
         return out
     }
+
+    private val AGP_ALIAS_RE = Regex("""alias\s*\([^)]*[Aa]ndroid[^)]*[Aa]pplication[^)]*\)""")
+
+    /** The module directory of an Android *application* project, or null when this isn't one.
+     *  `com.android.application` in a module's build script is the primary signal; a version-catalog
+     *  alias (`alias(libs.plugins.android.application)`) never names the plugin id, so the catalog is
+     *  consulted for those, and a manifest declaring a LAUNCHER activity is the last resort. */
+    private fun androidAppModule(root: File, files: List<File>): File? {
+        val catalogNamesAgp = File(root, "gradle/libs.versions.toml").takeIf(File::isFile)
+            ?.let { runCatching { it.readText() }.getOrNull() }
+            ?.contains("com.android.application") == true
+
+        for (buildFile in files) {
+            if (buildFile.name != "build.gradle" && buildFile.name != "build.gradle.kts") continue
+            val text = runCatching { buildFile.readText() }.getOrNull() ?: continue
+            // The ROOT build script of a conventional Android project also names the plugin, as
+            // `id("com.android.application") version "..." apply false` — declaring the version for
+            // subprojects without applying it. Matching the file as a whole would pick the root as
+            // the app module, so the `apply false` suffix has to be excluded line by line.
+            val appliesAgp = text.lineSequence().any { line ->
+                !line.contains("apply false") &&
+                    (line.contains("com.android.application") || (catalogNamesAgp && AGP_ALIAS_RE.containsMatchIn(line)))
+            }
+            if (appliesAgp) return buildFile.parentFile
+        }
+
+        // <module>/src/main/AndroidManifest.xml -> <module>
+        return files.firstOrNull { f ->
+            f.name == "AndroidManifest.xml" &&
+                runCatching { f.readText() }.getOrNull()?.contains("android.intent.category.LAUNCHER") == true
+        }?.parentFile?.parentFile?.parentFile
+    }
+
+    /** Build the debug APK, then install and launch it on the device behind the ADB bridge. The
+     *  package and launcher activity are read back out of the built APK with `aapt dump badging`
+     *  instead of parsed from Gradle: flavors, `applicationIdSuffix` and build types all rewrite the
+     *  final id, so only the APK knows what it actually is. */
+    private fun androidRunCommand(guestDir: String, modulePath: String): String = buildString {
+        val task = androidAssembleTask(modulePath)
+        val apkDir = androidApkDir(modulePath)
+        appendLine("clear"); appendLine("set -e")
+        appendLine("cd \"$guestDir\"")
+        appendLine("echo '== JCode: building =='")
+        appendLine("bash gradlew --console=plain $task")
+        appendLine("APK=\$(find \"$apkDir\" -name '*.apk' -type f 2>/dev/null | xargs -r ls -t | head -1)")
+        appendLine("[ -n \"\$APK\" ] || { echo \"No APK under $apkDir\"; exit 1; }")
+        appendLine("BADGE=\$(aapt dump badging \"\$APK\")")
+        appendLine("PKG=\$(printf '%s\\n' \"\$BADGE\" | sed -n \"s/^package: name='\\([^']*\\)'.*/\\1/p\")")
+        appendLine("ACT=\$(printf '%s\\n' \"\$BADGE\" | sed -n \"s/^launchable-activity: name='\\([^']*\\)'.*/\\1/p\")")
+        appendLine("[ -n \"\$PKG\" ] || { echo \"Could not read a package name from \$APK\"; exit 1; }")
+        appendLine("echo \"== JCode: installing \$PKG ==\"")
+        appendLine("adb install -r -t \"\$APK\"")
+        appendLine("if [ -n \"\$ACT\" ]; then adb shell am start -n \"\$PKG/\$ACT\"; else adb shell monkey -p \"\$PKG\" -c android.intent.category.LAUNCHER 1; fi")
+        appendLine("echo \"Launched \$PKG\"")
+    }
+
+    /** Build the debug APK and stop there: the app is started by the container, in J Code's own
+     *  process, once the workbench sees the run finish. Nothing is installed and adb is never used, so
+     *  this recipe works on a device that was never paired. The APK directory is stamped into the
+     *  script as [VDEVICE_MARKER] — that, not the terminal output, is how the workbench finds the
+     *  build's APK afterwards ([virtualDeviceApkDir]). */
+    private fun androidVirtualDeviceCommand(guestDir: String, modulePath: String): String = buildString {
+        appendLine("clear"); appendLine("set -e")
+        appendLine("# $VDEVICE_MARKER ${androidApkDir(modulePath)}")
+        appendLine("cd \"$guestDir\"")
+        appendLine("echo '== JCode: building for the virtual device =='")
+        appendLine("bash gradlew --console=plain ${androidAssembleTask(modulePath)}")
+        appendLine("echo 'Build finished.'")
+    }
+
+    private fun androidAssembleTask(modulePath: String): String =
+        if (modulePath.isEmpty()) "assembleDebug" else ":${modulePath.replace('/', ':')}:assembleDebug"
+
+    private fun androidApkDir(modulePath: String): String =
+        if (modulePath.isEmpty()) "build/outputs/apk/debug" else "$modulePath/build/outputs/apk/debug"
+
+    /** The host directory a virtual-device run config builds its APK into, or null when [config] is
+     *  not one (i.e. its script carries no [VDEVICE_MARKER]). */
+    fun virtualDeviceApkDir(project: Project, config: RunConfig): File? {
+        val root = (project.fsPath as? FsPath.Local)?.file ?: return null
+        val relative = config.terminals
+            .firstNotNullOfOrNull { VDEVICE_MARKER_RE.find(it.command)?.groupValues?.get(1)?.trim() }
+            ?.takeIf { it.isNotEmpty() }
+            ?: return null
+        return File(root, relative)
+    }
+
+    /** The most recently written `.apk` under [apkDir] (searched recursively, since a flavoured build
+     *  nests its output), or null when the build produced none. */
+    fun freshestApk(apkDir: File): File? =
+        apkDir.takeIf(File::isDirectory)
+            ?.walkTopDown()
+            ?.filter { it.isFile && it.extension.equals("apk", ignoreCase = true) }
+            ?.maxByOrNull(File::lastModified)
 
     private fun dotnetPublishCommand(csprojGuest: String, stageName: String): String = buildString {
         appendLine("clear"); appendLine("set -e")
@@ -711,6 +831,9 @@ object ProjectRunner {
         }.joinToString("")
         return cleaned.trim('-').ifBlank { "project" }
     }
+
+    const val VDEVICE_MARKER = "jcode-virtual-device:"
+    private val VDEVICE_MARKER_RE = Regex("^# $VDEVICE_MARKER (.+)$", RegexOption.MULTILINE)
 
     private const val ASPNET_PORT = 5080
     private const val VITE_PORT = 5173

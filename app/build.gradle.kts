@@ -12,7 +12,7 @@ plugins {
 // git-commit-count scheme and produced downgrades). Pre-release suffixes (e.g. -beta) are
 // ignored by the derivation. The formula must match scripts/build-release.ps1 ($Code) and
 // build-release-common.sh (CODE).
-val jcodeVersion = "1.3.10"
+val jcodeVersion = "1.4.0"
 
 val jcodeVersionName: String =
     (project.findProperty("jcodeVersionName") as? String)?.trim()?.takeIf { it.isNotBlank() }
@@ -95,6 +95,9 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        // The app-sandbox tab talks to the :guest process over a Binder interface that carries a
+        // SurfaceControlViewHost.SurfacePackage and raw MotionEvents/KeyEvents.
+        aidl = true
     }
 
     packaging {

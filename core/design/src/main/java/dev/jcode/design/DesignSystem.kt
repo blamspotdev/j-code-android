@@ -246,6 +246,34 @@ class EnvironmentBackupActions(
 val LocalEnvironmentBackup = compositionLocalOf { EnvironmentBackupActions() }
 
 /**
+ * ADB bridge status + the entry point to its pairing page, shared (via [LocalAndroidDevice]) with the
+ * settings screen and the Run panel without threading params through JCodeShell (ART register limit).
+ * [ready] is true only once a device is connected through the relay; [status] is a short label for
+ * every other state ("Not set up", "Connecting…", a failure reason).
+ */
+class AndroidDeviceSetting(
+    val ready: Boolean = false,
+    val status: String = "Not set up",
+    val serial: String? = null,
+    val onOpenPage: () -> Unit = {},
+)
+
+val LocalAndroidDevice = compositionLocalOf { AndroidDeviceSetting() }
+
+/**
+ * "Run in a virtual device" preference, shared (via [LocalVirtualDevice]) with the settings screen and
+ * the run flow without threading a param through JCodeShell (ART register limit). When [enabled], an
+ * Android run config that builds for the container starts its APK inside J Code once the build
+ * finishes, instead of installing it through adb; [onChange] toggles it.
+ */
+class VirtualDeviceSetting(
+    val enabled: Boolean = false,
+    val onChange: (Boolean) -> Unit = {},
+)
+
+val LocalVirtualDevice = compositionLocalOf { VirtualDeviceSetting() }
+
+/**
  * Performance / resource-management preferences, shared (via [LocalPerformanceSettings]) with both the
  * settings screen and JCodeShell without threading params through the latter (ART register limit).
  * [confirmCloseRunning] warns before closing a project/workspace that still has a running terminal

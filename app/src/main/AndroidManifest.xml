@@ -85,6 +85,63 @@
             android:name=".AppInstallReceiver"
             android:exported="false" />
 
+        <!-- Virtual device (dev.jcode.vdevice): the stubs the app-virtualization container launches
+             in place of a guest APK's own activities, since the system cannot be asked to start an
+             activity of a package it has never heard of. They run in their own :guest process so the
+             guest gets its own ART heap and framework hooks and cannot corrupt the IDE, and they are
+             never used as themselves — GuestRuntime swaps in the guest's class before the system
+             instantiates them. launchMode is standard so one stub can back several guest instances,
+             and configChanges is deliberately broad so the guest handles rotation itself instead of
+             being relaunched through the stub. -->
+        <activity
+            android:name=".vdevice.GuestBootstrapActivity"
+            android:process=":guest"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <activity
+            android:name=".vdevice.GuestActivity0"
+            android:process=":guest"
+            android:exported="false"
+            android:launchMode="standard"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|layoutDirection|fontScale|density|colorMode"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+        <activity
+            android:name=".vdevice.GuestActivity1"
+            android:process=":guest"
+            android:exported="false"
+            android:launchMode="standard"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|layoutDirection|fontScale|density|colorMode"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+        <activity
+            android:name=".vdevice.GuestActivity2"
+            android:process=":guest"
+            android:exported="false"
+            android:launchMode="standard"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|layoutDirection|fontScale|density|colorMode"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+        <activity
+            android:name=".vdevice.GuestActivity3"
+            android:process=":guest"
+            android:exported="false"
+            android:launchMode="standard"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|layoutDirection|fontScale|density|colorMode"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+
+        <!-- The app-sandbox editor tab's half of the container: the workbench binds this to have the
+             guest built window-less and composited into a SurfaceView (see EmbeddedGuest). It shares
+             the stubs' :guest process on purpose — the hooks and the guest's heap must stay out of
+             the IDE — and unbinding it is what tears a session down, since nothing else keeps the
+             process alive. -->
+        <service
+            android:name=".vdevice.GuestSessionService"
+            android:process=":guest"
+            android:exported="false" />
+
     </application>
 
 </manifest>

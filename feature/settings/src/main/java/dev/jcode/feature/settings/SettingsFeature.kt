@@ -70,6 +70,8 @@ import dev.jcode.design.LocalExtraKeysSetting
 import dev.jcode.design.LocalPerformanceSettings
 import dev.jcode.design.ExplorerExcludeEffect
 import dev.jcode.design.ExplorerHiddenMode
+import dev.jcode.design.LocalAndroidDevice
+import dev.jcode.design.LocalVirtualDevice
 import dev.jcode.design.LocalAppUpdate
 import dev.jcode.design.LocalSettingsBackup
 import dev.jcode.design.EnvVarSettings
@@ -741,6 +743,41 @@ object SettingsFeature {
                         Text(if (envBackup.updatingPackages) "Updating packages…" else "Update system packages")
                     }
                 }
+            }
+
+            SettingsCard(
+                title = "Android device",
+                description = "Pair JCode with this phone's own adb so builds install and launch on it.",
+                keywords = "android device adb bridge wireless debugging pair pairing code relay serial apk " +
+                    "install launch logcat gradle installdebug flutter run",
+            ) {
+                val androidDevice = LocalAndroidDevice.current
+                SummaryRow(label = "ADB bridge", value = androidDevice.status)
+                androidDevice.serial?.let { SummaryRow(label = "Serial", value = it) }
+                FilledTonalButton(onClick = androidDevice.onOpenPage, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (androidDevice.ready) "Manage device" else "Set up ADB")
+                }
+            }
+
+            SettingsCard(
+                title = "Virtual device",
+                description = "Start a freshly built Android app inside JCode, without installing it.",
+                keywords = "virtual device container guest sandbox android app run apk launch no install " +
+                    "without adb quick iteration preview identity permissions services providers",
+            ) {
+                val virtualDevice = LocalVirtualDevice.current
+                ToggleRow(
+                    label = "Run in a virtual device",
+                    supporting = "An Android run config built for the virtual device starts its APK inside " +
+                        "JCode — no install and no ADB setup — under a virtual device identity, with its " +
+                        "storage kept under JCode. The app still inherits JCode's permissions, and the " +
+                        "services and providers it declares are not registered, so use this for quick " +
+                        "iteration and install the app for real before trusting what you see.",
+                    checked = virtualDevice.enabled,
+                    onCheckedChange = virtualDevice.onChange,
+                    modified = virtualDevice.enabled != SettingsDefaults.RUN_IN_VIRTUAL_DEVICE,
+                    onReset = { virtualDevice.onChange(SettingsDefaults.RUN_IN_VIRTUAL_DEVICE) },
+                )
             }
 
             SettingsSectionHeader("About")

@@ -900,8 +900,8 @@ static void handle_osc(VtParser* parser, bool bel_terminated) {
         }
     } else if (cmd >= 7711 && cmd <= 7715) {
         // JCode shell-integration events (7711 open-file, 7712 tab title, 7713 task complete,
-        // 7714 open-url, 7715 nested-shell open): queued for the host to drain after each feed
-        // (see vt_parser_osc_event_at), replacing the Kotlin-side per-byte re-scan of the same output.
+        // 7714 open-url, 7715 nested-shell open): queued for the host to drain after each feed (see
+        // vt_parser_osc_event_at), replacing the Kotlin-side per-byte re-scan of the same output.
         osc_event_push(parser, cmd, &parser->osc_buffer[i]);
     }
 }

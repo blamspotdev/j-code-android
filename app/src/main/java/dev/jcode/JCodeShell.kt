@@ -17,6 +17,7 @@ import dev.jcode.design.LocalRestoreSession
 import dev.jcode.design.LocalTabCloseButtonSetting
 import dev.jcode.design.BottomBarSetting
 import dev.jcode.design.EditorTabActions
+import dev.jcode.design.FloatingRestorePill
 import dev.jcode.design.FontOption
 import dev.jcode.design.FontSettings
 import dev.jcode.design.LocalEditorTabActions
@@ -204,6 +205,7 @@ import dev.jcode.core.distro.RootfsDownloader
 import dev.jcode.core.distro.RootfsManager
 import dev.jcode.core.distro.LspCatalogState
 import dev.jcode.core.distro.SdkCatalogState
+import dev.jcode.core.distro.adb.AdbBridgeState
 import dev.jcode.core.term.TerminalSessionManager
 import dev.jcode.core.term.TerminalView
 import dev.jcode.design.ChromeControls
@@ -258,6 +260,9 @@ import dev.jcode.workbench.marketplace.ExtensionKeepAliveSetting
 import dev.jcode.workbench.marketplace.LocalExtensionCapabilities
 import dev.jcode.workbench.marketplace.LocalExtensionKeepAlive
 import dev.jcode.workbench.ExtensionWebViewPage
+import dev.jcode.workbench.ADB_CATALOG_ID
+import dev.jcode.workbench.AndroidDevicePage
+import dev.jcode.workbench.adbStatusLabel
 import dev.jcode.workbench.BrowserPage
 import dev.jcode.workbench.BuiltinBrowser
 import dev.jcode.workbench.DevtoolsSidebarContent
@@ -309,6 +314,13 @@ import dev.jcode.design.LocalSettingsBackup
 import dev.jcode.design.SettingsBackupActions
 import dev.jcode.design.EnvironmentBackupActions
 import dev.jcode.design.LocalEnvironmentBackup
+import dev.jcode.design.AndroidDeviceSetting
+import dev.jcode.design.LocalAndroidDevice
+import dev.jcode.design.LocalVirtualDevice
+import dev.jcode.design.VirtualDeviceSetting
+import dev.jcode.vdevice.AppSandbox
+import dev.jcode.vdevice.AppSandboxPage
+import dev.jcode.vdevice.VirtualDevice
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalVolumeKeysSetting
@@ -340,7 +352,6 @@ import dev.jcode.workbench.CloseTarget
 import dev.jcode.workbench.IssueActions
 import dev.jcode.workbench.LocalIssueActions
 import dev.jcode.core.debug.DebugState
-import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.workbench.LocalTerminalTapConfig
 import dev.jcode.workbench.TerminalExtraKeysTarget
 import dev.jcode.workbench.WorkbenchExtraKeysBar
@@ -752,14 +763,13 @@ fun JCodeApp(
     // Debug launch target = the active source file, if it has an installed debug engine (stdio adapters
     // and js-debug's TCP adapter are both supported now).
     val activeDebugFile = editorGroup.activeTab?.takeIf { !it.isPage }?.filePath
-    val activeDebugEngine = remember(activeDebugFile?.path) {
-        activeDebugFile?.let { f ->
-            val ext = "." + f.name.substringAfterLast('.', "")
-            DebugEngineCatalog.BUILT_IN.firstOrNull { ext in it.extensions }
-        }
+    // Resolved through the ViewModel rather than by matching the catalog's `extensions` here: `.kt`
+    // maps to an engine only inside an Android app project, which a plain extension match misses.
+    val activeDebugEngineId = remember(activeDebugFile?.path) {
+        activeDebugFile?.path?.let { viewModel.debugEngineIdFor(it) }
     }
-    val canDebug = activeDebugEngine != null &&
-        activeDebugEngine.id in debugCatalogState.installedEntryIds
+    val canDebug = activeDebugEngineId != null &&
+        activeDebugEngineId in debugCatalogState.installedEntryIds
     // remember-ed so the holder is stable across recompositions (its callbacks are bound viewModel
     // refs, which allocate a fresh — thus unequal — instance every pass; an unremembered holder
     // provided as a CompositionLocal invalidates every reader on any JCodeApp recomposition).
@@ -815,6 +825,12 @@ fun JCodeApp(
     LaunchedEffect(Unit) {
         snapshotFlow { BuiltinBrowser.revealSignal.value }.collect { if (it > 0) viewModel.openBrowserTab() }
     }
+    // Same pattern for the device sandbox: a finished virtual-device build only bumps AppSandbox.revealSignal.
+    LaunchedEffect(Unit) {
+        snapshotFlow { AppSandbox.revealSignal.value }.collect { if (it > 0) viewModel.openAppSandboxTab() }
+    }
+    // A page tab has no close callback, so the guest is reaped by watching the tab list.
+    LaunchedEffect(editorGroup.tabs) { viewModel.pruneAppSandbox() }
     val snackbarHostState = remember { SnackbarHostState() }
     val openFolderLauncher = rememberOpenFolderLauncher(
         onFolderPicked = viewModel::openExternalFolder,
@@ -1150,6 +1166,20 @@ fun JCodeApp(
             updatingPackages = systemPackagesUpdating,
         )
     }
+    val adbBridgeState by viewModel.adbBridge.state.collectAsStateWithLifecycle()
+    val adbSerial by viewModel.adbBridge.serial.collectAsStateWithLifecycle()
+    val androidDeviceSetting = remember(adbBridgeState, adbSerial) {
+        AndroidDeviceSetting(
+            ready = adbBridgeState is AdbBridgeState.Ready,
+            status = adbStatusLabel(adbBridgeState),
+            serial = adbSerial,
+            onOpenPage = viewModel::openAndroidDevicePage,
+        )
+    }
+    val runInVirtualDevice by viewModel.runInVirtualDevice.collectAsStateWithLifecycle()
+    val virtualDeviceSetting = remember(runInVirtualDevice) {
+        VirtualDeviceSetting(enabled = runInVirtualDevice, onChange = viewModel::setRunInVirtualDevice)
+    }
     val envBackupStatus by viewModel.envBackupStatus.collectAsStateWithLifecycle()
     envBackupStatus?.let { status ->
         AlertDialog(
@@ -1230,6 +1260,8 @@ fun JCodeApp(
         LocalAppUpdate provides appUpdateSetting,
         LocalSettingsBackup provides settingsBackupActions,
         LocalEnvironmentBackup provides environmentBackupActions,
+        LocalAndroidDevice provides androidDeviceSetting,
+        LocalVirtualDevice provides virtualDeviceSetting,
         LocalCommandPaletteSetting provides commandPaletteSetting,
         LocalMarkdownPreviewSetting provides markdownPreviewSetting,
         LocalEditorFontSizeSetting provides editorFontSizeSetting,
@@ -1346,6 +1378,7 @@ fun JCodeApp(
             // The Source Control extension renders its git-identity + GitHub-auth screen at its
             // `#github` route (a global-config screen that works with no project open).
             onOpenExtensionConfig = { id -> viewModel.openExtensionViewPage(id, "github", "Git Configuration") },
+            onAdbPair = viewModel::pairAdbDevice,
             onExtensionExec = viewModel::runtimeExecJson,
             onExtensionApiRequest = { extId, envelope ->
                 val ext = viewModel.installedExtensions.value.firstOrNull { it.id == extId }
@@ -1502,6 +1535,10 @@ private fun JCodeShell(
     // the editor-page dispatch is invoked in a subcomposition where the local would fall back to default.
     val vcs = LocalVcsActions.current
     val appContext = LocalContext.current.applicationContext
+    // The guest runs in J Code's task, so the container is handed the hosting activity when there is
+    // one (the application context would push it into a task of its own).
+    val hostActivity = LocalContext.current.findActivity()
+    val virtualDevice = LocalVirtualDevice.current
     val configuration = LocalConfiguration.current
     val focusRequester = remember { FocusRequester() }
     val compactDrawerState = rememberDrawerState(DrawerValue.Closed)
@@ -1870,6 +1907,9 @@ private fun JCodeShell(
     // Run terminals whose command reported completion (OSC 7713); the run is "done" once all have.
     var runDoneSessionIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var runPollJob by remember { mutableStateOf<Job?>(null) }
+    // Where the running config drops its APK, when it is an Android run that ends in the virtual
+    // device. Set at Run and consumed when the build reports completion.
+    var pendingVirtualDeviceApkDir by remember { mutableStateOf<File?>(null) }
 
     // Clear the ACTIVE-run status (so the UI shows Run again) without touching [runSessionIds] — the
     // terminals stay for teardown-on-next-run. A run is no longer active once its command is done/killed.
@@ -1880,6 +1920,7 @@ private fun JCodeShell(
         runUrl = null
         runningProjectId = null
         runningRunName = null
+        pendingVirtualDeviceApkDir = null
     }
 
     // A run terminal going away — the server crashed/exited (EOF), the user closed the tab, or killed
@@ -1928,15 +1969,45 @@ private fun JCodeShell(
         onDispose { TerminalSessionHost.setUiNestedShellListener(null) }
     }
 
+    // Hand the APK a finished virtual-device build produced to the container. The build ran in the
+    // guest runtime, so nothing but the freshest file on disk says what it just wrote.
+    fun startVirtualDevice(apkDir: File, exitCode: Int) {
+        fun fail(message: String) {
+            OutputLog.append("✗ $message", OutputKind.Error)
+            scope.launch { snackbarHostState.showSnackbar(message) }
+        }
+        if (exitCode != 0) {
+            fail("Build failed (exit $exitCode) — nothing started in the virtual device.")
+            return
+        }
+        val apk = ProjectRunner.freshestApk(apkDir)
+        if (apk == null) {
+            fail("Build reported success but left no APK in ${apkDir.absolutePath}.")
+            return
+        }
+        // The tab is the preferred presentation; it falls back to the full-screen launch itself when
+        // the window cannot host an embedded guest, so the decision is not taken here.
+        VirtualDevice.inspect(appContext, apk.absolutePath)
+            .onSuccess {
+                OutputLog.append("✓ Opening ${it.label} (${it.packageName}) on the device sandbox")
+                AppSandbox.requestOpen(apk.absolutePath)
+            }
+            .onFailure { fail("Virtual device: ${it.message ?: it.toString()}") }
+    }
+
     // A run command reporting completion (OSC 7713, emitted after the command) marks that terminal
     // done. The run is done once every one of its commands has completed — then the active status
     // clears (UI shows Run again), but the terminals stay open with their output until the next run
     // tears them down. Non-run sessions (setup/manual) aren't in runSessionIds, so they're ignored.
     LaunchedEffect(runTerminalCompletions) {
-        runTerminalCompletions.collect { (sessionId, _) ->
+        runTerminalCompletions.collect { (sessionId, exitCode) ->
             if (sessionId in runSessionIds) {
                 runDoneSessionIds = runDoneSessionIds + sessionId
-                if (runSessionIds.all { it in runDoneSessionIds }) clearRunActiveStatus()
+                if (runSessionIds.all { it in runDoneSessionIds }) {
+                    val apkDir = pendingVirtualDeviceApkDir
+                    clearRunActiveStatus()
+                    apkDir?.let { startVirtualDevice(it, exitCode) }
+                }
             }
         }
     }
@@ -1984,6 +2055,16 @@ private fun JCodeShell(
         if (startedIds.isEmpty()) return
         runSessionIds = startedIds
         runDoneSessionIds = emptySet()
+        // A virtual-device config only builds; the container takes over when the build reports done.
+        // With the setting off it stays a plain build, which is silent enough to be worth saying.
+        val virtualApkDir = ProjectRunner.virtualDeviceApkDir(project, config)
+        pendingVirtualDeviceApkDir = virtualApkDir?.takeIf { virtualDevice.enabled }
+        if (virtualApkDir != null && !virtualDevice.enabled) {
+            OutputLog.append(
+                "'${config.name}' only builds the APK — turn on Settings → Environment → " +
+                    "\"Run in a virtual device\" to start it here.",
+            )
+        }
         runningProjectId = project.id
         runningRunName = config.name
         selectTerminalSession(startedIds.last()) // focus the frontend terminal
@@ -2800,6 +2881,18 @@ private fun JCodeShell(
                                     onOpenConfig = managerActions.onOpenExtensionConfig,
                                     modifier = Modifier.fillMaxSize(),
                                 )
+                                EditorPageKind.AndroidDevice -> AndroidDevicePage(
+                                    adbInstalled = ADB_CATALOG_ID in sdkCatalogState.installedEntryIds,
+                                    onOpenAdbToolchain = { managerActions.onOpenSdkDetail(ADB_CATALOG_ID) },
+                                    onPair = managerActions.onAdbPair,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                                EditorPageKind.AppSandbox -> AppSandboxPage(
+                                    onSnackbar = { message ->
+                                        scope.launch { snackbarHostState.showSnackbar(message) }
+                                    },
+                                    modifier = Modifier.fillMaxSize(),
+                                )
                                 EditorPageKind.Browser -> BrowserPage(modifier = Modifier.fillMaxSize())
                                 EditorPageKind.ImageViewer -> key(tab.id) {
                                     // Key by tab id so switching between image tabs (same call site)
@@ -3409,25 +3502,14 @@ private fun EditorWorkspace(
             }
         }
         if (chrome.chromeHidden) {
-            // 44dp box (≥ the 48dp min once IconButton's own touch expansion is added) keeps the only
-            // exit from hidden-chrome mode comfortably tappable.
-            Box(
+            FloatingRestorePill(
+                icon = jcIcon(JCodeIcon.ChevronDown),
+                contentDescription = "Show header and tabs",
+                onClick = { chrome.onSetChromeHidden(false) },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(4.dp)
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
-                    .clickable { chrome.onSetChromeHidden(false) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = jcIcon(JCodeIcon.ChevronDown),
-                    contentDescription = "Show header and tabs",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
+                    .padding(4.dp),
+            )
         }
         }
     }
