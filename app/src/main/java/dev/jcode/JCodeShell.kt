@@ -2887,7 +2887,12 @@ private fun JCodeShell(
                                     onPair = managerActions.onAdbPair,
                                     modifier = Modifier.fillMaxSize(),
                                 )
-                                EditorPageKind.AppSandbox -> AppSandboxPage(modifier = Modifier.fillMaxSize())
+                                EditorPageKind.AppSandbox -> AppSandboxPage(
+                                    onSnackbar = { message ->
+                                        scope.launch { snackbarHostState.showSnackbar(message) }
+                                    },
+                                    modifier = Modifier.fillMaxSize(),
+                                )
                                 EditorPageKind.Browser -> BrowserPage(modifier = Modifier.fillMaxSize())
                                 EditorPageKind.ImageViewer -> key(tab.id) {
                                     // Key by tab id so switching between image tabs (same call site)

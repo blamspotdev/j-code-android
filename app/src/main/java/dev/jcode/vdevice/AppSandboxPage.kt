@@ -29,12 +29,15 @@ import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -54,7 +57,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -93,9 +95,14 @@ private val HANDLE_TOUCH_HEIGHT = 24.dp
  * and the out-of-band activity creation the container depends on rests on non-SDK members — so every
  * failure lands on the same visible fallback: run the app full screen, the way the container has
  * always been able to.
+ *
+ * One-off results — a full-screen launch, an app that closed itself — go to [onSnackbar] rather than
+ * to a band along the bottom: they are over once they have been read, and the device's screen is the
+ * scarce thing here. What a running guest could not do is not one-off, so it stays reachable from the
+ * control bar for as long as that guest is up.
  */
 @Composable
-internal fun AppSandboxPage(modifier: Modifier = Modifier) {
+internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val view = LocalView.current
     val session = remember { AppSandbox.session(context) }
@@ -115,7 +122,6 @@ internal fun AppSandboxPage(modifier: Modifier = Modifier) {
     var running by AppSandbox.running
     var size by remember { mutableStateOf(IntSize.Zero) }
     var surfaceView by remember { mutableStateOf<AppSandboxSurfaceView?>(null) }
-    var notice by remember { mutableStateOf<String?>(null) }
     var launcherOpen by remember { mutableStateOf(false) }
     val surface by session.surface.collectAsStateWithLifecycle()
 
@@ -129,11 +135,11 @@ internal fun AppSandboxPage(modifier: Modifier = Modifier) {
     LaunchedEffect(surface, surfaceView) {
         surface?.let { surfaceView?.adopt(it) }
     }
-    // An app that closes itself leaves the device, not the tab: the screen goes back to blank and
-    // says what happened, which is the same place the Stop button lands on.
+    // An app that closes itself leaves the device, not the tab: the screen goes back to blank — the
+    // same place the Stop button lands on — and why it went is said once, on the way past.
     LaunchedEffect(status) {
         (status as? SandboxStatus.Stopped)?.let {
-            notice = it.reason
+            onSnackbar(it.reason)
             session.close()
             running = false
         }
@@ -142,76 +148,61 @@ internal fun AppSandboxPage(modifier: Modifier = Modifier) {
     fun runFullScreen() {
         launcherOpen = false
         VirtualDevice.launch(context, apkPath.trim(), activityClass)
-            .onSuccess { notice = "Started ${it.label} full screen." }
-            .onFailure { notice = it.message ?: "Could not start the app." }
+            .onSuccess { onSnackbar("Started ${it.label} full screen.") }
+            .onFailure { onSnackbar(it.message ?: "Could not start the app.") }
     }
 
     fun stop() {
         surfaceView?.hideKeyboard()
         session.close()
         running = false
-        notice = null
     }
 
-    Column(modifier) {
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            DeviceScreen(
-                session = session,
-                status = status,
+    Box(modifier) {
+        DeviceScreen(
+            session = session,
+            status = status,
+            running = running,
+            onSurface = { surfaceView = it },
+            onSized = { width, height -> size = IntSize(width, height) },
+            onRetry = {
+                session.restart(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
+            },
+            onFullScreen = { runFullScreen() },
+            onDismiss = { stop() },
+            onLaunch = { launcherOpen = true },
+            modifier = Modifier.fillMaxSize(),
+        )
+
+        if (launcherOpen) {
+            DeviceLauncher(
+                tier = tier,
+                apkPath = apkPath,
+                onApkPathChange = {
+                    apkPath = it
+                    // The activity a launch named belongs to the APK it named, not to this one.
+                    AppSandbox.activityClass.value = null
+                },
+                onRunHere = {
+                    launcherOpen = false
+                    running = true
+                },
+                onRunFullScreen = { runFullScreen() },
+                onClose = { launcherOpen = false },
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            DeviceControls(
                 running = running,
-                onSurface = { surfaceView = it },
-                onSized = { width, height -> size = IntSize(width, height) },
-                onRetry = {
+                caveat = (status as? SandboxStatus.Running)?.warning,
+                onBack = { session.back() },
+                onKeyboard = { surfaceView?.showKeyboard() },
+                onLaunch = { launcherOpen = true },
+                onRestart = {
                     session.restart(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
                 },
                 onFullScreen = { runFullScreen() },
-                onDismiss = { stop() },
-                onLaunch = { launcherOpen = true },
-                modifier = Modifier.fillMaxSize(),
-            )
-
-            if (launcherOpen) {
-                DeviceLauncher(
-                    tier = tier,
-                    apkPath = apkPath,
-                    onApkPathChange = {
-                        apkPath = it
-                        // The activity a launch named belongs to the APK it named, not to this one.
-                        AppSandbox.activityClass.value = null
-                    },
-                    onRunHere = {
-                        launcherOpen = false
-                        notice = null
-                        running = true
-                    },
-                    onRunFullScreen = { runFullScreen() },
-                    onClose = { launcherOpen = false },
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                DeviceControls(
-                    running = running,
-                    onBack = { session.back() },
-                    onKeyboard = { surfaceView?.showKeyboard() },
-                    onLaunch = { launcherOpen = true },
-                    onRestart = {
-                        session.restart(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
-                    },
-                    onFullScreen = { runFullScreen() },
-                    onStop = { stop() },
-                )
-            }
-        }
-
-        (notice ?: (status as? SandboxStatus.Running)?.warning)?.let { message ->
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-            Text(
-                text = message,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
+                onStop = { stop() },
             )
         }
     }
@@ -354,10 +345,14 @@ private fun ScreenFallback(
  * already runs past the bottom edge; every row of tab handed back to it is a row of the app that can
  * actually be seen. The bar therefore collapses itself once it has been left alone, and comes back
  * through the same pill the workbench's hidden chrome uses.
+ *
+ * [caveat] is what the container could not give the guest that is up — a button here when there is
+ * something to say, and no button at all when there is not.
  */
 @Composable
 private fun BoxScope.DeviceControls(
     running: Boolean,
+    caveat: String?,
     onBack: () -> Unit,
     onKeyboard: () -> Unit,
     onLaunch: () -> Unit,
@@ -366,6 +361,10 @@ private fun BoxScope.DeviceControls(
     onStop: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(true) }
+    var caveatOpen by remember { mutableStateOf(false) }
+    // The dialog is a window of its own, so nothing presses the bar while it is up — and a guest that
+    // stops takes its caveat with it, which must also let the timer go again.
+    val openCaveat = caveat?.takeIf { caveatOpen }
 
     AnimatedVisibility(
         visible = expanded,
@@ -376,8 +375,8 @@ private fun BoxScope.DeviceControls(
         // Remembered with the bar rather than with the page, so a press that the collapse animation
         // cut short cannot strand the timer once the pill brings the bar back.
         var pressed by remember { mutableStateOf(false) }
-        LaunchedEffect(pressed) {
-            if (!pressed) {
+        LaunchedEffect(pressed, openCaveat) {
+            if (!pressed && openCaveat == null) {
                 delay(TOOLBAR_IDLE_COLLAPSE_MS)
                 expanded = false
             }
@@ -399,7 +398,17 @@ private fun BoxScope.DeviceControls(
             tonalElevation = 3.dp,
         ) {
             Column {
-                DeviceToolbar(running, onBack, onKeyboard, onLaunch, onRestart, onFullScreen, onStop)
+                DeviceToolbar(
+                    running = running,
+                    caveat = caveat,
+                    onBack = onBack,
+                    onKeyboard = onKeyboard,
+                    onCaveat = { caveatOpen = true },
+                    onLaunch = onLaunch,
+                    onRestart = onRestart,
+                    onFullScreen = onFullScreen,
+                    onStop = onStop,
+                )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
             }
         }
@@ -413,6 +422,33 @@ private fun BoxScope.DeviceControls(
             modifier = Modifier.align(Alignment.TopCenter),
         )
     }
+
+    // Outside the collapsing bar: the message takes longer to read than the bar stays up.
+    openCaveat?.let { message ->
+        GuestCaveatDialog(message = message, onDismiss = { caveatOpen = false })
+    }
+}
+
+/**
+ * What the container could not give the running guest, word for word. It is a paragraph about one
+ * app's fidelity rather than something to act on, so it waits behind a tap instead of standing in a
+ * band of the device's screen — and nothing is trimmed to fit once it is opened.
+ */
+@Composable
+private fun GuestCaveatDialog(message: String, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("What this guest could not do") },
+        text = {
+            Text(
+                text = message,
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }
 
 /**
@@ -442,8 +478,10 @@ private fun DeviceControlsHandle(onClick: () -> Unit, modifier: Modifier = Modif
 @Composable
 private fun DeviceToolbar(
     running: Boolean,
+    caveat: String?,
     onBack: () -> Unit,
     onKeyboard: () -> Unit,
+    onCaveat: () -> Unit,
     onLaunch: () -> Unit,
     onRestart: () -> Unit,
     onFullScreen: () -> Unit,
@@ -463,6 +501,16 @@ private fun DeviceToolbar(
                 modifier = Modifier.padding(start = 8.dp),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        // Only lit when this guest actually lost something: a warning that is always on is a warning
+        // nobody reads. Carries the same colour ManagerNoticeCard gives the launcher's version of it.
+        if (caveat != null) {
+            ToolbarAction(
+                icon = Icons.Rounded.Warning,
+                label = "What this guest could not do",
+                onClick = onCaveat,
+                tint = MaterialTheme.colorScheme.error,
             )
         }
         Box(modifier = Modifier.weight(1f))
