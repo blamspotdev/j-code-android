@@ -78,6 +78,7 @@ internal fun ExtensionsPanel(
     onRefreshMarketplace: () -> Unit,
     onOpenDetail: (String) -> Unit,
     onOpenPermissions: () -> Unit,
+    onImportVsix: (() -> Unit)? = null,
     pendingReloadNames: List<String> = emptyList(),
     onReloadPending: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -106,6 +107,8 @@ internal fun ExtensionsPanel(
             searchPlaceholder = "Search extensions",
             onManage = onOpenPermissions,
             manageContentDescription = "Extension settings",
+            onImport = onImportVsix,
+            importContentDescription = "Import a VS Code extension (.vsix)",
         )
 
         if (pendingReloadNames.isNotEmpty()) {

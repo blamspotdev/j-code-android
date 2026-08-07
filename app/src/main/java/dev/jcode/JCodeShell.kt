@@ -638,6 +638,12 @@ fun JCodeApp(
         if (uri != null) viewModel.sideloadExtension(uri)
     }
     var showSideloadWarning by remember { mutableStateOf(false) }
+    // Importing a .vsix is ordinary use, not a developer action, so this picker is independent of
+    // the developer-options gate above.
+    val vsixPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) viewModel.importVsix(uri)
+    }
+    var showVsixImportInfo by remember { mutableStateOf(false) }
     val developerSetting = remember(developerOptions) {
         DeveloperSetting(
             enabled = developerOptions,
@@ -669,6 +675,31 @@ fun JCodeApp(
                 TextButton(onClick = { showSideloadWarning = false; jextPicker.launch("*/*") }) { Text("Choose .jext") }
             },
             dismissButton = { TextButton(onClick = { showSideloadWarning = false }) { Text("Cancel") } },
+        )
+    }
+    if (showVsixImportInfo) {
+        AlertDialog(
+            onDismissRequest = { showVsixImportInfo = false },
+            title = { Text("Import a VS Code extension") },
+            text = {
+                // Scrollable: this is the longest dialog in the app and it must stay readable in
+                // landscape, where there is far less height to work with.
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    "JCode runs the part of the VS Code API that extensions built around a webview " +
+                        "use — a side panel, commands, settings, and the current file and theme.\n\n" +
+                        "Extensions that add languages, themes, snippets, debuggers or tasks won't " +
+                        "work: JCode has its own systems for those. You'll be told what an extension " +
+                        "needs that's missing, both when it imports and if it asks for it while running.\n\n" +
+                        "A .vsix isn't verified by the marketplace and its code runs in the Linux " +
+                        "runtime, so import one only from a publisher you trust.",
+                )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showVsixImportInfo = false; vsixPicker.launch("*/*") }) { Text("Choose .vsix") }
+            },
+            dismissButton = { TextButton(onClick = { showVsixImportInfo = false }) { Text("Cancel") } },
         )
     }
     val cursorDragHorizontalLevel by viewModel.editorCursorDragHorizontalLevel.collectAsStateWithLifecycle()
@@ -1374,6 +1405,7 @@ fun JCodeApp(
             onUninstallExtension = viewModel::uninstallExtension,
             onOpenExtensionDetail = viewModel::openExtensionDetailPage,
             onOpenExtensionPermissions = viewModel::openExtensionPermissionsPage,
+            onImportVsix = { showVsixImportInfo = true },
             onOpenExtensionApp = viewModel::openExtensionAppPage,
             // The Source Control extension renders its git-identity + GitHub-auth screen at its
             // `#github` route (a global-config screen that works with no project open).
@@ -3348,6 +3380,7 @@ private fun WorkspacePanel(
                             onRefreshMarketplace = managerActions.onRefreshMarketplace,
                             onOpenDetail = managerActions.onOpenExtensionDetail,
                             onOpenPermissions = managerActions.onOpenExtensionPermissions,
+                            onImportVsix = managerActions.onImportVsix,
                             pendingReloadNames = pendingReload.names,
                             onReloadPending = pendingReload.onReload,
                             modifier = Modifier.fillMaxSize(),

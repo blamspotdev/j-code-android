@@ -351,6 +351,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Import a VS Code extension package picked by the user. Unlike sideloading a `.jext` this is
+     * not a developer action — importing a `.vsix` is how you bring in an extension JCode does not
+     * publish — so it is reachable from the extension list itself.
+     */
+    fun importVsix(uri: android.net.Uri) {
+        viewModelScope.launch {
+            val installedBefore = _installedExtensions.value.map { it.id }.toSet()
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val tmp = File.createTempFile("import", ".vsix", appContext.cacheDir)
+                    try {
+                        appContext.contentResolver.openInputStream(uri)?.use { input ->
+                            tmp.outputStream().use { input.copyTo(it) }
+                        } ?: error("cannot open the selected file")
+                        extensionInstaller.installLocalVsix(tmp, BuildConfig.VERSION_NAME).getOrThrow()
+                    } finally {
+                        tmp.delete()
+                    }
+                }
+            }
+            result
+                .onSuccess { r ->
+                    refreshInstalledExtensions()
+                    // Lead with what will not work: a .vsix can install cleanly and still be missing
+                    // the part the user came for.
+                    emitMessage(
+                        r.compatibility.warnings.firstOrNull()
+                            ?.let { "Imported '${r.extension.name}' — $it" }
+                            ?: "Imported '${r.extension.name}' ${r.manifest.version}.",
+                    )
+                    if (r.extension.id in installedBefore) {
+                        markPendingReload(r.extension.id, r.extension.name)
+                    }
+                }
+                .onFailure { emitMessage("Import failed: ${it.message ?: "not a usable .vsix"}") }
+        }
+    }
+
     /** Fetch the remote marketplace index (extensions available to install). */
     fun refreshMarketplace() {
         viewModelScope.launch {

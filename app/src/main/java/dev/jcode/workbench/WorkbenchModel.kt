@@ -152,6 +152,9 @@ internal data class WorkbenchManagerActions(
     val onUninstallExtension: (String) -> Unit,
     val onOpenExtensionDetail: (String) -> Unit,
     val onOpenExtensionPermissions: () -> Unit,
+    /** Starts the "import a VS Code .vsix" flow from the extension list. Not a developer action —
+     *  importing an extension JCode does not publish is ordinary use, so it is always available. */
+    val onImportVsix: (() -> Unit)? = null,
     /** Opens an extension's bundled web-frontend ("Manage"/DB-manager) screen by extension id. */
     val onOpenExtensionApp: (String) -> Unit,
     /** Opens an extension's web frontend at its `#config` route by extension id (e.g. Source Control
