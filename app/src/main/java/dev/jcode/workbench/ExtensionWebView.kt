@@ -316,6 +316,7 @@ fun ExtensionWebViewPage(
                 settings.allowUniversalAccessFromFileURLs = true
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView, url: String) {
+                        view.evaluateJavascript(VIEWPORT_SIZE_JS, null)
                         view.evaluateJavascript(themeJsState.value, null)
                     }
 
@@ -385,6 +386,28 @@ fun ExtensionWebViewPage(
         },
     )
 }
+
+/**
+ * Publishes the WebView's real size to every extension page as `--jcode-viewport-height` /
+ * `--jcode-viewport-width`, kept in sync as the view resizes.
+ *
+ * Android WebView is a system component many devices never update, and older builds lay a page out
+ * against a viewport whose height is zero even though `window.innerHeight` reports the true size:
+ * every `vh` length there resolves to 0, so an extension's dialogs and side panels — sized against
+ * the viewport — render as empty slivers. A page can size against these variables instead and get
+ * a height that holds on any engine.
+ */
+private const val VIEWPORT_SIZE_JS = """
+(function () {
+  var root = document.documentElement;
+  var publish = function () {
+    root.style.setProperty('--jcode-viewport-height', window.innerHeight + 'px');
+    root.style.setProperty('--jcode-viewport-width', window.innerWidth + 'px');
+  };
+  publish();
+  window.addEventListener('resize', publish);
+})();
+"""
 
 private const val NO_UI_HTML =
     "<html><body style=\"font-family:sans-serif;color:#9aa;padding:24px\">" +
