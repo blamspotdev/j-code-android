@@ -463,6 +463,11 @@ private fun VsixExtensionWebView(
                 // how a page ends up sitting on its splash forever.
                 "webview/postMessage" -> {
                     val payload = params.opt("message")
+                    ExtensionDevLog.log(
+                        ExtensionDevLogEntry.Kind.Event,
+                        extension.id,
+                        "ext → page ${payload?.toString()?.take(220)}",
+                    )
                     val json = JSONObject.quote(
                         when (payload) {
                             null, JSONObject.NULL -> "null"
@@ -581,7 +586,14 @@ private fun VsixExtensionWebView(
                     object {
                         @JavascriptInterface
                         fun postMessage(payload: String) {
-                            val handle = viewHandle ?: return
+                            val handle = viewHandle
+                            ExtensionDevLog.log(
+                                ExtensionDevLogEntry.Kind.Event,
+                                extension.id,
+                                if (handle == null) "page → ext DROPPED (no view yet) ${payload.take(200)}"
+                                else "page → ext ${payload.take(220)}",
+                            )
+                            if (handle == null) return
                             scope.launch { host?.postToWebview(handle, payload) }
                         }
                     },
