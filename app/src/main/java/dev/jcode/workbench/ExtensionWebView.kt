@@ -541,9 +541,32 @@ private fun VsixExtensionWebView(
     )
 }
 
-/** `acquireVsCodeApi()`, the one thing every VS Code webview expects to find waiting for it. */
+/**
+ * What every VS Code webview expects to find waiting for it: `acquireVsCodeApi()`, and a document
+ * with a height.
+ *
+ * The height is not a given here. On the WebView builds JCode ships to, the document lays out
+ * against a zero-height viewport, so `html` computes to 0 and an extension whose root is
+ * `height: 100%` — which is most of them — fills nothing and renders blank. The real size is only
+ * available in JS, so it is applied from there as pixels and republished as a variable for anything
+ * sizing itself in viewport units.
+ */
 private val VSIX_BOOTSTRAP = """
+<style>html,body{margin:0;padding:0;overflow:hidden}</style>
 <script>
+(function () {
+  var applySize = function () {
+    var root = document.documentElement;
+    var height = window.innerHeight + 'px';
+    root.style.setProperty('--jcode-viewport-height', height);
+    root.style.setProperty('--jcode-viewport-width', window.innerWidth + 'px');
+    root.style.height = height;
+    if (document.body) document.body.style.height = height;
+  };
+  applySize();
+  window.addEventListener('resize', applySize);
+  document.addEventListener('DOMContentLoaded', applySize);
+})();
 (function () {
   var state = {};
   var listeners = [];
