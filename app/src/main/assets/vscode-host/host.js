@@ -481,6 +481,11 @@ const activate = async (state) => {
   };
   windowState = { focused: true, active: true };
 
+  // Worth stating plainly in the log: an extension that resolves its working directory from the
+  // workspace behaves completely differently when this is empty, and the difference is otherwise
+  // only visible several layers downstream.
+  log('info', 'workspace folders: ' + JSON.stringify(workspaceState.folders.map((f) => f.uri.fsPath)));
+
   const entry = path.resolve(EXT_DIR, MAIN);
   extensionModule = require(entry);
 
