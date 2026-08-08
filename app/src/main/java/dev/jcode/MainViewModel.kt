@@ -2969,6 +2969,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Open (or focus) an editor tab for a webview panel an imported `.vsix` created.
+     *
+     * Panels coexist rather than replacing each other: an extension can hold several at once (a
+     * session opened in the editor alongside its Agent Manager), and VS Code shows them as separate
+     * tabs. The panel itself lives in the extension's session, so this only surfaces it — closing the
+     * tab leaves it running, and the extension revealing it again reopens this tab.
+     */
+    fun openVsixPanelPage(extensionId: String, handle: String, title: String) {
+        _bringEditorToFront.tryEmit(Unit)
+        val tabId = VSIX_PANEL_PREFIX + extensionId + "#" + handle
+        val group = _editorGroup.value
+        val existing = group.tabs.firstOrNull { it.id == tabId }
+        _editorGroup.value = if (existing != null) {
+            group.withActiveTabChanged(existing.id)
+        } else {
+            group.withTabAdded(EditorTab.page(tabId, title, EditorPageKind.VsixPanel))
+        }
+    }
+
     /** Run a command in the Linux runtime for an extension frontend; returns a JSON result payload.
      *  Runs as root: manager extensions (SQL Client, VM Manager) need privilege to install/run software. */
     suspend fun runtimeExecJson(command: String, timeoutMs: Long): String {
@@ -4680,6 +4700,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val DEBUG_ENGINE_DETAIL_PREFIX = "jcode://debug-engine/"
         const val EXT_DETAIL_PREFIX = "jcode://ext/"
         const val EXT_APP_PREFIX = "jcode://ext-app/"
+        const val VSIX_PANEL_PREFIX = "jcode://vsix-panel/"
         const val EXT_PERMISSIONS_TAB_ID = "jcode://ext-permissions"
         const val RUN_CONFIG_PREFIX = "jcode://run-config/"
         const val BUILD_CONFIG_PREFIX = "jcode://build-config/"

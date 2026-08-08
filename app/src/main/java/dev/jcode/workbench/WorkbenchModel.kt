@@ -167,6 +167,8 @@ internal data class WorkbenchManagerActions(
     val onExtensionExec: suspend (command: String, timeoutMs: Long) -> String,
     /** Spawns a long-lived runtime process with stdio attached, used to run an imported `.vsix`. */
     val onSpawnRuntimeProcess: ((command: String) -> Process?)? = null,
+    /** Surfaces a webview panel an imported `.vsix` created (`createWebviewPanel`) as an editor tab. */
+    val onOpenVsixPanel: (extensionId: String, handle: String, title: String) -> Unit = { _, _, _ -> },
     /** Extension API v1 envelope handler: (extensionId, requestJson) -> response JSON. */
     val onExtensionApiRequest: suspend (extensionId: String, envelopeJson: String) -> String =
         { _, _ -> """{"ok":false,"error":"extension API unavailable"}""" },

@@ -345,6 +345,7 @@ import dev.jcode.workbench.WorkbenchActionButton
 import dev.jcode.workbench.WorkbenchIconActionButton
 import dev.jcode.workbench.ExtensionDrawerActions
 import dev.jcode.workbench.VsixDrawerContent
+import dev.jcode.workbench.VsixPanelPage
 import dev.jcode.workbench.VsixViewHolder
 import dev.jcode.workbench.ScmBackgroundHost
 import dev.jcode.workbench.ScmWebViewHolder
@@ -1273,6 +1274,7 @@ fun JCodeApp(
                 onStopAllServices = viewModel::stopAllRuntimeServices,
                 keepAliveFor = { id -> id !in extensionKeepAliveDisabled },
                 spawnProcess = viewModel::spawnRuntimeProcess,
+                onOpenPanel = viewModel::openVsixPanelPage,
             )
         },
         LocalTaskManagerBackgroundActions provides remember {
@@ -1425,6 +1427,7 @@ fun JCodeApp(
             onAdbPair = viewModel::pairAdbDevice,
             onExtensionExec = viewModel::runtimeExecJson,
             onSpawnRuntimeProcess = viewModel::spawnRuntimeProcess,
+            onOpenVsixPanel = viewModel::openVsixPanelPage,
             onExtensionApiRequest = { extId, envelope ->
                 val ext = viewModel.installedExtensions.value.firstOrNull { it.id == extId }
                 if (ext == null) """{"ok":false,"error":"unknown extension: $extId"}"""
@@ -2978,6 +2981,24 @@ private fun JCodeShell(
                                                 events = managerActions.extensionEvents,
                                                 route = view,
                                                 spawnProcess = managerActions.onSpawnRuntimeProcess,
+                                                onOpenPanel = { handle, title ->
+                                                    managerActions.onOpenVsixPanel(ext.id, handle, title)
+                                                },
+                                                modifier = Modifier.fillMaxSize(),
+                                            )
+                                        }
+                                    }
+                                }
+                                EditorPageKind.VsixPanel -> {
+                                    // Tab id is VSIX_PANEL_PREFIX + extId + "#" + the panel's handle.
+                                    val rest = tab.id.substringAfter(MainViewModel.VSIX_PANEL_PREFIX)
+                                    val extId = rest.substringBefore("#")
+                                    val handle = rest.substringAfter("#", "")
+                                    installedExtensions.firstOrNull { it.id == extId }?.let { ext ->
+                                        key(ext.id, handle) {
+                                            VsixPanelPage(
+                                                extension = ext,
+                                                handle = handle,
                                                 modifier = Modifier.fillMaxSize(),
                                             )
                                         }

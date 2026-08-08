@@ -34,6 +34,8 @@ class ExtensionDrawerActions(
     val keepAliveFor: (extensionId: String) -> Boolean = { true },
     /** Starts a long-lived process in the Linux runtime, which is what runs an imported `.vsix`. */
     val spawnProcess: ((command: String) -> Process?)? = null,
+    /** Surface a webview panel the extension created as an editor tab (`createWebviewPanel`). */
+    val onOpenPanel: (extensionId: String, handle: String, title: String) -> Unit = { _, _, _ -> },
 )
 
 val LocalExtensionDrawerActions = compositionLocalOf { ExtensionDrawerActions() }
@@ -77,6 +79,7 @@ internal fun VsixDrawerContent(extension: InstalledExtension, modifier: Modifier
         extension = extension,
         spawnProcess = spawn,
         onApiRequest = { envelope -> actions.apiRequest(extension, envelope) },
+        onOpenPanel = { handle, title -> actions.onOpenPanel(extension.id, handle, title) },
         modifier = modifier,
     )
     if (!actions.keepAliveFor(extension.id)) {
