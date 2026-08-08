@@ -1375,6 +1375,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val rightDrawerPersistentKey = booleanPreferencesKey("right_drawer_persistent")
+
+    /** In landscape, dock the right drawer beside the editor at half the screen instead of sliding it
+     *  over as a modal sheet. Ignored in portrait, where there is no width to share. */
+    val rightDrawerPersistent: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[rightDrawerPersistentKey] ?: SettingsDefaults.RIGHT_DRAWER_PERSISTENT }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.RIGHT_DRAWER_PERSISTENT)
+
+    fun setRightDrawerPersistent(enabled: Boolean) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[rightDrawerPersistentKey] = enabled }
+        }
+    }
+
     private val editorDragMovesCursorKey = booleanPreferencesKey("editor_drag_moves_cursor")
 
     /** When true, a one-finger drag on the editor moves the text cursor (the view follows) instead of

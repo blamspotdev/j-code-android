@@ -217,6 +217,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import dev.jcode.design.DeveloperSetting
 import dev.jcode.design.LocalDeveloperSetting
+import dev.jcode.design.LocalRightDrawerSetting
+import dev.jcode.design.RightDrawerSetting
+import dev.jcode.design.SettingsDefaults
 import dev.jcode.design.EditorFontSizeSetting
 import dev.jcode.design.EditorWordWrapSetting
 import dev.jcode.design.LocalEditorFontSizeSetting
@@ -649,6 +652,13 @@ fun JCodeApp(
             enabled = developerOptions,
             onSetEnabled = viewModel::setDeveloperOptions,
             onLoadExtension = { showSideloadWarning = true },
+        )
+    }
+    val rightDrawerPersistent by viewModel.rightDrawerPersistent.collectAsStateWithLifecycle()
+    val rightDrawerSetting = remember(rightDrawerPersistent) {
+        RightDrawerSetting(
+            enabled = rightDrawerPersistent,
+            onSetEnabled = viewModel::setRightDrawerPersistent,
         )
     }
     val extensionDevState = remember(installedExtensions) {
@@ -1298,6 +1308,7 @@ fun JCodeApp(
         LocalEditorFontSizeSetting provides editorFontSizeSetting,
         LocalEditorWordWrapSetting provides editorWordWrapSetting,
         LocalDeveloperSetting provides developerSetting,
+        LocalRightDrawerSetting provides rightDrawerSetting,
         LocalExtensionDevState provides extensionDevState,
         LocalExtensionSettingsUi provides extensionSettingsUi,
         LocalWebPreviewBrowsers provides webPreviewBrowsers,
@@ -1582,10 +1593,17 @@ private fun JCodeShell(
     val isMobileLandscapeMode = isLandscape && windowInfo.heightClass == JCodeWindowHeightClass.Compact
     val usesModalWorkspace = !isLandscape || isMobileLandscapeMode
     val isPortraitMobileMode = usesModalWorkspace && windowInfo.widthClass == JCodeWindowWidthClass.Compact
-    val hasLandscapeInspectorSidebar = isLandscape
     val canShowRightSidebar = true
     val leftSidebarWidth = if (windowInfo.widthClass == JCodeWindowWidthClass.Expanded) 284.dp else 236.dp
-    val rightSidebarWidth = (configuration.screenWidthDp * 0.75f).dp
+    // Opt-in (Settings → Appearance) landscape split. It deliberately does NOT go through
+    // usesModalWorkspace: that also drives the LEFT ModalNavigationDrawer, and docking the left
+    // drawer on a phone would leave no editor at all. Only the right side changes.
+    val persistentRightDrawer = LocalRightDrawerSetting.current.enabled && isLandscape
+    val rightSidebarDocked = isLandscape && (!usesModalWorkspace || persistentRightDrawer)
+    val rightSidebarWidth = (
+        configuration.screenWidthDp *
+            if (persistentRightDrawer) SettingsDefaults.RIGHT_DRAWER_PERSISTENT_FRACTION else 0.75f
+        ).dp
     val activeTab = editorGroup.activeTab
     // The Extension Dev tab exists only when Developer options is on, so it's excluded here too —
     // otherwise a persisted ExtensionDev selection would survive turning developer mode off.
@@ -3040,7 +3058,7 @@ private fun JCodeShell(
                     }
                 }
 
-                if (hasLandscapeInspectorSidebar && !usesModalWorkspace && rightSidebarVisible) {
+                if (rightSidebarDocked && rightSidebarVisible) {
                     WorkbenchRightSidebar(
                         selectedTab = rightPanelTab,
                         selectedProject = selectedProject,
@@ -3085,7 +3103,7 @@ private fun JCodeShell(
             content()
         }
 
-        if (usesModalWorkspace) {
+        if (usesModalWorkspace && !rightSidebarDocked) {
             AnimatedVisibility(
                 visible = rightSidebarVisible,
                 enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),

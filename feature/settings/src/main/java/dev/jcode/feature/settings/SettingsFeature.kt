@@ -68,6 +68,7 @@ import dev.jcode.design.LocalEditorFontSizeSetting
 import dev.jcode.design.LocalEditorWordWrapSetting
 import dev.jcode.design.LocalExtraKeysSetting
 import dev.jcode.design.LocalPerformanceSettings
+import dev.jcode.design.LocalRightDrawerSetting
 import dev.jcode.design.ExplorerExcludeEffect
 import dev.jcode.design.ExplorerHiddenMode
 import dev.jcode.design.LocalAndroidDevice
@@ -376,6 +377,23 @@ object SettingsFeature {
                         onReset = { cutoutSetting.onChange(SettingsDefaults.RESPECT_DEVICE_CUTOUT) },
                     )
                 }
+            }
+
+            SettingsCard(
+                title = "Right drawer",
+                description = "The panel holding the terminal, output, issues and extension views.",
+                keywords = "right drawer panel sidebar persistent dock split half width landscape terminal inspector",
+            ) {
+                val rightDrawerSetting = LocalRightDrawerSetting.current
+                ToggleRow(
+                    label = "Dock in landscape",
+                    supporting = "In landscape, split the screen with the right drawer instead of " +
+                        "sliding it over the editor, so both stay usable. Portrait is unaffected.",
+                    checked = rightDrawerSetting.enabled,
+                    onCheckedChange = rightDrawerSetting.onSetEnabled,
+                    modified = rightDrawerSetting.enabled != SettingsDefaults.RIGHT_DRAWER_PERSISTENT,
+                    onReset = { rightDrawerSetting.onSetEnabled(SettingsDefaults.RIGHT_DRAWER_PERSISTENT) },
+                )
             }
 
             SettingsCard(
