@@ -438,6 +438,8 @@ private fun VsixExtensionWebView(
     var viewHandle by remember(extension.id) { mutableStateOf<String?>(null) }
     var host by remember(extension.id) { mutableStateOf<VsCodeExtensionHost?>(null) }
     var webView by remember(extension.id) { mutableStateOf<WebView?>(null) }
+    var projectPath by remember(extension.id) { mutableStateOf<String?>(null) }
+    var projectName by remember(extension.id) { mutableStateOf<String?>(null) }
     val backgroundArgb = MaterialTheme.colorScheme.background.toArgb()
     val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
 
@@ -494,12 +496,12 @@ private fun VsixExtensionWebView(
             JSONObject(onApiRequest("""{"type":"workbench.projectInfo","payload":{}}"""))
                 .optJSONObject("data")
         }.getOrNull()
-        val projectPath = project?.optString("path")?.takeIf { it.isNotBlank() }
-        val projectName = project?.optString("name")?.takeIf { it.isNotBlank() }
+        projectPath = project?.optString("path")?.takeIf { it.isNotBlank() }
+        projectName = project?.optString("name")?.takeIf { it.isNotBlank() }
             ?: projectPath?.substringAfterLast('/')
 
         val activated = started.activate(
-            folders = if (projectPath != null) listOf((projectName ?: "project") to projectPath) else emptyList(),
+            folders = projectPath?.let { listOf((projectName ?: it.substringAfterLast('/')) to it) }.orEmpty(),
             configuration = JSONObject(),
         )
         // Tell the extension which theme it is being shown in before it builds its view, so it
@@ -585,7 +587,7 @@ private fun VsixExtensionWebView(
                     },
                     "JCodeVsix",
                 )
-                loadDataWithBaseURL("$VSIX_RESOURCE_ORIGIN/", VSIX_BOOTSTRAP + page, "text/html", "utf-8", null)
+                loadDataWithBaseURL("$VSIX_RESOURCE_ORIGIN/", vsixBootstrap(projectName, projectPath) + page, "text/html", "utf-8", null)
                 webView = this
             }
         },
@@ -595,7 +597,7 @@ private fun VsixExtensionWebView(
             val stamp = page.hashCode()
             if (view.tag != stamp) {
                 view.tag = stamp
-                view.loadDataWithBaseURL("$VSIX_RESOURCE_ORIGIN/", VSIX_BOOTSTRAP + page, "text/html", "utf-8", null)
+                view.loadDataWithBaseURL("$VSIX_RESOURCE_ORIGIN/", vsixBootstrap(projectName, projectPath) + page, "text/html", "utf-8", null)
             }
         },
     )
@@ -611,6 +613,37 @@ private fun VsixExtensionWebView(
  * available in JS, so it is applied from there as pixels and republished as a variable for anything
  * sizing itself in viewport units.
  */
+private fun vsixBootstrap(projectName: String?, projectPath: String?): String {
+    // A VS Code webview is handed its workspace through page config, not through the extension API —
+    // the page cannot call vscode.workspace itself. Telling only the extension host which project is
+    // open therefore leaves the UI to fall back to whatever it last persisted, which is how it ends
+    // up showing a stale folder instead of the one on screen.
+    val folders = if (projectPath != null) {
+        """[{"name":${JSONObject.quote(projectName ?: projectPath.substringAfterLast('/'))},""" +
+            """"path":${JSONObject.quote(projectPath)},"uri":${JSONObject.quote("file://$projectPath")}}]"""
+    } else {
+        "[]"
+    }
+    val folder = if (projectPath != null) JSONObject.quote(projectPath) else "null"
+    return """
+<script>
+(function () {
+  var ours = { workspaceFolder: $folder, workspaceFolders: $folders };
+  var config = Object.assign({ theme: 'dark', platform: 'linux' }, ours);
+  // The extension writes this config itself once its own script runs, which would drop the workspace
+  // we just resolved and send it back to whatever it last persisted. Keep everything it sets except
+  // the folders, which JCode is the authority on.
+  Object.defineProperty(window, '__VSCODE_CONFIG__', {
+    configurable: false,
+    get: function () { return config; },
+    set: function (value) { config = Object.assign({}, value || {}, ours); },
+  });
+  window.__OPENCHAMBER_HOME__ = $folder;
+})();
+</script>
+""" + VSIX_BOOTSTRAP
+}
+
 private val VSIX_BOOTSTRAP = """
 <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1, user-scalable=no">
 <style>
@@ -670,6 +703,41 @@ html,body{margin:0;padding:0;overflow:hidden}
 </script>
 """.trimIndent()
 
+/**
+ * Undo Tailwind's opacity fallback on engines without `color-mix()`.
+ *
+ * A translucent utility compiles to a solid colour plus a `@supports color-mix` block that adds the
+ * alpha. Where `color-mix()` is unsupported only the solid colour survives, so every intended tint
+ * paints at full strength — a 10% selection wash becomes a solid bar. The alpha cannot be recovered
+ * in CSS (the colour arrives through a variable, and neither relative colour syntax nor `color-mix`
+ * exists here), but the intent can: a faint tint reads far closer to nothing than to solid. So the
+ * faint ones are dropped and the strong ones kept.
+ *
+ * Appended rather than edited in place: same selector, same specificity, later in the sheet.
+ */
+private fun tintOverridesFor(css: String): String {
+    val supportsBlock = Regex("""@supports\s*\(color:\s*color-mix\([^)]*\)\)\s*\{((?:[^{}]|\{[^{}]*\})*)\}""")
+    val rule = Regex("""([^{}]+)\{([^{}]*)\}""")
+    val tinted = Regex("""([-a-zA-Z]+)\s*:\s*color-mix\(in oklab,[^,]+?([\d.]+)%\s*,\s*transparent\)""")
+
+    val overrides = StringBuilder()
+    for (block in supportsBlock.findAll(css)) {
+        for (inner in rule.findAll(block.groupValues[1])) {
+            val selector = inner.groupValues[1].trim()
+            if (selector.isEmpty() || selector.startsWith("@")) continue
+            for (decl in tinted.findAll(inner.groupValues[2])) {
+                val percent = decl.groupValues[2].toFloatOrNull() ?: continue
+                if (percent >= FAINT_TINT_CEILING) continue
+                overrides.append(selector).append('{').append(decl.groupValues[1]).append(":transparent}")
+            }
+        }
+    }
+    return overrides.toString()
+}
+
+/** Above this, a tint is a real fill and is left alone; below it, it was meant to be barely there. */
+private const val FAINT_TINT_CEILING = 60f
+
 /** Serve a file from the extension's install directory for [VSIX_RESOURCE_ORIGIN] requests. */
 private fun serveExtensionResource(extensionDir: File, url: Uri): android.webkit.WebResourceResponse? {
     if (!url.toString().startsWith("$VSIX_RESOURCE_ORIGIN/")) return null
@@ -693,6 +761,11 @@ private fun serveExtensionResource(extensionDir: File, url: Uri): android.webkit
         "woff2" -> "font/woff2"
         "ttf" -> "font/ttf"
         else -> "application/octet-stream"
+    }
+    if (mime == "text/css") {
+        val css = file.readText()
+        val patched = css + tintOverridesFor(css)
+        return android.webkit.WebResourceResponse(mime, "utf-8", patched.byteInputStream())
     }
     return android.webkit.WebResourceResponse(mime, "utf-8", file.inputStream())
 }
