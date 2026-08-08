@@ -28,6 +28,12 @@ object SettingsDefaults {
     const val EDITOR_FONT_SIZE = 14f
     const val EDITOR_WORD_WRAP = false
     const val DEVELOPER_OPTIONS = false
+    const val RIGHT_DRAWER_PERSISTENT = false
+    const val RIGHT_DRAWER_PERSISTENT_FRACTION = 0.5f
+
+    /** How far the docked drawer can be dragged. Both panes stay usable at either end. */
+    const val RIGHT_DRAWER_MIN_FRACTION = 0.3f
+    const val RIGHT_DRAWER_MAX_FRACTION = 0.7f
     const val RUN_IN_VIRTUAL_DEVICE = false
     val VOLUME_UP_ACTION = VolumeKeyAction.SystemDefault
     val VOLUME_DOWN_ACTION = VolumeKeyAction.SystemDefault

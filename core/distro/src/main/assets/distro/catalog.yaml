@@ -551,8 +551,8 @@ entries:
     name: opencode
     description: >-
       The opencode AI coding agent (single self-contained binary, no Node.js needed). Powers the
-      Chat tab in the right drawer via the OpenChamber extension, and briefs the agent on JCode's
-      environment. Bring an API key or subscription for your model provider.
+      OpenChamber extension's right-drawer panel, and briefs the agent on JCode's environment.
+      Bring an API key or subscription for your model provider.
     supportedArches: [arm64]
     installScript: |
       set -e

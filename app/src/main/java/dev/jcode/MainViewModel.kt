@@ -62,6 +62,7 @@ import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.feature.marketplace.BundledExtensionSpec
 import dev.jcode.feature.marketplace.ExtensionActivation
 import dev.jcode.feature.marketplace.ExtensionDeps
+import dev.jcode.feature.marketplace.ExtensionInstaller
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.languageFor
 import dev.jcode.feature.marketplace.MarketplaceEntry
@@ -320,7 +321,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         appContext.contentResolver.openInputStream(uri)?.use { input ->
                             tmp.outputStream().use { input.copyTo(it) }
                         } ?: error("cannot open the selected file")
-                        extensionInstaller.installLocalJext(tmp, BuildConfig.VERSION_NAME).getOrThrow()
+                        extensionInstaller.installLocalPackage(tmp, BuildConfig.VERSION_NAME).getOrThrow()
+                    } finally {
+                        tmp.delete()
+                    }
+                }
+            }
+            result
+                .onSuccess { outcome ->
+                    refreshInstalledExtensions()
+                    emitMessage(
+                        when (outcome) {
+                            is ExtensionInstaller.SideloadOutcome.Jext ->
+                                if (outcome.signed) "Installed '${outcome.extension.name}' (signed — not debuggable)."
+                                else "Loaded '${outcome.extension.name}' (unsigned dev extension)."
+                            // Lead with what will not work: a VS Code extension can install cleanly and
+                            // still be missing the part the user wanted.
+                            is ExtensionInstaller.SideloadOutcome.Vsix ->
+                                outcome.compatibility.warnings.firstOrNull()
+                                    ?.let { "Imported '${outcome.extension.name}' (.vsix) — $it" }
+                                    ?: "Imported '${outcome.extension.name}' (.vsix)."
+                        },
+                    )
+                    if (outcome.extension.id in installedBefore) {
+                        markPendingReload(outcome.extension.id, outcome.extension.name)
+                    }
+                }
+                .onFailure { emitMessage("Sideload failed: ${it.message ?: "unrecognised package"}") }
+        }
+    }
+
+    /**
+     * Import a VS Code extension package picked by the user. Unlike sideloading a `.jext` this is
+     * not a developer action — importing a `.vsix` is how you bring in an extension JCode does not
+     * publish — so it is reachable from the extension list itself.
+     */
+    fun importVsix(uri: android.net.Uri) {
+        viewModelScope.launch {
+            val installedBefore = _installedExtensions.value.map { it.id }.toSet()
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val tmp = File.createTempFile("import", ".vsix", appContext.cacheDir)
+                    try {
+                        appContext.contentResolver.openInputStream(uri)?.use { input ->
+                            tmp.outputStream().use { input.copyTo(it) }
+                        } ?: error("cannot open the selected file")
+                        extensionInstaller.installLocalVsix(tmp, BuildConfig.VERSION_NAME).getOrThrow()
                     } finally {
                         tmp.delete()
                     }
@@ -329,15 +375,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             result
                 .onSuccess { r ->
                     refreshInstalledExtensions()
+                    // Lead with what will not work: a .vsix can install cleanly and still be missing
+                    // the part the user came for.
                     emitMessage(
-                        if (r.signed) "Installed '${r.extension.name}' (signed — not debuggable)."
-                        else "Loaded '${r.extension.name}' (unsigned dev extension).",
+                        r.compatibility.warnings.firstOrNull()
+                            ?.let { "Imported '${r.extension.name}' — $it" }
+                            ?: "Imported '${r.extension.name}' ${r.manifest.version}.",
                     )
                     if (r.extension.id in installedBefore) {
                         markPendingReload(r.extension.id, r.extension.name)
                     }
                 }
-                .onFailure { emitMessage("Sideload failed: ${it.message ?: "invalid .jext"}") }
+                .onFailure { emitMessage("Import failed: ${it.message ?: "not a usable .vsix"}") }
         }
     }
 
@@ -854,6 +903,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val virtualDeviceAdb: AdbDaemon by lazy { VirtualDeviceAdbService.daemon(appContext) }
 
+    /** Holds the guest's adb server open; see [startVirtualDeviceAdb]. */
+    private var virtualDeviceAdbServer: Process? = null
+
     private suspend fun startVirtualDeviceAdb() {
         val port = runCatching { virtualDeviceAdb.start() }.getOrElse { error ->
             OutputLog.append("Virtual device adb failed to start: ${error.message}\n", OutputKind.Error)
@@ -863,21 +915,93 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // The daemon only trusts the distro's own adbkey.pub, and adb does not create one until it
         // has run once — so mint it before connecting, or the first connection is refused for want
         // of a key rather than because anything is wrong.
-        runCatching {
-            distroService.exec(
-                "mkdir -p \"\$HOME/.android\" && " +
-                    "{ [ -f \"\$HOME/.android/adbkey.pub\" ] || adb keygen \"\$HOME/.android/adbkey\"; } && " +
-                    "adb connect 127.0.0.1:$port",
-                timeoutMs = VIRTUAL_DEVICE_CONNECT_TIMEOUT_MS,
-            )
-        }.onFailure { error ->
-            OutputLog.append("Virtual device adb connect failed: ${error.message}\n", OutputKind.Error)
+        //
+        attachVirtualDeviceAdb(port)
+    }
+
+    /**
+     * Hold the guest's adb server open with the virtual device attached to it.
+     *
+     * `adb connect` registers the device with an adb *server*, and that server is a child of whatever
+     * proot session started it — which proot reaps on exit. Connecting from a one-shot command
+     * therefore left nothing behind: the next terminal started a server of its own, `adb devices` was
+     * empty, and `adb install` had no device to install to. Keeping this session alive keeps that
+     * server alive, and every terminal shares it.
+     */
+    private fun attachVirtualDeviceAdb(port: Int) {
+        runCatching { virtualDeviceAdbServer?.destroy() }
+        virtualDeviceAdbServer = distroService.spawnDapProcess(
+            command = "mkdir -p \"\$HOME/.android\" && " +
+                "{ [ -f \"\$HOME/.android/adbkey.pub\" ] || adb keygen \"\$HOME/.android/adbkey\"; } && " +
+                "adb start-server && adb connect 127.0.0.1:$port && exec sleep infinity",
+        )
+        if (virtualDeviceAdbServer == null) {
+            OutputLog.append("Virtual device adb connect failed: the Linux runtime is not ready\n", OutputKind.Error)
         }
     }
 
     private fun stopVirtualDeviceAdb() {
+        runCatching { virtualDeviceAdbServer?.destroy() }
+        virtualDeviceAdbServer = null
         runCatching { virtualDeviceAdb.stop() }
         TerminalSessionHost.manager(appContext).virtualDeviceAdbPort = 0
+    }
+
+    /**
+     * Re-attach the virtual device to the runtime's adb server.
+     *
+     * The attachment is not owned by JCode once made: `adb kill-server`, an adb client of a different
+     * version taking the port, or the runtime restarting all drop it, and the device then goes missing
+     * from `adb devices` with nothing to say why. This puts it back without restarting the app.
+     */
+    private val _virtualDeviceAdbReconnecting = MutableStateFlow(false)
+
+    /** True while [reconnectVirtualDeviceAdb] is working, so the settings action can show it. */
+    val virtualDeviceAdbReconnecting: StateFlow<Boolean> = _virtualDeviceAdbReconnecting.asStateFlow()
+
+    fun reconnectVirtualDeviceAdb() {
+        if (_virtualDeviceAdbReconnecting.value) return
+        viewModelScope.launch {
+            if (!runInVirtualDevice.value) {
+                OutputLog.append("Virtual device is off — turn it on to connect.\n", OutputKind.Error)
+                return@launch
+            }
+            _virtualDeviceAdbReconnecting.value = true
+            try {
+                // Reattach to the port already in use where there is one, rather than restarting the
+                // daemon onto a fresh one: terminals are told the device's address through
+                // ANDROID_SERIAL when they start, and a new port would leave every open terminal
+                // pointing at a dead one.
+                val port = TerminalSessionHost.manager(appContext).virtualDeviceAdbPort
+                if (port > 0) attachVirtualDeviceAdb(port) else startVirtualDeviceAdb()
+                // Spawning the client only starts the connect; wait for the device to actually be
+                // listed before saying so, or the action reports success the moment it is asked and
+                // the user finds out otherwise from `adb devices`.
+                val target = "127.0.0.1:${TerminalSessionHost.manager(appContext).virtualDeviceAdbPort}"
+                val attached = awaitVirtualDeviceAttached(target)
+                OutputLog.append(
+                    if (attached) "Virtual device attached at $target.\n"
+                    else "Virtual device did not attach at $target.\n",
+                    if (attached) OutputKind.Info else OutputKind.Error,
+                )
+            } finally {
+                _virtualDeviceAdbReconnecting.value = false
+            }
+        }
+    }
+
+    /** Poll `adb devices` until [target] shows up, so "reconnected" means it actually is. */
+    private suspend fun awaitVirtualDeviceAttached(target: String): Boolean {
+        repeat(VIRTUAL_DEVICE_ATTACH_ATTEMPTS) {
+            val listed = runCatching {
+                distroService.exec("adb devices", timeoutMs = 10_000L).stdout
+            }.getOrDefault("")
+            if (listed.lineSequence().any { it.startsWith(target) && it.trimEnd().endsWith("device") }) {
+                return true
+            }
+            delay(VIRTUAL_DEVICE_ATTACH_POLL_MS)
+        }
+        return false
     }
 
     private val autoCloseIdleKey = booleanPreferencesKey("perf_auto_close_idle_terminals")
@@ -1323,6 +1447,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setDeveloperOptions(enabled: Boolean) {
         viewModelScope.launch {
             uiPreferences.edit { prefs -> prefs[developerOptionsKey] = enabled }
+        }
+    }
+
+    private val rightDrawerPersistentKey = booleanPreferencesKey("right_drawer_persistent")
+
+    /** In landscape, dock the right drawer beside the editor at half the screen instead of sliding it
+     *  over as a modal sheet. Ignored in portrait, where there is no width to share. */
+    val rightDrawerPersistent: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[rightDrawerPersistentKey] ?: SettingsDefaults.RIGHT_DRAWER_PERSISTENT }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.RIGHT_DRAWER_PERSISTENT)
+
+    fun setRightDrawerPersistent(enabled: Boolean) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[rightDrawerPersistentKey] = enabled }
+        }
+    }
+
+    private val rightDrawerWidthKey = floatPreferencesKey("right_drawer_width_fraction")
+
+    /**
+     * Share of the docked split the right drawer takes, set by dragging the divider.
+     *
+     * Clamped on the way out as well as in: a width stored under a wider range than the current one
+     * would otherwise survive it, and the panes are only guaranteed usable inside the range.
+     */
+    val rightDrawerWidthFraction: StateFlow<Float> = uiPreferences.data
+        .map { prefs ->
+            (prefs[rightDrawerWidthKey] ?: SettingsDefaults.RIGHT_DRAWER_PERSISTENT_FRACTION)
+                .coerceIn(
+                    SettingsDefaults.RIGHT_DRAWER_MIN_FRACTION,
+                    SettingsDefaults.RIGHT_DRAWER_MAX_FRACTION,
+                )
+        }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            SettingsDefaults.RIGHT_DRAWER_PERSISTENT_FRACTION,
+        )
+
+    fun setRightDrawerWidthFraction(fraction: Float) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                prefs[rightDrawerWidthKey] = fraction.coerceIn(
+                    SettingsDefaults.RIGHT_DRAWER_MIN_FRACTION,
+                    SettingsDefaults.RIGHT_DRAWER_MAX_FRACTION,
+                )
+            }
         }
     }
 
@@ -2906,6 +3077,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Open (or focus) an editor tab for a webview panel an imported `.vsix` created.
+     *
+     * Panels coexist rather than replacing each other: an extension can hold several at once (a
+     * session opened in the editor alongside its Agent Manager), and VS Code shows them as separate
+     * tabs. The panel itself lives in the extension's session, so this only surfaces it — closing the
+     * tab leaves it running, and the extension revealing it again reopens this tab.
+     */
+    fun openVsixPanelPage(extensionId: String, handle: String, title: String) {
+        _bringEditorToFront.tryEmit(Unit)
+        val tabId = VSIX_PANEL_PREFIX + extensionId + "#" + handle
+        val group = _editorGroup.value
+        val existing = group.tabs.firstOrNull { it.id == tabId }
+        _editorGroup.value = if (existing != null) {
+            group.withActiveTabChanged(existing.id)
+        } else {
+            group.withTabAdded(EditorTab.page(tabId, title, EditorPageKind.VsixPanel))
+        }
+    }
+
     /** Run a command in the Linux runtime for an extension frontend; returns a JSON result payload.
      *  Runs as root: manager extensions (SQL Client, VM Manager) need privilege to install/run software. */
     suspend fun runtimeExecJson(command: String, timeoutMs: Long): String {
@@ -3547,6 +3738,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return true
     }
 
+    /**
+     * Spawn a long-lived process in the Linux runtime with its stdio attached, for callers that need
+     * to talk to it rather than just start it — the `.vsix` extension host speaks JSON over stdin
+     * and stdout. Unlike [startRuntimeService] the caller owns the process and must destroy it.
+     */
+    fun spawnRuntimeProcess(command: String): Process? =
+        distroService.spawnDapProcess(command = command, userOverride = "root")
+
     fun stopRuntimeService(extId: String, id: String) {
         runtimeServices.remove(svcKey(extId, id))?.let { runCatching { it.destroy() } }
     }
@@ -3605,15 +3804,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Snapshot of every extension doing background work, for the Task Manager (polled, not reactive). */
     fun backgroundExtensionSnapshot(): List<BackgroundExtensionInfo> {
         val scmIds = dev.jcode.workbench.ScmWebViewHolder.ids().toSet()
-        val chatIds = dev.jcode.workbench.AgentChatWebViewHolder.ids().toSet()
+        val vsixIds = dev.jcode.workbench.VsixViewHolder.ids().toSet()
         val serviceCounts = runtimeServices.keys.groupingBy { it.substringBefore(' ') }.eachCount()
         val suspended = _suspendedBackgroundExtensions.value
         val names = installedExtensions.value.associate { it.id to it.name }
-        return (scmIds + chatIds + serviceCounts.keys + suspended).map { id ->
+        return (scmIds + vsixIds + serviceCounts.keys + suspended).map { id ->
             BackgroundExtensionInfo(
                 id = id,
                 name = names[id] ?: id,
-                hasHost = id in scmIds || id in chatIds,
+                hasHost = id in scmIds || id in vsixIds,
                 serviceCount = serviceCounts[id] ?: 0,
                 suspended = id in suspended,
             )
@@ -3621,8 +3820,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Stop a background extension: reap its runtime services and tear down its host. A live SCM host
-     *  is suspended (it would otherwise re-attach on the next project open); a Chat host is destroyed
-     *  and simply restarts when the user reopens the Chat tab. Runs on the main thread (WebView.destroy). */
+     *  is suspended (it would otherwise re-attach on the next project open); a `.vsix` session is
+     *  destroyed and restarts when its drawer tab is reopened. Runs on the main thread (WebView.destroy). */
     fun stopBackgroundExtension(id: String) {
         viewModelScope.launch(Dispatchers.Main) {
             reapExtensionServices(id)
@@ -3632,8 +3831,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 clearExplorerScmDecorations()
                 // The shell's ScmBackgroundHost tears the WebView down once scmHostExt drops to null.
             }
-            if (dev.jcode.workbench.AgentChatWebViewHolder.get(id) != null) {
-                dev.jcode.workbench.AgentChatWebViewHolder.destroy(id)
+            if (dev.jcode.workbench.VsixViewHolder.get(id) != null) {
+                dev.jcode.workbench.VsixViewHolder.destroy(id)
             }
         }
     }
@@ -4577,8 +4776,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
-        /** `adb keygen` plus the first `adb connect` both start a JVM under proot; 60s is slack. */
-        private const val VIRTUAL_DEVICE_CONNECT_TIMEOUT_MS = 60_000L
+        /** How long to keep asking `adb devices` after a reconnect: the client is spawned, so the
+         *  connection lands a moment later — `adb keygen` on a cold runtime is the slow case. */
+        private const val VIRTUAL_DEVICE_ATTACH_ATTEMPTS = 12
+        private const val VIRTUAL_DEVICE_ATTACH_POLL_MS = 1_000L
 
         /** Free space to leave on app storage after importing an off-ext4 folder into /sources. */
         private const val IMPORT_FREE_SPACE_HEADROOM_BYTES = 64L * 1024 * 1024
@@ -4609,6 +4810,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val DEBUG_ENGINE_DETAIL_PREFIX = "jcode://debug-engine/"
         const val EXT_DETAIL_PREFIX = "jcode://ext/"
         const val EXT_APP_PREFIX = "jcode://ext-app/"
+        const val VSIX_PANEL_PREFIX = "jcode://vsix-panel/"
         const val EXT_PERMISSIONS_TAB_ID = "jcode://ext-permissions"
         const val RUN_CONFIG_PREFIX = "jcode://run-config/"
         const val BUILD_CONFIG_PREFIX = "jcode://build-config/"

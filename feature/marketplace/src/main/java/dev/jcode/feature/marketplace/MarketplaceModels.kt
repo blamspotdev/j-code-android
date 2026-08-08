@@ -308,7 +308,12 @@ fun InstalledExtension.languageFor(fileName: String): LanguagePack? =
     languages.firstOrNull { it.matchesFile(fileName) }
 
 /** True if this extension ships a web-frontend ("Manage" / DB-manager) UI that resolves on disk. */
-val InstalledExtension.hasWebUi: Boolean get() = webUiFile != null
+/** True when the extension has a UI to show. A `.vsix` builds its own at runtime, so it has one
+ *  even though there is no HTML file on disk to point at. */
+val InstalledExtension.hasWebUi: Boolean get() = webUiFile != null || isVsix
+
+/** True for an extension imported from a `.vsix`, whose UI comes from its code rather than a file. */
+val InstalledExtension.isVsix: Boolean get() = File(dir, VsixPackage.VSIX_MARKER).isFile
 
 /** The extension's web-frontend HTML entry file inside [dir], or null if it doesn't ship one. */
 val InstalledExtension.webUiFile: File?

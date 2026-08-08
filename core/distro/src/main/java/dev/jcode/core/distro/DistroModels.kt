@@ -214,6 +214,9 @@ object WorkspaceHostPaths {
         else -> guestPath
     }
 
+    /** Guest mount of [projectsRoot]: where every project lives, and the `HOME` a runtime tool gets. */
+    const val WORKSPACE_GUEST = DEFAULT_DISTRO_WORKDIR
+
     /** Guest mount of the clone-staging dir ([sourcesRoot]), bound into every proot spawn. */
     const val SOURCES_GUEST = "/sources"
 

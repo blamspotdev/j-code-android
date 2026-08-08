@@ -67,8 +67,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -138,6 +141,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -166,6 +170,8 @@ import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -217,6 +223,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import dev.jcode.design.DeveloperSetting
 import dev.jcode.design.LocalDeveloperSetting
+import dev.jcode.design.LocalRightDrawerSetting
+import dev.jcode.design.RightDrawerSetting
+import dev.jcode.design.SettingsDefaults
 import dev.jcode.design.EditorFontSizeSetting
 import dev.jcode.design.EditorWordWrapSetting
 import dev.jcode.design.LocalEditorFontSizeSetting
@@ -340,14 +349,14 @@ import dev.jcode.workbench.WorkspaceEmptyState
 import dev.jcode.workbench.SidebarToolButton
 import dev.jcode.workbench.WorkbenchActionButton
 import dev.jcode.workbench.WorkbenchIconActionButton
-import dev.jcode.workbench.AgentChatActions
-import dev.jcode.workbench.AgentChatSidebarContent
-import dev.jcode.workbench.AgentChatWebViewHolder
+import dev.jcode.workbench.ExtensionDrawerActions
+import dev.jcode.workbench.VsixDrawerContent
+import dev.jcode.workbench.VsixPanelPage
+import dev.jcode.workbench.VsixViewHolder
 import dev.jcode.workbench.ScmBackgroundHost
 import dev.jcode.workbench.ScmWebViewHolder
-import dev.jcode.workbench.agentChatTabTitle
-import dev.jcode.workbench.hasAgentChatExtension
-import dev.jcode.workbench.LocalAgentChatActions
+import dev.jcode.workbench.installedVsixExtensions
+import dev.jcode.workbench.LocalExtensionDrawerActions
 import dev.jcode.workbench.CloseTarget
 import dev.jcode.workbench.IssueActions
 import dev.jcode.workbench.LocalIssueActions
@@ -357,6 +366,7 @@ import dev.jcode.workbench.TerminalExtraKeysTarget
 import dev.jcode.workbench.WorkbenchExtraKeysBar
 import dev.jcode.workbench.WorkbenchSnackbarHost
 import dev.jcode.workbench.BottomStatusBarSlot
+import dev.jcode.workbench.RightPanelSelection
 import dev.jcode.workbench.RightPanelTab
 import dev.jcode.workbench.WorkbenchManagerActions
 import dev.jcode.workbench.WorkbenchRunActions
@@ -446,7 +456,7 @@ fun JCodeApp(
             onSetEnabled = { id, enabled ->
                 viewModel.setExtensionKeepAlive(id, enabled)
                 // Turning it off tears down the persisted WebView so it can't linger detached.
-                if (!enabled) AgentChatWebViewHolder.destroy(id)
+                if (!enabled) VsixViewHolder.destroy(id)
             },
         )
     }
@@ -638,11 +648,27 @@ fun JCodeApp(
         if (uri != null) viewModel.sideloadExtension(uri)
     }
     var showSideloadWarning by remember { mutableStateOf(false) }
+    // Importing a .vsix is ordinary use, not a developer action, so this picker is independent of
+    // the developer-options gate above.
+    val vsixPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) viewModel.importVsix(uri)
+    }
+    var showVsixImportInfo by remember { mutableStateOf(false) }
     val developerSetting = remember(developerOptions) {
         DeveloperSetting(
             enabled = developerOptions,
             onSetEnabled = viewModel::setDeveloperOptions,
             onLoadExtension = { showSideloadWarning = true },
+        )
+    }
+    val rightDrawerPersistent by viewModel.rightDrawerPersistent.collectAsStateWithLifecycle()
+    val rightDrawerWidthFraction by viewModel.rightDrawerWidthFraction.collectAsStateWithLifecycle()
+    val rightDrawerSetting = remember(rightDrawerPersistent, rightDrawerWidthFraction) {
+        RightDrawerSetting(
+            enabled = rightDrawerPersistent,
+            onSetEnabled = viewModel::setRightDrawerPersistent,
+            widthFraction = rightDrawerWidthFraction,
+            onSetWidthFraction = viewModel::setRightDrawerWidthFraction,
         )
     }
     val extensionDevState = remember(installedExtensions) {
@@ -669,6 +695,31 @@ fun JCodeApp(
                 TextButton(onClick = { showSideloadWarning = false; jextPicker.launch("*/*") }) { Text("Choose .jext") }
             },
             dismissButton = { TextButton(onClick = { showSideloadWarning = false }) { Text("Cancel") } },
+        )
+    }
+    if (showVsixImportInfo) {
+        AlertDialog(
+            onDismissRequest = { showVsixImportInfo = false },
+            title = { Text("Import a VS Code extension") },
+            text = {
+                // Scrollable: this is the longest dialog in the app and it must stay readable in
+                // landscape, where there is far less height to work with.
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    "JCode runs the part of the VS Code API that extensions built around a webview " +
+                        "use — a side panel, commands, settings, and the current file and theme.\n\n" +
+                        "Extensions that add languages, themes, snippets, debuggers or tasks won't " +
+                        "work: JCode has its own systems for those. You'll be told what an extension " +
+                        "needs that's missing, both when it imports and if it asks for it while running.\n\n" +
+                        "A .vsix isn't verified by the marketplace and its code runs in the Linux " +
+                        "runtime, so import one only from a publisher you trust.",
+                )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showVsixImportInfo = false; vsixPicker.launch("*/*") }) { Text("Choose .vsix") }
+            },
+            dismissButton = { TextButton(onClick = { showVsixImportInfo = false }) { Text("Cancel") } },
         )
     }
     val cursorDragHorizontalLevel by viewModel.editorCursorDragHorizontalLevel.collectAsStateWithLifecycle()
@@ -1177,8 +1228,16 @@ fun JCodeApp(
         )
     }
     val runInVirtualDevice by viewModel.runInVirtualDevice.collectAsStateWithLifecycle()
-    val virtualDeviceSetting = remember(runInVirtualDevice) {
-        VirtualDeviceSetting(enabled = runInVirtualDevice, onChange = viewModel::setRunInVirtualDevice)
+    val adbToolInstalled = ADB_CATALOG_ENTRY in sdkCatalogState.installedEntryIds
+    val virtualDeviceReconnecting by viewModel.virtualDeviceAdbReconnecting.collectAsStateWithLifecycle()
+    val virtualDeviceSetting = remember(runInVirtualDevice, adbToolInstalled, virtualDeviceReconnecting) {
+        VirtualDeviceSetting(
+            enabled = runInVirtualDevice,
+            onChange = viewModel::setRunInVirtualDevice,
+            adbAvailable = adbToolInstalled,
+            onReconnect = viewModel::reconnectVirtualDeviceAdb,
+            reconnecting = virtualDeviceReconnecting,
+        )
     }
     val envBackupStatus by viewModel.envBackupStatus.collectAsStateWithLifecycle()
     envBackupStatus?.let { status ->
@@ -1223,14 +1282,16 @@ fun JCodeApp(
         LocalExtensionActivation provides extensionActivationSetting,
         LocalExtensionCapabilities provides extensionCapabilitySetting,
         LocalExtensionKeepAlive provides extensionKeepAliveSetting,
-        LocalAgentChatActions provides remember(extensionKeepAliveDisabled) {
-            AgentChatActions(
+        LocalExtensionDrawerActions provides remember(extensionKeepAliveDisabled) {
+            ExtensionDrawerActions(
                 extensions = viewModel.installedExtensions,
                 exec = viewModel::runtimeExecJson,
                 apiRequest = viewModel::extensionApiRequest,
                 events = viewModel.extensionEvents,
                 onStopAllServices = viewModel::stopAllRuntimeServices,
                 keepAliveFor = { id -> id !in extensionKeepAliveDisabled },
+                spawnProcess = viewModel::spawnRuntimeProcess,
+                onOpenPanel = viewModel::openVsixPanelPage,
             )
         },
         LocalTaskManagerBackgroundActions provides remember {
@@ -1267,6 +1328,7 @@ fun JCodeApp(
         LocalEditorFontSizeSetting provides editorFontSizeSetting,
         LocalEditorWordWrapSetting provides editorWordWrapSetting,
         LocalDeveloperSetting provides developerSetting,
+        LocalRightDrawerSetting provides rightDrawerSetting,
         LocalExtensionDevState provides extensionDevState,
         LocalExtensionSettingsUi provides extensionSettingsUi,
         LocalWebPreviewBrowsers provides webPreviewBrowsers,
@@ -1374,12 +1436,15 @@ fun JCodeApp(
             onUninstallExtension = viewModel::uninstallExtension,
             onOpenExtensionDetail = viewModel::openExtensionDetailPage,
             onOpenExtensionPermissions = viewModel::openExtensionPermissionsPage,
+            onImportVsix = { showVsixImportInfo = true },
             onOpenExtensionApp = viewModel::openExtensionAppPage,
             // The Source Control extension renders its git-identity + GitHub-auth screen at its
             // `#github` route (a global-config screen that works with no project open).
             onOpenExtensionConfig = { id -> viewModel.openExtensionViewPage(id, "github", "Git Configuration") },
             onAdbPair = viewModel::pairAdbDevice,
             onExtensionExec = viewModel::runtimeExecJson,
+            onSpawnRuntimeProcess = viewModel::spawnRuntimeProcess,
+            onOpenVsixPanel = viewModel::openVsixPanelPage,
             onExtensionApiRequest = { extId, envelope ->
                 val ext = viewModel.installedExtensions.value.firstOrNull { it.id == extId }
                 if (ext == null) """{"ok":false,"error":"unknown extension: $extId"}"""
@@ -1549,9 +1614,16 @@ private fun JCodeShell(
     val isMobileLandscapeMode = isLandscape && windowInfo.heightClass == JCodeWindowHeightClass.Compact
     val usesModalWorkspace = !isLandscape || isMobileLandscapeMode
     val isPortraitMobileMode = usesModalWorkspace && windowInfo.widthClass == JCodeWindowWidthClass.Compact
-    val hasLandscapeInspectorSidebar = isLandscape
     val canShowRightSidebar = true
     val leftSidebarWidth = if (windowInfo.widthClass == JCodeWindowWidthClass.Expanded) 284.dp else 236.dp
+    // Opt-in (Settings → Appearance) landscape split. It deliberately does NOT go through
+    // usesModalWorkspace: that also drives the LEFT ModalNavigationDrawer, and docking the left
+    // drawer on a phone would leave no editor at all. Only the right side changes.
+    val rightDrawerSplit = LocalRightDrawerSetting.current
+    val persistentRightDrawer = rightDrawerSplit.enabled && isLandscape
+    val rightSidebarDocked = isLandscape && (!usesModalWorkspace || persistentRightDrawer)
+    // Only the opt-in split is dragged; the large-screen sidebar keeps the fixed width it has always
+    // had, so turning the setting on is the only thing that changes how the workspace is divided.
     val rightSidebarWidth = (configuration.screenWidthDp * 0.75f).dp
     val activeTab = editorGroup.activeTab
     // The Extension Dev tab exists only when Developer options is on, so it's excluded here too —
@@ -1656,15 +1728,19 @@ private fun JCodeShell(
             }
         }
     }
-    var rightPanelTab by rememberSaveable {
-        mutableStateOf(RightPanelTab.Terminal)
-    }
+    // Saved as a string rather than the sealed type itself: an extension tab is identified by an id,
+    // which no enum ordinal can carry across process death.
+    var rightPanelKey by rememberSaveable { mutableStateOf(RightPanelSelection.Default.asKey()) }
+    val rightPanelSelection = remember(rightPanelKey) { RightPanelSelection.fromKey(rightPanelKey) }
+    val rightPanelTab = (rightPanelSelection as? RightPanelSelection.Builtin)?.tab
+    fun selectRightPanel(selection: RightPanelSelection) { rightPanelKey = selection.asKey() }
+    fun selectRightPanelTab(tab: RightPanelTab) = selectRightPanel(RightPanelSelection.Builtin(tab))
     // Turning Developer options off must fully retire the Ext Dev tab — including the landscape
-    // persistent sidebar, which renders rightPanelTab directly (no portrait clamp). Reset the
-    // selection so its panel (and its auto-reload loop) stop composing everywhere.
+    // persistent sidebar, which renders the selection directly (no portrait clamp). Reset it so the
+    // panel (and its auto-reload loop) stop composing everywhere.
     LaunchedEffect(developerModeEnabled) {
         if (!developerModeEnabled && rightPanelTab == RightPanelTab.ExtensionDev) {
-            rightPanelTab = RightPanelTab.Terminal
+            selectRightPanelTab(RightPanelTab.Terminal)
         }
     }
     // When a debug session starts, surface its console: reveal the right drawer on its Debug tab
@@ -1674,16 +1750,18 @@ private fun JCodeShell(
     }
     LaunchedEffect(debugSessionActive) {
         if (debugSessionActive) {
-            rightPanelTab = RightPanelTab.DebugConsole
+            selectRightPanelTab(RightPanelTab.DebugConsole)
             rightSidebarVisible = true
         }
     }
-    // The Chat tab only exists while an agent-chat extension is installed; if it goes away (or was
-    // never installed) while selected, fall back to the Terminal tab so the drawer isn't left on it.
-    val chatExtensionAvailable = hasAgentChatExtension()
-    LaunchedEffect(chatExtensionAvailable) {
-        if (!chatExtensionAvailable && rightPanelTab == RightPanelTab.Chat) {
-            rightPanelTab = RightPanelTab.Terminal
+    // An extension's tab exists only while it is installed; uninstalling the one on screen must not
+    // leave the drawer pointed at nothing.
+    val vsixExtensions = installedVsixExtensions()
+    val selectedVsix = (rightPanelSelection as? RightPanelSelection.Extension)
+        ?.let { sel -> vsixExtensions.firstOrNull { it.id == sel.extensionId } }
+    LaunchedEffect(rightPanelSelection, vsixExtensions.map { it.id }) {
+        if (rightPanelSelection is RightPanelSelection.Extension && selectedVsix == null) {
+            selectRightPanelTab(RightPanelTab.Terminal)
         }
     }
     // Read once here so the run handlers below (defined before the settings block) can resolve the
@@ -1694,7 +1772,7 @@ private fun JCodeShell(
     LaunchedEffect(Unit) {
         snapshotFlow { BuiltinBrowser.revealSignal.value }.collect { sig ->
             if (sig > 0) {
-                rightPanelTab = RightPanelTab.Devtools
+                selectRightPanelTab(RightPanelTab.Devtools)
                 rightSidebarVisible = true
             }
         }
@@ -2024,7 +2102,7 @@ private fun JCodeShell(
             scope.launch { snackbarHostState.showSnackbar("'${config.name}' has no terminals. Tap Configure to set it up.") }
             return
         }
-        rightPanelTab = RightPanelTab.Terminal
+        selectRightPanelTab(RightPanelTab.Terminal)
         rightSidebarVisible = true
         // Tear down any previous run terminals (frees the dev ports, avoids tab accumulation), then
         // spawn one fresh terminal per plan step in order - e.g. "Server" then "Client" - each running
@@ -2116,7 +2194,7 @@ private fun JCodeShell(
             scope.launch { snackbarHostState.showSnackbar("'${config.name}' has no command. Tap Configure to set it up.") }
             return
         }
-        rightPanelTab = RightPanelTab.Terminal
+        selectRightPanelTab(RightPanelTab.Terminal)
         rightSidebarVisible = true
         val session = spawnTerminalSession(label = config.name) ?: return
         val invocation = ProjectRunner.runInvocation(project, ProjectRunner.RunTerminal(config.name, config.command))
@@ -2184,7 +2262,7 @@ private fun JCodeShell(
     // If something is running and the user opted to be warned, a confirm dialog gates the teardown.
     val perf = LocalPerformanceSettings.current
     val debugSessionUiLocal = LocalDebugSession.current
-    val agentChatActionsLocal = LocalAgentChatActions.current
+    val extensionDrawerActionsLocal = LocalExtensionDrawerActions.current
     val editorSaveActionsLocal = LocalEditorSaveActions.current
     var pendingCloseTarget by remember { mutableStateOf<CloseTarget?>(null) }
     var pendingUnsavedSwitch by remember { mutableStateOf<CloseTarget?>(null) }
@@ -2199,8 +2277,8 @@ private fun JCodeShell(
     fun teardownRunning() {
         if (runInProgress || runningProjectId != null) handleStopRun()
         debugSessionUiLocal.onStop()
-        agentChatActionsLocal.onStopAllServices()
-        AgentChatWebViewHolder.destroyAll()
+        extensionDrawerActionsLocal.onStopAllServices()
+        VsixViewHolder.destroyAll()
         ScmWebViewHolder.destroyAll()
         closeAllTerminalSessions()
     }
@@ -2624,14 +2702,38 @@ private fun JCodeShell(
             },
             containerColor = MaterialTheme.colorScheme.background,
         ) { innerPadding ->
+            // The split's own width, so the two panes are sized against what they actually divide
+            // rather than against the screen. Seeded from the screen so the first frame is already
+            // right, then corrected to the measured width (insets and a cutout make them differ).
+            val splitDensity = LocalDensity.current
+            var splitWidthPx by remember(configuration.screenWidthDp) {
+                mutableIntStateOf(with(splitDensity) { configuration.screenWidthDp.dp.roundToPx() })
+            }
+            val dragSplit = rightSidebarDocked && rightSidebarVisible && persistentRightDrawer
+            // The drag runs on local state and is saved once on release. Reading the stored value back
+            // each frame would lose most of a drag: it only updates after a round trip through
+            // preferences, so every delta in the meantime would be measured from the same stale width.
+            var liveDrawerFraction by remember { mutableFloatStateOf(rightDrawerSplit.widthFraction) }
+            LaunchedEffect(rightDrawerSplit.widthFraction) {
+                liveDrawerFraction = rightDrawerSplit.widthFraction
+            }
+            // What the panes share, once the divider has taken its own width.
+            val splitContentWidth = with(splitDensity) { splitWidthPx.toDp() } - SPLIT_HANDLE_WIDTH
+            val drawerWidth = splitContentWidth * liveDrawerFraction
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding),
+                    .padding(innerPadding)
+                    .onSizeChanged { splitWidthPx = it.width },
             ) {
                 Box(
                     modifier = Modifier
-                        .weight(1f)
+                        .then(
+                            // The editor takes the remainder as an explicit width, so the two always
+                            // add up to the split exactly whatever the fraction rounds to.
+                            if (dragSplit) Modifier.width(splitContentWidth - drawerWidth)
+                            else Modifier.weight(1f),
+                        )
                         .fillMaxHeight(),
                 ) {
                     CompositionLocalProvider(
@@ -2685,12 +2787,12 @@ private fun JCodeShell(
                         terminalHasUnseen = terminalHasUnseen,
                         terminalSessions = terminalInstances,
                         onOpenTerminalSession = { id ->
-                            rightPanelTab = RightPanelTab.Terminal
+                            selectRightPanelTab(RightPanelTab.Terminal)
                             rightSidebarVisible = true
                             selectTerminalSession(id)
                         },
                         onShowTerminal = {
-                            rightPanelTab = RightPanelTab.Terminal
+                            selectRightPanelTab(RightPanelTab.Terminal)
                             rightSidebarVisible = true
                         },
                         onSelectEditorTab = onSelectEditorTab,
@@ -2919,6 +3021,25 @@ private fun JCodeShell(
                                                 },
                                                 events = managerActions.extensionEvents,
                                                 route = view,
+                                                spawnProcess = managerActions.onSpawnRuntimeProcess,
+                                                onOpenPanel = { handle, title ->
+                                                    managerActions.onOpenVsixPanel(ext.id, handle, title)
+                                                },
+                                                modifier = Modifier.fillMaxSize(),
+                                            )
+                                        }
+                                    }
+                                }
+                                EditorPageKind.VsixPanel -> {
+                                    // Tab id is VSIX_PANEL_PREFIX + extId + "#" + the panel's handle.
+                                    val rest = tab.id.substringAfter(MainViewModel.VSIX_PANEL_PREFIX)
+                                    val extId = rest.substringBefore("#")
+                                    val handle = rest.substringAfter("#", "")
+                                    installedExtensions.firstOrNull { it.id == extId }?.let { ext ->
+                                        key(ext.id, handle) {
+                                            VsixPanelPage(
+                                                extension = ext,
+                                                handle = handle,
                                                 modifier = Modifier.fillMaxSize(),
                                             )
                                         }
@@ -3006,9 +3127,25 @@ private fun JCodeShell(
                     }
                 }
 
-                if (hasLandscapeInspectorSidebar && !usesModalWorkspace && rightSidebarVisible) {
+                if (dragSplit) {
+                    WorkspaceSplitHandle(
+                        onDrag = { deltaPx ->
+                            val span = with(splitDensity) { splitContentWidth.toPx() }
+                            if (span > 0f) {
+                                // Dragging left grows the drawer, so the movement is subtracted.
+                                liveDrawerFraction = (liveDrawerFraction - deltaPx / span).coerceIn(
+                                    SettingsDefaults.RIGHT_DRAWER_MIN_FRACTION,
+                                    SettingsDefaults.RIGHT_DRAWER_MAX_FRACTION,
+                                )
+                            }
+                        },
+                        onDragStopped = { rightDrawerSplit.onSetWidthFraction(liveDrawerFraction) },
+                    )
+                }
+                if (rightSidebarDocked && rightSidebarVisible) {
                     WorkbenchRightSidebar(
-                        selectedTab = rightPanelTab,
+                        selected = rightPanelSelection,
+                        vsixExtensions = vsixExtensions,
                         selectedProject = selectedProject,
                         terminalSessionIds = terminalSessionIds,
                         selectedTerminalSessionId = selectedTerminalSessionId,
@@ -3019,8 +3156,8 @@ private fun JCodeShell(
                         onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                         modifier = Modifier
                             .fillMaxHeight()
-                            .width(rightSidebarWidth),
-                        onTabSelected = { rightPanelTab = it },
+                            .width(if (dragSplit) drawerWidth else rightSidebarWidth),
+                        onSelected = { selectRightPanel(it) },
                         onSelectTerminalSession = ::selectTerminalSession,
                         onAddTerminalSession = ::createTerminalSession,
                         onRemoveTerminalSession = ::closeTerminalSession,
@@ -3051,7 +3188,7 @@ private fun JCodeShell(
             content()
         }
 
-        if (usesModalWorkspace) {
+        if (usesModalWorkspace && !rightSidebarDocked) {
             AnimatedVisibility(
                 visible = rightSidebarVisible,
                 enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
@@ -3073,7 +3210,8 @@ private fun JCodeShell(
                             .navigationBarsPadding(),
                     ) {
                         WorkbenchRightSidebar(
-                            selectedTab = rightPanelTab.takeIf { it in portraitRightSidebarTabs } ?: RightPanelTab.Terminal,
+                            selected = rightPanelSelection.clampedTo(portraitRightSidebarTabs),
+                            vsixExtensions = vsixExtensions,
                             selectedProject = selectedProject,
                             terminalSessionIds = terminalSessionIds,
                             selectedTerminalSessionId = selectedTerminalSessionId,
@@ -3085,7 +3223,7 @@ private fun JCodeShell(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxWidth(),
-                            onTabSelected = { rightPanelTab = it },
+                            onSelected = { selectRightPanel(it) },
                             onSelectTerminalSession = ::selectTerminalSession,
                             onAddTerminalSession = ::createTerminalSession,
                             onRemoveTerminalSession = ::closeTerminalSession,
@@ -3348,6 +3486,7 @@ private fun WorkspacePanel(
                             onRefreshMarketplace = managerActions.onRefreshMarketplace,
                             onOpenDetail = managerActions.onOpenExtensionDetail,
                             onOpenPermissions = managerActions.onOpenExtensionPermissions,
+                            onImportVsix = managerActions.onImportVsix,
                             pendingReloadNames = pendingReload.names,
                             onReloadPending = pendingReload.onReload,
                             modifier = Modifier.fillMaxSize(),
@@ -3750,7 +3889,8 @@ private fun terminalTabLabel(raw: String?): String {
 
 @Composable
 private fun WorkbenchRightSidebar(
-    selectedTab: RightPanelTab,
+    selected: RightPanelSelection,
+    vsixExtensions: List<dev.jcode.feature.marketplace.InstalledExtension>,
     selectedProject: Project?,
     terminalSessionIds: List<String>,
     selectedTerminalSessionId: String,
@@ -3759,7 +3899,7 @@ private fun WorkbenchRightSidebar(
     terminalTitleFor: (String) -> String?,
     terminalReady: Boolean,
     onOpenEnvironmentWizard: () -> Unit,
-    onTabSelected: (RightPanelTab) -> Unit,
+    onSelected: (RightPanelSelection) -> Unit,
     onSelectTerminalSession: (String) -> Unit,
     onAddTerminalSession: () -> Unit,
     onRemoveTerminalSession: (String) -> Unit,
@@ -3776,6 +3916,8 @@ private fun WorkbenchRightSidebar(
         color = MaterialTheme.colorScheme.surface,
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
+            val activeVsix = (selected as? RightPanelSelection.Extension)
+                ?.let { sel -> vsixExtensions.firstOrNull { it.id == sel.extensionId } }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -3792,63 +3934,36 @@ private fun WorkbenchRightSidebar(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // The Chat tab's title tracks the installed agent extension (e.g. "OpenChamber"),
-                    // and the tab is shown only while such an extension is installed.
-                    val chatAvailable = hasAgentChatExtension()
-                    val chatTabTitle = agentChatTabTitle()
                     val devMode = LocalDeveloperSetting.current.enabled
                     RightPanelTab.entries
                         .filter {
                             it.enabled &&
-                                (it != RightPanelTab.Chat || chatAvailable) &&
                                 (it != RightPanelTab.Devtools || BuiltinBrowser.everOpened.value) &&
                                 (it != RightPanelTab.ExtensionDev || devMode)
                         }
                         .forEach { tab ->
-                        val selected = tab == selectedTab
-                        val tabLabel = if (tab == RightPanelTab.Chat) chatTabTitle else tab.label
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = if (selected) {
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-                            } else {
-                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)
-                            },
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { onTabSelected(tab) },
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                            ) {
-                                val tint = if (selected) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                }
-                                Icon(
-                                    imageVector = jcIcon(tab.icon),
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                    tint = tint,
-                                )
-                                Text(
-                                    text = tabLabel,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = tint,
-                                )
-                            }
+                            RightPanelChip(
+                                label = tab.label,
+                                icon = tab.icon,
+                                selected = selected == RightPanelSelection.Builtin(tab),
+                                onClick = { onSelected(RightPanelSelection.Builtin(tab)) },
+                            )
                         }
+                    // An imported .vsix gets a tab of its own, under its own name — a VS Code
+                    // extension exists to show a view, and this is where it belongs.
+                    vsixExtensions.forEach { ext ->
+                        RightPanelChip(
+                            label = ext.name,
+                            icon = JCodeIcon.Extensions,
+                            selected = selected == RightPanelSelection.Extension(ext.id),
+                            onClick = { onSelected(RightPanelSelection.Extension(ext.id)) },
+                        )
                     }
                 }
-                if (selectedTab == RightPanelTab.Chat) {
-                    WorkbenchIconActionButton(
-                        icon = jcIcon(JCodeIcon.Settings),
-                        contentDescription = "Agent settings",
-                        onClick = { AgentChatWebViewHolder.postCommand("showSettings") },
-                    )
+                // An extension's own view actions — whatever it declared for its view title — sit in
+                // an overflow menu just before Close, so the tab strip keeps its width.
+                if (activeVsix != null) {
+                    VsixTitleActionsMenu(activeVsix)
                 }
                 WorkbenchIconActionButton(
                     icon = jcIcon(JCodeIcon.Close),
@@ -3857,25 +3972,141 @@ private fun WorkbenchRightSidebar(
                 )
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
-            WorkbenchRightSidebarBody(
-                tab = selectedTab,
-                selectedProject = selectedProject,
-                terminalSessionIds = terminalSessionIds,
-                selectedTerminalSessionId = selectedTerminalSessionId,
-                activeTerminalPty = activeTerminalPty,
-                terminalSessionFor = terminalSessionFor,
-                terminalTitleFor = terminalTitleFor,
-                terminalReady = terminalReady,
-                onOpenEnvironmentWizard = onOpenEnvironmentWizard,
-                onSelectTerminalSession = onSelectTerminalSession,
-                onAddTerminalSession = onAddTerminalSession,
-                onRemoveTerminalSession = onRemoveTerminalSession,
-                runningProjectName = runningProjectName,
-                runInProgress = runInProgress,
-                onStopRun = onStopRun,
-                modifier = Modifier.fillMaxSize(),
-            )
+            if (activeVsix != null) {
+                // Keyed so switching between two extensions swaps views rather than reusing one.
+                key(activeVsix.id) {
+                    VsixDrawerContent(activeVsix, modifier = Modifier.fillMaxSize())
+                }
+            } else {
+                WorkbenchRightSidebarBody(
+                    tab = (selected as? RightPanelSelection.Builtin)?.tab ?: RightPanelTab.Terminal,
+                    selectedProject = selectedProject,
+                    terminalSessionIds = terminalSessionIds,
+                    selectedTerminalSessionId = selectedTerminalSessionId,
+                    activeTerminalPty = activeTerminalPty,
+                    terminalSessionFor = terminalSessionFor,
+                    terminalTitleFor = terminalTitleFor,
+                    terminalReady = terminalReady,
+                    onOpenEnvironmentWizard = onOpenEnvironmentWizard,
+                    onSelectTerminalSession = onSelectTerminalSession,
+                    onAddTerminalSession = onAddTerminalSession,
+                    onRemoveTerminalSession = onRemoveTerminalSession,
+                    runningProjectName = runningProjectName,
+                    runInProgress = runInProgress,
+                    onStopRun = onStopRun,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
+    }
+}
+
+/** Toolchain catalog id of the runtime's adb client — the one the virtual device is reached through. */
+private const val ADB_CATALOG_ENTRY = "adb"
+
+/** The gap between the docked panes, and the touch target that resizes them. */
+private val SPLIT_HANDLE_WIDTH = 12.dp
+
+/**
+ * What sits between the editor and the docked right drawer: the gap that separates them and the grip
+ * that resizes them.
+ *
+ * The strip carries its own colour rather than letting the background through. Left transparent it
+ * inherits the app background — the same colour the editor draws on — so the gap read as a seam
+ * against one pane and a hard edge against the other. `surfaceVariant` sits above both, which is what
+ * makes it legible whichever way the theme bundle runs.
+ *
+ * Wider than it looks: the whole strip is the touch target, because a hairline is not draggable with
+ * a thumb. [onDrag] receives the horizontal movement in pixels.
+ */
+@Composable
+private fun WorkspaceSplitHandle(onDrag: (Float) -> Unit, onDragStopped: () -> Unit) {
+    val onDragState = rememberUpdatedState(onDrag)
+    Box(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(SPLIT_HANDLE_WIDTH)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+            .draggable(
+                orientation = Orientation.Horizontal,
+                state = rememberDraggableState { delta -> onDragState.value(delta) },
+                onDragStopped = { onDragStopped() },
+            )
+            .semantics { contentDescription = "Resize editor and panel" },
+        contentAlignment = Alignment.Center,
+    ) {
+        // A short bar at the midpoint, so the strip reads as something to grab rather than a border.
+        Box(
+            modifier = Modifier
+                .size(width = 4.dp, height = 40.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(MaterialTheme.colorScheme.outline),
+        )
+    }
+}
+
+/** One tab in the right drawer's strip, built-in or extension-backed. */
+@Composable
+private fun RightPanelChip(
+    label: String,
+    icon: JCodeIcon,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)
+        },
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            Icon(
+                imageVector = jcIcon(icon),
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = tint,
+            )
+            Text(text = label, style = MaterialTheme.typography.labelMedium, color = tint)
+        }
+    }
+}
+
+/**
+ * The overflow menu for an extension's drawer tab, listing the actions the extension declared for
+ * its view's title bar and running the chosen one through its own command handler.
+ *
+ * Nothing is shown until the extension has activated, because the actions come from its manifest and
+ * the view it registered — before that there is no view to act on.
+ */
+@Composable
+private fun VsixTitleActionsMenu(extension: dev.jcode.feature.marketplace.InstalledExtension) {
+    val actions = VsixViewHolder.titleActions[extension.id].orEmpty()
+    if (actions.isEmpty()) return
+    val session = VsixViewHolder.get(extension.id) ?: return
+    var expanded by remember(extension.id) { mutableStateOf(false) }
+    Box {
+        WorkbenchIconActionButton(
+            icon = jcIcon(JCodeIcon.MoreVert),
+            contentDescription = "${extension.name} actions",
+            onClick = { expanded = true },
+        )
+        CompactContextMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            listActions = actions.map { action ->
+                ContextAction(contributedMenuIcon(action.codicon), action.title) { session.execute(action.id) }
+            },
+        )
     }
 }
 
@@ -3943,9 +4174,6 @@ private fun WorkbenchRightSidebarBody(
         }
         RightPanelTab.ExtensionDev -> {
             ExtensionDevSidebarContent(modifier = modifier)
-        }
-        RightPanelTab.Chat -> {
-            AgentChatSidebarContent(modifier = modifier)
         }
     }
 }
@@ -4708,7 +4936,13 @@ private data class TerminalMenuRequest(
     val view: dev.jcode.core.term.TerminalView,
 )
 
-/** Map an extension-contributed action's manifest `icon` name onto a semantic icon slot. */
+/**
+ * Map an extension-contributed action's icon name onto a semantic icon slot.
+ *
+ * Serves both manifest kinds: a `.jext` names icons plainly, a `.vsix` names VS Code codicons, and
+ * the two vocabularies overlap enough that one table is clearer than two. Anything unrecognised falls
+ * back to the generic extension mark — the action's label already says what it does.
+ */
 private fun contributedMenuIcon(name: String?): JCodeIcon = when (name?.lowercase()) {
     "scm", "source-control", "git" -> JCodeIcon.Scm
     "database", "db" -> JCodeIcon.Database
@@ -4717,12 +4951,17 @@ private fun contributedMenuIcon(name: String?): JCodeIcon = when (name?.lowercas
     "debug" -> JCodeIcon.Debug
     "terminal" -> JCodeIcon.Terminal
     "browser", "web" -> JCodeIcon.Browser
-    "search" -> JCodeIcon.Search
-    "settings", "gear" -> JCodeIcon.Settings
-    "chat" -> JCodeIcon.Chat
+    "search", "search-fuzzy" -> JCodeIcon.Search
+    "settings", "gear", "settings-gear" -> JCodeIcon.Settings
+    "chat", "comment", "comment-discussion" -> JCodeIcon.Chat
     "image" -> JCodeIcon.Image
     "code" -> JCodeIcon.Code
-    "preview", "eye" -> JCodeIcon.Preview
+    "preview", "eye", "open-preview" -> JCodeIcon.Preview
     "format" -> JCodeIcon.Format
+    "add", "plus", "new-file" -> JCodeIcon.Add
+    "link-external", "go-to-file" -> JCodeIcon.Open
+    "refresh", "sync" -> JCodeIcon.Refresh
+    "trash", "clear-all" -> JCodeIcon.Delete
+    "history", "clock" -> JCodeIcon.Logs
     else -> JCodeIcon.Extensions
 }

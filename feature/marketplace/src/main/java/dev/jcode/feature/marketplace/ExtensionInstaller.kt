@@ -97,6 +97,123 @@ class ExtensionInstaller internal constructor(context: Context) {
     data class SideloadResult(val extension: InstalledExtension, val signed: Boolean)
 
     /**
+     * Install a sideloaded package, choosing the pipeline from what is actually inside it rather
+     * than from the file name — a file picked through SAF often arrives without a usable extension.
+     */
+    suspend fun installLocalPackage(file: File, appVersion: String): Result<SideloadOutcome> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val bytes = file.readBytes()
+                val isVsix = !JextCrypto.isSignedJext(bytes) &&
+                    runCatching { VsixPackage.looksLikeVsix(readZipEntries(bytes).keys) }.getOrDefault(false)
+                if (isVsix) {
+                    val result = installFromVsixBytes(bytes, appVersion)
+                    SideloadOutcome.Vsix(result.extension, result.manifest, result.compatibility)
+                } else {
+                    val signed = JextCrypto.isSignedJext(bytes)
+                    val ext = installFromJextBytes(bytes, null, appVersion, markDev = !signed)
+                    SideloadOutcome.Jext(ext, signed)
+                }
+            }
+        }
+
+    /** What a sideload turned out to be. */
+    sealed interface SideloadOutcome {
+        val extension: InstalledExtension
+
+        data class Jext(override val extension: InstalledExtension, val signed: Boolean) : SideloadOutcome
+
+        data class Vsix(
+            override val extension: InstalledExtension,
+            val manifest: VsixManifest,
+            val compatibility: VsixCompatibility,
+        ) : SideloadOutcome
+    }
+
+    /**
+     * Install a VS Code extension package. The `extension/` subtree becomes the install directory
+     * and the VS Code manifest is translated into an `extension.yaml`, so everything downstream —
+     * the extension list, detail page, uninstall, developer tools — works without knowing that this
+     * one arrived as a `.vsix`.
+     *
+     * A `.vsix` is unsigned third-party code, so it installs on the same footing as an unsigned
+     * sideload: marked dev, and never mistaken for a verified marketplace package.
+     */
+    suspend fun installLocalVsix(file: File, appVersion: String): Result<VsixInstallResult> =
+        withContext(Dispatchers.IO) {
+            runCatching { installFromVsixBytes(file.readBytes(), appVersion) }
+        }
+
+    /** Outcome of a `.vsix` install: what landed, and what JCode could not honour in it. */
+    data class VsixInstallResult(
+        val extension: InstalledExtension,
+        val manifest: VsixManifest,
+        val compatibility: VsixCompatibility,
+    )
+
+    /** Read a `.vsix` without installing it, to show what would happen. */
+    suspend fun inspectVsix(file: File): Result<Pair<VsixManifest, VsixCompatibility>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val entries = readZipEntries(file.readBytes())
+                val manifest = VsixPackage.parse(readVsixPackageJson(entries), readVsixNls(entries))
+                manifest to VsixPackage.compatibilityOf(manifest)
+            }
+        }
+
+    private fun readVsixPackageJson(files: Map<String, ByteArray>): String {
+        if (!VsixPackage.looksLikeVsix(files.keys)) {
+            error("not a .vsix package (no ${VsixPackage.PAYLOAD_PREFIX}package.json)")
+        }
+        return files.getValue(VsixPackage.PAYLOAD_PREFIX + "package.json").toString(Charsets.UTF_8)
+    }
+
+    private fun readVsixNls(files: Map<String, ByteArray>): String? =
+        files[VsixPackage.NLS_JSON]?.toString(Charsets.UTF_8)
+
+    private fun installFromVsixBytes(bytes: ByteArray, appVersion: String): VsixInstallResult {
+        val files = readZipEntries(bytes)
+        val manifest = VsixPackage.parse(readVsixPackageJson(files), readVsixNls(files))
+        val compatibility = VsixPackage.compatibilityOf(manifest)
+
+        installRoot.mkdirs()
+        val dest = File(installRoot, safeDirName(manifest.id))
+        val tmp = File(installRoot, ".tmp-${safeDirName(manifest.id)}")
+        tmp.deleteRecursively()
+        tmp.mkdirs()
+        val tmpPath = tmp.canonicalPath + File.separator
+        for ((rel, data) in files) {
+            // Only the extension's own subtree is installed; the archive's VS Code packaging
+            // metadata is of no use once the manifest has been translated.
+            if (!rel.startsWith(VsixPackage.PAYLOAD_PREFIX)) continue
+            val relative = rel.removePrefix(VsixPackage.PAYLOAD_PREFIX)
+            if (relative.isEmpty()) continue
+            // Never let a package supply its own markers — only the host writes those.
+            if (relative == DEV_MARKER || relative.endsWith("/$DEV_MARKER")) continue
+            if (relative == VsixPackage.VSIX_MARKER || relative.endsWith("/${VsixPackage.VSIX_MARKER}")) continue
+            // The generated manifest is the source of truth; an extension.yaml in the archive is not.
+            if (relative == "extension.yaml") continue
+            val outFile = File(tmp, relative)
+            if (!outFile.canonicalPath.startsWith(tmpPath)) continue // zip-slip guard
+            outFile.parentFile?.mkdirs()
+            outFile.writeBytes(data)
+        }
+        File(tmp, "extension.yaml").writeText(VsixPackage.toExtensionYaml(manifest))
+
+        dest.deleteRecursively()
+        if (!tmp.renameTo(dest)) {
+            tmp.copyRecursively(dest, overwrite = true)
+            tmp.deleteRecursively()
+        }
+        // Markers are written after the atomic swap so a package can never smuggle them in.
+        runCatching { File(dest, VsixPackage.VSIX_MARKER).writeText(manifest.main.orEmpty()) }
+        runCatching { File(dest, DEV_MARKER).writeText("vsix") }
+
+        val installed = loadInstalled(dest) ?: error("could not read the manifest generated for ${manifest.id}")
+        return VsixInstallResult(installed, manifest, compatibility)
+    }
+
+    /**
      * Install extensions bundled in the APK assets (e.g. `builtin-extensions/foo.jext`) that aren't
      * present yet, or whose bundled version is newer than the installed copy. Best-effort and
      * idempotent — safe to call on every launch; reuses the same verify + extract pipeline as a

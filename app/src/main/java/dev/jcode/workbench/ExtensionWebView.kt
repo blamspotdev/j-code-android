@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Environment
 import android.provider.OpenableColumns
 import android.view.MotionEvent
+import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.webkit.JavascriptInterface
@@ -15,12 +16,18 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -28,6 +35,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -36,8 +44,13 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.jcode.design.JCodeTheme
 import dev.jcode.feature.marketplace.InstalledExtension
+import dev.jcode.feature.marketplace.VsixCommand
+import dev.jcode.feature.marketplace.VsixPackage
 import dev.jcode.feature.marketplace.webUiFile
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -104,8 +117,27 @@ fun ExtensionWebViewPage(
     /** Optional view route appended to the loaded URL as `#route` so an extension can render an
      *  alternate screen (e.g. a full-page sign-in) from the same bundle. */
     route: String = "",
+    /** Spawns a long-lived process in the Linux runtime, used to run an imported `.vsix`. */
+    spawnProcess: ((command: String) -> Process?)? = null,
+    /** Surface a webview panel an imported `.vsix` created as an editor tab. */
+    onOpenPanel: (handle: String, title: String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
+    // A .vsix has no page on disk to point at — its UI is built by the extension's own code — so it
+    // takes a different route entirely.
+    val vsixEntry = remember(extension.id) {
+        File(extension.dir, dev.jcode.feature.marketplace.VsixPackage.VSIX_MARKER)
+            .takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotEmpty() }
+    }
+    if (vsixEntry != null) {
+        if (spawnProcess == null) {
+            ExtensionNotice("${extension.name} needs the Linux runtime to run, and it isn't available here.", modifier)
+        } else {
+            VsixExtensionView(extension, spawnProcess, onApiRequest, onOpenPanel, modifier)
+        }
+        return
+    }
+
     val scope = rememberCoroutineScope()
     var webView by remember(extension.id) { mutableStateOf<WebView?>(null) }
     // SAF file picking for extension `<input type="file">` (e.g. the SQL Client "restore from .bak"
@@ -316,6 +348,7 @@ fun ExtensionWebViewPage(
                 settings.allowUniversalAccessFromFileURLs = true
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView, url: String) {
+                        view.evaluateJavascript(VIEWPORT_SIZE_JS, null)
                         view.evaluateJavascript(themeJsState.value, null)
                     }
 
@@ -385,6 +418,779 @@ fun ExtensionWebViewPage(
         },
     )
 }
+
+/** Origin the extension's own files are served from, matching `webview.cspSource` in the host. */
+private const val VSIX_RESOURCE_ORIGIN = "https://jcode.webview"
+
+/**
+ * A running `.vsix`: its extension host, a WebView per webview the extension has open, and the state
+ * whoever is displaying them reads.
+ *
+ * Deliberately not composition-scoped. A VS Code extension is a process that takes seconds to come
+ * up — OpenChamber launches `opencode` and waits for it — so tearing it down because a drawer closed
+ * or a tab lost focus would restart it every time. The session outlives its mount points; only
+ * [dispose] ends it. WebViews are built with the application context so a detached session cannot
+ * hold an Activity.
+ *
+ * An extension has more than one surface: the view it contributes to the drawer, plus any panel it
+ * opens with `createWebviewPanel` (OpenChamber's "Open Session in Editor" and its Agent Manager).
+ * Every message the host sends names the webview it belongs to, so surfaces are kept per handle —
+ * routing them all to one WebView let a panel overwrite the drawer.
+ */
+internal class VsixSession private constructor(
+    val extension: InstalledExtension,
+    val version: String?,
+    val host: VsCodeExtensionHost,
+    private val scope: CoroutineScope,
+    private val context: Context,
+    private val backgroundArgb: Int,
+    private val onOpenPanel: (handle: String, title: String) -> Unit,
+) {
+    /** What to show while there is no page yet, and why if there never will be. */
+    var status by mutableStateOf("Starting ${extension.name}…")
+        private set
+    var failure by mutableStateOf<String?>(null)
+        private set
+
+    /** One webview the extension has open, mounted wherever it belongs. */
+    inner class Surface(val handle: String, val webView: WebView) {
+        var hasPage by mutableStateOf(false)
+            internal set
+        internal var loadedStamp: Int? = null
+    }
+
+    private val surfaces = mutableStateMapOf<String, Surface>()
+
+    /** The handle of the view the extension contributed, known once it has been resolved. */
+    private var viewHandle by mutableStateOf<String?>(null)
+    private var projectName: String? = null
+    private var projectPath: String? = null
+
+    /** The drawer's surface: the view this extension contributes. */
+    val viewSurface: Surface? get() = viewHandle?.let { surfaces[it] }
+
+    /** An editor panel's surface, or null if the extension has not created (or has closed) it. */
+    fun panel(handle: String): Surface? = surfaces[handle]
+
+    fun execute(commandId: String) {
+        scope.launch { host.executeCommand(commandId) }
+    }
+
+    fun dispose() {
+        host.dispose()
+        surfaces.values.forEach { surface ->
+            (surface.webView.parent as? ViewGroup)?.removeView(surface.webView)
+            surface.webView.destroy()
+        }
+        surfaces.clear()
+        scope.cancel()
+    }
+
+    private fun onHostEvent(method: String, params: JSONObject) {
+        when (method) {
+            "host/log" -> ExtensionDevLog.log(
+                if (params.optString("level") == "error") ExtensionDevLogEntry.Kind.Error
+                else ExtensionDevLogEntry.Kind.Console,
+                extension.id,
+                "[host] ${params.optString("text")}",
+            )
+            // The extension re-rendering a webview is normal: it sends this whenever its state changes.
+            "webview/html" -> render(params.optString("handle"), params.optString("html"))
+            // `createWebviewPanel` — the extension wants a surface of its own in the editor area. This
+            // is how "Open Session in Editor" and the Agent Manager reach the main screen.
+            "webview/panelCreated" -> {
+                val handle = params.optString("handle").takeIf { it.isNotBlank() } ?: return
+                val title = params.optString("title").ifBlank { extension.name }
+                scope.launch {
+                    surfaceFor(handle)
+                    rememberPanelTitle(handle, title)
+                    onOpenPanel(handle, title)
+                }
+            }
+            // `panel.reveal()` — bring it back to front. Reopening covers the case where the user
+            // closed the tab: the extension still holds the panel and only ever reveals it.
+            "webview/reveal" -> {
+                val handle = params.optString("handle").takeIf { it.isNotBlank() } ?: return
+                if (handle != viewHandle) {
+                    scope.launch { onOpenPanel(handle, panelTitles[handle] ?: extension.name) }
+                }
+            }
+            "webview/disposed" -> {
+                val handle = params.optString("handle").takeIf { it.isNotBlank() } ?: return
+                scope.launch { closeSurface(handle) }
+            }
+            // The extension talking to one of its pages. This is a request, not a notification: the
+            // extension waits on it, so a missing reply strands whatever it was doing — which is how
+            // a page ends up sitting on its splash forever.
+            "webview/postMessage" -> {
+                val payload = params.opt("message")
+                val handle = params.optString("handle")
+                ExtensionDevLog.log(
+                    ExtensionDevLogEntry.Kind.Event,
+                    extension.id,
+                    "ext → page[$handle] ${payload?.toString()?.take(200)}",
+                )
+                val json = JSONObject.quote(
+                    when (payload) {
+                        null, JSONObject.NULL -> "null"
+                        else -> payload.toString()
+                    },
+                )
+                scope.launch {
+                    surfaces[handle]?.webView
+                        ?.evaluateJavascript("window.__jcodeDeliver && window.__jcodeDeliver($json)", null)
+                }
+                host.reply(params.optInt("__requestId"), null)
+            }
+            else -> {
+                ExtensionDevLog.log(ExtensionDevLogEntry.Kind.Event, extension.id, "$method $params")
+                // Anything else the extension asks for is not implemented yet, but it must still be
+                // answered — an unanswered request blocks the extension rather than degrading it.
+                if (params.has("__requestId")) {
+                    host.reply(params.optInt("__requestId"), null, "$method is not implemented by JCode")
+                }
+            }
+        }
+    }
+
+    private fun onPageMessage(handle: String, payload: String) {
+        ExtensionDevLog.log(ExtensionDevLogEntry.Kind.Event, extension.id, "page[$handle] → ext ${payload.take(200)}")
+        scope.launch { host.postToWebview(handle, payload) }
+    }
+
+    /** Titles the extension gave its panels, so a later `reveal` can name the tab it reopens. */
+    private val panelTitles = HashMap<String, String>()
+
+    /** The surface for [handle], creating its WebView on first use. Main thread only. */
+    private fun surfaceFor(handle: String): Surface = surfaces.getOrPut(handle) {
+        Surface(handle, newWebView(context, extension, backgroundArgb, handle, ::onPageMessage))
+    }
+
+    private fun closeSurface(handle: String) {
+        surfaces.remove(handle)?.let { surface ->
+            (surface.webView.parent as? ViewGroup)?.removeView(surface.webView)
+            surface.webView.destroy()
+        }
+        panelTitles.remove(handle)
+    }
+
+    /**
+     * Load [html] into the webview [handle] names, skipping a render it is already showing.
+     *
+     * Marshalled through [scope] (main-immediate) rather than `webView.post`: a WebView is not in the
+     * view tree until there is a page to show, and `View.post` on a detached view defers the runnable
+     * until it attaches — which would never happen, because attaching is what this enables.
+     */
+    private fun render(handle: String, html: String) {
+        if (html.isBlank() || handle.isBlank()) return
+        val document = vsixBootstrap(projectName, projectPath) + html
+        val stamp = html.hashCode()
+        scope.launch {
+            val surface = surfaceFor(handle)
+            if (surface.loadedStamp == stamp) return@launch
+            surface.loadedStamp = stamp
+            surface.webView.loadDataWithBaseURL("$VSIX_RESOURCE_ORIGIN/", document, "text/html", "utf-8", null)
+            surface.hasPage = true
+        }
+    }
+
+    private suspend fun start(
+        apiRequest: suspend (envelopeJson: String) -> String,
+        isDarkTheme: Boolean,
+    ) {
+        // Resolved before the host is spawned, not after: the project is the host's HOME, and an
+        // extension reads workspaceFolders to decide what it is working on, so the wrong answer here
+        // is the difference between it loading the project and asking the user to pick one.
+        val project = runCatching {
+            JSONObject(apiRequest("""{"type":"workbench.projectInfo","payload":{}}""")).optJSONObject("data")
+        }.getOrNull()
+        projectPath = project?.optString("path")?.takeIf { it.isNotBlank() }
+        projectName = project?.optString("name")?.takeIf { it.isNotBlank() }
+            ?: projectPath?.substringAfterLast('/')
+
+        host.start(projectDir = projectPath)?.let { failure = it; return }
+        status = "Loading ${extension.name}…"
+
+        val activated = host.activate(
+            folders = projectPath?.let { listOf((projectName ?: it.substringAfterLast('/')) to it) }.orEmpty(),
+            configuration = JSONObject(),
+        )
+        // Tell the extension which theme it is being shown in before it builds its view, so it styles
+        // itself correctly the first time rather than after a repaint.
+        runCatching { host.setTheme(dark = isDarkTheme) }
+        activated.optString("error").takeIf { it.isNotBlank() }?.let { failure = it; return }
+
+        val views = activated.optJSONArray("views")
+        val viewId = (0 until (views?.length() ?: 0)).firstNotNullOfOrNull { views?.optString(it) }
+        if (viewId.isNullOrBlank()) {
+            failure = "${extension.name} registered no view to show."
+            return
+        }
+        VsixViewHolder.titleActions[extension.id] = readTitleActions(viewId)
+
+        val resolved = host.resolveWebviewView(viewId)
+        resolved.optString("error").takeIf { it.isNotBlank() }?.let { failure = it; return }
+        val handle = resolved.optString("handle")
+        viewHandle = handle
+        render(handle, resolved.optString("html"))
+    }
+
+    /** Remember a panel's title so a later `reveal` can reopen its tab under the same name. */
+    private fun rememberPanelTitle(handle: String, title: String) {
+        panelTitles[handle] = title
+    }
+
+    /** The extension's own manifest, unpacked into the install dir, is the source for its actions. */
+    private fun readTitleActions(viewId: String): List<VsixCommand> = runCatching {
+        val manifest = File(extension.dir, "package.json").takeIf { it.isFile }?.readText() ?: return emptyList()
+        val nls = File(extension.dir, "package.nls.json").takeIf { it.isFile }?.readText()
+        VsixPackage.parseViewTitleActions(manifest, nls, viewId)
+    }.getOrDefault(emptyList())
+
+    companion object {
+        fun start(
+            context: Context,
+            extension: InstalledExtension,
+            spawnProcess: (command: String) -> Process?,
+            apiRequest: suspend (envelopeJson: String) -> String,
+            backgroundArgb: Int,
+            isDarkTheme: Boolean,
+            onOpenPanel: (handle: String, title: String) -> Unit,
+        ): VsixSession {
+            val appContext = context.applicationContext
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+            // The host callback can only fire once the host is started, which happens after `session`
+            // is assigned below.
+            lateinit var session: VsixSession
+            val host = VsCodeExtensionHost(appContext, extension, spawnProcess) { method, params ->
+                session.onHostEvent(method, params)
+            }
+            session = VsixSession(
+                extension = extension,
+                version = extension.version,
+                host = host,
+                scope = scope,
+                context = appContext,
+                backgroundArgb = backgroundArgb,
+                onOpenPanel = onOpenPanel,
+            )
+            scope.launch { session.start(apiRequest, isDarkTheme) }
+            return session
+        }
+
+        /**
+         * A WebView for one of the extension's webviews. Each carries its own bridge, closed over the
+         * handle it belongs to, so a page's messages reach the webview the extension is listening on
+         * rather than whichever one happens to be the view.
+         */
+        @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
+        private fun newWebView(
+            context: Context,
+            extension: InstalledExtension,
+            backgroundArgb: Int,
+            handle: String,
+            onPageMessage: (handle: String, payload: String) -> Unit,
+        ): WebView = NoFullscreenWebView(context).apply {
+            setBackgroundColor(backgroundArgb)
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            @Suppress("DEPRECATION")
+            settings.allowFileAccess = true
+            // Honour the viewport meta the bootstrap injects, which declares an explicit
+            // height=device-height. That is what gives this WebView a layout viewport with a real
+            // height, so `vh` and percentage chains resolve instead of collapsing — fixing it here
+            // rather than rewriting the extension's stylesheet afterwards. Safe to enable because this
+            // page always carries that meta; a page without one would fall back to a 980px-wide
+            // desktop viewport.
+            settings.useWideViewPort = true
+            settings.loadWithOverviewMode = true
+            // The page is served over https so its resource origin can back a Content-Security-Policy,
+            // but the server an extension talks to is plain http on loopback inside the runtime —
+            // OpenChamber starts opencode and then calls it. That mix is blocked by default and the
+            // extension simply hangs, so allow it: both ends are on this device.
+            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView, url: String) {
+                    // Dynamic units (dvh) are rejected outright by these engines whatever the viewport
+                    // is, so the repair pass still runs — it no-ops where unneeded.
+                    view.evaluateJavascript(VIEWPORT_SIZE_JS, null)
+                }
+
+                override fun shouldInterceptRequest(
+                    view: WebView,
+                    request: android.webkit.WebResourceRequest,
+                ): android.webkit.WebResourceResponse? = serveExtensionResource(extension.dir, request.url)
+            }
+            webChromeClient = object : WebChromeClient() {
+                override fun onConsoleMessage(msg: android.webkit.ConsoleMessage): Boolean {
+                    ExtensionDevLog.log(
+                        if (msg.messageLevel().name.lowercase() == "error") ExtensionDevLogEntry.Kind.Error
+                        else ExtensionDevLogEntry.Kind.Console,
+                        extension.id,
+                        "[${msg.messageLevel().name.lowercase()}] ${msg.message().orEmpty()}",
+                    )
+                    return false
+                }
+            }
+            // A WebView nested in a scrollable panel loses drags to its parent otherwise.
+            setOnTouchListener { v, event ->
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                }
+                false
+            }
+            addJavascriptInterface(
+                object {
+                    @JavascriptInterface
+                    fun postMessage(payload: String) = onPageMessage(handle, payload)
+                },
+                "JCodeVsix",
+            )
+        }
+    }
+}
+
+/**
+ * The live `.vsix` sessions, one per extension, keyed by id.
+ *
+ * Process-scoped for the reason in [VsixSession]: an extension must survive its view being hidden.
+ * Mirrors [ScmWebViewHolder] — mount points detach, only this destroys.
+ */
+internal object VsixViewHolder {
+    private val sessions = HashMap<String, VsixSession>()
+
+    /**
+     * Each running extension's view-title actions, by extension id.
+     *
+     * Kept here rather than on the session because the drawer header composes before the body starts
+     * the session, so a header reading through the session gets null on the pass that matters and does
+     * not reliably resubscribe once the actions land — the menu then stayed hidden until something
+     * else forced recomposition. This map exists from the start, so the read always registers.
+     */
+    val titleActions = mutableStateMapOf<String, List<VsixCommand>>()
+
+    fun get(id: String): VsixSession? = sessions[id]
+
+    fun ids(): List<String> = sessions.keys.toList()
+
+    fun destroy(id: String) {
+        sessions.remove(id)?.dispose()
+        titleActions.remove(id)
+    }
+
+    fun destroyAll() {
+        sessions.keys.toList().forEach { destroy(it) }
+    }
+
+    /** The session for [extension], starting it if it is not running (or is running a stale version). */
+    fun getOrStart(
+        context: Context,
+        extension: InstalledExtension,
+        spawnProcess: (command: String) -> Process?,
+        apiRequest: suspend (envelopeJson: String) -> String,
+        backgroundArgb: Int,
+        isDarkTheme: Boolean,
+        onOpenPanel: (handle: String, title: String) -> Unit,
+    ): VsixSession {
+        sessions[extension.id]?.let { existing ->
+            // A session that failed is not worth keeping: the usual cause is something missing from
+            // the runtime, so reopening the view after installing it should retry rather than show the
+            // same stale error forever.
+            if (existing.version == extension.version && existing.failure == null) return existing
+            destroy(extension.id)
+        }
+        return VsixSession.start(
+            context = context,
+            extension = extension,
+            spawnProcess = spawnProcess,
+            apiRequest = apiRequest,
+            backgroundArgb = backgroundArgb,
+            isDarkTheme = isDarkTheme,
+            onOpenPanel = onOpenPanel,
+        ).also { sessions[extension.id] = it }
+    }
+}
+
+/**
+ * Shows an imported `.vsix`, wherever it is mounted.
+ *
+ * Nothing can be drawn until the extension has run — its HTML is produced by its own code — so this
+ * reports progress until a page arrives. Requests to [VSIX_RESOURCE_ORIGIN] are served straight from
+ * the install directory, which is how the extension's scripts and styles resolve without the page
+ * ever learning where on disk it actually lives.
+ */
+@Composable
+internal fun VsixExtensionView(
+    extension: InstalledExtension,
+    spawnProcess: (command: String) -> Process?,
+    onApiRequest: suspend (envelopeJson: String) -> String,
+    onOpenPanel: (handle: String, title: String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val backgroundArgb = MaterialTheme.colorScheme.background.toArgb()
+    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val session = remember(extension.id, extension.version) {
+        VsixViewHolder.getOrStart(
+            context = context,
+            extension = extension,
+            spawnProcess = spawnProcess,
+            apiRequest = onApiRequest,
+            backgroundArgb = backgroundArgb,
+            isDarkTheme = isDarkTheme,
+            onOpenPanel = onOpenPanel,
+        )
+    }
+
+    session.failure?.let {
+        ExtensionNotice(it, modifier)
+        return
+    }
+    val surface = session.viewSurface
+    if (surface == null || !surface.hasPage) {
+        ExtensionNotice(session.status, modifier)
+        return
+    }
+    VsixSurfaceView(surface, modifier)
+}
+
+/**
+ * Shows a webview panel the extension opened, as a page in the editor area.
+ *
+ * This is what `createWebviewPanel` means on a phone: OpenChamber's "Open Session in Editor" and its
+ * Agent Manager both ask for one. The panel belongs to the session, so it keeps running while the tab
+ * is not on screen and reopening the tab shows it as it was.
+ */
+@Composable
+internal fun VsixPanelPage(
+    extension: InstalledExtension,
+    handle: String,
+    modifier: Modifier = Modifier,
+) {
+    val surface = VsixViewHolder.get(extension.id)?.panel(handle)
+    if (surface == null) {
+        ExtensionNotice("${extension.name} closed this view.", modifier)
+        return
+    }
+    if (!surface.hasPage) {
+        ExtensionNotice("Opening ${extension.name}…", modifier)
+        return
+    }
+    VsixSurfaceView(surface, modifier)
+}
+
+/** Mount one of a session's WebViews, reparenting it rather than rebuilding it. */
+@Composable
+private fun VsixSurfaceView(surface: VsixSession.Surface, modifier: Modifier) {
+    AndroidView(
+        modifier = modifier.fillMaxSize(),
+        factory = {
+            (surface.webView.parent as? ViewGroup)?.removeView(surface.webView)
+            surface.webView
+        },
+    )
+    DisposableEffect(surface) {
+        onDispose { (surface.webView.parent as? ViewGroup)?.removeView(surface.webView) }
+    }
+}
+
+/**
+ * What every VS Code webview expects to find waiting for it: `acquireVsCodeApi()`, and a document
+ * with a height.
+ *
+ * The height is not a given here. On the WebView builds JCode ships to, the document lays out
+ * against a zero-height viewport, so `html` computes to 0 and an extension whose root is
+ * `height: 100%` — which is most of them — fills nothing and renders blank. The real size is only
+ * available in JS, so it is applied from there as pixels and republished as a variable for anything
+ * sizing itself in viewport units.
+ */
+private fun vsixBootstrap(projectName: String?, projectPath: String?): String {
+    // A VS Code webview is handed its workspace through page config, not through the extension API —
+    // the page cannot call vscode.workspace itself. Telling only the extension host which project is
+    // open therefore leaves the UI to fall back to whatever it last persisted, which is how it ends
+    // up showing a stale folder instead of the one on screen.
+    val folders = if (projectPath != null) {
+        """[{"name":${JSONObject.quote(projectName ?: projectPath.substringAfterLast('/'))},""" +
+            """"path":${JSONObject.quote(projectPath)},"uri":${JSONObject.quote("file://$projectPath")}}]"""
+    } else {
+        "[]"
+    }
+    val folder = if (projectPath != null) JSONObject.quote(projectPath) else "null"
+    return """
+<script>
+(function () {
+  var ours = { workspaceFolder: $folder, workspaceFolders: $folders };
+  var config = Object.assign({ theme: 'dark', platform: 'linux' }, ours);
+  // The extension writes this config itself once its own script runs, which would drop the workspace
+  // we just resolved and send it back to whatever it last persisted. Keep everything it sets except
+  // the folders, which JCode is the authority on.
+  Object.defineProperty(window, '__VSCODE_CONFIG__', {
+    configurable: false,
+    get: function () { return config; },
+    set: function (value) { config = Object.assign({}, value || {}, ours); },
+  });
+  // The home an extension browses from. Pinned for the same reason as the folders, and it matters
+  // more here: the extension host runs as the runtime's root user, so an unpinned value resolves to
+  // /root — a directory holding nothing but dotfiles, which is why the folder picker opened on an
+  // empty list. With a project open, the project IS the sensible place to start.
+  if ($folder) {
+    var home = $folder;
+    Object.defineProperty(window, '__OPENCHAMBER_HOME__', {
+      configurable: false,
+      get: function () { return home; },
+      set: function () {},
+    });
+    // Seed the "~" a file-browsing extension expands against. It is a cache the page derives from
+    // whatever directory it can find and then persists, and the process it asks lives in /root, so
+    // without this it settles on a directory holding nothing the user wants to see. Written before
+    // the extension's own script runs so the value is in place the first time it is read.
+    try {
+      window.localStorage.setItem('homeDirectory', home);
+      window.localStorage.setItem('lastDirectory', home);
+    } catch (e) {}
+  }
+})();
+</script>
+""" + VSIX_BOOTSTRAP
+}
+
+private val VSIX_BOOTSTRAP = """
+<meta name="viewport" content="width=device-width, height=device-height, initial-scale=1, user-scalable=no">
+<style>
+html,body{margin:0;padding:0;overflow:hidden}
+/* VS Code hands a webview its theme as --vscode-* variables. An extension's styling resolves
+   against those, so without them it draws in a washed-out fallback. Only the variables are
+   supplied — the extension owns what it does with them. */
+:root{
+  --vscode-editor-background:#14151d; --vscode-editor-foreground:#d5d9e0;
+  --vscode-sideBar-background:#101118; --vscode-sideBar-foreground:#c8cdd6;
+  --vscode-panel-background:#14151d; --vscode-panel-border:#2a2d3c;
+  --vscode-button-background:#3d5afe; --vscode-button-foreground:#ffffff;
+  --vscode-button-hoverBackground:#4d68ff; --vscode-button-secondaryBackground:#2a2d3c;
+  --vscode-button-secondaryForeground:#d5d9e0;
+  --vscode-input-background:#1c1e29; --vscode-input-foreground:#d5d9e0;
+  --vscode-input-border:#2a2d3c; --vscode-input-placeholderForeground:#8b93a3;
+  --vscode-focusBorder:#3d5afe; --vscode-errorForeground:#d06262;
+  --vscode-descriptionForeground:#8b93a3; --vscode-textLink-foreground:#7f9cff;
+  --vscode-foreground:#d5d9e0; --vscode-widget-border:#2a2d3c;
+  --vscode-list-hoverBackground:#1c1e29; --vscode-list-activeSelectionBackground:#2a2d3c;
+  --vscode-editorWidget-background:#181a24; --vscode-editorWidget-border:#2a2d3c;
+  --vscode-editor-font-family:monospace; --vscode-font-family:system-ui,sans-serif;
+  --vscode-font-size:13px; --vscode-font-weight:400;
+}
+</style>
+<script>
+(function () {
+  var applySize = function () {
+    var root = document.documentElement;
+    var height = window.innerHeight + 'px';
+    root.style.setProperty('--jcode-viewport-height', height);
+    root.style.setProperty('--jcode-viewport-width', window.innerWidth + 'px');
+    root.style.height = height;
+    if (document.body) document.body.style.height = height;
+  };
+  applySize();
+  window.addEventListener('resize', applySize);
+  document.addEventListener('DOMContentLoaded', applySize);
+})();
+(function () {
+  var state = {};
+  var listeners = [];
+  window.acquireVsCodeApi = function () {
+    return {
+      postMessage: function (message) { window.JCodeVsix.postMessage(JSON.stringify(message)); },
+      getState: function () { return state; },
+      setState: function (next) { state = next; return next; },
+    };
+  };
+  // The host delivers extension -> page messages through here.
+  window.__jcodeDeliver = function (json) {
+    var data;
+    try { data = JSON.parse(json); } catch (e) { data = json; }
+    window.dispatchEvent(new MessageEvent('message', { data: data }));
+  };
+})();
+</script>
+""".trimIndent()
+
+/**
+ * Undo Tailwind's opacity fallback on engines without `color-mix()`.
+ *
+ * A translucent utility compiles to a solid colour plus a `@supports color-mix` block that adds the
+ * alpha. Where `color-mix()` is unsupported only the solid colour survives, so every intended tint
+ * paints at full strength — a 10% selection wash becomes a solid bar. The alpha cannot be recovered
+ * in CSS (the colour arrives through a variable, and neither relative colour syntax nor `color-mix`
+ * exists here), but the intent can: a faint tint reads far closer to nothing than to solid. So the
+ * faint ones are dropped and the strong ones kept.
+ *
+ * Appended rather than edited in place: same selector, same specificity, later in the sheet.
+ */
+private fun tintOverridesFor(css: String): String {
+    val supportsBlock = Regex("""@supports\s*\(color:\s*color-mix\([^)]*\)\)\s*\{((?:[^{}]|\{[^{}]*\})*)\}""")
+    val rule = Regex("""([^{}]+)\{([^{}]*)\}""")
+    val tinted = Regex("""([-a-zA-Z]+)\s*:\s*color-mix\(in oklab,[^,]+?([\d.]+)%\s*,\s*transparent\)""")
+
+    val overrides = StringBuilder()
+    for (block in supportsBlock.findAll(css)) {
+        for (inner in rule.findAll(block.groupValues[1])) {
+            val selector = inner.groupValues[1].trim()
+            if (selector.isEmpty() || selector.startsWith("@")) continue
+            for (decl in tinted.findAll(inner.groupValues[2])) {
+                val percent = decl.groupValues[2].toFloatOrNull() ?: continue
+                if (percent >= FAINT_TINT_CEILING) continue
+                overrides.append(selector).append('{').append(decl.groupValues[1]).append(":transparent}")
+            }
+        }
+    }
+    return overrides.toString()
+}
+
+/** Above this, a tint is a real fill and is left alone; below it, it was meant to be barely there. */
+private const val FAINT_TINT_CEILING = 60f
+
+/** Serve a file from the extension's install directory for [VSIX_RESOURCE_ORIGIN] requests. */
+private fun serveExtensionResource(extensionDir: File, url: Uri): android.webkit.WebResourceResponse? {
+    if (!url.toString().startsWith("$VSIX_RESOURCE_ORIGIN/")) return null
+    val relative = url.path?.trimStart('/').orEmpty()
+    if (relative.isEmpty()) return null
+    val file = File(extensionDir, relative)
+    val root = extensionDir.canonicalPath + File.separator
+    // Never serve outside the extension, whatever the page asks for.
+    if (!file.canonicalPath.startsWith(root) || !file.isFile) return null
+    val mime = when (file.extension.lowercase()) {
+        "js", "mjs", "cjs" -> "text/javascript"
+        "css" -> "text/css"
+        "html" -> "text/html"
+        "json", "map" -> "application/json"
+        "svg" -> "image/svg+xml"
+        "png" -> "image/png"
+        "jpg", "jpeg" -> "image/jpeg"
+        "gif" -> "image/gif"
+        "webp" -> "image/webp"
+        "woff" -> "font/woff"
+        "woff2" -> "font/woff2"
+        "ttf" -> "font/ttf"
+        else -> "application/octet-stream"
+    }
+    if (mime == "text/css") {
+        val css = file.readText()
+        val patched = css + tintOverridesFor(css)
+        return android.webkit.WebResourceResponse(mime, "utf-8", patched.byteInputStream())
+    }
+    return android.webkit.WebResourceResponse(mime, "utf-8", file.inputStream())
+}
+
+/** Centred one-line message for a page that cannot be shown (yet). */
+@Composable
+private fun ExtensionNotice(text: String, modifier: Modifier = Modifier) {
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(24.dp),
+        )
+    }
+}
+/**
+ * Publishes the WebView's real size to every extension page as `--jcode-viewport-height` /
+ * `--jcode-viewport-width`, and repairs viewport-height lengths on engines that cannot resolve them.
+ *
+ * Android WebView is a system component many devices never update, and older builds lay a page out
+ * against a viewport whose height is zero even though `window.innerHeight` reports the true size:
+ * every `vh` length there resolves to 0, so an extension's dialogs and side panels — sized against
+ * the viewport — render as empty slivers. Dynamic units (`dvh`, Chromium 108+) are rejected outright
+ * on top of that.
+ *
+ * A probe decides whether this engine is affected, so healthy WebViews do no work at all. Where it
+ * is, every viewport-height length in the page's stylesheets is rewritten against the published
+ * variable. Rules are edited in place so their `@media` / `@supports` / `@layer` context is
+ * preserved, the pass is deferred off first paint, and a `<head>` observer catches stylesheets that
+ * arrive later — a code-split bundle usually loads its CSS well after the page "finishes".
+ */
+private const val VIEWPORT_SIZE_JS = """
+(function () {
+  var root = document.documentElement;
+  var publish = function () {
+    root.style.setProperty('--jcode-viewport-height', window.innerHeight + 'px');
+    root.style.setProperty('--jcode-viewport-width', window.innerWidth + 'px');
+  };
+  publish();
+  window.addEventListener('resize', publish);
+
+  var probe = document.createElement('div');
+  probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;height:100vh';
+  (document.body || root).appendChild(probe);
+  var viewportUnitsWork = probe.getBoundingClientRect().height > 1;
+  probe.parentNode.removeChild(probe);
+  if (viewportUnitsWork || !window.innerHeight) return;
+
+  // Heights only — viewport widths resolve correctly even on the affected engines.
+  var LENGTH = /(-?\d*\.?\d+)(?:[dls])?(?:vh|vb)\b/gi;
+  var repair = function (value) {
+    return value.replace(LENGTH, function (match, amount) {
+      var fraction = parseFloat(amount) / 100;
+      return fraction === 1
+        ? 'var(--jcode-viewport-height)'
+        : 'calc(var(--jcode-viewport-height) * ' + fraction + ')';
+    });
+  };
+
+  var seen = [];
+  var repairRules = function (rules) {
+    for (var i = 0; i < rules.length; i++) {
+      var rule = rules[i];
+      if (rule.cssRules) { repairRules(rule.cssRules); continue; }
+      var style = rule.style;
+      if (!style || !style.length) continue;
+      for (var j = 0; j < style.length; j++) {
+        var prop = style[j];
+        var value = style.getPropertyValue(prop);
+        if (value.indexOf('vh') < 0 && value.indexOf('vb') < 0) continue;
+        var next = repair(value);
+        if (next !== value) { style.setProperty(prop, next, style.getPropertyPriority(prop)); repaired++; }
+      }
+    }
+  };
+
+  var scheduled = false;
+  var repaired = 0;
+  var sweep = function () {
+    scheduled = false;
+    var started = Date.now();
+    var before = repaired;
+    var sheets = document.styleSheets;
+    for (var i = 0; i < sheets.length; i++) {
+      var sheet = sheets[i];
+      if (seen.indexOf(sheet) >= 0) continue;
+      // A sheet the page cannot read, or has not parsed yet, throws. Only record it as done on
+      // success — otherwise a sheet still parsing when this runs would never be revisited.
+      try {
+        var rules = sheet.cssRules;
+        repairRules(rules);
+        seen.push(sheet);
+      } catch (e) {}
+    }
+    if (repaired > before) {
+      console.log('[jcode] viewport-height CSS repaired: ' + repaired + ' declaration(s) in '
+        + (Date.now() - started) + 'ms');
+    }
+  };
+  var schedule = function () {
+    if (scheduled) return;
+    scheduled = true;
+    if (window.requestIdleCallback) window.requestIdleCallback(sweep, { timeout: 500 });
+    else window.setTimeout(sweep, 0);
+  };
+
+  schedule();
+  // Watch <head> only: that is where a bundler injects its stylesheets, and watching the whole
+  // document would fire this callback on every render of a busy app for no benefit.
+  if (window.MutationObserver && document.head) {
+    new MutationObserver(schedule).observe(document.head, { childList: true, subtree: true });
+  }
+})();
+"""
 
 private const val NO_UI_HTML =
     "<html><body style=\"font-family:sans-serif;color:#9aa;padding:24px\">" +

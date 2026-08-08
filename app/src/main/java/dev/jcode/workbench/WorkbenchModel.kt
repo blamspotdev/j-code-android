@@ -152,6 +152,9 @@ internal data class WorkbenchManagerActions(
     val onUninstallExtension: (String) -> Unit,
     val onOpenExtensionDetail: (String) -> Unit,
     val onOpenExtensionPermissions: () -> Unit,
+    /** Starts the "import a VS Code .vsix" flow from the extension list. Not a developer action —
+     *  importing an extension JCode does not publish is ordinary use, so it is always available. */
+    val onImportVsix: (() -> Unit)? = null,
     /** Opens an extension's bundled web-frontend ("Manage"/DB-manager) screen by extension id. */
     val onOpenExtensionApp: (String) -> Unit,
     /** Opens an extension's web frontend at its `#config` route by extension id (e.g. Source Control
@@ -162,6 +165,10 @@ internal data class WorkbenchManagerActions(
         { _, _ -> "ADB pairing is unavailable." },
     /** Runs a command in the Linux runtime for an extension web frontend; returns a JSON result. */
     val onExtensionExec: suspend (command: String, timeoutMs: Long) -> String,
+    /** Spawns a long-lived runtime process with stdio attached, used to run an imported `.vsix`. */
+    val onSpawnRuntimeProcess: ((command: String) -> Process?)? = null,
+    /** Surfaces a webview panel an imported `.vsix` created (`createWebviewPanel`) as an editor tab. */
+    val onOpenVsixPanel: (extensionId: String, handle: String, title: String) -> Unit = { _, _, _ -> },
     /** Extension API v1 envelope handler: (extensionId, requestJson) -> response JSON. */
     val onExtensionApiRequest: suspend (extensionId: String, envelopeJson: String) -> String =
         { _, _ -> """{"ok":false,"error":"extension API unavailable"}""" },
@@ -204,5 +211,38 @@ internal enum class RightPanelTab(
     /** Extension-authoring tools (inspector / manifest validator / live log); shown only when
      *  Developer options is enabled (see [dev.jcode.design.LocalDeveloperSetting]). */
     ExtensionDev("Ext Dev", JCodeIcon.Extensions, enabled = true),
-    Chat("Chat", JCodeIcon.Chat, enabled = true),
+}
+
+/**
+ * What the right drawer is showing: one of its built-in panels, or an imported `.vsix`.
+ *
+ * The built-ins are a fixed set and stay an enum; extensions are not, so they cannot be. An imported
+ * extension gets a tab of its own, which is why the selection has to name one rather than being a
+ * single hardcoded slot.
+ */
+internal sealed interface RightPanelSelection {
+    data class Builtin(val tab: RightPanelTab) : RightPanelSelection
+
+    data class Extension(val extensionId: String) : RightPanelSelection
+
+    /** Stable form for [androidx.compose.runtime.saveable.rememberSaveable]. */
+    fun asKey(): String = when (this) {
+        is Builtin -> "builtin:${tab.name}"
+        is Extension -> "ext:$extensionId"
+    }
+
+    /** Fall back to the default when this names a built-in the caller isn't offering. */
+    fun clampedTo(allowed: Set<RightPanelTab>): RightPanelSelection =
+        if (this is Builtin && tab !in allowed) Default else this
+
+    companion object {
+        val Default = Builtin(RightPanelTab.Terminal)
+
+        fun fromKey(key: String): RightPanelSelection = when {
+            key.startsWith("ext:") -> Extension(key.removePrefix("ext:"))
+            else -> key.removePrefix("builtin:")
+                .let { name -> RightPanelTab.entries.firstOrNull { it.name == name } }
+                ?.let { Builtin(it) } ?: Default
+        }
+    }
 }

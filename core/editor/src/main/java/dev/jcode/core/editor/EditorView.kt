@@ -668,7 +668,12 @@ class EditorView @JvmOverloads constructor(
             decorations !== nodeDecorations || theme !== nodeTheme || config !== nodeConfig ||
             typeface !== nodeTypeface || viewport.scrollX != nodeScrollX ||
             viewport.scrollY != nodeScrollY || viewport.widthPx != nodeWidth
-        if (contentStale || viewport.heightPx > nodeRecordedHeight) {
+        // A display list can also vanish without any of the keys changing: the framework drops it on
+        // destroyHardwareResources() and on renderer-context loss, which another surface appearing
+        // (an extension WebView in the right drawer) provokes on some drivers. Every key still
+        // matches, so without this the replay draws nothing and the file looks closed until a tab
+        // switch re-attaches. Same guard TerminalView's grid cache uses.
+        if (contentStale || !node.hasDisplayList() || viewport.heightPx > nodeRecordedHeight) {
             // Enable with: adb shell setprop log.tag.EditorRecord DEBUG — names the key that forced a
             // re-record, for diagnosing invalidation storms (a healthy IME toggle records ~once).
             if (android.util.Log.isLoggable("EditorRecord", android.util.Log.DEBUG)) {
@@ -678,7 +683,8 @@ class EditorView @JvmOverloads constructor(
                         "car=${carets !== nodeCarets} dec=${decorations !== nodeDecorations} " +
                         "thm=${theme !== nodeTheme} cfg=${config !== nodeConfig} tf=${typeface !== nodeTypeface} " +
                         "sx=${viewport.scrollX != nodeScrollX} sy=${viewport.scrollY != nodeScrollY} " +
-                        "w=${viewport.widthPx != nodeWidth} hGrow=${viewport.heightPx > nodeRecordedHeight}",
+                        "w=${viewport.widthPx != nodeWidth} hGrow=${viewport.heightPx > nodeRecordedHeight} " +
+                        "dl=${!node.hasDisplayList()}",
                 )
             }
             // A width change (rotation, pane resize) resets the height watermark so a tall portrait

@@ -121,6 +121,9 @@ fun ManagerPanelHeader(
     searchPlaceholder: String = "Search",
     onManage: (() -> Unit)? = null,
     manageContentDescription: String = "Manage",
+    onImport: (() -> Unit)? = null,
+    importIcon: JCodeIcon = JCodeIcon.Open,
+    importContentDescription: String = "Import",
 ) {
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -130,6 +133,13 @@ fun ManagerPanelHeader(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
             )
+            if (onImport != null) {
+                HeaderIconButton(
+                    icon = LocalIconBundle.current[importIcon],
+                    contentDescription = importContentDescription,
+                    onClick = onImport,
+                )
+            }
             if (onManage != null) {
                 HeaderIconButton(
                     icon = LocalIconBundle.current[JCodeIcon.Settings],
@@ -246,6 +256,8 @@ fun ManagerListRow(
     checkingLabel: String = "Checking…",
     modifier: Modifier = Modifier,
     leading: (@Composable () -> Unit)? = null,
+    /** Shown just before the status chip, for a row that needs a word about what it is. */
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
@@ -272,6 +284,7 @@ fun ManagerListRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        trailing?.invoke()
         ManagerStatusChip(status = status, checking = checking, checkingLabel = checkingLabel)
     }
 }

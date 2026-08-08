@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -68,6 +69,7 @@ import dev.jcode.design.LocalEditorFontSizeSetting
 import dev.jcode.design.LocalEditorWordWrapSetting
 import dev.jcode.design.LocalExtraKeysSetting
 import dev.jcode.design.LocalPerformanceSettings
+import dev.jcode.design.LocalRightDrawerSetting
 import dev.jcode.design.ExplorerExcludeEffect
 import dev.jcode.design.ExplorerHiddenMode
 import dev.jcode.design.LocalAndroidDevice
@@ -376,6 +378,23 @@ object SettingsFeature {
                         onReset = { cutoutSetting.onChange(SettingsDefaults.RESPECT_DEVICE_CUTOUT) },
                     )
                 }
+            }
+
+            SettingsCard(
+                title = "Right drawer",
+                description = "The panel holding the terminal, output, issues and extension views.",
+                keywords = "right drawer panel sidebar persistent dock split half width landscape terminal inspector",
+            ) {
+                val rightDrawerSetting = LocalRightDrawerSetting.current
+                ToggleRow(
+                    label = "Dock in landscape",
+                    supporting = "In landscape, split the screen with the right drawer instead of " +
+                        "sliding it over the editor, so both stay usable. Portrait is unaffected.",
+                    checked = rightDrawerSetting.enabled,
+                    onCheckedChange = rightDrawerSetting.onSetEnabled,
+                    modified = rightDrawerSetting.enabled != SettingsDefaults.RIGHT_DRAWER_PERSISTENT,
+                    onReset = { rightDrawerSetting.onSetEnabled(SettingsDefaults.RIGHT_DRAWER_PERSISTENT) },
+                )
             }
 
             SettingsCard(
@@ -778,6 +797,20 @@ object SettingsFeature {
                     modified = virtualDevice.enabled != SettingsDefaults.RUN_IN_VIRTUAL_DEVICE,
                     onReset = { virtualDevice.onChange(SettingsDefaults.RUN_IN_VIRTUAL_DEVICE) },
                 )
+                // The device is reached through the runtime's own adb, so there is nothing to
+                // reconnect without it — and the button would be a dead end rather than a fix.
+                if (virtualDevice.adbAvailable) {
+                    SettingsActionRow(
+                        label = "Reconnect adb",
+                        supporting = "Attach the virtual device to the runtime's adb server again, for " +
+                            "when `adb devices` no longer lists it — after `adb kill-server`, or a " +
+                            "runtime restart.",
+                        buttonLabel = "Reconnect",
+                        enabled = virtualDevice.enabled,
+                        busy = virtualDevice.reconnecting,
+                        onClick = virtualDevice.onReconnect,
+                    )
+                }
             }
 
             SettingsSectionHeader("About")
@@ -1722,6 +1755,45 @@ private fun OptionRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             content()
+        }
+    }
+}
+
+/** A settings row that performs an action rather than holding a value, so it has nothing to reset. */
+@Composable
+private fun SettingsActionRow(
+    label: String,
+    supporting: String,
+    buttonLabel: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    busy: Boolean = false,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Text(
+                text = supporting,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        FilledTonalButton(onClick = onClick, enabled = enabled && !busy) {
+            // The label stays put and the spinner takes the leading slot, so the button keeps its
+            // width and the row does not jump the moment it is pressed.
+            if (busy) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(buttonLabel)
         }
     }
 }
