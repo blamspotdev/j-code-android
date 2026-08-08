@@ -134,6 +134,14 @@ object VsixPackage {
         appendLine("version: ${manifest.version.yaml()}")
         appendLine("type: app")
         appendLine("description: ${manifest.description.yaml()}")
+        // Declared so JCode can answer the extension host's questions about the editor — which file
+        // is open, which project, which theme. Without it those calls are refused and the extension
+        // falls back to whatever it last persisted, so it shows the wrong project. It stays a
+        // declaration: the user can still revoke it from the extension's permissions.
+        appendLine("api:")
+        appendLine("  minApiVersion: 1")
+        appendLine("  capabilities:")
+        appendLine("    - workbench")
         if (manifest.icon != null) {
             appendLine("images:")
             appendLine("  icon: ${manifest.icon.yaml()}")
