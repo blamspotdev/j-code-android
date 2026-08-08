@@ -4000,8 +4000,13 @@ private val SPLIT_HANDLE_WIDTH = 12.dp
  * What sits between the editor and the docked right drawer: the gap that separates them and the grip
  * that resizes them.
  *
- * Wider than it looks — the visible hairline is 1dp but the touch target is the whole strip, because a
- * 1dp target is not draggable with a thumb. [onDrag] receives the horizontal movement in pixels.
+ * The strip carries its own colour rather than letting the background through. Left transparent it
+ * inherits the app background — the same colour the editor draws on — so the gap read as a seam
+ * against one pane and a hard edge against the other. `surfaceVariant` sits above both, which is what
+ * makes it legible whichever way the theme bundle runs.
+ *
+ * Wider than it looks: the whole strip is the touch target, because a hairline is not draggable with
+ * a thumb. [onDrag] receives the horizontal movement in pixels.
  */
 @Composable
 private fun WorkspaceSplitHandle(onDrag: (Float) -> Unit, onDragStopped: () -> Unit) {
@@ -4010,6 +4015,7 @@ private fun WorkspaceSplitHandle(onDrag: (Float) -> Unit, onDragStopped: () -> U
         modifier = Modifier
             .fillMaxHeight()
             .width(SPLIT_HANDLE_WIDTH)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
             .draggable(
                 orientation = Orientation.Horizontal,
                 state = rememberDraggableState { delta -> onDragState.value(delta) },
@@ -4018,18 +4024,12 @@ private fun WorkspaceSplitHandle(onDrag: (Float) -> Unit, onDragStopped: () -> U
             .semantics { contentDescription = "Resize editor and panel" },
         contentAlignment = Alignment.Center,
     ) {
-        HorizontalDivider(
-            modifier = Modifier
-                .fillMaxHeight()
-                .width(1.dp),
-            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
-        )
-        // A short bar at the midpoint, so the strip reads as something to grab rather than a seam.
+        // A short bar at the midpoint, so the strip reads as something to grab rather than a border.
         Box(
             modifier = Modifier
                 .size(width = 4.dp, height = 40.dp)
                 .clip(RoundedCornerShape(2.dp))
-                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f)),
+                .background(MaterialTheme.colorScheme.outline),
         )
     }
 }
