@@ -124,7 +124,7 @@ fun ExtensionWebViewPage(
         if (spawnProcess == null) {
             ExtensionNotice("${extension.name} needs the Linux runtime to run, and it isn't available here.", modifier)
         } else {
-            VsixExtensionWebView(extension, spawnProcess, modifier)
+            VsixExtensionWebView(extension, spawnProcess, onApiRequest, modifier)
         }
         return
     }
@@ -427,6 +427,7 @@ private const val VSIX_RESOURCE_ORIGIN = "https://jcode.webview"
 private fun VsixExtensionWebView(
     extension: InstalledExtension,
     spawnProcess: (command: String) -> Process?,
+    onApiRequest: suspend (envelopeJson: String) -> String,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -486,8 +487,19 @@ private fun VsixExtensionWebView(
         started.start()?.let { failure = it; return@LaunchedEffect }
         status = "Loading ${extension.name}…"
 
+        // Hand over the project the user actually has open, not the workspace root. An extension
+        // reads workspaceFolders to decide what it is working on, so the wrong answer here is the
+        // difference between it loading the project and asking the user to pick one.
+        val project = runCatching {
+            JSONObject(onApiRequest("""{"type":"workbench.projectInfo","payload":{}}"""))
+                .optJSONObject("data")
+        }.getOrNull()
+        val projectPath = project?.optString("path")?.takeIf { it.isNotBlank() }
+        val projectName = project?.optString("name")?.takeIf { it.isNotBlank() }
+            ?: projectPath?.substringAfterLast('/')
+
         val activated = started.activate(
-            folders = listOf("workspace" to "/workspace"),
+            folders = if (projectPath != null) listOf((projectName ?: "project") to projectPath) else emptyList(),
             configuration = JSONObject(),
         )
         // Tell the extension which theme it is being shown in before it builds its view, so it

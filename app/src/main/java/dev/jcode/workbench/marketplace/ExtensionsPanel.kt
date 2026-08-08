@@ -1,5 +1,6 @@
 package dev.jcode.workbench.marketplace
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -61,6 +62,7 @@ import dev.jcode.feature.marketplace.hasWebUi
 import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.isUpdateAvailable
 import dev.jcode.feature.marketplace.otherAuthors
+import dev.jcode.feature.marketplace.isVsix
 import dev.jcode.feature.marketplace.primaryAuthor
 import androidx.compose.runtime.collectAsState
 import dev.jcode.workbench.ExtensionWebViewPage
@@ -173,6 +175,13 @@ internal fun ExtensionsPanel(
                             checkingLabel = phase ?: "Checking…",
                             leading = {
                                 ExtensionIcon(type = row.type, name = row.name, iconFile = row.iconFile, iconUrl = row.iconUrl)
+                            },
+                            // A VS Code import sits beside JCode's own extensions and behaves
+                            // differently — unverified, and only partly supported — so it says so.
+                            trailing = if (row.vsix) {
+                                { VsixBadge() }
+                            } else {
+                                null
                             },
                         )
                     }
@@ -837,6 +846,23 @@ private fun marketStatus(entry: MarketplaceEntry?, installed: InstalledExtension
     else -> ManagerItemStatus.Installed
 }
 
+/** Marks a row as a VS Code import: unverified, and only as supported as JCode's API slice allows. */
+@Composable
+private fun VsixBadge() {
+    Text(
+        text = "VSIX",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant,
+                shape = RoundedCornerShape(4.dp),
+            )
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    )
+}
+
 /** One row of the unified extensions list (marketplace entries + installed-only extensions). */
 private data class ExtensionRow(
     val id: String,
@@ -849,6 +875,8 @@ private data class ExtensionRow(
     val installed: Boolean,
     val iconFile: File?,
     val iconUrl: String?,
+    /** Imported from a VS Code `.vsix` rather than published as a JCode extension. */
+    val vsix: Boolean = false,
 )
 
 /** Merge marketplace + installed into one list, filtered by [query] and sorted installed-first. */
@@ -886,6 +914,7 @@ private fun buildExtensionRows(
             installed = true,
             iconFile = ext.iconFile,
             iconUrl = null,
+            vsix = ext.isVsix,
         )
     }
     return (fromMarket + installedOnly)

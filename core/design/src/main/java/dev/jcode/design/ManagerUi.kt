@@ -256,6 +256,8 @@ fun ManagerListRow(
     checkingLabel: String = "Checking…",
     modifier: Modifier = Modifier,
     leading: (@Composable () -> Unit)? = null,
+    /** Shown just before the status chip, for a row that needs a word about what it is. */
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
@@ -282,6 +284,7 @@ fun ManagerListRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        trailing?.invoke()
         ManagerStatusChip(status = status, checking = checking, checkingLabel = checkingLabel)
     }
 }
