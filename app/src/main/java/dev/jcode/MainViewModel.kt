@@ -916,11 +916,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // has run once — so mint it before connecting, or the first connection is refused for want
         // of a key rather than because anything is wrong.
         //
-        // Then hold the session open. `adb connect` registers the device with an adb *server*, and
-        // that server is a child of whatever proot session started it — which proot reaps on exit.
-        // Connecting from a one-shot command therefore left nothing behind: the next terminal started
-        // a server of its own, `adb devices` was empty, and `adb install` had no device to install to.
-        // Keeping this session alive keeps that server alive, and every terminal shares it.
+        attachVirtualDeviceAdb(port)
+    }
+
+    /**
+     * Hold the guest's adb server open with the virtual device attached to it.
+     *
+     * `adb connect` registers the device with an adb *server*, and that server is a child of whatever
+     * proot session started it — which proot reaps on exit. Connecting from a one-shot command
+     * therefore left nothing behind: the next terminal started a server of its own, `adb devices` was
+     * empty, and `adb install` had no device to install to. Keeping this session alive keeps that
+     * server alive, and every terminal shares it.
+     */
+    private fun attachVirtualDeviceAdb(port: Int) {
         runCatching { virtualDeviceAdbServer?.destroy() }
         virtualDeviceAdbServer = distroService.spawnDapProcess(
             command = "mkdir -p \"\$HOME/.android\" && " +
@@ -937,6 +945,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         virtualDeviceAdbServer = null
         runCatching { virtualDeviceAdb.stop() }
         TerminalSessionHost.manager(appContext).virtualDeviceAdbPort = 0
+    }
+
+    /**
+     * Re-attach the virtual device to the runtime's adb server.
+     *
+     * The attachment is not owned by JCode once made: `adb kill-server`, an adb client of a different
+     * version taking the port, or the runtime restarting all drop it, and the device then goes missing
+     * from `adb devices` with nothing to say why. This puts it back without restarting the app.
+     */
+    fun reconnectVirtualDeviceAdb() {
+        viewModelScope.launch {
+            if (!runInVirtualDevice.value) {
+                OutputLog.append("Virtual device is off — turn it on to connect.\n", OutputKind.Error)
+                return@launch
+            }
+            // Reattach to the port already in use where there is one, rather than restarting the
+            // daemon onto a fresh one: terminals are told the device's address through ANDROID_SERIAL
+            // when they start, and a new port would leave every open terminal pointing at a dead one.
+            val port = TerminalSessionHost.manager(appContext).virtualDeviceAdbPort
+            if (port > 0) attachVirtualDeviceAdb(port) else startVirtualDeviceAdb()
+            OutputLog.append("Virtual device adb reconnected.\n", OutputKind.Info)
+        }
     }
 
     private val autoCloseIdleKey = booleanPreferencesKey("perf_auto_close_idle_terminals")

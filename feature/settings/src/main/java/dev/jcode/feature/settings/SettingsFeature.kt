@@ -796,6 +796,19 @@ object SettingsFeature {
                     modified = virtualDevice.enabled != SettingsDefaults.RUN_IN_VIRTUAL_DEVICE,
                     onReset = { virtualDevice.onChange(SettingsDefaults.RUN_IN_VIRTUAL_DEVICE) },
                 )
+                // The device is reached through the runtime's own adb, so there is nothing to
+                // reconnect without it — and the button would be a dead end rather than a fix.
+                if (virtualDevice.adbAvailable) {
+                    SettingsActionRow(
+                        label = "Reconnect adb",
+                        supporting = "Attach the virtual device to the runtime's adb server again, for " +
+                            "when `adb devices` no longer lists it — after `adb kill-server`, or a " +
+                            "runtime restart.",
+                        buttonLabel = "Reconnect",
+                        enabled = virtualDevice.enabled,
+                        onClick = virtualDevice.onReconnect,
+                    )
+                }
             }
 
             SettingsSectionHeader("About")
@@ -1741,6 +1754,32 @@ private fun OptionRow(
             )
             content()
         }
+    }
+}
+
+/** A settings row that performs an action rather than holding a value, so it has nothing to reset. */
+@Composable
+private fun SettingsActionRow(
+    label: String,
+    supporting: String,
+    buttonLabel: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Text(
+                text = supporting,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        FilledTonalButton(onClick = onClick, enabled = enabled) { Text(buttonLabel) }
     }
 }
 

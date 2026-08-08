@@ -1228,8 +1228,14 @@ fun JCodeApp(
         )
     }
     val runInVirtualDevice by viewModel.runInVirtualDevice.collectAsStateWithLifecycle()
-    val virtualDeviceSetting = remember(runInVirtualDevice) {
-        VirtualDeviceSetting(enabled = runInVirtualDevice, onChange = viewModel::setRunInVirtualDevice)
+    val adbToolInstalled = ADB_CATALOG_ENTRY in sdkCatalogState.installedEntryIds
+    val virtualDeviceSetting = remember(runInVirtualDevice, adbToolInstalled) {
+        VirtualDeviceSetting(
+            enabled = runInVirtualDevice,
+            onChange = viewModel::setRunInVirtualDevice,
+            adbAvailable = adbToolInstalled,
+            onReconnect = viewModel::reconnectVirtualDeviceAdb,
+        )
     }
     val envBackupStatus by viewModel.envBackupStatus.collectAsStateWithLifecycle()
     envBackupStatus?.let { status ->
@@ -3992,6 +3998,9 @@ private fun WorkbenchRightSidebar(
         }
     }
 }
+
+/** Toolchain catalog id of the runtime's adb client — the one the virtual device is reached through. */
+private const val ADB_CATALOG_ENTRY = "adb"
 
 /** The gap between the docked panes, and the touch target that resizes them. */
 private val SPLIT_HANDLE_WIDTH = 12.dp
