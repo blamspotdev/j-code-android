@@ -48,13 +48,17 @@ class VsCodeExtensionHost(
         val guestDir = stageForRuntime() ?: return "could not stage ${extension.name} into the Linux runtime"
         val hostScript = stageHostScript() ?: return "could not stage the extension host into the Linux runtime"
 
-        val command = buildString {
+        val node = buildString {
             append("node ").append(shellQuote(hostScript))
             append(" --ext-dir ").append(shellQuote(guestDir))
             append(" --main ").append(shellQuote(main))
             append(" --id ").append(shellQuote(extension.id))
         }
-        val started = spawn(command) ?: return "the Linux runtime is not ready"
+        // Run it through a login shell. An extension routinely shells out to a tool it expects on
+        // PATH — OpenChamber launches the opencode binary, and sits on its splash forever without
+        // it — and those tools install into per-user directories that only a login profile adds.
+        // This gives the extension the same environment a terminal would.
+        val started = spawn("bash -lc ${shellQuote(node)}") ?: return "the Linux runtime is not ready"
         process = started
         writer = started.outputStream.bufferedWriter()
 

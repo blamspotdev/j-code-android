@@ -436,6 +436,7 @@ private fun VsixExtensionWebView(
     var html by remember(extension.id) { mutableStateOf<String?>(null) }
     var viewHandle by remember(extension.id) { mutableStateOf<String?>(null) }
     var host by remember(extension.id) { mutableStateOf<VsCodeExtensionHost?>(null) }
+    var webView by remember(extension.id) { mutableStateOf<WebView?>(null) }
     val backgroundArgb = MaterialTheme.colorScheme.background.toArgb()
     val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
 
@@ -454,9 +455,30 @@ private fun VsixExtensionWebView(
                 )
                 // The extension re-rendering its view is normal: it sets html whenever its state changes.
                 "webview/html" -> html = params.optString("html")
-                else -> ExtensionDevLog.log(
-                    ExtensionDevLogEntry.Kind.Event, extension.id, "$method ${params}",
-                )
+                // The extension talking to its own page. This is a request, not a notification: the
+                // extension waits on it, so a missing reply strands whatever it was doing — which is
+                // how a page ends up sitting on its splash forever.
+                "webview/postMessage" -> {
+                    val payload = params.opt("message")
+                    val json = JSONObject.quote(
+                        when (payload) {
+                            null, JSONObject.NULL -> "null"
+                            else -> payload.toString()
+                        },
+                    )
+                    webView?.post {
+                        webView?.evaluateJavascript("window.__jcodeDeliver && window.__jcodeDeliver($json)", null)
+                    }
+                    host?.reply(params.optInt("__requestId"), null)
+                }
+                else -> {
+                    ExtensionDevLog.log(ExtensionDevLogEntry.Kind.Event, extension.id, "$method $params")
+                    // Anything else the extension asks for is not implemented yet, but it must still
+                    // be answered — an unanswered request blocks the extension rather than degrading.
+                    if (params.has("__requestId")) {
+                        host?.reply(params.optInt("__requestId"), null, "$method is not implemented by JCode")
+                    }
+                }
             }
         }
         host = started
@@ -513,6 +535,11 @@ private fun VsixExtensionWebView(
                 // a 980px-wide desktop viewport.
                 settings.useWideViewPort = true
                 settings.loadWithOverviewMode = true
+                // The page is served over https so its resource origin can back a Content-Security-
+                // Policy, but the server an extension talks to is plain http on loopback inside the
+                // runtime — OpenChamber starts opencode and then calls it. That mix is blocked by
+                // default and the extension simply hangs, so allow it: both ends are on this device.
+                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView, url: String) {
                         // Dynamic units (dvh) are rejected outright by these engines whatever the
@@ -547,6 +574,7 @@ private fun VsixExtensionWebView(
                     "JCodeVsix",
                 )
                 loadDataWithBaseURL("$VSIX_RESOURCE_ORIGIN/", VSIX_BOOTSTRAP + page, "text/html", "utf-8", null)
+                webView = this
             }
         },
         update = { view ->
@@ -573,7 +601,29 @@ private fun VsixExtensionWebView(
  */
 private val VSIX_BOOTSTRAP = """
 <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1, user-scalable=no">
-<style>html,body{margin:0;padding:0;overflow:hidden}</style>
+<style>
+html,body{margin:0;padding:0;overflow:hidden}
+/* VS Code hands a webview its theme as --vscode-* variables. An extension's styling resolves
+   against those, so without them it draws in a washed-out fallback. Only the variables are
+   supplied — the extension owns what it does with them. */
+:root{
+  --vscode-editor-background:#14151d; --vscode-editor-foreground:#d5d9e0;
+  --vscode-sideBar-background:#101118; --vscode-sideBar-foreground:#c8cdd6;
+  --vscode-panel-background:#14151d; --vscode-panel-border:#2a2d3c;
+  --vscode-button-background:#3d5afe; --vscode-button-foreground:#ffffff;
+  --vscode-button-hoverBackground:#4d68ff; --vscode-button-secondaryBackground:#2a2d3c;
+  --vscode-button-secondaryForeground:#d5d9e0;
+  --vscode-input-background:#1c1e29; --vscode-input-foreground:#d5d9e0;
+  --vscode-input-border:#2a2d3c; --vscode-input-placeholderForeground:#8b93a3;
+  --vscode-focusBorder:#3d5afe; --vscode-errorForeground:#d06262;
+  --vscode-descriptionForeground:#8b93a3; --vscode-textLink-foreground:#7f9cff;
+  --vscode-foreground:#d5d9e0; --vscode-widget-border:#2a2d3c;
+  --vscode-list-hoverBackground:#1c1e29; --vscode-list-activeSelectionBackground:#2a2d3c;
+  --vscode-editorWidget-background:#181a24; --vscode-editorWidget-border:#2a2d3c;
+  --vscode-editor-font-family:monospace; --vscode-font-family:system-ui,sans-serif;
+  --vscode-font-size:13px; --vscode-font-weight:400;
+}
+</style>
 <script>
 (function () {
   var applySize = function () {
