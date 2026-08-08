@@ -1389,6 +1389,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val rightDrawerWidthKey = floatPreferencesKey("right_drawer_width_fraction")
+
+    /**
+     * Share of the docked split the right drawer takes, set by dragging the divider.
+     *
+     * Clamped on the way out as well as in: a width stored under a wider range than the current one
+     * would otherwise survive it, and the panes are only guaranteed usable inside the range.
+     */
+    val rightDrawerWidthFraction: StateFlow<Float> = uiPreferences.data
+        .map { prefs ->
+            (prefs[rightDrawerWidthKey] ?: SettingsDefaults.RIGHT_DRAWER_PERSISTENT_FRACTION)
+                .coerceIn(
+                    SettingsDefaults.RIGHT_DRAWER_MIN_FRACTION,
+                    SettingsDefaults.RIGHT_DRAWER_MAX_FRACTION,
+                )
+        }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            SettingsDefaults.RIGHT_DRAWER_PERSISTENT_FRACTION,
+        )
+
+    fun setRightDrawerWidthFraction(fraction: Float) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                prefs[rightDrawerWidthKey] = fraction.coerceIn(
+                    SettingsDefaults.RIGHT_DRAWER_MIN_FRACTION,
+                    SettingsDefaults.RIGHT_DRAWER_MAX_FRACTION,
+                )
+            }
+        }
+    }
+
     private val editorDragMovesCursorKey = booleanPreferencesKey("editor_drag_moves_cursor")
 
     /** When true, a one-finger drag on the editor moves the text cursor (the view follows) instead of

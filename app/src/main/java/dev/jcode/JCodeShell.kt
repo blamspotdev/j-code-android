@@ -67,8 +67,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -138,6 +141,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -166,6 +170,8 @@ import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -656,10 +662,13 @@ fun JCodeApp(
         )
     }
     val rightDrawerPersistent by viewModel.rightDrawerPersistent.collectAsStateWithLifecycle()
-    val rightDrawerSetting = remember(rightDrawerPersistent) {
+    val rightDrawerWidthFraction by viewModel.rightDrawerWidthFraction.collectAsStateWithLifecycle()
+    val rightDrawerSetting = remember(rightDrawerPersistent, rightDrawerWidthFraction) {
         RightDrawerSetting(
             enabled = rightDrawerPersistent,
             onSetEnabled = viewModel::setRightDrawerPersistent,
+            widthFraction = rightDrawerWidthFraction,
+            onSetWidthFraction = viewModel::setRightDrawerWidthFraction,
         )
     }
     val extensionDevState = remember(installedExtensions) {
@@ -1602,12 +1611,12 @@ private fun JCodeShell(
     // Opt-in (Settings → Appearance) landscape split. It deliberately does NOT go through
     // usesModalWorkspace: that also drives the LEFT ModalNavigationDrawer, and docking the left
     // drawer on a phone would leave no editor at all. Only the right side changes.
-    val persistentRightDrawer = LocalRightDrawerSetting.current.enabled && isLandscape
+    val rightDrawerSplit = LocalRightDrawerSetting.current
+    val persistentRightDrawer = rightDrawerSplit.enabled && isLandscape
     val rightSidebarDocked = isLandscape && (!usesModalWorkspace || persistentRightDrawer)
-    val rightSidebarWidth = (
-        configuration.screenWidthDp *
-            if (persistentRightDrawer) SettingsDefaults.RIGHT_DRAWER_PERSISTENT_FRACTION else 0.75f
-        ).dp
+    // Only the opt-in split is dragged; the large-screen sidebar keeps the fixed width it has always
+    // had, so turning the setting on is the only thing that changes how the workspace is divided.
+    val rightSidebarWidth = (configuration.screenWidthDp * 0.75f).dp
     val activeTab = editorGroup.activeTab
     // The Extension Dev tab exists only when Developer options is on, so it's excluded here too —
     // otherwise a persisted ExtensionDev selection would survive turning developer mode off.
@@ -2685,14 +2694,38 @@ private fun JCodeShell(
             },
             containerColor = MaterialTheme.colorScheme.background,
         ) { innerPadding ->
+            // The split's own width, so the two panes are sized against what they actually divide
+            // rather than against the screen. Seeded from the screen so the first frame is already
+            // right, then corrected to the measured width (insets and a cutout make them differ).
+            val splitDensity = LocalDensity.current
+            var splitWidthPx by remember(configuration.screenWidthDp) {
+                mutableIntStateOf(with(splitDensity) { configuration.screenWidthDp.dp.roundToPx() })
+            }
+            val dragSplit = rightSidebarDocked && rightSidebarVisible && persistentRightDrawer
+            // The drag runs on local state and is saved once on release. Reading the stored value back
+            // each frame would lose most of a drag: it only updates after a round trip through
+            // preferences, so every delta in the meantime would be measured from the same stale width.
+            var liveDrawerFraction by remember { mutableFloatStateOf(rightDrawerSplit.widthFraction) }
+            LaunchedEffect(rightDrawerSplit.widthFraction) {
+                liveDrawerFraction = rightDrawerSplit.widthFraction
+            }
+            // What the panes share, once the divider has taken its own width.
+            val splitContentWidth = with(splitDensity) { splitWidthPx.toDp() } - SPLIT_HANDLE_WIDTH
+            val drawerWidth = splitContentWidth * liveDrawerFraction
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding),
+                    .padding(innerPadding)
+                    .onSizeChanged { splitWidthPx = it.width },
             ) {
                 Box(
                     modifier = Modifier
-                        .weight(1f)
+                        .then(
+                            // The editor takes the remainder as an explicit width, so the two always
+                            // add up to the split exactly whatever the fraction rounds to.
+                            if (dragSplit) Modifier.width(splitContentWidth - drawerWidth)
+                            else Modifier.weight(1f),
+                        )
                         .fillMaxHeight(),
                 ) {
                     CompositionLocalProvider(
@@ -3086,6 +3119,21 @@ private fun JCodeShell(
                     }
                 }
 
+                if (dragSplit) {
+                    WorkspaceSplitHandle(
+                        onDrag = { deltaPx ->
+                            val span = with(splitDensity) { splitContentWidth.toPx() }
+                            if (span > 0f) {
+                                // Dragging left grows the drawer, so the movement is subtracted.
+                                liveDrawerFraction = (liveDrawerFraction - deltaPx / span).coerceIn(
+                                    SettingsDefaults.RIGHT_DRAWER_MIN_FRACTION,
+                                    SettingsDefaults.RIGHT_DRAWER_MAX_FRACTION,
+                                )
+                            }
+                        },
+                        onDragStopped = { rightDrawerSplit.onSetWidthFraction(liveDrawerFraction) },
+                    )
+                }
                 if (rightSidebarDocked && rightSidebarVisible) {
                     WorkbenchRightSidebar(
                         selected = rightPanelSelection,
@@ -3100,7 +3148,7 @@ private fun JCodeShell(
                         onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                         modifier = Modifier
                             .fillMaxHeight()
-                            .width(rightSidebarWidth),
+                            .width(if (dragSplit) drawerWidth else rightSidebarWidth),
                         onSelected = { selectRightPanel(it) },
                         onSelectTerminalSession = ::selectTerminalSession,
                         onAddTerminalSession = ::createTerminalSession,
@@ -3942,6 +3990,47 @@ private fun WorkbenchRightSidebar(
                 )
             }
         }
+    }
+}
+
+/** The gap between the docked panes, and the touch target that resizes them. */
+private val SPLIT_HANDLE_WIDTH = 12.dp
+
+/**
+ * What sits between the editor and the docked right drawer: the gap that separates them and the grip
+ * that resizes them.
+ *
+ * Wider than it looks — the visible hairline is 1dp but the touch target is the whole strip, because a
+ * 1dp target is not draggable with a thumb. [onDrag] receives the horizontal movement in pixels.
+ */
+@Composable
+private fun WorkspaceSplitHandle(onDrag: (Float) -> Unit, onDragStopped: () -> Unit) {
+    val onDragState = rememberUpdatedState(onDrag)
+    Box(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(SPLIT_HANDLE_WIDTH)
+            .draggable(
+                orientation = Orientation.Horizontal,
+                state = rememberDraggableState { delta -> onDragState.value(delta) },
+                onDragStopped = { onDragStopped() },
+            )
+            .semantics { contentDescription = "Resize editor and panel" },
+        contentAlignment = Alignment.Center,
+    ) {
+        HorizontalDivider(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(1.dp),
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
+        )
+        // A short bar at the midpoint, so the strip reads as something to grab rather than a seam.
+        Box(
+            modifier = Modifier
+                .size(width = 4.dp, height = 40.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f)),
+        )
     }
 }
 

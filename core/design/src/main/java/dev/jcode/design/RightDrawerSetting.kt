@@ -15,6 +15,10 @@ import androidx.compose.runtime.compositionLocalOf
 class RightDrawerSetting(
     val enabled: Boolean = SettingsDefaults.RIGHT_DRAWER_PERSISTENT,
     val onSetEnabled: (Boolean) -> Unit = {},
+    /** Share of the split the drawer takes, dragged by the divider and kept between
+     *  [SettingsDefaults.RIGHT_DRAWER_MIN_FRACTION] and [SettingsDefaults.RIGHT_DRAWER_MAX_FRACTION]. */
+    val widthFraction: Float = SettingsDefaults.RIGHT_DRAWER_PERSISTENT_FRACTION,
+    val onSetWidthFraction: (Float) -> Unit = {},
 )
 
 val LocalRightDrawerSetting = compositionLocalOf { RightDrawerSetting() }
