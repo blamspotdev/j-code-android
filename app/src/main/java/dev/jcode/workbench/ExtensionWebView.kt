@@ -598,18 +598,18 @@ internal class VsixSession private constructor(
         apiRequest: suspend (envelopeJson: String) -> String,
         isDarkTheme: Boolean,
     ) {
-        host.start()?.let { failure = it; return }
-        status = "Loading ${extension.name}…"
-
-        // Hand over the project the user actually has open, not the workspace root. An extension
-        // reads workspaceFolders to decide what it is working on, so the wrong answer here is the
-        // difference between it loading the project and asking the user to pick one.
+        // Resolved before the host is spawned, not after: the project is the host's HOME, and an
+        // extension reads workspaceFolders to decide what it is working on, so the wrong answer here
+        // is the difference between it loading the project and asking the user to pick one.
         val project = runCatching {
             JSONObject(apiRequest("""{"type":"workbench.projectInfo","payload":{}}""")).optJSONObject("data")
         }.getOrNull()
         projectPath = project?.optString("path")?.takeIf { it.isNotBlank() }
         projectName = project?.optString("name")?.takeIf { it.isNotBlank() }
             ?: projectPath?.substringAfterLast('/')
+
+        host.start(projectDir = projectPath)?.let { failure = it; return }
+        status = "Loading ${extension.name}…"
 
         val activated = host.activate(
             folders = projectPath?.let { listOf((projectName ?: it.substringAfterLast('/')) to it) }.orEmpty(),
@@ -929,7 +929,26 @@ private fun vsixBootstrap(projectName: String?, projectPath: String?): String {
     get: function () { return config; },
     set: function (value) { config = Object.assign({}, value || {}, ours); },
   });
-  window.__OPENCHAMBER_HOME__ = $folder;
+  // The home an extension browses from. Pinned for the same reason as the folders, and it matters
+  // more here: the extension host runs as the runtime's root user, so an unpinned value resolves to
+  // /root — a directory holding nothing but dotfiles, which is why the folder picker opened on an
+  // empty list. With a project open, the project IS the sensible place to start.
+  if ($folder) {
+    var home = $folder;
+    Object.defineProperty(window, '__OPENCHAMBER_HOME__', {
+      configurable: false,
+      get: function () { return home; },
+      set: function () {},
+    });
+    // Seed the "~" a file-browsing extension expands against. It is a cache the page derives from
+    // whatever directory it can find and then persists, and the process it asks lives in /root, so
+    // without this it settles on a directory holding nothing the user wants to see. Written before
+    // the extension's own script runs so the value is in place the first time it is read.
+    try {
+      window.localStorage.setItem('homeDirectory', home);
+      window.localStorage.setItem('lastDirectory', home);
+    } catch (e) {}
+  }
 })();
 </script>
 """ + VSIX_BOOTSTRAP

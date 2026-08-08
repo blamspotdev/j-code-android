@@ -40,8 +40,21 @@ class VsCodeExtensionHost(
 
     val id: String get() = extension.id
 
-    /** Stage, spawn, and wait for the host to announce itself. Null on success, else why not. */
-    suspend fun start(): String? {
+    /**
+     * Stage, spawn, and wait for the host to announce itself. Null on success, else why not.
+     *
+     * [projectDir] sets where the host runs: its working directory, and — through its parent — its
+     * `HOME`. An extension that shells out to a tool routinely starts it in the home directory
+     * (OpenChamber launches `opencode serve` there), and that tool's idea of "where am I" propagates
+     * all the way into the UI: left alone it is the runtime root user's `/root`, so a file picker
+     * opens on a directory holding nothing but dotfiles.
+     *
+     * `HOME` is the project's *parent* rather than the project, so browsing starts on the list of the
+     * user's projects. Pointing it at the project itself reads better but is not safe: an extension
+     * that writes to `$HOME/.config` ignoring `XDG_CONFIG_HOME` — OpenChamber does — would drop a
+     * dotfile directory inside the user's repository.
+     */
+    suspend fun start(projectDir: String? = null): String? {
         val main = File(extension.dir, VsixPackage.VSIX_MARKER).takeIf { it.isFile }?.readText()?.trim()
         if (main.isNullOrBlank()) return "${extension.name} has no extension entry point to run."
 
@@ -55,6 +68,17 @@ class VsCodeExtensionHost(
             // extension spawning a tool from /usr/local/bin gets ENOENT. OpenChamber does exactly
             // that with opencode, and reports it as "CLI not found" however well it is installed.
             append("export PATH=").append(shellQuote(GUEST_PATH)).append(":\"\$PATH\"; ")
+            if (projectDir != null) {
+                // Pin the XDG dirs to the real home FIRST, so moving HOME below relocates only where
+                // the extension looks. Everything that honours them keeps its state where it already
+                // is; opencode's database does, which is why moving HOME does not strand history.
+                append("export XDG_DATA_HOME=").append(shellQuote("$RUNTIME_HOME/.local/share")).append("; ")
+                append("export XDG_CONFIG_HOME=").append(shellQuote("$RUNTIME_HOME/.config")).append("; ")
+                append("export XDG_STATE_HOME=").append(shellQuote("$RUNTIME_HOME/.local/state")).append("; ")
+                append("export XDG_CACHE_HOME=").append(shellQuote("$RUNTIME_HOME/.cache")).append("; ")
+                append("export HOME=").append(shellQuote(browseHomeFor(projectDir))).append("; ")
+                append("cd ").append(shellQuote(projectDir)).append("; ")
+            }
             append("node ").append(shellQuote(hostScript))
             append(" --ext-dir ").append(shellQuote(guestDir))
             append(" --main ").append(shellQuote(main))
@@ -224,6 +248,10 @@ class VsCodeExtensionHost(
         }
     }
 
+    /** The directory an extension should browse from: the one holding the open project. */
+    private fun browseHomeFor(projectDir: String): String =
+        projectDir.trimEnd('/').substringBeforeLast('/').ifBlank { "/" }
+
     private fun safeName(value: String) = value.replace(Regex("[^A-Za-z0-9._-]"), "_")
 
     private fun parseLoose(raw: String): Any =
@@ -236,6 +264,9 @@ class VsCodeExtensionHost(
     private companion object {
         /** What the rootfs declares in /etc/environment, applied where the shell will not. */
         const val GUEST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+        /** The host runs as the runtime's root user; this is where its state belongs, whatever HOME is. */
+        const val RUNTIME_HOME = "/root"
         const val STAGE_DIR = "vsix"
         const val HOST_DIR = "vsix-host"
         const val START_TIMEOUT_MS = 30_000L
