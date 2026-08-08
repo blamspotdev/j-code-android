@@ -1789,10 +1789,21 @@ class DistroService(
             // Bind every project of the current workspace (host dir -> its guest target) so a multi-repo
             // extension can reach them all at once; keep the selected project's bind first (it's the
             // primary — see primaryBind()). Dedup by target in case two resolve to the same mount.
-            projectBinds.isNotEmpty() ->
-                projectBinds.sortedByDescending { it.second == projectTargetPath }
+            projectBinds.isNotEmpty() -> {
+                val perProject = projectBinds.sortedByDescending { it.second == projectTargetPath }
                     .distinctBy { it.second }
                     .map { DistroBind(host = it.first, target = it.second) }
+                // Then the projects folder itself, so the runtime also sees folders that are not
+                // workspace projects yet. Without it a "choose a folder to add" browser can only offer
+                // what is already open, which is the one thing nobody needs to add. Appended last so
+                // the selected project stays the primary bind, and it is the least specific target, so
+                // a project living outside this folder keeps resolving through its own bind.
+                if (perProject.none { it.target == DEFAULT_DISTRO_WORKDIR }) {
+                    perProject + DistroBind(WorkspaceHostPaths.projectsRoot, DEFAULT_DISTRO_WORKDIR)
+                } else {
+                    perProject
+                }
+            }
             !projectHostPath.isNullOrBlank() && !projectTargetPath.isNullOrBlank() -> {
                 listOf(DistroBind(projectHostPath, projectTargetPath))
             }
