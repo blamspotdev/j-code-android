@@ -903,6 +903,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val virtualDeviceAdb: AdbDaemon by lazy { VirtualDeviceAdbService.daemon(appContext) }
 
+    /** Holds the guest's adb server open; see [startVirtualDeviceAdb]. */
+    private var virtualDeviceAdbServer: Process? = null
+
     private suspend fun startVirtualDeviceAdb() {
         val port = runCatching { virtualDeviceAdb.start() }.getOrElse { error ->
             OutputLog.append("Virtual device adb failed to start: ${error.message}\n", OutputKind.Error)
@@ -912,19 +915,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // The daemon only trusts the distro's own adbkey.pub, and adb does not create one until it
         // has run once — so mint it before connecting, or the first connection is refused for want
         // of a key rather than because anything is wrong.
-        runCatching {
-            distroService.exec(
-                "mkdir -p \"\$HOME/.android\" && " +
-                    "{ [ -f \"\$HOME/.android/adbkey.pub\" ] || adb keygen \"\$HOME/.android/adbkey\"; } && " +
-                    "adb connect 127.0.0.1:$port",
-                timeoutMs = VIRTUAL_DEVICE_CONNECT_TIMEOUT_MS,
-            )
-        }.onFailure { error ->
-            OutputLog.append("Virtual device adb connect failed: ${error.message}\n", OutputKind.Error)
+        //
+        // Then hold the session open. `adb connect` registers the device with an adb *server*, and
+        // that server is a child of whatever proot session started it — which proot reaps on exit.
+        // Connecting from a one-shot command therefore left nothing behind: the next terminal started
+        // a server of its own, `adb devices` was empty, and `adb install` had no device to install to.
+        // Keeping this session alive keeps that server alive, and every terminal shares it.
+        runCatching { virtualDeviceAdbServer?.destroy() }
+        virtualDeviceAdbServer = distroService.spawnDapProcess(
+            command = "mkdir -p \"\$HOME/.android\" && " +
+                "{ [ -f \"\$HOME/.android/adbkey.pub\" ] || adb keygen \"\$HOME/.android/adbkey\"; } && " +
+                "adb start-server && adb connect 127.0.0.1:$port && exec sleep infinity",
+        )
+        if (virtualDeviceAdbServer == null) {
+            OutputLog.append("Virtual device adb connect failed: the Linux runtime is not ready\n", OutputKind.Error)
         }
     }
 
     private fun stopVirtualDeviceAdb() {
+        runCatching { virtualDeviceAdbServer?.destroy() }
+        virtualDeviceAdbServer = null
         runCatching { virtualDeviceAdb.stop() }
         TerminalSessionHost.manager(appContext).virtualDeviceAdbPort = 0
     }
@@ -4702,7 +4712,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         /** `adb keygen` plus the first `adb connect` both start a JVM under proot; 60s is slack. */
-        private const val VIRTUAL_DEVICE_CONNECT_TIMEOUT_MS = 60_000L
 
         /** Free space to leave on app storage after importing an off-ext4 folder into /sources. */
         private const val IMPORT_FREE_SPACE_HEADROOM_BYTES = 64L * 1024 * 1024
