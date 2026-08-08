@@ -49,15 +49,19 @@ class VsCodeExtensionHost(
         val hostScript = stageHostScript() ?: return "could not stage the extension host into the Linux runtime"
 
         val node = buildString {
+            // A login shell alone is not enough to find an installed tool. The rootfs keeps its PATH
+            // in /etc/environment, which PAM reads and `bash -lc` does not, and nothing in
+            // /etc/profile sets one — so the host would inherit the Android process's PATH and an
+            // extension spawning a tool from /usr/local/bin gets ENOENT. OpenChamber does exactly
+            // that with opencode, and reports it as "CLI not found" however well it is installed.
+            append("export PATH=").append(shellQuote(GUEST_PATH)).append(":\"\$PATH\"; ")
             append("node ").append(shellQuote(hostScript))
             append(" --ext-dir ").append(shellQuote(guestDir))
             append(" --main ").append(shellQuote(main))
             append(" --id ").append(shellQuote(extension.id))
         }
-        // Run it through a login shell. An extension routinely shells out to a tool it expects on
-        // PATH — OpenChamber launches the opencode binary, and sits on its splash forever without
-        // it — and those tools install into per-user directories that only a login profile adds.
-        // This gives the extension the same environment a terminal would.
+        // Run it through a login shell so the extension gets the same environment a terminal would:
+        // a tool may also install into a per-user directory that only a login profile adds.
         val started = spawn("bash -lc ${shellQuote(node)}") ?: return "the Linux runtime is not ready"
         process = started
         writer = started.outputStream.bufferedWriter()
@@ -230,6 +234,8 @@ class VsCodeExtensionHost(
     private fun shellQuote(value: String) = "'" + value.replace("'", "'\\''") + "'"
 
     private companion object {
+        /** What the rootfs declares in /etc/environment, applied where the shell will not. */
+        const val GUEST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         const val STAGE_DIR = "vsix"
         const val HOST_DIR = "vsix-host"
         const val START_TIMEOUT_MS = 30_000L

@@ -251,7 +251,10 @@ const vscode = {
       if (local) return Promise.resolve().then(() => local(...args));
       return call('commands/execute', { id, args });
     },
-    getCommands: () => call('commands/list', {}).then((all) => all.concat(Array.from(commands.keys()))),
+    // Answered here rather than asked of JCode: JCode implements no VS Code built-in commands, so
+    // the extension's own registrations are the whole list. Asking anyway rejected, and an extension
+    // that calls this without a catch (they do) turned that into an unhandled rejection.
+    getCommands: () => Promise.resolve(Array.from(commands.keys())),
   },
 
   window: {

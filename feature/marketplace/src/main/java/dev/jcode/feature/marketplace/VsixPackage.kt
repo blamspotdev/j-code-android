@@ -63,6 +63,21 @@ object VsixPackage {
         return strings[key] ?: key
     }
 
+    /**
+     * Make a command title fit to put on a button even when its string bundle is missing.
+     *
+     * [localize] leaves an unresolved placeholder as its own key, which is the honest answer but reads
+     * badly as a label — `command.newSession.title` where "New Session" belongs. Packages do ship
+     * without their bundle (the OpenChamber `.vsix` does), so the key is turned back into the words it
+     * was made from. Anything already looking like a sentence is left alone.
+     */
+    private fun readableTitle(value: String): String {
+        if (value.isBlank() || value.contains(' ') || !value.contains('.')) return value
+        val parts = value.split('.').filter { it.isNotBlank() }
+        val word = parts.lastOrNull { it != "title" && it != "label" } ?: return value
+        return word.replace(Regex("([a-z0-9])([A-Z])"), "$1 $2").replaceFirstChar { it.uppercaseChar() }
+    }
+
     /** Read `package.nls.json` into a flat key/value map; empty when the extension ships none. */
     fun parseNls(nlsJson: String?): Map<String, String> {
         if (nlsJson.isNullOrBlank()) return emptyMap()
@@ -97,6 +112,55 @@ object VsixPackage {
             activationEvents = json.optJSONArray("activationEvents").toStringList(),
             contributeKeys = json.optJSONObject("contributes")?.keys()?.asSequence()?.toList().orEmpty(),
         )
+    }
+
+    /**
+     * The actions belonging to a view's title bar, in declaration order.
+     *
+     * VS Code puts a view's own buttons in `contributes.menus["view/title"]`, each naming a command
+     * declared in `contributes.commands` and scoped by a `when` clause to the view it belongs to.
+     * That is the set worth surfacing: an extension's full command list is mostly editor-context and
+     * palette entries that mean nothing next to a panel. An extension that declares no `view/title`
+     * group falls back to every command it has, so it is still reachable.
+     *
+     * [viewId] filters by `when`; matching is a substring test rather than a real expression
+     * evaluator, which is enough for the `view == some.id` clauses this key is used with and cannot
+     * wrongly *include* another view (ids are unique).
+     */
+    fun parseViewTitleActions(packageJson: String, nlsJson: String?, viewId: String?): List<VsixCommand> {
+        val json = runCatching { JSONObject(packageJson) }.getOrNull() ?: return emptyList()
+        val contributes = json.optJSONObject("contributes") ?: return emptyList()
+        val strings = parseNls(nlsJson)
+
+        val declared = LinkedHashMap<String, VsixCommand>()
+        val commands = contributes.optJSONArray("commands")
+        for (i in 0 until (commands?.length() ?: 0)) {
+            val entry = commands?.optJSONObject(i) ?: continue
+            val id = entry.optString("command").takeIf { it.isNotBlank() } ?: continue
+            declared[id] = VsixCommand(
+                id = id,
+                title = readableTitle(localize(entry.optString("title"), strings)).ifBlank { id },
+                // `icon` is either a codicon reference or a { light, dark } pair of image paths;
+                // only the codicon can map onto a JCode icon, so a path is treated as no icon.
+                icon = entry.optString("icon").takeIf { it.isNotBlank() },
+            )
+        }
+        if (declared.isEmpty()) return emptyList()
+
+        val titleEntries = contributes.optJSONObject("menus")?.optJSONArray("view/title")
+        val ordered = (0 until (titleEntries?.length() ?: 0)).mapNotNull { i ->
+            val entry = titleEntries?.optJSONObject(i) ?: return@mapNotNull null
+            val command = declared[entry.optString("command")] ?: return@mapNotNull null
+            val whenClause = entry.optString("when")
+            if (viewId != null && whenClause.isNotBlank() && !whenClause.contains(viewId)) return@mapNotNull null
+            val group = entry.optString("group")
+            command to group
+        }
+            .sortedBy { (_, group) -> group.substringAfter('@', "").toIntOrNull() ?: Int.MAX_VALUE }
+            .map { (command, _) -> command }
+            .distinctBy { it.id }
+
+        return ordered.ifEmpty { declared.values.toList() }
     }
 
     /** What JCode can and cannot honour in [manifest]. */
@@ -163,6 +227,24 @@ object VsixPackage {
         if (this == null) return emptyList()
         return (0 until length()).mapNotNull { optString(it).takeIf { s -> s.isNotBlank() } }
     }
+}
+
+/**
+ * A command an extension declares, as offered to the user.
+ *
+ * [icon] is VS Code's `$(codicon-name)` reference, kept in that raw form because only the presenting
+ * layer knows which of its own icons it can map one onto.
+ */
+data class VsixCommand(
+    val id: String,
+    val title: String,
+    val icon: String?,
+) {
+    /** The bare codicon name (`add`), or null when the icon is an image path rather than a codicon. */
+    val codicon: String? get() = icon?.trim()
+        ?.takeIf { it.startsWith("$(") && it.endsWith(")") }
+        ?.removeSurrounding("$(", ")")
+        ?.takeIf { it.isNotBlank() }
 }
 
 /** The parts of a VS Code `package.json` that JCode acts on. */

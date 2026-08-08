@@ -343,14 +343,13 @@ import dev.jcode.workbench.WorkspaceEmptyState
 import dev.jcode.workbench.SidebarToolButton
 import dev.jcode.workbench.WorkbenchActionButton
 import dev.jcode.workbench.WorkbenchIconActionButton
-import dev.jcode.workbench.AgentChatActions
-import dev.jcode.workbench.AgentChatSidebarContent
-import dev.jcode.workbench.AgentChatWebViewHolder
+import dev.jcode.workbench.ExtensionDrawerActions
+import dev.jcode.workbench.VsixDrawerContent
+import dev.jcode.workbench.VsixViewHolder
 import dev.jcode.workbench.ScmBackgroundHost
 import dev.jcode.workbench.ScmWebViewHolder
-import dev.jcode.workbench.agentChatTabTitle
-import dev.jcode.workbench.hasAgentChatExtension
-import dev.jcode.workbench.LocalAgentChatActions
+import dev.jcode.workbench.installedVsixExtensions
+import dev.jcode.workbench.LocalExtensionDrawerActions
 import dev.jcode.workbench.CloseTarget
 import dev.jcode.workbench.IssueActions
 import dev.jcode.workbench.LocalIssueActions
@@ -360,6 +359,7 @@ import dev.jcode.workbench.TerminalExtraKeysTarget
 import dev.jcode.workbench.WorkbenchExtraKeysBar
 import dev.jcode.workbench.WorkbenchSnackbarHost
 import dev.jcode.workbench.BottomStatusBarSlot
+import dev.jcode.workbench.RightPanelSelection
 import dev.jcode.workbench.RightPanelTab
 import dev.jcode.workbench.WorkbenchManagerActions
 import dev.jcode.workbench.WorkbenchRunActions
@@ -449,7 +449,7 @@ fun JCodeApp(
             onSetEnabled = { id, enabled ->
                 viewModel.setExtensionKeepAlive(id, enabled)
                 // Turning it off tears down the persisted WebView so it can't linger detached.
-                if (!enabled) AgentChatWebViewHolder.destroy(id)
+                if (!enabled) VsixViewHolder.destroy(id)
             },
         )
     }
@@ -1264,14 +1264,15 @@ fun JCodeApp(
         LocalExtensionActivation provides extensionActivationSetting,
         LocalExtensionCapabilities provides extensionCapabilitySetting,
         LocalExtensionKeepAlive provides extensionKeepAliveSetting,
-        LocalAgentChatActions provides remember(extensionKeepAliveDisabled) {
-            AgentChatActions(
+        LocalExtensionDrawerActions provides remember(extensionKeepAliveDisabled) {
+            ExtensionDrawerActions(
                 extensions = viewModel.installedExtensions,
                 exec = viewModel::runtimeExecJson,
                 apiRequest = viewModel::extensionApiRequest,
                 events = viewModel.extensionEvents,
                 onStopAllServices = viewModel::stopAllRuntimeServices,
                 keepAliveFor = { id -> id !in extensionKeepAliveDisabled },
+                spawnProcess = viewModel::spawnRuntimeProcess,
             )
         },
         LocalTaskManagerBackgroundActions provides remember {
@@ -1707,15 +1708,19 @@ private fun JCodeShell(
             }
         }
     }
-    var rightPanelTab by rememberSaveable {
-        mutableStateOf(RightPanelTab.Terminal)
-    }
+    // Saved as a string rather than the sealed type itself: an extension tab is identified by an id,
+    // which no enum ordinal can carry across process death.
+    var rightPanelKey by rememberSaveable { mutableStateOf(RightPanelSelection.Default.asKey()) }
+    val rightPanelSelection = remember(rightPanelKey) { RightPanelSelection.fromKey(rightPanelKey) }
+    val rightPanelTab = (rightPanelSelection as? RightPanelSelection.Builtin)?.tab
+    fun selectRightPanel(selection: RightPanelSelection) { rightPanelKey = selection.asKey() }
+    fun selectRightPanelTab(tab: RightPanelTab) = selectRightPanel(RightPanelSelection.Builtin(tab))
     // Turning Developer options off must fully retire the Ext Dev tab — including the landscape
-    // persistent sidebar, which renders rightPanelTab directly (no portrait clamp). Reset the
-    // selection so its panel (and its auto-reload loop) stop composing everywhere.
+    // persistent sidebar, which renders the selection directly (no portrait clamp). Reset it so the
+    // panel (and its auto-reload loop) stop composing everywhere.
     LaunchedEffect(developerModeEnabled) {
         if (!developerModeEnabled && rightPanelTab == RightPanelTab.ExtensionDev) {
-            rightPanelTab = RightPanelTab.Terminal
+            selectRightPanelTab(RightPanelTab.Terminal)
         }
     }
     // When a debug session starts, surface its console: reveal the right drawer on its Debug tab
@@ -1725,16 +1730,18 @@ private fun JCodeShell(
     }
     LaunchedEffect(debugSessionActive) {
         if (debugSessionActive) {
-            rightPanelTab = RightPanelTab.DebugConsole
+            selectRightPanelTab(RightPanelTab.DebugConsole)
             rightSidebarVisible = true
         }
     }
-    // The Chat tab only exists while an agent-chat extension is installed; if it goes away (or was
-    // never installed) while selected, fall back to the Terminal tab so the drawer isn't left on it.
-    val chatExtensionAvailable = hasAgentChatExtension()
-    LaunchedEffect(chatExtensionAvailable) {
-        if (!chatExtensionAvailable && rightPanelTab == RightPanelTab.Chat) {
-            rightPanelTab = RightPanelTab.Terminal
+    // An extension's tab exists only while it is installed; uninstalling the one on screen must not
+    // leave the drawer pointed at nothing.
+    val vsixExtensions = installedVsixExtensions()
+    val selectedVsix = (rightPanelSelection as? RightPanelSelection.Extension)
+        ?.let { sel -> vsixExtensions.firstOrNull { it.id == sel.extensionId } }
+    LaunchedEffect(rightPanelSelection, vsixExtensions.map { it.id }) {
+        if (rightPanelSelection is RightPanelSelection.Extension && selectedVsix == null) {
+            selectRightPanelTab(RightPanelTab.Terminal)
         }
     }
     // Read once here so the run handlers below (defined before the settings block) can resolve the
@@ -1745,7 +1752,7 @@ private fun JCodeShell(
     LaunchedEffect(Unit) {
         snapshotFlow { BuiltinBrowser.revealSignal.value }.collect { sig ->
             if (sig > 0) {
-                rightPanelTab = RightPanelTab.Devtools
+                selectRightPanelTab(RightPanelTab.Devtools)
                 rightSidebarVisible = true
             }
         }
@@ -2075,7 +2082,7 @@ private fun JCodeShell(
             scope.launch { snackbarHostState.showSnackbar("'${config.name}' has no terminals. Tap Configure to set it up.") }
             return
         }
-        rightPanelTab = RightPanelTab.Terminal
+        selectRightPanelTab(RightPanelTab.Terminal)
         rightSidebarVisible = true
         // Tear down any previous run terminals (frees the dev ports, avoids tab accumulation), then
         // spawn one fresh terminal per plan step in order - e.g. "Server" then "Client" - each running
@@ -2167,7 +2174,7 @@ private fun JCodeShell(
             scope.launch { snackbarHostState.showSnackbar("'${config.name}' has no command. Tap Configure to set it up.") }
             return
         }
-        rightPanelTab = RightPanelTab.Terminal
+        selectRightPanelTab(RightPanelTab.Terminal)
         rightSidebarVisible = true
         val session = spawnTerminalSession(label = config.name) ?: return
         val invocation = ProjectRunner.runInvocation(project, ProjectRunner.RunTerminal(config.name, config.command))
@@ -2235,7 +2242,7 @@ private fun JCodeShell(
     // If something is running and the user opted to be warned, a confirm dialog gates the teardown.
     val perf = LocalPerformanceSettings.current
     val debugSessionUiLocal = LocalDebugSession.current
-    val agentChatActionsLocal = LocalAgentChatActions.current
+    val extensionDrawerActionsLocal = LocalExtensionDrawerActions.current
     val editorSaveActionsLocal = LocalEditorSaveActions.current
     var pendingCloseTarget by remember { mutableStateOf<CloseTarget?>(null) }
     var pendingUnsavedSwitch by remember { mutableStateOf<CloseTarget?>(null) }
@@ -2250,8 +2257,8 @@ private fun JCodeShell(
     fun teardownRunning() {
         if (runInProgress || runningProjectId != null) handleStopRun()
         debugSessionUiLocal.onStop()
-        agentChatActionsLocal.onStopAllServices()
-        AgentChatWebViewHolder.destroyAll()
+        extensionDrawerActionsLocal.onStopAllServices()
+        VsixViewHolder.destroyAll()
         ScmWebViewHolder.destroyAll()
         closeAllTerminalSessions()
     }
@@ -2736,12 +2743,12 @@ private fun JCodeShell(
                         terminalHasUnseen = terminalHasUnseen,
                         terminalSessions = terminalInstances,
                         onOpenTerminalSession = { id ->
-                            rightPanelTab = RightPanelTab.Terminal
+                            selectRightPanelTab(RightPanelTab.Terminal)
                             rightSidebarVisible = true
                             selectTerminalSession(id)
                         },
                         onShowTerminal = {
-                            rightPanelTab = RightPanelTab.Terminal
+                            selectRightPanelTab(RightPanelTab.Terminal)
                             rightSidebarVisible = true
                         },
                         onSelectEditorTab = onSelectEditorTab,
@@ -3060,7 +3067,8 @@ private fun JCodeShell(
 
                 if (rightSidebarDocked && rightSidebarVisible) {
                     WorkbenchRightSidebar(
-                        selectedTab = rightPanelTab,
+                        selected = rightPanelSelection,
+                        vsixExtensions = vsixExtensions,
                         selectedProject = selectedProject,
                         terminalSessionIds = terminalSessionIds,
                         selectedTerminalSessionId = selectedTerminalSessionId,
@@ -3072,7 +3080,7 @@ private fun JCodeShell(
                         modifier = Modifier
                             .fillMaxHeight()
                             .width(rightSidebarWidth),
-                        onTabSelected = { rightPanelTab = it },
+                        onSelected = { selectRightPanel(it) },
                         onSelectTerminalSession = ::selectTerminalSession,
                         onAddTerminalSession = ::createTerminalSession,
                         onRemoveTerminalSession = ::closeTerminalSession,
@@ -3125,7 +3133,8 @@ private fun JCodeShell(
                             .navigationBarsPadding(),
                     ) {
                         WorkbenchRightSidebar(
-                            selectedTab = rightPanelTab.takeIf { it in portraitRightSidebarTabs } ?: RightPanelTab.Terminal,
+                            selected = rightPanelSelection.clampedTo(portraitRightSidebarTabs),
+                            vsixExtensions = vsixExtensions,
                             selectedProject = selectedProject,
                             terminalSessionIds = terminalSessionIds,
                             selectedTerminalSessionId = selectedTerminalSessionId,
@@ -3137,7 +3146,7 @@ private fun JCodeShell(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxWidth(),
-                            onTabSelected = { rightPanelTab = it },
+                            onSelected = { selectRightPanel(it) },
                             onSelectTerminalSession = ::selectTerminalSession,
                             onAddTerminalSession = ::createTerminalSession,
                             onRemoveTerminalSession = ::closeTerminalSession,
@@ -3803,7 +3812,8 @@ private fun terminalTabLabel(raw: String?): String {
 
 @Composable
 private fun WorkbenchRightSidebar(
-    selectedTab: RightPanelTab,
+    selected: RightPanelSelection,
+    vsixExtensions: List<dev.jcode.feature.marketplace.InstalledExtension>,
     selectedProject: Project?,
     terminalSessionIds: List<String>,
     selectedTerminalSessionId: String,
@@ -3812,7 +3822,7 @@ private fun WorkbenchRightSidebar(
     terminalTitleFor: (String) -> String?,
     terminalReady: Boolean,
     onOpenEnvironmentWizard: () -> Unit,
-    onTabSelected: (RightPanelTab) -> Unit,
+    onSelected: (RightPanelSelection) -> Unit,
     onSelectTerminalSession: (String) -> Unit,
     onAddTerminalSession: () -> Unit,
     onRemoveTerminalSession: (String) -> Unit,
@@ -3829,6 +3839,8 @@ private fun WorkbenchRightSidebar(
         color = MaterialTheme.colorScheme.surface,
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
+            val activeVsix = (selected as? RightPanelSelection.Extension)
+                ?.let { sel -> vsixExtensions.firstOrNull { it.id == sel.extensionId } }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -3845,63 +3857,36 @@ private fun WorkbenchRightSidebar(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // The Chat tab's title tracks the installed agent extension (e.g. "OpenChamber"),
-                    // and the tab is shown only while such an extension is installed.
-                    val chatAvailable = hasAgentChatExtension()
-                    val chatTabTitle = agentChatTabTitle()
                     val devMode = LocalDeveloperSetting.current.enabled
                     RightPanelTab.entries
                         .filter {
                             it.enabled &&
-                                (it != RightPanelTab.Chat || chatAvailable) &&
                                 (it != RightPanelTab.Devtools || BuiltinBrowser.everOpened.value) &&
                                 (it != RightPanelTab.ExtensionDev || devMode)
                         }
                         .forEach { tab ->
-                        val selected = tab == selectedTab
-                        val tabLabel = if (tab == RightPanelTab.Chat) chatTabTitle else tab.label
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = if (selected) {
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-                            } else {
-                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)
-                            },
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { onTabSelected(tab) },
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                            ) {
-                                val tint = if (selected) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                }
-                                Icon(
-                                    imageVector = jcIcon(tab.icon),
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                    tint = tint,
-                                )
-                                Text(
-                                    text = tabLabel,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = tint,
-                                )
-                            }
+                            RightPanelChip(
+                                label = tab.label,
+                                icon = tab.icon,
+                                selected = selected == RightPanelSelection.Builtin(tab),
+                                onClick = { onSelected(RightPanelSelection.Builtin(tab)) },
+                            )
                         }
+                    // An imported .vsix gets a tab of its own, under its own name — a VS Code
+                    // extension exists to show a view, and this is where it belongs.
+                    vsixExtensions.forEach { ext ->
+                        RightPanelChip(
+                            label = ext.name,
+                            icon = JCodeIcon.Extensions,
+                            selected = selected == RightPanelSelection.Extension(ext.id),
+                            onClick = { onSelected(RightPanelSelection.Extension(ext.id)) },
+                        )
                     }
                 }
-                if (selectedTab == RightPanelTab.Chat) {
-                    WorkbenchIconActionButton(
-                        icon = jcIcon(JCodeIcon.Settings),
-                        contentDescription = "Agent settings",
-                        onClick = { AgentChatWebViewHolder.postCommand("showSettings") },
-                    )
+                // An extension's own view actions — whatever it declared for its view title — sit in
+                // an overflow menu just before Close, so the tab strip keeps its width.
+                if (activeVsix != null) {
+                    VsixTitleActionsMenu(activeVsix)
                 }
                 WorkbenchIconActionButton(
                     icon = jcIcon(JCodeIcon.Close),
@@ -3910,25 +3895,97 @@ private fun WorkbenchRightSidebar(
                 )
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
-            WorkbenchRightSidebarBody(
-                tab = selectedTab,
-                selectedProject = selectedProject,
-                terminalSessionIds = terminalSessionIds,
-                selectedTerminalSessionId = selectedTerminalSessionId,
-                activeTerminalPty = activeTerminalPty,
-                terminalSessionFor = terminalSessionFor,
-                terminalTitleFor = terminalTitleFor,
-                terminalReady = terminalReady,
-                onOpenEnvironmentWizard = onOpenEnvironmentWizard,
-                onSelectTerminalSession = onSelectTerminalSession,
-                onAddTerminalSession = onAddTerminalSession,
-                onRemoveTerminalSession = onRemoveTerminalSession,
-                runningProjectName = runningProjectName,
-                runInProgress = runInProgress,
-                onStopRun = onStopRun,
-                modifier = Modifier.fillMaxSize(),
-            )
+            if (activeVsix != null) {
+                // Keyed so switching between two extensions swaps views rather than reusing one.
+                key(activeVsix.id) {
+                    VsixDrawerContent(activeVsix, modifier = Modifier.fillMaxSize())
+                }
+            } else {
+                WorkbenchRightSidebarBody(
+                    tab = (selected as? RightPanelSelection.Builtin)?.tab ?: RightPanelTab.Terminal,
+                    selectedProject = selectedProject,
+                    terminalSessionIds = terminalSessionIds,
+                    selectedTerminalSessionId = selectedTerminalSessionId,
+                    activeTerminalPty = activeTerminalPty,
+                    terminalSessionFor = terminalSessionFor,
+                    terminalTitleFor = terminalTitleFor,
+                    terminalReady = terminalReady,
+                    onOpenEnvironmentWizard = onOpenEnvironmentWizard,
+                    onSelectTerminalSession = onSelectTerminalSession,
+                    onAddTerminalSession = onAddTerminalSession,
+                    onRemoveTerminalSession = onRemoveTerminalSession,
+                    runningProjectName = runningProjectName,
+                    runInProgress = runInProgress,
+                    onStopRun = onStopRun,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
+    }
+}
+
+/** One tab in the right drawer's strip, built-in or extension-backed. */
+@Composable
+private fun RightPanelChip(
+    label: String,
+    icon: JCodeIcon,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)
+        },
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            Icon(
+                imageVector = jcIcon(icon),
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = tint,
+            )
+            Text(text = label, style = MaterialTheme.typography.labelMedium, color = tint)
+        }
+    }
+}
+
+/**
+ * The overflow menu for an extension's drawer tab, listing the actions the extension declared for
+ * its view's title bar and running the chosen one through its own command handler.
+ *
+ * Nothing is shown until the extension has activated, because the actions come from its manifest and
+ * the view it registered — before that there is no view to act on.
+ */
+@Composable
+private fun VsixTitleActionsMenu(extension: dev.jcode.feature.marketplace.InstalledExtension) {
+    val actions = VsixViewHolder.titleActions[extension.id].orEmpty()
+    if (actions.isEmpty()) return
+    val session = VsixViewHolder.get(extension.id) ?: return
+    var expanded by remember(extension.id) { mutableStateOf(false) }
+    Box {
+        WorkbenchIconActionButton(
+            icon = jcIcon(JCodeIcon.MoreVert),
+            contentDescription = "${extension.name} actions",
+            onClick = { expanded = true },
+        )
+        CompactContextMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            listActions = actions.map { action ->
+                ContextAction(contributedMenuIcon(action.codicon), action.title) { session.execute(action.id) }
+            },
+        )
     }
 }
 
@@ -3996,9 +4053,6 @@ private fun WorkbenchRightSidebarBody(
         }
         RightPanelTab.ExtensionDev -> {
             ExtensionDevSidebarContent(modifier = modifier)
-        }
-        RightPanelTab.Chat -> {
-            AgentChatSidebarContent(modifier = modifier)
         }
     }
 }
@@ -4761,7 +4815,13 @@ private data class TerminalMenuRequest(
     val view: dev.jcode.core.term.TerminalView,
 )
 
-/** Map an extension-contributed action's manifest `icon` name onto a semantic icon slot. */
+/**
+ * Map an extension-contributed action's icon name onto a semantic icon slot.
+ *
+ * Serves both manifest kinds: a `.jext` names icons plainly, a `.vsix` names VS Code codicons, and
+ * the two vocabularies overlap enough that one table is clearer than two. Anything unrecognised falls
+ * back to the generic extension mark — the action's label already says what it does.
+ */
 private fun contributedMenuIcon(name: String?): JCodeIcon = when (name?.lowercase()) {
     "scm", "source-control", "git" -> JCodeIcon.Scm
     "database", "db" -> JCodeIcon.Database
@@ -4770,12 +4830,17 @@ private fun contributedMenuIcon(name: String?): JCodeIcon = when (name?.lowercas
     "debug" -> JCodeIcon.Debug
     "terminal" -> JCodeIcon.Terminal
     "browser", "web" -> JCodeIcon.Browser
-    "search" -> JCodeIcon.Search
-    "settings", "gear" -> JCodeIcon.Settings
-    "chat" -> JCodeIcon.Chat
+    "search", "search-fuzzy" -> JCodeIcon.Search
+    "settings", "gear", "settings-gear" -> JCodeIcon.Settings
+    "chat", "comment", "comment-discussion" -> JCodeIcon.Chat
     "image" -> JCodeIcon.Image
     "code" -> JCodeIcon.Code
-    "preview", "eye" -> JCodeIcon.Preview
+    "preview", "eye", "open-preview" -> JCodeIcon.Preview
     "format" -> JCodeIcon.Format
+    "add", "plus", "new-file" -> JCodeIcon.Add
+    "link-external", "go-to-file" -> JCodeIcon.Open
+    "refresh", "sync" -> JCodeIcon.Refresh
+    "trash", "clear-all" -> JCodeIcon.Delete
+    "history", "clock" -> JCodeIcon.Logs
     else -> JCodeIcon.Extensions
 }

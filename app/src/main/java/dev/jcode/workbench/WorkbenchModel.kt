@@ -209,5 +209,38 @@ internal enum class RightPanelTab(
     /** Extension-authoring tools (inspector / manifest validator / live log); shown only when
      *  Developer options is enabled (see [dev.jcode.design.LocalDeveloperSetting]). */
     ExtensionDev("Ext Dev", JCodeIcon.Extensions, enabled = true),
-    Chat("Chat", JCodeIcon.Chat, enabled = true),
+}
+
+/**
+ * What the right drawer is showing: one of its built-in panels, or an imported `.vsix`.
+ *
+ * The built-ins are a fixed set and stay an enum; extensions are not, so they cannot be. An imported
+ * extension gets a tab of its own, which is why the selection has to name one rather than being a
+ * single hardcoded slot.
+ */
+internal sealed interface RightPanelSelection {
+    data class Builtin(val tab: RightPanelTab) : RightPanelSelection
+
+    data class Extension(val extensionId: String) : RightPanelSelection
+
+    /** Stable form for [androidx.compose.runtime.saveable.rememberSaveable]. */
+    fun asKey(): String = when (this) {
+        is Builtin -> "builtin:${tab.name}"
+        is Extension -> "ext:$extensionId"
+    }
+
+    /** Fall back to the default when this names a built-in the caller isn't offering. */
+    fun clampedTo(allowed: Set<RightPanelTab>): RightPanelSelection =
+        if (this is Builtin && tab !in allowed) Default else this
+
+    companion object {
+        val Default = Builtin(RightPanelTab.Terminal)
+
+        fun fromKey(key: String): RightPanelSelection = when {
+            key.startsWith("ext:") -> Extension(key.removePrefix("ext:"))
+            else -> key.removePrefix("builtin:")
+                .let { name -> RightPanelTab.entries.firstOrNull { it.name == name } }
+                ?.let { Builtin(it) } ?: Default
+        }
+    }
 }

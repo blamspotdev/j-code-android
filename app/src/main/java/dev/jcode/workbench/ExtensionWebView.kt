@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Environment
 import android.provider.OpenableColumns
 import android.view.MotionEvent
+import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.webkit.JavascriptInterface
@@ -26,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -42,8 +44,13 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.jcode.design.JCodeTheme
 import dev.jcode.feature.marketplace.InstalledExtension
+import dev.jcode.feature.marketplace.VsixCommand
+import dev.jcode.feature.marketplace.VsixPackage
 import dev.jcode.feature.marketplace.webUiFile
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -124,7 +131,7 @@ fun ExtensionWebViewPage(
         if (spawnProcess == null) {
             ExtensionNotice("${extension.name} needs the Linux runtime to run, and it isn't available here.", modifier)
         } else {
-            VsixExtensionWebView(extension, spawnProcess, onApiRequest, modifier)
+            VsixExtensionView(extension, spawnProcess, onApiRequest, modifier)
         }
         return
     }
@@ -414,144 +421,196 @@ fun ExtensionWebViewPage(
 private const val VSIX_RESOURCE_ORIGIN = "https://jcode.webview"
 
 /**
- * Renders an imported `.vsix`.
+ * A running `.vsix`: its extension host, the WebView showing the view it registered, and the state
+ * whoever is displaying it reads.
  *
- * Nothing can be shown until the extension has run: its HTML is produced by its own code. So the
- * host is started, the extension activated, and the first webview view it registered resolved —
- * whatever HTML comes back is what gets loaded. Requests to [VSIX_RESOURCE_ORIGIN] are served
- * straight from the install directory, which is how the extension's scripts and styles resolve
- * without the page ever learning where on disk it actually lives.
+ * Deliberately not composition-scoped. A VS Code extension is a process that takes seconds to come
+ * up — OpenChamber launches `opencode` and waits for it — so tearing it down because a drawer closed
+ * or a tab lost focus would restart it every time. The session outlives its mount points; only
+ * [dispose] ends it. The WebView is built with the application context so a detached session cannot
+ * hold an Activity.
  */
-@SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
-@Composable
-private fun VsixExtensionWebView(
-    extension: InstalledExtension,
-    spawnProcess: (command: String) -> Process?,
-    onApiRequest: suspend (envelopeJson: String) -> String,
-    modifier: Modifier = Modifier,
+internal class VsixSession private constructor(
+    val extension: InstalledExtension,
+    val version: String?,
+    val webView: WebView,
+    val host: VsCodeExtensionHost,
+    private val scope: CoroutineScope,
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var status by remember(extension.id) { mutableStateOf("Starting ${extension.name}…") }
-    var failure by remember(extension.id) { mutableStateOf<String?>(null) }
-    var html by remember(extension.id) { mutableStateOf<String?>(null) }
-    var viewHandle by remember(extension.id) { mutableStateOf<String?>(null) }
-    var host by remember(extension.id) { mutableStateOf<VsCodeExtensionHost?>(null) }
-    var webView by remember(extension.id) { mutableStateOf<WebView?>(null) }
-    var projectPath by remember(extension.id) { mutableStateOf<String?>(null) }
-    var projectName by remember(extension.id) { mutableStateOf<String?>(null) }
-    val backgroundArgb = MaterialTheme.colorScheme.background.toArgb()
-    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    /** What to show while there is no page yet, and why if there never will be. */
+    var status by mutableStateOf("Starting ${extension.name}…")
+        private set
+    var failure by mutableStateOf<String?>(null)
+        private set
+    var hasPage by mutableStateOf(false)
+        private set
 
-    DisposableEffect(extension.id) {
-        onDispose { host?.dispose() }
+    private var viewHandle: String? = null
+    private var projectName: String? = null
+    private var projectPath: String? = null
+    private var loadedStamp: Int? = null
+
+    fun execute(commandId: String) {
+        scope.launch { host.executeCommand(commandId) }
     }
 
-    LaunchedEffect(extension.id) {
-        val started = VsCodeExtensionHost(context, extension, spawnProcess) { method, params ->
-            when (method) {
-                "host/log" -> ExtensionDevLog.log(
-                    if (params.optString("level") == "error") ExtensionDevLogEntry.Kind.Error
-                    else ExtensionDevLogEntry.Kind.Console,
+    fun dispose() {
+        host.dispose()
+        (webView.parent as? ViewGroup)?.removeView(webView)
+        webView.destroy()
+        scope.cancel()
+    }
+
+    private fun onHostEvent(method: String, params: JSONObject) {
+        when (method) {
+            "host/log" -> ExtensionDevLog.log(
+                if (params.optString("level") == "error") ExtensionDevLogEntry.Kind.Error
+                else ExtensionDevLogEntry.Kind.Console,
+                extension.id,
+                "[host] ${params.optString("text")}",
+            )
+            // The extension re-rendering its view is normal: it sends this whenever its state changes.
+            "webview/html" -> render(params.optString("html"))
+            // The extension talking to its own page. This is a request, not a notification: the
+            // extension waits on it, so a missing reply strands whatever it was doing — which is how
+            // a page ends up sitting on its splash forever.
+            "webview/postMessage" -> {
+                val payload = params.opt("message")
+                ExtensionDevLog.log(
+                    ExtensionDevLogEntry.Kind.Event,
                     extension.id,
-                    "[host] ${params.optString("text")}",
+                    "ext → page ${payload?.toString()?.take(220)}",
                 )
-                // The extension re-rendering its view is normal: it sets html whenever its state changes.
-                "webview/html" -> html = params.optString("html")
-                // The extension talking to its own page. This is a request, not a notification: the
-                // extension waits on it, so a missing reply strands whatever it was doing — which is
-                // how a page ends up sitting on its splash forever.
-                "webview/postMessage" -> {
-                    val payload = params.opt("message")
-                    ExtensionDevLog.log(
-                        ExtensionDevLogEntry.Kind.Event,
-                        extension.id,
-                        "ext → page ${payload?.toString()?.take(220)}",
-                    )
-                    val json = JSONObject.quote(
-                        when (payload) {
-                            null, JSONObject.NULL -> "null"
-                            else -> payload.toString()
-                        },
-                    )
-                    webView?.post {
-                        webView?.evaluateJavascript("window.__jcodeDeliver && window.__jcodeDeliver($json)", null)
-                    }
-                    host?.reply(params.optInt("__requestId"), null)
+                val json = JSONObject.quote(
+                    when (payload) {
+                        null, JSONObject.NULL -> "null"
+                        else -> payload.toString()
+                    },
+                )
+                scope.launch {
+                    webView.evaluateJavascript("window.__jcodeDeliver && window.__jcodeDeliver($json)", null)
                 }
-                else -> {
-                    ExtensionDevLog.log(ExtensionDevLogEntry.Kind.Event, extension.id, "$method $params")
-                    // Anything else the extension asks for is not implemented yet, but it must still
-                    // be answered — an unanswered request blocks the extension rather than degrading.
-                    if (params.has("__requestId")) {
-                        host?.reply(params.optInt("__requestId"), null, "$method is not implemented by JCode")
-                    }
+                host.reply(params.optInt("__requestId"), null)
+            }
+            else -> {
+                ExtensionDevLog.log(ExtensionDevLogEntry.Kind.Event, extension.id, "$method $params")
+                // Anything else the extension asks for is not implemented yet, but it must still be
+                // answered — an unanswered request blocks the extension rather than degrading it.
+                if (params.has("__requestId")) {
+                    host.reply(params.optInt("__requestId"), null, "$method is not implemented by JCode")
                 }
             }
         }
-        host = started
+    }
 
-        started.start()?.let { failure = it; return@LaunchedEffect }
+    private fun onPageMessage(payload: String) {
+        val handle = viewHandle
+        ExtensionDevLog.log(
+            ExtensionDevLogEntry.Kind.Event,
+            extension.id,
+            if (handle == null) "page → ext DROPPED (no view yet) ${payload.take(200)}"
+            else "page → ext ${payload.take(220)}",
+        )
+        if (handle == null) return
+        scope.launch { host.postToWebview(handle, payload) }
+    }
+
+    /**
+     * Load [html] into the page, skipping a render the WebView is already showing.
+     *
+     * Marshalled through [scope] (main-immediate) rather than `webView.post`: the WebView is not in the
+     * view tree until there is a page to show, and `View.post` on a detached view defers the runnable
+     * until it attaches — which would never happen, because attaching is what this enables.
+     */
+    private fun render(html: String) {
+        if (html.isBlank()) return
+        val stamp = html.hashCode()
+        if (loadedStamp == stamp) return
+        loadedStamp = stamp
+        val document = vsixBootstrap(projectName, projectPath) + html
+        scope.launch {
+            webView.loadDataWithBaseURL("$VSIX_RESOURCE_ORIGIN/", document, "text/html", "utf-8", null)
+            hasPage = true
+        }
+    }
+
+    private suspend fun start(
+        apiRequest: suspend (envelopeJson: String) -> String,
+        isDarkTheme: Boolean,
+    ) {
+        host.start()?.let { failure = it; return }
         status = "Loading ${extension.name}…"
 
         // Hand over the project the user actually has open, not the workspace root. An extension
         // reads workspaceFolders to decide what it is working on, so the wrong answer here is the
         // difference between it loading the project and asking the user to pick one.
         val project = runCatching {
-            JSONObject(onApiRequest("""{"type":"workbench.projectInfo","payload":{}}"""))
-                .optJSONObject("data")
+            JSONObject(apiRequest("""{"type":"workbench.projectInfo","payload":{}}""")).optJSONObject("data")
         }.getOrNull()
         projectPath = project?.optString("path")?.takeIf { it.isNotBlank() }
         projectName = project?.optString("name")?.takeIf { it.isNotBlank() }
             ?: projectPath?.substringAfterLast('/')
 
-        val activated = started.activate(
+        val activated = host.activate(
             folders = projectPath?.let { listOf((projectName ?: it.substringAfterLast('/')) to it) }.orEmpty(),
             configuration = JSONObject(),
         )
-        // Tell the extension which theme it is being shown in before it builds its view, so it
-        // styles itself correctly the first time rather than after a repaint.
-        runCatching { started.setTheme(dark = isDarkTheme) }
-        activated.optString("error").takeIf { it.isNotBlank() }?.let { failure = it; return@LaunchedEffect }
+        // Tell the extension which theme it is being shown in before it builds its view, so it styles
+        // itself correctly the first time rather than after a repaint.
+        runCatching { host.setTheme(dark = isDarkTheme) }
+        activated.optString("error").takeIf { it.isNotBlank() }?.let { failure = it; return }
 
         val views = activated.optJSONArray("views")
         val viewId = (0 until (views?.length() ?: 0)).firstNotNullOfOrNull { views?.optString(it) }
         if (viewId.isNullOrBlank()) {
             failure = "${extension.name} registered no view to show."
-            return@LaunchedEffect
+            return
         }
-        val resolved = started.resolveWebviewView(viewId)
-        resolved.optString("error").takeIf { it.isNotBlank() }?.let { failure = it; return@LaunchedEffect }
+        VsixViewHolder.titleActions[extension.id] = readTitleActions(viewId)
+
+        val resolved = host.resolveWebviewView(viewId)
+        resolved.optString("error").takeIf { it.isNotBlank() }?.let { failure = it; return }
         viewHandle = resolved.optString("handle")
-        html = resolved.optString("html")
+        render(resolved.optString("html"))
     }
 
-    val current = failure
-    if (current != null) {
-        ExtensionNotice(current, modifier)
-        return
-    }
-    val page = html
-    if (page.isNullOrBlank()) {
-        ExtensionNotice(status, modifier)
-        return
-    }
+    /** The extension's own manifest, unpacked into the install dir, is the source for its actions. */
+    private fun readTitleActions(viewId: String): List<VsixCommand> = runCatching {
+        val manifest = File(extension.dir, "package.json").takeIf { it.isFile }?.readText() ?: return emptyList()
+        val nls = File(extension.dir, "package.nls.json").takeIf { it.isFile }?.readText()
+        VsixPackage.parseViewTitleActions(manifest, nls, viewId)
+    }.getOrDefault(emptyList())
 
-    AndroidView(
-        modifier = modifier.fillMaxSize(),
-        factory = { ctx ->
-            NoFullscreenWebView(ctx).apply {
+    companion object {
+        @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
+        fun start(
+            context: Context,
+            extension: InstalledExtension,
+            spawnProcess: (command: String) -> Process?,
+            apiRequest: suspend (envelopeJson: String) -> String,
+            backgroundArgb: Int,
+            isDarkTheme: Boolean,
+        ): VsixSession {
+            val appContext = context.applicationContext
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+            // Both callbacks below can only fire once the host is started and a page is loaded, which
+            // happens after `session` is assigned.
+            lateinit var session: VsixSession
+            val host = VsCodeExtensionHost(appContext, extension, spawnProcess) { method, params ->
+                session.onHostEvent(method, params)
+            }
+            val webView = NoFullscreenWebView(appContext).apply {
                 setBackgroundColor(backgroundArgb)
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 @Suppress("DEPRECATION")
                 settings.allowFileAccess = true
                 // Honour the viewport meta the bootstrap injects, which declares an explicit
-                // height=device-height. That is what gives this WebView a layout viewport with a
-                // real height, so `vh` and percentage chains resolve instead of collapsing — fixing
-                // it here rather than rewriting the extension's stylesheet afterwards. Safe to enable
-                // because this page always carries that meta; a page without one would fall back to
-                // a 980px-wide desktop viewport.
+                // height=device-height. That is what gives this WebView a layout viewport with a real
+                // height, so `vh` and percentage chains resolve instead of collapsing — fixing it here
+                // rather than rewriting the extension's stylesheet afterwards. Safe to enable because
+                // this page always carries that meta; a page without one would fall back to a
+                // 980px-wide desktop viewport.
                 settings.useWideViewPort = true
                 settings.loadWithOverviewMode = true
                 // The page is served over https so its resource origin can back a Content-Security-
@@ -582,37 +641,129 @@ private fun VsixExtensionWebView(
                         return false
                     }
                 }
+                // A WebView nested in a scrollable panel loses drags to its parent otherwise.
+                setOnTouchListener { v, event ->
+                    if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                        v.parent?.requestDisallowInterceptTouchEvent(true)
+                    }
+                    false
+                }
                 addJavascriptInterface(
                     object {
                         @JavascriptInterface
-                        fun postMessage(payload: String) {
-                            val handle = viewHandle
-                            ExtensionDevLog.log(
-                                ExtensionDevLogEntry.Kind.Event,
-                                extension.id,
-                                if (handle == null) "page → ext DROPPED (no view yet) ${payload.take(200)}"
-                                else "page → ext ${payload.take(220)}",
-                            )
-                            if (handle == null) return
-                            scope.launch { host?.postToWebview(handle, payload) }
-                        }
+                        fun postMessage(payload: String) = session.onPageMessage(payload)
                     },
                     "JCodeVsix",
                 )
-                loadDataWithBaseURL("$VSIX_RESOURCE_ORIGIN/", vsixBootstrap(projectName, projectPath) + page, "text/html", "utf-8", null)
-                webView = this
             }
-        },
-        update = { view ->
-            // The extension replaces its HTML whenever its own state changes; reload rather than
-            // trying to reconcile a document we did not author.
-            val stamp = page.hashCode()
-            if (view.tag != stamp) {
-                view.tag = stamp
-                view.loadDataWithBaseURL("$VSIX_RESOURCE_ORIGIN/", vsixBootstrap(projectName, projectPath) + page, "text/html", "utf-8", null)
-            }
+            session = VsixSession(extension, extension.version, webView, host, scope)
+            scope.launch { session.start(apiRequest, isDarkTheme) }
+            return session
+        }
+    }
+}
+
+/**
+ * The live `.vsix` sessions, one per extension, keyed by id.
+ *
+ * Process-scoped for the reason in [VsixSession]: an extension must survive its view being hidden.
+ * Mirrors [ScmWebViewHolder] — mount points detach, only this destroys.
+ */
+internal object VsixViewHolder {
+    private val sessions = HashMap<String, VsixSession>()
+
+    /**
+     * Each running extension's view-title actions, by extension id.
+     *
+     * Kept here rather than on the session because the drawer header composes before the body starts
+     * the session, so a header reading through the session gets null on the pass that matters and does
+     * not reliably resubscribe once the actions land — the menu then stayed hidden until something
+     * else forced recomposition. This map exists from the start, so the read always registers.
+     */
+    val titleActions = mutableStateMapOf<String, List<VsixCommand>>()
+
+    fun get(id: String): VsixSession? = sessions[id]
+
+    fun ids(): List<String> = sessions.keys.toList()
+
+    fun destroy(id: String) {
+        sessions.remove(id)?.dispose()
+        titleActions.remove(id)
+    }
+
+    fun destroyAll() {
+        sessions.keys.toList().forEach { destroy(it) }
+    }
+
+    /** The session for [extension], starting it if it is not running (or is running a stale version). */
+    fun getOrStart(
+        context: Context,
+        extension: InstalledExtension,
+        spawnProcess: (command: String) -> Process?,
+        apiRequest: suspend (envelopeJson: String) -> String,
+        backgroundArgb: Int,
+        isDarkTheme: Boolean,
+    ): VsixSession {
+        sessions[extension.id]?.let { existing ->
+            // A session that failed is not worth keeping: the usual cause is something missing from
+            // the runtime, so reopening the view after installing it should retry rather than show the
+            // same stale error forever.
+            if (existing.version == extension.version && existing.failure == null) return existing
+            destroy(extension.id)
+        }
+        return VsixSession.start(context, extension, spawnProcess, apiRequest, backgroundArgb, isDarkTheme)
+            .also { sessions[extension.id] = it }
+    }
+}
+
+/**
+ * Shows an imported `.vsix`, wherever it is mounted.
+ *
+ * Nothing can be drawn until the extension has run — its HTML is produced by its own code — so this
+ * reports progress until a page arrives. Requests to [VSIX_RESOURCE_ORIGIN] are served straight from
+ * the install directory, which is how the extension's scripts and styles resolve without the page
+ * ever learning where on disk it actually lives.
+ */
+@Composable
+internal fun VsixExtensionView(
+    extension: InstalledExtension,
+    spawnProcess: (command: String) -> Process?,
+    onApiRequest: suspend (envelopeJson: String) -> String,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val backgroundArgb = MaterialTheme.colorScheme.background.toArgb()
+    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val session = remember(extension.id, extension.version) {
+        VsixViewHolder.getOrStart(
+            context = context,
+            extension = extension,
+            spawnProcess = spawnProcess,
+            apiRequest = onApiRequest,
+            backgroundArgb = backgroundArgb,
+            isDarkTheme = isDarkTheme,
+        )
+    }
+
+    session.failure?.let {
+        ExtensionNotice(it, modifier)
+        return
+    }
+    if (!session.hasPage) {
+        ExtensionNotice(session.status, modifier)
+        return
+    }
+
+    AndroidView(
+        modifier = modifier.fillMaxSize(),
+        factory = {
+            (session.webView.parent as? ViewGroup)?.removeView(session.webView)
+            session.webView
         },
     )
+    DisposableEffect(session) {
+        onDispose { (session.webView.parent as? ViewGroup)?.removeView(session.webView) }
+    }
 }
 
 /**

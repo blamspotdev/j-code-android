@@ -3676,15 +3676,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Snapshot of every extension doing background work, for the Task Manager (polled, not reactive). */
     fun backgroundExtensionSnapshot(): List<BackgroundExtensionInfo> {
         val scmIds = dev.jcode.workbench.ScmWebViewHolder.ids().toSet()
-        val chatIds = dev.jcode.workbench.AgentChatWebViewHolder.ids().toSet()
+        val vsixIds = dev.jcode.workbench.VsixViewHolder.ids().toSet()
         val serviceCounts = runtimeServices.keys.groupingBy { it.substringBefore(' ') }.eachCount()
         val suspended = _suspendedBackgroundExtensions.value
         val names = installedExtensions.value.associate { it.id to it.name }
-        return (scmIds + chatIds + serviceCounts.keys + suspended).map { id ->
+        return (scmIds + vsixIds + serviceCounts.keys + suspended).map { id ->
             BackgroundExtensionInfo(
                 id = id,
                 name = names[id] ?: id,
-                hasHost = id in scmIds || id in chatIds,
+                hasHost = id in scmIds || id in vsixIds,
                 serviceCount = serviceCounts[id] ?: 0,
                 suspended = id in suspended,
             )
@@ -3692,8 +3692,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Stop a background extension: reap its runtime services and tear down its host. A live SCM host
-     *  is suspended (it would otherwise re-attach on the next project open); a Chat host is destroyed
-     *  and simply restarts when the user reopens the Chat tab. Runs on the main thread (WebView.destroy). */
+     *  is suspended (it would otherwise re-attach on the next project open); a `.vsix` session is
+     *  destroyed and restarts when its drawer tab is reopened. Runs on the main thread (WebView.destroy). */
     fun stopBackgroundExtension(id: String) {
         viewModelScope.launch(Dispatchers.Main) {
             reapExtensionServices(id)
@@ -3703,8 +3703,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 clearExplorerScmDecorations()
                 // The shell's ScmBackgroundHost tears the WebView down once scmHostExt drops to null.
             }
-            if (dev.jcode.workbench.AgentChatWebViewHolder.get(id) != null) {
-                dev.jcode.workbench.AgentChatWebViewHolder.destroy(id)
+            if (dev.jcode.workbench.VsixViewHolder.get(id) != null) {
+                dev.jcode.workbench.VsixViewHolder.destroy(id)
             }
         }
     }

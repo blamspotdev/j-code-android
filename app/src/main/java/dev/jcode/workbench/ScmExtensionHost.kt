@@ -32,7 +32,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 /**
- * Process-scoped holder for a persistent SCM WebView (mirrors [AgentChatWebViewHolder]). An SCM
+ * Process-scoped holder for a persistent SCM WebView (mirrors [VsixViewHolder]). An SCM
  * extension that contributes `explorerDecorations` is booted here as soon as a project opens — its
  * sidebar surface computes git status and pushes Explorer decorations without the SCM panel ever
  * being shown — and the SCM panel attaches this same WebView when visible, so the panel keeps its
