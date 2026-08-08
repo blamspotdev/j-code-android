@@ -33,6 +33,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -435,6 +436,7 @@ private fun VsixExtensionWebView(
     var viewHandle by remember(extension.id) { mutableStateOf<String?>(null) }
     var host by remember(extension.id) { mutableStateOf<VsCodeExtensionHost?>(null) }
     val backgroundArgb = MaterialTheme.colorScheme.background.toArgb()
+    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
 
     DisposableEffect(extension.id) {
         onDispose { host?.dispose() }
@@ -465,6 +467,9 @@ private fun VsixExtensionWebView(
             folders = listOf("workspace" to "/workspace"),
             configuration = JSONObject(),
         )
+        // Tell the extension which theme it is being shown in before it builds its view, so it
+        // styles itself correctly the first time rather than after a repaint.
+        runCatching { started.setTheme(dark = isDarkTheme) }
         activated.optString("error").takeIf { it.isNotBlank() }?.let { failure = it; return@LaunchedEffect }
 
         val views = activated.optJSONArray("views")
