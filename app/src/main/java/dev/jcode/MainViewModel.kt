@@ -954,19 +954,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * version taking the port, or the runtime restarting all drop it, and the device then goes missing
      * from `adb devices` with nothing to say why. This puts it back without restarting the app.
      */
+    private val _virtualDeviceAdbReconnecting = MutableStateFlow(false)
+
+    /** True while [reconnectVirtualDeviceAdb] is working, so the settings action can show it. */
+    val virtualDeviceAdbReconnecting: StateFlow<Boolean> = _virtualDeviceAdbReconnecting.asStateFlow()
+
     fun reconnectVirtualDeviceAdb() {
+        if (_virtualDeviceAdbReconnecting.value) return
         viewModelScope.launch {
             if (!runInVirtualDevice.value) {
                 OutputLog.append("Virtual device is off — turn it on to connect.\n", OutputKind.Error)
                 return@launch
             }
-            // Reattach to the port already in use where there is one, rather than restarting the
-            // daemon onto a fresh one: terminals are told the device's address through ANDROID_SERIAL
-            // when they start, and a new port would leave every open terminal pointing at a dead one.
-            val port = TerminalSessionHost.manager(appContext).virtualDeviceAdbPort
-            if (port > 0) attachVirtualDeviceAdb(port) else startVirtualDeviceAdb()
-            OutputLog.append("Virtual device adb reconnected.\n", OutputKind.Info)
+            _virtualDeviceAdbReconnecting.value = true
+            try {
+                // Reattach to the port already in use where there is one, rather than restarting the
+                // daemon onto a fresh one: terminals are told the device's address through
+                // ANDROID_SERIAL when they start, and a new port would leave every open terminal
+                // pointing at a dead one.
+                val port = TerminalSessionHost.manager(appContext).virtualDeviceAdbPort
+                if (port > 0) attachVirtualDeviceAdb(port) else startVirtualDeviceAdb()
+                // Spawning the client only starts the connect; wait for the device to actually be
+                // listed before saying so, or the action reports success the moment it is asked and
+                // the user finds out otherwise from `adb devices`.
+                val target = "127.0.0.1:${TerminalSessionHost.manager(appContext).virtualDeviceAdbPort}"
+                val attached = awaitVirtualDeviceAttached(target)
+                OutputLog.append(
+                    if (attached) "Virtual device attached at $target.\n"
+                    else "Virtual device did not attach at $target.\n",
+                    if (attached) OutputKind.Info else OutputKind.Error,
+                )
+            } finally {
+                _virtualDeviceAdbReconnecting.value = false
+            }
         }
+    }
+
+    /** Poll `adb devices` until [target] shows up, so "reconnected" means it actually is. */
+    private suspend fun awaitVirtualDeviceAttached(target: String): Boolean {
+        repeat(VIRTUAL_DEVICE_ATTACH_ATTEMPTS) {
+            val listed = runCatching {
+                distroService.exec("adb devices", timeoutMs = 10_000L).stdout
+            }.getOrDefault("")
+            if (listed.lineSequence().any { it.startsWith(target) && it.trimEnd().endsWith("device") }) {
+                return true
+            }
+            delay(VIRTUAL_DEVICE_ATTACH_POLL_MS)
+        }
+        return false
     }
 
     private val autoCloseIdleKey = booleanPreferencesKey("perf_auto_close_idle_terminals")
@@ -4741,7 +4776,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
-        /** `adb keygen` plus the first `adb connect` both start a JVM under proot; 60s is slack. */
+        /** How long to keep asking `adb devices` after a reconnect: the client is spawned, so the
+         *  connection lands a moment later — `adb keygen` on a cold runtime is the slow case. */
+        private const val VIRTUAL_DEVICE_ATTACH_ATTEMPTS = 12
+        private const val VIRTUAL_DEVICE_ATTACH_POLL_MS = 1_000L
 
         /** Free space to leave on app storage after importing an off-ext4 folder into /sources. */
         private const val IMPORT_FREE_SPACE_HEADROOM_BYTES = 64L * 1024 * 1024

@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -806,6 +807,7 @@ object SettingsFeature {
                             "runtime restart.",
                         buttonLabel = "Reconnect",
                         enabled = virtualDevice.enabled,
+                        busy = virtualDevice.reconnecting,
                         onClick = virtualDevice.onReconnect,
                     )
                 }
@@ -1765,6 +1767,7 @@ private fun SettingsActionRow(
     buttonLabel: String,
     onClick: () -> Unit,
     enabled: Boolean = true,
+    busy: Boolean = false,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
@@ -1779,7 +1782,19 @@ private fun SettingsActionRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        FilledTonalButton(onClick = onClick, enabled = enabled) { Text(buttonLabel) }
+        FilledTonalButton(onClick = onClick, enabled = enabled && !busy) {
+            // The label stays put and the spinner takes the leading slot, so the button keeps its
+            // width and the row does not jump the moment it is pressed.
+            if (busy) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(buttonLabel)
+        }
     }
 }
 

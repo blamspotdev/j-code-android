@@ -1229,12 +1229,14 @@ fun JCodeApp(
     }
     val runInVirtualDevice by viewModel.runInVirtualDevice.collectAsStateWithLifecycle()
     val adbToolInstalled = ADB_CATALOG_ENTRY in sdkCatalogState.installedEntryIds
-    val virtualDeviceSetting = remember(runInVirtualDevice, adbToolInstalled) {
+    val virtualDeviceReconnecting by viewModel.virtualDeviceAdbReconnecting.collectAsStateWithLifecycle()
+    val virtualDeviceSetting = remember(runInVirtualDevice, adbToolInstalled, virtualDeviceReconnecting) {
         VirtualDeviceSetting(
             enabled = runInVirtualDevice,
             onChange = viewModel::setRunInVirtualDevice,
             adbAvailable = adbToolInstalled,
             onReconnect = viewModel::reconnectVirtualDeviceAdb,
+            reconnecting = virtualDeviceReconnecting,
         )
     }
     val envBackupStatus by viewModel.envBackupStatus.collectAsStateWithLifecycle()

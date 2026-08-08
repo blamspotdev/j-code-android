@@ -273,6 +273,8 @@ class VirtualDeviceSetting(
     val adbAvailable: Boolean = false,
     /** Re-attach the virtual device to the runtime's adb server. */
     val onReconnect: () -> Unit = {},
+    /** True while a reconnect is in flight, so the action can show it is working. */
+    val reconnecting: Boolean = false,
 )
 
 val LocalVirtualDevice = compositionLocalOf { VirtualDeviceSetting() }
