@@ -55,6 +55,13 @@ data class ExecResult(
 /** Backward-compatible alias for code that still references TermuxRunResult. */
 typealias TermuxRunResult = ExecResult
 
+/**
+ * How far the running toolchain install/uninstall has got, as reported by the script itself through
+ * the `jcode_progress` helper (OSC 7716). One action runs at a time — the catalog lock serializes
+ * them — so a single value covers the SDK, LSP and debug-engine managers.
+ */
+data class CatalogProgress(val percent: Int, val label: String)
+
 data class DistroEvent(
     val stage: String,
     val message: String,

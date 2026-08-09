@@ -51,6 +51,7 @@ internal class SdkCatalogLoader(
                 supportedDistros = entry.stringList("supportedDistros"),
                 supportedArches = entry.stringList("supportedArches"),
                 requiredSdks = entry.stringList("requiredSdks"),
+                minInstallTimeoutMinutes = entry.int("minInstallTimeoutMinutes") ?: 0,
             )
         }
     }
@@ -78,6 +79,13 @@ internal class SdkCatalogLoader(
             is String -> value.trim().lowercase().let { if (it == "true") true else if (it == "false") false else null }
             else -> null
         }
+    }
+
+    private fun Map<String, Any?>.int(key: String): Int? = when (val value = this[key]) {
+        null -> null
+        is Number -> value.toInt()
+        is String -> value.trim().toIntOrNull()
+        else -> null
     }
 
     private fun Map<String, Any?>.list(key: String): List<Any?> {

@@ -2,6 +2,7 @@ package dev.jcode.feature.lspmanager
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import dev.jcode.core.distro.CatalogProgress
 import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.core.distro.LspCatalogAction
 import dev.jcode.core.distro.LspCatalogEntry
@@ -21,6 +22,7 @@ object LspManagerFeature {
         entry: LspCatalogEntry,
         state: LspCatalogState,
         environmentState: DistroEnvironmentState,
+        progress: CatalogProgress? = null,
         onInstall: (String) -> Unit,
         onUpdate: (String) -> Unit,
         onUninstall: (String) -> Unit,
@@ -46,6 +48,8 @@ object LspManagerFeature {
             onUpdate = { onUpdate(entry.id) },
             onUninstall = { onUninstall(entry.id) },
             onVerify = { onVerify(entry.id) },
+            progressPercent = progress?.percent.takeIf { running },
+            progressLabel = progress?.label,
             modifier = modifier,
         )
     }

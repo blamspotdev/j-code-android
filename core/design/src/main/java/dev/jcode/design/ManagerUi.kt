@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -25,6 +26,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -449,6 +451,11 @@ fun ManagerDetailScreen(
     multiVersion: Boolean = false,
     /** Whether the available-versions list is still being fetched (shows a spinner in the picker). */
     versionsLoading: Boolean = false,
+    /** 0..100 reported by the running install itself; null while it reports nothing (the chip then
+     *  keeps its indeterminate spinner). Only shown while [busy]. */
+    progressPercent: Int? = null,
+    /** What the install is doing at [progressPercent], e.g. "Downloading Android platform". */
+    progressLabel: String? = null,
     onInstallVersion: (String) -> Unit = {},
     onUninstallVersion: (String) -> Unit = {},
     extra: @Composable () -> Unit = {},
@@ -474,6 +481,10 @@ fun ManagerDetailScreen(
                     ManagerStatusChip(status = status, checking = busy, checkingLabel = busyLabel ?: "Checking…", spinner = true)
                 }
             }
+        }
+
+        if (busy && progressPercent != null) {
+            ManagerProgress(percent = progressPercent, label = progressLabel)
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
@@ -531,6 +542,37 @@ fun ManagerDetailScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * Determinate progress for a running install: the percentage the script reported, what it is doing,
+ * and a bar. The same numbers are also printed into the Setup terminal, so the two agree.
+ */
+@Composable
+private fun ManagerProgress(percent: Int, label: String?) {
+    val clamped = percent.coerceIn(0, 100)
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = label?.takeIf { it.isNotBlank() } ?: "Working…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = "$clamped%",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        LinearProgressIndicator(
+            progress = { clamped / 100f },
+            modifier = Modifier.fillMaxWidth().height(4.dp),
+        )
     }
 }
 

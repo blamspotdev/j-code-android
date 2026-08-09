@@ -39,7 +39,11 @@ class SetupTerminalRunner(
     /** The live Setup session id, for the UI to surface as a (non-focused) terminal tab. */
     val sessionId: StateFlow<String?> = _sessionId.asStateFlow()
 
-    private class Pending(val token: String, val sessionId: String) {
+    private class Pending(
+        val token: String,
+        val sessionId: String,
+        val onProgress: (Int, String) -> Unit,
+    ) {
         val exit = CompletableDeferred<Int>()
     }
 
@@ -55,6 +59,17 @@ class SetupTerminalRunner(
         current.exit.complete(payload.substringAfter(';').trim().toIntOrNull() ?: -1)
     }
 
+    /** Routed from [TerminalSessionManager.onTaskProgress]; payload is `<token>;<percent>;<label>`.
+     *  A marker from an earlier (abandoned) task is dropped by the token check. */
+    fun handleTaskProgress(sessionId: String, payload: String) {
+        val current = pending ?: return
+        if (current.sessionId != sessionId) return
+        val parts = payload.split(';')
+        if (parts.size < 2 || parts[0] != current.token) return
+        val percent = parts[1].trim().toIntOrNull() ?: return
+        current.onProgress(percent, parts.drop(2).joinToString(";").trim())
+    }
+
     /**
      * Run [script] in the Setup terminal and suspend until it reports completion. [asUser] follows
      * catalog semantics: "root" runs privileged with HOME/USER pointing at the jcode user; any other
@@ -67,29 +82,38 @@ class SetupTerminalRunner(
         workdir: String?,
         asUser: String,
         timeoutMs: Long,
+        onProgress: (Int, String) -> Unit = { _, _ -> },
     ): ExecResult? = mutex.withLock {
         val session = ensureSession() ?: return@withLock null
         val token = "jc${tokenCounter.incrementAndGet()}"
-        val task = Pending(token, session.id)
+        val input = buildTaskInput(label, script, workdir, asUser, token) ?: return@withLock null
+        val task = Pending(token, session.id, onProgress)
         pending = task
         try {
-            manager.sendInput(session.id, buildTaskInput(label, script, workdir, asUser, token))
+            manager.sendInput(session.id, input)
             awaitCompletion(task, session.id, label, timeoutMs)
         } finally {
             pending = null
         }
     }
 
-    /** One shell-input block: heredoc the script into a guest file, run it, report OSC 7713. */
+    /**
+     * Stage the script into the guest filesystem and return the one short line that runs it.
+     *
+     * The script is written host-side rather than heredoc'd into the shell. A PTY's line discipline
+     * buffers only a few KB, so a large script (the Android SDK one is ~9 KB) arrived truncated and
+     * left the shell waiting inside an unterminated heredoc — with the whole thing echoed back over
+     * the terminal on the way in. Only the short run command goes through the PTY now. Returns null
+     * if the file could not be staged, so the caller falls back to the quiet in-process exec.
+     */
     private fun buildTaskInput(
         label: String,
         script: String,
         workdir: String?,
         asUser: String,
         token: String,
-    ): String {
+    ): String? {
         val guestScript = "/tmp/.jcode-task-$token.sh"
-        val heredocEnd = "JCODE_EOF_$token"
         val runtimeUser = distroService.environmentState.value.runtime.user
         val body = buildString {
             append("echo '== ").append(label.replace("'", "")).append(" =='\n")
@@ -97,15 +121,16 @@ class SetupTerminalRunner(
             append(script)
             if (!script.endsWith("\n")) append('\n')
         }
+        if (!distroService.stageGuestFile(guestScript, body)) return null
+        // JCODE_PROGRESS_TOKEN is what makes the injected `jcode_progress` helper emit its OSC 7716
+        // marker; it names the task the marker belongs to so a stale one from an abandoned run is
+        // ignored. Exported for the `su` path too — the login shell would otherwise drop it.
         val runCommand = if (asUser == "root") {
-            "env HOME=/home/$runtimeUser USER=$runtimeUser /bin/sh $guestScript"
+            "env HOME=/home/$runtimeUser USER=$runtimeUser JCODE_PROGRESS_TOKEN=$token /bin/sh $guestScript"
         } else {
-            "su - $asUser -c '/bin/sh $guestScript'"
+            "su - $asUser -c 'JCODE_PROGRESS_TOKEN=$token /bin/sh $guestScript'"
         }
         return buildString {
-            append("cat > ").append(guestScript).append(" <<'").append(heredocEnd).append("'\n")
-            append(body)
-            append(heredocEnd).append('\n')
             append(runCommand)
             append("; printf '\\033]7713;").append(token).append(";%s\\007' \"$?\"")
             append("; rm -f ").append(guestScript).append('\n')

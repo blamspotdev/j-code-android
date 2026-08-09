@@ -33,6 +33,14 @@ internal val LocalTerminalTapConfig = compositionLocalOf { TerminalTapConfig() }
  */
 internal val LocalDebugCatalogState = compositionLocalOf { DebugEngineCatalogState() }
 
+/** How far the running toolchain install has got (percent + phase), or null when nothing is running
+ *  or the script reports nothing. Same register-limit rationale as [LocalDebugCatalogState]. */
+internal val LocalCatalogProgress = compositionLocalOf<dev.jcode.core.distro.CatalogProgress?> { null }
+
+/** The SDK the user pressed Install on, which differs from the running one while a toolchain it
+ *  requires is being installed first. Same register-limit rationale as [LocalCatalogProgress]. */
+internal val LocalSdkInstallRequestedId = compositionLocalOf<String?> { null }
+
 /** Per-extension install phase labels ("Installing…", "Installing required tools…", "Verifying…"),
  *  keyed by extension id. A CompositionLocal so the giant [dev.jcode.JCodeShell] composable stays
  *  under the ART register limit. */

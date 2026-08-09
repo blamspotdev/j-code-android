@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
@@ -30,7 +29,8 @@ class ExtensionDrawerActions(
     val events: SharedFlow<Pair<String, String>>? = null,
     /** Reap all long-lived runtime services (e.g. the opencode agent) on app teardown. */
     val onStopAllServices: () -> Unit = {},
-    /** Whether the extension should keep running while its panel is closed (per-extension permission). */
+    /** Whether the extension may keep running while its drawer tab is not on screen (per-extension
+     *  permission). The shell reads this to decide what to tear down when the selection changes. */
     val keepAliveFor: (extensionId: String) -> Boolean = { true },
     /** Starts a long-lived process in the Linux runtime, which is what runs an imported `.vsix`. */
     val spawnProcess: ((command: String) -> Process?)? = null,
@@ -61,8 +61,10 @@ internal fun installedVsixExtensions(): List<InstalledExtension> {
  * A `.vsix` extension's view, hosted in the right drawer.
  *
  * The session lives in [VsixViewHolder], so closing the drawer or switching tabs only detaches the
- * WebView and the extension keeps running. When its "keep running in background" permission is off
- * the session is torn down on the way out instead, which is the one case where reopening restarts it.
+ * WebView and the extension keeps running. Tearing down a session whose "keep running in background"
+ * permission is off is the shell's job, driven by which drawer tab is selected — this composable's
+ * own lifetime is the wrong signal, because a rotation rebuilds it into the other layout and would
+ * read as the user navigating away.
  */
 @Composable
 internal fun VsixDrawerContent(extension: InstalledExtension, modifier: Modifier = Modifier) {
@@ -82,11 +84,6 @@ internal fun VsixDrawerContent(extension: InstalledExtension, modifier: Modifier
         onOpenPanel = { handle, title -> actions.onOpenPanel(extension.id, handle, title) },
         modifier = modifier,
     )
-    if (!actions.keepAliveFor(extension.id)) {
-        DisposableEffect(extension.id) {
-            onDispose { VsixViewHolder.destroy(extension.id) }
-        }
-    }
 }
 
 @Composable

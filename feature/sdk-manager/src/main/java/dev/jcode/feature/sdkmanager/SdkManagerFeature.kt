@@ -2,6 +2,7 @@ package dev.jcode.feature.sdkmanager
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import dev.jcode.core.distro.CatalogProgress
 import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.core.distro.SdkCatalogAction
 import dev.jcode.core.distro.SdkCatalogEntry
@@ -22,6 +23,10 @@ object SdkManagerFeature {
         entry: SdkCatalogEntry,
         state: SdkCatalogState,
         environmentState: DistroEnvironmentState,
+        progress: CatalogProgress? = null,
+        /** The entry the user pressed Install on, when that is this one and a *required* toolchain is
+         *  what is currently running. Lets this page own the progress for the whole chain. */
+        requestedEntryId: String? = null,
         onInstall: (String) -> Unit,
         onUpdate: (String) -> Unit,
         onUninstall: (String) -> Unit,
@@ -32,18 +37,24 @@ object SdkManagerFeature {
     ) {
         val environmentReady = environmentState.distroInstalled == true && environmentState.jcodeUserReady == true
         val running = state.runningEntryId == entry.id
+        // This page is also "busy" while a toolchain it requires is being installed on its behalf.
+        val prerequisite = !running && requestedEntryId == entry.id && state.runningEntryId != null
+        val prerequisiteName = state.entries.firstOrNull { it.id == state.runningEntryId }?.name
         val versioned = entry.versionsScript.isNotBlank()
         ManagerDetailScreen(
             title = entry.name,
             subtitle = entry.category.label,
             description = entry.description,
             status = statusOf(entry.id, state),
-            busy = state.checking || running,
-            busyLabel = when (state.runningAction.takeIf { running }) {
-                SdkCatalogAction.Install -> "Installing…"
-                SdkCatalogAction.Verify -> "Verifying…"
-                SdkCatalogAction.Uninstall -> "Removing…"
-                null -> "Checking…"
+            busy = state.checking || running || prerequisite,
+            busyLabel = when {
+                prerequisite -> "Installing ${prerequisiteName ?: "required tools"}…"
+                else -> when (state.runningAction.takeIf { running }) {
+                    SdkCatalogAction.Install -> "Installing…"
+                    SdkCatalogAction.Verify -> "Verifying…"
+                    SdkCatalogAction.Uninstall -> "Removing…"
+                    null -> "Checking…"
+                }
             },
             actionsEnabled = environmentReady && state.runningEntryId == null && !state.checking,
             onInstall = { onInstall(entry.id) },
@@ -58,6 +69,8 @@ object SdkManagerFeature {
             installedVersions = if (versioned) state.installedVersions[entry.id].orEmpty() else emptyList(),
             multiVersion = entry.multiVersion,
             versionsLoading = versioned && state.versionsLoadingEntryId == entry.id,
+            progressPercent = progress?.percent.takeIf { running || prerequisite },
+            progressLabel = progress?.label,
             onInstallVersion = { version -> onInstallVersion(entry.id, version) },
             onUninstallVersion = { version -> onUninstallVersion(entry.id, version) },
             modifier = modifier,

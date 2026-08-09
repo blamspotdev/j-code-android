@@ -291,6 +291,8 @@ import dev.jcode.workbench.marketplace.LocalExtensionActivation
 import dev.jcode.workbench.marketplace.ExtensionsPanel
 import dev.jcode.workbench.DebugEditorState
 import dev.jcode.workbench.DebugSessionUi
+import dev.jcode.workbench.LocalCatalogProgress
+import dev.jcode.workbench.LocalSdkInstallRequestedId
 import dev.jcode.workbench.LocalDebugCatalogState
 import dev.jcode.workbench.LocalDebugEditorState
 import dev.jcode.workbench.LocalDebugSession
@@ -423,6 +425,8 @@ fun JCodeApp(
     val sdkCatalogState by viewModel.sdkCatalogState.collectAsStateWithLifecycle()
     val lspCatalogState by viewModel.lspCatalogState.collectAsStateWithLifecycle()
     val debugCatalogState by viewModel.debugCatalogState.collectAsStateWithLifecycle()
+    val catalogProgress by viewModel.catalogProgress.collectAsStateWithLifecycle()
+    val sdkInstallRequestedId by viewModel.sdkInstallRequestedId.collectAsStateWithLifecycle()
     val breakpoints by viewModel.breakpoints.collectAsStateWithLifecycle()
     val debugLocation by viewModel.debugLocation.collectAsStateWithLifecycle()
     val debugState by viewModel.debugState.collectAsStateWithLifecycle()
@@ -1309,6 +1313,8 @@ fun JCodeApp(
         LocalEditorEmptyActions provides editorEmptyActions,
         LocalVcsActions provides vcsActions,
         LocalDebugCatalogState provides debugCatalogState,
+        LocalCatalogProgress provides catalogProgress,
+        LocalSdkInstallRequestedId provides sdkInstallRequestedId,
         LocalExtensionInstallPhases provides extensionInstallPhases,
         LocalPendingReload provides pendingReloadUi,
         LocalRunConfigPresets provides contributedRunPresets,
@@ -1762,6 +1768,19 @@ private fun JCodeShell(
     LaunchedEffect(rightPanelSelection, vsixExtensions.map { it.id }) {
         if (rightPanelSelection is RightPanelSelection.Extension && selectedVsix == null) {
             selectRightPanelTab(RightPanelTab.Terminal)
+        }
+    }
+    // A .vsix whose "keep running in the background" permission is off is torn down once the user
+    // navigates away from its tab. Driven by the selection (and whether the drawer is showing at
+    // all), never by the drawer composable's lifetime: rotating rebuilds the drawer into the other
+    // layout, which as a teardown signal read as "navigated away" and restarted the extension.
+    val keepVsixAlive = LocalExtensionDrawerActions.current.keepAliveFor
+    LaunchedEffect(rightPanelSelection, rightSidebarVisible, keepVsixAlive, vsixExtensions.map { it.id }) {
+        val onScreen = (rightPanelSelection as? RightPanelSelection.Extension)
+            ?.extensionId
+            ?.takeIf { rightSidebarVisible }
+        vsixExtensions.forEach { ext ->
+            if (ext.id != onScreen && !keepVsixAlive(ext.id)) VsixViewHolder.destroy(ext.id)
         }
     }
     // Read once here so the run handlers below (defined before the settings block) can resolve the
@@ -2873,6 +2892,8 @@ private fun JCodeShell(
                                             entry = entry,
                                             state = sdkCatalogState,
                                             environmentState = environmentState,
+                                            progress = LocalCatalogProgress.current,
+                                            requestedEntryId = LocalSdkInstallRequestedId.current,
                                             onInstall = managerActions.onInstallSdkCatalogEntry,
                                             onUpdate = managerActions.onInstallSdkCatalogEntry,
                                             onUninstall = managerActions.onUninstallSdkCatalogEntry,
@@ -2890,6 +2911,7 @@ private fun JCodeShell(
                                             entry = entry,
                                             state = lspCatalogState,
                                             environmentState = environmentState,
+                                            progress = LocalCatalogProgress.current,
                                             onInstall = managerActions.onInstallLspCatalogEntry,
                                             onUpdate = managerActions.onInstallLspCatalogEntry,
                                             onUninstall = managerActions.onUninstallLspCatalogEntry,
@@ -2906,6 +2928,7 @@ private fun JCodeShell(
                                             entry = entry,
                                             state = debugState,
                                             environmentState = environmentState,
+                                            progress = LocalCatalogProgress.current,
                                             onInstall = managerActions.onInstallDebugEngine,
                                             onUpdate = managerActions.onInstallDebugEngine,
                                             onUninstall = managerActions.onUninstallDebugEngine,
@@ -3507,6 +3530,7 @@ private fun WorkspacePanel(
                         onOpenLspDetail = managerActions.onOpenLspDetail,
                         onOpenDebugDetail = managerActions.onOpenDebugEngineDetail,
                         modifier = Modifier.fillMaxSize(),
+                        progress = LocalCatalogProgress.current,
                     )
 
                     WorkbenchTool.DbManager -> DbManagerPanel(

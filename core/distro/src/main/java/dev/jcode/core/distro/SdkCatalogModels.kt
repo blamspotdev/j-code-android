@@ -27,7 +27,16 @@ data class SdkCatalogEntry(
     val supportedArches: List<String> = emptyList(),
     /** Other SDK catalog ids that must be installed first (e.g. android-sdk requires android-prereqs). */
     val requiredSdks: List<String> = emptyList(),
+    /** Floor for this entry's install timeout, in minutes. The user's "Toolchain install timeout"
+     *  setting still applies when it is larger; this only stops an entry that genuinely needs longer
+     *  (hundreds of MB over a phone connection) from being killed by a shorter global default.
+     *  0 = no floor. */
+    val minInstallTimeoutMinutes: Int = 0,
 ) {
+    /** This entry's install budget given the user's global [globalTimeoutMs] setting. */
+    fun installTimeoutMs(globalTimeoutMs: Long): Long =
+        maxOf(globalTimeoutMs, minInstallTimeoutMinutes * 60_000L)
+
     /** Whether this entry should be offered on the given environment. */
     fun isSupportedOn(distroId: String, arch: Arch): Boolean =
         (supportedDistros.isEmpty() || distroId in supportedDistros) &&

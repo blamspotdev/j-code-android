@@ -2,6 +2,7 @@ package dev.jcode.feature.debug
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import dev.jcode.core.distro.CatalogProgress
 import dev.jcode.core.distro.DebugEngineAction
 import dev.jcode.core.distro.DebugEngineCatalogState
 import dev.jcode.core.distro.DebugEngineEntry
@@ -21,6 +22,7 @@ object DebugEngineManagerFeature {
         entry: DebugEngineEntry,
         state: DebugEngineCatalogState,
         environmentState: DistroEnvironmentState,
+        progress: CatalogProgress? = null,
         onInstall: (String) -> Unit,
         onUpdate: (String) -> Unit,
         onUninstall: (String) -> Unit,
@@ -46,6 +48,8 @@ object DebugEngineManagerFeature {
             onUpdate = { onUpdate(entry.id) },
             onUninstall = { onUninstall(entry.id) },
             onVerify = { onVerify(entry.id) },
+            progressPercent = progress?.percent.takeIf { running },
+            progressLabel = progress?.label,
             modifier = modifier,
         )
     }

@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import dev.jcode.core.distro.CatalogProgress
 import dev.jcode.core.distro.DebugEngineCatalogState
 import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.core.distro.LspCatalogState
@@ -47,6 +48,7 @@ private data class ToolchainRow(
     val description: String,
     val status: ManagerItemStatus,
     val checking: Boolean,
+    val checkingLabel: String = "Checking…",
 )
 
 /**
@@ -65,6 +67,8 @@ internal fun ToolchainManagerPanel(
     onOpenLspDetail: (String) -> Unit,
     onOpenDebugDetail: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** Percent + phase of the running install, so the row shows it without opening the detail page. */
+    progress: CatalogProgress? = null,
 ) {
     val environmentReady = environmentState.distroInstalled == true && environmentState.jcodeUserReady == true
     var query by remember { mutableStateOf("") }
@@ -79,7 +83,7 @@ internal fun ToolchainManagerPanel(
             category.contains(query, ignoreCase = true) ||
             description.contains(query, ignoreCase = true)
 
-    val rows = remember(sdkState, lspState, debugState, query, filterName, selectedDistro) {
+    val rows = remember(sdkState, lspState, debugState, query, filterName, selectedDistro, progress) {
         val all = buildList {
             if (filter == null || filter == ToolchainKind.Sdk) {
                 sdkState.entries
@@ -94,7 +98,9 @@ internal fun ToolchainManagerPanel(
                                 name = it.name,
                                 description = "${it.category.label} · ${it.description}",
                                 status = statusOf(it.id, sdkState.installedEntryIds, sdkState.updatableEntryIds),
-                                checking = sdkState.checking && it.id !in sdkState.installedEntryIds,
+                                checking = sdkState.runningEntryId == it.id ||
+                                    (sdkState.checking && it.id !in sdkState.installedEntryIds),
+                                checkingLabel = runningLabel(sdkState.runningEntryId == it.id, sdkState.runningAction?.label, progress),
                             ),
                         )
                     }
@@ -110,7 +116,9 @@ internal fun ToolchainManagerPanel(
                                 name = it.name,
                                 description = "${it.category} · ${it.description}",
                                 status = statusOf(it.id, lspState.installedEntryIds, lspState.updatableEntryIds),
-                                checking = lspState.checking && it.id !in lspState.installedEntryIds,
+                                checking = lspState.runningEntryId == it.id ||
+                                    (lspState.checking && it.id !in lspState.installedEntryIds),
+                                checkingLabel = runningLabel(lspState.runningEntryId == it.id, lspState.runningAction?.label, progress),
                             ),
                         )
                     }
@@ -126,7 +134,9 @@ internal fun ToolchainManagerPanel(
                                 name = it.name,
                                 description = "${it.category} · ${it.description}",
                                 status = statusOf(it.id, debugState.installedEntryIds, debugState.updatableEntryIds),
-                                checking = debugState.checking && it.id !in debugState.installedEntryIds,
+                                checking = debugState.runningEntryId == it.id ||
+                                    (debugState.checking && it.id !in debugState.installedEntryIds),
+                                checkingLabel = runningLabel(debugState.runningEntryId == it.id, debugState.runningAction?.label, progress),
                             ),
                         )
                     }
@@ -233,6 +243,7 @@ internal fun ToolchainManagerPanel(
                             description = row.description,
                             status = row.status,
                             checking = row.checking,
+                            checkingLabel = row.checkingLabel,
                             onClick = {
                                 when (row.kind) {
                                     ToolchainKind.Sdk -> onOpenSdkDetail(row.id)
@@ -246,6 +257,22 @@ internal fun ToolchainManagerPanel(
             }
         }
     }
+}
+
+/**
+ * Chip text while a row is busy. The row that is actually running names its action and — once the
+ * script has reported any — the percentage ("Installing… 42%"); every other row is only ever busy
+ * because of a catalog-wide refresh, which is "Checking…".
+ */
+private fun runningLabel(isRunning: Boolean, actionLabel: String?, progress: CatalogProgress?): String {
+    if (!isRunning) return "Checking…"
+    val verb = when (actionLabel) {
+        "Install" -> "Installing"
+        "Remove" -> "Removing"
+        "Verify" -> "Verifying"
+        else -> "Working"
+    }
+    return verb + "…" + (progress?.percent?.let { " $it%" }.orEmpty())
 }
 
 private fun statusOf(id: String, installed: Set<String>, updatable: Set<String>): ManagerItemStatus = when {

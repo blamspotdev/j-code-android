@@ -335,7 +335,11 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                SdkCatalogAction.Install -> execCatalogAction("${action.label} ${entry.name}", applyVersion(entry.installScript, version), timeoutMs = catalogInstallTimeoutMs)
+                SdkCatalogAction.Install -> execCatalogAction(
+                    "${action.label} ${entry.name}",
+                    applyVersion(entry.installScript, version),
+                    timeoutMs = entry.installTimeoutMs(catalogInstallTimeoutMs),
+                )
                 SdkCatalogAction.Verify -> execCatalogScript(entry.verifyScript, timeoutMs = 120_000L)
                 SdkCatalogAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", applyVersion(entry.uninstallScript, version), timeoutMs = 900_000L)
             }
@@ -1463,9 +1467,37 @@ class DistroService(
      * (visible in the right drawer) instead of a silent in-process exec. Returns null to decline
      * (e.g. no session slot free), in which case the action falls back to [execCatalogScript].
      * Scripts run with the same semantics either way: root, with HOME/USER pointing at the jcode user.
+     *
+     * The runner reports the script's own `jcode_progress` calls back through `onProgress`.
      */
     @Volatile
-    var interactiveCatalogRunner: (suspend (label: String, script: String, timeoutMs: Long) -> ExecResult?)? = null
+    var interactiveCatalogRunner:
+        (suspend (label: String, script: String, timeoutMs: Long, onProgress: (Int, String) -> Unit) -> ExecResult?)? = null
+
+    /**
+     * Stage [content] at [guestPath] inside the selected distro by writing it straight into the
+     * rootfs on the host, returning true on success.
+     *
+     * The alternative — typing the content into a shell — goes through a PTY line discipline, which
+     * buffers a few KB, caps a single line's length, and echoes everything back. That is fine for a
+     * command but not for a script: the Setup terminal used to heredoc whole toolchain scripts in
+     * (the Android SDK one is ~9 KB) and the tail was lost. The rootfs is app-private storage, so
+     * the host can just write the file.
+     */
+    fun stageGuestFile(guestPath: String, content: String): Boolean = runCatching {
+        val distroId = _environmentState.value.runtime.selectedDistro.id
+        if (!rootfsManager.isDistroInstalled(distroId)) return false
+        val target = File(rootfsManager.getRootfsPath(distroId), guestPath.trimStart('/'))
+        target.parentFile?.mkdirs()
+        target.writeText(content)
+        true
+    }.getOrDefault(false)
+
+    private val _catalogProgress = MutableStateFlow<CatalogProgress?>(null)
+
+    /** Percentage + phase of the running install/uninstall, or null when nothing is running (or the
+     *  running script reports no progress). Shared by the SDK / LSP / debug-engine manager pages. */
+    val catalogProgress: StateFlow<CatalogProgress?> = _catalogProgress.asStateFlow()
 
     /** Timeout (ms) for a catalog INSTALL action (SDK/LSP/debugger), set from the "Toolchain install
      *  timeout" setting. Verify/uninstall keep their own fixed budgets. Default is the pre-setting
@@ -1483,33 +1515,63 @@ class DistroService(
      *  — a missing runtime ([ExecResult.internalError]) or a user cancel (SIGINT, exit 130) — break
      *  out immediately. Retries carry a "retry N/M" label so they're visible in the Setup terminal. */
     private suspend fun execCatalogAction(label: String, script: String, timeoutMs: Long): ExecResult {
-        val prepared = withAptSelfHeal(script)
+        val prepared = withCatalogHelpers(withAptSelfHeal(script))
         var last: ExecResult? = null
-        for (attempt in 1..CATALOG_INSTALL_MAX_ATTEMPTS) {
-            val attemptLabel =
-                if (attempt == 1) label else "$label — retry $attempt/$CATALOG_INSTALL_MAX_ATTEMPTS"
-            val result = runCatalogOnce(attemptLabel, prepared, timeoutMs)
-            if (result.succeeded) return result
-            last = result
-            val healable = result.internalError == null && result.exitCode != 130
-            if (!healable || attempt == CATALOG_INSTALL_MAX_ATTEMPTS) break
-            delay(CATALOG_RETRY_BACKOFF_MS * attempt)
+        try {
+            for (attempt in 1..CATALOG_INSTALL_MAX_ATTEMPTS) {
+                val attemptLabel =
+                    if (attempt == 1) label else "$label — retry $attempt/$CATALOG_INSTALL_MAX_ATTEMPTS"
+                // Each attempt restarts the script from the top, so its progress restarts too.
+                _catalogProgress.value = null
+                val result = runCatalogOnce(attemptLabel, prepared, timeoutMs)
+                if (result.succeeded) return result
+                last = result
+                val healable = result.internalError == null && result.exitCode != 130
+                if (!healable || attempt == CATALOG_INSTALL_MAX_ATTEMPTS) break
+                delay(CATALOG_RETRY_BACKOFF_MS * attempt)
+            }
+        } finally {
+            _catalogProgress.value = null
         }
         return last ?: ExecResult(exitCode = 1)
     }
 
     /** One catalog-action attempt: prefer the visible Setup terminal, fall back to a quiet in-process
-     *  exec. [prepared] already carries the apt self-heal preamble. */
+     *  exec. [prepared] already carries the apt self-heal + progress-helper preambles. */
     private suspend fun runCatalogOnce(label: String, prepared: String, timeoutMs: Long): ExecResult {
         val runner = interactiveCatalogRunner
         if (runner != null) {
             val runtime = _environmentState.value.runtime
             val ensure = ensureDistroUser(runtime.selectedDistro.id, runtime.user)
             if (!ensure.succeeded) return ensure
-            runner(label, prepared, timeoutMs)?.let { return it }
+            val onProgress: (Int, String) -> Unit = { percent, phase ->
+                _catalogProgress.value = CatalogProgress(percent.coerceIn(0, 100), phase)
+            }
+            runner(label, prepared, timeoutMs, onProgress)?.let { return it }
         }
+        // Quiet fallback: no PTY, so the OSC markers go nowhere and the UI stays indeterminate.
         return execCatalogScript(prepared, timeoutMs)
     }
+
+    /**
+     * Prepend the shell helpers every catalog install/uninstall may call.
+     *
+     * `jcode_progress <percent> <label>` reports how far the script has got: an OSC 7716 marker the
+     * Setup terminal turns into a determinate progress bar, plus a plain `[ 42%] …` line so the
+     * progress is readable in the terminal itself. `jcode_fetch <url> <dest> <from> <to> <label>`
+     * downloads a file and reports true byte-level progress across the [from,to] slice of the bar —
+     * curl's own meter is a carriage-return animation no percentage can be recovered from once it
+     * has been through a PTY. `jcode_apt <from> <to> <label> <packages…>` is `apt-get update` plus
+     * `apt-get install`, reporting apt's own machine-readable `APT::Status-Fd` percentages, so a
+     * plain apt-based toolchain gets a genuine bar rather than three hand-placed milestones. It
+     * keeps apt's exit status (via a temp file — the status of a pipeline is its last member's).
+     *
+     * Both are defined unconditionally so a script can call them on either execution path; without a
+     * PTY (`JCODE_PROGRESS_TOKEN` unset) the marker is simply not emitted. Every helper ends by
+     * returning 0 — a script running under `set -e` would otherwise abort on a progress call whose
+     * last comparison happened to be false.
+     */
+    private fun withCatalogHelpers(script: String): String = CATALOG_SHELL_HELPERS + script
 
     /** Fix DNS/resolv.conf for the selected distro before an apt operation. Host-side, idempotent,
      *  no proot round-trip; safe to call unconditionally (see [RootfsManager.ensureRootfsNetworking]). */
@@ -1561,7 +1623,13 @@ class DistroService(
      * All three are silent, fast no-ops when the runtime is already clean.
      */
     private fun withAptSelfHeal(script: String): String {
-        if (!(script.contains("apt-get") || script.contains("apt ") || script.contains("dpkg"))) {
+        // `jcode_apt` is the injected helper (see [withCatalogHelpers]) that most entries now use
+        // instead of calling apt-get directly; it needs the same repair pass.
+        if (!(
+                script.contains("apt-get") || script.contains("apt ") ||
+                    script.contains("dpkg") || script.contains("jcode_apt")
+                )
+        ) {
             return script
         }
         val preamble =
@@ -2156,5 +2224,76 @@ class DistroService(
         private const val CATALOG_RETRY_BACKOFF_MS: Long = 3_000L
         /** Wizard steps that must never abort setup — logged, marked done, and stepped over on failure. */
         private val BEST_EFFORT_STEPS: Set<WizardStepId> = setOf(WizardStepId.AptUpdated)
+
+        /** Shell helpers prepended to every catalog install/uninstall — see [withCatalogHelpers]. */
+        private val CATALOG_SHELL_HELPERS: String = """
+            # --- JCode catalog helpers (injected by DistroService) ---
+            __jc_last_pct=-1
+            jcode_progress() {
+              __jc_p=${'$'}1
+              case "${'$'}__jc_p" in ''|*[!0-9]*) return 0 ;; esac
+              [ "${'$'}__jc_p" -gt 100 ] && __jc_p=100
+              if [ -n "${'$'}{JCODE_PROGRESS_TOKEN:-}" ]; then
+                printf '\033]7716;%s;%s;%s\007' "${'$'}JCODE_PROGRESS_TOKEN" "${'$'}__jc_p" "${'$'}2"
+              fi
+              if [ "${'$'}__jc_p" != "${'$'}__jc_last_pct" ]; then
+                __jc_last_pct=${'$'}__jc_p
+                printf '[%3d%%] %s\n' "${'$'}__jc_p" "${'$'}2"
+              fi
+              return 0
+            }
+            jcode_fetch() {
+              __jc_u=${'$'}1; __jc_d=${'$'}2; __jc_a=${'$'}{3:-0}; __jc_b=${'$'}{4:-100}; __jc_l=${'$'}{5:-Downloading}
+              __jc_t=${'$'}(curl -fsSLI "${'$'}__jc_u" 2>/dev/null | tr -d '\r' |
+                awk 'tolower(${'$'}1)=="content-length:"{n=${'$'}2} END{print n+0}')
+              rm -f "${'$'}__jc_d"
+              curl -fsSL --retry 3 --retry-delay 3 --connect-timeout 30 -o "${'$'}__jc_d" "${'$'}__jc_u" &
+              __jc_pid=${'$'}!
+              while kill -0 "${'$'}__jc_pid" 2>/dev/null; do
+                if [ "${'$'}__jc_t" -gt 0 ] && [ -f "${'$'}__jc_d" ]; then
+                  __jc_c=${'$'}(wc -c < "${'$'}__jc_d" 2>/dev/null || echo 0)
+                  jcode_progress ${'$'}(( __jc_a + (__jc_b - __jc_a) * __jc_c / __jc_t )) "${'$'}__jc_l"
+                fi
+                sleep 2
+              done
+              wait "${'$'}__jc_pid"
+            }
+            __jc_apt_run() {
+              __ja_a=${'$'}1; __ja_b=${'$'}2; __ja_l=${'$'}3; shift 3
+              __ja_mid=${'$'}(( (__ja_a + __ja_b) / 2 ))
+              rm -f /tmp/.jcode-apt-rc
+              { sudo apt-get -y -o APT::Status-Fd=1 -o Dpkg::Use-Pty=0 "${'$'}@" 2>&1
+                echo "__jcrc:${'$'}?" > /tmp/.jcode-apt-rc
+              } | while IFS= read -r __ja_line; do
+                case "${'$'}__ja_line" in
+                  dlstatus:*|pmstatus:*)
+                    case "${'$'}__ja_line" in
+                      dlstatus:*) __ja_x=${'$'}__ja_a; __ja_y=${'$'}__ja_mid ;;
+                      *)          __ja_x=${'$'}__ja_mid; __ja_y=${'$'}__ja_b ;;
+                    esac
+                    __ja_p=${'$'}(printf '%s' "${'$'}__ja_line" | cut -d: -f3 | cut -d. -f1)
+                    case "${'$'}__ja_p" in
+                      ''|*[!0-9]*) ;;
+                      *) jcode_progress ${'$'}(( __ja_x + (__ja_y - __ja_x) * __ja_p / 100 )) \
+                           "${'$'}(printf '%s' "${'$'}__ja_line" | cut -d: -f4- | cut -c1-60)" ;;
+                    esac
+                    ;;
+                  *) printf '%s\n' "${'$'}__ja_line" ;;
+                esac
+              done
+              jcode_progress "${'$'}__ja_b" "${'$'}__ja_l"
+              __ja_rc=${'$'}(sed -n 's/^__jcrc://p' /tmp/.jcode-apt-rc 2>/dev/null)
+              rm -f /tmp/.jcode-apt-rc
+              return "${'$'}{__ja_rc:-0}"
+            }
+            jcode_apt() {
+              __ja0=${'$'}1; __ja1=${'$'}2; __ja2=${'$'}3; shift 3
+              __ja_q=${'$'}(( __ja0 + (__ja1 - __ja0) / 5 ))
+              __jc_apt_run "${'$'}__ja0" "${'$'}__ja_q" "${'$'}__ja2" update || true
+              __jc_apt_run "${'$'}__ja_q" "${'$'}__ja1" "${'$'}__ja2" install "${'$'}@"
+            }
+            # --- end JCode catalog helpers ---
+
+        """.trimIndent()
     }
 }
