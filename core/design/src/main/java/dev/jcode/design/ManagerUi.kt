@@ -536,10 +536,11 @@ fun ManagerDetailScreen(
                 if (showVerify) {
                     CompactOutlinedButton("Verify", onClick = onVerify, enabled = actionsEnabled, modifier = Modifier.weight(1f))
                 }
-                // Multi-version tools are removed per-version in the list above; single-version keeps a global Uninstall.
-                if (!(hasVersions && multiVersion)) {
-                    CompactOutlinedButton("Uninstall", onClick = onUninstall, enabled = installed && actionsEnabled, modifier = Modifier.weight(1f))
-                }
+                // Kept for multi-version tools too. Individual versions are removed in the list above,
+                // but "Uninstall" means the whole toolchain — which for something like the Android
+                // SDK is more than its versions: removing every platform would still leave the
+                // command-line tools, build-tools and Gradle behind with no way to get rid of them.
+                CompactOutlinedButton("Uninstall", onClick = onUninstall, enabled = installed && actionsEnabled, modifier = Modifier.weight(1f))
             }
         }
     }

@@ -381,9 +381,12 @@ entries:
   - id: android-sdk
     category: android
     name: Android SDK
-    description: Command-line tools, an Android platform, build-tools and the latest Gradle, wired with the ARM-native aapt2 so on-device Gradle builds (assembleDebug) produce a real APK. The platform is the newest one this device's aapt2 can actually read, which is NOT the newest that exists — the install prints the compileSdk to use, and records it in android-sdk/jcode-compile-sdk.txt. Gradle is exposed at /opt/gradle/current and on PATH. Requires the Android SDK prerequisites. Large download.
+    description: Command-line tools, Android platforms, build-tools and the latest Gradle, wired with the ARM-native aapt2 so on-device Gradle builds (assembleDebug) produce a real APK. Several platforms can be installed side by side and a project picks any of them with compileSdk; the newest one this device's aapt2 can actually read is the default and is recorded in android-sdk/jcode-compile-sdk.txt. That is NOT the newest platform that exists — the version list marks the ones this device cannot build against. Gradle is exposed at /opt/gradle/current and on PATH. Requires the Android SDK prerequisites. Large download.
     supportedArches: [arm64]
     requiredSdks: [android-prereqs]
+    # The SDK keeps every platform in its own platforms/android-<api> directory, so they coexist with
+    # no extra machinery — only the shared base (command-line tools, build-tools, Gradle) is single.
+    multiVersion: true
     # Several hundred MB over a phone connection. The global "Toolchain install timeout" setting still
     # wins when it is larger; this only stops a short default from killing a healthy install midway.
     minInstallTimeoutMinutes: 45
@@ -453,7 +456,11 @@ entries:
       REPO_XML=""
       for R in repository2-3.xml repository2-1.xml; do
         if wget -q --timeout=60 --tries=3 -O /tmp/android-repo.xml "https://dl.google.com/android/repository/$R"; then
-          REPO_XML=/tmp/android-repo.xml; break
+          REPO_XML=/tmp/android-repo.xml
+          # Kept so the version picker still has a list when the network is down (see versionsScript).
+          mkdir -p "$HOME/.cache/jcode" 2>/dev/null || true
+          cp -f /tmp/android-repo.xml "$HOME/.cache/jcode/android-repo.xml" 2>/dev/null || true
+          break
         fi
       done
       if [ -z "$REPO_XML" ]; then
@@ -567,52 +574,99 @@ entries:
       echo "aapt2 $AAPT2_VER — trying Android platforms from API $CEILING downwards"
 
       jcode_progress 50 "Choosing an Android platform"
-      # A platform already on disk is free to test: a retried install must not re-download 90 MB, and
-      # one left behind by an interrupted run that this aapt2 cannot read is removed here rather than
-      # lingering forever.
+      WANT="${JCODE_VERSION:-}"
+      [ "$WANT" = "latest" ] && WANT=""
       CHOSEN=""
-      for D in $(ls -1 "$ANDROID_HOME/platforms" 2>/dev/null | sort -Vr); do
-        if probe_platform "$D"; then
-          CHOSEN="$D"
-          echo "   reusing the already-installed $D"
-          break
+      if [ -n "$WANT" ]; then
+        # A platform was picked in the version list. Install exactly that one — platforms coexist, so
+        # this ADDS to whatever is already there rather than replacing it.
+        CDIR="android-$WANT"
+        # Refuse before downloading. The list marks these "Unsupported here", but the newest is also
+        # the list head (what the picker preselects), so it is easy to pick one by accident — and
+        # finding out after ~90 MB has been pulled is the sort of failure this entry is meant to stop.
+        WANT_API=$(printf '%s' "$WANT" | sed -E 's/\..*$//')
+        case "$WANT_API" in ''|*[!0-9]*) WANT_API=0 ;; esac
+        if [ "$WANT_API" -gt "$CEILING" ]; then
+          rm -f /tmp/jcode-probe.apk /tmp/jcode-probe-manifest.xml /tmp/jcode-sdkm.log "$REPO_XML"
+          echo "Android platform $WANT cannot be used on this device."
+          echo "aapt2 $AAPT2_VER — the only ARM build available — cannot read the resource tables that"
+          echo "API $((CEILING + 1)) and newer ship, so nothing would ever build against it. Nothing was downloaded."
+          echo "Install API $CEILING or lower; the version list marks those as supported."
+          exit 1
         fi
-        echo "   removing $D — this device's aapt2 cannot read its resource table"
-        rm -rf "$ANDROID_HOME/platforms/$D"
-      done
-
-      TRIED=0
-      for CAND in $ALL_PLATFORMS; do
-        [ -n "$CHOSEN" ] && break
-        CDIR="${CAND#platforms;}"
-        API=$(printf '%s' "$CDIR" | sed -E 's/^android-//; s/\..*$//')
-        case "$API" in ''|*[!0-9]*) continue ;; esac
-        # Above the ceiling this aapt2 provably cannot read it; below 30 it is too old to build against.
-        [ "$API" -le "$CEILING" ] || continue
-        [ "$API" -ge 30 ] || continue
-        # Three strikes. Past that the ceiling table is wrong about this device and downloading more
-        # candidates is just burning the user's data.
-        TRIED=$((TRIED + 1))
-        [ "$TRIED" -le 3 ] || break
-        echo "== Android platform $CDIR: downloading and probing =="
-        sdkm_run 50 78 "Downloading Android platform $CDIR" "$(pkg_size "$CAND")" "$CAND"
+        if [ ! -f "$ANDROID_HOME/platforms/$CDIR/android.jar" ]; then
+          echo "== Android platform $CDIR: downloading =="
+          sdkm_run 50 78 "Downloading Android platform $CDIR" "$(pkg_size "platforms;$CDIR")" "platforms;$CDIR"
+        fi
         if probe_platform "$CDIR"; then
           CHOSEN="$CDIR"
-          echo "   aapt2 links against $CDIR — using it"
-          break
+          echo "   aapt2 links against $CDIR"
+        else
+          # Keep the SDK exactly as it was: only this candidate is removed, so any platform that was
+          # already working still is.
+          rm -rf "$ANDROID_HOME/platforms/$CDIR"
+          rm -f /tmp/jcode-probe.apk /tmp/jcode-probe-manifest.xml /tmp/jcode-sdkm.log "$REPO_XML"
+          echo "Android platform $CDIR downloaded, but this device's aapt2 ($AAPT2_VER) cannot read its"
+          echo "resource table — nothing could ever build against it, so it has been removed again."
+          echo "Choose a platform the version list does not mark as unsupported (API $CEILING or lower)."
+          exit 1
         fi
-        echo "   aapt2 cannot read $CDIR's resource table — removing it and stepping down"
-        rm -rf "$ANDROID_HOME/platforms/$CDIR"
-      done
-      rm -f /tmp/jcode-probe.apk /tmp/jcode-probe-manifest.xml /tmp/jcode-sdkm.log "$REPO_XML"
+      else
+        # No particular version asked for: land one that works. A platform already on disk is free to
+        # test, so a retried install never re-downloads 90 MB, and one left behind by an interrupted
+        # run that this aapt2 cannot read is removed here rather than lingering forever.
+        for D in $(ls -1 "$ANDROID_HOME/platforms" 2>/dev/null | sort -Vr); do
+          if probe_platform "$D"; then
+            CHOSEN="$D"
+            echo "   reusing the already-installed $D"
+            break
+          fi
+          echo "   removing $D — this device's aapt2 cannot read its resource table"
+          rm -rf "$ANDROID_HOME/platforms/$D"
+        done
+
+        TRIED=0
+        for CAND in $ALL_PLATFORMS; do
+          [ -n "$CHOSEN" ] && break
+          CDIR="${CAND#platforms;}"
+          API=$(printf '%s' "$CDIR" | sed -E 's/^android-//; s/\..*$//')
+          case "$API" in ''|*[!0-9]*) continue ;; esac
+          # Above the ceiling this aapt2 provably cannot read it; below 30 it is too old to build against.
+          [ "$API" -le "$CEILING" ] || continue
+          [ "$API" -ge 30 ] || continue
+          # Three strikes. Past that the ceiling table is wrong about this device and downloading more
+          # candidates is just burning the user's data.
+          TRIED=$((TRIED + 1))
+          [ "$TRIED" -le 3 ] || break
+          echo "== Android platform $CDIR: downloading and probing =="
+          sdkm_run 50 78 "Downloading Android platform $CDIR" "$(pkg_size "$CAND")" "$CAND"
+          if probe_platform "$CDIR"; then
+            CHOSEN="$CDIR"
+            echo "   aapt2 links against $CDIR — using it"
+            break
+          fi
+          echo "   aapt2 cannot read $CDIR's resource table — removing it and stepping down"
+          rm -rf "$ANDROID_HOME/platforms/$CDIR"
+        done
+      fi
       if [ -z "$CHOSEN" ]; then
+        rm -f /tmp/jcode-probe.apk /tmp/jcode-probe-manifest.xml /tmp/jcode-sdkm.log "$REPO_XML"
         echo "No available Android platform can be read by this device's aapt2 ($AAPT2_VER)."
         echo "Install an older one by hand, e.g.: sdkmanager 'platforms;android-34'"
         exit 1
       fi
-      COMPILE_SDK=$(printf '%s' "$CHOSEN" | sed -E 's/^android-//')
-      # Recorded so the Run/Build recipes and the user can see which compileSdk actually works here;
-      # a project written against a newer one still fails, and the number is not guessable.
+
+      # The default compileSdk is the newest INSTALLED platform this aapt2 can read — not necessarily
+      # the one just installed, since an older platform can be added alongside a newer one. Recorded
+      # so the Run/Build recipes and the user can see what actually works here; the number is not
+      # guessable, and a project written against a newer platform still fails to link.
+      DEFAULT_PLATFORM=""
+      for D in $(ls -1 "$ANDROID_HOME/platforms" 2>/dev/null | sort -Vr); do
+        if probe_platform "$D"; then DEFAULT_PLATFORM="$D"; break; fi
+      done
+      [ -n "$DEFAULT_PLATFORM" ] || DEFAULT_PLATFORM="$CHOSEN"
+      rm -f /tmp/jcode-probe.apk /tmp/jcode-probe-manifest.xml /tmp/jcode-sdkm.log "$REPO_XML"
+      COMPILE_SDK=$(printf '%s' "$DEFAULT_PLATFORM" | sed -E 's/^android-//')
       printf '%s\n' "$COMPILE_SDK" > "$ANDROID_HOME/jcode-compile-sdk.txt"
 
       jcode_progress 80 "Resolving the latest Gradle"
@@ -633,22 +687,90 @@ entries:
       echo
       echo "================================================================"
       echo " Android SDK ready. Use compileSdk $COMPILE_SDK in your build.gradle."
+      echo " Platforms installed: $(ls -1 "$ANDROID_HOME/platforms" 2>/dev/null | sort -Vr | sed 's/^android-//' | tr '\n' ' ')"
       echo " Newer platforms exist, but the only arm64 aapt2 available cannot"
       echo " read their resources, so a higher compileSdk will fail to link."
       echo "================================================================"
     verifyScript: |
       ls "$HOME"/android-sdk/platforms/*/android.jar >/dev/null 2>&1 && [ -x /opt/gradle/current/bin/gradle ] && BT=$(ls -d "$HOME"/android-sdk/build-tools/*/ 2>/dev/null | sort -V | tail -1) && "${BT}aapt2" version >/dev/null 2>&1 && echo ready
     uninstallScript: |
-      rm -rf "$HOME/android-sdk"
-      sudo rm -rf /opt/gradle
-      sudo rm -f /usr/local/bin/gradle
-    # Deliberately does NOT compare against the newest platform: the installed one is capped by what
-    # this device's aapt2 can read, so "newer platform exists" is the normal steady state and would
-    # nag forever. Only a newer Gradle is actionable.
+      ANDROID_HOME="$HOME/android-sdk"
+      V="${JCODE_VERSION:-}"
+      if [ -n "$V" ] && [ "$V" != "latest" ]; then
+        # Removing one platform leaves the shared base (command-line tools, build-tools, Gradle) and
+        # every other platform alone.
+        rm -rf "$ANDROID_HOME/platforms/android-$V"
+        # Re-point the recorded default at the newest platform still installed that aapt2 can read.
+        BT=$(ls -d "$ANDROID_HOME"/build-tools/*/ 2>/dev/null | sort -V | tail -1)
+        DEFAULT_PLATFORM=""
+        if [ -n "$BT" ] && [ -x "${BT}aapt2" ]; then
+          printf '%s\n' '<?xml version="1.0" encoding="utf-8"?>' '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="jcode.probe">' '  <application />' '</manifest>' > /tmp/jcode-probe-manifest.xml
+          for D in $(ls -1 "$ANDROID_HOME/platforms" 2>/dev/null | sort -Vr); do
+            if timeout 120 "${BT}aapt2" link -I "$ANDROID_HOME/platforms/$D/android.jar" \
+                 --manifest /tmp/jcode-probe-manifest.xml -o /tmp/jcode-probe.apk >/dev/null 2>&1; then
+              DEFAULT_PLATFORM="$D"; break
+            fi
+          done
+          rm -f /tmp/jcode-probe.apk /tmp/jcode-probe-manifest.xml
+        fi
+        if [ -n "$DEFAULT_PLATFORM" ]; then
+          printf '%s\n' "${DEFAULT_PLATFORM#android-}" > "$ANDROID_HOME/jcode-compile-sdk.txt"
+          echo "Removed android-$V. compileSdk is now ${DEFAULT_PLATFORM#android-}."
+        else
+          rm -f "$ANDROID_HOME/jcode-compile-sdk.txt"
+          echo "Removed android-$V. No usable Android platform is left — install one to build again."
+        fi
+      else
+        rm -rf "$ANDROID_HOME"
+        sudo rm -rf /opt/gradle
+        sudo rm -f /usr/local/bin/gradle
+      fi
+    # Deliberately does NOT compare against the newest platform: what can be installed is capped by
+    # what this device's aapt2 can read, so "a newer platform exists" is the normal steady state and
+    # would nag forever. Only a newer Gradle is actionable.
     updateCheckScript: |
       [ -d "$HOME/android-sdk/platforms" ] || exit 1
       G=$(wget -qO- https://services.gradle.org/versions/current | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
       [ -n "$G" ] && [ ! -x "/opt/gradle/gradle-$G/bin/gradle" ]
+    # Every Android platform Google publishes that is worth building against here, newest first, each
+    # marked with whether THIS device's aapt2 can actually read it — Google ships no arm64 aapt2, so
+    # we run Debian's, and above its ceiling a platform links nowhere (see the install script). They
+    # are still offered: the ceiling table is a shortcut, and the install probes for real before
+    # keeping anything. Runs without the catalog helpers (the versions fetch is a quiet exec).
+    versionsScript: |
+      A=/usr/lib/android-sdk/build-tools/debian/aapt2
+      CEILING=9999
+      if [ -x "$A" ]; then
+        case "$("$A" version 2>&1 | sed -n 's/.*(aapt) \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1)" in
+          2.19) CEILING=34 ;;
+        esac
+      fi
+      # Google's manifest, cached. A version list that vanishes because one HTTPS request blipped is
+      # worse than a slightly stale one — platforms are only ever added — so a successful fetch is
+      # kept and reused when the next one fails. The install script populates the same cache.
+      CACHE="$HOME/.cache/jcode/android-repo.xml"
+      mkdir -p "$(dirname "$CACHE")" 2>/dev/null || true
+      REPO=""
+      for R in repository2-3.xml repository2-1.xml; do
+        if wget -q --timeout=60 --tries=3 -O /tmp/jcode-platforms.xml "https://dl.google.com/android/repository/$R"; then
+          cp -f /tmp/jcode-platforms.xml "$CACHE" 2>/dev/null || true
+          REPO=/tmp/jcode-platforms.xml; break
+        fi
+      done
+      if [ -z "$REPO" ] && [ -s "$CACHE" ]; then REPO="$CACHE"; fi
+      [ -n "$REPO" ] || exit 1
+      grep -oE 'path="platforms;android-[0-9]+(\.[0-9]+)?"' "$REPO" |
+        sed -E 's/^path="platforms;android-//; s/"$//' | sort -u -Vr |
+        awk -v ceil="$CEILING" '
+          { api = $0; sub(/\..*/, "", api) }
+          api + 0 < 30 { next }
+          api + 0 > ceil + 0 { print $0 "\tUnsupported here"; next }
+          !seen++ { print $0 "\tRecommended"; next }
+          { print $0 "\t" }
+        '
+      rm -f /tmp/jcode-platforms.xml
+    installedVersionsScript: |
+      ls -1 "$HOME/android-sdk/platforms" 2>/dev/null | sed -n 's/^android-//p' | sort -rV
 
   - id: adb
     category: android
