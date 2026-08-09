@@ -952,7 +952,14 @@ fun JCodeApp(
                 actionLabel = "Update",
                 duration = SnackbarDuration.Long,
             )
-            if (result == SnackbarResult.ActionPerformed) appUpdateSetting.onInstallUpdate()
+            if (result == SnackbarResult.ActionPerformed) {
+                // Start the download AND put the user in front of it: progress only renders on the
+                // Settings > About button, so installing from the toast alone looked like nothing
+                // happened. Open Settings and reveal that group, then kick the install off.
+                viewModel.openSettingsPage()
+                SettingsFeature.revealGroup("About")
+                appUpdateSetting.onInstallUpdate()
+            }
         }
     }
 

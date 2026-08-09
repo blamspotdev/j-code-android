@@ -48,8 +48,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -106,8 +109,22 @@ import dev.jcode.design.SettingsTextFieldRow
 import dev.jcode.design.ThemeBundleRegistry
 import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.design.ThemeMode
+import kotlin.math.roundToInt
 
 object SettingsFeature {
+
+    /** Group the next composition should jump to, or null. Set by [revealGroup]. */
+    private val pendingReveal = mutableStateOf<String?>(null)
+
+    /**
+     * Ask the Settings screen to reveal a group by title — switch to the GLOBAL tab, clear any
+     * search, expand it, and scroll it into view. Used by the "update available" toast so its Update
+     * action lands the user on the progress it starts. Safe to call before Settings is composed: the
+     * request is consumed by whichever composition runs next.
+     */
+    fun revealGroup(title: String) {
+        pendingReveal.value = title
+    }
 
     @Composable
     fun Content(
@@ -192,6 +209,22 @@ object SettingsFeature {
         val explorerViewMode = scopedExplorer?.viewMode ?: effectiveConfig.explorer.viewMode
 
         var query by rememberSaveable { mutableStateOf("") }
+        val scrollState = rememberScrollState()
+        // A reveal request (e.g. the update toast's Update action) puts the named group on screen:
+        // the GLOBAL tab because that is where they live, no search because a query bypasses grouping
+        // entirely, then expand and scroll. The group's offset is only known once it has been laid
+        // out, and Settings may have opened on this very frame, so wait for it rather than guessing.
+        val reveal = pendingReveal.value
+        LaunchedEffect(reveal) {
+            val title = reveal ?: return@LaunchedEffect
+            selectedTab = 0
+            query = ""
+            settingsGroupExpanded.getOrPut(title) { mutableStateOf(false) }.value = true
+            var frames = 0
+            while (settingsGroupOffsets[title] == null && frames++ < 30) withFrameNanos { }
+            settingsGroupOffsets[title]?.let { scrollState.animateScrollTo(it.roundToInt()) }
+            pendingReveal.value = null
+        }
         // Fresh each composition; cards increment it when they pass the filter, and the trailing
         // empty-state reads it after all cards have composed.
         val matchSink = SettingsMatchSink()
@@ -202,7 +235,7 @@ object SettingsFeature {
         Column(
             modifier = modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scrollState)
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -1422,6 +1455,10 @@ private fun SettingsNoResults(query: String) {
  */
 private val settingsGroupExpanded = mutableMapOf<String, MutableState<Boolean>>()
 
+/** Each group's y offset inside the scrolling column, published as it is laid out, so
+ *  [SettingsFeature.revealGroup] can scroll to one. */
+private val settingsGroupOffsets = mutableMapOf<String, Float>()
+
 /**
  * A run of [SettingsCard]s under one heading, collapsed by default so the page opens as a short list
  * of headings instead of one long scroll.
@@ -1449,6 +1486,7 @@ private fun ColumnScope.SettingsGroup(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .onGloballyPositioned { settingsGroupOffsets[stateKey] = it.positionInParent().y }
             .clickable { expanded = !expanded }
             .padding(top = 6.dp, start = 2.dp, end = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
