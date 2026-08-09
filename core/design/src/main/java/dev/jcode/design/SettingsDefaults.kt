@@ -27,6 +27,7 @@ object SettingsDefaults {
     const val MARKDOWN_WRAP_PORTRAIT = true
     const val EDITOR_FONT_SIZE = 14f
     const val EDITOR_WORD_WRAP = false
+    const val TERMINAL_FONT_SIZE = 13f
     const val DEVELOPER_OPTIONS = false
     const val RIGHT_DRAWER_PERSISTENT = false
     const val RIGHT_DRAWER_PERSISTENT_FRACTION = 0.5f

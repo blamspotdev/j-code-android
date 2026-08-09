@@ -56,6 +56,9 @@ import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -73,6 +76,7 @@ import dev.jcode.design.LocalBottomBarSetting
 import dev.jcode.design.LocalFontSettings
 import dev.jcode.design.LocalEditorDragMovesCursor
 import dev.jcode.design.LocalEditorFontSizeSetting
+import dev.jcode.design.LocalTerminalFontSizeSetting
 import dev.jcode.design.LocalEditorWordWrapSetting
 import dev.jcode.design.LocalExtraKeysSetting
 import dev.jcode.design.LocalPerformanceSettings
@@ -107,8 +111,12 @@ import dev.jcode.design.SettingsDropdownRow
 import dev.jcode.design.SettingsResettableRow
 import dev.jcode.design.SettingsTextFieldRow
 import dev.jcode.design.ThemeBundleRegistry
+import dev.jcode.core.distro.AppProcesses
 import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.design.ThemeMode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 object SettingsFeature {
@@ -380,6 +388,22 @@ object SettingsFeature {
                     optionLabel = fontLabel,
                     modified = fontSettings.terminalFontId != fontSettings.terminalDefaultId,
                     onReset = { fontSettings.onSelectTerminalFont(fontSettings.terminalDefaultId) },
+                )
+            }
+
+            SettingsCard(
+                title = "Terminal",
+                description = "Text size for terminal sessions. Applies to every open terminal.",
+                keywords = "terminal font size text scale sp bigger smaller zoom console shell tty readable",
+            ) {
+                val terminalFontSizeSetting = LocalTerminalFontSizeSetting.current
+                StepperRow(
+                    label = "Font size",
+                    value = "${terminalFontSizeSetting.value.toInt()} sp",
+                    onDecrease = { terminalFontSizeSetting.onChange((terminalFontSizeSetting.value - 1f).coerceAtLeast(6f)) },
+                    onIncrease = { terminalFontSizeSetting.onChange((terminalFontSizeSetting.value + 1f).coerceAtMost(40f)) },
+                    modified = terminalFontSizeSetting.value != SettingsDefaults.TERMINAL_FONT_SIZE,
+                    onReset = { terminalFontSizeSetting.onChange(SettingsDefaults.TERMINAL_FONT_SIZE) },
                 )
             }
 
@@ -808,6 +832,53 @@ object SettingsFeature {
                     ) {
                         Text(if (envBackup.updatingPackages) "Updating packages…" else "Update system packages")
                     }
+                }
+            }
+
+            SettingsCard(
+                title = "Background process limit",
+                description = "Android caps how many processes an app may fork and kills the rest — " +
+                    "which takes the whole Linux environment down mid-command. Raising the cap needs " +
+                    "one adb command; JCode cannot set it itself.",
+                keywords = "phantom process limit killed died crashed dies terminal closes distro proot stopped " +
+                    "background max_phantom_processes device_config adb activity manager trimming long session " +
+                    "claude agent build gradle npm disappears exits by itself",
+            ) {
+                val clipboard = LocalClipboardManager.current
+                var processCount by remember { mutableStateOf<Int?>(null) }
+                // Only polls while this card is actually on screen (the group is collapsed by default).
+                LaunchedEffect(Unit) {
+                    while (true) {
+                        processCount = withContext(Dispatchers.IO) { AppProcesses.count() }
+                        delay(3_000L)
+                    }
+                }
+                SummaryRow(
+                    label = "Linux processes",
+                    value = processCount?.let { "$it of ${AppProcesses.DEFAULT_PHANTOM_LIMIT} (default cap)" }
+                        ?: "Unknown",
+                )
+                Text(
+                    text = "Android 12+ kills an app's forked processes once they pass the cap — 32 by " +
+                        "default. proot, the shell and everything under it count, so a long build or " +
+                        "coding-agent session goes over it and the terminal dies while JCode keeps " +
+                        "running. Run these from a computer with the device connected (or from this " +
+                        "device's own adb) to lift it; it survives reboots but has to be redone after a " +
+                        "factory reset.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = AppProcesses.RAISE_LIMIT_COMMANDS,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                OutlinedButton(
+                    onClick = { clipboard.setText(AnnotatedString(AppProcesses.RAISE_LIMIT_COMMANDS)) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Copy commands")
                 }
             }
 

@@ -122,6 +122,9 @@ const val EXTENSION_API_VERSION = 1
  *  must not be able to grow the decoration maps without limit. */
 const val MAX_EXPLORER_DECORATIONS = 20_000
 
+/** Throttle for the "Android killed the distro" prompt — one kill takes every terminal at once. */
+private const val PROCESS_LIMIT_PROMPT_INTERVAL_MS = 60_000L
+
 /**
  * Process-singleton holder for the app-level UI-preferences DataStore. A DataStore must be created
  * exactly once per file per process; constructing a second one (e.g. when MainViewModel is rebuilt
@@ -186,6 +189,9 @@ sealed interface PendingFolderType {
 sealed interface WorkbenchPrompt {
     /** A change only applies on a fresh process — offer to restart the app. */
     data class RestartApp(val message: String) : WorkbenchPrompt
+
+    /** Android killed the distro's processes; point the user at the setting that explains it. */
+    data object ProcessLimit : WorkbenchPrompt
 }
 
 /** An updated extension awaiting a reload; surfaced as a compact banner atop the Extensions panel. */
@@ -313,6 +319,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Actionable prompts surfaced as a snackbar with a button (restart the app). */
     private val _prompts = MutableSharedFlow<WorkbenchPrompt>(extraBufferCapacity = 4)
     val prompts = _prompts.asSharedFlow()
+
+    private var lastProcessLimitPromptAt = 0L
+
+    /**
+     * A terminal's process tree was killed from outside the app (see
+     * [dev.jcode.core.term.TerminalSessionManager.onExternalKill]). One kill takes every session down
+     * at once, so the prompt is throttled — otherwise the user gets a snackbar per dead terminal.
+     */
+    fun reportExternalProcessKill() {
+        val now = System.currentTimeMillis()
+        if (now - lastProcessLimitPromptAt < PROCESS_LIMIT_PROMPT_INTERVAL_MS) return
+        lastProcessLimitPromptAt = now
+        _prompts.tryEmit(WorkbenchPrompt.ProcessLimit)
+    }
 
     /**
      * Sideload an extension from a picked `.jext` [uri] (Developer options). Streams it to a cache
@@ -1427,6 +1447,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setEditorFontSizeGlobal(size: Float) {
         viewModelScope.launch {
             uiPreferences.edit { prefs -> prefs[editorFontSizeGlobalKey] = size.coerceIn(8f, 72f) }
+        }
+    }
+
+    private val terminalFontSizeGlobalKey = floatPreferencesKey("terminal_font_size_global")
+
+    /** App-level (Global settings) terminal font size, in sp. Unlike the editor's, this has no
+     *  workspace/project override — a terminal is not tied to one file tree. */
+    val terminalFontSizeGlobal: StateFlow<Float> = uiPreferences.data
+        .map { prefs -> (prefs[terminalFontSizeGlobalKey] ?: SettingsDefaults.TERMINAL_FONT_SIZE).coerceIn(6f, 40f) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.TERMINAL_FONT_SIZE)
+
+    fun setTerminalFontSizeGlobal(size: Float) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[terminalFontSizeGlobalKey] = size.coerceIn(6f, 40f) }
         }
     }
 

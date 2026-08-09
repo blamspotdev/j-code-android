@@ -16,6 +16,9 @@ import kotlinx.coroutines.launch
 /** Upper bound for the user-configurable session limit (Settings default is 12). */
 private const val MAX_SESSIONS_CAP = 24
 
+/** How close together two self-exits have to be to read as one external kill of the whole tree. */
+private const val EXTERNAL_KILL_BURST_MS = 1_500L
+
 /**
  * Manages terminal sessions backed by real PTY processes.
  * Sessions survive app backgrounding via the PTY file descriptors.
@@ -100,6 +103,18 @@ class TerminalSessionManager(
     /** Invoked (off the main thread) when a session's shell exits on its own and it is auto-reaped,
      *  so the host can release the session's foreground-service hold and the UI can drop its tab. */
     var onSessionExit: ((String) -> Unit)? = null
+
+    /** Invoked (off the main thread, after [onSessionExit]) when a shell died in a way an ordinary
+     *  exit cannot explain — its whole process tree was killed from outside the app. On Android 12+
+     *  that is almost always ActivityManager trimming "phantom processes": everything an app forks
+     *  beyond `max_phantom_processes` (32 out of the box) is killed, which takes proot and the entire
+     *  distro down while the app itself keeps running. The host uses this to explain what happened
+     *  instead of leaving the terminal to vanish mid-command. */
+    var onExternalKill: ((String) -> Unit)? = null
+
+    /** Epoch millis of the last self-exit, so a whole-tree kill is recognised by its burst. */
+    @Volatile
+    private var lastSelfExitAt = 0L
 
     /** Invoked (off the main thread) when a guest `code`/`jcode <path>[:line[:col]]` command runs,
      *  carrying the path token so the host can open + focus it in the editor. */
@@ -505,6 +520,12 @@ class TerminalSessionManager(
     /** Tear down a session whose shell exited by itself (see [startReader]). Idempotent. */
     private fun reapExitedSession(id: String) {
         val session = synchronized(sessionsLock) { _sessions.remove(id) } ?: return
+        // A shell does not return to its own exit path while a foreground program is still running,
+        // and independent shells do not exit within milliseconds of each other — either means the tree
+        // was killed from outside. Captured before the teardown clears the session's state.
+        val now = System.currentTimeMillis()
+        val externallyKilled = session.foreground != null || now - lastSelfExitAt <= EXTERNAL_KILL_BURST_MS
+        lastSelfExitAt = now
         session.onUpdate = null
         // Close only the PTY (already at EOF). Do NOT close the VtParser here: a bound TerminalView may
         // still be drawing it on the main thread, and closing native parser state from this IO thread
@@ -515,6 +536,7 @@ class TerminalSessionManager(
             activeSessionId = synchronized(sessionsLock) { _sessions.keys.firstOrNull() }
         }
         onSessionExit?.invoke(id)
+        if (externallyKilled) onExternalKill?.invoke(id)
     }
 
     /**

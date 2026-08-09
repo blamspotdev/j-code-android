@@ -92,6 +92,14 @@ falls back to the default when the named built-in is not currently offered.
 | Ext Dev | `app/src/main/java/dev/jcode/workbench/ExtensionDevPanel.kt`, `ExtensionDevLog.kt` | Unsigned sideloads only; the extension's `console` output lands here, **not** in logcat |
 | Terminal host | `app/src/main/java/dev/jcode/TerminalSessionHost.kt` | Session tabs, nested `↳` sub-shell tabs |
 
+Terminal tabs can be **pinned** (long-press → Pin): a pinned tab sorts to the front, shows a pin
+instead of its `×`, and is skipped by *Close others* / *Close all*. The pin set lives in `JCodeApp`
+alongside `terminalSessionIds`, **not** in the terminal panel — the right drawer's content is
+disposed whenever the drawer is collapsed or closed (and again when it swaps between modal and
+docked), which takes a panel-local `rememberSaveable` registry with it. This is the same hazard as
+the collapsible settings groups; see
+[Settings reference](04-settings-reference.md).
+
 ---
 
 ## 5. Command palette
@@ -177,15 +185,18 @@ A chip row above the soft keyboard supplying keys a phone IME lacks.
 
 ```kotlin
 enum class ExtraKey(val label: String) {
-    Esc("ESC"), Slash("/"), Dash("-"), Tab("TAB"), Ctrl("CTRL"), Alt("ALT"),
+    Esc("ESC"), Slash("/"), Dash("-"), Tab("TAB"), Ctrl("CTRL"), Alt("ALT"), Shift("SHIFT"),
     Left("←"), Up("↑"), Down("↓"), Right("→"),
     Home("HOME"), End("END"), PageUp("PGUP"), PageDown("PGDN"),
     F1("F1") … F12("F12"),
 }
 ```
 
-`Ctrl` and `Alt` are **one-shot sticky modifiers**, not sent keys: tapping one arms it for the next
-keystroke, which is then translated to the corresponding control byte for the terminal.
+`Ctrl`, `Alt` and `Shift` are **one-shot sticky modifiers**, not sent keys: tapping one arms it for
+the next keystroke, which is then translated to the corresponding control byte or xterm modified
+sequence for the terminal. `Shift` also latches from a soft keyboard's own Shift key (see
+`TerminalView.pendingShift`), because on-screen keyboards send Shift as a key of its own and leave
+`META_SHIFT_ON` off the key that follows.
 
 ```kotlin
 enum class ExtraKeysVisibility { Hidden, WithKeyboard, Always }
@@ -242,6 +253,7 @@ every line of setup output and would otherwise recompose the row continuously du
 4. Root `onPreviewKeyEvent` runs before focused interop views — keep the per-view fallbacks.
 5. Extension `console` output goes to the Ext Dev log, not logcat.
 6. Status-bar `remember` keys must exclude churning fields.
+7. State that must outlive the right drawer (terminal pins) is held in `JCodeApp`, never in a panel.
 
 ---
 

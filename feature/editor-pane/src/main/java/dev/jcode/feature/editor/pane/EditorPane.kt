@@ -652,7 +652,7 @@ private class EditorExtraKeysTarget(private val view: EditorView) : ExtraKeysTar
         ExtraKey.Home, ExtraKey.End, ExtraKey.PageUp, ExtraKey.PageDown,
     )
 
-    override fun onExtraKey(key: ExtraKey, ctrl: Boolean, alt: Boolean) {
+    override fun onExtraKey(key: ExtraKey, ctrl: Boolean, alt: Boolean, shift: Boolean) {
         val keyCode = when (key) {
             ExtraKey.Esc -> android.view.KeyEvent.KEYCODE_ESCAPE
             ExtraKey.Tab -> android.view.KeyEvent.KEYCODE_TAB

@@ -90,7 +90,7 @@ fun BottomStatusBarSlot(content: @Composable () -> Unit) {
 class TerminalExtraKeysTarget(private val view: TerminalView) : ExtraKeysTarget {
 
     override val keys = listOf(
-        ExtraKey.Esc, ExtraKey.Tab, ExtraKey.Ctrl, ExtraKey.Alt,
+        ExtraKey.Esc, ExtraKey.Tab, ExtraKey.Ctrl, ExtraKey.Alt, ExtraKey.Shift,
         ExtraKey.Left, ExtraKey.Up, ExtraKey.Down, ExtraKey.Right,
         ExtraKey.Home, ExtraKey.End, ExtraKey.PageUp, ExtraKey.PageDown,
         ExtraKey.Slash, ExtraKey.Dash,
@@ -99,9 +99,9 @@ class TerminalExtraKeysTarget(private val view: TerminalView) : ExtraKeysTarget 
     // Terminals consume F1-F12 (htop/mc function bars); the row appends them behind the setting.
     override val supportsFunctionKeys = true
 
-    override fun onExtraKey(key: ExtraKey, ctrl: Boolean, alt: Boolean) {
-        if (ctrl || alt) {
-            modifiedSequence(key, ctrl, alt)?.let {
+    override fun onExtraKey(key: ExtraKey, ctrl: Boolean, alt: Boolean, shift: Boolean) {
+        if (ctrl || alt || shift) {
+            modifiedSequence(key, ctrl, alt, shift)?.let {
                 view.sendInput(it)
                 return
             }
@@ -112,7 +112,9 @@ class TerminalExtraKeysTarget(private val view: TerminalView) : ExtraKeysTarget 
         }
         when (key) {
             ExtraKey.Esc -> view.sendKey(KeyEvent.KEYCODE_ESCAPE, null)
-            ExtraKey.Tab -> view.sendKey(KeyEvent.KEYCODE_TAB, null)
+            // Shift+Tab (back-tab) is encoded by TerminalView.sendKey, like every other key here;
+            // the chip only has to hand it the sticky Shift.
+            ExtraKey.Tab -> view.sendKey(KeyEvent.KEYCODE_TAB, shiftOnlyEvent(shift))
             ExtraKey.Left -> view.sendKey(KeyEvent.KEYCODE_DPAD_LEFT, null)
             ExtraKey.Up -> view.sendKey(KeyEvent.KEYCODE_DPAD_UP, null)
             ExtraKey.Down -> view.sendKey(KeyEvent.KEYCODE_DPAD_DOWN, null)
@@ -127,6 +129,14 @@ class TerminalExtraKeysTarget(private val view: TerminalView) : ExtraKeysTarget 
         }
     }
 
+    /** A bare key-down carrying just the sticky Shift, so [TerminalView.sendKey] picks the shifted
+     *  encoding. Null when Shift is not armed — sendKey treats a null event as "no modifiers". */
+    private fun shiftOnlyEvent(shift: Boolean): KeyEvent? = if (shift) {
+        KeyEvent(0L, 0L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_UNKNOWN, 0, KeyEvent.META_SHIFT_ON)
+    } else {
+        null
+    }
+
     /** F1-F12 map onto the contiguous KEYCODE_F1..F12 block [TerminalView.sendKey] already encodes. */
     private fun functionKeyCode(key: ExtraKey): Int? =
         if (key >= ExtraKey.F1 && key <= ExtraKey.F12) {
@@ -135,9 +145,10 @@ class TerminalExtraKeysTarget(private val view: TerminalView) : ExtraKeysTarget 
             null
         }
 
-    override fun onModifiersChanged(ctrl: Boolean, alt: Boolean) {
+    override fun onModifiersChanged(ctrl: Boolean, alt: Boolean, shift: Boolean) {
         view.pendingCtrl = ctrl
         view.pendingAlt = alt
+        view.pendingShift = shift
     }
 
     // [lines] positive = up into scrollback history, matching the terminal's scrollOffset axis.
@@ -145,9 +156,9 @@ class TerminalExtraKeysTarget(private val view: TerminalView) : ExtraKeysTarget 
         view.scrollByLines(lines)
     }
 
-    /** xterm modified sequences: modifier code = 1 + (2 if alt) + (4 if ctrl). */
-    private fun modifiedSequence(key: ExtraKey, ctrl: Boolean, alt: Boolean): String? {
-        val mod = 1 + (if (alt) 2 else 0) + (if (ctrl) 4 else 0)
+    /** xterm modified sequences: modifier code = 1 + (1 if shift) + (2 if alt) + (4 if ctrl). */
+    private fun modifiedSequence(key: ExtraKey, ctrl: Boolean, alt: Boolean, shift: Boolean): String? {
+        val mod = 1 + (if (shift) 1 else 0) + (if (alt) 2 else 0) + (if (ctrl) 4 else 0)
         return when (key) {
             ExtraKey.Up -> "\u001B[1;${mod}A"
             ExtraKey.Down -> "\u001B[1;${mod}B"

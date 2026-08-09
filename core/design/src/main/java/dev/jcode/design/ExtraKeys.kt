@@ -29,7 +29,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
-/** One chip on the extra-keys row. [Ctrl]/[Alt] are one-shot sticky modifiers, not sent keys. */
+/** One chip on the extra-keys row. [Ctrl]/[Alt]/[Shift] are one-shot sticky modifiers, not sent keys. */
 enum class ExtraKey(val label: String) {
     Esc("ESC"),
     Slash("/"),
@@ -37,6 +37,7 @@ enum class ExtraKey(val label: String) {
     Tab("TAB"),
     Ctrl("CTRL"),
     Alt("ALT"),
+    Shift("SHIFT"),
     Left("←"),
     Up("↑"),
     Down("↓"),
@@ -67,7 +68,8 @@ val EXTRA_FUNCTION_KEYS = listOf(
 
 /** A focused surface (terminal or editor) that consumes extra-keys row presses. */
 interface ExtraKeysTarget {
-    /** Chips to show, in order. Including [ExtraKey.Ctrl]/[ExtraKey.Alt] opts into sticky modifiers. */
+    /** Chips to show, in order. Including [ExtraKey.Ctrl]/[ExtraKey.Alt]/[ExtraKey.Shift] opts into
+     *  sticky modifiers. */
     val keys: List<ExtraKey>
 
     /** Whether the surface consumes F1-F12 — gates the "Function keys" setting so the chips only
@@ -75,10 +77,10 @@ interface ExtraKeysTarget {
     val supportsFunctionKeys: Boolean get() = false
 
     /** A non-modifier chip was tapped with the sticky modifier state captured at tap time. */
-    fun onExtraKey(key: ExtraKey, ctrl: Boolean, alt: Boolean)
+    fun onExtraKey(key: ExtraKey, ctrl: Boolean, alt: Boolean, shift: Boolean = false)
 
     /** Sticky modifiers were armed/cleared; a terminal applies them to the next typed character. */
-    fun onModifiersChanged(ctrl: Boolean, alt: Boolean) {}
+    fun onModifiersChanged(ctrl: Boolean, alt: Boolean, shift: Boolean = false) {}
 
     /** Scroll the surface by [lines]: positive reveals earlier content (editor: up the file; terminal:
      *  back into scrollback), negative moves toward the newest content. Default: no-op. */
@@ -94,10 +96,12 @@ class ExtraKeysState {
     var target by mutableStateOf<ExtraKeysTarget?>(null)
     var ctrl by mutableStateOf(false)
     var alt by mutableStateOf(false)
+    var shift by mutableStateOf(false)
 
     fun clearModifiers() {
         ctrl = false
         alt = false
+        shift = false
     }
 }
 
@@ -154,7 +158,9 @@ fun ExtraKeysRow(
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 keys.forEach { key ->
-                    val active = (key == ExtraKey.Ctrl && state.ctrl) || (key == ExtraKey.Alt && state.alt)
+                    val active = (key == ExtraKey.Ctrl && state.ctrl) ||
+                        (key == ExtraKey.Alt && state.alt) ||
+                        (key == ExtraKey.Shift && state.shift)
                     ExtraKeyChip(
                         label = key.label,
                         glyphFont = if (key.isDirectional) glyphFont else null,
@@ -163,20 +169,25 @@ fun ExtraKeysRow(
                             when (key) {
                                 ExtraKey.Ctrl -> {
                                     state.ctrl = !state.ctrl
-                                    target.onModifiersChanged(state.ctrl, state.alt)
+                                    target.onModifiersChanged(state.ctrl, state.alt, state.shift)
                                 }
                                 ExtraKey.Alt -> {
                                     state.alt = !state.alt
-                                    target.onModifiersChanged(state.ctrl, state.alt)
+                                    target.onModifiersChanged(state.ctrl, state.alt, state.shift)
+                                }
+                                ExtraKey.Shift -> {
+                                    state.shift = !state.shift
+                                    target.onModifiersChanged(state.ctrl, state.alt, state.shift)
                                 }
                                 else -> {
                                     val ctrl = state.ctrl
                                     val alt = state.alt
-                                    if (ctrl || alt) {
+                                    val shift = state.shift
+                                    if (ctrl || alt || shift) {
                                         state.clearModifiers()
-                                        target.onModifiersChanged(false, false)
+                                        target.onModifiersChanged(false, false, false)
                                     }
-                                    target.onExtraKey(key, ctrl, alt)
+                                    target.onExtraKey(key, ctrl, alt, shift)
                                 }
                             }
                         },

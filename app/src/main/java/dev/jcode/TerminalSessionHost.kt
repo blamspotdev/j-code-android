@@ -41,6 +41,15 @@ object TerminalSessionHost {
         uiExitListener = listener
     }
 
+    // Optional UI hook for a session whose process tree was killed from outside the app (Android's
+    // phantom-process trim), so the workbench can explain the disappearance rather than say nothing.
+    @Volatile
+    private var uiExternalKillListener: (() -> Unit)? = null
+
+    fun setUiExternalKillListener(listener: (() -> Unit)?) {
+        uiExternalKillListener = listener
+    }
+
     // Optional UI hook so a guest `code`/`jcode <path>` command can open + focus a file in the editor.
     // Set via a DisposableEffect and cleared on dispose, so it never outlives its composition.
     @Volatile
@@ -105,6 +114,9 @@ object TerminalSessionHost {
                 mgr.onSessionExit = { sessionId ->
                     onSessionStopped(sessionId)
                     uiExitListener?.let { listener -> mainHandler.post { listener(sessionId) } }
+                }
+                mgr.onExternalKill = {
+                    uiExternalKillListener?.let { listener -> mainHandler.post { listener() } }
                 }
                 // A guest `code`/`jcode <path>` command (OSC 7711) fires this off the reader thread;
                 // hop to the main thread and hand the path token to the active UI listener.

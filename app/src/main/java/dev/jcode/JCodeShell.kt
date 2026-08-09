@@ -229,6 +229,8 @@ import dev.jcode.design.SettingsDefaults
 import dev.jcode.design.EditorFontSizeSetting
 import dev.jcode.design.EditorWordWrapSetting
 import dev.jcode.design.LocalEditorFontSizeSetting
+import dev.jcode.design.LocalTerminalFontSizeSetting
+import dev.jcode.design.TerminalFontSizeSetting
 import dev.jcode.design.LocalEditorWordWrapSetting
 import dev.jcode.design.LocalMarkdownPreviewSetting
 import dev.jcode.workbench.ExtensionDevState
@@ -642,6 +644,10 @@ fun JCodeApp(
     val editorWordWrapSetting = remember(editorWordWrap) {
         EditorWordWrapSetting(enabled = editorWordWrap, onChange = viewModel::setEditorWordWrap)
     }
+    val terminalFontSizeGlobal by viewModel.terminalFontSizeGlobal.collectAsStateWithLifecycle()
+    val terminalFontSizeSetting = remember(terminalFontSizeGlobal) {
+        TerminalFontSizeSetting(value = terminalFontSizeGlobal, onChange = viewModel::setTerminalFontSizeGlobal)
+    }
     val pendingReloadList by viewModel.pendingReload.collectAsStateWithLifecycle()
     val pendingReloadUi = remember(pendingReloadList) {
         PendingReloadUi(pendingReloadList.map { it.name }, viewModel::reloadPendingExtensions)
@@ -923,6 +929,12 @@ fun JCodeApp(
         }
     }
 
+    // A terminal that vanished because Android killed its process tree, not because its shell ended.
+    DisposableEffect(viewModel) {
+        TerminalSessionHost.setUiExternalKillListener { viewModel.reportExternalProcessKill() }
+        onDispose { TerminalSessionHost.setUiExternalKillListener(null) }
+    }
+
     // Actionable prompt (restart the app) as a snackbar with a button. Extension-reload prompts render
     // as a compact banner atop the Extensions panel instead (see ExtensionsPanel).
     LaunchedEffect(viewModel) {
@@ -935,6 +947,17 @@ fun JCodeApp(
                         duration = SnackbarDuration.Long,
                     )
                     if (result == SnackbarResult.ActionPerformed) viewModel.restartApp()
+                }
+                WorkbenchPrompt.ProcessLimit -> {
+                    val result = snackbarHostState.showSnackbar(
+                        message = "Android stopped the Linux environment (background process limit).",
+                        actionLabel = "Details",
+                        duration = SnackbarDuration.Long,
+                    )
+                    if (result == SnackbarResult.ActionPerformed) {
+                        viewModel.openSettingsPage()
+                        SettingsFeature.revealGroup("Environment")
+                    }
                 }
             }
         }
@@ -1340,6 +1363,7 @@ fun JCodeApp(
         LocalMarkdownPreviewSetting provides markdownPreviewSetting,
         LocalEditorFontSizeSetting provides editorFontSizeSetting,
         LocalEditorWordWrapSetting provides editorWordWrapSetting,
+        LocalTerminalFontSizeSetting provides terminalFontSizeSetting,
         LocalDeveloperSetting provides developerSetting,
         LocalRightDrawerSetting provides rightDrawerSetting,
         LocalExtensionDevState provides extensionDevState,
@@ -1841,6 +1865,19 @@ private fun JCodeShell(
     }
     var terminalSessionIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var selectedTerminalSessionId by rememberSaveable { mutableStateOf("") }
+    // Pinned terminals sort to the front, hide their "×", and are skipped by Close others/all. Held
+    // HERE rather than inside the terminal panel: the right drawer's content is disposed whenever the
+    // drawer is collapsed/closed (and again when it swaps between modal and docked), which takes the
+    // panel's saveable registry with it — panel-local pin state silently reset on every close.
+    var pinnedTerminalIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    // Drop pins for sessions that have gone away so the set can't leak stale ids.
+    LaunchedEffect(terminalSessionIds) {
+        val live = pinnedTerminalIds.filter { it in terminalSessionIds }
+        if (live.size != pinnedTerminalIds.size) pinnedTerminalIds = live
+    }
+    fun setTerminalPinned(id: String, pinned: Boolean) {
+        pinnedTerminalIds = if (pinned) pinnedTerminalIds + id else pinnedTerminalIds - id
+    }
     // Live tab names keyed by session id, driven by the shell's OSC 7712 (the running program name).
     val terminalTitles = remember { mutableStateMapOf<String, String>() }
     // Terminals the user has actually looked at; anything else is a "new background" instance (badge dot).
@@ -3184,6 +3221,8 @@ private fun JCodeShell(
                         terminalSessionFor = { id -> terminalSessionManager.getSession(id) },
                         terminalTitleFor = { id -> terminalTitles[id] },
                         terminalReady = terminalReady,
+                        pinnedTerminalIds = pinnedTerminalIds,
+                        onSetTerminalPinned = ::setTerminalPinned,
                         onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                         modifier = Modifier
                             .fillMaxHeight()
@@ -3250,6 +3289,8 @@ private fun JCodeShell(
                             terminalSessionFor = { id -> terminalSessionManager.getSession(id) },
                             terminalTitleFor = { id -> terminalTitles[id] },
                             terminalReady = terminalReady,
+                            pinnedTerminalIds = pinnedTerminalIds,
+                            onSetTerminalPinned = ::setTerminalPinned,
                             onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                             modifier = Modifier
                                 .weight(1f)
@@ -3930,6 +3971,8 @@ private fun WorkbenchRightSidebar(
     terminalSessionFor: (String) -> dev.jcode.core.term.TerminalSessionManager.Session?,
     terminalTitleFor: (String) -> String?,
     terminalReady: Boolean,
+    pinnedTerminalIds: List<String>,
+    onSetTerminalPinned: (String, Boolean) -> Unit,
     onOpenEnvironmentWizard: () -> Unit,
     onSelected: (RightPanelSelection) -> Unit,
     onSelectTerminalSession: (String) -> Unit,
@@ -4019,6 +4062,8 @@ private fun WorkbenchRightSidebar(
                     terminalSessionFor = terminalSessionFor,
                     terminalTitleFor = terminalTitleFor,
                     terminalReady = terminalReady,
+                    pinnedTerminalIds = pinnedTerminalIds,
+                    onSetTerminalPinned = onSetTerminalPinned,
                     onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                     onSelectTerminalSession = onSelectTerminalSession,
                     onAddTerminalSession = onAddTerminalSession,
@@ -4152,6 +4197,8 @@ private fun WorkbenchRightSidebarBody(
     terminalSessionFor: (String) -> dev.jcode.core.term.TerminalSessionManager.Session?,
     terminalTitleFor: (String) -> String?,
     terminalReady: Boolean,
+    pinnedTerminalIds: List<String>,
+    onSetTerminalPinned: (String, Boolean) -> Unit,
     onOpenEnvironmentWizard: () -> Unit,
     onSelectTerminalSession: (String) -> Unit,
     onAddTerminalSession: () -> Unit,
@@ -4171,6 +4218,8 @@ private fun WorkbenchRightSidebarBody(
                 terminalSessionFor = terminalSessionFor,
                 terminalTitleFor = terminalTitleFor,
                 terminalReady = terminalReady,
+                pinnedTerminalIds = pinnedTerminalIds,
+                onSetTerminalPinned = onSetTerminalPinned,
                 onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                 onSelectTerminalSession = onSelectTerminalSession,
                 onAddTerminalSession = onAddTerminalSession,
@@ -4301,6 +4350,8 @@ private fun TerminalSidebarContent(
     terminalSessionFor: (String) -> dev.jcode.core.term.TerminalSessionManager.Session?,
     terminalTitleFor: (String) -> String?,
     terminalReady: Boolean,
+    pinnedTerminalIds: List<String>,
+    onSetTerminalPinned: (String, Boolean) -> Unit,
     onOpenEnvironmentWizard: () -> Unit,
     onSelectTerminalSession: (String) -> Unit,
     onAddTerminalSession: () -> Unit,
@@ -4309,14 +4360,6 @@ private fun TerminalSidebarContent(
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         var menuForId by remember { mutableStateOf<String?>(null) }
-        // Pinned terminals sort to the front, hide their "×", and are skipped by Close others/all.
-        // Terminals are ephemeral (never persisted), so this pin state is UI-local too.
-        var pinnedTerminalIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
-        // Drop pins for sessions that have gone away so the set can't leak stale ids.
-        LaunchedEffect(terminalSessionIds) {
-            val live = pinnedTerminalIds.filter { it in terminalSessionIds }
-            if (live.size != pinnedTerminalIds.size) pinnedTerminalIds = live
-        }
         val orderedSessionIds = terminalSessionIds.sortedBy { it !in pinnedTerminalIds }
         // Closing a terminal running a foreground program prompts first (Kill / Close Unbusy / Cancel).
         // "Unbusy" = idle at the prompt (Session.foreground == null). Honors the same confirm-close
@@ -4436,11 +4479,7 @@ private fun TerminalSidebarContent(
                             listActions = buildList {
                                 if (!isRelocated) {
                                     add(ContextAction(JCodeIcon.Pin, if (isPinned) "Unpin" else "Pin") {
-                                        pinnedTerminalIds = if (isPinned) {
-                                            pinnedTerminalIds - sessionId
-                                        } else {
-                                            pinnedTerminalIds + sessionId
-                                        }
+                                        onSetTerminalPinned(sessionId, !isPinned)
                                     })
                                 }
                                 add(ContextAction(JCodeIcon.Clear, "Clear") {
@@ -4513,6 +4552,9 @@ private fun TerminalSidebarContent(
             val tapConfig = LocalTerminalTapConfig.current
             val extraKeys = LocalExtraKeysState.current
             val terminalTypeface = LocalTerminalTypeface.current
+            // sp -> px with the raw display density (not fontScale): the terminal is a fixed grid, so
+            // it follows the app's own size setting rather than the system's text-scaling slider.
+            val terminalFontPx = LocalTerminalFontSizeSetting.current.value * LocalDensity.current.density
             val termSaveActions = LocalEditorSaveActions.current
             var termMenu by remember { mutableStateOf<TerminalMenuRequest?>(null) }
             // Points the extra-keys row at whichever terminal owns the IME; cleared on focus loss so
@@ -4539,7 +4581,7 @@ private fun TerminalSidebarContent(
                         AndroidView(
                             factory = { ctx ->
                                 TerminalView(ctx).apply {
-                                    setFontSize(30f)
+                                    setFontSize(terminalFontPx)
                                     setTypeface(terminalTypeface)
                                     onTapToken = tapConfig.onToken
                                     onContextMenu = { x, y -> termMenu = TerminalMenuRequest(x, y, this) }
@@ -4551,6 +4593,9 @@ private fun TerminalSidebarContent(
                                 }
                             },
                             update = { view ->
+                                // Guarded: setFontSize re-measures the cell and reflows the PTY, so an
+                                // unchanged size must not churn every recomposition.
+                                if (view.getFontSize() != terminalFontPx) view.setFontSize(terminalFontPx)
                                 view.setTypeface(terminalTypeface)
                                 view.onTapToken = tapConfig.onToken
                                 view.onContextMenu = { x, y -> termMenu = TerminalMenuRequest(x, y, view) }

@@ -36,6 +36,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import dev.jcode.core.debug.DebugState
+import dev.jcode.core.distro.AppProcesses
 import dev.jcode.core.term.TerminalSessionManager
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.JcTooltip
@@ -46,9 +47,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.File
-
-/** One row of the app-owned Linux process list (proot trees, adapters, the app itself). */
-private data class LinuxProc(val pid: Int, val name: String, val rssKb: Long)
 
 /** Host device RAM (the Android device, not the proot guest), read from /proc/meminfo. */
 private data class HostMemory(val availKb: Long, val totalKb: Long)
@@ -85,7 +83,7 @@ internal fun TaskManagerSidebarContent(
 ) {
     val debug = LocalDebugSession.current
     val backgroundActions = LocalTaskManagerBackgroundActions.current
-    var processes by remember { mutableStateOf<List<LinuxProc>>(emptyList()) }
+    var processes by remember { mutableStateOf<List<AppProcesses.Process>>(emptyList()) }
     var backgroundExtensions by remember { mutableStateOf<List<MainViewModel.BackgroundExtensionInfo>>(emptyList()) }
     var hostMemory by remember { mutableStateOf<HostMemory?>(null) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -97,7 +95,7 @@ internal fun TaskManagerSidebarContent(
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (isActive) {
-                val (procs, mem) = withContext(Dispatchers.IO) { listOwnProcesses() to readHostMemory() }
+                val (procs, mem) = withContext(Dispatchers.IO) { AppProcesses.list() to readHostMemory() }
                 processes = procs
                 hostMemory = mem
                 backgroundExtensions = backgroundActions.snapshot()
@@ -377,7 +375,7 @@ private fun HostMemoryRow(mem: HostMemory) {
 }
 
 @Composable
-private fun ProcessRow(proc: LinuxProc, isSelf: Boolean, onKill: () -> Unit) {
+private fun ProcessRow(proc: AppProcesses.Process, isSelf: Boolean, onKill: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -431,34 +429,9 @@ private fun ProcessRow(proc: LinuxProc, isSelf: Boolean, onKill: () -> Unit) {
 }
 
 /**
- * The app-uid processes visible in /proc — Android mounts /proc with hidepid, so this is exactly
- * the IDE's own tree: the app process plus every proot/guest process it spawned. Sorted by memory.
- */
-private fun listOwnProcesses(): List<LinuxProc> {
-    val myUid = android.os.Process.myUid()
-    val pageKb = runCatching { Os.sysconf(OsConstants._SC_PAGESIZE) / 1024 }.getOrDefault(4L)
-    return File("/proc").listFiles().orEmpty().mapNotNull { dir ->
-        val pid = dir.name.toIntOrNull() ?: return@mapNotNull null
-        runCatching {
-            if (Os.stat(dir.path).st_uid != myUid) return@mapNotNull null
-            // cmdline is NUL-separated argv; the first token is the executable path.
-            val cmdline = File(dir, "cmdline").readBytes()
-                .toString(Charsets.UTF_8)
-                .split('\u0000')
-                .firstOrNull { it.isNotBlank() }
-            val comm = File(dir, "comm").readText().trim()
-            val name = (cmdline?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: comm)
-                .ifBlank { "pid $pid" }
-            val rssPages = File(dir, "statm").readText().split(' ').getOrNull(1)?.toLongOrNull() ?: 0L
-            LinuxProc(pid = pid, name = name, rssKb = rssPages * pageKb)
-        }.getOrNull()
-    }.sortedByDescending { it.rssKb }
-}
-
-/**
  * Host device RAM from /proc/meminfo — MemTotal and MemAvailable (kB). This is the Android device's
  * memory, not the proot guest's. /proc/meminfo is a global, always-readable file (unaffected by the
- * per-pid hidepid mount that limits [listOwnProcesses]). Returns null if it can't be parsed.
+ * per-pid hidepid mount that limits [AppProcesses.list]). Returns null if it can't be parsed.
  */
 private fun readHostMemory(): HostMemory? = runCatching {
     var total = 0L

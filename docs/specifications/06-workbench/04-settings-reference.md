@@ -43,12 +43,12 @@ behind, because the built-in divider spans only the tab content.
 
 | Group | Contains |
 |---|---|
-| **Appearance** | Theme bundle, icon bundle, fonts, immersive keyboard, display cutout, right-drawer split, bottom status bar, extra-keys row |
+| **Appearance** | Theme bundle, icon bundle, fonts, terminal font size, immersive keyboard, display cutout, right-drawer split, bottom status bar, extra-keys row |
 | **Input** | Volume-key bindings, command-palette command toggles |
 | **Startup** | Restore last session |
 | **Performance** | Hardware acceleration, auto-close idle terminals, idle timeout, max terminal sessions |
 | **Web preview** | Which browser opens web previews (global, with a per-project override) |
-| **Environment** | Distro selection, Android device, virtual device |
+| **Environment** | Distro selection, background process limit, Android device, virtual device |
 | **About** | Version, update check, backup and restore |
 | **Editor** | Editor defaults, gestures, tabs, formatter, Markdown preview |
 | **Explorer** | Exclude files and folders |
@@ -100,6 +100,7 @@ by the Settings screen's modified/reset-to-default logic.
 | `MARKDOWN_WRAP_PORTRAIT` | `true` | |
 | `EDITOR_FONT_SIZE` | `14f` | Clamped 8–72 |
 | `EDITOR_WORD_WRAP` | `false` | |
+| `TERMINAL_FONT_SIZE` | `13f` | sp, clamped 6–40; scaled by display density before `TerminalView.setFontSize` |
 | `DEVELOPER_OPTIONS` | `false` | Gates the Ext Dev panel |
 | `RIGHT_DRAWER_PERSISTENT` | `false` | Landscape split |
 | `RIGHT_DRAWER_PERSISTENT_FRACTION` | `0.5f` | |

@@ -223,6 +223,7 @@ All `@Volatile`, all invoked off the main thread:
 | Callback | Fired by |
 |---|---|
 | `onSessionExit(id)` | The shell exited on its own and the session was auto-reaped |
+| `onExternalKill(id)` | The same exit, but unexplainable by an ordinary one — see below |
 | `onOpenFileRequest(path)` | OSC 7711 |
 | `onTitleChange(id, program)` | OSC 7712 |
 | `onTaskComplete(id, payload)` | OSC 7713 |
@@ -254,6 +255,15 @@ It also injects environment: `androidSdkEnvVars` supplies `ANDROID_HOME` when th
 and `adbEnvVars` supplies `ANDROID_SERIAL` and `JCODE_ADB_PORT` when the ADB bridge is up.
 
 ### 5.4 Idle reaping
+
+`onExternalKill` fires from `reapExitedSession` when the shell died with a foreground program still
+running, or within `EXTERNAL_KILL_BURST_MS` (1.5 s) of another self-exit. Neither happens on a normal
+exit, and both are the signature of Android's **phantom-process trim**: ActivityManager kills every
+process an app forked past `activity_manager/max_phantom_processes` (32 by default), taking proot and
+the whole distro with it while the app itself keeps running. The app cannot raise that cap — it lives
+in DeviceConfig behind a signature permission — so the workbench surfaces a prompt pointing at
+Settings → Environment → *Background process limit*, which carries the adb commands
+(`AppProcesses.RAISE_LIMIT_COMMANDS`) and a live count from `AppProcesses.count()`.
 
 `reapIdle(idleMillis)` closes sessions with `foreground == null` (no running program), not in the
 protected set, and `now - lastActivityAt >= idleMillis`. Controlled by the
@@ -313,7 +323,12 @@ A custom `View` mirroring `EditorView`'s structure:
   **logical rows** with cell-centre anchors.
 - Mouse reporting: `dispatchScroll` and `sendMouseEvent` emit xterm mouse reports when the program
   has enabled tracking, gated by `appConsumesMouse(modes)`.
-- IME: `commitText`, `sendKeyEvent`, `deleteSurroundingText`.
+- IME: `commitText`, `sendKeyEvent`, `deleteSurroundingText`. `sendKeyEvent` routes through the same
+  `sendKey` table as the hardware path, and latches a standalone `KEYCODE_SHIFT_*` into
+  `pendingShift` (folded into the next key's meta state) so Shift+Enter — encoded as `ESC CR`, the
+  "insert a newline" sequence CLIs like Claude Code expect — and Shift+Tab work from a soft keyboard.
+- Font size: `setFontSize` takes raw pixels; the workbench scales the sp-based global setting by the
+  display density.
 - Cursor blink: `startBlink` / `stopBlink` / `resetBlink`.
 - Colour resolution: `sgrFg` / `sgrBg` / `resolveCellColor` handle SGR, 256-indexed and truecolor.
 - Paste: OSC 52 text is shell-quoted via `shellQuote` before being written.
