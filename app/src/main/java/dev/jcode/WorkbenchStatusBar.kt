@@ -105,16 +105,15 @@ internal fun WorkbenchStatusBar(
                 color = if (issueCount.hasErrors) MaterialTheme.colorScheme.error else Color.Unspecified,
                 icon = jcIcon(JCodeIcon.Problems),
             )
-            // File-only metrics are meaningless for a page tab (e.g. Settings); hide them there.
-            if (activeTab?.isPage != true) {
+            // Every one of these describes an open buffer, so they all hang off the same condition.
+            // Testing `isPage` instead only excluded page tabs (Settings) — with no tab at all the
+            // bar still claimed "1:1 · lang: Plain Text" over an empty editor area.
+            val editorState = activeTab?.editorState
+            if (editorState != null) {
                 StatusCell("${metrics.line}:${metrics.column}", icon = jcIcon(JCodeIcon.Cursor))
                 StatusCell("lang: ${metrics.language}")
-                // Encoding + line-ending apply to an actual open file; hide them when none is focused.
-                val editorState = activeTab?.editorState
-                if (editorState != null) {
-                    EncodingCell(metrics.encoding)
-                    LineEndingCell(metrics.lineEnding, editorState)
-                }
+                EncodingCell(metrics.encoding)
+                LineEndingCell(metrics.lineEnding, editorState)
             }
             StatusCell(
                 "distro: ${distroStatus.label}",
