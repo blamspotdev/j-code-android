@@ -92,6 +92,12 @@ Module rule: **`:core:*` never depends on `:feature:*`; `:feature:*` depends onl
 `EditorState.applyEdit` on a single-threaded dispatcher; JNI/native handles are
 wrapped as `AutoCloseable` + `Cleaner`.
 
+## Documentation
+
+Full as-built engineering specifications live in
+[`docs/specifications/`](docs/specifications/README.md) — architecture, module contracts, wire
+protocols, on-disk formats, and an honest inventory of what is and isn't wired up.
+
 ## Extensions
 
 Dev Packs, templates, and (later) theme / icon sets install from the
