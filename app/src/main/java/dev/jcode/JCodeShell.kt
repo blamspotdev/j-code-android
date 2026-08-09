@@ -291,6 +291,8 @@ import dev.jcode.workbench.marketplace.LocalExtensionActivation
 import dev.jcode.workbench.marketplace.ExtensionsPanel
 import dev.jcode.workbench.DebugEditorState
 import dev.jcode.workbench.DebugSessionUi
+import dev.jcode.workbench.LocalCatalogProgress
+import dev.jcode.workbench.LocalSdkInstallRequestedId
 import dev.jcode.workbench.LocalDebugCatalogState
 import dev.jcode.workbench.LocalDebugEditorState
 import dev.jcode.workbench.LocalDebugSession
@@ -423,6 +425,8 @@ fun JCodeApp(
     val sdkCatalogState by viewModel.sdkCatalogState.collectAsStateWithLifecycle()
     val lspCatalogState by viewModel.lspCatalogState.collectAsStateWithLifecycle()
     val debugCatalogState by viewModel.debugCatalogState.collectAsStateWithLifecycle()
+    val catalogProgress by viewModel.catalogProgress.collectAsStateWithLifecycle()
+    val sdkInstallRequestedId by viewModel.sdkInstallRequestedId.collectAsStateWithLifecycle()
     val breakpoints by viewModel.breakpoints.collectAsStateWithLifecycle()
     val debugLocation by viewModel.debugLocation.collectAsStateWithLifecycle()
     val debugState by viewModel.debugState.collectAsStateWithLifecycle()
@@ -948,7 +952,14 @@ fun JCodeApp(
                 actionLabel = "Update",
                 duration = SnackbarDuration.Long,
             )
-            if (result == SnackbarResult.ActionPerformed) appUpdateSetting.onInstallUpdate()
+            if (result == SnackbarResult.ActionPerformed) {
+                // Start the download AND put the user in front of it: progress only renders on the
+                // Settings > About button, so installing from the toast alone looked like nothing
+                // happened. Open Settings and reveal that group, then kick the install off.
+                viewModel.openSettingsPage()
+                SettingsFeature.revealGroup("About")
+                appUpdateSetting.onInstallUpdate()
+            }
         }
     }
 
@@ -1309,6 +1320,8 @@ fun JCodeApp(
         LocalEditorEmptyActions provides editorEmptyActions,
         LocalVcsActions provides vcsActions,
         LocalDebugCatalogState provides debugCatalogState,
+        LocalCatalogProgress provides catalogProgress,
+        LocalSdkInstallRequestedId provides sdkInstallRequestedId,
         LocalExtensionInstallPhases provides extensionInstallPhases,
         LocalPendingReload provides pendingReloadUi,
         LocalRunConfigPresets provides contributedRunPresets,
@@ -1418,17 +1431,14 @@ fun JCodeApp(
             onInstallSdkCatalogEntry = viewModel::installSdkCatalogEntry,
             onInstallSdkCatalogVersion = viewModel::installSdkCatalogVersion,
             onUninstallSdkCatalogVersion = viewModel::uninstallSdkCatalogVersion,
-            onVerifySdkCatalogEntry = viewModel::verifySdkCatalogEntry,
             onUninstallSdkCatalogEntry = viewModel::uninstallSdkCatalogEntry,
             onOpenSdkDetail = viewModel::openSdkDetailPage,
             onCheckLspStatuses = viewModel::checkLspStatuses,
             onInstallLspCatalogEntry = viewModel::installLspCatalogEntry,
-            onVerifyLspCatalogEntry = viewModel::verifyLspCatalogEntry,
             onUninstallLspCatalogEntry = viewModel::uninstallLspCatalogEntry,
             onOpenLspDetail = viewModel::openLspDetailPage,
             onCheckDebugStatuses = viewModel::checkDebugEngineStatuses,
             onInstallDebugEngine = viewModel::installDebugEngine,
-            onVerifyDebugEngine = viewModel::verifyDebugEngine,
             onUninstallDebugEngine = viewModel::uninstallDebugEngine,
             onOpenDebugEngineDetail = viewModel::openDebugEngineDetailPage,
             onRefreshMarketplace = viewModel::refreshMarketplace,
@@ -1437,7 +1447,6 @@ fun JCodeApp(
             onOpenExtensionDetail = viewModel::openExtensionDetailPage,
             onOpenExtensionPermissions = viewModel::openExtensionPermissionsPage,
             onImportVsix = { showVsixImportInfo = true },
-            onOpenExtensionApp = viewModel::openExtensionAppPage,
             // The Source Control extension renders its git-identity + GitHub-auth screen at its
             // `#github` route (a global-config screen that works with no project open).
             onOpenExtensionConfig = { id -> viewModel.openExtensionViewPage(id, "github", "Git Configuration") },
@@ -1762,6 +1771,19 @@ private fun JCodeShell(
     LaunchedEffect(rightPanelSelection, vsixExtensions.map { it.id }) {
         if (rightPanelSelection is RightPanelSelection.Extension && selectedVsix == null) {
             selectRightPanelTab(RightPanelTab.Terminal)
+        }
+    }
+    // A .vsix whose "keep running in the background" permission is off is torn down once the user
+    // navigates away from its tab. Driven by the selection (and whether the drawer is showing at
+    // all), never by the drawer composable's lifetime: rotating rebuilds the drawer into the other
+    // layout, which as a teardown signal read as "navigated away" and restarted the extension.
+    val keepVsixAlive = LocalExtensionDrawerActions.current.keepAliveFor
+    LaunchedEffect(rightPanelSelection, rightSidebarVisible, keepVsixAlive, vsixExtensions.map { it.id }) {
+        val onScreen = (rightPanelSelection as? RightPanelSelection.Extension)
+            ?.extensionId
+            ?.takeIf { rightSidebarVisible }
+        vsixExtensions.forEach { ext ->
+            if (ext.id != onScreen && !keepVsixAlive(ext.id)) VsixViewHolder.destroy(ext.id)
         }
     }
     // Read once here so the run handlers below (defined before the settings block) can resolve the
@@ -2694,8 +2716,17 @@ private fun JCodeShell(
                         WorkbenchStatusBar(
                             activeTab = activeTab,
                             selectedProject = selectedProject,
-                            effectiveConfig = effectiveConfig,
-                            activeDistroId = environmentState.runtime.selectedDistro.id,
+                            // Keyed on the fields the label actually reads: environmentState also
+                            // carries activityLog, which churns on every line of setup output and
+                            // would otherwise recompose this row throughout an install.
+                            distroStatus = remember(
+                                environmentState.runningStep,
+                                environmentState.errorMessage,
+                                environmentState.prootInstalled,
+                                environmentState.distroInstalled,
+                                environmentState.jcodeUserReady,
+                                environmentState.runtime.selectedDistro.id,
+                            ) { distroStatusOf(environmentState) },
                         )
                     }
                 }
@@ -2873,10 +2904,11 @@ private fun JCodeShell(
                                             entry = entry,
                                             state = sdkCatalogState,
                                             environmentState = environmentState,
+                                            progress = LocalCatalogProgress.current,
+                                            requestedEntryId = LocalSdkInstallRequestedId.current,
                                             onInstall = managerActions.onInstallSdkCatalogEntry,
                                             onUpdate = managerActions.onInstallSdkCatalogEntry,
                                             onUninstall = managerActions.onUninstallSdkCatalogEntry,
-                                            onVerify = managerActions.onVerifySdkCatalogEntry,
                                             onInstallVersion = managerActions.onInstallSdkCatalogVersion,
                                             onUninstallVersion = managerActions.onUninstallSdkCatalogVersion,
                                             modifier = Modifier.fillMaxSize(),
@@ -2890,10 +2922,10 @@ private fun JCodeShell(
                                             entry = entry,
                                             state = lspCatalogState,
                                             environmentState = environmentState,
+                                            progress = LocalCatalogProgress.current,
                                             onInstall = managerActions.onInstallLspCatalogEntry,
                                             onUpdate = managerActions.onInstallLspCatalogEntry,
                                             onUninstall = managerActions.onUninstallLspCatalogEntry,
-                                            onVerify = managerActions.onVerifyLspCatalogEntry,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
@@ -2906,10 +2938,10 @@ private fun JCodeShell(
                                             entry = entry,
                                             state = debugState,
                                             environmentState = environmentState,
+                                            progress = LocalCatalogProgress.current,
                                             onInstall = managerActions.onInstallDebugEngine,
                                             onUpdate = managerActions.onInstallDebugEngine,
                                             onUninstall = managerActions.onUninstallDebugEngine,
-                                            onVerify = managerActions.onVerifyDebugEngine,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
@@ -2969,7 +3001,6 @@ private fun JCodeShell(
                                             installPhase = LocalExtensionInstallPhases.current[entry?.id ?: inst?.id],
                                             onInstall = managerActions.onInstallExtension,
                                             onUninstall = managerActions.onUninstallExtension,
-                                            onOpenApp = managerActions.onOpenExtensionApp,
                                             onOpenExtensionDetail = managerActions.onOpenExtensionDetail,
                                             onOpenSdkDetail = managerActions.onOpenSdkDetail,
                                             onOpenLspDetail = managerActions.onOpenLspDetail,
@@ -3507,6 +3538,7 @@ private fun WorkspacePanel(
                         onOpenLspDetail = managerActions.onOpenLspDetail,
                         onOpenDebugDetail = managerActions.onOpenDebugEngineDetail,
                         modifier = Modifier.fillMaxSize(),
+                        progress = LocalCatalogProgress.current,
                     )
 
                     WorkbenchTool.DbManager -> DbManagerPanel(

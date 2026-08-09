@@ -335,16 +335,16 @@ class DistroService(
             )
 
             val actionResult = when (action) {
-                SdkCatalogAction.Install -> execCatalogAction("${action.label} ${entry.name}", applyVersion(entry.installScript, version), timeoutMs = catalogInstallTimeoutMs)
-                SdkCatalogAction.Verify -> execCatalogScript(entry.verifyScript, timeoutMs = 120_000L)
+                SdkCatalogAction.Install -> execCatalogAction(
+                    "${action.label} ${entry.name}",
+                    applyVersion(entry.installScript, version),
+                    timeoutMs = entry.installTimeoutMs(catalogInstallTimeoutMs),
+                )
                 SdkCatalogAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", applyVersion(entry.uninstallScript, version), timeoutMs = 900_000L)
             }
-            val verifyResult = when (action) {
-                SdkCatalogAction.Verify -> actionResult
-                SdkCatalogAction.Install,
-                SdkCatalogAction.Uninstall,
-                -> execCatalogScript(entry.verifyScript, timeoutMs = 120_000L)
-            }
+            // The install/uninstall script's own exit status is not trusted — the verify script is
+            // what decides whether the tool is actually there afterwards.
+            val verifyResult = execCatalogScript(entry.verifyScript, timeoutMs = 120_000L)
 
             val installedNow = verifyResult.succeeded
             val updatedInstalledEntries = readInstalledCatalogEntries(distroId).toMutableSet().apply {
@@ -357,7 +357,7 @@ class DistroService(
             persistInstalledCatalogEntries(distroId, updatedInstalledEntries)
 
             val refreshedInstalledVersions =
-                if (entry.versionsScript.isNotBlank() && action != SdkCatalogAction.Verify) {
+                if (entry.versionsScript.isNotBlank()) {
                     _sdkCatalogState.value.installedVersions.toMutableMap()
                         .apply { put(entry.id, readInstalledVersionsForEntry(entry)) }
                 } else {
@@ -489,15 +489,11 @@ class DistroService(
 
             val actionResult = when (action) {
                 LspCatalogAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installCommand, timeoutMs = catalogInstallTimeoutMs)
-                LspCatalogAction.Verify -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
                 LspCatalogAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", entry.uninstallCommand, timeoutMs = 900_000L)
             }
-            val verifyResult = when (action) {
-                LspCatalogAction.Verify -> actionResult
-                LspCatalogAction.Install,
-                LspCatalogAction.Uninstall,
-                -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
-            }
+            // The install/uninstall command's own exit status is not trusted — the verify command
+            // is what decides whether the tool is actually there afterwards.
+            val verifyResult = execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
 
             val installedNow = verifyResult.succeeded
             val updatedInstalledEntries = readInstalledLspEntries(distroId).toMutableSet().apply {
@@ -725,15 +721,11 @@ class DistroService(
 
             val actionResult = when (action) {
                 DebugEngineAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installCommand, timeoutMs = catalogInstallTimeoutMs)
-                DebugEngineAction.Verify -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
                 DebugEngineAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", entry.uninstallCommand, timeoutMs = 900_000L)
             }
-            val verifyResult = when (action) {
-                DebugEngineAction.Verify -> actionResult
-                DebugEngineAction.Install,
-                DebugEngineAction.Uninstall,
-                -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
-            }
+            // The install/uninstall command's own exit status is not trusted — the verify command
+            // is what decides whether the tool is actually there afterwards.
+            val verifyResult = execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
 
             val installedNow = verifyResult.succeeded
             val updatedInstalledEntries = readInstalledDebugEntries(distroId).toMutableSet().apply {
@@ -872,10 +864,13 @@ class DistroService(
             val jcodeUserReady = checkDistroUser()
             if (jcodeUserReady == true) {
                 completedSteps += WizardStepId.JcodeUserCreated
-                // Refreshing package lists is best-effort and idempotent; treat it as done once the
-                // user is ready so it runs only during the fresh first-run pass (when the distro isn't
-                // installed at derive time) and never re-runs on later "Use"/refresh triggers.
+                // Refreshing package lists and installing Node are best-effort and idempotent; treat
+                // them as done once the user is ready so they run only during the fresh first-run pass
+                // (when the distro isn't installed at derive time) and never re-run on later
+                // "Use"/refresh triggers — an environment set up before Node was part of setup should
+                // not start a multi-minute install the next time it is selected.
                 completedSteps += WizardStepId.AptUpdated
+                completedSteps += WizardStepId.NodeInstalled
             }
 
             val toolchainReady = checkToolchainReady()
@@ -959,6 +954,7 @@ class DistroService(
                 WizardStepId.ToolchainBootstrapped -> bootstrapToolchain(onLine = ::appendActivityLogLine)
                 WizardStepId.JcodeUserCreated -> createDistroUser(onLine = ::appendActivityLogLine)
                 WizardStepId.AptUpdated -> aptUpdateStep(onLine = ::appendActivityLogLine)
+                WizardStepId.NodeInstalled -> installNodeStep(onLine = ::appendActivityLogLine)
                 WizardStepId.SmokeTest -> smokeTest(onLine = ::appendActivityLogLine)
             }
 
@@ -1042,6 +1038,14 @@ class DistroService(
                     WizardStepId.ToolchainBootstrapped -> bootstrapToolchain(onLine = ::appendActivityLogLine)
                     WizardStepId.JcodeUserCreated -> createDistroUser(onLine = ::appendActivityLogLine)
                     WizardStepId.AptUpdated -> aptUpdateStep(onLine = ::appendActivityLogLine)
+                    WizardStepId.NodeInstalled -> installNodeStep(
+                        onLine = ::appendActivityLogLine,
+                        onProgress = { percent, detail ->
+                            _autoSetupProgress.tryEmit(
+                                DistroWizardProgress.Running(step, stepLabel(step), percent, detail),
+                            )
+                        },
+                    )
                     WizardStepId.SmokeTest -> smokeTest(onLine = ::appendActivityLogLine)
                 }
 
@@ -1128,6 +1132,7 @@ class DistroService(
         WizardStepId.ToolchainBootstrapped -> "Skip bootstrap (use SDK Manager for tools)"
         WizardStepId.JcodeUserCreated -> "Create jcode user"
         WizardStepId.AptUpdated -> "Refresh package lists"
+        WizardStepId.NodeInstalled -> "Install Node.js (LTS)"
         WizardStepId.SmokeTest -> "Run smoke test"
     }
 
@@ -1445,7 +1450,11 @@ class DistroService(
      * /home/jcode and remain usable from the (non-root) terminal. The scripts' own `sudo` prefixes
      * become a passthrough via the shim installed by [ensureDistroUser].
      */
-    private fun execCatalogScript(script: String, timeoutMs: Long): ExecResult {
+    private fun execCatalogScript(
+        script: String,
+        timeoutMs: Long,
+        onLine: ((String) -> Unit)? = null,
+    ): ExecResult {
         val runtime = _environmentState.value.runtime
         // Root execs skip the su-guard, so make sure the jcode home + sudo shim exist first.
         val ensure = ensureDistroUser(runtime.selectedDistro.id, runtime.user)
@@ -1455,6 +1464,7 @@ class DistroService(
             timeoutMs = timeoutMs,
             user = "root",
             env = mapOf("HOME" to "/home/${runtime.user}", "USER" to runtime.user),
+            onLine = onLine,
         )
     }
 
@@ -1463,9 +1473,37 @@ class DistroService(
      * (visible in the right drawer) instead of a silent in-process exec. Returns null to decline
      * (e.g. no session slot free), in which case the action falls back to [execCatalogScript].
      * Scripts run with the same semantics either way: root, with HOME/USER pointing at the jcode user.
+     *
+     * The runner reports the script's own `jcode_progress` calls back through `onProgress`.
      */
     @Volatile
-    var interactiveCatalogRunner: (suspend (label: String, script: String, timeoutMs: Long) -> ExecResult?)? = null
+    var interactiveCatalogRunner:
+        (suspend (label: String, script: String, timeoutMs: Long, onProgress: (Int, String) -> Unit) -> ExecResult?)? = null
+
+    /**
+     * Stage [content] at [guestPath] inside the selected distro by writing it straight into the
+     * rootfs on the host, returning true on success.
+     *
+     * The alternative — typing the content into a shell — goes through a PTY line discipline, which
+     * buffers a few KB, caps a single line's length, and echoes everything back. That is fine for a
+     * command but not for a script: the Setup terminal used to heredoc whole toolchain scripts in
+     * (the Android SDK one is ~9 KB) and the tail was lost. The rootfs is app-private storage, so
+     * the host can just write the file.
+     */
+    fun stageGuestFile(guestPath: String, content: String): Boolean = runCatching {
+        val distroId = _environmentState.value.runtime.selectedDistro.id
+        if (!rootfsManager.isDistroInstalled(distroId)) return false
+        val target = File(rootfsManager.getRootfsPath(distroId), guestPath.trimStart('/'))
+        target.parentFile?.mkdirs()
+        target.writeText(content)
+        true
+    }.getOrDefault(false)
+
+    private val _catalogProgress = MutableStateFlow<CatalogProgress?>(null)
+
+    /** Percentage + phase of the running install/uninstall, or null when nothing is running (or the
+     *  running script reports no progress). Shared by the SDK / LSP / debug-engine manager pages. */
+    val catalogProgress: StateFlow<CatalogProgress?> = _catalogProgress.asStateFlow()
 
     /** Timeout (ms) for a catalog INSTALL action (SDK/LSP/debugger), set from the "Toolchain install
      *  timeout" setting. Verify/uninstall keep their own fixed budgets. Default is the pre-setting
@@ -1482,34 +1520,79 @@ class DistroService(
      *  from the previous attempt is cleaned before retrying. Hard-stops that can't heal by re-running
      *  — a missing runtime ([ExecResult.internalError]) or a user cancel (SIGINT, exit 130) — break
      *  out immediately. Retries carry a "retry N/M" label so they're visible in the Setup terminal. */
-    private suspend fun execCatalogAction(label: String, script: String, timeoutMs: Long): ExecResult {
-        val prepared = withAptSelfHeal(script)
+    private suspend fun execCatalogAction(
+        label: String,
+        script: String,
+        timeoutMs: Long,
+        onProgress: ((Int, String) -> Unit)? = null,
+        onLine: ((String) -> Unit)? = null,
+    ): ExecResult {
+        val prepared = withCatalogHelpers(withAptSelfHeal(script))
         var last: ExecResult? = null
-        for (attempt in 1..CATALOG_INSTALL_MAX_ATTEMPTS) {
-            val attemptLabel =
-                if (attempt == 1) label else "$label — retry $attempt/$CATALOG_INSTALL_MAX_ATTEMPTS"
-            val result = runCatalogOnce(attemptLabel, prepared, timeoutMs)
-            if (result.succeeded) return result
-            last = result
-            val healable = result.internalError == null && result.exitCode != 130
-            if (!healable || attempt == CATALOG_INSTALL_MAX_ATTEMPTS) break
-            delay(CATALOG_RETRY_BACKOFF_MS * attempt)
+        try {
+            for (attempt in 1..CATALOG_INSTALL_MAX_ATTEMPTS) {
+                val attemptLabel =
+                    if (attempt == 1) label else "$label — retry $attempt/$CATALOG_INSTALL_MAX_ATTEMPTS"
+                // Each attempt restarts the script from the top, so its progress restarts too.
+                _catalogProgress.value = null
+                val result = runCatalogOnce(attemptLabel, prepared, timeoutMs, onProgress, onLine)
+                if (result.succeeded) return result
+                last = result
+                val healable = result.internalError == null && result.exitCode != 130
+                if (!healable || attempt == CATALOG_INSTALL_MAX_ATTEMPTS) break
+                delay(CATALOG_RETRY_BACKOFF_MS * attempt)
+            }
+        } finally {
+            _catalogProgress.value = null
         }
         return last ?: ExecResult(exitCode = 1)
     }
 
     /** One catalog-action attempt: prefer the visible Setup terminal, fall back to a quiet in-process
-     *  exec. [prepared] already carries the apt self-heal preamble. */
-    private suspend fun runCatalogOnce(label: String, prepared: String, timeoutMs: Long): ExecResult {
+     *  exec. [prepared] already carries the apt self-heal + progress-helper preambles. */
+    private suspend fun runCatalogOnce(
+        label: String,
+        prepared: String,
+        timeoutMs: Long,
+        onProgress: ((Int, String) -> Unit)? = null,
+        onLine: ((String) -> Unit)? = null,
+    ): ExecResult {
         val runner = interactiveCatalogRunner
         if (runner != null) {
             val runtime = _environmentState.value.runtime
             val ensure = ensureDistroUser(runtime.selectedDistro.id, runtime.user)
             if (!ensure.succeeded) return ensure
-            runner(label, prepared, timeoutMs)?.let { return it }
+            val reportProgress: (Int, String) -> Unit = { percent, phase ->
+                _catalogProgress.value = CatalogProgress(percent.coerceIn(0, 100), phase)
+                onProgress?.invoke(percent.coerceIn(0, 100), phase)
+            }
+            runner(label, prepared, timeoutMs, reportProgress)?.let { return it }
         }
-        return execCatalogScript(prepared, timeoutMs)
+        // Quiet fallback: no PTY, so the OSC markers go nowhere and the catalog UI stays indeterminate.
+        // A caller that passed [onLine] still sees the script's own output, progress lines included.
+        return execCatalogScript(prepared, timeoutMs, onLine)
     }
+
+    /**
+     * Prepend the shell helpers every catalog install/uninstall may call.
+     *
+     * `jcode_progress <percent> <label>` reports how far the script has got: an OSC 7716 marker the
+     * Setup terminal turns into a determinate progress bar, plus a plain `[ 42%] …` line so the
+     * progress is readable in the terminal itself. `jcode_fetch <url> <dest> <from> <to> <label>`
+     * downloads a file and reports true byte-level progress across the [from,to] slice of the bar —
+     * curl's own meter is a carriage-return animation no percentage can be recovered from once it
+     * has been through a PTY. `jcode_apt <from> <to> <label> <packages…>` is `apt-get update` plus
+     * `apt-get install`, reporting apt's own machine-readable `APT::Status-Fd` percentages (on fd 3,
+     * for the reason spelled out at the call site), so a plain apt-based toolchain gets a genuine bar
+     * rather than three hand-placed milestones. It keeps apt's exit status (via a temp file — the
+     * status of a pipeline is its last member's).
+     *
+     * Both are defined unconditionally so a script can call them on either execution path; without a
+     * PTY (`JCODE_PROGRESS_TOKEN` unset) the marker is simply not emitted. Every helper ends by
+     * returning 0 — a script running under `set -e` would otherwise abort on a progress call whose
+     * last comparison happened to be false.
+     */
+    private fun withCatalogHelpers(script: String): String = CATALOG_SHELL_HELPERS + script
 
     /** Fix DNS/resolv.conf for the selected distro before an apt operation. Host-side, idempotent,
      *  no proot round-trip; safe to call unconditionally (see [RootfsManager.ensureRootfsNetworking]). */
@@ -1529,6 +1612,70 @@ class DistroService(
         ensureSelectedDistroNetworking()
         onLine?.invoke("Refreshing package lists (apt-get update)…")
         return execCatalogAction("Refresh package lists", "sudo apt-get -y update", timeoutMs = 300_000L)
+    }
+
+    /**
+     * Install the newest LTS Node.js during first-run setup ([WizardStepId.NodeInstalled]), straight
+     * after the package lists are refreshed. Node is what most of the workbench leans on — imported
+     * `.vsix` extensions, several language servers and most project templates all assume `node`/`npm`
+     * are on PATH — so a fresh environment ships with it rather than making a trip to Toolchains
+     * everyone's first task.
+     *
+     * Runs the `nodejs` catalog entry's own script (nvm, newest LTS) and records the outcome in the
+     * same persisted installed-set the Toolchains panel reads, so the row already reads "Installed"
+     * and the version picker can add or remove versions alongside it. Best-effort
+     * ([BEST_EFFORT_STEPS]): a failure still leaves a usable environment. Called from inside the
+     * wizard lock, so it must NOT take [lock] again.
+     */
+    private suspend fun installNodeStep(
+        onLine: ((String) -> Unit)? = null,
+        onProgress: ((Int, String) -> Unit)? = null,
+    ): ExecResult {
+        val entry = _sdkCatalogState.value.entries
+            .ifEmpty { runCatching { sdkCatalogLoader.load() }.getOrElse { emptyList() } }
+            .firstOrNull { it.id == NODE_CATALOG_ENTRY_ID }
+            ?: return ExecResult(internalError = "Node.js is missing from the toolchain catalog.")
+
+        if (execCatalogScript(entry.verifyScript, timeoutMs = 120_000L).succeeded) {
+            return ExecResult(stdout = "Node.js is already installed.", exitCode = 0)
+        }
+
+        ensureSelectedDistroNetworking()
+        onLine?.invoke("Installing Node.js (LTS)…")
+        // Without a Setup terminal there is no PTY for the OSC progress marker, so the script's plain
+        // "[ 42%] label" line is what drives the wizard's bar on that path.
+        val result = execCatalogAction(
+            label = "Install ${entry.name} (LTS)",
+            script = entry.installScript,
+            timeoutMs = entry.installTimeoutMs(catalogInstallTimeoutMs),
+            onProgress = onProgress,
+            onLine = { line ->
+                onLine?.invoke(line)
+                PROGRESS_LINE.matchEntire(line.trim())?.let { match ->
+                    val percent = match.groupValues[1].toIntOrNull() ?: return@let
+                    onProgress?.invoke(percent.coerceIn(0, 100), match.groupValues[2].trim())
+                }
+            },
+        )
+
+        // Same rule as a catalog install: the verify script, not the install script's exit code,
+        // decides whether the tool is actually there.
+        val installed = execCatalogScript(entry.verifyScript, timeoutMs = 120_000L).succeeded
+        val distroId = _environmentState.value.runtime.selectedDistro.id
+        persistInstalledCatalogEntries(
+            distroId,
+            readInstalledCatalogEntries(distroId).toMutableSet()
+                .apply { if (installed) add(entry.id) else remove(entry.id) }
+                .toSet(),
+        )
+        if (!installed) {
+            return ExecResult(
+                internalError = result.internalError
+                    ?: "Node.js install finished, but verification did not detect it.",
+                exitCode = result.exitCode ?: 1,
+            )
+        }
+        return ExecResult(stdout = "Node.js (LTS) installed.", exitCode = 0)
     }
 
     /**
@@ -1561,7 +1708,13 @@ class DistroService(
      * All three are silent, fast no-ops when the runtime is already clean.
      */
     private fun withAptSelfHeal(script: String): String {
-        if (!(script.contains("apt-get") || script.contains("apt ") || script.contains("dpkg"))) {
+        // `jcode_apt` is the injected helper (see [withCatalogHelpers]) that most entries now use
+        // instead of calling apt-get directly; it needs the same repair pass.
+        if (!(
+                script.contains("apt-get") || script.contains("apt ") ||
+                    script.contains("dpkg") || script.contains("jcode_apt")
+                )
+        ) {
             return script
         }
         val preamble =
@@ -1900,7 +2053,7 @@ class DistroService(
     }
 
     private fun normalizeProcessOutputLine(line: String): String? {
-        val normalized = line.trim()
+        val normalized = ANSI_CSI.replace(line, "").trim()
         if (normalized.isBlank()) return null
         if (normalized.startsWith("proot warning: unknown syscall ")) return null
         return normalized
@@ -1940,17 +2093,12 @@ class DistroService(
         return buildList {
             add("[command] ${action.label} ${entry.name}")
             addAll(actionResult.toLogBlock())
-            if (action != SdkCatalogAction.Verify) {
-                add("[verify] ${entry.name}")
-                addAll(verifyResult.toLogBlock())
-            }
+            add("[verify] ${entry.name}")
+            addAll(verifyResult.toLogBlock())
             add(
                 when (action) {
                     SdkCatalogAction.Install ->
                         if (installedNow) "[result] Installed." else "[result] Install completed but verification failed."
-
-                    SdkCatalogAction.Verify ->
-                        if (installedNow) "[result] Installed." else "[result] Not installed."
 
                     SdkCatalogAction.Uninstall ->
                         if (!installedNow) "[result] Removed." else "[result] Still detected after removal."
@@ -1978,7 +2126,6 @@ class DistroService(
     private fun SdkCatalogEntry.scriptFor(action: SdkCatalogAction): String {
         return when (action) {
             SdkCatalogAction.Install -> installScript
-            SdkCatalogAction.Verify -> verifyScript
             SdkCatalogAction.Uninstall -> uninstallScript
         }
     }
@@ -2054,17 +2201,12 @@ class DistroService(
         return buildList {
             add("[command] ${action.label} $name")
             addAll(actionResult.toLogBlock())
-            if (action != LspCatalogAction.Verify) {
-                add("[verify] $name")
-                addAll(verifyResult.toLogBlock())
-            }
+            add("[verify] $name")
+            addAll(verifyResult.toLogBlock())
             add(
                 when (action) {
                     LspCatalogAction.Install ->
                         if (installedNow) "[result] Installed." else "[result] Install completed but verification failed."
-
-                    LspCatalogAction.Verify ->
-                        if (installedNow) "[result] Installed." else "[result] Not installed."
 
                     LspCatalogAction.Uninstall ->
                         if (!installedNow) "[result] Removed." else "[result] Still detected after removal."
@@ -2076,7 +2218,6 @@ class DistroService(
     private fun LspCatalogEntry.commandFor(action: LspCatalogAction): String {
         return when (action) {
             LspCatalogAction.Install -> installCommand
-            LspCatalogAction.Verify -> verifyCommand
             LspCatalogAction.Uninstall -> uninstallCommand
         }
     }
@@ -2105,17 +2246,12 @@ class DistroService(
         return buildList {
             add("[command] ${action.label} $name")
             addAll(actionResult.toLogBlock())
-            if (action != DebugEngineAction.Verify) {
-                add("[verify] $name")
-                addAll(verifyResult.toLogBlock())
-            }
+            add("[verify] $name")
+            addAll(verifyResult.toLogBlock())
             add(
                 when (action) {
                     DebugEngineAction.Install ->
                         if (installedNow) "[result] Installed." else "[result] Install completed but verification failed."
-
-                    DebugEngineAction.Verify ->
-                        if (installedNow) "[result] Installed." else "[result] Not installed."
 
                     DebugEngineAction.Uninstall ->
                         if (!installedNow) "[result] Removed." else "[result] Still detected after removal."
@@ -2127,7 +2263,6 @@ class DistroService(
     private fun DebugEngineEntry.commandFor(action: DebugEngineAction): String {
         return when (action) {
             DebugEngineAction.Install -> installCommand
-            DebugEngineAction.Verify -> verifyCommand
             DebugEngineAction.Uninstall -> uninstallCommand
         }
     }
@@ -2155,6 +2290,99 @@ class DistroService(
         /** Linear back-off base between install retries (× attempt): 3s, then 6s. */
         private const val CATALOG_RETRY_BACKOFF_MS: Long = 3_000L
         /** Wizard steps that must never abort setup — logged, marked done, and stepped over on failure. */
-        private val BEST_EFFORT_STEPS: Set<WizardStepId> = setOf(WizardStepId.AptUpdated)
+        private val BEST_EFFORT_STEPS: Set<WizardStepId> =
+            setOf(WizardStepId.AptUpdated, WizardStepId.NodeInstalled)
+
+        /** Catalog entry installed automatically during first-run setup — see [installNodeStep]. */
+        private const val NODE_CATALOG_ENTRY_ID: String = "nodejs"
+
+        /** The plain-text half of `jcode_progress`: `[ 42%] Downloading Node.js`. */
+        private val PROGRESS_LINE = Regex("""\[\s*(\d+)%\]\s*(.*)""")
+
+        /** CSI escapes (colour, cursor moves). The setup log is plain text, but plenty of install
+         *  scripts colour their output — nvm's "Creating default alias" line is SGR-wrapped — and the
+         *  raw bytes render there as stray control glyphs. The introducer is `Char(27)` rather than an
+         *  escape so a literal ESC byte — invisible to most editors and easy to destroy on a later
+         *  edit — stays out of the source. The bracket must still be backslash-escaped: ICU's regex
+         *  reads `[` inside a class as the start of a *nested* class, so `[[]` fails to compile. */
+        private val ANSI_CSI = Regex(Char(27) + """\[[0-9;?]*[ -/]*[@-~]""")
+
+        /** Shell helpers prepended to every catalog install/uninstall — see [withCatalogHelpers]. */
+        private val CATALOG_SHELL_HELPERS: String = """
+            # --- JCode catalog helpers (injected by DistroService) ---
+            __jc_last_pct=-1
+            jcode_progress() {
+              __jc_p=${'$'}1
+              case "${'$'}__jc_p" in ''|*[!0-9]*) return 0 ;; esac
+              [ "${'$'}__jc_p" -gt 100 ] && __jc_p=100
+              if [ -n "${'$'}{JCODE_PROGRESS_TOKEN:-}" ]; then
+                printf '\033]7716;%s;%s;%s\007' "${'$'}JCODE_PROGRESS_TOKEN" "${'$'}__jc_p" "${'$'}2"
+              fi
+              if [ "${'$'}__jc_p" != "${'$'}__jc_last_pct" ]; then
+                __jc_last_pct=${'$'}__jc_p
+                printf '[%3d%%] %s\n' "${'$'}__jc_p" "${'$'}2"
+              fi
+              return 0
+            }
+            jcode_fetch() {
+              __jc_u=${'$'}1; __jc_d=${'$'}2; __jc_a=${'$'}{3:-0}; __jc_b=${'$'}{4:-100}; __jc_l=${'$'}{5:-Downloading}
+              __jc_t=${'$'}(curl -fsSLI "${'$'}__jc_u" 2>/dev/null | tr -d '\r' |
+                awk 'tolower(${'$'}1)=="content-length:"{n=${'$'}2} END{print n+0}')
+              rm -f "${'$'}__jc_d"
+              curl -fsSL --retry 3 --retry-delay 3 --connect-timeout 30 -o "${'$'}__jc_d" "${'$'}__jc_u" &
+              __jc_pid=${'$'}!
+              while kill -0 "${'$'}__jc_pid" 2>/dev/null; do
+                if [ "${'$'}__jc_t" -gt 0 ] && [ -f "${'$'}__jc_d" ]; then
+                  __jc_c=${'$'}(wc -c < "${'$'}__jc_d" 2>/dev/null || echo 0)
+                  jcode_progress ${'$'}(( __jc_a + (__jc_b - __jc_a) * __jc_c / __jc_t )) "${'$'}__jc_l"
+                fi
+                sleep 2
+              done
+              wait "${'$'}__jc_pid"
+            }
+            __jc_apt_run() {
+              __ja_a=${'$'}1; __ja_b=${'$'}2; __ja_l=${'$'}3; shift 3
+              __ja_mid=${'$'}(( (__ja_a + __ja_b) / 2 ))
+              rm -f /tmp/.jcode-apt-rc
+              # Status-Fd MUST NOT be 1. Combined with Dpkg::Use-Pty=0 (no pty, so dpkg inherits our
+              # stdout) apt claims fd 1 as its status channel while dpkg hands the same descriptor to
+              # maintainer scripts, and their first write to stdout fails with EIO. That kills the
+              # postinst and leaves the package half-configured ("iF") — ca-certificates on Ubuntu
+              # 26.04 is the loud case, but it was measured on 24.04 too. Either option alone is
+              # harmless; it is the pair that breaks. Status goes to fd 3 and is folded back into the
+              # same pipe by `3>&1`, so the reader below still sees one merged stream.
+              { sudo apt-get -y -o APT::Status-Fd=3 -o Dpkg::Use-Pty=0 "${'$'}@" 2>&1 3>&1
+                echo "__jcrc:${'$'}?" > /tmp/.jcode-apt-rc
+              } | while IFS= read -r __ja_line; do
+                case "${'$'}__ja_line" in
+                  dlstatus:*|pmstatus:*)
+                    case "${'$'}__ja_line" in
+                      dlstatus:*) __ja_x=${'$'}__ja_a; __ja_y=${'$'}__ja_mid ;;
+                      *)          __ja_x=${'$'}__ja_mid; __ja_y=${'$'}__ja_b ;;
+                    esac
+                    __ja_p=${'$'}(printf '%s' "${'$'}__ja_line" | cut -d: -f3 | cut -d. -f1)
+                    case "${'$'}__ja_p" in
+                      ''|*[!0-9]*) ;;
+                      *) jcode_progress ${'$'}(( __ja_x + (__ja_y - __ja_x) * __ja_p / 100 )) \
+                           "${'$'}(printf '%s' "${'$'}__ja_line" | cut -d: -f4- | cut -c1-60)" ;;
+                    esac
+                    ;;
+                  *) printf '%s\n' "${'$'}__ja_line" ;;
+                esac
+              done
+              jcode_progress "${'$'}__ja_b" "${'$'}__ja_l"
+              __ja_rc=${'$'}(sed -n 's/^__jcrc://p' /tmp/.jcode-apt-rc 2>/dev/null)
+              rm -f /tmp/.jcode-apt-rc
+              return "${'$'}{__ja_rc:-0}"
+            }
+            jcode_apt() {
+              __ja0=${'$'}1; __ja1=${'$'}2; __ja2=${'$'}3; shift 3
+              __ja_q=${'$'}(( __ja0 + (__ja1 - __ja0) / 5 ))
+              __jc_apt_run "${'$'}__ja0" "${'$'}__ja_q" "${'$'}__ja2" update || true
+              __jc_apt_run "${'$'}__ja_q" "${'$'}__ja1" "${'$'}__ja2" install "${'$'}@"
+            }
+            # --- end JCode catalog helpers ---
+
+        """.trimIndent()
     }
 }

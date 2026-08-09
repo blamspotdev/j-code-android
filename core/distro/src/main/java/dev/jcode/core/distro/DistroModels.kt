@@ -55,6 +55,13 @@ data class ExecResult(
 /** Backward-compatible alias for code that still references TermuxRunResult. */
 typealias TermuxRunResult = ExecResult
 
+/**
+ * How far the running toolchain install/uninstall has got, as reported by the script itself through
+ * the `jcode_progress` helper (OSC 7716). One action runs at a time — the catalog lock serializes
+ * them — so a single value covers the SDK, LSP and debug-engine managers.
+ */
+data class CatalogProgress(val percent: Int, val label: String)
+
 data class DistroEvent(
     val stage: String,
     val message: String,
@@ -102,6 +109,8 @@ enum class WizardStepId(val key: String) {
     JcodeUserCreated("jcode-user-created"),
     /** Package lists refreshed (`apt-get update`) — best-effort, never blocks setup. */
     AptUpdated("apt-updated"),
+    /** Node.js LTS installed from the toolchain catalog — best-effort, never blocks setup. */
+    NodeInstalled("node-installed"),
     /** Final smoke test passed. */
     SmokeTest("smoke-test");
 

@@ -33,6 +33,14 @@ internal val LocalTerminalTapConfig = compositionLocalOf { TerminalTapConfig() }
  */
 internal val LocalDebugCatalogState = compositionLocalOf { DebugEngineCatalogState() }
 
+/** How far the running toolchain install has got (percent + phase), or null when nothing is running
+ *  or the script reports nothing. Same register-limit rationale as [LocalDebugCatalogState]. */
+internal val LocalCatalogProgress = compositionLocalOf<dev.jcode.core.distro.CatalogProgress?> { null }
+
+/** The SDK the user pressed Install on, which differs from the running one while a toolchain it
+ *  requires is being installed first. Same register-limit rationale as [LocalCatalogProgress]. */
+internal val LocalSdkInstallRequestedId = compositionLocalOf<String?> { null }
+
 /** Per-extension install phase labels ("Installing…", "Installing required tools…", "Verifying…"),
  *  keyed by extension id. A CompositionLocal so the giant [dev.jcode.JCodeShell] composable stays
  *  under the ART register limit. */
@@ -134,17 +142,14 @@ internal data class WorkbenchManagerActions(
     val onInstallSdkCatalogEntry: (String) -> Unit,
     val onInstallSdkCatalogVersion: (String, String) -> Unit,
     val onUninstallSdkCatalogVersion: (String, String) -> Unit,
-    val onVerifySdkCatalogEntry: (String) -> Unit,
     val onUninstallSdkCatalogEntry: (String) -> Unit,
     val onOpenSdkDetail: (String) -> Unit,
     val onCheckLspStatuses: () -> Unit,
     val onInstallLspCatalogEntry: (String) -> Unit,
-    val onVerifyLspCatalogEntry: (String) -> Unit,
     val onUninstallLspCatalogEntry: (String) -> Unit,
     val onOpenLspDetail: (String) -> Unit,
     val onCheckDebugStatuses: () -> Unit,
     val onInstallDebugEngine: (String) -> Unit,
-    val onVerifyDebugEngine: (String) -> Unit,
     val onUninstallDebugEngine: (String) -> Unit,
     val onOpenDebugEngineDetail: (String) -> Unit,
     val onRefreshMarketplace: () -> Unit,
@@ -155,8 +160,6 @@ internal data class WorkbenchManagerActions(
     /** Starts the "import a VS Code .vsix" flow from the extension list. Not a developer action —
      *  importing an extension JCode does not publish is ordinary use, so it is always available. */
     val onImportVsix: (() -> Unit)? = null,
-    /** Opens an extension's bundled web-frontend ("Manage"/DB-manager) screen by extension id. */
-    val onOpenExtensionApp: (String) -> Unit,
     /** Opens an extension's web frontend at its `#config` route by extension id (e.g. Source Control
      *  git identity/credentials), reachable without an open project. */
     val onOpenExtensionConfig: (String) -> Unit,

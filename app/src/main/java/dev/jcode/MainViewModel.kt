@@ -221,8 +221,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             setupTerminalRunner.handleTaskComplete(sessionId, payload)
             _runTerminalCompletions.tryEmit(sessionId to (payload.substringAfter(';').trim().toIntOrNull() ?: -1))
         }
-        distroService.interactiveCatalogRunner = { label, script, timeoutMs ->
-            setupTerminalRunner.run(label, script, workdir = null, asUser = "root", timeoutMs = timeoutMs)
+        TerminalSessionHost.manager(appContext).onTaskProgress = setupTerminalRunner::handleTaskProgress
+        distroService.interactiveCatalogRunner = { label, script, timeoutMs, onProgress ->
+            setupTerminalRunner.run(
+                label = label,
+                script = script,
+                workdir = null,
+                asUser = "root",
+                timeoutMs = timeoutMs,
+                onProgress = onProgress,
+            )
         }
         templateScaffolder.interactiveExec = { label, command, workdir, timeoutMs ->
             setupTerminalRunner.run(
@@ -1716,6 +1724,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val debugCatalogState = distroService.debugCatalogState
     val autoSetupProgress = distroService.autoSetupProgress
 
+    /** Percentage + phase of the running toolchain install, for the manager pages' progress bar. */
+    val catalogProgress = distroService.catalogProgress
+
+    private val _sdkInstallRequestedId = MutableStateFlow<String?>(null)
+
+    /** The SDK the user actually pressed Install on, which is not necessarily the one running: a
+     *  required toolchain (the Android SDK pulls in its prerequisites, ~500 MB of JDK and build
+     *  tools) installs first under its own id. The detail page reads this so it can keep showing
+     *  progress — and say whose — instead of an unexplained spinner for the first several minutes. */
+    val sdkInstallRequestedId: StateFlow<String?> = _sdkInstallRequestedId.asStateFlow()
+
     private val debugController = DebugController(distroService, viewModelScope)
     val debugState = debugController.state
     val debugCallStack = debugController.callStack
@@ -2862,15 +2881,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun installSdkCatalogEntry(entryId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val entry = distroService.sdkCatalogState.value.entries.firstOrNull { it.id == entryId }
-            if (entry != null && !installRequiredSdks(entry.requiredSdks, entry.name)) return@launch
-            runCatalogInstall("sdk", entryId) {
-                distroService.runSdkCatalogAction(entryId, SdkCatalogAction.Install)
+            _sdkInstallRequestedId.value = entryId
+            try {
+                if (entry != null && !installRequiredSdks(entry.requiredSdks, entry.name)) return@launch
+                runCatalogInstall("sdk", entryId) {
+                    distroService.runSdkCatalogAction(entryId, SdkCatalogAction.Install)
+                }
+            } finally {
+                _sdkInstallRequestedId.value = null
             }
         }
-    }
-
-    fun verifySdkCatalogEntry(entryId: String) {
-        runSdkCatalogAction(entryId, SdkCatalogAction.Verify)
     }
 
     fun uninstallSdkCatalogEntry(entryId: String) {
@@ -2914,10 +2934,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun verifyLspCatalogEntry(entryId: String) {
-        runLspCatalogAction(entryId, LspCatalogAction.Verify)
-    }
-
     fun uninstallLspCatalogEntry(entryId: String) {
         runLspCatalogAction(entryId, LspCatalogAction.Uninstall)
     }
@@ -2930,10 +2946,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 distroService.runDebugEngineCatalogAction(entryId, DebugEngineAction.Install)
             }
         }
-    }
-
-    fun verifyDebugEngine(entryId: String) {
-        runDebugCatalogAction(entryId, DebugEngineAction.Verify)
     }
 
     fun uninstallDebugEngine(entryId: String) {
@@ -3038,8 +3050,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
     }
 
-    /** Open (or focus) an installed extension's bundled web frontend as a full-screen in-editor page. */
-    fun openExtensionAppPage(extensionId: String) {
+    /** Open (or focus) an installed extension's bundled web frontend as a full-screen in-editor page.
+     *  Only reachable through [openExtensionViewPage]'s blank-view case now that the Extension detail
+     *  screen no longer offers a "Manage" button. */
+    private fun openExtensionAppPage(extensionId: String) {
         openDetailPage(EXT_APP_PREFIX + extensionId, EditorPageKind.ExtensionApp) {
             _installedExtensions.value.firstOrNull { it.id == extensionId }?.name ?: "App"
         }

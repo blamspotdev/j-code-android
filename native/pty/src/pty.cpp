@@ -1,6 +1,7 @@
 #include "pty.h"
 #include <unistd.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <signal.h>
@@ -11,6 +12,11 @@
 
 // Android doesn't have forkpty(), so we implement it using /dev/ptmx
 namespace jcode {
+
+// How long Pty::write waits for the guest to drain a full line-discipline buffer before giving up
+// and reporting a short write. Generous for a shell that is reading (it drains in microseconds),
+// short enough that a wedged guest can't block an input write for long.
+static const int WRITE_DRAIN_TIMEOUT_MS = 2000;
 
 // Open a PTY master/slave pair using /dev/ptmx
 static int openPtyPair(int* master, int* slave, const struct winsize* ws) {
@@ -164,11 +170,37 @@ int Pty::read(uint8_t* buffer, int maxLen) {
 int Pty::write(const uint8_t* data, int len) {
     if (!isOpen()) return -1;
 
-    ssize_t n = ::write(master_fd_, data, len);
-    if (n < 0) {
-        return -1;
+    // Write everything, not just whatever one write() call happens to take.
+    //
+    // The master fd is O_NONBLOCK and a PTY's line discipline buffers only a few KB, so a single
+    // write() of a large block returns short (or EAGAIN) and the remainder used to be dropped on
+    // the floor with no error — the call even reported "success". That silently truncated any long
+    // input, which is how the Setup terminal's heredoc'd toolchain scripts (the Android SDK one is
+    // ~9 KB) arrived half-written and left the shell sitting forever inside an unterminated
+    // heredoc. Loop instead, waiting for the guest to drain the buffer between chunks.
+    int written = 0;
+    while (written < len) {
+        ssize_t n = ::write(master_fd_, data + written, len - written);
+        if (n > 0) {
+            written += static_cast<int>(n);
+            continue;
+        }
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            struct pollfd pfd;
+            pfd.fd = master_fd_;
+            pfd.events = POLLOUT;
+            pfd.revents = 0;
+            int r = poll(&pfd, 1, WRITE_DRAIN_TIMEOUT_MS);
+            if (r > 0) continue;
+            if (r < 0 && errno == EINTR) continue;
+            // Nothing drained within the timeout: the guest is not reading. Report the partial
+            // count rather than spinning — the caller sees a short write instead of a hang.
+            break;
+        }
+        return written > 0 ? written : -1;
     }
-    return static_cast<int>(n);
+    return written;
 }
 
 bool Pty::resize(int cols, int rows) {

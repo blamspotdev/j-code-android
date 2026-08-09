@@ -33,7 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jcode.core.buffer.EditTx
-import dev.jcode.core.config.EffectiveConfig
+import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.jcIcon
 import dev.jcode.core.lsp.LspModule
@@ -54,12 +54,32 @@ internal data class EditorMetrics(
     val lineEnding: String = "LF",
 )
 
+/** What the status bar says about the Linux environment, and whether that reads as a failure. */
+internal data class DistroStatus(val label: String, val isError: Boolean)
+
+/**
+ * The environment's state as one short label.
+ *
+ * `runningStep` is checked before `errorMessage` on purpose: a wizard step clears `runningStep` and
+ * writes `errorMessage` in the same update, so a stale error from an earlier attempt can still be set
+ * while a fresh run is under way — and "setting up…" is the truer thing to say then. The ready gate
+ * (`distroInstalled == true && jcodeUserReady == true`) is the same predicate the rest of the app
+ * uses to decide the runtime is usable.
+ */
+internal fun distroStatusOf(state: DistroEnvironmentState): DistroStatus = when {
+    state.runningStep != null -> DistroStatus("setting up…", isError = false)
+    state.errorMessage != null -> DistroStatus("failed", isError = true)
+    !state.prootInstalled || state.distroInstalled == false -> DistroStatus("not installed", isError = false)
+    state.distroInstalled == null -> DistroStatus("checking…", isError = false)
+    state.jcodeUserReady != true -> DistroStatus("not ready", isError = false)
+    else -> DistroStatus(state.runtime.selectedDistro.id, isError = false)
+}
+
 @Composable
 internal fun WorkbenchStatusBar(
     activeTab: EditorTab?,
     selectedProject: Project?,
-    effectiveConfig: EffectiveConfig,
-    activeDistroId: String,
+    distroStatus: DistroStatus,
 ) {
     // Collected here (not hoisted into JCodeShell): the caret/snapshot flows emit on every
     // keystroke and caret move, so reading them in this bottomBar scope keeps a keystroke from
@@ -67,9 +87,6 @@ internal fun WorkbenchStatusBar(
     val metrics = rememberEditorMetrics(activeTab)
     val branch = rememberGitBranch(selectedProject)
     val issueCount by LspModule.diagnosticsBus.totalCount.collectAsStateWithLifecycle()
-    // A project's effective distro can be overridden in its `.jcode`; otherwise fall back to the
-    // globally active environment so the cell still reflects what terminals/builds target.
-    val distro = if (selectedProject != null) effectiveConfig.distro.id else activeDistroId
     Surface(
         modifier = Modifier.navigationBarsPadding(),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
@@ -88,18 +105,20 @@ internal fun WorkbenchStatusBar(
                 color = if (issueCount.hasErrors) MaterialTheme.colorScheme.error else Color.Unspecified,
                 icon = jcIcon(JCodeIcon.Problems),
             )
-            // File-only metrics are meaningless for a page tab (e.g. Settings); hide them there.
-            if (activeTab?.isPage != true) {
+            // Every one of these describes an open buffer, so they all hang off the same condition.
+            // Testing `isPage` instead only excluded page tabs (Settings) — with no tab at all the
+            // bar still claimed "1:1 · lang: Plain Text" over an empty editor area.
+            val editorState = activeTab?.editorState
+            if (editorState != null) {
                 StatusCell("${metrics.line}:${metrics.column}", icon = jcIcon(JCodeIcon.Cursor))
                 StatusCell("lang: ${metrics.language}")
-                // Encoding + line-ending apply to an actual open file; hide them when none is focused.
-                val editorState = activeTab?.editorState
-                if (editorState != null) {
-                    EncodingCell(metrics.encoding)
-                    LineEndingCell(metrics.lineEnding, editorState)
-                }
+                EncodingCell(metrics.encoding)
+                LineEndingCell(metrics.lineEnding, editorState)
             }
-            StatusCell("distro: ${distro.ifBlank { "--" }}")
+            StatusCell(
+                "distro: ${distroStatus.label}",
+                color = if (distroStatus.isError) MaterialTheme.colorScheme.error else Color.Unspecified,
+            )
         }
     }
 }

@@ -26,7 +26,6 @@ data class LspCatalogEntry(
 
 enum class LspCatalogAction(val label: String) {
     Install("Install"),
-    Verify("Verify"),
     Uninstall("Remove"),
 }
 
@@ -51,7 +50,7 @@ object LspServerCatalog {
             category = "Systems",
             name = "clangd (C/C++)",
             description = "Clang-based language server for C and C++.",
-            installCommand = "sudo apt-get update && sudo apt-get install -y clangd",
+            installCommand = "jcode_apt 0 100 'Installing clangd' clangd",
             verifyCommand = "clangd --version",
             uninstallCommand = "sudo apt-get remove -y clangd",
             runCommand = "clangd --background-index",
@@ -69,7 +68,9 @@ object LspServerCatalog {
             // which no longer ships lib/tsserver.js — typescript-language-server can't drive it and
             // fails to start for any project without a local typescript<=6. updateCheck below stays
             // scoped to the LSP only, so this pin isn't auto-bumped to 7.
-            installCommand = "sudo npm install -g typescript@5 typescript-language-server",
+            installCommand = "set -e; jcode_progress 10 'Installing the TypeScript language server'; " +
+                "sudo npm install -g typescript@5 typescript-language-server; " +
+                "jcode_progress 100 'TypeScript language server ready'",
             verifyCommand = "typescript-language-server --version",
             uninstallCommand = "sudo npm rm -g typescript typescript-language-server",
             runCommand = "typescript-language-server --stdio",
@@ -89,7 +90,8 @@ object LspServerCatalog {
             // don't have on PATH, and the tool's apphost needs the same env to find the runtime.
             // Unpinned: current releases target .NET 10, which the dotnet toolchain's LTS channel
             // installs (the old 0.16.0 pin only mattered while that toolchain topped out at .NET 8).
-            installCommand = "dotnet tool install --global csharp-ls",
+            installCommand = "set -e; jcode_progress 10 'Installing csharp-ls'; " +
+                "dotnet tool install --global csharp-ls; jcode_progress 100 'csharp-ls ready'",
             verifyCommand = "env DOTNET_ROOT=\"\$HOME/.dotnet\" DOTNET_GCHeapHardLimit=0x40000000 \"\$HOME/.dotnet/tools/csharp-ls\" --version",
             uninstallCommand = "dotnet tool uninstall --global csharp-ls",
             runCommand = "env DOTNET_ROOT=\"\$HOME/.dotnet\" DOTNET_GCHeapHardLimit=0x40000000 \"\$HOME/.dotnet/tools/csharp-ls\"",
@@ -103,7 +105,8 @@ object LspServerCatalog {
             category = "Scripting",
             name = "Pyright (Python)",
             description = "Static type checker and language server for Python (needs Node.js).",
-            installCommand = "sudo npm install -g pyright",
+            installCommand = "set -e; jcode_progress 10 'Installing Pyright'; " +
+                "sudo npm install -g pyright; jcode_progress 100 'Pyright ready'",
             // pyright-langserver itself rejects --version ("Connection input stream is not set",
             // exit 1) — only the pyright CLI answers it, so verify through that.
             verifyCommand = "pyright --version",
@@ -122,8 +125,10 @@ object LspServerCatalog {
             description = "Official Go language server (needs the Go toolchain).",
             // `go install` drops the binary into $GOPATH/bin, which is never on the fixed catalog
             // PATH — the /usr/local/bin symlink is what makes verify and the runtime launcher find it.
-            installCommand = "set -e; go install golang.org/x/tools/gopls@latest; " +
-                "sudo ln -sf \"\$(go env GOPATH)/bin/gopls\" /usr/local/bin/gopls",
+            installCommand = "set -e; jcode_progress 10 'Building gopls'; " +
+                "go install golang.org/x/tools/gopls@latest; jcode_progress 90 'Putting gopls on PATH'; " +
+                "sudo ln -sf \"\$(go env GOPATH)/bin/gopls\" /usr/local/bin/gopls; " +
+                "jcode_progress 100 'gopls ready'",
             verifyCommand = "gopls version",
             uninstallCommand = "sudo rm -f /usr/local/bin/gopls; " +
                 "rm -f \"\$(go env GOPATH 2>/dev/null || echo \"\$HOME/go\")/bin/gopls\"",
@@ -140,8 +145,11 @@ object LspServerCatalog {
             description = "Language server for Rust (needs rustup).",
             // rustup lives in ~/.cargo/bin, which is never on the fixed catalog PATH; the component's
             // real binary gets symlinked into /usr/local/bin so verify and the runtime launcher work.
-            installCommand = "set -e; \"\$HOME/.cargo/bin/rustup\" component add rust-analyzer; " +
-                "sudo ln -sf \"\$(\"\$HOME/.cargo/bin/rustup\" which rust-analyzer)\" /usr/local/bin/rust-analyzer",
+            installCommand = "set -e; jcode_progress 10 'Adding the rust-analyzer component'; " +
+                "\"\$HOME/.cargo/bin/rustup\" component add rust-analyzer; " +
+                "jcode_progress 90 'Putting rust-analyzer on PATH'; " +
+                "sudo ln -sf \"\$(\"\$HOME/.cargo/bin/rustup\" which rust-analyzer)\" /usr/local/bin/rust-analyzer; " +
+                "jcode_progress 100 'rust-analyzer ready'",
             verifyCommand = "rust-analyzer --version",
             uninstallCommand = "sudo rm -f /usr/local/bin/rust-analyzer; " +
                 "\"\$HOME/.cargo/bin/rustup\" component remove rust-analyzer",
@@ -159,11 +167,13 @@ object LspServerCatalog {
             // fwcd/kotlin-language-server ships a `server.zip` on each release; /releases/latest/download
             // always resolves to the newest asset, so no version needs pinning. It's a JVM app, so `jdk`
             // (which provides `java`) is required first.
-            installCommand = "set -e; sudo apt-get install -y curl unzip; " +
-                "curl -fsSL -o /tmp/kls.zip https://github.com/fwcd/kotlin-language-server/releases/latest/download/server.zip; " +
+            installCommand = "set -e; jcode_apt 0 15 'Installing download prerequisites' curl unzip; " +
+                "jcode_fetch https://github.com/fwcd/kotlin-language-server/releases/latest/download/server.zip " +
+                "/tmp/kls.zip 15 85 'Downloading the Kotlin language server'; " +
+                "jcode_progress 88 'Unpacking the Kotlin language server'; " +
                 "sudo rm -rf /opt/kotlin-language-server; sudo unzip -q -o /tmp/kls.zip -d /opt/kotlin-language-server; " +
                 "sudo ln -sf /opt/kotlin-language-server/server/bin/kotlin-language-server /usr/local/bin/kotlin-language-server; " +
-                "rm -f /tmp/kls.zip",
+                "rm -f /tmp/kls.zip; jcode_progress 100 'Kotlin language server ready'",
             // The server's arg parser knows only --tcpServerPort/--tcpClientPort/--tcpClientHost;
             // `--version` makes it throw and exit 1, so a launch-based verify misreports a good
             // install as failed. Check the launcher and the JVM it needs instead.
@@ -183,10 +193,13 @@ object LspServerCatalog {
             description = "Eclipse JDT language server for Java (needs a JDK). Installed from the latest Eclipse snapshot archive.",
             // The equinox launcher writes to its -configuration area, so the runtime uses a per-user
             // copy of config_linux instead of the root-owned /opt tree.
-            installCommand = "set -e; sudo apt-get install -y curl; " +
-                "curl -fsSL -o /tmp/jdtls.tar.gz https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz; " +
+            installCommand = "set -e; jcode_apt 0 15 'Installing download prerequisites' curl; " +
+                "jcode_fetch https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz " +
+                "/tmp/jdtls.tar.gz 15 85 'Downloading Eclipse JDT LS'; " +
+                "jcode_progress 88 'Unpacking Eclipse JDT LS'; " +
                 "sudo rm -rf /opt/jdtls; sudo mkdir -p /opt/jdtls; sudo tar -xzf /tmp/jdtls.tar.gz -C /opt/jdtls; rm -f /tmp/jdtls.tar.gz; " +
-                "rm -rf \"\$HOME/.jdtls\"; mkdir -p \"\$HOME/.jdtls\"; cp -r /opt/jdtls/config_linux \"\$HOME/.jdtls/config\"",
+                "rm -rf \"\$HOME/.jdtls\"; mkdir -p \"\$HOME/.jdtls\"; cp -r /opt/jdtls/config_linux \"\$HOME/.jdtls/config\"; " +
+                "jcode_progress 100 'Eclipse JDT LS ready'",
             verifyCommand = "ls /opt/jdtls/plugins/org.eclipse.equinox.launcher_*.jar >/dev/null 2>&1 && " +
                 "command -v java >/dev/null 2>&1 && echo ready",
             uninstallCommand = "sudo rm -rf /opt/jdtls; rm -rf \"\$HOME/.jdtls\" \"\$HOME/.jdtls-data\"",
@@ -208,7 +221,9 @@ object LspServerCatalog {
             category = "Web",
             name = "HTML",
             description = "HTML language server from vscode-langservers-extracted (needs Node.js).",
-            installCommand = "sudo npm install -g vscode-langservers-extracted",
+            installCommand = "set -e; jcode_progress 10 'Installing the HTML/CSS/JSON servers'; " +
+                "sudo npm install -g vscode-langservers-extracted; " +
+                "jcode_progress 100 'HTML/CSS/JSON servers ready'",
             verifyCommand = "command -v vscode-html-language-server >/dev/null 2>&1 && node -e \"process.exit(0)\"",
             uninstallCommand = "sudo npm rm -g vscode-langservers-extracted",
             runCommand = "vscode-html-language-server --stdio",
@@ -223,7 +238,9 @@ object LspServerCatalog {
             category = "Web",
             name = "CSS / SCSS / LESS",
             description = "CSS language server from vscode-langservers-extracted (needs Node.js).",
-            installCommand = "sudo npm install -g vscode-langservers-extracted",
+            installCommand = "set -e; jcode_progress 10 'Installing the HTML/CSS/JSON servers'; " +
+                "sudo npm install -g vscode-langservers-extracted; " +
+                "jcode_progress 100 'HTML/CSS/JSON servers ready'",
             verifyCommand = "command -v vscode-css-language-server >/dev/null 2>&1 && node -e \"process.exit(0)\"",
             uninstallCommand = "sudo npm rm -g vscode-langservers-extracted",
             runCommand = "vscode-css-language-server --stdio",
@@ -238,7 +255,9 @@ object LspServerCatalog {
             category = "Web",
             name = "JSON",
             description = "JSON language server from vscode-langservers-extracted (needs Node.js).",
-            installCommand = "sudo npm install -g vscode-langservers-extracted",
+            installCommand = "set -e; jcode_progress 10 'Installing the HTML/CSS/JSON servers'; " +
+                "sudo npm install -g vscode-langservers-extracted; " +
+                "jcode_progress 100 'HTML/CSS/JSON servers ready'",
             verifyCommand = "command -v vscode-json-language-server >/dev/null 2>&1 && node -e \"process.exit(0)\"",
             uninstallCommand = "sudo npm rm -g vscode-langservers-extracted",
             runCommand = "vscode-json-language-server --stdio",
@@ -253,7 +272,9 @@ object LspServerCatalog {
             category = "Web",
             name = "YAML",
             description = "YAML language server by Red Hat (needs Node.js).",
-            installCommand = "sudo npm install -g yaml-language-server",
+            installCommand = "set -e; jcode_progress 10 'Installing the YAML language server'; " +
+                "sudo npm install -g yaml-language-server; " +
+                "jcode_progress 100 'YAML language server ready'",
             verifyCommand = "yaml-language-server --version",
             uninstallCommand = "sudo npm rm -g yaml-language-server",
             runCommand = "yaml-language-server --stdio",

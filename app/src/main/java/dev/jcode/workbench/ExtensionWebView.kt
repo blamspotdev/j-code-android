@@ -7,6 +7,7 @@ import android.os.Environment
 import android.provider.OpenableColumns
 import android.view.MotionEvent
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.webkit.JavascriptInterface
@@ -882,16 +883,39 @@ internal fun VsixPanelPage(
 /** Mount one of a session's WebViews, reparenting it rather than rebuilding it. */
 @Composable
 private fun VsixSurfaceView(surface: VsixSession.Surface, modifier: Modifier) {
+    PersistentWebViewHost(surface.webView, modifier.fillMaxSize())
+}
+
+/**
+ * Mounts a WebView that outlives this composable, re-parenting it in and out instead of building or
+ * destroying it.
+ *
+ * The WebView goes into a container this mount owns rather than being handed to [AndroidView]
+ * directly, because two mounts can be alive at the same moment: rotating the device composes the
+ * landscape drawer before the portrait one is torn down, and a teardown that detached the WebView
+ * from "whatever its parent happens to be" then ripped it straight back out of the mount that had
+ * just adopted it — which is why an extension's view went blank after a rotation. Removing it from
+ * *this* container is a no-op once another mount owns it, so either order is safe.
+ */
+@Composable
+internal fun PersistentWebViewHost(webView: WebView, modifier: Modifier = Modifier) {
     AndroidView(
-        modifier = modifier.fillMaxSize(),
-        factory = {
-            (surface.webView.parent as? ViewGroup)?.removeView(surface.webView)
-            surface.webView
+        modifier = modifier,
+        factory = { context -> FrameLayout(context) },
+        update = { host ->
+            if (webView.parent !== host) {
+                (webView.parent as? ViewGroup)?.removeView(webView)
+                host.addView(
+                    webView,
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    ),
+                )
+            }
         },
+        onRelease = { host -> host.removeView(webView) },
     )
-    DisposableEffect(surface) {
-        onDispose { (surface.webView.parent as? ViewGroup)?.removeView(surface.webView) }
-    }
 }
 
 /**

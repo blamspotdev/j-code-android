@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -25,6 +26,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -432,14 +434,10 @@ fun ManagerDetailScreen(
     onInstall: () -> Unit,
     onUpdate: () -> Unit,
     onUninstall: () -> Unit,
-    onVerify: () -> Unit,
     modifier: Modifier = Modifier,
     busyLabel: String? = null,
     showActions: Boolean = true,
-    showVerify: Boolean = true,
     leading: (@Composable () -> Unit)? = null,
-    onManage: (() -> Unit)? = null,
-    manageLabel: String = "Manage",
     /** Installable versions, newest first (index 0 is treated as "latest"), each with an optional tag
      *  (e.g. "LTS Jod"). Empty = no version picker. */
     availableVersions: List<VersionOption> = emptyList(),
@@ -449,6 +447,11 @@ fun ManagerDetailScreen(
     multiVersion: Boolean = false,
     /** Whether the available-versions list is still being fetched (shows a spinner in the picker). */
     versionsLoading: Boolean = false,
+    /** 0..100 reported by the running install itself; null while it reports nothing (the chip then
+     *  keeps its indeterminate spinner). Only shown while [busy]. */
+    progressPercent: Int? = null,
+    /** What the install is doing at [progressPercent], e.g. "Downloading Android platform". */
+    progressLabel: String? = null,
     onInstallVersion: (String) -> Unit = {},
     onUninstallVersion: (String) -> Unit = {},
     extra: @Composable () -> Unit = {},
@@ -476,6 +479,10 @@ fun ManagerDetailScreen(
             }
         }
 
+        if (busy && progressPercent != null) {
+            ManagerProgress(percent = progressPercent, label = progressLabel)
+        }
+
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
         if (description.isNotBlank()) {
@@ -495,10 +502,6 @@ fun ManagerDetailScreen(
                 onSelectVersion = { selectedVersion = it },
                 onUninstallVersion = onUninstallVersion,
             )
-        }
-
-        if (onManage != null) {
-            CompactFilledButton(manageLabel, onClick = onManage, enabled = actionsEnabled, modifier = Modifier.fillMaxWidth())
         }
 
         if (showActions) {
@@ -522,15 +525,44 @@ fun ManagerDetailScreen(
                         modifier = Modifier.weight(1f),
                     )
                 }
-                if (showVerify) {
-                    CompactOutlinedButton("Verify", onClick = onVerify, enabled = actionsEnabled, modifier = Modifier.weight(1f))
-                }
-                // Multi-version tools are removed per-version in the list above; single-version keeps a global Uninstall.
-                if (!(hasVersions && multiVersion)) {
-                    CompactOutlinedButton("Uninstall", onClick = onUninstall, enabled = installed && actionsEnabled, modifier = Modifier.weight(1f))
-                }
+                // Kept for multi-version tools too. Individual versions are removed in the list above,
+                // but "Uninstall" means the whole toolchain — which for something like the Android
+                // SDK is more than its versions: removing every platform would still leave the
+                // command-line tools, build-tools and Gradle behind with no way to get rid of them.
+                CompactOutlinedButton("Uninstall", onClick = onUninstall, enabled = installed && actionsEnabled, modifier = Modifier.weight(1f))
             }
         }
+    }
+}
+
+/**
+ * Determinate progress for a running install: the percentage the script reported, what it is doing,
+ * and a bar. The same numbers are also printed into the Setup terminal, so the two agree.
+ */
+@Composable
+private fun ManagerProgress(percent: Int, label: String?) {
+    val clamped = percent.coerceIn(0, 100)
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = label?.takeIf { it.isNotBlank() } ?: "Working…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = "$clamped%",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        LinearProgressIndicator(
+            progress = { clamped / 100f },
+            modifier = Modifier.fillMaxWidth().height(4.dp),
+        )
     }
 }
 

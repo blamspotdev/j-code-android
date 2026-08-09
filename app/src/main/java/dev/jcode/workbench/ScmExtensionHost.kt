@@ -9,7 +9,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -18,7 +17,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.viewinterop.AndroidView
 import dev.jcode.design.JCodeTheme
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.webUiFile
@@ -143,18 +141,7 @@ internal fun ScmBackgroundHost(
  *  Keyed on [entry] so a rebuilt holder entry swaps its fresh WebView into the panel. */
 @Composable
 internal fun ScmHostWebView(entry: ScmWebViewHolder.Entry, modifier: Modifier = Modifier) {
-    key(entry) {
-        AndroidView(
-            modifier = modifier,
-            factory = {
-                (entry.webView.parent as? ViewGroup)?.removeView(entry.webView)
-                entry.webView
-            },
-        )
-        DisposableEffect(entry) {
-            onDispose { (entry.webView.parent as? ViewGroup)?.removeView(entry.webView) }
-        }
-    }
+    key(entry) { PersistentWebViewHost(entry.webView, modifier) }
 }
 
 /** Build the persistent SCM WebView wired to the extension bridge on a caller-owned [scope], so the

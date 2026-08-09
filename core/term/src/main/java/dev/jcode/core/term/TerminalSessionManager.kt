@@ -127,6 +127,12 @@ class TerminalSessionManager(
     @Volatile
     var onTaskComplete: ((String, String) -> Unit)? = null
 
+    /** Invoked (off the reader thread) with (sessionId, payload) when a guest task reports how far it
+     *  has got via OSC 7716. The payload is `<token>;<percent>;<label>` — see the Setup-terminal task
+     *  runner, which turns it into a determinate progress bar on the manager pages. */
+    @Volatile
+    var onTaskProgress: ((String, String) -> Unit)? = null
+
     /** Invoked (off the reader thread) with decoded text when a guest program writes the clipboard
      *  via OSC 52 (e.g. Claude Code's copy-on-select), so the host can set the Android clipboard. */
     @Volatile
@@ -419,6 +425,7 @@ class TerminalSessionManager(
                     7713 -> onTaskComplete?.invoke(session.id, payload.trim())
                     7714 -> onOpenUrlRequest?.invoke(payload.trim())
                     7715 -> onNestedShellOpen?.invoke(session.id, payload.trim())
+                    7716 -> onTaskProgress?.invoke(session.id, payload.trim())
                 }
             }
             while (isActive) {
