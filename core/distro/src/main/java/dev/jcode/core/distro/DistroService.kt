@@ -1582,9 +1582,10 @@ class DistroService(
      * downloads a file and reports true byte-level progress across the [from,to] slice of the bar —
      * curl's own meter is a carriage-return animation no percentage can be recovered from once it
      * has been through a PTY. `jcode_apt <from> <to> <label> <packages…>` is `apt-get update` plus
-     * `apt-get install`, reporting apt's own machine-readable `APT::Status-Fd` percentages, so a
-     * plain apt-based toolchain gets a genuine bar rather than three hand-placed milestones. It
-     * keeps apt's exit status (via a temp file — the status of a pipeline is its last member's).
+     * `apt-get install`, reporting apt's own machine-readable `APT::Status-Fd` percentages (on fd 3,
+     * for the reason spelled out at the call site), so a plain apt-based toolchain gets a genuine bar
+     * rather than three hand-placed milestones. It keeps apt's exit status (via a temp file — the
+     * status of a pipeline is its last member's).
      *
      * Both are defined unconditionally so a script can call them on either execution path; without a
      * PTY (`JCODE_PROGRESS_TOKEN` unset) the marker is simply not emitted. Every helper ends by
@@ -2343,7 +2344,14 @@ class DistroService(
               __ja_a=${'$'}1; __ja_b=${'$'}2; __ja_l=${'$'}3; shift 3
               __ja_mid=${'$'}(( (__ja_a + __ja_b) / 2 ))
               rm -f /tmp/.jcode-apt-rc
-              { sudo apt-get -y -o APT::Status-Fd=1 -o Dpkg::Use-Pty=0 "${'$'}@" 2>&1
+              # Status-Fd MUST NOT be 1. Combined with Dpkg::Use-Pty=0 (no pty, so dpkg inherits our
+              # stdout) apt claims fd 1 as its status channel while dpkg hands the same descriptor to
+              # maintainer scripts, and their first write to stdout fails with EIO. That kills the
+              # postinst and leaves the package half-configured ("iF") — ca-certificates on Ubuntu
+              # 26.04 is the loud case, but it was measured on 24.04 too. Either option alone is
+              # harmless; it is the pair that breaks. Status goes to fd 3 and is folded back into the
+              # same pipe by `3>&1`, so the reader below still sees one merged stream.
+              { sudo apt-get -y -o APT::Status-Fd=3 -o Dpkg::Use-Pty=0 "${'$'}@" 2>&1 3>&1
                 echo "__jcrc:${'$'}?" > /tmp/.jcode-apt-rc
               } | while IFS= read -r __ja_line; do
                 case "${'$'}__ja_line" in
