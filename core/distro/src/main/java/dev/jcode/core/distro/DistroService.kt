@@ -2300,10 +2300,11 @@ class DistroService(
 
         /** CSI escapes (colour, cursor moves). The setup log is plain text, but plenty of install
          *  scripts colour their output — nvm's "Creating default alias" line is SGR-wrapped — and the
-         *  raw bytes render there as stray control glyphs. Spelled `Char(27)` (ESC) and `[[]` rather
-         *  than the usual escapes so the pattern stays plain ASCII: a literal ESC byte in source is
-         *  invisible to most editors and diff tools, and easy to destroy on a later edit. */
-        private val ANSI_CSI = Regex(Char(27) + "[[][0-9;?]*[ -/]*[@-~]")
+         *  raw bytes render there as stray control glyphs. The introducer is `Char(27)` rather than an
+         *  escape so a literal ESC byte — invisible to most editors and easy to destroy on a later
+         *  edit — stays out of the source. The bracket must still be backslash-escaped: ICU's regex
+         *  reads `[` inside a class as the start of a *nested* class, so `[[]` fails to compile. */
+        private val ANSI_CSI = Regex(Char(27) + """\[[0-9;?]*[ -/]*[@-~]""")
 
         /** Shell helpers prepended to every catalog install/uninstall — see [withCatalogHelpers]. */
         private val CATALOG_SHELL_HELPERS: String = """
