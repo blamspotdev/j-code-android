@@ -79,7 +79,6 @@ enum class SdkCatalogCategory(val label: String) {
 
 enum class SdkCatalogAction(val label: String) {
     Install("Install"),
-    Verify("Verify"),
     Uninstall("Remove"),
 }
 

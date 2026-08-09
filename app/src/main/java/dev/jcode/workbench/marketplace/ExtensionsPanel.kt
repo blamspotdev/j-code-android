@@ -471,7 +471,6 @@ internal fun ExtensionDetailPage(
     installPhase: String?,
     onInstall: (MarketplaceEntry) -> Unit,
     onUninstall: (String) -> Unit,
-    onOpenApp: (String) -> Unit,
     onOpenExtensionDetail: (String) -> Unit,
     onOpenSdkDetail: (String) -> Unit,
     onOpenLspDetail: (String) -> Unit,
@@ -506,19 +505,9 @@ internal fun ExtensionDetailPage(
         busy = busy,
         busyLabel = installPhase,
         actionsEnabled = !busy,
-        showVerify = false,
         onInstall = { if (hasDeps) showDeps = true else entry?.let(onInstall) },
         onUpdate = { entry?.let(onInstall) },
         onUninstall = { onUninstall(id) },
-        onVerify = {},
-        // The Source Control UI is embedded in the left-drawer SCM panel, so a full-page "Manage" tab
-        // would just duplicate it. (Other web-UI extensions still get Manage.)
-        onManage = if (installed != null && installed.hasWebUi && installed.type != ExtensionType.Scm) {
-            { onOpenApp(installed.id) }
-        } else {
-            null
-        },
-        manageLabel = "Manage",
         modifier = modifier,
         leading = {
             ExtensionIcon(

@@ -30,7 +30,6 @@ object SdkManagerFeature {
         onInstall: (String) -> Unit,
         onUpdate: (String) -> Unit,
         onUninstall: (String) -> Unit,
-        onVerify: (String) -> Unit,
         onInstallVersion: (String, String) -> Unit = { _, _ -> },
         onUninstallVersion: (String, String) -> Unit = { _, _ -> },
         modifier: Modifier = Modifier,
@@ -51,7 +50,6 @@ object SdkManagerFeature {
                 prerequisite -> "Installing ${prerequisiteName ?: "required tools"}…"
                 else -> when (state.runningAction.takeIf { running }) {
                     SdkCatalogAction.Install -> "Installing…"
-                    SdkCatalogAction.Verify -> "Verifying…"
                     SdkCatalogAction.Uninstall -> "Removing…"
                     null -> "Checking…"
                 }
@@ -60,7 +58,6 @@ object SdkManagerFeature {
             onInstall = { onInstall(entry.id) },
             onUpdate = { onUpdate(entry.id) },
             onUninstall = { onUninstall(entry.id) },
-            onVerify = { onVerify(entry.id) },
             availableVersions = if (versioned) {
                 state.availableVersions[entry.id].orEmpty().map { VersionOption(it.version, it.tag.ifBlank { null }) }
             } else {

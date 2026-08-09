@@ -26,7 +26,6 @@ object LspManagerFeature {
         onInstall: (String) -> Unit,
         onUpdate: (String) -> Unit,
         onUninstall: (String) -> Unit,
-        onVerify: (String) -> Unit,
         modifier: Modifier = Modifier,
     ) {
         val environmentReady = environmentState.distroInstalled == true && environmentState.jcodeUserReady == true
@@ -39,7 +38,6 @@ object LspManagerFeature {
             busy = state.checking || running,
             busyLabel = when (state.runningAction.takeIf { running }) {
                 LspCatalogAction.Install -> "Installing…"
-                LspCatalogAction.Verify -> "Verifying…"
                 LspCatalogAction.Uninstall -> "Removing…"
                 null -> "Checking…"
             },
@@ -47,7 +45,6 @@ object LspManagerFeature {
             onInstall = { onInstall(entry.id) },
             onUpdate = { onUpdate(entry.id) },
             onUninstall = { onUninstall(entry.id) },
-            onVerify = { onVerify(entry.id) },
             progressPercent = progress?.percent.takeIf { running },
             progressLabel = progress?.label,
             modifier = modifier,

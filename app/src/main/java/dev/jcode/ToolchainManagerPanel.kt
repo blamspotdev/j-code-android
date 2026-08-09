@@ -269,7 +269,6 @@ private fun runningLabel(isRunning: Boolean, actionLabel: String?, progress: Cat
     val verb = when (actionLabel) {
         "Install" -> "Installing"
         "Remove" -> "Removing"
-        "Verify" -> "Verifying"
         else -> "Working"
     }
     return verb + "…" + (progress?.percent?.let { " $it%" }.orEmpty())

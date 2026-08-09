@@ -26,7 +26,6 @@ data class LspCatalogEntry(
 
 enum class LspCatalogAction(val label: String) {
     Install("Install"),
-    Verify("Verify"),
     Uninstall("Remove"),
 }
 

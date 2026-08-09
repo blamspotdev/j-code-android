@@ -1,6 +1,7 @@
 package dev.jcode.feature.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -41,6 +43,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -60,6 +63,7 @@ import dev.jcode.core.config.WorkspaceConfig
 import dev.jcode.design.IconBundle
 import dev.jcode.design.IconBundleRegistry
 import dev.jcode.design.JCodeIcon
+import dev.jcode.design.jcIcon
 import dev.jcode.design.BottomBarVisibility
 import dev.jcode.design.ExtraKeysVisibility
 import dev.jcode.design.LocalBottomBarSetting
@@ -260,7 +264,7 @@ object SettingsFeature {
             val showGlobalTab = safeTab == 0
             val showScopedTab = safeTab in 1 until tabScopes.size
             if (showGlobalTab) {
-            SettingsSectionHeader("Appearance")
+            SettingsGroup("Appearance") {
             SettingsCard(
                 title = "Appearance",
                 description = "System follows your device's light/dark setting.",
@@ -450,7 +454,9 @@ object SettingsFeature {
                 )
             }
 
-            SettingsSectionHeader("Input")
+            } // end Appearance
+
+            SettingsGroup("Input") {
             SettingsCard(
                 title = "Volume keys",
                 description = "Remap the hardware volume buttons to editor/terminal actions. " +
@@ -500,7 +506,9 @@ object SettingsFeature {
                 }
             }
 
-            SettingsSectionHeader("Startup")
+            } // end Input
+
+            SettingsGroup("Startup") {
             SettingsCard(
                 title = "Restore last session",
                 description = "Pick up where you left off after closing the app.",
@@ -516,10 +524,12 @@ object SettingsFeature {
                 )
             }
 
+            } // end Startup
+
             // Per-extension settings now live on the Extension Settings screen (Extensions list → gear),
             // alongside each extension's permissions — not here in App Settings.
 
-            SettingsSectionHeader("Performance")
+            SettingsGroup("Performance") {
             SettingsCard(
                 title = "Rendering",
                 description = "How JCode draws the UI, editor, and terminal.",
@@ -608,6 +618,8 @@ object SettingsFeature {
                     onReset = { perf.onSetNestedShellTabs(SettingsDefaults.NESTED_SHELL_TABS) },
                 )
             }
+            } // end Performance
+
             } // end Global-only cards; the Web preview card below renders on every scope tab.
 
             // "Open web previews in" edits the app-wide default on the GLOBAL tab and a per-project
@@ -618,7 +630,7 @@ object SettingsFeature {
             if (!isEnvVarTab) {
             val projectBrowserScope =
                 tabScopes.getOrNull(safeTab) == ConfigScope.Project && webPreview.currentProjectKey.isNotBlank()
-            SettingsSectionHeader("Web preview")
+            SettingsGroup("Web preview") {
             SettingsCard(
                 title = "Open web previews in",
                 description = if (projectBrowserScope) {
@@ -666,10 +678,12 @@ object SettingsFeature {
                     )
                 }
             }
+            } // end Web preview
+
             } // end web-preview (hidden on the ENV VAR tab)
 
             if (showGlobalTab) {
-            SettingsSectionHeader("Environment")
+            SettingsGroup("Environment") {
             SettingsCard(
                 title = "Environment",
                 description = "Environment setup: proot, distro bootstrap, and the final smoke test. " +
@@ -813,7 +827,9 @@ object SettingsFeature {
                 }
             }
 
-            SettingsSectionHeader("About")
+            } // end Environment
+
+            SettingsGroup("About") {
             SettingsCard(
                 title = "JCode",
                 description = "App version and updates from GitHub releases.",
@@ -891,7 +907,9 @@ object SettingsFeature {
                 }
             }
 
-            SettingsSectionHeader("Editor")
+            } // end About
+
+            SettingsGroup("Editor") {
             SettingsCard(
                 title = "Editor defaults",
                 description = "Default font size and word wrap for the code editor. A workspace or " +
@@ -1020,7 +1038,9 @@ object SettingsFeature {
                 )
             }
 
-            SettingsSectionHeader("Explorer")
+            } // end Editor
+
+            SettingsGroup("Explorer") {
             SettingsCard(
                 title = "Exclude Files/Folders",
                 description = "Exclude files and folders at the project root in the Explorer. \"By-injected\" " +
@@ -1060,7 +1080,9 @@ object SettingsFeature {
                 )
             }
 
-            SettingsSectionHeader("Developer")
+            } // end Explorer
+
+            SettingsGroup("Developer") {
             SettingsCard(
                 title = "Developer options",
                 description = "Tools for building and testing JCode extensions.",
@@ -1091,10 +1113,11 @@ object SettingsFeature {
                 }
             }
 
+            } // end Developer
+
             } // end Global tab
 
             if (showScopedTab) {
-            SettingsSectionHeader("Editor")
             // The active tab already names the scope; this caption just states its reach.
             if (query.isBlank()) {
                 Text(
@@ -1122,6 +1145,7 @@ object SettingsFeature {
                 WarningCard(title = "Environment warning", message = message)
             }
 
+            SettingsGroup("Editor", stateKey = "scoped.Editor") {
             SettingsCard(
                 title = "Editor behavior",
                 description = "These controls write back to YAML and update the open editor immediately.",
@@ -1213,7 +1237,9 @@ object SettingsFeature {
                 }
             }
 
-            SettingsSectionHeader("Files")
+            } // end Editor (scoped)
+
+            SettingsGroup("Files") {
             SettingsCard(
                 title = "YAML files",
                 description = "Open the backing config files directly when you want full control.",
@@ -1230,6 +1256,8 @@ object SettingsFeature {
                     Text("Open project YAML")
                 }
             }
+            } // end Files
+
             } // end Project/Workspace tab
 
             // Composed after every card, so matchSink.count reflects the whole page.
@@ -1384,17 +1412,66 @@ private fun SettingsNoResults(query: String) {
     }
 }
 
+/**
+ * Which settings groups are open, held outside the composition.
+ *
+ * `rememberSaveable` is not enough here: rotating the device makes the workbench swap between its
+ * modal and docked layouts, which disposes this whole subtree along with its saveable registry, so
+ * every group would snap shut on rotation. Session-scoped by design — a fresh launch starts
+ * collapsed. Each group owns its own [MutableState] so toggling one doesn't invalidate the rest.
+ */
+private val settingsGroupExpanded = mutableMapOf<String, MutableState<Boolean>>()
+
+/**
+ * A run of [SettingsCard]s under one heading, collapsed by default so the page opens as a short list
+ * of headings instead of one long scroll.
+ *
+ * While a search is running the heading and the collapse are bypassed entirely and [content] is
+ * emitted straight into the caller's Column — not merely un-collapsed. Cards filter themselves and
+ * count themselves into [LocalSettingsMatchSink], so wrapping them at all would both hide matches
+ * inside collapsed groups and, for a group whose cards all filtered out, leave an empty child behind
+ * that the parent's `spacedBy` would still pad around.
+ *
+ * [stateKey] separates groups that share a title — "Editor" is a heading on both the global and the
+ * scoped tab.
+ */
 @Composable
-private fun SettingsSectionHeader(title: String) {
-    // Hidden while searching, so results read as a flat filtered list.
-    if (LocalSettingsQuery.current.isNotBlank()) return
-    Text(
-        text = title,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.primary,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(top = 6.dp, start = 2.dp),
-    )
+private fun ColumnScope.SettingsGroup(
+    title: String,
+    stateKey: String = title,
+    content: @Composable () -> Unit,
+) {
+    if (LocalSettingsQuery.current.isNotBlank()) {
+        content()
+        return
+    }
+    var expanded by remember(stateKey) { settingsGroupExpanded.getOrPut(stateKey) { mutableStateOf(false) } }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { expanded = !expanded }
+            .padding(top = 6.dp, start = 2.dp, end = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            imageVector = jcIcon(if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown),
+            contentDescription = if (expanded) "Collapse $title" else "Expand $title",
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp),
+        )
+    }
+    // AnimatedVisibility stacks its children like a Box, so the cards need their own Column to keep
+    // the page's 10dp rhythm instead of drawing on top of each other.
+    AnimatedVisibility(visible = expanded) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { content() }
+    }
 }
 
 @Composable
@@ -1590,7 +1667,14 @@ private fun EnvVarEditor(settings: EnvVarSettings) {
     var adding by remember { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        SettingsSectionHeader("Environment variables")
+        // A plain heading, not a SettingsGroup: this tab is one section and has no search field.
+        Text(
+            text = "Environment variables",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(top = 6.dp, start = 2.dp),
+        )
         Text(
             text = "Exported into every terminal and Build & Run session (e.g. API keys, GOPRIVATE, " +
                 "JAVA_OPTS). Applied to newly opened terminals.",

@@ -340,15 +340,11 @@ class DistroService(
                     applyVersion(entry.installScript, version),
                     timeoutMs = entry.installTimeoutMs(catalogInstallTimeoutMs),
                 )
-                SdkCatalogAction.Verify -> execCatalogScript(entry.verifyScript, timeoutMs = 120_000L)
                 SdkCatalogAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", applyVersion(entry.uninstallScript, version), timeoutMs = 900_000L)
             }
-            val verifyResult = when (action) {
-                SdkCatalogAction.Verify -> actionResult
-                SdkCatalogAction.Install,
-                SdkCatalogAction.Uninstall,
-                -> execCatalogScript(entry.verifyScript, timeoutMs = 120_000L)
-            }
+            // The install/uninstall script's own exit status is not trusted — the verify script is
+            // what decides whether the tool is actually there afterwards.
+            val verifyResult = execCatalogScript(entry.verifyScript, timeoutMs = 120_000L)
 
             val installedNow = verifyResult.succeeded
             val updatedInstalledEntries = readInstalledCatalogEntries(distroId).toMutableSet().apply {
@@ -361,7 +357,7 @@ class DistroService(
             persistInstalledCatalogEntries(distroId, updatedInstalledEntries)
 
             val refreshedInstalledVersions =
-                if (entry.versionsScript.isNotBlank() && action != SdkCatalogAction.Verify) {
+                if (entry.versionsScript.isNotBlank()) {
                     _sdkCatalogState.value.installedVersions.toMutableMap()
                         .apply { put(entry.id, readInstalledVersionsForEntry(entry)) }
                 } else {
@@ -493,15 +489,11 @@ class DistroService(
 
             val actionResult = when (action) {
                 LspCatalogAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installCommand, timeoutMs = catalogInstallTimeoutMs)
-                LspCatalogAction.Verify -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
                 LspCatalogAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", entry.uninstallCommand, timeoutMs = 900_000L)
             }
-            val verifyResult = when (action) {
-                LspCatalogAction.Verify -> actionResult
-                LspCatalogAction.Install,
-                LspCatalogAction.Uninstall,
-                -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
-            }
+            // The install/uninstall command's own exit status is not trusted — the verify command
+            // is what decides whether the tool is actually there afterwards.
+            val verifyResult = execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
 
             val installedNow = verifyResult.succeeded
             val updatedInstalledEntries = readInstalledLspEntries(distroId).toMutableSet().apply {
@@ -729,15 +721,11 @@ class DistroService(
 
             val actionResult = when (action) {
                 DebugEngineAction.Install -> execCatalogAction("${action.label} ${entry.name}", entry.installCommand, timeoutMs = catalogInstallTimeoutMs)
-                DebugEngineAction.Verify -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
                 DebugEngineAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", entry.uninstallCommand, timeoutMs = 900_000L)
             }
-            val verifyResult = when (action) {
-                DebugEngineAction.Verify -> actionResult
-                DebugEngineAction.Install,
-                DebugEngineAction.Uninstall,
-                -> execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
-            }
+            // The install/uninstall command's own exit status is not trusted — the verify command
+            // is what decides whether the tool is actually there afterwards.
+            val verifyResult = execCatalogScript(entry.verifyCommand, timeoutMs = 120_000L)
 
             val installedNow = verifyResult.succeeded
             val updatedInstalledEntries = readInstalledDebugEntries(distroId).toMutableSet().apply {
@@ -2008,17 +1996,12 @@ class DistroService(
         return buildList {
             add("[command] ${action.label} ${entry.name}")
             addAll(actionResult.toLogBlock())
-            if (action != SdkCatalogAction.Verify) {
-                add("[verify] ${entry.name}")
-                addAll(verifyResult.toLogBlock())
-            }
+            add("[verify] ${entry.name}")
+            addAll(verifyResult.toLogBlock())
             add(
                 when (action) {
                     SdkCatalogAction.Install ->
                         if (installedNow) "[result] Installed." else "[result] Install completed but verification failed."
-
-                    SdkCatalogAction.Verify ->
-                        if (installedNow) "[result] Installed." else "[result] Not installed."
 
                     SdkCatalogAction.Uninstall ->
                         if (!installedNow) "[result] Removed." else "[result] Still detected after removal."
@@ -2046,7 +2029,6 @@ class DistroService(
     private fun SdkCatalogEntry.scriptFor(action: SdkCatalogAction): String {
         return when (action) {
             SdkCatalogAction.Install -> installScript
-            SdkCatalogAction.Verify -> verifyScript
             SdkCatalogAction.Uninstall -> uninstallScript
         }
     }
@@ -2122,17 +2104,12 @@ class DistroService(
         return buildList {
             add("[command] ${action.label} $name")
             addAll(actionResult.toLogBlock())
-            if (action != LspCatalogAction.Verify) {
-                add("[verify] $name")
-                addAll(verifyResult.toLogBlock())
-            }
+            add("[verify] $name")
+            addAll(verifyResult.toLogBlock())
             add(
                 when (action) {
                     LspCatalogAction.Install ->
                         if (installedNow) "[result] Installed." else "[result] Install completed but verification failed."
-
-                    LspCatalogAction.Verify ->
-                        if (installedNow) "[result] Installed." else "[result] Not installed."
 
                     LspCatalogAction.Uninstall ->
                         if (!installedNow) "[result] Removed." else "[result] Still detected after removal."
@@ -2144,7 +2121,6 @@ class DistroService(
     private fun LspCatalogEntry.commandFor(action: LspCatalogAction): String {
         return when (action) {
             LspCatalogAction.Install -> installCommand
-            LspCatalogAction.Verify -> verifyCommand
             LspCatalogAction.Uninstall -> uninstallCommand
         }
     }
@@ -2173,17 +2149,12 @@ class DistroService(
         return buildList {
             add("[command] ${action.label} $name")
             addAll(actionResult.toLogBlock())
-            if (action != DebugEngineAction.Verify) {
-                add("[verify] $name")
-                addAll(verifyResult.toLogBlock())
-            }
+            add("[verify] $name")
+            addAll(verifyResult.toLogBlock())
             add(
                 when (action) {
                     DebugEngineAction.Install ->
                         if (installedNow) "[result] Installed." else "[result] Install completed but verification failed."
-
-                    DebugEngineAction.Verify ->
-                        if (installedNow) "[result] Installed." else "[result] Not installed."
 
                     DebugEngineAction.Uninstall ->
                         if (!installedNow) "[result] Removed." else "[result] Still detected after removal."
@@ -2195,7 +2166,6 @@ class DistroService(
     private fun DebugEngineEntry.commandFor(action: DebugEngineAction): String {
         return when (action) {
             DebugEngineAction.Install -> installCommand
-            DebugEngineAction.Verify -> verifyCommand
             DebugEngineAction.Uninstall -> uninstallCommand
         }
     }

@@ -1424,17 +1424,14 @@ fun JCodeApp(
             onInstallSdkCatalogEntry = viewModel::installSdkCatalogEntry,
             onInstallSdkCatalogVersion = viewModel::installSdkCatalogVersion,
             onUninstallSdkCatalogVersion = viewModel::uninstallSdkCatalogVersion,
-            onVerifySdkCatalogEntry = viewModel::verifySdkCatalogEntry,
             onUninstallSdkCatalogEntry = viewModel::uninstallSdkCatalogEntry,
             onOpenSdkDetail = viewModel::openSdkDetailPage,
             onCheckLspStatuses = viewModel::checkLspStatuses,
             onInstallLspCatalogEntry = viewModel::installLspCatalogEntry,
-            onVerifyLspCatalogEntry = viewModel::verifyLspCatalogEntry,
             onUninstallLspCatalogEntry = viewModel::uninstallLspCatalogEntry,
             onOpenLspDetail = viewModel::openLspDetailPage,
             onCheckDebugStatuses = viewModel::checkDebugEngineStatuses,
             onInstallDebugEngine = viewModel::installDebugEngine,
-            onVerifyDebugEngine = viewModel::verifyDebugEngine,
             onUninstallDebugEngine = viewModel::uninstallDebugEngine,
             onOpenDebugEngineDetail = viewModel::openDebugEngineDetailPage,
             onRefreshMarketplace = viewModel::refreshMarketplace,
@@ -1443,7 +1440,6 @@ fun JCodeApp(
             onOpenExtensionDetail = viewModel::openExtensionDetailPage,
             onOpenExtensionPermissions = viewModel::openExtensionPermissionsPage,
             onImportVsix = { showVsixImportInfo = true },
-            onOpenExtensionApp = viewModel::openExtensionAppPage,
             // The Source Control extension renders its git-identity + GitHub-auth screen at its
             // `#github` route (a global-config screen that works with no project open).
             onOpenExtensionConfig = { id -> viewModel.openExtensionViewPage(id, "github", "Git Configuration") },
@@ -2713,8 +2709,17 @@ private fun JCodeShell(
                         WorkbenchStatusBar(
                             activeTab = activeTab,
                             selectedProject = selectedProject,
-                            effectiveConfig = effectiveConfig,
-                            activeDistroId = environmentState.runtime.selectedDistro.id,
+                            // Keyed on the fields the label actually reads: environmentState also
+                            // carries activityLog, which churns on every line of setup output and
+                            // would otherwise recompose this row throughout an install.
+                            distroStatus = remember(
+                                environmentState.runningStep,
+                                environmentState.errorMessage,
+                                environmentState.prootInstalled,
+                                environmentState.distroInstalled,
+                                environmentState.jcodeUserReady,
+                                environmentState.runtime.selectedDistro.id,
+                            ) { distroStatusOf(environmentState) },
                         )
                     }
                 }
@@ -2897,7 +2902,6 @@ private fun JCodeShell(
                                             onInstall = managerActions.onInstallSdkCatalogEntry,
                                             onUpdate = managerActions.onInstallSdkCatalogEntry,
                                             onUninstall = managerActions.onUninstallSdkCatalogEntry,
-                                            onVerify = managerActions.onVerifySdkCatalogEntry,
                                             onInstallVersion = managerActions.onInstallSdkCatalogVersion,
                                             onUninstallVersion = managerActions.onUninstallSdkCatalogVersion,
                                             modifier = Modifier.fillMaxSize(),
@@ -2915,7 +2919,6 @@ private fun JCodeShell(
                                             onInstall = managerActions.onInstallLspCatalogEntry,
                                             onUpdate = managerActions.onInstallLspCatalogEntry,
                                             onUninstall = managerActions.onUninstallLspCatalogEntry,
-                                            onVerify = managerActions.onVerifyLspCatalogEntry,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
@@ -2932,7 +2935,6 @@ private fun JCodeShell(
                                             onInstall = managerActions.onInstallDebugEngine,
                                             onUpdate = managerActions.onInstallDebugEngine,
                                             onUninstall = managerActions.onUninstallDebugEngine,
-                                            onVerify = managerActions.onVerifyDebugEngine,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
@@ -2992,7 +2994,6 @@ private fun JCodeShell(
                                             installPhase = LocalExtensionInstallPhases.current[entry?.id ?: inst?.id],
                                             onInstall = managerActions.onInstallExtension,
                                             onUninstall = managerActions.onUninstallExtension,
-                                            onOpenApp = managerActions.onOpenExtensionApp,
                                             onOpenExtensionDetail = managerActions.onOpenExtensionDetail,
                                             onOpenSdkDetail = managerActions.onOpenSdkDetail,
                                             onOpenLspDetail = managerActions.onOpenLspDetail,

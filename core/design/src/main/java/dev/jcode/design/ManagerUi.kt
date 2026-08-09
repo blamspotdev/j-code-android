@@ -434,14 +434,10 @@ fun ManagerDetailScreen(
     onInstall: () -> Unit,
     onUpdate: () -> Unit,
     onUninstall: () -> Unit,
-    onVerify: () -> Unit,
     modifier: Modifier = Modifier,
     busyLabel: String? = null,
     showActions: Boolean = true,
-    showVerify: Boolean = true,
     leading: (@Composable () -> Unit)? = null,
-    onManage: (() -> Unit)? = null,
-    manageLabel: String = "Manage",
     /** Installable versions, newest first (index 0 is treated as "latest"), each with an optional tag
      *  (e.g. "LTS Jod"). Empty = no version picker. */
     availableVersions: List<VersionOption> = emptyList(),
@@ -508,10 +504,6 @@ fun ManagerDetailScreen(
             )
         }
 
-        if (onManage != null) {
-            CompactFilledButton(manageLabel, onClick = onManage, enabled = actionsEnabled, modifier = Modifier.fillMaxWidth())
-        }
-
         if (showActions) {
             val installed = status == ManagerItemStatus.Installed || status == ManagerItemStatus.UpdateAvailable
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -532,9 +524,6 @@ fun ManagerDetailScreen(
                         enabled = actionsEnabled,
                         modifier = Modifier.weight(1f),
                     )
-                }
-                if (showVerify) {
-                    CompactOutlinedButton("Verify", onClick = onVerify, enabled = actionsEnabled, modifier = Modifier.weight(1f))
                 }
                 // Kept for multi-version tools too. Individual versions are removed in the list above,
                 // but "Uninstall" means the whole toolchain — which for something like the Android

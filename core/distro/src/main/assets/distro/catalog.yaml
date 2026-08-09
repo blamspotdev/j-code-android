@@ -1,18 +1,24 @@
 entries:
   - id: clangd
     category: languages
-    name: C/C++
-    description: Installs clang, clangd, clang-format, lldb, and gdb for C-family projects.
+    # This entry is the COMPILER only. clangd itself is the language-server catalog's entry of the
+    # same name, and LLDB belongs to the lldb-dap debug engine — when this entry shipped all three,
+    # the Toolchains list showed what looked like the same tool twice and each install redid the
+    # other's work. The id stays "clangd" because it keys the persisted installed-set and the C/C++
+    # Dev Pack names it in suggests.sdks.
+    name: Clang (C/C++ compiler)
+    description: The clang compiler, clang-format, and gdb for building and debugging C-family projects. The clangd language server and the LLDB debugger are separate entries.
     installScript: |
       set -e
-      jcode_apt 0 100 "Installing the C/C++ toolchain" clang clangd clang-format lldb gdb
+      jcode_apt 0 100 "Installing the C/C++ compiler" clang clang-format gdb
     verifyScript: |
-      command -v clang >/dev/null 2>&1 && command -v clangd >/dev/null 2>&1 && echo ready
+      command -v clang >/dev/null 2>&1 && echo ready
     uninstallScript: |
-      sudo apt-get remove -y clang clangd clang-format lldb gdb
-    # (-[0-9]+)? also matches the versioned llvm-toolchain packages (clang-18, lldb-18, …) that
-    # carry the actual updates; the unversioned metas almost never rev within a release.
-    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(clang|clangd|clang-format|lldb|gdb)(-[0-9]+)?/'"
+      sudo apt-get remove -y clang clang-format gdb
+    # (-[0-9]+)? also matches the versioned llvm-toolchain packages (clang-18, …) that carry the
+    # actual updates; the unversioned metas almost never rev within a release. It cannot match
+    # clangd/ — after "clang" the optional -NN matches empty and "/" would have to match "d".
+    updateCheckScript: "apt list --upgradable 2>/dev/null | grep -qE '^(clang|clang-format|gdb)(-[0-9]+)?/'"
 
   - id: python
     category: languages

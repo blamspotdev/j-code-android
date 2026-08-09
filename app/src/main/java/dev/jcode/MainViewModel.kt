@@ -2893,10 +2893,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun verifySdkCatalogEntry(entryId: String) {
-        runSdkCatalogAction(entryId, SdkCatalogAction.Verify)
-    }
-
     fun uninstallSdkCatalogEntry(entryId: String) {
         runSdkCatalogAction(entryId, SdkCatalogAction.Uninstall)
     }
@@ -2938,10 +2934,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun verifyLspCatalogEntry(entryId: String) {
-        runLspCatalogAction(entryId, LspCatalogAction.Verify)
-    }
-
     fun uninstallLspCatalogEntry(entryId: String) {
         runLspCatalogAction(entryId, LspCatalogAction.Uninstall)
     }
@@ -2954,10 +2946,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 distroService.runDebugEngineCatalogAction(entryId, DebugEngineAction.Install)
             }
         }
-    }
-
-    fun verifyDebugEngine(entryId: String) {
-        runDebugCatalogAction(entryId, DebugEngineAction.Verify)
     }
 
     fun uninstallDebugEngine(entryId: String) {
@@ -3062,8 +3050,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
     }
 
-    /** Open (or focus) an installed extension's bundled web frontend as a full-screen in-editor page. */
-    fun openExtensionAppPage(extensionId: String) {
+    /** Open (or focus) an installed extension's bundled web frontend as a full-screen in-editor page.
+     *  Only reachable through [openExtensionViewPage]'s blank-view case now that the Extension detail
+     *  screen no longer offers a "Manage" button. */
+    private fun openExtensionAppPage(extensionId: String) {
         openDetailPage(EXT_APP_PREFIX + extensionId, EditorPageKind.ExtensionApp) {
             _installedExtensions.value.firstOrNull { it.id == extensionId }?.name ?: "App"
         }

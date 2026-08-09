@@ -34,7 +34,6 @@ data class DebugEngineEntry(
 
 enum class DebugEngineAction(val label: String) {
     Install("Install"),
-    Verify("Verify"),
     Uninstall("Remove"),
 }
 
