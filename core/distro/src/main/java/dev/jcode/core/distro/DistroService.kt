@@ -864,10 +864,13 @@ class DistroService(
             val jcodeUserReady = checkDistroUser()
             if (jcodeUserReady == true) {
                 completedSteps += WizardStepId.JcodeUserCreated
-                // Refreshing package lists is best-effort and idempotent; treat it as done once the
-                // user is ready so it runs only during the fresh first-run pass (when the distro isn't
-                // installed at derive time) and never re-runs on later "Use"/refresh triggers.
+                // Refreshing package lists and installing Node are best-effort and idempotent; treat
+                // them as done once the user is ready so they run only during the fresh first-run pass
+                // (when the distro isn't installed at derive time) and never re-run on later
+                // "Use"/refresh triggers — an environment set up before Node was part of setup should
+                // not start a multi-minute install the next time it is selected.
                 completedSteps += WizardStepId.AptUpdated
+                completedSteps += WizardStepId.NodeInstalled
             }
 
             val toolchainReady = checkToolchainReady()
@@ -951,6 +954,7 @@ class DistroService(
                 WizardStepId.ToolchainBootstrapped -> bootstrapToolchain(onLine = ::appendActivityLogLine)
                 WizardStepId.JcodeUserCreated -> createDistroUser(onLine = ::appendActivityLogLine)
                 WizardStepId.AptUpdated -> aptUpdateStep(onLine = ::appendActivityLogLine)
+                WizardStepId.NodeInstalled -> installNodeStep(onLine = ::appendActivityLogLine)
                 WizardStepId.SmokeTest -> smokeTest(onLine = ::appendActivityLogLine)
             }
 
@@ -1034,6 +1038,14 @@ class DistroService(
                     WizardStepId.ToolchainBootstrapped -> bootstrapToolchain(onLine = ::appendActivityLogLine)
                     WizardStepId.JcodeUserCreated -> createDistroUser(onLine = ::appendActivityLogLine)
                     WizardStepId.AptUpdated -> aptUpdateStep(onLine = ::appendActivityLogLine)
+                    WizardStepId.NodeInstalled -> installNodeStep(
+                        onLine = ::appendActivityLogLine,
+                        onProgress = { percent, detail ->
+                            _autoSetupProgress.tryEmit(
+                                DistroWizardProgress.Running(step, stepLabel(step), percent, detail),
+                            )
+                        },
+                    )
                     WizardStepId.SmokeTest -> smokeTest(onLine = ::appendActivityLogLine)
                 }
 
@@ -1120,6 +1132,7 @@ class DistroService(
         WizardStepId.ToolchainBootstrapped -> "Skip bootstrap (use SDK Manager for tools)"
         WizardStepId.JcodeUserCreated -> "Create jcode user"
         WizardStepId.AptUpdated -> "Refresh package lists"
+        WizardStepId.NodeInstalled -> "Install Node.js (LTS)"
         WizardStepId.SmokeTest -> "Run smoke test"
     }
 
@@ -1437,7 +1450,11 @@ class DistroService(
      * /home/jcode and remain usable from the (non-root) terminal. The scripts' own `sudo` prefixes
      * become a passthrough via the shim installed by [ensureDistroUser].
      */
-    private fun execCatalogScript(script: String, timeoutMs: Long): ExecResult {
+    private fun execCatalogScript(
+        script: String,
+        timeoutMs: Long,
+        onLine: ((String) -> Unit)? = null,
+    ): ExecResult {
         val runtime = _environmentState.value.runtime
         // Root execs skip the su-guard, so make sure the jcode home + sudo shim exist first.
         val ensure = ensureDistroUser(runtime.selectedDistro.id, runtime.user)
@@ -1447,6 +1464,7 @@ class DistroService(
             timeoutMs = timeoutMs,
             user = "root",
             env = mapOf("HOME" to "/home/${runtime.user}", "USER" to runtime.user),
+            onLine = onLine,
         )
     }
 
@@ -1502,7 +1520,13 @@ class DistroService(
      *  from the previous attempt is cleaned before retrying. Hard-stops that can't heal by re-running
      *  — a missing runtime ([ExecResult.internalError]) or a user cancel (SIGINT, exit 130) — break
      *  out immediately. Retries carry a "retry N/M" label so they're visible in the Setup terminal. */
-    private suspend fun execCatalogAction(label: String, script: String, timeoutMs: Long): ExecResult {
+    private suspend fun execCatalogAction(
+        label: String,
+        script: String,
+        timeoutMs: Long,
+        onProgress: ((Int, String) -> Unit)? = null,
+        onLine: ((String) -> Unit)? = null,
+    ): ExecResult {
         val prepared = withCatalogHelpers(withAptSelfHeal(script))
         var last: ExecResult? = null
         try {
@@ -1511,7 +1535,7 @@ class DistroService(
                     if (attempt == 1) label else "$label — retry $attempt/$CATALOG_INSTALL_MAX_ATTEMPTS"
                 // Each attempt restarts the script from the top, so its progress restarts too.
                 _catalogProgress.value = null
-                val result = runCatalogOnce(attemptLabel, prepared, timeoutMs)
+                val result = runCatalogOnce(attemptLabel, prepared, timeoutMs, onProgress, onLine)
                 if (result.succeeded) return result
                 last = result
                 val healable = result.internalError == null && result.exitCode != 130
@@ -1526,19 +1550,27 @@ class DistroService(
 
     /** One catalog-action attempt: prefer the visible Setup terminal, fall back to a quiet in-process
      *  exec. [prepared] already carries the apt self-heal + progress-helper preambles. */
-    private suspend fun runCatalogOnce(label: String, prepared: String, timeoutMs: Long): ExecResult {
+    private suspend fun runCatalogOnce(
+        label: String,
+        prepared: String,
+        timeoutMs: Long,
+        onProgress: ((Int, String) -> Unit)? = null,
+        onLine: ((String) -> Unit)? = null,
+    ): ExecResult {
         val runner = interactiveCatalogRunner
         if (runner != null) {
             val runtime = _environmentState.value.runtime
             val ensure = ensureDistroUser(runtime.selectedDistro.id, runtime.user)
             if (!ensure.succeeded) return ensure
-            val onProgress: (Int, String) -> Unit = { percent, phase ->
+            val reportProgress: (Int, String) -> Unit = { percent, phase ->
                 _catalogProgress.value = CatalogProgress(percent.coerceIn(0, 100), phase)
+                onProgress?.invoke(percent.coerceIn(0, 100), phase)
             }
-            runner(label, prepared, timeoutMs, onProgress)?.let { return it }
+            runner(label, prepared, timeoutMs, reportProgress)?.let { return it }
         }
-        // Quiet fallback: no PTY, so the OSC markers go nowhere and the UI stays indeterminate.
-        return execCatalogScript(prepared, timeoutMs)
+        // Quiet fallback: no PTY, so the OSC markers go nowhere and the catalog UI stays indeterminate.
+        // A caller that passed [onLine] still sees the script's own output, progress lines included.
+        return execCatalogScript(prepared, timeoutMs, onLine)
     }
 
     /**
@@ -1579,6 +1611,70 @@ class DistroService(
         ensureSelectedDistroNetworking()
         onLine?.invoke("Refreshing package lists (apt-get update)…")
         return execCatalogAction("Refresh package lists", "sudo apt-get -y update", timeoutMs = 300_000L)
+    }
+
+    /**
+     * Install the newest LTS Node.js during first-run setup ([WizardStepId.NodeInstalled]), straight
+     * after the package lists are refreshed. Node is what most of the workbench leans on — imported
+     * `.vsix` extensions, several language servers and most project templates all assume `node`/`npm`
+     * are on PATH — so a fresh environment ships with it rather than making a trip to Toolchains
+     * everyone's first task.
+     *
+     * Runs the `nodejs` catalog entry's own script (nvm, newest LTS) and records the outcome in the
+     * same persisted installed-set the Toolchains panel reads, so the row already reads "Installed"
+     * and the version picker can add or remove versions alongside it. Best-effort
+     * ([BEST_EFFORT_STEPS]): a failure still leaves a usable environment. Called from inside the
+     * wizard lock, so it must NOT take [lock] again.
+     */
+    private suspend fun installNodeStep(
+        onLine: ((String) -> Unit)? = null,
+        onProgress: ((Int, String) -> Unit)? = null,
+    ): ExecResult {
+        val entry = _sdkCatalogState.value.entries
+            .ifEmpty { runCatching { sdkCatalogLoader.load() }.getOrElse { emptyList() } }
+            .firstOrNull { it.id == NODE_CATALOG_ENTRY_ID }
+            ?: return ExecResult(internalError = "Node.js is missing from the toolchain catalog.")
+
+        if (execCatalogScript(entry.verifyScript, timeoutMs = 120_000L).succeeded) {
+            return ExecResult(stdout = "Node.js is already installed.", exitCode = 0)
+        }
+
+        ensureSelectedDistroNetworking()
+        onLine?.invoke("Installing Node.js (LTS)…")
+        // Without a Setup terminal there is no PTY for the OSC progress marker, so the script's plain
+        // "[ 42%] label" line is what drives the wizard's bar on that path.
+        val result = execCatalogAction(
+            label = "Install ${entry.name} (LTS)",
+            script = entry.installScript,
+            timeoutMs = entry.installTimeoutMs(catalogInstallTimeoutMs),
+            onProgress = onProgress,
+            onLine = { line ->
+                onLine?.invoke(line)
+                PROGRESS_LINE.matchEntire(line.trim())?.let { match ->
+                    val percent = match.groupValues[1].toIntOrNull() ?: return@let
+                    onProgress?.invoke(percent.coerceIn(0, 100), match.groupValues[2].trim())
+                }
+            },
+        )
+
+        // Same rule as a catalog install: the verify script, not the install script's exit code,
+        // decides whether the tool is actually there.
+        val installed = execCatalogScript(entry.verifyScript, timeoutMs = 120_000L).succeeded
+        val distroId = _environmentState.value.runtime.selectedDistro.id
+        persistInstalledCatalogEntries(
+            distroId,
+            readInstalledCatalogEntries(distroId).toMutableSet()
+                .apply { if (installed) add(entry.id) else remove(entry.id) }
+                .toSet(),
+        )
+        if (!installed) {
+            return ExecResult(
+                internalError = result.internalError
+                    ?: "Node.js install finished, but verification did not detect it.",
+                exitCode = result.exitCode ?: 1,
+            )
+        }
+        return ExecResult(stdout = "Node.js (LTS) installed.", exitCode = 0)
     }
 
     /**
@@ -1956,7 +2052,7 @@ class DistroService(
     }
 
     private fun normalizeProcessOutputLine(line: String): String? {
-        val normalized = line.trim()
+        val normalized = ANSI_CSI.replace(line, "").trim()
         if (normalized.isBlank()) return null
         if (normalized.startsWith("proot warning: unknown syscall ")) return null
         return normalized
@@ -2193,7 +2289,21 @@ class DistroService(
         /** Linear back-off base between install retries (× attempt): 3s, then 6s. */
         private const val CATALOG_RETRY_BACKOFF_MS: Long = 3_000L
         /** Wizard steps that must never abort setup — logged, marked done, and stepped over on failure. */
-        private val BEST_EFFORT_STEPS: Set<WizardStepId> = setOf(WizardStepId.AptUpdated)
+        private val BEST_EFFORT_STEPS: Set<WizardStepId> =
+            setOf(WizardStepId.AptUpdated, WizardStepId.NodeInstalled)
+
+        /** Catalog entry installed automatically during first-run setup — see [installNodeStep]. */
+        private const val NODE_CATALOG_ENTRY_ID: String = "nodejs"
+
+        /** The plain-text half of `jcode_progress`: `[ 42%] Downloading Node.js`. */
+        private val PROGRESS_LINE = Regex("""\[\s*(\d+)%\]\s*(.*)""")
+
+        /** CSI escapes (colour, cursor moves). The setup log is plain text, but plenty of install
+         *  scripts colour their output — nvm's "Creating default alias" line is SGR-wrapped — and the
+         *  raw bytes render there as stray control glyphs. Spelled `Char(27)` (ESC) and `[[]` rather
+         *  than the usual escapes so the pattern stays plain ASCII: a literal ESC byte in source is
+         *  invisible to most editors and diff tools, and easy to destroy on a later edit. */
+        private val ANSI_CSI = Regex(Char(27) + "[[][0-9;?]*[ -/]*[@-~]")
 
         /** Shell helpers prepended to every catalog install/uninstall — see [withCatalogHelpers]. */
         private val CATALOG_SHELL_HELPERS: String = """

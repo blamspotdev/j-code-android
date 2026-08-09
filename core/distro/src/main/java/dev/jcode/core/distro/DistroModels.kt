@@ -109,6 +109,8 @@ enum class WizardStepId(val key: String) {
     JcodeUserCreated("jcode-user-created"),
     /** Package lists refreshed (`apt-get update`) — best-effort, never blocks setup. */
     AptUpdated("apt-updated"),
+    /** Node.js LTS installed from the toolchain catalog — best-effort, never blocks setup. */
+    NodeInstalled("node-installed"),
     /** Final smoke test passed. */
     SmokeTest("smoke-test");
 
