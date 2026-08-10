@@ -84,7 +84,15 @@ class DistroService(
     private val seededConfigured: Boolean? = if (startupPrefs.getBoolean(KEY_ENV_CONFIGURED, false)) true else null
 
     private val _environmentState = MutableStateFlow(
-        DistroEnvironmentState(distroInstalled = seededConfigured, smokeTestPassed = seededConfigured),
+        DistroEnvironmentState(
+            // proot is seeded from the same flag: the status bar reads "not installed" off
+            // `!prootInstalled`, so leaving it false defeated the flash this seed exists to prevent —
+            // a configured device announced a broken environment for the second or two until the
+            // probe answered. Optimistic like the other two, and self-corrected by the same probe.
+            prootInstalled = seededConfigured == true,
+            distroInstalled = seededConfigured,
+            smokeTestPassed = seededConfigured,
+        ),
     )
     val environmentState: StateFlow<DistroEnvironmentState> = _environmentState.asStateFlow()
 

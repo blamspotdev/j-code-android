@@ -69,8 +69,13 @@ internal data class DistroStatus(val label: String, val isError: Boolean)
 internal fun distroStatusOf(state: DistroEnvironmentState): DistroStatus = when {
     state.runningStep != null -> DistroStatus("setting up…", isError = false)
     state.errorMessage != null -> DistroStatus("failed", isError = true)
+    // Every unknown reads as "checking…", before any of the negative verdicts. Nothing is derived
+    // until the startup probe runs, and reporting an environment missing or broken when it has simply
+    // not been looked at yet is the one thing that is never true here: a device with no distro is held
+    // on the onboarding screen, never shown a workbench.
+    state.distroInstalled == null || state.jcodeUserReady == null ->
+        DistroStatus("checking…", isError = false)
     !state.prootInstalled || state.distroInstalled == false -> DistroStatus("not installed", isError = false)
-    state.distroInstalled == null -> DistroStatus("checking…", isError = false)
     state.jcodeUserReady != true -> DistroStatus("not ready", isError = false)
     else -> DistroStatus(state.runtime.selectedDistro.id, isError = false)
 }
