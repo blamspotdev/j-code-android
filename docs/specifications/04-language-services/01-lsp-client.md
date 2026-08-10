@@ -280,7 +280,27 @@ per update, with no incremental path.
 requests. It mirrors `DebugController`, but a debug session is singular and user-started while
 language servers start implicitly and several run at once.
 
-### 8.1 Session keying
+### 8.1 Activation is paired to an extension
+
+A catalog match on the file extension selects *which* server could handle a file; it does not by
+itself start one. A server runs only when an installed extension pairs with it:
+
+| Pairing | Source |
+|---|---|
+| The extension names the server in `requires.lsps` / `suggests.lsps` | [Manifest reference §2.3](../07-extensions/03-manifest-reference.md) — e.g. the C/C++ Dev Pack requires `clangd` |
+| The extension ships a Dev Pack that claims the file's language | `InstalledExtension.languageFor(fileName)` |
+
+Either is enough. Both exist because Dev Packs predate the catalog ids: a pack that owns `.css`
+is what makes the CSS server that language's implementation, whether or not it names it.
+
+A language server is a language's *implementation*, so the extension that owns the language decides
+whether it should run. This also means an unpaired language never prompts to install a server — the
+missing piece there is the Dev Pack, not the server.
+
+Installing or removing an extension re-evaluates every open document (`retryOpenDocuments`), so
+adding a Dev Pack starts its server for files that are already open, with no restart.
+
+### 8.2 Session keying
 
 Sessions are keyed by **(serverId, projectRoot)** and shared by every open file resolving to that
 pair. The root is the nearest ancestor holding one of the descriptor's `rootDetectors`, bounded by
@@ -289,7 +309,7 @@ the projects root, falling back to the project directory itself.
 Files outside the workspace resolve to no root and get no session: proot binds only the projects
 root, so a server could not read them anyway.
 
-### 8.2 Document synchronisation
+### 8.3 Document synchronisation
 
 | Editor event | Controller | Notes |
 |---|---|---|
@@ -309,7 +329,7 @@ A document opened while its session is still handshaking is held back and replay
 Sessions stop when their last document closes — these processes are heavy (jdtls holds a JVM,
 rust-analyzer an index) and a phone has no room for idle ones.
 
-### 8.3 Missing servers
+### 8.4 Missing servers
 
 Opening a file whose catalog server is not installed emits `missingServer` once per server per
 session. `JCodeShell` turns that into a snackbar with an **Install** action routed through

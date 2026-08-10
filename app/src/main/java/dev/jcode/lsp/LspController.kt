@@ -62,6 +62,12 @@ class LspController(
     private val diagnosticsBus: DiagnosticsBus,
     private val documentText: (hostPath: String) -> String?,
     private val openDocumentPaths: () -> List<String>,
+    /**
+     * Whether an installed extension pairs with this server for this file. A language server is a
+     * language's *implementation*; the extension that owns the language is what decides it should
+     * run, so a server never starts on a bare file-extension match alone.
+     */
+    private val isServerPaired: (serverId: String, fileName: String) -> Boolean,
 ) {
 
     private data class SessionKey(val serverId: String, val root: String)
@@ -175,6 +181,14 @@ class LspController(
         }
     }
 
+    /**
+     * Re-evaluates every open document. Called when the installed extensions change: installing the
+     * Dev Pack for a language is what pairs its server, and that must light up the files already open.
+     */
+    fun retryOpenDocuments() {
+        scope.launch { openDocumentPaths().forEach { documentOpened(it) } }
+    }
+
     /** Tears every session down — a different project's files never belong to the same server root. */
     fun shutdownAll() {
         documents.values.forEach { it.changeJob?.cancel() }
@@ -255,6 +269,12 @@ class LspController(
         val descriptor = LspServerDescriptor.findForExtension(extension)
         if (descriptor == null) {
             log("no session: no catalog server handles $extension")
+            return null
+        }
+        // Checked before the installed-check so an unpaired language never prompts to install a
+        // server the user has no extension for; the missing piece there is the Dev Pack, not the server.
+        if (!isServerPaired(descriptor.id, File(hostPath).name)) {
+            log("no session: no installed extension pairs with ${descriptor.id}")
             return null
         }
         if (descriptor.id !in distroService.lspCatalogState.value.installedEntryIds) {

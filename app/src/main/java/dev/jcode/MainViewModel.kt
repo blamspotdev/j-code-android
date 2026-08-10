@@ -115,6 +115,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -1883,7 +1884,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .filter { !it.isPage && it.filePath.path.isNotBlank() }
                 .map { it.filePath.path }
         },
+        isServerPaired = ::isLanguageServerPaired,
     )
+
+    /**
+     * Whether an installed extension pairs with [serverId] for [fileName].
+     *
+     * Two ways to pair, because Dev Packs predate the catalog ids: an explicit `requires.lsps` /
+     * `suggests.lsps` entry naming the server, or a Dev Pack that claims the file's language — a pack
+     * owning `.css` is what makes the CSS server that language's implementation. Without either, a
+     * catalog match on the file extension alone is not enough to start a server.
+     */
+    private fun isLanguageServerPaired(serverId: String, fileName: String): Boolean =
+        installedExtensions.value.any { extension ->
+            serverId in extension.requires.lsps ||
+                serverId in extension.suggests.lsps ||
+                extension.languageFor(fileName) != null
+        }
 
     /** Running language servers, surfaced in the status bar. */
     val lspServers = lspController.servers
@@ -2156,6 +2173,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         lspController.onApplyEdit = { edit ->
             viewModelScope.launch { applyWorkspaceEdit(edit) }
             true
+        }
+        // Installing (or removing) a Dev Pack changes which servers are paired, so the files already
+        // open have to be re-evaluated rather than waiting for the user to reopen them.
+        viewModelScope.launch {
+            installedExtensions
+                .map { extensions -> extensions.map { it.id }.toSet() }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect { lspController.retryOpenDocuments() }
         }
         // .jcode YAML config parse errors are real project issues; mirror them onto the bus.
         viewModelScope.launch {
