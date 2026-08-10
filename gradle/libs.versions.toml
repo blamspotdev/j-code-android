@@ -11,7 +11,6 @@ room = "2.8.4"
 datastore = "1.1.2"
 coroutines = "1.10.1"
 snakeyaml-engine = "2.9"
-lsp4j = "0.23.1"
 bouncycastle = "1.80"
 kotlinx-serialization = "1.8.0"
 androidx-test-core = "1.6.1"
@@ -61,9 +60,6 @@ coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-
 
 # snakeyaml-engine
 snakeyaml-engine = { group = "org.snakeyaml", name = "snakeyaml-engine", version.ref = "snakeyaml-engine" }
-
-# LSP4J
-lsp4j = { group = "org.eclipse.lsp4j", name = "org.eclipse.lsp4j", version.ref = "lsp4j" }
 
 # Bouncy Castle
 bouncycastle-provider = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }

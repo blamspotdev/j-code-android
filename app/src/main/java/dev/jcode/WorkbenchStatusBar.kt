@@ -69,8 +69,13 @@ internal data class DistroStatus(val label: String, val isError: Boolean)
 internal fun distroStatusOf(state: DistroEnvironmentState): DistroStatus = when {
     state.runningStep != null -> DistroStatus("setting up…", isError = false)
     state.errorMessage != null -> DistroStatus("failed", isError = true)
+    // Every unknown reads as "checking…", before any of the negative verdicts. Nothing is derived
+    // until the startup probe runs, and reporting an environment missing or broken when it has simply
+    // not been looked at yet is the one thing that is never true here: a device with no distro is held
+    // on the onboarding screen, never shown a workbench.
+    state.distroInstalled == null || state.jcodeUserReady == null ->
+        DistroStatus("checking…", isError = false)
     !state.prootInstalled || state.distroInstalled == false -> DistroStatus("not installed", isError = false)
-    state.distroInstalled == null -> DistroStatus("checking…", isError = false)
     state.jcodeUserReady != true -> DistroStatus("not ready", isError = false)
     else -> DistroStatus(state.runtime.selectedDistro.id, isError = false)
 }
@@ -80,6 +85,7 @@ internal fun WorkbenchStatusBar(
     activeTab: EditorTab?,
     selectedProject: Project?,
     distroStatus: DistroStatus,
+    lspServers: List<dev.jcode.lsp.LspServerStatus> = emptyList(),
 ) {
     // Collected here (not hoisted into JCodeShell): the caret/snapshot flows emit on every
     // keystroke and caret move, so reading them in this bottomBar scope keeps a keystroke from
@@ -119,7 +125,21 @@ internal fun WorkbenchStatusBar(
                 "distro: ${distroStatus.label}",
                 color = if (distroStatus.isError) MaterialTheme.colorScheme.error else Color.Unspecified,
             )
+            // Only while a server is coming up or has failed. A healthy server announces itself
+            // through squiggles and completions, and this row has no space for a permanent cell.
+            LanguageServerCell(lspServers)
         }
+    }
+}
+
+/** Reports a language server that is still starting, or one that failed — nothing when all are ready. */
+@Composable
+private fun LanguageServerCell(servers: List<dev.jcode.lsp.LspServerStatus>) {
+    val failed = servers.firstOrNull { it.state == dev.jcode.core.lsp.LspState.ERROR }
+    val pending = servers.firstOrNull { it.state != dev.jcode.core.lsp.LspState.READY }
+    when {
+        failed != null -> StatusCell("lsp: ${failed.name} failed", color = MaterialTheme.colorScheme.error)
+        pending != null -> StatusCell("lsp: starting ${pending.name}")
     }
 }
 

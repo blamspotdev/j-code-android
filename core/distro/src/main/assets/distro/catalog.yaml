@@ -807,6 +807,16 @@ entries:
       set -e
       jcode_progress 3 "Fetching the .NET installer"
       command -v curl >/dev/null 2>&1 || { sudo apt-get update; sudo apt-get install -y curl ca-certificates; }
+      # .NET refuses to start at all without ICU ("Couldn't find a valid ICU package installed on the
+      # system", then FailFast) — every `dotnet` invocation aborts, not just globalization-aware code.
+      # Ubuntu's package is versioned (libicu78 on 26.04, libicu74 on 24.04), so resolve the newest
+      # available rather than pinning a number that breaks on the next release.
+      if ! ldconfig -p 2>/dev/null | grep -q libicuuc; then
+        jcode_progress 6 "Installing ICU (required by .NET)"
+        sudo apt-get update
+        ICU=$(apt-cache search --names-only '^libicu[0-9][0-9]*$' | awk '{print $1}' | sort -V | tail -1)
+        sudo apt-get install -y "${ICU:-libicu-dev}"
+      fi
       mkdir -p "$HOME/.dotnet"
       curl -fsSL --retry 3 https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
       V="${JCODE_VERSION:-}"

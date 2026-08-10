@@ -6,6 +6,7 @@ import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
 import dev.jcode.design.EditorSaveActions
 import dev.jcode.design.IconBundleRegistry
+import dev.jcode.core.editor.completion.CompletionSource
 import dev.jcode.core.editor.completion.LocalCompletionSource
 import dev.jcode.editor.languagePackCompletionItems
 import dev.jcode.design.LocalEditorSaveActions
@@ -265,6 +266,8 @@ import dev.jcode.feature.lspmanager.LspManagerFeature
 import dev.jcode.feature.sdkmanager.SdkManagerFeature
 import dev.jcode.feature.settings.SettingsFeature
 import dev.jcode.workbench.dialog.ImportProgressHost
+import dev.jcode.workbench.dialog.LspLocationPickerDialog
+import dev.jcode.workbench.dialog.LspRenameDialog
 import dev.jcode.workbench.dialog.NewItemDialog
 import dev.jcode.workbench.dialog.PostCloneDialog
 import dev.jcode.workbench.dialog.OpenFolderTypeDialog
@@ -361,6 +364,7 @@ import dev.jcode.workbench.ExtensionDrawerActions
 import dev.jcode.workbench.VsixDrawerContent
 import dev.jcode.workbench.VsixPanelPage
 import dev.jcode.workbench.VsixViewHolder
+import dev.jcode.workbench.hasClipboardImage
 import dev.jcode.workbench.ScmBackgroundHost
 import dev.jcode.workbench.ScmWebViewHolder
 import dev.jcode.workbench.installedVsixExtensions
@@ -419,6 +423,8 @@ fun JCodeApp(
     val editorGroup by viewModel.editorGroup.collectAsStateWithLifecycle()
     val pendingEditorClose by viewModel.pendingEditorClose.collectAsStateWithLifecycle()
     val showNewItemDialog by viewModel.showNewItemDialog.collectAsStateWithLifecycle()
+    val lspLocationPicker by viewModel.lspLocationPicker.collectAsStateWithLifecycle()
+    val lspRenameRequest by viewModel.lspRenameRequest.collectAsStateWithLifecycle()
     val postClonePrompt by viewModel.postClonePrompt.collectAsStateWithLifecycle()
     val templates by viewModel.templates.collectAsStateWithLifecycle()
     val workspaceConfig by viewModel.workspaceConfig.collectAsStateWithLifecycle()
@@ -430,6 +436,7 @@ fun JCodeApp(
     val installedEnvironments by viewModel.environments.collectAsStateWithLifecycle()
     val sdkCatalogState by viewModel.sdkCatalogState.collectAsStateWithLifecycle()
     val lspCatalogState by viewModel.lspCatalogState.collectAsStateWithLifecycle()
+    val lspServers by viewModel.lspServers.collectAsStateWithLifecycle()
     val debugCatalogState by viewModel.debugCatalogState.collectAsStateWithLifecycle()
     val catalogProgress by viewModel.catalogProgress.collectAsStateWithLifecycle()
     val sdkInstallRequestedId by viewModel.sdkInstallRequestedId.collectAsStateWithLifecycle()
@@ -822,8 +829,20 @@ fun JCodeApp(
     val activeLanguagePack = remember(activeFileName, activeLanguageExtensions) {
         activeFileName?.let { n -> activeLanguageExtensions.firstNotNullOfOrNull { it.languageFor(n) } }
     }
-    val completionSource = remember(activeLanguagePack) {
-        { prefix: String -> languagePackCompletionItems(activeLanguagePack, prefix) }
+    // Language-pack keywords and snippets are instant and always available; a language server knows
+    // what is actually in scope, so its items lead. Deduped by label so a keyword the server also
+    // suggests appears once.
+    val completionSource = remember(activeLanguagePack, viewModel) {
+        CompletionSource { query ->
+            val packItems = languagePackCompletionItems(activeLanguagePack, query.prefix)
+            val serverItems = viewModel.lspCompletions(
+                hostPath = query.path,
+                line = query.line,
+                character = query.character,
+                prefix = query.prefix,
+            )
+            (serverItems + packItems).distinctBy { it.label }
+        }
     }
     // Debug launch target = the active source file, if it has an installed debug engine (stdio adapters
     // and js-debug's TCP adapter are both supported now).
@@ -963,7 +982,29 @@ fun JCodeApp(
                         SettingsFeature.revealGroup("Environment")
                     }
                 }
+                is WorkbenchPrompt.StaleTerminalDistro -> {
+                    snackbarHostState.showSnackbar(
+                        message = "Open terminals run ${prompt.sessionDistro}; toolchains install " +
+                            "into ${prompt.installedInto}. Open a new terminal to use it.",
+                        duration = SnackbarDuration.Long,
+                    )
+                }
             }
+        }
+    }
+
+    // Opening a file whose language server isn't installed offers to install it, rather than silently
+    // giving no diagnostics or completions. The controller emits once per server per session, so
+    // declining is not re-asked on every file of that language. Install pulls the server's required
+    // SDKs first (jdtls needs a JDK, csharp-ls the .NET SDK), which is why it stays an explicit choice.
+    LaunchedEffect(viewModel) {
+        viewModel.lspMissingServer.collect { entry ->
+            val result = snackbarHostState.showSnackbar(
+                message = "${entry.name} isn't installed — code intelligence is off for these files.",
+                actionLabel = "Install",
+                duration = SnackbarDuration.Long,
+            )
+            if (result == SnackbarResult.ActionPerformed) viewModel.installLspCatalogEntry(entry.id)
         }
     }
 
@@ -1153,7 +1194,10 @@ fun JCodeApp(
     }
 
     val issueActions = remember(viewModel) {
-        IssueActions(onOpen = { path, line -> viewModel.openFileByGuestPath("$path:${line + 1}") })
+        // Diagnostics are 0-based; the `path:line:col` token openFileByGuestPath parses is 1-based.
+        IssueActions(onOpen = { path, line, column ->
+            viewModel.openFileByGuestPath("$path:${line + 1}:${column + 1}")
+        })
     }
 
     // Mirror the active file's bus diagnostics onto its editor as squiggly underlines. Positions are
@@ -1443,6 +1487,8 @@ fun JCodeApp(
         autoSetupProgress = autoSetupProgress,
         sdkCatalogState = sdkCatalogState,
         lspCatalogState = lspCatalogState,
+        lspServers = lspServers,
+        onEditorLanguageAction = viewModel::editorLanguageAction,
         workspaceManager = viewModel.workspaceManager,
         snackbarHostState = snackbarHostState,
         openFolderLauncher = openFolderLauncher,
@@ -1569,6 +1615,22 @@ fun JCodeApp(
 
     ImportProgressHost(viewModel.importProgress)
 
+    lspLocationPicker?.let { picker ->
+        LspLocationPickerDialog(
+            picker = picker,
+            onSelect = viewModel::openLspLocationEntry,
+            onDismiss = viewModel::dismissLspLocationPicker,
+        )
+    }
+
+    lspRenameRequest?.let { request ->
+        LspRenameDialog(
+            symbol = request.symbol,
+            onConfirm = viewModel::confirmLspRename,
+            onDismiss = viewModel::dismissLspRename,
+        )
+    }
+
     // Closing tabs with unsaved changes: Save / Discard / Close Saved (dismiss = keep everything).
     pendingEditorClose?.let { pending ->
         UnsavedChangesDialog(
@@ -1579,6 +1641,52 @@ fun JCodeApp(
             onThird = { viewModel.resolveEditorClose(EditorCloseChoice.CLOSE_SAVED) },
             onDismiss = { viewModel.resolveEditorClose(EditorCloseChoice.CANCEL) },
             onCancel = { viewModel.resolveEditorClose(EditorCloseChoice.CANCEL) },
+        )
+    }
+
+    // Switching environments restarts the app, which takes any foreground process with it.
+    val pendingEnvironmentSwitch by viewModel.pendingEnvironmentSwitch.collectAsStateWithLifecycle()
+    pendingEnvironmentSwitch?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelEnvironmentSwitch() },
+            title = { Text("Switch environment?") },
+            text = {
+                Text(
+                    "JCode restarts to switch to ${pending.environmentId}. Editors and unsaved changes " +
+                        "are kept; these will be stopped:\n" +
+                        pending.running.joinToString("\n") { "•  $it" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            // Same slot order as TerminalRunningDialog: the destructive action stays out of the
+            // rightmost (reflexive-tap) position, "Cancel" is the safe default at the end.
+            confirmButton = {
+                TextButton(onClick = { viewModel.confirmEnvironmentSwitch() }) {
+                    Text("Restart", color = MaterialTheme.colorScheme.error)
+                }
+                TextButton(onClick = { viewModel.cancelEnvironmentSwitch() }) { Text("Cancel") }
+            },
+            dismissButton = {},
+        )
+    }
+
+    // Hold the workbench until the runtime answers. Everything here — editors, terminals, language
+    // servers — runs against the distro, and a terminal spawned before the active environment is known
+    // binds to the wrong rootfs for the life of its shell.
+    //
+    // Only while the answer is still coming: unknown, or a setup actually running. A definitive "not
+    // ready" falls through instead, because there is nothing more to wait for — a broken environment
+    // belongs on the setup screen (which this yields to), not behind a spinner that never ends.
+    val environmentReady =
+        environmentState.distroInstalled == true && environmentState.jcodeUserReady == true
+    val environmentResolving = environmentState.distroInstalled == null ||
+        environmentState.jcodeUserReady == null ||
+        environmentState.runningStep != null
+    if (!showFirstRunEnvironmentScreen && !environmentReady && environmentResolving) {
+        OnboardingFeature.StartupSplash(
+            distroLabel = environmentState.runtime.selectedDistro.label,
+            progress = autoSetupProgress,
         )
     }
 
@@ -1616,6 +1724,8 @@ private fun JCodeShell(
     autoSetupProgress: DistroWizardProgress,
     sdkCatalogState: SdkCatalogState,
     lspCatalogState: LspCatalogState,
+    lspServers: List<dev.jcode.lsp.LspServerStatus>,
+    onEditorLanguageAction: (EditorLanguageAction, String, Int) -> Unit,
     workspaceManager: WorkspaceManager,
     snackbarHostState: SnackbarHostState,
     openFolderLauncher: ActivityResultLauncher<Uri?>,
@@ -2831,6 +2941,7 @@ private fun JCodeShell(
                                 environmentState.jcodeUserReady,
                                 environmentState.runtime.selectedDistro.id,
                             ) { distroStatusOf(environmentState) },
+                            lspServers = lspServers,
                         )
                     }
                 }
@@ -2942,21 +3053,17 @@ private fun JCodeShell(
                                 leftSidebarExpanded = true
                             }
                         },
+                        // Shown when a language pack claims the file OR a catalog language server
+                        // covers its extension; the action itself explains anything still missing
+                        // (not installed, still starting, capability unsupported).
                         languageActionsEnabled = run {
                             val name = editorGroup.activeTab?.filePath?.name
-                            name != null && activeLanguageExtensions.any { it.languageFor(name) != null }
+                            name != null && (
+                                activeLanguageExtensions.any { it.languageFor(name) != null } ||
+                                    dev.jcode.core.lsp.LspServerDescriptor.findForFile(name) != null
+                                )
                         },
-                        onEditorLanguageAction = { action, word ->
-                            if (action == EditorLanguageAction.FormatDocument) {
-                                editorActions.onFormat()
-                            } else {
-                                // Semantic actions need a language server (deferred); surface intent.
-                                scope.launch {
-                                    val target = if (word.isNotBlank()) " \"$word\"" else ""
-                                    snackbarHostState.showSnackbar("${action.label}$target — needs a language server (coming soon)")
-                                }
-                            }
-                        },
+                        onEditorLanguageAction = onEditorLanguageAction,
                         editorPageContent = { tab ->
                             when (tab.pageKind) {
                                 EditorPageKind.Settings -> SettingsFeature.Content(
@@ -3703,7 +3810,7 @@ private fun EditorWorkspace(
     onFind: () -> Unit,
     onOpenFileRequest: () -> Unit,
     languageActionsEnabled: Boolean,
-    onEditorLanguageAction: (EditorLanguageAction, String) -> Unit,
+    onEditorLanguageAction: (EditorLanguageAction, String, Int) -> Unit,
     editorPageContent: @Composable (EditorTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -4240,20 +4347,37 @@ private fun RightPanelChip(
 @Composable
 private fun VsixTitleActionsMenu(extension: dev.jcode.feature.marketplace.InstalledExtension) {
     val actions = VsixViewHolder.titleActions[extension.id].orEmpty()
-    if (actions.isEmpty()) return
     val session = VsixViewHolder.get(extension.id) ?: return
+    val context = LocalContext.current
     var expanded by remember(extension.id) { mutableStateOf(false) }
+    // Re-checked each time the menu opens: the clipboard changes outside this composition.
+    var canPasteImage by remember(extension.id) { mutableStateOf(false) }
+    if (actions.isEmpty() && !canPasteImage) {
+        // Still needs one clipboard check to know whether the button is worth showing at all.
+        LaunchedEffect(extension.id) { canPasteImage = hasClipboardImage(context) }
+        if (!canPasteImage) return
+    }
     Box {
         WorkbenchIconActionButton(
             icon = jcIcon(JCodeIcon.MoreVert),
             contentDescription = "${extension.name} actions",
-            onClick = { expanded = true },
+            onClick = {
+                canPasteImage = hasClipboardImage(context)
+                expanded = true
+            },
         )
         CompactContextMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            listActions = actions.map { action ->
-                ContextAction(contributedMenuIcon(action.codicon), action.title) { session.execute(action.id) }
+            listActions = buildList {
+                // Ctrl+V covers a hardware keyboard; this is the same paste for touch, where
+                // Chromium's own menu offers nothing for an image on the clipboard.
+                if (canPasteImage) {
+                    add(ContextAction(JCodeIcon.Paste, "Paste image") { session.pasteClipboardImage() })
+                }
+                actions.forEach { action ->
+                    add(ContextAction(contributedMenuIcon(action.codicon), action.title) { session.execute(action.id) })
+                }
             },
         )
     }
@@ -4643,6 +4767,11 @@ private fun TerminalSidebarContent(
                     }
                 }
                 view.onPendingModifiersConsumed = { extraKeys.clearModifiers() }
+                // Mirror the soft keyboard's Shift onto the row's chip: it highlights, and the chips
+                // then carry that Shift into the keys the keyboard has none of (Tab, the arrows).
+                view.onPendingShiftChanged = { armed ->
+                    if (extraKeys.target === adapter) extraKeys.shift = armed
+                }
                 if (view.isFocused) extraKeys.target = adapter
             }
             Box(modifier = Modifier.fillMaxSize()) {

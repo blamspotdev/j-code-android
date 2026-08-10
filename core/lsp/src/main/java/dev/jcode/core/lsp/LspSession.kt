@@ -1,35 +1,47 @@
 package dev.jcode.core.lsp
 
-import dev.jcode.core.term.PtyProcess
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.Closeable
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * LSP client session that communicates with a language server over a PTY.
+ * LSP client session. The language server runs inside the distro and speaks JSON-RPC over its stdio
+ * pipes ([LspTransport]).
  *
- * The language server runs inside the distro via `proot-distro login`,
- * and we communicate via JSON-RPC over stdio (the PTY's stdin/stdout).
+ * The [transportFactory] indirection keeps this module free of any knowledge of proot: the caller
+ * turns a command string into a running guest process.
  */
 class LspSession(
     val descriptor: LspServerDescriptor,
     val projectRoot: String,
-    private val ptyFactory: (command: String) -> PtyProcess,
+    /** Spawns the server (given a shell command) and returns its stdio as an [LspTransport], or null. */
+    private val transportFactory: (command: String) -> LspTransport?,
 ) : Closeable {
 
-    private var pty: PtyProcess? = null
+    private var transport: LspTransport? = null
     private var readJob: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val requestId = AtomicInteger(0)
-    private val pendingRequests = ConcurrentHashMap<Int, CompletableDeferred<JSONObject>>()
+    private val pending = ConcurrentHashMap<Int, CompletableDeferred<Any?>>()
     private val writeMutex = Mutex()
+    @Volatile private var closed = false
 
     private val _state = MutableStateFlow(LspState.DISCONNECTED)
     val state: StateFlow<LspState> = _state.asStateFlow()
@@ -37,92 +49,174 @@ class LspSession(
     private val _diagnostics = MutableStateFlow<Map<String, List<Diagnostic>>>(emptyMap())
     val diagnostics: StateFlow<Map<String, List<Diagnostic>>> = _diagnostics.asStateFlow()
 
-    /** Notification handler for server-pushed events. */
+    /** The server's advertised capabilities, available once the handshake completes. */
+    @Volatile var serverCapabilities: JSONObject? = null
+        private set
+
+    /** Notification handler for server-pushed events other than diagnostics. */
     var onNotification: ((String, JSONObject) -> Unit)? = null
 
+    /** Handles a server-initiated `workspace/applyEdit`; returns whether the edit was applied. */
+    var onApplyEdit: ((JSONObject) -> Boolean)? = null
+
+    /** Human-readable reason the session failed, when [state] is [LspState.ERROR]. */
+    @Volatile var errorMessage: String? = null
+        private set
+
+    // ---- lifecycle ------------------------------------------------------------------------------
+
     /**
-     * Start the language server session.
+     * Spawn the server and run the LSP handshake: `initialize` -> `initialized`.
+     *
+     * [rootUri] is a `file://` URI in the GUEST path space, since the server sees the project through
+     * proot's binds.
      */
     suspend fun start(rootUri: String) {
-        if (_state.value != LspState.DISCONNECTED) return
-
+        if (_state.value != LspState.DISCONNECTED || closed) return
         _state.value = LspState.STARTING
-
         try {
+            // --noprofile --norc so a user's shell configuration cannot inject output into the stream.
             val command = "exec bash --noprofile --norc -c '${descriptor.runCommand}'"
-            pty = ptyFactory(command)
+            transport = transportFactory(command) ?: throw LspException("runtime is not ready")
             _state.value = LspState.RUNNING
-
-            // Start reading responses
             readJob = scope.launch { readLoop() }
 
-            // Send initialize request
-            val initResult = sendRequest("initialize", JSONObject().apply {
-                put("processId", android.os.Process.myPid())
-                put("rootUri", rootUri)
-                put("capabilities", JSONObject().apply {
-                    put("textDocument", JSONObject().apply {
-                        put("completion", JSONObject().apply {
-                            put("completionItem", JSONObject().apply {
-                                put("snippetSupport", true)
-                                put("documentationFormat", listOf("markdown", "plaintext"))
-                            })
-                        })
-                        put("hover", JSONObject().apply {
-                            put("contentFormat", listOf("markdown", "plaintext"))
-                        })
-                        put("publishDiagnostics", JSONObject().apply {
-                            put("relatedInformation", true)
-                        })
-                    })
-                })
-            })
-
-            // Send initialized notification
+            val result = sendRequest("initialize", initializeParams(rootUri), INITIALIZE_TIMEOUT_MS)
+            serverCapabilities = result.asObject()?.optJSONObject("capabilities")
             sendNotification("initialized", JSONObject())
-
             _state.value = LspState.READY
         } catch (e: Exception) {
+            errorMessage = e.message ?: e::class.java.simpleName
             _state.value = LspState.ERROR
             close()
         }
     }
 
-    /**
-     * Send a JSON-RPC request and wait for response.
-     */
-    suspend fun sendRequest(method: String, params: JSONObject): JSONObject {
+    private fun initializeParams(rootUri: String): JSONObject = JSONObject().apply {
+        put("processId", android.os.Process.myPid())
+        put("rootUri", rootUri)
+        put("workspaceFolders", JSONArray().put(workspaceFolder(rootUri)))
+        put("capabilities", JSONObject().apply {
+            put("textDocument", JSONObject().apply {
+                put("synchronization", JSONObject().apply {
+                    put("didSave", true)
+                    put("willSave", false)
+                    put("dynamicRegistration", false)
+                })
+                put("completion", JSONObject().apply {
+                    put("contextSupport", true)
+                    put("completionItem", JSONObject().apply {
+                        put("snippetSupport", true)
+                        put("documentationFormat", JSONArray().put("markdown").put("plaintext"))
+                    })
+                })
+                put("hover", JSONObject().apply {
+                    put("contentFormat", JSONArray().put("markdown").put("plaintext"))
+                })
+                // linkSupport off: servers then answer with plain Location[] rather than LocationLink[],
+                // which keeps one parse path for definition results.
+                put("definition", JSONObject().apply { put("linkSupport", false) })
+                put("references", JSONObject())
+                put("rename", JSONObject().apply { put("prepareSupport", false) })
+                put("formatting", JSONObject())
+                put("publishDiagnostics", JSONObject().apply { put("relatedInformation", true) })
+            })
+            put("workspace", JSONObject().apply {
+                put("applyEdit", true)
+                put("configuration", true)
+                put("workspaceFolders", true)
+            })
+            put("window", JSONObject().apply { put("workDoneProgress", true) })
+            // Positions are exchanged in UTF-16 code units; the caller converts at the buffer boundary.
+            put("general", JSONObject().apply {
+                put("positionEncodings", JSONArray().put("utf-16"))
+            })
+        })
+    }
+
+    private fun workspaceFolder(rootUri: String): JSONObject = JSONObject().apply {
+        put("uri", rootUri)
+        put("name", rootUri.substringAfterLast('/').ifBlank { "workspace" })
+    }
+
+    override fun close() {
+        if (closed) return
+        closed = true
+        val t = transport
+        readJob?.cancel()
+        // Graceful stop written straight to the transport: the read loop is already cancelled, and
+        // routing through the suspend writer would need a scope this method is about to cancel.
+        runCatching {
+            t?.write(frame(JSONObject().apply {
+                put("jsonrpc", "2.0")
+                put("id", requestId.incrementAndGet())
+                put("method", "shutdown")
+                put("params", JSONObject())
+            }))
+            t?.write(frame(JSONObject().apply {
+                put("jsonrpc", "2.0")
+                put("method", "exit")
+                put("params", JSONObject())
+            }))
+        }
+        runCatching { t?.close() }
+        transport = null
+        if (_state.value != LspState.ERROR) _state.value = LspState.DISCONNECTED
+        pending.values.forEach { it.cancel() }
+        pending.clear()
+        scope.cancel()
+    }
+
+    // ---- capability gating ----------------------------------------------------------------------
+
+    val supportsCompletion: Boolean get() = providerEnabled("completionProvider")
+    val supportsHover: Boolean get() = providerEnabled("hoverProvider")
+    val supportsDefinition: Boolean get() = providerEnabled("definitionProvider")
+    val supportsReferences: Boolean get() = providerEnabled("referencesProvider")
+    val supportsRename: Boolean get() = providerEnabled("renameProvider")
+    val supportsFormatting: Boolean get() = providerEnabled("documentFormattingProvider")
+
+    /** A provider field is either `true` or an options object; absent or `false` means unsupported. */
+    private fun providerEnabled(key: String): Boolean {
+        val caps = serverCapabilities ?: return false
+        val value = caps.opt(key) ?: return false
+        return value != false && value != JSONObject.NULL
+    }
+
+    // ---- requests -------------------------------------------------------------------------------
+
+    /** Sends a JSON-RPC request. The result is a [JSONObject], a [JSONArray], or null. */
+    suspend fun sendRequest(
+        method: String,
+        params: JSONObject,
+        timeoutMs: Long = REQUEST_TIMEOUT_MS,
+    ): Any? {
         val id = requestId.incrementAndGet()
-        val deferred = CompletableDeferred<JSONObject>()
-        pendingRequests[id] = deferred
-
-        val message = JSONObject().apply {
-            put("jsonrpc", "2.0")
-            put("id", id)
-            put("method", method)
-            put("params", params)
+        val deferred = CompletableDeferred<Any?>()
+        pending[id] = deferred
+        return try {
+            writeMessage(JSONObject().apply {
+                put("jsonrpc", "2.0")
+                put("id", id)
+                put("method", method)
+                put("params", params)
+            })
+            withTimeout(timeoutMs) { deferred.await() }
+        } finally {
+            pending.remove(id)
         }
-
-        writeMessage(message)
-
-        return withTimeout(30_000) { deferred.await() }
     }
 
-    /**
-     * Send a JSON-RPC notification (no response expected).
-     */
     suspend fun sendNotification(method: String, params: JSONObject) {
-        val message = JSONObject().apply {
+        writeMessage(JSONObject().apply {
             put("jsonrpc", "2.0")
             put("method", method)
             put("params", params)
-        }
-        writeMessage(message)
+        })
     }
 
-    /**
-     * Notify the server that a text document was opened.
-     */
+    // ---- document synchronisation ---------------------------------------------------------------
+
     suspend fun didOpen(uri: String, languageId: String, version: Int, text: String) {
         sendNotification("textDocument/didOpen", JSONObject().apply {
             put("textDocument", JSONObject().apply {
@@ -135,7 +229,9 @@ class LspSession(
     }
 
     /**
-     * Notify the server that a text document was changed.
+     * Full-document sync. Servers that advertise incremental sync still accept a change object with
+     * no `range` as a whole-document replacement, so one path covers the whole catalog without
+     * plumbing edit deltas out of the editor.
      */
     suspend fun didChange(uri: String, version: Int, text: String) {
         sendNotification("textDocument/didChange", JSONObject().apply {
@@ -143,261 +239,404 @@ class LspSession(
                 put("uri", uri)
                 put("version", version)
             })
-            put("contentChanges", listOf(JSONObject().apply {
-                put("text", text)
-            }))
+            put("contentChanges", JSONArray().put(JSONObject().apply { put("text", text) }))
         })
     }
 
-    /**
-     * Request completions at a position.
-     */
+    suspend fun didSave(uri: String, text: String) {
+        sendNotification("textDocument/didSave", JSONObject().apply {
+            put("textDocument", JSONObject().apply { put("uri", uri) })
+            put("text", text)
+        })
+    }
+
+    suspend fun didClose(uri: String) {
+        sendNotification("textDocument/didClose", JSONObject().apply {
+            put("textDocument", JSONObject().apply { put("uri", uri) })
+        })
+        // The server stops publishing for a closed document but never retracts what it already sent.
+        _diagnostics.value = _diagnostics.value - distroToHostPath(uri)
+    }
+
+    // ---- language features ----------------------------------------------------------------------
+
     suspend fun completion(uri: String, line: Int, character: Int): List<CompletionResult> {
-        if (_state.value != LspState.READY) return emptyList()
-
-        val result = sendRequest("textDocument/completion", JSONObject().apply {
-            put("textDocument", JSONObject().apply { put("uri", uri) })
-            put("position", JSONObject().apply {
-                put("line", line)
-                put("character", character)
-            })
-        })
-
-        return parseCompletionResults(result)
+        if (!ready() || !supportsCompletion) return emptyList()
+        val result = sendRequest("textDocument/completion", positionParams(uri, line, character))
+        return parseCompletions(result)
     }
 
-    /**
-     * Request hover information.
-     */
     suspend fun hover(uri: String, line: Int, character: Int): String? {
-        if (_state.value != LspState.READY) return null
-
-        val result = sendRequest("textDocument/hover", JSONObject().apply {
-            put("textDocument", JSONObject().apply { put("uri", uri) })
-            put("position", JSONObject().apply {
-                put("line", line)
-                put("character", character)
-            })
-        })
-
-        return result.optJSONObject("contents")?.optString("value")
-            ?: result.optString("contents")
+        if (!ready() || !supportsHover) return null
+        val result = sendRequest("textDocument/hover", positionParams(uri, line, character))
+        return parseHover(result.asObject()?.opt("contents"))
     }
 
-    /**
-     * Request go-to-definition.
-     */
-    suspend fun definition(uri: String, line: Int, character: Int): LocationResult? {
-        if (_state.value != LspState.READY) return null
-
-        val result = sendRequest("textDocument/definition", JSONObject().apply {
-            put("textDocument", JSONObject().apply { put("uri", uri) })
-            put("position", JSONObject().apply {
-                put("line", line)
-                put("character", character)
-            })
-        })
-
-        return parseLocation(result)
+    suspend fun definition(uri: String, line: Int, character: Int): List<LocationResult> {
+        if (!ready() || !supportsDefinition) return emptyList()
+        val result = sendRequest("textDocument/definition", positionParams(uri, line, character))
+        return parseLocations(result)
     }
 
-    /**
-     * Translate a host path to a distro URI.
-     */
+    suspend fun references(
+        uri: String,
+        line: Int,
+        character: Int,
+        includeDeclaration: Boolean = true,
+    ): List<LocationResult> {
+        if (!ready() || !supportsReferences) return emptyList()
+        val params = positionParams(uri, line, character).apply {
+            put("context", JSONObject().apply { put("includeDeclaration", includeDeclaration) })
+        }
+        return parseLocations(sendRequest("textDocument/references", params))
+    }
+
+    /** Returns the edits a rename implies, keyed by host path, or null when the server declines. */
+    suspend fun rename(uri: String, line: Int, character: Int, newName: String): WorkspaceEditResult? {
+        if (!ready() || !supportsRename) return null
+        val params = positionParams(uri, line, character).apply { put("newName", newName) }
+        val edit = sendRequest("textDocument/rename", params).asObject() ?: return null
+        return parseWorkspaceEdit(edit)
+    }
+
+    suspend fun formatting(uri: String, tabSize: Int, insertSpaces: Boolean): List<TextEditResult> {
+        if (!ready() || !supportsFormatting) return emptyList()
+        val params = JSONObject().apply {
+            put("textDocument", JSONObject().apply { put("uri", uri) })
+            put("options", JSONObject().apply {
+                put("tabSize", tabSize)
+                put("insertSpaces", insertSpaces)
+                put("trimTrailingWhitespace", true)
+                put("insertFinalNewline", true)
+            })
+        }
+        return parseTextEdits(sendRequest("textDocument/formatting", params).asArray())
+    }
+
+    private fun ready(): Boolean = _state.value == LspState.READY && !closed
+
+    private fun positionParams(uri: String, line: Int, character: Int): JSONObject = JSONObject().apply {
+        put("textDocument", JSONObject().apply { put("uri", uri) })
+        put("position", JSONObject().apply {
+            put("line", line)
+            put("character", character)
+        })
+    }
+
+    // ---- path translation -----------------------------------------------------------------------
+
+    /** Host path -> the `file://` URI the server sees through proot's binds. */
     fun hostToDistroUri(hostPath: String): String {
         val distroPath = dev.jcode.core.distro.WorkspaceHostPaths.hostToGuest(hostPath).replace("\\", "/")
         return "file://$distroPath"
     }
 
-    /**
-     * Translate a distro URI to a host path.
-     */
     fun distroToHostPath(distroUri: String): String {
-        val path = distroUri.removePrefix("file://")
+        val path = java.net.URLDecoder.decode(distroUri.removePrefix("file://"), "UTF-8")
         return dev.jcode.core.distro.WorkspaceHostPaths.guestToHost(path)
             .replace("/", java.io.File.separator)
     }
 
-    private suspend fun writeMessage(message: JSONObject) {
-        val content = message.toString()
-        val header = "Content-Length: ${content.toByteArray().size}\r\n\r\n"
-        val fullMessage = header + content
+    // ---- transport ------------------------------------------------------------------------------
 
-        writeMutex.withLock {
-            pty?.write(fullMessage.toByteArray())
-        }
+    private fun frame(message: JSONObject): ByteArray {
+        val content = message.toString().toByteArray(Charsets.UTF_8)
+        val header = "Content-Length: ${content.size}\r\n\r\n".toByteArray(Charsets.US_ASCII)
+        return header + content
+    }
+
+    private suspend fun writeMessage(message: JSONObject) {
+        val bytes = frame(message)
+        writeMutex.withLock { transport?.write(bytes) }
     }
 
     private suspend fun readLoop() {
-        val buffer = ByteArray(8192)
-        var accumulated = ""
-
-        while (scope.isActive && _state.value != LspState.DISCONNECTED) {
-            val pty = this.pty ?: break
+        val buffer = ByteArray(READ_CHUNK)
+        while (scope.isActive && !closed) {
+            val t = transport ?: break
             val n = try {
-                pty.read(buffer)
+                t.read(buffer)
             } catch (e: Exception) {
                 -1
             }
-            if (n > 0) {
-                accumulated += String(buffer, 0, n)
-                accumulated = processAccumulated(accumulated)
-            } else if (n < 0) {
-                break
-            } else {
-                // Idle: block in poll until the server writes (scope is Dispatchers.IO); the 1s
-                // timeout bounds teardown notice since close() doesn't wake an in-flight poll.
-                pty.awaitReadable(1000)
+            when {
+                n > 0 -> {
+                    append(buffer, n)
+                    drainMessages()
+                }
+                n < 0 -> break
+                else -> delay(10)
             }
         }
     }
 
-    private fun processAccumulated(data: String): String {
-        var remaining = data
+    // Accumulator for partial messages. Grown by doubling and compacted in place rather than
+    // reallocated per chunk: a large completion response arrives as hundreds of chunks, and
+    // `acc += chunk` would copy the whole buffer for each one.
+    private var acc = ByteArray(READ_CHUNK * 2)
+    private var accLen = 0
 
+    private fun append(data: ByteArray, n: Int) {
+        if (accLen + n > acc.size) {
+            var capacity = acc.size
+            while (capacity < accLen + n) capacity *= 2
+            acc = acc.copyOf(capacity)
+        }
+        System.arraycopy(data, 0, acc, accLen, n)
+        accLen += n
+    }
+
+    /**
+     * Frame LSP messages out of the raw byte stream. `Content-Length` is a BYTE count, so the header
+     * scan and the body slice must both work on bytes: decoding to a String first mis-slices any
+     * message containing multi-byte UTF-8 (a hover body with typographic quotes is enough) and every
+     * later message on the stream is then misframed.
+     */
+    private fun drainMessages() {
+        var consumed = 0
         while (true) {
-            val headerEnd = remaining.indexOf("\r\n\r\n")
+            val headerEnd = indexOfHeaderEnd(consumed)
             if (headerEnd < 0) break
-
-            val header = remaining.substring(0, headerEnd)
-            val contentLengthMatch = Regex("Content-Length: (\\d+)").find(header)
-            val contentLength = contentLengthMatch?.groupValues?.get(1)?.toIntOrNull() ?: break
-
-            val contentStart = headerEnd + 4
-            if (remaining.length < contentStart + contentLength) break
-
-            val content = remaining.substring(contentStart, contentStart + contentLength)
-            remaining = remaining.substring(contentStart + contentLength)
-
-            try {
-                val json = JSONObject(content)
-                handleMessage(json)
-            } catch (e: Exception) {
-                // Invalid JSON, skip
-            }
+            val header = String(acc, consumed, headerEnd - consumed, Charsets.US_ASCII)
+            val length = CONTENT_LENGTH.find(header)?.groupValues?.get(1)?.toIntOrNull() ?: break
+            val bodyStart = headerEnd + 4
+            if (accLen - bodyStart < length) break
+            val content = String(acc, bodyStart, length, Charsets.UTF_8)
+            consumed = bodyStart + length
+            runCatching { handleMessage(JSONObject(content)) }
         }
-
-        return remaining
+        if (consumed > 0) {
+            System.arraycopy(acc, consumed, acc, 0, accLen - consumed)
+            accLen -= consumed
+        }
     }
 
-    private fun handleMessage(json: JSONObject) {
-        val id = json.optInt("id", -1)
-        if (id >= 0) {
-            // Response to a request
-            val deferred = pendingRequests.remove(id)
-            if (json.has("result")) {
-                deferred?.complete(json.getJSONObject("result"))
-            } else if (json.has("error")) {
-                deferred?.completeExceptionally(
-                    LspException(json.getJSONObject("error").optString("message", "Unknown error"))
-                )
-            }
-        } else {
-            // Notification from server
-            val method = json.optString("method", "")
-            val params = json.optJSONObject("params") ?: JSONObject()
+    /** Index of the first `\r\n\r\n` at or after [from], or -1. */
+    private fun indexOfHeaderEnd(from: Int): Int {
+        for (i in from..accLen - 4) {
+            if (acc[i] == 0x0D.toByte() && acc[i + 1] == 0x0A.toByte() &&
+                acc[i + 2] == 0x0D.toByte() && acc[i + 3] == 0x0A.toByte()
+            ) return i
+        }
+        return -1
+    }
 
-            when (method) {
-                "textDocument/publishDiagnostics" -> handleDiagnostics(params)
-                else -> onNotification?.invoke(method, params)
+    /**
+     * A message carrying `method` is server-initiated (a request when it also carries `id`, else a
+     * notification); anything else is a response to one of ours. Checking `id` first would mistake
+     * `workspace/configuration` for a response and leave the server waiting forever, which is exactly
+     * how jdtls and typescript-language-server stall.
+     */
+    private fun handleMessage(json: JSONObject) {
+        val method = if (json.has("method")) json.optString("method") else null
+        if (method != null) {
+            val params = json.optJSONObject("params") ?: JSONObject()
+            val id = if (json.has("id")) json.opt("id") else null
+            if (id != null) handleServerRequest(id, method, params) else handleServerNotification(method, params)
+            return
+        }
+        val deferred = pending.remove(json.optInt("id", -1)) ?: return
+        val error = json.optJSONObject("error")
+        if (error != null) {
+            deferred.completeExceptionally(LspException(error.optString("message", "unknown error")))
+        } else {
+            deferred.complete(json.opt("result").takeIf { it != JSONObject.NULL })
+        }
+    }
+
+    private fun handleServerNotification(method: String, params: JSONObject) {
+        when (method) {
+            "textDocument/publishDiagnostics" -> handleDiagnostics(params)
+            else -> onNotification?.invoke(method, params)
+        }
+    }
+
+    private fun handleServerRequest(id: Any, method: String, params: JSONObject) {
+        when (method) {
+            // No per-server settings are stored, so every requested section resolves to defaults.
+            // An empty object rather than null: serde-based servers fail to deserialise null.
+            "workspace/configuration" -> {
+                val count = params.optJSONArray("items")?.length() ?: 0
+                respond(id, JSONArray().apply { repeat(count) { put(JSONObject()) } })
             }
+            "workspace/workspaceFolders" ->
+                respond(id, JSONArray().put(workspaceFolder(hostToDistroUri(projectRoot))))
+            "workspace/applyEdit" -> {
+                val applied = onApplyEdit?.invoke(params.optJSONObject("edit") ?: JSONObject()) ?: false
+                respond(id, JSONObject().apply { put("applied", applied) })
+            }
+            "client/registerCapability", "client/unregisterCapability",
+            "window/workDoneProgress/create", "window/showMessageRequest",
+            -> respond(id, JSONObject.NULL)
+            else -> respondError(id, METHOD_NOT_FOUND, "Method not found: $method")
+        }
+    }
+
+    private fun respond(id: Any, result: Any) {
+        scope.launch {
+            writeMessage(JSONObject().apply {
+                put("jsonrpc", "2.0")
+                put("id", id)
+                put("result", result)
+            })
+        }
+    }
+
+    private fun respondError(id: Any, code: Int, message: String) {
+        scope.launch {
+            writeMessage(JSONObject().apply {
+                put("jsonrpc", "2.0")
+                put("id", id)
+                put("error", JSONObject().apply {
+                    put("code", code)
+                    put("message", message)
+                })
+            })
         }
     }
 
     private fun handleDiagnostics(params: JSONObject) {
         val uri = params.optString("uri", "")
-        val diags = params.optJSONArray("diagnostics") ?: return
-
-        val hostUri = distroToHostPath(uri)
-        val diagnostics = mutableListOf<Diagnostic>()
-
-        for (i in 0 until diags.length()) {
-            val diag = diags.getJSONObject(i)
-            val range = diag.optJSONObject("range") ?: continue
-            val start = range.optJSONObject("start") ?: continue
-            val end = range.optJSONObject("end") ?: continue
-
-            diagnostics.add(Diagnostic(
+        val array = params.optJSONArray("diagnostics") ?: return
+        val hostPath = distroToHostPath(uri)
+        val parsed = (0 until array.length()).mapNotNull { i ->
+            val diagnostic = array.optJSONObject(i) ?: return@mapNotNull null
+            val range = diagnostic.optJSONObject("range") ?: return@mapNotNull null
+            val start = range.optJSONObject("start") ?: return@mapNotNull null
+            val end = range.optJSONObject("end") ?: start
+            Diagnostic(
                 startLine = start.optInt("line", 0),
                 startCol = start.optInt("character", 0),
                 endLine = end.optInt("line", 0),
                 endCol = end.optInt("character", 0),
-                severity = DiagnosticSeverity.fromLsp(diag.optInt("severity", 1)),
-                message = diag.optString("message", ""),
-                source = diag.optString("source", descriptor.id),
-                code = if (diag.has("code")) diag.optString("code") else null,
-            ))
-        }
-
-        val current = _diagnostics.value.toMutableMap()
-        current[hostUri] = diagnostics
-        _diagnostics.value = current
-    }
-
-    private fun parseCompletionResults(result: JSONObject): List<CompletionResult> {
-        val items = result.optJSONArray("items")
-            ?: return if (result.has("label")) listOf(parseCompletionItem(result)) else emptyList()
-
-        return (0 until items.length()).map { i ->
-            parseCompletionItem(items.getJSONObject(i))
-        }
-    }
-
-    private fun parseCompletionItem(item: JSONObject): CompletionResult {
-        return CompletionResult(
-            label = item.optString("label", ""),
-            kind = item.optInt("kind", 1),
-            detail = if (item.has("detail")) item.optString("detail") else null,
-            documentation = item.optJSONObject("documentation")?.optString("value")
-                ?: if (item.has("documentation")) item.optString("documentation") else null,
-            insertText = if (item.has("insertText")) item.optString("insertText") else item.optString("label"),
-            insertTextFormat = item.optInt("insertTextFormat", 1),
-        )
-    }
-
-    private fun parseLocation(result: JSONObject): LocationResult? {
-        // Could be a single location or an array
-        if (result.has("uri")) {
-            val range = result.optJSONObject("range") ?: return null
-            val start = range.optJSONObject("start") ?: return null
-            return LocationResult(
-                uri = distroToHostPath(result.optString("uri", "")),
-                line = start.optInt("line", 0),
-                character = start.optInt("character", 0),
+                severity = DiagnosticSeverity.fromLsp(diagnostic.optInt("severity", 1)),
+                message = diagnostic.optString("message", ""),
+                source = diagnostic.optString("source", descriptor.id),
+                code = if (diagnostic.has("code")) diagnostic.optString("code") else null,
             )
         }
-        val array = result.optJSONArray("items") ?: return null
-        if (array.length() == 0) return null
-        val first = array.getJSONObject(0)
-        val range = first.optJSONObject("range") ?: return null
+        _diagnostics.value = _diagnostics.value + (hostPath to parsed)
+    }
+
+    // ---- result parsing -------------------------------------------------------------------------
+
+    private fun Any?.asObject(): JSONObject? = this as? JSONObject
+
+    private fun Any?.asArray(): JSONArray? = this as? JSONArray
+
+    /** `CompletionItem[]` or `CompletionList { items }`. */
+    private fun parseCompletions(result: Any?): List<CompletionResult> {
+        val items = result.asArray() ?: result.asObject()?.optJSONArray("items") ?: return emptyList()
+        return (0 until items.length()).mapNotNull { i ->
+            items.optJSONObject(i)?.let { item ->
+                CompletionResult(
+                    label = item.optString("label", ""),
+                    kind = item.optInt("kind", 1),
+                    detail = item.optStringOrNull("detail"),
+                    documentation = item.optJSONObject("documentation")?.optStringOrNull("value")
+                        ?: item.optStringOrNull("documentation"),
+                    insertText = item.optJSONObject("textEdit")?.optStringOrNull("newText")
+                        ?: item.optStringOrNull("insertText")
+                        ?: item.optString("label", ""),
+                    insertTextFormat = item.optInt("insertTextFormat", 1),
+                    sortText = item.optStringOrNull("sortText"),
+                )
+            }
+        }
+    }
+
+    /** `MarkupContent`, `MarkedString`, or an array of either. */
+    private fun parseHover(contents: Any?): String? = when (contents) {
+        null, JSONObject.NULL -> null
+        is String -> contents.ifBlank { null }
+        is JSONObject -> contents.optStringOrNull("value")
+        is JSONArray -> (0 until contents.length())
+            .mapNotNull { parseHover(contents.opt(it)) }
+            .joinToString("\n\n")
+            .ifBlank { null }
+        else -> null
+    }
+
+    /** `Location`, `Location[]`, or `LocationLink[]`. */
+    private fun parseLocations(result: Any?): List<LocationResult> {
+        result.asObject()?.let { return listOfNotNull(parseLocation(it)) }
+        val array = result.asArray() ?: return emptyList()
+        return (0 until array.length()).mapNotNull { i -> array.optJSONObject(i)?.let(::parseLocation) }
+    }
+
+    private fun parseLocation(json: JSONObject): LocationResult? {
+        val uri = json.optStringOrNull("uri") ?: json.optStringOrNull("targetUri") ?: return null
+        val range = json.optJSONObject("range")
+            ?: json.optJSONObject("targetSelectionRange")
+            ?: json.optJSONObject("targetRange")
+            ?: return null
         val start = range.optJSONObject("start") ?: return null
         return LocationResult(
-            uri = distroToHostPath(first.optString("targetUri", first.optString("uri", ""))),
+            path = distroToHostPath(uri),
             line = start.optInt("line", 0),
             character = start.optInt("character", 0),
         )
     }
 
-    override fun close() {
-        scope.launch {
-            try {
-                sendNotification("exit", JSONObject())
-            } catch (_: Exception) {}
+    private fun parseTextEdits(array: JSONArray?): List<TextEditResult> {
+        if (array == null) return emptyList()
+        return (0 until array.length()).mapNotNull { i ->
+            val edit = array.optJSONObject(i) ?: return@mapNotNull null
+            val range = edit.optJSONObject("range") ?: return@mapNotNull null
+            val start = range.optJSONObject("start") ?: return@mapNotNull null
+            val end = range.optJSONObject("end") ?: return@mapNotNull null
+            TextEditResult(
+                startLine = start.optInt("line", 0),
+                startChar = start.optInt("character", 0),
+                endLine = end.optInt("line", 0),
+                endChar = end.optInt("character", 0),
+                newText = edit.optString("newText", ""),
+            )
         }
+    }
 
-        readJob?.cancel()
-        pty?.close()
-        pty = null
-        _state.value = LspState.DISCONNECTED
-        pendingRequests.values.forEach { it.cancel() }
-        pendingRequests.clear()
-        scope.cancel()
+    /**
+     * A `WorkspaceEdit` carries edits either in `changes` (uri -> edits) or in `documentChanges`
+     * (which may also hold create/rename/delete file operations, ignored here).
+     */
+    fun parseWorkspaceEdit(edit: JSONObject): WorkspaceEditResult {
+        val byPath = LinkedHashMap<String, List<TextEditResult>>()
+        edit.optJSONObject("changes")?.let { changes ->
+            changes.keys().forEach { uri ->
+                val edits = parseTextEdits(changes.optJSONArray(uri))
+                if (edits.isNotEmpty()) byPath[distroToHostPath(uri)] = edits
+            }
+        }
+        edit.optJSONArray("documentChanges")?.let { changes ->
+            for (i in 0 until changes.length()) {
+                val change = changes.optJSONObject(i) ?: continue
+                val uri = change.optJSONObject("textDocument")?.optStringOrNull("uri") ?: continue
+                val edits = parseTextEdits(change.optJSONArray("edits"))
+                if (edits.isEmpty()) continue
+                val path = distroToHostPath(uri)
+                byPath[path] = byPath[path].orEmpty() + edits
+            }
+        }
+        return WorkspaceEditResult(byPath)
+    }
+
+    /** `optString` returns "" for both a missing key and an explicit null; this distinguishes them. */
+    private fun JSONObject.optStringOrNull(key: String): String? =
+        if (has(key) && !isNull(key)) optString(key).takeIf { it.isNotEmpty() } else null
+
+    private companion object {
+        const val READ_CHUNK = 8192
+        const val REQUEST_TIMEOUT_MS = 15_000L
+
+        // jdtls builds a workspace index before answering `initialize`, which on a cold project on a
+        // phone is comfortably past any ordinary request timeout.
+        const val INITIALIZE_TIMEOUT_MS = 120_000L
+        const val METHOD_NOT_FOUND = -32601
+        val CONTENT_LENGTH = Regex("Content-Length: (\\d+)")
     }
 }
 
-/**
- * LSP session states.
- */
+/** LSP session states. */
 enum class LspState {
     DISCONNECTED,
     STARTING,
@@ -406,9 +645,7 @@ enum class LspState {
     ERROR,
 }
 
-/**
- * A diagnostic from an LSP server.
- */
+/** A diagnostic from an LSP server. */
 data class Diagnostic(
     val startLine: Int,
     val startCol: Int,
@@ -420,9 +657,7 @@ data class Diagnostic(
     val code: String?,
 )
 
-/**
- * Diagnostic severity levels (matching LSP spec).
- */
+/** Diagnostic severity levels (matching LSP spec). */
 enum class DiagnosticSeverity(val value: Int) {
     ERROR(1),
     WARNING(2),
@@ -440,25 +675,39 @@ enum class DiagnosticSeverity(val value: Int) {
     }
 }
 
-/**
- * A completion result from an LSP server.
- */
+/** A completion result from an LSP server. */
 data class CompletionResult(
     val label: String,
     val kind: Int,
     val detail: String?,
     val documentation: String?,
     val insertText: String,
-    val insertTextFormat: Int,  // 1 = plain text, 2 = snippet
+    /** 1 = plain text, 2 = snippet. */
+    val insertTextFormat: Int,
+    val sortText: String?,
 )
 
-/**
- * A location result (go-to-definition, etc.).
- */
+/** A resolved location (go-to-definition, references), in HOST path space. */
 data class LocationResult(
-    val uri: String,
+    val path: String,
     val line: Int,
     val character: Int,
 )
+
+/** A single text edit, in LSP coordinates (0-based line, UTF-16 character). */
+data class TextEditResult(
+    val startLine: Int,
+    val startChar: Int,
+    val endLine: Int,
+    val endChar: Int,
+    val newText: String,
+)
+
+/** The edits a workspace-wide operation implies, keyed by HOST path. */
+data class WorkspaceEditResult(val editsByPath: Map<String, List<TextEditResult>>) {
+    val isEmpty: Boolean get() = editsByPath.values.all { it.isEmpty() }
+    val fileCount: Int get() = editsByPath.count { it.value.isNotEmpty() }
+    val editCount: Int get() = editsByPath.values.sumOf { it.size }
+}
 
 class LspException(message: String) : Exception(message)

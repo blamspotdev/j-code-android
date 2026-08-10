@@ -57,6 +57,7 @@ import androidx.compose.ui.platform.LocalContext
 import dev.jcode.design.JCodeTheme
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -113,6 +114,66 @@ object OnboardingFeature {
         }
     }
 
+    /**
+     * Held over the workbench until the environment is usable.
+     *
+     * Editors, terminals and language servers are all backed by the distro, so letting them render
+     * first means work can start against a rootfs nobody has resolved yet — that is how a terminal
+     * opened during startup ended up bound to the catalog default instead of the active environment.
+     * Blocking is the point: there is nothing useful to do here until the runtime answers.
+     */
+    @Composable
+    fun StartupSplash(
+        distroLabel: String,
+        progress: DistroWizardProgress,
+        modifier: Modifier = Modifier,
+    ) {
+        val running = progress as? DistroWizardProgress.Running
+        Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding()
+                    .padding(32.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = "JCode",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    // A running setup step is the more specific thing to say; otherwise the wait is
+                    // the environment being probed and started.
+                    text = running?.label ?: "Starting $distroLabel…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(20.dp))
+                val percent = running?.progressPercent
+                if (percent != null) {
+                    LinearProgressIndicator(
+                        progress = { percent / 100f },
+                        modifier = Modifier.fillMaxWidth(0.7f),
+                    )
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(0.7f))
+                }
+                running?.progressDetail?.let { detail ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = detail,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+
     /** Full-width environment setup, rendered as an in-editor page tab (replaces the cramped dialog). */
     @Composable
     fun EnvironmentSetupPage(
@@ -165,6 +226,17 @@ private fun StepperScreen(
     val completed = autoSetupProgress is DistroWizardProgress.AllDone
     var logsExpanded by rememberSaveable { mutableStateOf(true) }
 
+    // [autoSetupProgress] tracks a setup run in THIS session, not whether an environment exists — on
+    // an ordinary launch it is Idle. Keying the wizard off it left the first-run steps on screen
+    // forever, so a configured device showed "Choose the Linux distro JCode should prepare" and
+    // "Waiting for you to choose a distro" directly under a card reporting one already active: two
+    // pickers for one setting, disagreeing. Ask the environment itself instead, and once it is ready
+    // leave [InstalledEnvironmentsCard] as the only control — the wizard returns on request, for
+    // installing a distro that is not here yet.
+    val configured = environmentState.smokeTestPassed == true && installedEnvironments.isNotEmpty()
+    var addingEnvironment by rememberSaveable { mutableStateOf(false) }
+    val showWizard = !configured || addingEnvironment || running || completed
+
     LaunchedEffect(running) {
         if (running) logsExpanded = true
     }
@@ -214,18 +286,24 @@ private fun StepperScreen(
                 )
             }
         }
-        item {
-            DistroSelectionCard(
-                number = distroStepNumber,
-                environmentState = environmentState,
-                running = running,
-                completed = completed,
-                enabled = distroStepEnabled,
-                onSelectDistro = onSelectDistro,
-                onAutoSetup = onAutoSetup,
-                onRefresh = onRefresh,
-                onRestoreEnvironment = onRestoreEnvironment,
-            )
+        if (showWizard) {
+            item {
+                DistroSelectionCard(
+                    number = distroStepNumber,
+                    environmentState = environmentState,
+                    running = running,
+                    completed = completed,
+                    enabled = distroStepEnabled,
+                    onSelectDistro = onSelectDistro,
+                    onAutoSetup = onAutoSetup,
+                    onRefresh = onRefresh,
+                    onRestoreEnvironment = onRestoreEnvironment,
+                )
+            }
+        } else {
+            item {
+                AddEnvironmentCard(onAdd = { addingEnvironment = true })
+            }
         }
     }
 
@@ -245,7 +323,9 @@ private fun StepperScreen(
                     .fillMaxWidth()
                     .weight(1f),
             ) {
-                val twoPane = maxWidth > maxHeight && maxWidth >= 600.dp
+                // The right pane exists to keep the setup log visible; with no wizard there is no log,
+                // and a half-empty split just strands the switcher in a narrow column.
+                val twoPane = maxWidth > maxHeight && maxWidth >= 600.dp && showWizard
                 if (twoPane) {
                     Row(modifier = Modifier.fillMaxSize()) {
                         LazyColumn(
@@ -283,17 +363,19 @@ private fun StepperScreen(
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         selectionSteps()
-                        item {
-                            ConfigureStepCard(
-                                number = distroStepNumber + 1,
-                                environmentState = environmentState,
-                                autoSetupProgress = autoSetupProgress,
-                                running = running,
-                                completed = completed,
-                                logsExpanded = logsExpanded,
-                                onToggleLogs = { logsExpanded = !logsExpanded },
-                                onDismiss = onDismiss,
-                            )
+                        if (showWizard) {
+                            item {
+                                ConfigureStepCard(
+                                    number = distroStepNumber + 1,
+                                    environmentState = environmentState,
+                                    autoSetupProgress = autoSetupProgress,
+                                    running = running,
+                                    completed = completed,
+                                    logsExpanded = logsExpanded,
+                                    onToggleLogs = { logsExpanded = !logsExpanded },
+                                    onDismiss = onDismiss,
+                                )
+                            }
                         }
                     }
                 }
@@ -470,6 +552,31 @@ private fun ConfigureStepCard(
             ) {
                 Text("Done")
             }
+        }
+    }
+}
+
+/** Reveals the setup wizard on a device that is already configured, for adding a second distro. */
+@Composable
+private fun AddEnvironmentCard(onAdd: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Add an environment", fontWeight = FontWeight.SemiBold)
+            Text(
+                text = "Install another Linux distro alongside the ones above. Each keeps its own SDKs " +
+                    "and language servers.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FilledTonalButton(onClick = onAdd) { Text("Install another distro") }
         }
     }
 }

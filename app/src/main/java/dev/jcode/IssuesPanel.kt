@@ -29,8 +29,8 @@ import dev.jcode.workbench.LocalIssueActions
 
 /**
  * The right-drawer "Issues" tab: every diagnostic on the [dev.jcode.core.lsp.DiagnosticsBus],
- * grouped by file — config (.jcode YAML) errors, on-save syntax checks, and (once wired) LSP
- * diagnostics all land on the same bus. Tapping an issue opens its file at the line.
+ * grouped by file — config (.jcode YAML) errors, on-save syntax checks and language-server
+ * diagnostics all land on the same bus. Tapping an issue opens its file at the line and column.
  */
 @Composable
 internal fun IssuesSidebarContent(modifier: Modifier = Modifier) {
@@ -58,10 +58,16 @@ internal fun IssuesSidebarContent(modifier: Modifier = Modifier) {
     LazyColumn(modifier = modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 4.dp)) {
         files.forEach { (path, diags) ->
             item(key = "hdr:$path") {
+                // The header is a tap target too, landing on the file's first diagnostic — it reads
+                // like a file row, so tapping it and getting nothing would be the surprising outcome.
+                val first = diags.first()
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.fillMaxWidth().padding(start = 4.dp, top = 8.dp, bottom = 2.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { actions.onOpen(path, first.startLine, first.startCol) }
+                        .padding(start = 4.dp, top = 8.dp, bottom = 2.dp),
                 ) {
                     Text(
                         text = path.substringAfterLast('/'),
@@ -92,7 +98,7 @@ internal fun IssuesSidebarContent(modifier: Modifier = Modifier) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { actions.onOpen(path, d.startLine) }
+                        .clickable { actions.onOpen(path, d.startLine, d.startCol) }
                         .padding(horizontal = 8.dp, vertical = 5.dp),
                 ) {
                     Box(
@@ -107,10 +113,12 @@ internal fun IssuesSidebarContent(modifier: Modifier = Modifier) {
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
+                    // Diagnostics count from 0; editors (and the status bar) count from 1.
                     Text(
-                        text = "Ln ${d.startLine + 1}",
+                        text = "Ln ${d.startLine + 1}, Col ${d.startCol + 1}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
                     )
                 }
             }

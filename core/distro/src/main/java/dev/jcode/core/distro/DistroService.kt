@@ -36,6 +36,7 @@ import kotlinx.coroutines.withContext
 /** SharedPreferences flag: the environment finished configuring at least once (used to skip the
  *  first-run setup screen instantly on launch — see [DistroService]'s seededConfigured). */
 private const val KEY_ENV_CONFIGURED = "env_configured"
+private const val KEY_SELECTED_DISTRO = "selected_distro"
 
 /**
  * Manages the embedded Linux environment using bundled proot.
@@ -83,8 +84,26 @@ class DistroService(
     private val startupPrefs = appContext.getSharedPreferences("jcode-distro-startup", Context.MODE_PRIVATE)
     private val seededConfigured: Boolean? = if (startupPrefs.getBoolean(KEY_ENV_CONFIGURED, false)) true else null
 
+    // Which environment was active last time, read synchronously alongside [seededConfigured]. The
+    // persisted selection otherwise only arrives with the async probe, and until it does
+    // `runtime.selectedDistro` is the catalog default — so a terminal opened in that window spawns
+    // against the WRONG rootfs and stays there for life, while the status bar later corrects itself
+    // to the real selection. That is how a shell ends up reporting a different distro than the app.
+    private val seededDistro: DistroProfile? =
+        startupPrefs.getString(KEY_SELECTED_DISTRO, null)?.let { DistroProfile.fromId(it) }
+
     private val _environmentState = MutableStateFlow(
-        DistroEnvironmentState(distroInstalled = seededConfigured, smokeTestPassed = seededConfigured),
+        DistroEnvironmentState(
+            // proot is seeded from the same flag: the status bar reads "not installed" off
+            // `!prootInstalled`, so leaving it false defeated the flash this seed exists to prevent —
+            // a configured device announced a broken environment for the second or two until the
+            // probe answered. Optimistic like the other two, and self-corrected by the same probe.
+            prootInstalled = seededConfigured == true,
+            distroInstalled = seededConfigured,
+            smokeTestPassed = seededConfigured,
+            runtime = seededDistro?.let { DistroRuntimeConfig(selectedDistro = it) }
+                ?: DistroRuntimeConfig(),
+        ),
     )
     val environmentState: StateFlow<DistroEnvironmentState> = _environmentState.asStateFlow()
 
@@ -134,8 +153,19 @@ class DistroService(
         projectBinds: List<Pair<String, String>> = emptyList(),
     ) {
         val availableDistros = _environmentState.value.availableDistros.ifEmpty { DistroProfile.defaults() }
+        // Only a config that names a specific image retargets the app. The default id is the generic
+        // "ubuntu", and resolving that through fromId falls back to whatever sits FIRST in the catalog
+        // — so merely opening a project re-pointed everything at 24.04 while the active environment
+        // was 26.04, which is what the startup splash was announcing.
+        val pinned = availableDistros.any {
+            it.id == distroConfig.id || it.installRecipe == distroConfig.id
+        }
         val runtime = DistroRuntimeConfig(
-            selectedDistro = DistroProfile.fromId(distroConfig.id, availableDistros),
+            selectedDistro = if (pinned) {
+                DistroProfile.fromId(distroConfig.id, availableDistros)
+            } else {
+                _environmentState.value.runtime.selectedDistro
+            },
             user = distroConfig.user.ifBlank { DEFAULT_DISTRO_USER },
             binds = resolveBinds(
                 distroBinds = distroConfig.bind,
@@ -152,18 +182,34 @@ class DistroService(
     }
 
     fun setSelectedDistro(profile: DistroProfile) {
+        applySelectedDistro(profile)
+        scope.launch { persistSelection(profile) }
+    }
+
+    /**
+     * [setSelectedDistro], but the caller can await the write. A switch that restarts the process
+     * must use this: the ordinary path persists on [scope], and `exit()` would take the process down
+     * before that lands, bringing the app back on the environment the user just switched away from.
+     */
+    suspend fun setSelectedDistroAwaitingPersist(profile: DistroProfile) {
+        applySelectedDistro(profile)
+        persistSelection(profile)
+    }
+
+    private fun applySelectedDistro(profile: DistroProfile) {
         _environmentState.value = _environmentState.value.copy(
             runtime = _environmentState.value.runtime.copy(selectedDistro = profile),
             completedSteps = _environmentState.value.completedSteps + WizardStepId.DistroSelected,
             errorMessage = null,
         )
         recomputeEnvironments()
-        scope.launch {
-            persistSelectedDistro(profile)
-            persistCompletedSteps(_environmentState.value.completedSteps)
-            syncSdkCatalogSelection(profile.id)
-            syncLspCatalogSelection(profile.id)
-        }
+    }
+
+    private suspend fun persistSelection(profile: DistroProfile) {
+        persistSelectedDistro(profile)
+        persistCompletedSteps(_environmentState.value.completedSteps)
+        syncSdkCatalogSelection(profile.id)
+        syncLspCatalogSelection(profile.id)
     }
 
     suspend fun setFirstRunSetupDeferred(deferred: Boolean) {
@@ -226,11 +272,20 @@ class DistroService(
 
     /** Switch the active environment that terminals and [exec] target. */
     fun setActiveEnvironment(environmentId: String) {
-        val available = _environmentState.value.availableDistros
-        val profile = available.firstOrNull { it.id == environmentId }
-            ?: DistroProfile.fromId(environmentId, available)
-        setSelectedDistro(profile)
+        setSelectedDistro(profileFor(environmentId))
         scope.launch { refreshEnvironment() }
+    }
+
+    /** [setActiveEnvironment] for a caller that restarts afterwards — see
+     *  [setSelectedDistroAwaitingPersist]. Skips the refresh: the new process derives it at startup. */
+    suspend fun setActiveEnvironmentAwaitingPersist(environmentId: String) {
+        setSelectedDistroAwaitingPersist(profileFor(environmentId))
+    }
+
+    private fun profileFor(environmentId: String): DistroProfile {
+        val available = _environmentState.value.availableDistros
+        return available.firstOrNull { it.id == environmentId }
+            ?: DistroProfile.fromId(environmentId, available)
     }
 
     /**
@@ -442,6 +497,7 @@ class DistroService(
             _lspCatalogState.value = _lspCatalogState.value.copy(
                 entries = lspCatalogEntries(),
                 installedEntryIds = readInstalledLspEntries(distroId),
+                loaded = true,
                 runningEntryId = null,
                 runningAction = null,
                 selectedDistroId = distroId,
@@ -807,22 +863,25 @@ class DistroService(
      * Callers must ensure the lock is already held.
      */
     private suspend fun refreshEnvironmentInternal() {
-        val availableDistros = rootfsManager.downloader.fetchManifest().profiles()
-            .ifEmpty { DistroProfile.defaults() }
-        _environmentState.value = _environmentState.value.copy(availableDistros = availableDistros)
-
-        val persistedSelection = readSelectedDistro(availableDistros)
-        if (persistedSelection != null) {
+        // Bring up the SELECTED environment from local state first — the persisted id and the rootfs
+        // on disk. fetchManifest() is a network round-trip that only feeds the list of images
+        // available to INSTALL, so leading with it made every start wait on the network before so
+        // much as looking at the distro it was about to run, with the splash held up behind it.
+        val knownDistros = _environmentState.value.availableDistros.ifEmpty { DistroProfile.defaults() }
+        readSelectedDistro(knownDistros)?.let { persisted ->
             _environmentState.value = _environmentState.value.copy(
-                runtime = _environmentState.value.runtime.copy(selectedDistro = persistedSelection),
-            )
-        } else {
-            _environmentState.value = _environmentState.value.copy(
-                runtime = _environmentState.value.runtime.copy(selectedDistro = availableDistros.first()),
+                runtime = _environmentState.value.runtime.copy(selectedDistro = persisted),
             )
         }
-
+        // No fallback to the first catalog entry: an unreadable selection means "keep what is
+        // running", never "silently retarget to whatever sits on top of the list".
         deriveSelectedDistroState()
+
+        // Now the installable catalog, off the startup path. It never re-points the selection: an id
+        // absent from the manifest still names a rootfs that is on disk and possibly active.
+        val availableDistros = rootfsManager.downloader.fetchManifest().profiles()
+            .ifEmpty { knownDistros }
+        _environmentState.value = _environmentState.value.copy(availableDistros = availableDistros)
     }
 
     /**
@@ -914,7 +973,10 @@ class DistroService(
 
         // Remember (fast, synchronous) whether the environment is configured, so the next launch can skip
         // the first-run setup screen without waiting for this async probe to re-run.
-        startupPrefs.edit().putBoolean(KEY_ENV_CONFIGURED, _environmentState.value.smokeTestPassed == true).apply()
+        startupPrefs.edit()
+            .putBoolean(KEY_ENV_CONFIGURED, _environmentState.value.smokeTestPassed == true)
+            .putString(KEY_SELECTED_DISTRO, _environmentState.value.runtime.selectedDistro.id)
+            .apply()
         persistCompletedSteps(completedSteps.toSet())
         syncSdkCatalogSelection(_environmentState.value.runtime.selectedDistro.id)
         syncLspCatalogSelection(_environmentState.value.runtime.selectedDistro.id)
@@ -1333,6 +1395,29 @@ class DistroService(
     /** (distroId:user) pairs verified to exist in the rootfs, so execs don't re-check every time. */
     private val verifiedDistroUsers = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
+    /**
+     * Whether [user]'s bootstrap is already present in [distroId]'s rootfs, judged from the rootfs
+     * itself rather than from a remembered verdict.
+     *
+     * [ensureDistroUser] costs ~12s under proot and was the whole of a cold start, re-proving every
+     * launch what the last one had established. But everything it writes is a plain file in
+     * app-private storage, so the same question answers from a few stats — and unlike a persisted
+     * flag this reads the CURRENT state, so deleting the account inside the distro makes the next
+     * launch rebuild it. That self-healing is the property the check was built around.
+     */
+    private fun distroUserBootstrapped(distroId: String, user: String): Boolean {
+        val rootfs = rootfsManager.getRootfsPath(distroId)
+        if (!rootfs.isDirectory) return false
+        val registered = runCatching {
+            File(rootfs, "etc/passwd").useLines { lines -> lines.any { it.startsWith("$user:") } }
+        }.getOrDefault(false)
+        if (!registered) return false
+        if (!File(rootfs, "home/$user").isDirectory) return false
+        if (!File(rootfs, "etc/sudoers.d/$user").isFile) return false
+        // Either a real sudo or the shim ensureDistroUser drops in for minimal images.
+        return File(rootfs, "usr/bin/sudo").exists() || File(rootfs, "usr/local/bin/sudo").exists()
+    }
+
     /** distroIds whose DNS/host config has been ensured this process, so it runs at most once each. */
     private val networkingConfigured = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
@@ -1353,6 +1438,10 @@ class DistroService(
         }
         val cacheKey = "$distroId:$user"
         if (verifiedDistroUsers[cacheKey] == true) {
+            return ExecResult(stdout = "user $user ready.", exitCode = 0)
+        }
+        if (distroUserBootstrapped(distroId, user)) {
+            verifiedDistroUsers[cacheKey] = true
             return ExecResult(stdout = "user $user ready.", exitCode = 0)
         }
         val lastFailure = distroUserEnsureFailures[cacheKey]
@@ -1797,17 +1886,20 @@ class DistroService(
     }
 
     /**
-     * Spawn a long-lived process inside the active distro for a debug adapter, with stdin/stdout PIPES
-     * (no PTY — clean bidirectional DAP, no echo). The caller reads DAP from `process.inputStream` and
-     * writes to `process.outputStream`; stderr is kept separate. Returns null if the runtime isn't ready.
+     * Spawn a long-lived process inside the active distro with stdin/stdout PIPES (no PTY — clean
+     * bidirectional protocol traffic, no echo). The caller reads from `process.inputStream` and writes
+     * to `process.outputStream`; stderr is kept separate. Returns null if the runtime isn't ready.
+     *
+     * Used for both debug adapters (DAP) and language servers (LSP): both frame JSON over stdio, and
+     * a PTY would echo every request back into the read stream.
      */
-    fun spawnDapProcess(
+    fun spawnStdioProcess(
         command: String,
         workdir: String = _environmentState.value.runtime.workdir,
         // Some adapters must run as a specific user — e.g. netcoredbg needs root, where the .NET SDK
         // (installed under /root/.dotnet) is readable. Defaults to the runtime user.
         userOverride: String? = null,
-        // Prepended to PATH so the adapter can find its runtime (e.g. /root/.dotnet for netcoredbg).
+        // Prepended to PATH so the process can find its runtime (e.g. /root/.dotnet for netcoredbg).
         extraPath: String = "",
     ): Process? {
         val runtime = _environmentState.value.runtime
@@ -1843,7 +1935,7 @@ class DistroService(
             }
             builder.start()
         } catch (e: Exception) {
-            android.util.Log.e("DistroService", "spawnDapProcess failed", e)
+            android.util.Log.e("DistroService", "spawnStdioProcess failed", e)
             null
         }
     }
@@ -1980,6 +2072,9 @@ class DistroService(
     }
 
     private suspend fun persistSelectedDistro(profile: DistroProfile) {
+        // Mirrored into startupPrefs so the next launch knows the selection before DataStore is read
+        // — see seededDistro. DataStore stays the source of truth; this is only the startup seed.
+        startupPrefs.edit().putString(KEY_SELECTED_DISTRO, profile.id).apply()
         dataStore.edit { prefs ->
             prefs[PreferencesKeys.SelectedDistro] = profile.id
         }
@@ -2170,6 +2265,8 @@ class DistroService(
 
     private fun lspCatalogEntries(): List<LspCatalogEntry> = LspServerCatalog.BUILT_IN
 
+    /** Note: deliberately leaves [LspCatalogState.loaded] alone — this runs during startup with a
+     *  distro selection that may still be the default, so it cannot vouch for the installed set. */
     private suspend fun syncLspCatalogSelection(distroId: String) {
         _lspCatalogState.value = _lspCatalogState.value.copy(
             entries = _lspCatalogState.value.entries.ifEmpty { lspCatalogEntries() },

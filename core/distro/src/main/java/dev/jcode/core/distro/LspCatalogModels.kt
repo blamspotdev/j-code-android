@@ -32,6 +32,15 @@ enum class LspCatalogAction(val label: String) {
 data class LspCatalogState(
     val entries: List<LspCatalogEntry> = emptyList(),
     val installedEntryIds: Set<String> = emptySet(),
+    /**
+     * Whether [installedEntryIds] has been loaded for the active distro at least once.
+     *
+     * Until then an empty set means "not known yet", not "nothing installed" — and the two are
+     * indistinguishable by timing, because the load is quiet for ~10s on a cold launch while the
+     * environment is probed first. Anything that would accuse a server of being missing must wait
+     * for this.
+     */
+    val loaded: Boolean = false,
     val updatableEntryIds: Set<String> = emptySet(),
     val checking: Boolean = false,
     val runningEntryId: String? = null,
@@ -41,6 +50,25 @@ data class LspCatalogState(
     val selectedDistroId: String? = null,
     val errorMessage: String? = null,
 )
+
+/**
+ * Symlinks an npm-installed global binary into `/usr/local/bin`.
+ *
+ * Node is installed through nvm, whose init lives at the bottom of `~/.bashrc` — and Ubuntu's
+ * `.bashrc` returns immediately when the shell is not interactive. Every catalog script and the LSP
+ * launcher run non-interactively (`su - jcode -c '…'`), so nvm never loads and `$(npm prefix -g)/bin`
+ * is never on PATH. `node`/`npm` themselves are usable only because the nodejs entry symlinks them;
+ * anything installed by `npm i -g` afterwards needs the same treatment, or both `verifyCommand` and
+ * the runtime launcher fail with "command not found". gopls and rust-analyzer solve the identical
+ * problem for `$GOPATH/bin` and `~/.cargo/bin`.
+ */
+private fun linkNpmBin(vararg names: String): String =
+    names.joinToString("; ") { name ->
+        "sudo ln -sf \"\$(npm prefix -g)/bin/$name\" /usr/local/bin/$name"
+    }
+
+private fun unlinkNpmBin(vararg names: String): String =
+    "sudo rm -f " + names.joinToString(" ") { "/usr/local/bin/$it" }
 
 /** Built-in language servers offered by the LSP Manager. */
 object LspServerCatalog {
@@ -70,9 +98,11 @@ object LspServerCatalog {
             // scoped to the LSP only, so this pin isn't auto-bumped to 7.
             installCommand = "set -e; jcode_progress 10 'Installing the TypeScript language server'; " +
                 "sudo npm install -g typescript@5 typescript-language-server; " +
+                linkNpmBin("typescript-language-server", "tsserver") + "; " +
                 "jcode_progress 100 'TypeScript language server ready'",
             verifyCommand = "typescript-language-server --version",
-            uninstallCommand = "sudo npm rm -g typescript typescript-language-server",
+            uninstallCommand = "sudo npm rm -g typescript typescript-language-server; " +
+                unlinkNpmBin("typescript-language-server", "tsserver"),
             runCommand = "typescript-language-server --stdio",
             updateCheckCommand = "test -n \"\$(npm outdated -g --parseable typescript-language-server 2>/dev/null)\"",
             languageIds = listOf("typescript", "javascript", "typescriptreact", "javascriptreact"),
@@ -106,11 +136,13 @@ object LspServerCatalog {
             name = "Pyright (Python)",
             description = "Static type checker and language server for Python (needs Node.js).",
             installCommand = "set -e; jcode_progress 10 'Installing Pyright'; " +
-                "sudo npm install -g pyright; jcode_progress 100 'Pyright ready'",
+                "sudo npm install -g pyright; " +
+                linkNpmBin("pyright", "pyright-langserver") + "; " +
+                "jcode_progress 100 'Pyright ready'",
             // pyright-langserver itself rejects --version ("Connection input stream is not set",
             // exit 1) — only the pyright CLI answers it, so verify through that.
             verifyCommand = "pyright --version",
-            uninstallCommand = "sudo npm rm -g pyright",
+            uninstallCommand = "sudo npm rm -g pyright; " + unlinkNpmBin("pyright", "pyright-langserver"),
             runCommand = "pyright-langserver --stdio",
             updateCheckCommand = "test -n \"\$(npm outdated -g --parseable pyright 2>/dev/null)\"",
             languageIds = listOf("python"),
@@ -167,9 +199,14 @@ object LspServerCatalog {
             // fwcd/kotlin-language-server ships a `server.zip` on each release; /releases/latest/download
             // always resolves to the newest asset, so no version needs pinning. It's a JVM app, so `jdk`
             // (which provides `java`) is required first.
-            installCommand = "set -e; jcode_apt 0 15 'Installing download prerequisites' curl unzip; " +
+            installCommand = "set -e; jcode_apt 0 10 'Installing download prerequisites' curl unzip; " +
+                // The server bundles kotlin-compiler 2.1, whose IntelliJ JavaVersion.parse throws
+                // IllegalArgumentException on a "26.0.1" version string — so it cannot run on the
+                // JDK 26 that Ubuntu 26.04's default-jdk provides. Install an LTS JVM for this
+                // server and pin it in runCommand; jdtls is unaffected and keeps using `jdk`.
+                "jcode_apt 10 35 'Installing a compatible JVM (Kotlin needs an LTS JDK)' openjdk-21-jdk-headless; " +
                 "jcode_fetch https://github.com/fwcd/kotlin-language-server/releases/latest/download/server.zip " +
-                "/tmp/kls.zip 15 85 'Downloading the Kotlin language server'; " +
+                "/tmp/kls.zip 35 85 'Downloading the Kotlin language server'; " +
                 "jcode_progress 88 'Unpacking the Kotlin language server'; " +
                 "sudo rm -rf /opt/kotlin-language-server; sudo unzip -q -o /tmp/kls.zip -d /opt/kotlin-language-server; " +
                 "sudo ln -sf /opt/kotlin-language-server/server/bin/kotlin-language-server /usr/local/bin/kotlin-language-server; " +
@@ -178,9 +215,12 @@ object LspServerCatalog {
             // `--version` makes it throw and exit 1, so a launch-based verify misreports a good
             // install as failed. Check the launcher and the JVM it needs instead.
             verifyCommand = "test -x /opt/kotlin-language-server/server/bin/kotlin-language-server && " +
-                "command -v java >/dev/null 2>&1 && echo ready",
+                "ls -d /usr/lib/jvm/java-21-openjdk-* >/dev/null 2>&1 && echo ready",
             uninstallCommand = "sudo rm -rf /opt/kotlin-language-server /usr/local/bin/kotlin-language-server",
-            runCommand = "kotlin-language-server",
+            // JAVA_HOME pins the LTS JVM installed above; the launcher is a Gradle start script, which
+            // prefers JAVA_HOME over whatever `java` PATH happens to resolve to.
+            runCommand = "env JAVA_HOME=\"\$(ls -d /usr/lib/jvm/java-21-openjdk-* | head -1)\" " +
+                "kotlin-language-server",
             languageIds = listOf("kotlin"),
             extensions = listOf(".kt", ".kts"),
             rootDetectors = listOf("build.gradle.kts", "settings.gradle.kts", ".git"),
@@ -223,9 +263,20 @@ object LspServerCatalog {
             description = "HTML language server from vscode-langservers-extracted (needs Node.js).",
             installCommand = "set -e; jcode_progress 10 'Installing the HTML/CSS/JSON servers'; " +
                 "sudo npm install -g vscode-langservers-extracted; " +
+                // One package ships all three binaries, so each entry links all three.
+                linkNpmBin(
+                    "vscode-html-language-server",
+                    "vscode-css-language-server",
+                    "vscode-json-language-server",
+                ) + "; " +
                 "jcode_progress 100 'HTML/CSS/JSON servers ready'",
             verifyCommand = "command -v vscode-html-language-server >/dev/null 2>&1 && node -e \"process.exit(0)\"",
-            uninstallCommand = "sudo npm rm -g vscode-langservers-extracted",
+            uninstallCommand = "sudo npm rm -g vscode-langservers-extracted; " +
+                unlinkNpmBin(
+                    "vscode-html-language-server",
+                    "vscode-css-language-server",
+                    "vscode-json-language-server",
+                ),
             runCommand = "vscode-html-language-server --stdio",
             updateCheckCommand = "test -n \"\$(npm outdated -g --parseable vscode-langservers-extracted 2>/dev/null)\"",
             languageIds = listOf("html"),
@@ -240,9 +291,20 @@ object LspServerCatalog {
             description = "CSS language server from vscode-langservers-extracted (needs Node.js).",
             installCommand = "set -e; jcode_progress 10 'Installing the HTML/CSS/JSON servers'; " +
                 "sudo npm install -g vscode-langservers-extracted; " +
+                // One package ships all three binaries, so each entry links all three.
+                linkNpmBin(
+                    "vscode-html-language-server",
+                    "vscode-css-language-server",
+                    "vscode-json-language-server",
+                ) + "; " +
                 "jcode_progress 100 'HTML/CSS/JSON servers ready'",
             verifyCommand = "command -v vscode-css-language-server >/dev/null 2>&1 && node -e \"process.exit(0)\"",
-            uninstallCommand = "sudo npm rm -g vscode-langservers-extracted",
+            uninstallCommand = "sudo npm rm -g vscode-langservers-extracted; " +
+                unlinkNpmBin(
+                    "vscode-html-language-server",
+                    "vscode-css-language-server",
+                    "vscode-json-language-server",
+                ),
             runCommand = "vscode-css-language-server --stdio",
             updateCheckCommand = "test -n \"\$(npm outdated -g --parseable vscode-langservers-extracted 2>/dev/null)\"",
             languageIds = listOf("css", "scss", "less"),
@@ -257,9 +319,20 @@ object LspServerCatalog {
             description = "JSON language server from vscode-langservers-extracted (needs Node.js).",
             installCommand = "set -e; jcode_progress 10 'Installing the HTML/CSS/JSON servers'; " +
                 "sudo npm install -g vscode-langservers-extracted; " +
+                // One package ships all three binaries, so each entry links all three.
+                linkNpmBin(
+                    "vscode-html-language-server",
+                    "vscode-css-language-server",
+                    "vscode-json-language-server",
+                ) + "; " +
                 "jcode_progress 100 'HTML/CSS/JSON servers ready'",
             verifyCommand = "command -v vscode-json-language-server >/dev/null 2>&1 && node -e \"process.exit(0)\"",
-            uninstallCommand = "sudo npm rm -g vscode-langservers-extracted",
+            uninstallCommand = "sudo npm rm -g vscode-langservers-extracted; " +
+                unlinkNpmBin(
+                    "vscode-html-language-server",
+                    "vscode-css-language-server",
+                    "vscode-json-language-server",
+                ),
             runCommand = "vscode-json-language-server --stdio",
             updateCheckCommand = "test -n \"\$(npm outdated -g --parseable vscode-langservers-extracted 2>/dev/null)\"",
             languageIds = listOf("json", "jsonc"),
@@ -274,9 +347,10 @@ object LspServerCatalog {
             description = "YAML language server by Red Hat (needs Node.js).",
             installCommand = "set -e; jcode_progress 10 'Installing the YAML language server'; " +
                 "sudo npm install -g yaml-language-server; " +
+                linkNpmBin("yaml-language-server") + "; " +
                 "jcode_progress 100 'YAML language server ready'",
             verifyCommand = "yaml-language-server --version",
-            uninstallCommand = "sudo npm rm -g yaml-language-server",
+            uninstallCommand = "sudo npm rm -g yaml-language-server; " + unlinkNpmBin("yaml-language-server"),
             runCommand = "yaml-language-server --stdio",
             updateCheckCommand = "test -n \"\$(npm outdated -g --parseable yaml-language-server 2>/dev/null)\"",
             languageIds = listOf("yaml"),

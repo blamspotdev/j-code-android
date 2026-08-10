@@ -40,8 +40,21 @@ import dev.jcode.core.distro.adb.AdbBridge
 import dev.jcode.core.distro.adb.AdbBridgeLocator
 import dev.jcode.core.distro.adb.AdbBridgeState
 import dev.jcode.core.distro.adb.AdbDaemon
+import dev.jcode.core.buffer.offsetToUtf16Position
+import dev.jcode.core.buffer.utf16PositionToOffset
+import dev.jcode.core.editor.EditorLanguageAction
+import dev.jcode.core.editor.completion.CompletionItem
 import dev.jcode.core.lsp.Diagnostic as LspDiagnostic
 import dev.jcode.core.lsp.DiagnosticSeverity as LspDiagnosticSeverity
+import dev.jcode.core.lsp.LocationResult
+import dev.jcode.core.lsp.LspState
+import dev.jcode.core.lsp.TextEditResult
+import dev.jcode.core.lsp.WorkspaceEditResult
+import dev.jcode.editor.toEditorItem
+import dev.jcode.lsp.LspFeature
+import dev.jcode.lsp.LspLocationEntry
+import dev.jcode.lsp.LspLocationPicker
+import dev.jcode.lsp.LspRenameRequest
 import dev.jcode.core.resource.ResourceManager
 import dev.jcode.core.resource.ResourceManagerLocator
 import androidx.compose.ui.graphics.Color
@@ -102,6 +115,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -196,6 +210,10 @@ sealed interface WorkbenchPrompt {
 
     /** Android killed the distro's processes; point the user at the setting that explains it. */
     data object ProcessLimit : WorkbenchPrompt
+
+    /** A toolchain was installed into the selected distro while open terminals are still running the
+     *  one they were spawned against, where it can never appear. */
+    data class StaleTerminalDistro(val sessionDistro: String, val installedInto: String) : WorkbenchPrompt
 }
 
 /** An updated extension awaiting a reload; surfaced as a compact banner atop the Extensions panel. */
@@ -588,6 +606,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun installRequiredLsp(entryId: String): Boolean = withContext(Dispatchers.IO) {
+        // The server's own prerequisites first, exactly as installLspCatalogEntry and
+        // installRequiredDbg do. Without this an extension that requires jdtls installs the server's
+        // files and no JVM, so its verify fails and it can never launch.
+        val entry = LspServerCatalog.findById(entryId)
+        if (entry != null && !installRequiredSdks(entry.requiredSdks, entry.name)) return@withContext false
         val session = SessionRegistry.registerSession(
             context = getApplication(),
             kind = BackendSessionKind.JOB,
@@ -658,9 +681,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         try {
             block()
+            warnIfTerminalsRunAnotherDistro()
         } finally {
             session.close()
         }
+    }
+
+    /**
+     * A terminal is pinned to the rootfs it was spawned against (proot's `-r`) for the life of its
+     * shell, so a toolchain installed into a different distro can never turn up in it: `which` finds
+     * nothing and the whole install tree is invisible, which reads as an install that silently
+     * failed. Nothing can migrate a running shell, so name both distros and let the user open a new
+     * terminal. Worded to hold whether or not the install itself succeeded.
+     */
+    private fun warnIfTerminalsRunAnotherDistro() {
+        val target = distroService.environmentState.value.runtime.selectedDistro.id
+        val stale = TerminalSessionHost.existingManager()?.sessions?.values
+            ?.mapNotNull { it.spawnSpec?.distroId }
+            ?.firstOrNull { it != target } ?: return
+        _prompts.tryEmit(WorkbenchPrompt.StaleTerminalDistro(stale, target))
     }
 
     fun uninstallExtension(id: String) {
@@ -962,7 +1001,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun attachVirtualDeviceAdb(port: Int) {
         runCatching { virtualDeviceAdbServer?.destroy() }
-        virtualDeviceAdbServer = distroService.spawnDapProcess(
+        virtualDeviceAdbServer = distroService.spawnStdioProcess(
             command = "mkdir -p \"\$HOME/.android\" && " +
                 "{ [ -f \"\$HOME/.android/adbkey.pub\" ] || adb keygen \"\$HOME/.android/adbkey\"; } && " +
                 "adb start-server && adb connect 127.0.0.1:$port && exec sleep infinity",
@@ -1858,7 +1897,321 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val diagnosticsBus = dev.jcode.core.lsp.LspModule.diagnosticsBus
 
+    // ---- Language servers (LSP) ----
+
+    private val lspController = dev.jcode.lsp.LspController(
+        distroService = distroService,
+        scope = viewModelScope,
+        diagnosticsBus = diagnosticsBus,
+        documentText = ::openDocumentText,
+        openDocumentPaths = {
+            _editorGroup.value.tabs
+                .filter { !it.isPage && it.filePath.path.isNotBlank() }
+                .map { it.filePath.path }
+        },
+        isServerPaired = ::isLanguageServerPaired,
+    )
+
+    /**
+     * Whether an installed extension pairs with [serverId] for [fileName].
+     *
+     * Two ways to pair, because Dev Packs predate the catalog ids: an explicit `requires.lsps` /
+     * `suggests.lsps` entry naming the server, or a Dev Pack that claims the file's language — a pack
+     * owning `.css` is what makes the CSS server that language's implementation. Without either, a
+     * catalog match on the file extension alone is not enough to start a server.
+     */
+    private fun isLanguageServerPaired(serverId: String, fileName: String): Boolean =
+        installedExtensions.value.any { extension ->
+            serverId in extension.requires.lsps ||
+                serverId in extension.suggests.lsps ||
+                extension.languageFor(fileName) != null
+        }
+
+    /** Running language servers, surfaced in the status bar. */
+    val lspServers = lspController.servers
+
+    /** A catalog server an opened file needs but which isn't installed; drives the install prompt. */
+    val lspMissingServer = lspController.missingServer
+
+    /**
+     * The live buffer for an open tab, as the language server needs to see it. Defensive because a
+     * tab can close (and its snapshot be released) between the controller resolving a document and
+     * reading it.
+     */
+    private fun openDocumentText(hostPath: String): String? = runCatching {
+        val state = _editorGroup.value.tabs
+            .firstOrNull { !it.isPage && it.filePath.path == hostPath }
+            ?.editorState ?: return@runCatching null
+        val snapshot = state.snapshot.value
+        snapshot.readRangeAsUtf16(0, snapshot.byteLength)
+    }.getOrNull()
+
+    /** Definitions/references awaiting a pick; null when no picker is open. */
+    private val _lspLocationPicker = MutableStateFlow<LspLocationPicker?>(null)
+    val lspLocationPicker: StateFlow<LspLocationPicker?> = _lspLocationPicker.asStateFlow()
+
+    /** A rename waiting on a new name from the dialog. */
+    private val _lspRenameRequest = MutableStateFlow<LspRenameRequest?>(null)
+    val lspRenameRequest: StateFlow<LspRenameRequest?> = _lspRenameRequest.asStateFlow()
+
+    fun dismissLspLocationPicker() { _lspLocationPicker.value = null }
+
+    fun dismissLspRename() { _lspRenameRequest.value = null }
+
+    /**
+     * Completions from the language server for the caret position, filtered to the typed prefix and
+     * capped: a server answering a bare `.` returns every member in scope, which is more than a
+     * phone-sized popup can usefully show.
+     */
+    suspend fun lspCompletions(
+        hostPath: String,
+        line: Int,
+        character: Int,
+        prefix: String,
+    ): List<CompletionItem> {
+        if (hostPath.isBlank()) return emptyList()
+        val items = lspController.completions(hostPath, line, character).map { it.toEditorItem() }
+        val matching = if (prefix.isBlank()) {
+            items
+        } else {
+            items.filter { it.filterText.startsWith(prefix, ignoreCase = true) }
+        }
+        return matching.take(MAX_LSP_COMPLETIONS)
+    }
+
+    /** Editor context-menu language actions, resolved against the byte [offset] that was pressed. */
+    fun editorLanguageAction(action: EditorLanguageAction, word: String, offset: Int) {
+        if (action == EditorLanguageAction.FormatDocument) {
+            formatActiveTab()
+            return
+        }
+        val tab = _editorGroup.value.activeTab?.takeIf { !it.isPage } ?: return
+        val state = tab.editorState ?: return
+        val path = tab.filePath.path
+        val (line, character) = state.snapshot.value.offsetToUtf16Position(offset)
+        viewModelScope.launch {
+            when (action) {
+                EditorLanguageAction.GoToDefinition -> lspGoToDefinition(path, line, character, word)
+                EditorLanguageAction.FindReferences -> lspFindReferences(path, line, character, word)
+                EditorLanguageAction.RenameSymbol -> lspBeginRename(path, line, character, word)
+                EditorLanguageAction.FormatDocument -> Unit // handled above
+            }
+        }
+    }
+
+    private suspend fun lspGoToDefinition(path: String, line: Int, character: Int, word: String) {
+        if (!requireLanguageServer(path, LspFeature.Definition, "Go to Definition")) return
+        val targets = lspController.definition(path, line, character)
+        when (targets.size) {
+            0 -> emitMessage("No definition found for \"$word\"")
+            1 -> openLspLocation(targets.first())
+            else -> _lspLocationPicker.value =
+                LspLocationPicker("Definitions of \"$word\"", targets.toEntries())
+        }
+    }
+
+    private suspend fun lspFindReferences(path: String, line: Int, character: Int, word: String) {
+        if (!requireLanguageServer(path, LspFeature.References, "Find References")) return
+        val results = lspController.references(path, line, character)
+        if (results.isEmpty()) {
+            emitMessage("No references found for \"$word\"")
+            return
+        }
+        _lspLocationPicker.value = LspLocationPicker("References to \"$word\"", results.toEntries())
+    }
+
+    private suspend fun lspBeginRename(path: String, line: Int, character: Int, word: String) {
+        if (!requireLanguageServer(path, LspFeature.Rename, "Rename Symbol")) return
+        if (word.isBlank()) {
+            emitMessage("Put the cursor on a symbol to rename it")
+            return
+        }
+        _lspRenameRequest.value = LspRenameRequest(path, line, character, word)
+    }
+
+    /** Second half of a rename: ask the server for the edits, then apply them. */
+    fun confirmLspRename(newName: String) {
+        val request = _lspRenameRequest.value ?: return
+        _lspRenameRequest.value = null
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty() || trimmed == request.symbol) return
+        viewModelScope.launch {
+            val edit = lspController.rename(request.path, request.line, request.character, trimmed)
+            if (edit == null || edit.isEmpty) {
+                emitMessage("\"${request.symbol}\" can't be renamed here")
+                return@launch
+            }
+            val applied = applyWorkspaceEdit(edit)
+            emitMessage(
+                if (applied) {
+                    "Renamed to \"$trimmed\" in ${edit.fileCount} " +
+                        if (edit.fileCount == 1) "file" else "files"
+                } else {
+                    "Rename failed"
+                },
+            )
+        }
+    }
+
+    fun openLspLocationEntry(entry: LspLocationEntry) {
+        _lspLocationPicker.value = null
+        viewModelScope.launch {
+            openLspLocation(LocationResult(entry.path, entry.line, entry.character))
+        }
+    }
+
+    private suspend fun openLspLocation(location: LocationResult) {
+        val file = File(location.path)
+        if (!file.isFile) {
+            emitMessage("Can't open ${file.name}: file not found")
+            return
+        }
+        _bringEditorToFront.tryEmit(Unit)
+        // openLocalFile takes 1-based coordinates; LSP counts from 0.
+        openLocalFile(file, line = location.line + 1, column = location.character + 1)
+    }
+
+    private fun List<LocationResult>.toEntries(): List<LspLocationEntry> = map { location ->
+        LspLocationEntry(
+            path = location.path,
+            line = location.line,
+            character = location.character,
+            preview = sourceLinePreview(location.path, location.line),
+        )
+    }
+
+    /** The text of one line, preferring an open buffer over disk so unsaved edits show through. */
+    private fun sourceLinePreview(path: String, line: Int): String = runCatching {
+        val state = _editorGroup.value.tabs
+            .firstOrNull { !it.isPage && it.filePath.path == path }
+            ?.editorState
+        val text = if (state != null) {
+            val snapshot = state.snapshot.value
+            if (line >= snapshot.lineCount) return@runCatching ""
+            snapshot.lineText(line)
+        } else {
+            File(path).useLines { lines -> lines.drop(line).firstOrNull() } ?: ""
+        }
+        text.trim().take(PREVIEW_MAX_CHARS)
+    }.getOrDefault("")
+
+    /**
+     * Explains why a language action can't run instead of silently doing nothing: the reason differs
+     * between "no server for this file type", "not installed", "still starting" and "this server has
+     * no such capability", and each has a different fix.
+     */
+    private suspend fun requireLanguageServer(
+        path: String,
+        feature: LspFeature,
+        actionLabel: String,
+    ): Boolean {
+        val status = lspController.statusFor(path)
+        if (status == null) {
+            val name = File(path).name
+            val descriptor = dev.jcode.core.lsp.LspServerDescriptor.findForFile(name)
+            val entry = descriptor?.let { LspServerCatalog.findById(it.id) }
+            emitMessage(
+                when {
+                    descriptor == null -> "$actionLabel needs a language server; none supports $name"
+                    // Unpaired: the server may well be installed, but no extension claims this
+                    // language, so pointing at Toolchains would send the user to the wrong place.
+                    !isLanguageServerPaired(descriptor.id, name) ->
+                        "$actionLabel needs a Dev Pack for $name; install one from Extensions"
+                    descriptor.id !in lspCatalogState.value.installedEntryIds ->
+                        "$actionLabel needs ${entry?.name ?: descriptor.id}; install it from Toolchains"
+                    else -> "$actionLabel needs the Linux environment to be ready"
+                },
+            )
+            return false
+        }
+        if (status.state != LspState.READY) {
+            emitMessage(
+                when (status.state) {
+                    LspState.ERROR -> "${status.name} failed to start${status.detail?.let { ": $it" } ?: ""}"
+                    else -> "${status.name} is still starting"
+                },
+            )
+            return false
+        }
+        if (!lspController.supports(path, feature)) {
+            emitMessage("${status.name} doesn't support $actionLabel")
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Apply a server-produced edit set. Open tabs go through [dev.jcode.core.editor.EditorState] so
+     * the change is undoable and the tab shows dirty; closed files are rewritten on disk.
+     */
+    private suspend fun applyWorkspaceEdit(edit: WorkspaceEditResult): Boolean = runCatching {
+        edit.editsByPath.forEach { (path, edits) ->
+            if (edits.isEmpty()) return@forEach
+            val state = _editorGroup.value.tabs
+                .firstOrNull { !it.isPage && it.filePath.path == path }
+                ?.editorState
+            if (state != null) applyEditsToBuffer(state, edits) else applyEditsToFile(File(path), edits)
+        }
+        notifyWorkspaceFilesChanged()
+        true
+    }.getOrElse {
+        emitMessage("Failed to apply edits: ${it.message ?: "error"}")
+        false
+    }
+
+    private suspend fun applyEditsToBuffer(
+        state: dev.jcode.core.editor.EditorState,
+        edits: List<TextEditResult>,
+    ) {
+        val snapshot = state.snapshot.value
+        // Applied last-first so an earlier edit's offsets are still valid when it is its turn.
+        resolveEdits(edits) { line, character -> snapshot.utf16PositionToOffset(line, character) }
+            .forEach { (start, end, text) -> state.applyEdit(EditTx.replace(start, end, text)) }
+    }
+
+    private fun applyEditsToFile(file: File, edits: List<TextEditResult>) {
+        if (!file.isFile) return
+        val original = file.readText()
+        dev.jcode.core.buffer.Buffer.fromText(original).use { buffer ->
+            val snapshot = buffer.snapshot()
+            val resolved = resolveEdits(edits) { line, character ->
+                snapshot.utf16PositionToOffset(line, character)
+            }
+            var latest = snapshot
+            resolved.forEach { (start, end, text) ->
+                latest = buffer.applyEdit(EditTx.replace(start, end, text))
+            }
+            file.writeText(latest.readRangeAsUtf16(0, latest.byteLength))
+        }
+    }
+
+    /** LSP (line, character) ranges -> descending byte ranges, so edits don't invalidate each other. */
+    private fun resolveEdits(
+        edits: List<TextEditResult>,
+        toOffset: (line: Int, character: Int) -> Int,
+    ): List<Triple<Int, Int, String>> = edits
+        .map { edit ->
+            val start = toOffset(edit.startLine, edit.startChar)
+            val end = toOffset(edit.endLine, edit.endChar).coerceAtLeast(start)
+            Triple(start, end, edit.newText)
+        }
+        .sortedByDescending { it.first }
+
     init {
+        // Code actions and some servers' rename flows push edits instead of returning them.
+        lspController.onApplyEdit = { edit ->
+            viewModelScope.launch { applyWorkspaceEdit(edit) }
+            true
+        }
+        // Installing (or removing) a Dev Pack changes which servers are paired, so the files already
+        // open have to be re-evaluated rather than waiting for the user to reopen them.
+        viewModelScope.launch {
+            installedExtensions
+                .map { extensions -> extensions.map { it.id }.toSet() }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect { lspController.retryOpenDocuments() }
+        }
         // .jcode YAML config parse errors are real project issues; mirror them onto the bus.
         viewModelScope.launch {
             configService.workspaceError.collect { err ->
@@ -2612,6 +2965,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun clearEditorTabs() {
         val tabs = _editorGroup.value.tabs
+        // Language servers are rooted in the project being left, so none of them survives the switch.
+        lspController.shutdownAll()
         tabs.filterNot { it.isPage }.forEach {
             it.editorState?.close()
             untrackDirty(it.id)
@@ -2843,8 +3198,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- Multi-environment ("docker-style") management ---
 
+    /**
+     * Switching environments restarts the app. A shell is bound to the rootfs it was spawned against
+     * for life (proot's `-r`), so without a restart the workbench is left half on the old environment
+     * — the state that made an installed toolchain look missing from an open terminal. Editor tabs and
+     * unsaved buffers survive via [restartApp]'s session flush; foreground processes do not, so those
+     * are confirmed first.
+     */
     fun setActiveEnvironment(environmentId: String) {
-        distroService.setActiveEnvironment(environmentId)
+        if (environmentId == distroService.environmentState.value.runtime.selectedDistro.id) return
+        val running = TerminalSessionHost.existingManager()?.sessions?.values
+            ?.mapNotNull { it.foreground }
+            .orEmpty()
+        if (running.isEmpty()) applyEnvironmentSwitch(environmentId)
+        else _pendingEnvironmentSwitch.value = PendingEnvironmentSwitch(environmentId, running)
+    }
+
+    /** An environment switch held back because live processes would be killed by the restart. */
+    data class PendingEnvironmentSwitch(val environmentId: String, val running: List<String>)
+
+    private val _pendingEnvironmentSwitch = MutableStateFlow<PendingEnvironmentSwitch?>(null)
+    val pendingEnvironmentSwitch: StateFlow<PendingEnvironmentSwitch?> =
+        _pendingEnvironmentSwitch.asStateFlow()
+
+    fun confirmEnvironmentSwitch() {
+        val pending = _pendingEnvironmentSwitch.value ?: return
+        _pendingEnvironmentSwitch.value = null
+        applyEnvironmentSwitch(pending.environmentId)
+    }
+
+    fun cancelEnvironmentSwitch() {
+        _pendingEnvironmentSwitch.value = null
+    }
+
+    private fun applyEnvironmentSwitch(environmentId: String) {
+        viewModelScope.launch {
+            distroService.setActiveEnvironmentAwaitingPersist(environmentId)
+            restartApp()
+        }
     }
 
     fun deleteEnvironment(environmentId: String) {
@@ -3816,7 +4207,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // Long-lived runtime services (e.g. the opencode agent server behind the OpenChamber Chat UI).
     // A one-shot exec.run can't host a server: proot --kill-on-exit reaps the tree the moment the
-    // launcher exec returns. spawnDapProcess gives a piped proot Process the JVM holds open, so the
+    // launcher exec returns. spawnStdioProcess gives a piped proot Process the JVM holds open, so the
     // server survives until we destroy() it (which reaps its tree). Keyed by "<extId> <serviceId>"
     // (extension ids never contain spaces) so services can be listed + reaped per owning extension
     // for the Task Manager "Background extensions" section.
@@ -3828,7 +4219,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun startRuntimeService(extId: String, id: String, command: String, user: String = "root", extraPath: String = ""): Boolean {
         val key = svcKey(extId, id)
         runtimeServices[key]?.let { if (it.isAlive) return true else runtimeServices.remove(key) }
-        val process = distroService.spawnDapProcess(
+        val process = distroService.spawnStdioProcess(
             command = command,
             userOverride = user,
             extraPath = extraPath,
@@ -3849,7 +4240,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * and stdout. Unlike [startRuntimeService] the caller owns the process and must destroy it.
      */
     fun spawnRuntimeProcess(command: String): Process? =
-        distroService.spawnDapProcess(command = command, userOverride = "root")
+        distroService.spawnStdioProcess(command = command, userOverride = "root")
 
     fun stopRuntimeService(extId: String, id: String) {
         runtimeServices.remove(svcKey(extId, id))?.let { runCatching { it.destroy() } }
@@ -3949,6 +4340,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         stopAllRuntimeServices()
+        lspController.shutdownAll()
         AppSandbox.close()
         adbBridge.stop()
         super.onCleared()
@@ -4332,6 +4724,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val doomed = group.tabs.filter { it.id in ids }
         if (doomed.isEmpty()) return
         doomed.forEach { tab ->
+            if (!tab.isPage) lspController.documentClosed(tab.filePath.path)
             tab.editorState?.close()
             untrackDirty(tab.id)
             diskSignatures.remove(tab.id)
@@ -4363,8 +4756,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             // Content edits that keep the tab dirty don't change the EditorGroup, so persist the unsaved
             // buffer on snapshot changes too (debounced) to capture in-progress typing before a kill.
+            // The same signal drives the language server's didChange (debounced inside the controller).
+            val hostPath = tab.filePath.path
             launch {
-                state.snapshot.collect { scheduleSessionSave() }
+                state.snapshot.collect {
+                    scheduleSessionSave()
+                    lspController.documentChanged(hostPath)
+                }
             }
         }
     }
@@ -4491,7 +4889,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Format the active tab with the built-in formatter, honoring its language pack's rules. */
+    /**
+     * Format the active tab. A language server formats to the project's own rules (a prettier config,
+     * gofmt, rustfmt), so it wins when one is running; the built-in formatter is the fallback.
+     */
     fun formatActiveTab() {
         val tab = _editorGroup.value.activeTab ?: return
         val state = tab.editorState ?: run {
@@ -4501,6 +4902,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val name = tab.filePath.name
         val lang = activeLanguageExtensions.value.firstNotNullOfOrNull { ext -> ext.languageFor(name) }
         viewModelScope.launch {
+            if (formatWithLanguageServer(tab)) return@launch
             val snap = state.snapshot.value
             val original = snap.readRangeAsUtf16(0, snap.byteLength)
             val formatted = dev.jcode.editor.CodeFormatter.format(original, lang)
@@ -4514,6 +4916,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             state.setSelection(listOf(Caret(caret, caret)))
             emitMessage("Formatted ${tab.title}")
         }
+    }
+
+    /** Returns false when no ready server offers formatting, or it returns no edits. */
+    private suspend fun formatWithLanguageServer(tab: EditorTab): Boolean {
+        val state = tab.editorState ?: return false
+        val path = tab.filePath.path
+        if (path.isBlank() || !lspController.supports(path, LspFeature.Formatting)) return false
+        val editor = effectiveConfig.value.editor
+        val edits = lspController.formatting(path, editor.tabSize, editor.insertSpaces)
+        if (edits.isEmpty()) return false
+        applyEditsToBuffer(state, edits)
+        emitMessage("Formatted ${tab.title}")
+        return true
     }
 
     private fun saveTab(tab: EditorTab) {
@@ -4546,6 +4961,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (clean) state.markClean()
             withContext(Dispatchers.IO) { file.diskSignatureOrNull() }?.let { diskSignatures[tab.id] = it }
             queueSyntaxCheck(file)
+            lspController.documentSaved(file.path)
             notifyWorkspaceFilesChanged()
             clean
         }.getOrElse {
@@ -4606,6 +5022,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 prep.signature?.let { diskSignatures[stableId] = it }
                 _editorGroup.value = _editorGroup.value.withTabAdded(tab)
                 queueSyntaxCheck(file)
+                lspController.documentOpened(file.path)
             }
         }
     }
@@ -4726,6 +5143,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         tab.editorState?.let { state ->
             state.applyEdit(EditTx.replace(0, state.snapshot.value.byteLength, text))
         }
+        // After the recovered text is applied, so the server opens the unsaved buffer rather than the
+        // stale file on disk. Clean restored tabs come through openLocalFile and are already covered.
+        lspController.documentOpened(file.path)
     }
 
     /** Persist the current workbench (open workspace/project + file tabs + unsaved buffers). Debounced. */
@@ -4881,6 +5301,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
+        /** Popup ceiling for server completions — a member list on a bare `.` runs to thousands. */
+        private const val MAX_LSP_COMPLETIONS = 200
+
+        /** Source-line preview length in the reference picker. */
+        private const val PREVIEW_MAX_CHARS = 120
+
         /** How long to keep asking `adb devices` after a reconnect: the client is spawned, so the
          *  connection lands a moment later — `adb keygen` on a cold runtime is the slow case. */
         private const val VIRTUAL_DEVICE_ATTACH_ATTEMPTS = 12

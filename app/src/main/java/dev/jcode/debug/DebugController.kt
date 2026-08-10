@@ -119,7 +119,7 @@ class DebugController(
 
     private fun beginSession(engine: DebugEngineEntry, plan: LaunchPlan, hostPath: String) {
         val transportFactory: (String) -> DapTransport? = { command ->
-            val proc = distroService.spawnDapProcess(
+            val proc = distroService.spawnStdioProcess(
                 command, workdir = plan.distroCwd, userOverride = plan.user, extraPath = plan.adapterPath,
             )
             when {

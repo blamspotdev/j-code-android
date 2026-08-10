@@ -22,9 +22,6 @@ android {
 }
 
 dependencies {
-    implementation(libs.lsp4j)
     implementation(libs.coroutines.android)
-    implementation(project(":core:editor-decor"))
-    implementation(project(":core:term"))
     implementation(project(":core:distro"))
 }

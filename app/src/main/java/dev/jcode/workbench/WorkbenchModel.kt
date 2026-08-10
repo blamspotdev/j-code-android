@@ -112,8 +112,8 @@ internal enum class CloseTarget { Project, Workspace }
 /** Issues-tab actions, provided via a CompositionLocal so the deeply nested right drawer can open a
  *  diagnostic's file at its line without threading params through the register-limited shell. */
 internal data class IssueActions(
-    /** Open [path] (host path) in the editor and jump to the 0-based [line]. */
-    val onOpen: (path: String, line: Int) -> Unit = { _, _ -> },
+    /** Open [path] (host path) in the editor and jump to the 0-based [line] and [column]. */
+    val onOpen: (path: String, line: Int, column: Int) -> Unit = { _, _, _ -> },
 )
 
 internal val LocalIssueActions = compositionLocalOf { IssueActions() }
