@@ -10,7 +10,7 @@ import android.webkit.WebView
 import java.io.ByteArrayOutputStream
 
 /*
- * Pasting a clipboard image into an extension's web UI.
+ * Pasting an image into an extension's web UI.
  *
  * An Android WebView never surfaces a clipboard *image* to the page: Chromium's paste path carries
  * text, so a web app listening for `paste` and reading `clipboardData.files` receives nothing no
@@ -19,6 +19,18 @@ import java.io.ByteArrayOutputStream
  * It is delivered as a real `paste` ClipboardEvent carrying a File, rather than as a path or a
  * bespoke bridge call, because that is the event a web chat UI (OpenChamber's, driving opencode)
  * already listens for — it needs no cooperation from the extension.
+ *
+ * Images arrive by two different routes, and only one of them is the system clipboard:
+ *
+ *  - **The keyboard.** Gboard pastes an image through the Commit Content API
+ *    (`InputConnection.commitContent`), never through `primaryClip` — its clipboard tab holds
+ *    screenshots the system clipboard does not. A view receives those only if it advertises the MIME
+ *    types in its `EditorInfo`, which is what [NoFullscreenWebView] does. This is the route that
+ *    actually works on a phone.
+ *  - **`ClipData`.** Ctrl+V and the panel's "Paste image" read `primaryClip`, which covers apps that
+ *    do put an image URI there (Chrome's "Copy image").
+ *
+ * Both end up in [pasteImageUri].
  */
 
 /** Whether the clipboard currently holds something this can paste. Cheap: no decoding. */
@@ -42,8 +54,7 @@ private fun clipboardImageUri(context: Context): Uri? {
  * `evaluateJavascript` — a full-resolution screenshot would be several MB of string, and no model
  * consuming the image needs that.
  */
-private fun clipboardImageAsBase64Png(context: Context): String? {
-    val uri = clipboardImageUri(context) ?: return null
+private fun encodeImageAsBase64Png(context: Context, uri: Uri): String? {
     return runCatching {
         val bitmap = context.contentResolver.openInputStream(uri).use { input ->
             BitmapFactory.decodeStream(input ?: return null)
@@ -54,10 +65,10 @@ private fun clipboardImageAsBase64Png(context: Context): String? {
             Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
         }
     }.onFailure {
-        // The clipboard advertises an image but we cannot read it — most often a content:// URI
-        // whose read grant does not extend to this app. Worth a line: the paste otherwise just
-        // does nothing, with no way to tell that from "the page ignored it".
-        android.util.Log.w(TAG, "clipboard image could not be read: $it")
+        // An image was offered but we cannot read it — most often a content:// URI whose read grant
+        // does not extend to this app. Worth a line: the paste otherwise just does nothing, with no
+        // way to tell that from "the page ignored it".
+        android.util.Log.w(TAG, "image could not be read: $it")
     }.getOrNull()
 }
 
@@ -75,7 +86,17 @@ private fun Bitmap.downscaledTo(maxEdge: Int): Bitmap {
  * holds no image, so the caller can fall through to normal (text) paste handling.
  */
 internal fun WebView.pasteClipboardImage(): Boolean {
-    val base64 = clipboardImageAsBase64Png(context) ?: return false
+    val uri = clipboardImageUri(context) ?: return false
+    return pasteImageUri(uri)
+}
+
+/**
+ * Delivers the image at [uri] to [this] page as a `paste` event. Returns false when it can't be read.
+ *
+ * This is the shared tail of both routes — the keyboard's `commitContent` and the system clipboard.
+ */
+internal fun WebView.pasteImageUri(uri: Uri): Boolean {
+    val base64 = encodeImageAsBase64Png(context, uri) ?: return false
     // Base64 is [A-Za-z0-9+/=] only, so a plain single-quoted literal cannot break out.
     evaluateJavascript(pasteImageJs(base64), null)
     return true

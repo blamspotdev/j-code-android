@@ -315,7 +315,8 @@ class TerminalView @JvmOverloads constructor(
         isFocusable = true
         isFocusableInTouchMode = true
         isLongClickable = true
-        
+        installImageReceiver()
+
         // Calculate cell dimensions
         cellWidth = textPaint.measureText("M")
         cellHeight = textPaint.fontSpacing
@@ -1477,8 +1478,14 @@ class TerminalView @JvmOverloads constructor(
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
         outAttrs.inputType = EditorInfo.TYPE_NULL
         outAttrs.imeOptions = EditorInfo.IME_ACTION_NONE
-        
-        return object : BaseInputConnection(this, false) {
+        // Advertise image content so the keyboard will hand one over. Gboard pastes images through
+        // the Commit Content API, never the system clipboard — its clipboard tab holds screenshots
+        // that never reach `primaryClip` — so [pasteFromClipboard]'s image branch never fires for it.
+        // This is the route that makes pasting a screenshot to a CLI like opencode actually work.
+        androidx.core.view.inputmethod.EditorInfoCompat
+            .setContentMimeTypes(outAttrs, arrayOf(IMAGE_MIME))
+
+        val base = object : BaseInputConnection(this, false) {
             override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
                 // A terminal's Enter is carriage return (0x0D), but IMEs commit it as a newline (LF).
                 // cooked-mode shells accept LF, but raw-mode TUIs (opencode, vim, htop) only recognise
@@ -1518,6 +1525,27 @@ class TerminalView @JvmOverloads constructor(
                 }
                 return true
             }
+        }
+        return androidx.core.view.inputmethod.InputConnectionCompat
+            .createWrapper(this, base, outAttrs)
+    }
+
+    /**
+     * Receives an image from the keyboard (and equally from a drag-drop), saves it through
+     * [onPasteImage] and types its path — the same thing the clipboard branch of
+     * [pasteFromClipboard] does, because a terminal cannot render an image but every CLI takes a path.
+     */
+    private fun installImageReceiver() {
+        androidx.core.view.ViewCompat.setOnReceiveContentListener(this, arrayOf(IMAGE_MIME)) { _, payload ->
+            val split = payload.partition { item -> item.uri != null }
+            split.first?.clip?.let { clip ->
+                for (i in 0 until clip.itemCount) {
+                    val uri = clip.getItemAt(i).uri ?: continue
+                    val guestPath = onPasteImage?.invoke(uri)
+                    if (guestPath != null) sendPaste(shellQuote(guestPath) + " ") else toast("Couldn't paste image")
+                }
+            }
+            split.second
         }
     }
 
@@ -1614,5 +1642,11 @@ class TerminalView @JvmOverloads constructor(
         // Stop rendering but DO NOT close the parser/PTY — the session keeps running in the background
         // (e.g. the terminal panel was hidden). The session is only torn down via closeSession().
         unbind()
+    }
+
+    private companion object {
+        /** A constant so it is never written inline in a KDoc, where the `/` + `*` would open a
+         *  nested block comment and swallow the rest of the file. */
+        const val IMAGE_MIME = "image/*"
     }
 }

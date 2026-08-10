@@ -17,6 +17,10 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.view.ContentInfoCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.inputmethod.EditorInfoCompat
+import androidx.core.view.inputmethod.InputConnectionCompat
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -79,12 +83,39 @@ private fun transferHostDir(context: Context): File =
     dev.jcode.core.distro.WorkspaceHostPaths.transferRoot(context.filesDir)
 
 private class NoFullscreenWebView(context: Context) : WebView(context) {
+    /**
+     * Advertises image content types so the keyboard will hand this view an image.
+     *
+     * Gboard pastes an image through the Commit Content API, not the system clipboard — its clipboard
+     * tab holds screenshots that never reach `primaryClip`. A keyboard only offers that to a view
+     * whose `EditorInfo` declares the MIME types, and WebView declares none, which is why an image
+     * paste silently does nothing here. Declaring them is what makes the keyboard's image chip live;
+     * [onCommitImage] then delivers it to the page as a real `paste` event.
+     */
+    init {
+        // The receiving half of the above. Reached for keyboard content and equally for a drag-drop
+        // or an autofill paste, since they all funnel through OnReceiveContentListener. The wrapper
+        // in onCreateInputConnection takes and releases the URI read grant around this call, so the
+        // bytes are readable here and must be read synchronously.
+        ViewCompat.setOnReceiveContentListener(this, arrayOf(IMAGE_MIME)) { _, payload ->
+            val split = payload.partition { item -> item.uri != null }
+            split.first?.clip?.let { clip ->
+                for (i in 0 until clip.itemCount) {
+                    clip.getItemAt(i).uri?.let { uri -> pasteImageUri(uri) }
+                }
+            }
+            // Anything that was not a URI (plain text alongside the image) goes back to the platform.
+            split.second
+        }
+    }
+
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
-        val ic = super.onCreateInputConnection(outAttrs)
+        val ic = super.onCreateInputConnection(outAttrs) ?: return null
         outAttrs.imeOptions = outAttrs.imeOptions or
             EditorInfo.IME_FLAG_NO_FULLSCREEN or
             EditorInfo.IME_FLAG_NO_EXTRACT_UI
-        return ic
+        EditorInfoCompat.setContentMimeTypes(outAttrs, arrayOf(IMAGE_MIME))
+        return InputConnectionCompat.createWrapper(this, ic, outAttrs)
     }
 
     /**
@@ -98,6 +129,12 @@ private class NoFullscreenWebView(context: Context) : WebView(context) {
             event.isCtrlPressed
         if (isPasteChord && pasteClipboardImage()) return true
         return super.dispatchKeyEvent(event)
+    }
+
+    private companion object {
+        /** Kept as a constant so it never has to be written inline in a KDoc, where the `/` + `*`
+         *  would open a nested block comment and swallow the rest of the file. */
+        const val IMAGE_MIME = "image/*"
     }
 }
 
