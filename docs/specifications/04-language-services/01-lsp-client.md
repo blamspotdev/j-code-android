@@ -300,6 +300,11 @@ missing piece there is the Dev Pack, not the server.
 Installing or removing an extension re-evaluates every open document (`retryOpenDocuments`), so
 adding a Dev Pack starts its server for files that are already open, with no restart.
 
+> **Two catalogued servers currently have no possible pairing.** The marketplace ships Dev Packs for
+> C/C++, C#, Java, JavaScript, Kotlin, Markup, Python, Style Sheet and TypeScript — but none for Go
+> or Rust. `gopls` and `rust-analyzer` can therefore be installed and can never activate. The fix is
+> a Go and a Rust Dev Pack (or a `requires.lsps` entry on an existing pack), not a change here.
+
 ### 8.2 Session keying
 
 Sessions are keyed by **(serverId, projectRoot)** and shared by every open file resolving to that

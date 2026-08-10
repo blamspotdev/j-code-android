@@ -186,6 +186,15 @@ So nvm never loads for any catalog or launcher command, and `$(npm prefix -g)/bi
 `node`/`npm` themselves work only because the `nodejs` entry symlinks them; every server installed
 with `npm i -g` afterwards needs `linkNpmBin` (and `unlinkNpmBin` on uninstall) or it is unusable.
 
+### 3.2 `kotlin-language-server` needs an LTS JVM, not the shared `jdk`
+
+The server bundles kotlin-compiler 2.1, whose IntelliJ `JavaVersion.parse` throws
+`IllegalArgumentException: 26.0.1` — it cannot parse the version string of the **JDK 26** that Ubuntu
+26.04's `default-jdk` (and therefore the `jdk` toolchain) installs. Its entry installs
+`openjdk-21-jdk-headless` and pins `JAVA_HOME` to it in `runCommand`; `verifyCommand` checks for that
+JVM rather than any `java`, so a machine without it reports the server as not installed instead of
+installing something that cannot start. `jdtls` runs fine on 26 and still uses the shared toolchain.
+
 ---
 
 ## 4. Debug-engine catalog
