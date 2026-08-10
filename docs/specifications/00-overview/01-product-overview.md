@@ -16,7 +16,7 @@ real projects entirely on-device, with no companion app and no root.
 
 | | |
 |---|---|
-| Version | 1.4.3 |
+| Version | 1.4.4 |
 | Package | `dev.jcode` (`.debug` / `.beta` variants install side by side) |
 | Platform | Android 13+ (`minSdk` / `targetSdk` 33, `compileSdk` 36) |
 | Release ABI | `arm64-v8a` |
