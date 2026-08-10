@@ -94,6 +94,13 @@ locally. It refuses anything that is not a plain `MAJOR.MINOR.PATCH` (a pre-rele
 `-PjcodeVersionName` at build time, never in the file), and rewrites both `app/build.gradle.kts` and
 the specifications that state the product version.
 
+Opening the PR requires **Settings → Actions → General → Workflow permissions → "Allow GitHub
+Actions to create and approve pull requests"**, which is off by default; without it `gh pr create`
+fails with *"GitHub Actions is not permitted to create or approve pull requests"*. The workflow
+treats that as a missing setting rather than a failure: the branch is pushed with the bump on it
+either way, and the run summary hands over the compare link. Note the toggle covers **approving** as
+well as creating, which matters on a repo whose ruleset requires a review.
+
 > PRs opened with `GITHUB_TOKEN` do not trigger other workflows, so the no-host-root guard does not
 > run on the bump PR. That is acceptable only while the diff is version strings alone.
 
