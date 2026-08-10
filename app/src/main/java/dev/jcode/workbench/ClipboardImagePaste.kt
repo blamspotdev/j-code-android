@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Looper
 import android.util.Base64
 import android.webkit.WebView
 import java.io.ByteArrayOutputStream
@@ -96,9 +97,16 @@ internal fun WebView.pasteClipboardImage(): Boolean {
  * This is the shared tail of both routes — the keyboard's `commitContent` and the system clipboard.
  */
 internal fun WebView.pasteImageUri(uri: Uri): Boolean {
+    // Decoded on the calling thread on purpose: a keyboard's commitContent only holds the URI read
+    // grant for the duration of that call, so the bytes have to be read before returning.
     val base64 = encodeImageAsBase64Png(context, uri) ?: return false
     // Base64 is [A-Za-z0-9+/=] only, so a plain single-quoted literal cannot break out.
-    evaluateJavascript(pasteImageJs(base64), null)
+    val js = pasteImageJs(base64)
+    // ...but the injection itself is posted: commitContent arrives on the InputConnection's own
+    // handler thread, and every WebView method has to run on the thread that created the WebView.
+    if (Looper.myLooper() == Looper.getMainLooper()) evaluateJavascript(js, null) else post {
+        evaluateJavascript(js, null)
+    }
     return true
 }
 
