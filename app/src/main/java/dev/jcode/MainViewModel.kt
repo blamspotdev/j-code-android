@@ -210,6 +210,10 @@ sealed interface WorkbenchPrompt {
 
     /** Android killed the distro's processes; point the user at the setting that explains it. */
     data object ProcessLimit : WorkbenchPrompt
+
+    /** A toolchain was installed into the selected distro while open terminals are still running the
+     *  one they were spawned against, where it can never appear. */
+    data class StaleTerminalDistro(val sessionDistro: String, val installedInto: String) : WorkbenchPrompt
 }
 
 /** An updated extension awaiting a reload; surfaced as a compact banner atop the Extensions panel. */
@@ -677,9 +681,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         try {
             block()
+            warnIfTerminalsRunAnotherDistro()
         } finally {
             session.close()
         }
+    }
+
+    /**
+     * A terminal is pinned to the rootfs it was spawned against (proot's `-r`) for the life of its
+     * shell, so a toolchain installed into a different distro can never turn up in it: `which` finds
+     * nothing and the whole install tree is invisible, which reads as an install that silently
+     * failed. Nothing can migrate a running shell, so name both distros and let the user open a new
+     * terminal. Worded to hold whether or not the install itself succeeded.
+     */
+    private fun warnIfTerminalsRunAnotherDistro() {
+        val target = distroService.environmentState.value.runtime.selectedDistro.id
+        val stale = TerminalSessionHost.existingManager()?.sessions?.values
+            ?.mapNotNull { it.spawnSpec?.distroId }
+            ?.firstOrNull { it != target } ?: return
+        _prompts.tryEmit(WorkbenchPrompt.StaleTerminalDistro(stale, target))
     }
 
     fun uninstallExtension(id: String) {

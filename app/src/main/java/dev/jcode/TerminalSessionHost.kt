@@ -95,6 +95,10 @@ object TerminalSessionHost {
         }
     }
 
+    /** The manager if one has been created, without creating one. For callers that only want to look
+     *  at existing sessions — no terminal has been opened yet means there is nothing to look at. */
+    fun existingManager(): TerminalSessionManager? = manager
+
     fun manager(context: Context): TerminalSessionManager {
         manager?.let { return it }
         return synchronized(this) {

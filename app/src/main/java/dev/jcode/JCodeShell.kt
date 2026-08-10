@@ -982,6 +982,13 @@ fun JCodeApp(
                         SettingsFeature.revealGroup("Environment")
                     }
                 }
+                is WorkbenchPrompt.StaleTerminalDistro -> {
+                    snackbarHostState.showSnackbar(
+                        message = "Open terminals run ${prompt.sessionDistro}; toolchains install " +
+                            "into ${prompt.installedInto}. Open a new terminal to use it.",
+                        duration = SnackbarDuration.Long,
+                    )
+                }
             }
         }
     }
