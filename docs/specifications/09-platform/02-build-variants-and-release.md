@@ -111,7 +111,14 @@ Properties of the scheme, as documented in the file: monotonic, deterministic, o
 independent of git history — **a squash-merge collapsed the old git-commit-count scheme and produced
 downgrades**.
 
-Pre-release suffixes (`1.4.3-beta`) are ignored by the code derivation.
+Pre-release suffixes (`1.4.3-beta`) are ignored by the code derivation, and are never stored in
+`app/build.gradle.kts` — the release scripts apply them at build time via `-PjcodeVersionName`.
+`scripts/bump-patch-version.sh` refuses to bump a version that has one, on the grounds that a
+suffix in the file means something upstream is wrong.
+
+The patch number is bumped for you: `.github/workflows/version-bump.yml` opens a standing bump
+PR after each merge to `main`. See
+[CI, quality and invariants](03-ci-quality-and-invariants.md).
 
 > **The formula is duplicated in three places** and they must agree: `app/build.gradle.kts`
 > (`jcodeVersionCode`), `scripts/build-release.ps1` (`$Code`), and

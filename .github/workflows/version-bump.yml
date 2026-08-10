@@ -1,0 +1,114 @@
+name: version bump
+
+# Keeps the patch version moving without anyone having to remember it (main has merged
+# a feature batch unbumped more than once — see the #28 and #34 bump PRs).
+#
+# It opens a PR rather than committing to main, because it CANNOT commit to main: the
+# `protect-main` ruleset requires a pull request and lists no bypass actors, so rulesets
+# apply to every actor including admins and GITHUB_TOKEN. Granting Actions a bypass would
+# let any workflow with contents:write push to main, which is a bigger change than this
+# problem is worth.
+#
+# The PR is a standing one on `chore/bump-version`, always rebuilt as "current main + 1
+# patch" and force-pushed. Several merges before you take it therefore produce ONE version
+# bump, not one per PR — a version per release rather than per merge, which is what the
+# semver scheme in app/build.gradle.kts is for. Merge it when you cut a release.
+#
+# Note: PRs opened with GITHUB_TOKEN do not trigger other workflows, so the no-host-root
+# guard does not run on the bump PR. Harmless here — the diff is version strings only —
+# but do not extend this workflow to touch code without revisiting that.
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Merges can land in quick succession; queue the runs instead of cancelling, so the last
+# one leaves the branch consistent with main rather than half-written.
+concurrency:
+  group: version-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       !contains(github.event.pull_request.labels.*.name, 'skip-bump'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Skip when the merged PR moved the version itself
+        id: guard
+        if: github.event_name == 'pull_request'
+        env:
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -eu
+          version_at() {
+            git show "$1:app/build.gradle.kts" 2>/dev/null \
+              | sed -n 's/^val jcodeVersion = "\([^"]*\)".*/\1/p' | head -1
+          }
+          # First parent of the merge/squash commit is the previous main tip either way.
+          before="$(version_at "$MERGE_SHA^")"
+          after="$(version_at "$MERGE_SHA")"
+          if [ -z "$before" ] || [ -z "$after" ]; then
+            echo "Could not read the version around $MERGE_SHA; bumping anyway."
+          elif [ "$before" != "$after" ]; then
+            echo "This PR already bumped $before -> $after; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump the patch version
+        id: bump
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          set -eu
+          version="$(sh scripts/bump-patch-version.sh)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Open or refresh the bump PR
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.bump.outputs.version }}
+          BRANCH: chore/bump-version
+        run: |
+          set -eu
+          if git diff --quiet; then
+            echo "main already reads $VERSION; nothing to open."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -B "$BRANCH"
+          git commit -am "Bump version to $VERSION" -m \
+            "Opened automatically after a merge to main. versionCode derives from the semver in app/build.gradle.kts, so this single line is the whole change; the specifications that state the product version move with it."
+          # Rebuilt from main every run, so the branch is replaced rather than appended to.
+          git push --force origin "$BRANCH"
+
+          body="$(printf '%s\n' \
+            "Automatic patch bump to \`$VERSION\`, opened after a merge to \`main\`." \
+            "" \
+            "\`versionCode\` derives from the semver (\`MAJOR*10000 + MINOR*100 + PATCH\`), so this one line is the whole change; the specifications that state the product version move with it." \
+            "" \
+            "This branch is rebuilt from \`main\` after every merge, so it always reads **current main + 1 patch**. Several merges before you take it produce one bump, not one per PR — merge it when you cut a release." \
+            "" \
+            "To skip the bump for a PR, label it \`skip-bump\`. A PR that changes \`jcodeVersion\` itself is detected and skipped.")"
+
+          existing="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "Bump version to $VERSION" --body "$body"
+            echo "Refreshed PR #$existing -> $VERSION"
+          else
+            gh pr create --base main --head "$BRANCH" \
+              --title "Bump version to $VERSION" --body "$body"
+          fi
