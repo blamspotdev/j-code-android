@@ -153,8 +153,19 @@ class DistroService(
         projectBinds: List<Pair<String, String>> = emptyList(),
     ) {
         val availableDistros = _environmentState.value.availableDistros.ifEmpty { DistroProfile.defaults() }
+        // Only a config that names a specific image retargets the app. The default id is the generic
+        // "ubuntu", and resolving that through fromId falls back to whatever sits FIRST in the catalog
+        // — so merely opening a project re-pointed everything at 24.04 while the active environment
+        // was 26.04, which is what the startup splash was announcing.
+        val pinned = availableDistros.any {
+            it.id == distroConfig.id || it.installRecipe == distroConfig.id
+        }
         val runtime = DistroRuntimeConfig(
-            selectedDistro = DistroProfile.fromId(distroConfig.id, availableDistros),
+            selectedDistro = if (pinned) {
+                DistroProfile.fromId(distroConfig.id, availableDistros)
+            } else {
+                _environmentState.value.runtime.selectedDistro
+            },
             user = distroConfig.user.ifBlank { DEFAULT_DISTRO_USER },
             binds = resolveBinds(
                 distroBinds = distroConfig.bind,

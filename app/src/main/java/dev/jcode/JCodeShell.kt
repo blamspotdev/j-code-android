@@ -1671,6 +1671,25 @@ fun JCodeApp(
         )
     }
 
+    // Hold the workbench until the runtime answers. Everything here — editors, terminals, language
+    // servers — runs against the distro, and a terminal spawned before the active environment is known
+    // binds to the wrong rootfs for the life of its shell.
+    //
+    // Only while the answer is still coming: unknown, or a setup actually running. A definitive "not
+    // ready" falls through instead, because there is nothing more to wait for — a broken environment
+    // belongs on the setup screen (which this yields to), not behind a spinner that never ends.
+    val environmentReady =
+        environmentState.distroInstalled == true && environmentState.jcodeUserReady == true
+    val environmentResolving = environmentState.distroInstalled == null ||
+        environmentState.jcodeUserReady == null ||
+        environmentState.runningStep != null
+    if (!showFirstRunEnvironmentScreen && !environmentReady && environmentResolving) {
+        OnboardingFeature.StartupSplash(
+            distroLabel = environmentState.runtime.selectedDistro.label,
+            progress = autoSetupProgress,
+        )
+    }
+
     if (showFirstRunEnvironmentScreen) {
         OnboardingFeature.FirstRunEnvironmentScreen(
             environmentState = environmentState,

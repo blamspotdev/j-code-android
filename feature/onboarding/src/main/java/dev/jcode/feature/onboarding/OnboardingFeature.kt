@@ -57,6 +57,7 @@ import androidx.compose.ui.platform.LocalContext
 import dev.jcode.design.JCodeTheme
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -109,6 +110,66 @@ object OnboardingFeature {
                     onStorageAccessGranted = onStorageAccessGranted,
                     onRestoreEnvironment = onRestoreEnvironment,
                 )
+            }
+        }
+    }
+
+    /**
+     * Held over the workbench until the environment is usable.
+     *
+     * Editors, terminals and language servers are all backed by the distro, so letting them render
+     * first means work can start against a rootfs nobody has resolved yet — that is how a terminal
+     * opened during startup ended up bound to the catalog default instead of the active environment.
+     * Blocking is the point: there is nothing useful to do here until the runtime answers.
+     */
+    @Composable
+    fun StartupSplash(
+        distroLabel: String,
+        progress: DistroWizardProgress,
+        modifier: Modifier = Modifier,
+    ) {
+        val running = progress as? DistroWizardProgress.Running
+        Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding()
+                    .padding(32.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = "JCode",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    // A running setup step is the more specific thing to say; otherwise the wait is
+                    // the environment being probed and started.
+                    text = running?.label ?: "Starting $distroLabel…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(20.dp))
+                val percent = running?.progressPercent
+                if (percent != null) {
+                    LinearProgressIndicator(
+                        progress = { percent / 100f },
+                        modifier = Modifier.fillMaxWidth(0.7f),
+                    )
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(0.7f))
+                }
+                running?.progressDetail?.let { detail ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = detail,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
