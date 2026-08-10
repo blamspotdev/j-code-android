@@ -21,6 +21,8 @@ import android.view.ViewTreeObserver
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
+import dev.jcode.core.diag.DiagArea
+import dev.jcode.core.diag.DiagnosticLog
 import kotlinx.coroutines.*
 import kotlin.math.hypot
 import kotlin.math.max
@@ -556,7 +558,17 @@ class TerminalView @JvmOverloads constructor(
     private fun sendPaste(text: String) {
         val normalized = text.replace("\r\n", "\r").replace("\n", "\r")
         val modes = currentInputModes()
-        if ((modes and VtParser.MODE_BRACKETED_PASTE) != 0) {
+        val bracketed = (modes and VtParser.MODE_BRACKETED_PASTE) != 0
+        // Whether to wrap is read from ?2004 as the app last reported it, and the app can be out
+        // of step with whatever is actually reading: readline only consumes the markers while it
+        // holds the line. When the two disagree the markers land as literal `[200~` text — seen
+        // once and not reproducible since, so record what decided it, to tell a stale mode from a
+        // reader that never accepted the markers.
+        DiagnosticLog.event(DiagArea.Terminal, "paste") {
+            "modes=0x${modes.toString(16)} bracketed=$bracketed " +
+                "chars=${normalized.length} lines=${normalized.count { it.code == 13 } + 1}"
+        }
+        if (bracketed) {
             sendInput("\u001B[200~" + normalized.replace("\u001B[201~", "") + "\u001B[201~")
         } else {
             sendInput(normalized)
