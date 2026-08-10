@@ -228,6 +228,10 @@ import dev.jcode.design.RightDrawerSetting
 import dev.jcode.design.SettingsDefaults
 import dev.jcode.design.EditorFontSizeSetting
 import dev.jcode.design.EditorWordWrapSetting
+import dev.jcode.core.diag.DIAGNOSTIC_LOG_FILE_NAME
+import dev.jcode.core.diag.DiagnosticLog
+import dev.jcode.design.DiagnosticsSetting
+import dev.jcode.design.LocalDiagnosticsSetting
 import dev.jcode.design.LocalEditorFontSizeSetting
 import dev.jcode.design.LocalTerminalFontSizeSetting
 import dev.jcode.design.TerminalFontSizeSetting
@@ -1227,6 +1231,47 @@ fun JCodeApp(
         )
     }
 
+    // Diagnostics (Settings > Diagnostics). Opt-in: MainViewModel is what actually starts recording;
+    // here we only surface the state, the log tail and the export/clear actions.
+    val diagnosticsPrefs by viewModel.diagnosticsPrefs.collectAsStateWithLifecycle()
+    // Bumped by onRefresh while the card is open so the size/location rows track a live session.
+    var diagnosticsStamp by remember { mutableIntStateOf(0) }
+    val diagnosticsExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        if (uri != null) backupScope.launch {
+            val outcome = runCatching {
+                val source = DiagnosticLog.currentFile() ?: error("Nothing has been recorded yet")
+                withContext(Dispatchers.IO) {
+                    updateContext.contentResolver.openOutputStream(uri)?.use { out ->
+                        source.inputStream().use { it.copyTo(out) }
+                    } ?: error("Could not open the file for writing")
+                }
+            }
+            snackbarHostState.showSnackbar(
+                outcome.fold({ "Diagnostic log exported" }, { "Export failed: ${it.message}" }),
+            )
+        }
+    }
+    val diagnosticsSetting = remember(diagnosticsPrefs, diagnosticsStamp) {
+        DiagnosticsSetting(
+            enabled = diagnosticsPrefs.enabled,
+            level = diagnosticsPrefs.level,
+            captureSystemLog = diagnosticsPrefs.captureSystemLog,
+            captureCrashes = diagnosticsPrefs.captureCrashes,
+            location = DiagnosticLog.directory?.absolutePath.orEmpty(),
+            sizeBytes = DiagnosticLog.sizeBytes(),
+            onSetEnabled = viewModel::setDiagnosticLogging,
+            onSetLevel = viewModel::setDiagnosticLevel,
+            onSetCaptureSystemLog = viewModel::setDiagnosticSystemLog,
+            onSetCaptureCrashes = viewModel::setDiagnosticCrashes,
+            recentLines = { DiagnosticLog.recentLines() },
+            onExport = { diagnosticsExportLauncher.launch(DIAGNOSTIC_LOG_FILE_NAME) },
+            onClear = { DiagnosticLog.clear(); diagnosticsStamp++ },
+            onRefresh = { diagnosticsStamp++ },
+        )
+    }
+
     // Environment backup/restore: pack/unpack the active Linux rootfs as a .tar.gz via a SAF picker.
     val envBackupLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/gzip"),
@@ -1364,6 +1409,7 @@ fun JCodeApp(
         LocalEditorFontSizeSetting provides editorFontSizeSetting,
         LocalEditorWordWrapSetting provides editorWordWrapSetting,
         LocalTerminalFontSizeSetting provides terminalFontSizeSetting,
+        LocalDiagnosticsSetting provides diagnosticsSetting,
         LocalDeveloperSetting provides developerSetting,
         LocalRightDrawerSetting provides rightDrawerSetting,
         LocalExtensionDevState provides extensionDevState,

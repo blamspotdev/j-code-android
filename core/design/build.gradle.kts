@@ -34,4 +34,6 @@ dependencies {
     implementation(libs.compose.material3.adaptive)
     implementation(libs.compose.material3.adaptive.layout)
     implementation(libs.core.ktx)
+    // api: DiagnosticsSetting exposes DiagLevel to the settings screen.
+    api(project(":core:diag"))
 }

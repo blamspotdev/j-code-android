@@ -11,6 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.isActive
+import dev.jcode.core.diag.DiagArea
+import dev.jcode.core.diag.DiagnosticLog
 import kotlinx.coroutines.launch
 
 /** Upper bound for the user-configurable session limit (Settings default is 12). */
@@ -18,6 +20,12 @@ private const val MAX_SESSIONS_CAP = 24
 
 /** How close together two self-exits have to be to read as one external kill of the whole tree. */
 private const val EXTERNAL_KILL_BURST_MS = 1_500L
+
+/** SIGKILL, as [PtyProcess.waitForExit] reports it (negated). What a phantom-process trim sends. */
+private const val SIGKILL = 9
+
+/** How long to wait for the child's exit status before giving up on it (see awaitExitStatus). */
+private const val EXIT_STATUS_WAIT_MS = 300L
 
 /**
  * Manages terminal sessions backed by real PTY processes.
@@ -520,11 +528,15 @@ class TerminalSessionManager(
     /** Tear down a session whose shell exited by itself (see [startReader]). Idempotent. */
     private fun reapExitedSession(id: String) {
         val session = synchronized(sessionsLock) { _sessions.remove(id) } ?: return
-        // A shell does not return to its own exit path while a foreground program is still running,
-        // and independent shells do not exit within milliseconds of each other — either means the tree
-        // was killed from outside. Captured before the teardown clears the session's state.
+        // Why the tree ended, decided BEFORE the teardown reaps the child itself. waitForExit reports
+        // a negative value when the child died on a signal, and SIGKILL is what a phantom-process trim
+        // (or the OOM killer) sends — proot never signals itself that way. The burst rule catches the
+        // same event from a second angle: a trim takes every session at once, and independent shells
+        // do not exit within milliseconds of each other. The child is already gone at EOF, so the wait
+        // returns immediately.
+        val exitStatus = awaitExitStatus(session)
         val now = System.currentTimeMillis()
-        val externallyKilled = session.foreground != null || now - lastSelfExitAt <= EXTERNAL_KILL_BURST_MS
+        val externallyKilled = exitStatus == -SIGKILL || now - lastSelfExitAt <= EXTERNAL_KILL_BURST_MS
         lastSelfExitAt = now
         session.onUpdate = null
         // Close only the PTY (already at EOF). Do NOT close the VtParser here: a bound TerminalView may
@@ -536,7 +548,35 @@ class TerminalSessionManager(
             activeSessionId = synchronized(sessionsLock) { _sessions.keys.firstOrNull() }
         }
         onSessionExit?.invoke(id)
-        if (externallyKilled) onExternalKill?.invoke(id)
+        if (externallyKilled) {
+            DiagnosticLog.failure(
+                DiagArea.Terminal,
+                "external-kill",
+                "session $id was killed from outside (exit=$exitStatus, " +
+                    "running=${session.foreground ?: "nothing"}, sessions left=$sessionCount) — " +
+                    "see the phantom-process cap in Settings > Environment",
+            )
+            onExternalKill?.invoke(id)
+        } else {
+            DiagnosticLog.event(DiagArea.Terminal, "exit") {
+                "session $id shell exited (status ${exitStatus ?: "unknown"})"
+            }
+        }
+    }
+
+    /**
+     * The child's exit status, or null when it has not reported in time. `waitForExit` blocks on
+     * `waitpid`, and EOF on the master only *usually* means the child is gone — a program that closes
+     * its tty and keeps running would otherwise wedge this reader forever. An unknown status simply
+     * leaves the burst rule to decide.
+     */
+    private fun awaitExitStatus(session: Session): Int? {
+        var status: Int? = null
+        val waiter = Thread { status = runCatching { session.pty.waitForExit() }.getOrNull() }
+        waiter.isDaemon = true
+        waiter.start()
+        waiter.join(EXIT_STATUS_WAIT_MS)
+        return status
     }
 
     /**

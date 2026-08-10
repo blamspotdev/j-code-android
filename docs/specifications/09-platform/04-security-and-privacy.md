@@ -184,6 +184,24 @@ Contact the Licensor privately rather than filing a public issue
 
 ---
 
+## Diagnostic logging
+
+`:core:diag` `DiagnosticLog` is **off by default and never enabled implicitly** — only the user's
+Settings → Diagnostics opt-in starts it, via the single `MainViewModel` collector that calls
+`DiagnosticLog.configure`. Three sources feed one file: explicit `event`/`trace`/`failure` calls, the
+app's **own** logcat (`logcat --pid=<self>`, which the log daemon scopes to this app with no
+permission), and uncaught exceptions (the previous handler still runs).
+
+Every line is **path-redacted** before it is written — the app data dir, the shared `JCode` root and
+the external-storage root become `<app-data>` / `<jcode>` / `<storage>`. This is not a user-facing
+toggle: a log exists to be shared, so redaction is unconditional.
+
+Files rotate at 2 MB × 2 in `JCode/logs/` (shared storage, so a report can be attached from a file
+manager or pulled over adb), falling back to the app's external files dir and then internal storage.
+The user can view the tail in-app before sharing, export a copy through SAF, or clear it.
+
+---
+
 ## 11. References
 
 - [CI, quality and invariants](03-ci-quality-and-invariants.md)

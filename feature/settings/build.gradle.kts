@@ -37,4 +37,5 @@ dependencies {
     implementation(project(":core:config"))
     implementation(project(":core:design"))
     implementation(project(":core:distro"))
+    implementation(project(":core:diag"))
 }

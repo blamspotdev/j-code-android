@@ -256,9 +256,12 @@ and `adbEnvVars` supplies `ANDROID_SERIAL` and `JCODE_ADB_PORT` when the ADB bri
 
 ### 5.4 Idle reaping
 
-`onExternalKill` fires from `reapExitedSession` when the shell died with a foreground program still
-running, or within `EXTERNAL_KILL_BURST_MS` (1.5 s) of another self-exit. Neither happens on a normal
-exit, and both are the signature of Android's **phantom-process trim**: ActivityManager kills every
+`onExternalKill` fires from `reapExitedSession` when the child's exit status is **SIGKILL**
+(`PtyProcess.waitForExit` reports a signal as its negation) or the exit lands within
+`EXTERNAL_KILL_BURST_MS` (1.5 s) of another self-exit. The wait is bounded to 300 ms on a throwaway
+thread — EOF on the master only *usually* means the child is gone, and a program that closes its tty
+and keeps running would otherwise wedge the reader. Neither rule fires on a normal exit; both are the
+signature of Android's **phantom-process trim**: ActivityManager kills every
 process an app forked past `activity_manager/max_phantom_processes` (32 by default), taking proot and
 the whole distro with it while the app itself keeps running. The app cannot raise that cap — it lives
 in DeviceConfig behind a signature permission — so the workbench surfaces a prompt pointing at

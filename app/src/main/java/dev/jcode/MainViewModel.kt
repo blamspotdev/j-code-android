@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
@@ -47,6 +48,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import dev.jcode.design.BottomBarVisibility
 import dev.jcode.design.ExtraKeysVisibility
+import dev.jcode.core.diag.DiagArea
+import dev.jcode.core.diag.DiagLevel
+import dev.jcode.core.diag.DiagnosticLog
 import dev.jcode.design.SettingsDefaults
 import dev.jcode.design.TabColoring
 import dev.jcode.design.TabMaxSize
@@ -1478,6 +1482,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val diagnosticLoggingKey = booleanPreferencesKey("diagnostic_logging")
+    private val diagnosticLevelKey = stringPreferencesKey("diagnostic_level")
+    private val diagnosticSystemLogKey = booleanPreferencesKey("diagnostic_system_log")
+    private val diagnosticCrashesKey = booleanPreferencesKey("diagnostic_crashes")
+
+    /** Settings → Diagnostics, opt-in. Collected into [DiagnosticLog.configure] below, which is the
+     *  only thing that ever starts recording. */
+    data class DiagnosticsPrefs(
+        val enabled: Boolean = SettingsDefaults.DIAGNOSTIC_LOGGING,
+        val level: DiagLevel = SettingsDefaults.DIAGNOSTIC_LEVEL,
+        val captureSystemLog: Boolean = SettingsDefaults.DIAGNOSTIC_SYSTEM_LOG,
+        val captureCrashes: Boolean = SettingsDefaults.DIAGNOSTIC_CRASHES,
+    )
+
+    val diagnosticsPrefs: StateFlow<DiagnosticsPrefs> = uiPreferences.data
+        .map { prefs ->
+            DiagnosticsPrefs(
+                enabled = prefs[diagnosticLoggingKey] ?: SettingsDefaults.DIAGNOSTIC_LOGGING,
+                level = prefs[diagnosticLevelKey]
+                    ?.let { name -> DiagLevel.entries.firstOrNull { it.name == name } }
+                    ?: SettingsDefaults.DIAGNOSTIC_LEVEL,
+                captureSystemLog = prefs[diagnosticSystemLogKey] ?: SettingsDefaults.DIAGNOSTIC_SYSTEM_LOG,
+                captureCrashes = prefs[diagnosticCrashesKey] ?: SettingsDefaults.DIAGNOSTIC_CRASHES,
+            )
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, DiagnosticsPrefs())
+
+    fun setDiagnosticLogging(enabled: Boolean) = editDiagnostics { it[diagnosticLoggingKey] = enabled }
+
+    fun setDiagnosticLevel(level: DiagLevel) = editDiagnostics { it[diagnosticLevelKey] = level.name }
+
+    fun setDiagnosticSystemLog(enabled: Boolean) = editDiagnostics { it[diagnosticSystemLogKey] = enabled }
+
+    fun setDiagnosticCrashes(enabled: Boolean) = editDiagnostics { it[diagnosticCrashesKey] = enabled }
+
+    private fun editDiagnostics(edit: (MutablePreferences) -> Unit) {
+        viewModelScope.launch { uiPreferences.edit { prefs -> edit(prefs) } }
+    }
+
     private val developerOptionsKey = booleanPreferencesKey("developer_options")
 
     /** Developer options (off by default): reveals extension-authoring tools — the Extension Dev
@@ -1994,6 +2037,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // re-publishes effectiveConfig, so the collector below live-updates open editors.
         viewModelScope.launch {
             editorFontSizeGlobal.collect { configService.setGlobalEditorFontSize(it) }
+        }
+
+        // The ONLY thing that starts diagnostic recording: it follows the user's opt-in and stops
+        // the moment they switch it back off.
+        viewModelScope.launch {
+            diagnosticsPrefs.collect { prefs ->
+                DiagnosticLog.configure(
+                    context = appContext,
+                    enabled = prefs.enabled,
+                    level = prefs.level,
+                    captureSystemLog = prefs.captureSystemLog,
+                    captureCrashes = prefs.captureCrashes,
+                )
+            }
         }
 
         viewModelScope.launch {

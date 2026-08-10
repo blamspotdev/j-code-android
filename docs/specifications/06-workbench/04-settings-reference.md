@@ -50,6 +50,7 @@ behind, because the built-in divider spans only the tab content.
 | **Web preview** | Which browser opens web previews (global, with a per-project override) |
 | **Environment** | Distro selection, background process limit, Android device, virtual device |
 | **About** | Version, update check, backup and restore |
+| **Diagnostics** | Opt-in diagnostic logging: detail level, system-log and crash capture, view/export/clear |
 | **Editor** | Editor defaults, gestures, tabs, formatter, Markdown preview |
 | **Explorer** | Exclude files and folders |
 | **Developer** | Developer options |
@@ -102,6 +103,10 @@ by the Settings screen's modified/reset-to-default logic.
 | `EDITOR_WORD_WRAP` | `false` | |
 | `TERMINAL_FONT_SIZE` | `13f` | sp, clamped 6–40; scaled by display density before `TerminalView.setFontSize` |
 | `DEVELOPER_OPTIONS` | `false` | Gates the Ext Dev panel |
+| `DIAGNOSTIC_LOGGING` | `false` | Master opt-in; nothing is recorded until it is on |
+| `DIAGNOSTIC_LEVEL` | `DiagLevel.Normal` | `Errors` / `Normal` / `Verbose` |
+| `DIAGNOSTIC_SYSTEM_LOG` | `true` | Only takes effect while `DIAGNOSTIC_LOGGING` is on |
+| `DIAGNOSTIC_CRASHES` | `true` | Only takes effect while `DIAGNOSTIC_LOGGING` is on |
 | `RIGHT_DRAWER_PERSISTENT` | `false` | Landscape split |
 | `RIGHT_DRAWER_PERSISTENT_FRACTION` | `0.5f` | |
 | `RIGHT_DRAWER_MIN_FRACTION` | `0.3f` | Drag bound |
@@ -125,7 +130,7 @@ Each lives in its own small file under `core/design/`:
 | Enum | Members | File |
 |---|---|---|
 | `ExtraKeysVisibility` | `Hidden`, `WithKeyboard`, `Always` | `ExtraKeys.kt` |
-| `ExtraKey` | `Esc`, `Slash`, `Dash`, `Tab`, `Ctrl`, `Alt`, arrows, `Home`, `End`, `PageUp`, `PageDown`, `F1`–`F12` | `ExtraKeys.kt` |
+| `ExtraKey` | `Esc`, `Slash`, `Dash`, `Tab`, `Ctrl`, `Alt`, `Shift`, arrows, `Home`, `End`, `PageUp`, `PageDown`, `F1`–`F12` | `ExtraKeys.kt` |
 | `BottomBarVisibility` | `Hidden`, `HideOnKeyboard`, `AlwaysShow` | `BottomBarSetting.kt` |
 | `ExplorerHiddenMode` | `HideSpecifiedAndInjected`, `HideInjected`, `None` | `DesignSystem.kt` |
 | `ExplorerExcludeEffect` | `GreyOut`, `Hide` | `DesignSystem.kt` |
@@ -133,6 +138,7 @@ Each lives in its own small file under `core/design/`:
 | `TabColoring` | `RandomRemember`, `Random`, `DirectoryBased`, `Disabled` | `TabColoring.kt` |
 | `TabMaxSize` | `Small(44.dp)`, `Medium(64.dp)`, `Large(104.dp)` | `TabMaxSize.kt` |
 | `ThemeMode` | `System`, `Light`, `Dark` | `DesignSystem.kt` |
+| `DiagLevel` | `Errors`, `Normal`, `Verbose` | `:core:diag` `DiagnosticLog.kt` |
 
 > **Enum settings persist by `.name`, never by ordinal.** Reordering an enum must not silently
 > rebind a user's choice. Some enum member names are retained purely for persistence compatibility

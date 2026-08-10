@@ -29,6 +29,12 @@ object SettingsDefaults {
     const val EDITOR_WORD_WRAP = false
     const val TERMINAL_FONT_SIZE = 13f
     const val DEVELOPER_OPTIONS = false
+
+    // Diagnostics is opt-in: nothing is recorded until the user turns it on to chase a problem.
+    const val DIAGNOSTIC_LOGGING = false
+    val DIAGNOSTIC_LEVEL = dev.jcode.core.diag.DiagLevel.Normal
+    const val DIAGNOSTIC_SYSTEM_LOG = true
+    const val DIAGNOSTIC_CRASHES = true
     const val RIGHT_DRAWER_PERSISTENT = false
     const val RIGHT_DRAWER_PERSISTENT_FRACTION = 0.5f
 
