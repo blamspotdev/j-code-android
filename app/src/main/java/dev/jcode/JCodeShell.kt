@@ -1794,6 +1794,27 @@ private fun JCodeShell(
         mutableStateOf(isLandscape && windowInfo.widthClass != JCodeWindowWidthClass.Compact)
     }
     val isPersistentLeftSidebarVisible = !usesModalWorkspace && leftSidebarExpanded
+    // Source Control shows a live working tree, but the app only ever hinted at disk changes it made
+    // itself (a save, an explorer operation) — so anything done in the terminal (git add, a build, an
+    // agent editing files) left the staged/changed lists stale until the user poked something. Poll
+    // the same hint while the panel is genuinely on screen, and only then: it costs a `git status` in
+    // the extension, which is not worth running for a panel nobody is looking at. The first tick
+    // fires immediately, so opening the panel re-reads the tree; repeatOnLifecycle parks the loop
+    // while the app is backgrounded.
+    val scmPanelOnScreen = selectedTool == WorkbenchTool.Scm &&
+        if (usesModalWorkspace) compactDrawerState.isOpen else leftSidebarExpanded
+    val scmPollLifecycle = LocalLifecycleOwner.current
+    // The same hint the explorer raises after a file operation, so both take the one code path.
+    val notifyFilesChanged = LocalExplorerScmUi.current.onFsActivity
+    LaunchedEffect(scmPanelOnScreen, scmPollLifecycle, notifyFilesChanged) {
+        if (!scmPanelOnScreen || notifyFilesChanged == null) return@LaunchedEffect
+        scmPollLifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                notifyFilesChanged()
+                delay(SCM_VISIBLE_REFRESH_MS)
+            }
+        }
+    }
     // NOT keyed on orientation/size: an open right drawer must survive a rotation. Keying it on
     // isLandscape/widthClass re-ran the initializer on every rotation and slammed it shut.
     var rightSidebarVisible by rememberSaveable { mutableStateOf(false) }
@@ -4126,6 +4147,11 @@ private fun WorkbenchRightSidebar(
 
 /** Toolchain catalog id of the runtime's adb client — the one the virtual device is reached through. */
 private const val ADB_CATALOG_ENTRY = "adb"
+
+/** How often the visible Source Control panel re-reads the working tree. Fast enough that a commit
+ *  made in the terminal shows up while the user is still looking, slow enough that the `git status`
+ *  behind it is not a treadmill. Only ticks while the panel is actually on screen. */
+private const val SCM_VISIBLE_REFRESH_MS = 3_000L
 
 /** The gap between the docked panes, and the touch target that resizes them. */
 private val SPLIT_HANDLE_WIDTH = 12.dp
