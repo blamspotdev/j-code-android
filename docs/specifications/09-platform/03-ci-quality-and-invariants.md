@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Status** | Implemented — one enforced guard; broader CI is planned |
+| **Status** | Implemented — one enforced guard plus version-bump automation; broader CI is planned |
 | **Modules** | Repository-wide |
-| **Primary sources** | scripts/check-no-host-root.sh, .github/workflows/no-host-root.yml, .githooks/pre-commit, scripts/install-git-hooks.sh, scripts/build-release.ps1, CONTRIBUTING.md, AGENTS.md, app/src/androidTest/, core/buffer/src/test/, core/buffer/src/androidTest/ |
+| **Primary sources** | scripts/check-no-host-root.sh, .github/workflows/no-host-root.yml, scripts/bump-patch-version.sh, .github/workflows/version-bump.yml, .githooks/pre-commit, scripts/install-git-hooks.sh, scripts/build-release.ps1, CONTRIBUTING.md, AGENTS.md, app/src/androidTest/, core/buffer/src/test/, core/buffer/src/androidTest/ |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -69,6 +69,33 @@ Run it manually at any time:
 ```bash
 sh scripts/check-no-host-root.sh
 ```
+
+---
+
+## 2a. Automatic patch bumping
+
+`main` has merged a feature batch without a version bump more than once (the #28 and #34 bump PRs
+exist only to correct that), so `.github/workflows/version-bump.yml` now does it.
+
+It **opens a PR rather than committing to `main`**, because it cannot commit to `main`: the
+`protect-main` ruleset requires a pull request and declares no bypass actors, and rulesets bind every
+actor — admins and `GITHUB_TOKEN` included. Granting Actions a bypass would let any workflow holding
+`contents: write` push to `main`, which is a larger change than the problem warrants.
+
+| Aspect | Behaviour |
+|---|---|
+| Trigger | A pull request **merged** into `main`, plus `workflow_dispatch` |
+| Branch | `chore/bump-version`, rebuilt from `main` each run and force-pushed |
+| Version | Always *current `main` + 1 patch*, so several merges yield **one** bump, not one per PR |
+| Skipped when | The merged PR changed `jcodeVersion` itself, or carries the `skip-bump` label |
+
+The bump itself is `scripts/bump-patch-version.sh` — a script, not YAML, so it can be run and tested
+locally. It refuses anything that is not a plain `MAJOR.MINOR.PATCH` (a pre-release label belongs on
+`-PjcodeVersionName` at build time, never in the file), and rewrites both `app/build.gradle.kts` and
+the specifications that state the product version.
+
+> PRs opened with `GITHUB_TOKEN` do not trigger other workflows, so the no-host-root guard does not
+> run on the bump PR. That is acceptable only while the diff is version strings alone.
 
 ---
 
@@ -198,7 +225,8 @@ Repository conventions worth knowing:
 
 ## 8. Known gaps
 
-- **The only CI workflow is the no-host-root guard.** There is no build, lint, unit-test or
+- **The only CI workflow that gates anything is the no-host-root guard** (the version-bump
+  workflow automates a chore, it does not check anything). There is no build, lint, unit-test or
   instrumented-test workflow.
 - `detekt` is a placeholder task with no configuration.
 - Warning-free builds and the contrast standards are conventions, not gates.
