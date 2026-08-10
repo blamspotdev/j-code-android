@@ -78,14 +78,20 @@ class TerminalView @JvmOverloads constructor(
     var pendingCtrl = false
     var pendingAlt = false
     // Shift armed for the NEXT key, from either the extra-keys row's SHIFT chip or an on-screen
-    // keyboard: soft keyboards (Gboard) send Shift as a key of its own and leave META_SHIFT_ON off the
-    // key that follows, so it is latched here and folded in — that is what makes Shift+Enter (Claude
-    // Code's newline) and Shift+Tab reachable without a hardware keyboard. Hardware keyboards report
-    // the meta state on the event itself and never set this.
+    // keyboard: soft keyboards send Shift as a key of its own, so it is latched here and folded into
+    // whatever follows — that is what makes Shift+Enter (Claude Code's newline) and Shift+Tab
+    // reachable without a hardware keyboard. Gboard does set META_SHIFT_ON on the key it sends next,
+    // so for its own keys the latch is redundant; it is what carries Shift to the keys Gboard does not
+    // have, which arrive from the extra-keys row (Tab, the arrows) with no meta state of their own.
+    // Hardware keyboards report the meta state on the event itself and never set this.
     var pendingShift = false
     // Notified after an armed modifier is consumed (or discarded) by typed input, so the row can
     // un-highlight its CTRL/ALT/SHIFT chips.
     var onPendingModifiersConsumed: (() -> Unit)? = null
+    // Notified when the soft keyboard's own Shift key arms or disarms [pendingShift], so the row can
+    // track it. Without this the row keeps a separate Shift of its own and a Gboard Shift is dropped
+    // by the very chips it exists to reach.
+    var onPendingShiftChanged: ((Boolean) -> Unit)? = null
     // Kept normalized: (startRow, startCol) <= (endRow, endCol) row-major; end column is inclusive.
     private var selectionStartRow = 0
     private var selectionStartCol = 0
@@ -1491,6 +1497,9 @@ class TerminalView @JvmOverloads constructor(
                 // cooked-mode shells accept LF, but raw-mode TUIs (opencode, vim, htop) only recognise
                 // CR as Enter — so map every newline form to CR, matching the hardware-key path.
                 text?.toString()?.let {
+                    // Committed text already carries the keyboard's own shift state, so the latch has
+                    // nothing left to add — but it must still be spent here, or it leaks onto the next key.
+                    consumePendingShift()
                     val mapped = it.replace("\r\n", "\r").replace("\n", "\r")
                     if (!sendWithPendingModifiers(mapped)) sendInput(mapped)
                 }
@@ -1499,9 +1508,11 @@ class TerminalView @JvmOverloads constructor(
 
             override fun sendKeyEvent(event: KeyEvent): Boolean {
                 val keyCode = event.keyCode
-                // Latch a standalone Shift from the soft keyboard rather than dropping it (see pendingShift).
+                // Latch a standalone Shift from the soft keyboard rather than dropping it (see
+                // pendingShift). Toggling rather than arming keeps it in step with the keyboard's own
+                // state: Gboard reports a Shift press for both taps, and the second one un-shifts it.
                 if (keyCode == KeyEvent.KEYCODE_SHIFT_LEFT || keyCode == KeyEvent.KEYCODE_SHIFT_RIGHT) {
-                    if (event.action == KeyEvent.ACTION_DOWN) pendingShift = true
+                    if (event.action == KeyEvent.ACTION_DOWN) latchShift(!pendingShift)
                     return true
                 }
                 if (event.action != KeyEvent.ACTION_DOWN) return true
@@ -1588,6 +1599,13 @@ class TerminalView @JvmOverloads constructor(
         if (!pendingShift) return
         pendingShift = false
         onPendingModifiersConsumed?.invoke()
+    }
+
+    /** Arm/disarm Shift from the soft keyboard's Shift key, mirroring it onto the extra-keys row. */
+    private fun latchShift(armed: Boolean) {
+        if (pendingShift == armed) return
+        pendingShift = armed
+        onPendingShiftChanged?.invoke(armed)
     }
 
     /** [event] with the armed [pendingShift] folded into its meta state, so both the key tables and

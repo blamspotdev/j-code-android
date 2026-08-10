@@ -4714,6 +4714,11 @@ private fun TerminalSidebarContent(
                     }
                 }
                 view.onPendingModifiersConsumed = { extraKeys.clearModifiers() }
+                // Mirror the soft keyboard's Shift onto the row's chip: it highlights, and the chips
+                // then carry that Shift into the keys the keyboard has none of (Tab, the arrows).
+                view.onPendingShiftChanged = { armed ->
+                    if (extraKeys.target === adapter) extraKeys.shift = armed
+                }
                 if (view.isFocused) extraKeys.target = adapter
             }
             Box(modifier = Modifier.fillMaxSize()) {
