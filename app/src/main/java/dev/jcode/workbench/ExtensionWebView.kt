@@ -86,6 +86,19 @@ private class NoFullscreenWebView(context: Context) : WebView(context) {
             EditorInfo.IME_FLAG_NO_EXTRACT_UI
         return ic
     }
+
+    /**
+     * Ctrl+V with an image on the clipboard: Chromium's own paste carries text only, so the image
+     * would silently paste as nothing. Handled here and delivered as a real `paste` event; a
+     * clipboard holding anything else falls through to normal handling untouched.
+     */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        val isPasteChord = event.action == android.view.KeyEvent.ACTION_DOWN &&
+            event.keyCode == android.view.KeyEvent.KEYCODE_V &&
+            event.isCtrlPressed
+        if (isPasteChord && pasteClipboardImage()) return true
+        return super.dispatchKeyEvent(event)
+    }
 }
 
 class ExtensionBridge(
@@ -475,6 +488,16 @@ internal class VsixSession private constructor(
 
     fun execute(commandId: String) {
         scope.launch { host.executeCommand(commandId) }
+    }
+
+    /**
+     * Delivers a clipboard image to the surface the user is working in as a `paste` event; false when
+     * the clipboard holds no image. Prefers the focused WebView — an extension can have both a drawer
+     * view and editor panels open, and the image belongs to whichever one has the caret.
+     */
+    fun pasteClipboardImage(): Boolean {
+        val focused = surfaces.values.firstOrNull { it.webView.hasFocus() }
+        return (focused ?: viewSurface)?.webView?.pasteClipboardImage() ?: false
     }
 
     fun dispose() {

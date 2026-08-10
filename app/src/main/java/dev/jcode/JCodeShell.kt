@@ -364,6 +364,7 @@ import dev.jcode.workbench.ExtensionDrawerActions
 import dev.jcode.workbench.VsixDrawerContent
 import dev.jcode.workbench.VsixPanelPage
 import dev.jcode.workbench.VsixViewHolder
+import dev.jcode.workbench.hasClipboardImage
 import dev.jcode.workbench.ScmBackgroundHost
 import dev.jcode.workbench.ScmWebViewHolder
 import dev.jcode.workbench.installedVsixExtensions
@@ -4293,20 +4294,37 @@ private fun RightPanelChip(
 @Composable
 private fun VsixTitleActionsMenu(extension: dev.jcode.feature.marketplace.InstalledExtension) {
     val actions = VsixViewHolder.titleActions[extension.id].orEmpty()
-    if (actions.isEmpty()) return
     val session = VsixViewHolder.get(extension.id) ?: return
+    val context = LocalContext.current
     var expanded by remember(extension.id) { mutableStateOf(false) }
+    // Re-checked each time the menu opens: the clipboard changes outside this composition.
+    var canPasteImage by remember(extension.id) { mutableStateOf(false) }
+    if (actions.isEmpty() && !canPasteImage) {
+        // Still needs one clipboard check to know whether the button is worth showing at all.
+        LaunchedEffect(extension.id) { canPasteImage = hasClipboardImage(context) }
+        if (!canPasteImage) return
+    }
     Box {
         WorkbenchIconActionButton(
             icon = jcIcon(JCodeIcon.MoreVert),
             contentDescription = "${extension.name} actions",
-            onClick = { expanded = true },
+            onClick = {
+                canPasteImage = hasClipboardImage(context)
+                expanded = true
+            },
         )
         CompactContextMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            listActions = actions.map { action ->
-                ContextAction(contributedMenuIcon(action.codicon), action.title) { session.execute(action.id) }
+            listActions = buildList {
+                // Ctrl+V covers a hardware keyboard; this is the same paste for touch, where
+                // Chromium's own menu offers nothing for an image on the clipboard.
+                if (canPasteImage) {
+                    add(ContextAction(JCodeIcon.Paste, "Paste image") { session.pasteClipboardImage() })
+                }
+                actions.forEach { action ->
+                    add(ContextAction(contributedMenuIcon(action.codicon), action.title) { session.execute(action.id) })
+                }
             },
         )
     }
