@@ -165,6 +165,17 @@ private fun StepperScreen(
     val completed = autoSetupProgress is DistroWizardProgress.AllDone
     var logsExpanded by rememberSaveable { mutableStateOf(true) }
 
+    // [autoSetupProgress] tracks a setup run in THIS session, not whether an environment exists — on
+    // an ordinary launch it is Idle. Keying the wizard off it left the first-run steps on screen
+    // forever, so a configured device showed "Choose the Linux distro JCode should prepare" and
+    // "Waiting for you to choose a distro" directly under a card reporting one already active: two
+    // pickers for one setting, disagreeing. Ask the environment itself instead, and once it is ready
+    // leave [InstalledEnvironmentsCard] as the only control — the wizard returns on request, for
+    // installing a distro that is not here yet.
+    val configured = environmentState.smokeTestPassed == true && installedEnvironments.isNotEmpty()
+    var addingEnvironment by rememberSaveable { mutableStateOf(false) }
+    val showWizard = !configured || addingEnvironment || running || completed
+
     LaunchedEffect(running) {
         if (running) logsExpanded = true
     }
@@ -214,18 +225,24 @@ private fun StepperScreen(
                 )
             }
         }
-        item {
-            DistroSelectionCard(
-                number = distroStepNumber,
-                environmentState = environmentState,
-                running = running,
-                completed = completed,
-                enabled = distroStepEnabled,
-                onSelectDistro = onSelectDistro,
-                onAutoSetup = onAutoSetup,
-                onRefresh = onRefresh,
-                onRestoreEnvironment = onRestoreEnvironment,
-            )
+        if (showWizard) {
+            item {
+                DistroSelectionCard(
+                    number = distroStepNumber,
+                    environmentState = environmentState,
+                    running = running,
+                    completed = completed,
+                    enabled = distroStepEnabled,
+                    onSelectDistro = onSelectDistro,
+                    onAutoSetup = onAutoSetup,
+                    onRefresh = onRefresh,
+                    onRestoreEnvironment = onRestoreEnvironment,
+                )
+            }
+        } else {
+            item {
+                AddEnvironmentCard(onAdd = { addingEnvironment = true })
+            }
         }
     }
 
@@ -245,7 +262,9 @@ private fun StepperScreen(
                     .fillMaxWidth()
                     .weight(1f),
             ) {
-                val twoPane = maxWidth > maxHeight && maxWidth >= 600.dp
+                // The right pane exists to keep the setup log visible; with no wizard there is no log,
+                // and a half-empty split just strands the switcher in a narrow column.
+                val twoPane = maxWidth > maxHeight && maxWidth >= 600.dp && showWizard
                 if (twoPane) {
                     Row(modifier = Modifier.fillMaxSize()) {
                         LazyColumn(
@@ -283,17 +302,19 @@ private fun StepperScreen(
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         selectionSteps()
-                        item {
-                            ConfigureStepCard(
-                                number = distroStepNumber + 1,
-                                environmentState = environmentState,
-                                autoSetupProgress = autoSetupProgress,
-                                running = running,
-                                completed = completed,
-                                logsExpanded = logsExpanded,
-                                onToggleLogs = { logsExpanded = !logsExpanded },
-                                onDismiss = onDismiss,
-                            )
+                        if (showWizard) {
+                            item {
+                                ConfigureStepCard(
+                                    number = distroStepNumber + 1,
+                                    environmentState = environmentState,
+                                    autoSetupProgress = autoSetupProgress,
+                                    running = running,
+                                    completed = completed,
+                                    logsExpanded = logsExpanded,
+                                    onToggleLogs = { logsExpanded = !logsExpanded },
+                                    onDismiss = onDismiss,
+                                )
+                            }
                         }
                     }
                 }
@@ -470,6 +491,31 @@ private fun ConfigureStepCard(
             ) {
                 Text("Done")
             }
+        }
+    }
+}
+
+/** Reveals the setup wizard on a device that is already configured, for adding a second distro. */
+@Composable
+private fun AddEnvironmentCard(onAdd: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Add an environment", fontWeight = FontWeight.SemiBold)
+            Text(
+                text = "Install another Linux distro alongside the ones above. Each keeps its own SDKs " +
+                    "and language servers.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FilledTonalButton(onClick = onAdd) { Text("Install another distro") }
         }
     }
 }
