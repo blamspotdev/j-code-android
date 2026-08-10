@@ -14,6 +14,13 @@ name: version bump
 # bump, not one per PR — a version per release rather than per merge, which is what the
 # semver scheme in app/build.gradle.kts is for. Merge it when you cut a release.
 #
+# Opening the PR needs "Allow GitHub Actions to create and approve pull requests"
+# (Settings > Actions > General > Workflow permissions), which is OFF by default. Without it
+# the branch is still pushed with the bump on it and the run reports the compare link instead
+# of failing — the version is never lost, it just costs a click. That toggle covers approving
+# as well as creating, which is worth knowing before enabling it on a repo whose ruleset
+# requires a review.
+#
 # Note: PRs opened with GITHUB_TOKEN do not trigger other workflows, so the no-host-root
 # guard does not run on the bump PR. Harmless here — the diff is version strings only —
 # but do not extend this workflow to touch code without revisiting that.
@@ -104,11 +111,32 @@ jobs:
             "" \
             "To skip the bump for a PR, label it \`skip-bump\`. A PR that changes \`jcodeVersion\` itself is detected and skipped.")"
 
-          existing="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          compare="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...${BRANCH}?expand=1"
+
+          # The bump is already safe on the branch by this point, so failing to open the PR is an
+          # inconvenience, not a lost result — opening one by hand takes a click. Creating a PR
+          # needs "Allow GitHub Actions to create and approve pull requests" (Settings > Actions >
+          # General), which is off by default; without it `gh pr create` returns
+          # "GitHub Actions is not permitted to create or approve pull requests". Rather than paint
+          # the run red for a missing repo setting, say so and hand over the compare link.
+          existing="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)"
           if [ -n "$existing" ]; then
-            gh pr edit "$existing" --title "Bump version to $VERSION" --body "$body"
-            echo "Refreshed PR #$existing -> $VERSION"
-          else
-            gh pr create --base main --head "$BRANCH" \
-              --title "Bump version to $VERSION" --body "$body"
+            if gh pr edit "$existing" --title "Bump version to $VERSION" --body "$body"; then
+              echo "Refreshed PR #$existing -> $VERSION"
+              exit 0
+            fi
+          elif gh pr create --base main --head "$BRANCH" \
+                 --title "Bump version to $VERSION" --body "$body"; then
+            exit 0
           fi
+
+          {
+            echo "### Bump to \`$VERSION\` is ready, but the PR could not be opened"
+            echo
+            echo "The branch \`$BRANCH\` is pushed and holds the whole change — [open the PR]($compare)."
+            echo
+            echo "To have this step open it automatically, enable **Settings → Actions → General →"
+            echo "Workflow permissions → Allow GitHub Actions to create and approve pull requests**."
+            echo "Note that toggle covers approving as well as creating."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Branch pushed. Open the PR here: $compare"
