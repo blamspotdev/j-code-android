@@ -152,18 +152,34 @@ class DistroService(
     }
 
     fun setSelectedDistro(profile: DistroProfile) {
+        applySelectedDistro(profile)
+        scope.launch { persistSelection(profile) }
+    }
+
+    /**
+     * [setSelectedDistro], but the caller can await the write. A switch that restarts the process
+     * must use this: the ordinary path persists on [scope], and `exit()` would take the process down
+     * before that lands, bringing the app back on the environment the user just switched away from.
+     */
+    suspend fun setSelectedDistroAwaitingPersist(profile: DistroProfile) {
+        applySelectedDistro(profile)
+        persistSelection(profile)
+    }
+
+    private fun applySelectedDistro(profile: DistroProfile) {
         _environmentState.value = _environmentState.value.copy(
             runtime = _environmentState.value.runtime.copy(selectedDistro = profile),
             completedSteps = _environmentState.value.completedSteps + WizardStepId.DistroSelected,
             errorMessage = null,
         )
         recomputeEnvironments()
-        scope.launch {
-            persistSelectedDistro(profile)
-            persistCompletedSteps(_environmentState.value.completedSteps)
-            syncSdkCatalogSelection(profile.id)
-            syncLspCatalogSelection(profile.id)
-        }
+    }
+
+    private suspend fun persistSelection(profile: DistroProfile) {
+        persistSelectedDistro(profile)
+        persistCompletedSteps(_environmentState.value.completedSteps)
+        syncSdkCatalogSelection(profile.id)
+        syncLspCatalogSelection(profile.id)
     }
 
     suspend fun setFirstRunSetupDeferred(deferred: Boolean) {
@@ -226,11 +242,20 @@ class DistroService(
 
     /** Switch the active environment that terminals and [exec] target. */
     fun setActiveEnvironment(environmentId: String) {
-        val available = _environmentState.value.availableDistros
-        val profile = available.firstOrNull { it.id == environmentId }
-            ?: DistroProfile.fromId(environmentId, available)
-        setSelectedDistro(profile)
+        setSelectedDistro(profileFor(environmentId))
         scope.launch { refreshEnvironment() }
+    }
+
+    /** [setActiveEnvironment] for a caller that restarts afterwards — see
+     *  [setSelectedDistroAwaitingPersist]. Skips the refresh: the new process derives it at startup. */
+    suspend fun setActiveEnvironmentAwaitingPersist(environmentId: String) {
+        setSelectedDistroAwaitingPersist(profileFor(environmentId))
+    }
+
+    private fun profileFor(environmentId: String): DistroProfile {
+        val available = _environmentState.value.availableDistros
+        return available.firstOrNull { it.id == environmentId }
+            ?: DistroProfile.fromId(environmentId, available)
     }
 
     /**

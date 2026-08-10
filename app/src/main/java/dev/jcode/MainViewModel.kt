@@ -3198,8 +3198,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- Multi-environment ("docker-style") management ---
 
+    /**
+     * Switching environments restarts the app. A shell is bound to the rootfs it was spawned against
+     * for life (proot's `-r`), so without a restart the workbench is left half on the old environment
+     * — the state that made an installed toolchain look missing from an open terminal. Editor tabs and
+     * unsaved buffers survive via [restartApp]'s session flush; foreground processes do not, so those
+     * are confirmed first.
+     */
     fun setActiveEnvironment(environmentId: String) {
-        distroService.setActiveEnvironment(environmentId)
+        if (environmentId == distroService.environmentState.value.runtime.selectedDistro.id) return
+        val running = TerminalSessionHost.existingManager()?.sessions?.values
+            ?.mapNotNull { it.foreground }
+            .orEmpty()
+        if (running.isEmpty()) applyEnvironmentSwitch(environmentId)
+        else _pendingEnvironmentSwitch.value = PendingEnvironmentSwitch(environmentId, running)
+    }
+
+    /** An environment switch held back because live processes would be killed by the restart. */
+    data class PendingEnvironmentSwitch(val environmentId: String, val running: List<String>)
+
+    private val _pendingEnvironmentSwitch = MutableStateFlow<PendingEnvironmentSwitch?>(null)
+    val pendingEnvironmentSwitch: StateFlow<PendingEnvironmentSwitch?> =
+        _pendingEnvironmentSwitch.asStateFlow()
+
+    fun confirmEnvironmentSwitch() {
+        val pending = _pendingEnvironmentSwitch.value ?: return
+        _pendingEnvironmentSwitch.value = null
+        applyEnvironmentSwitch(pending.environmentId)
+    }
+
+    fun cancelEnvironmentSwitch() {
+        _pendingEnvironmentSwitch.value = null
+    }
+
+    private fun applyEnvironmentSwitch(environmentId: String) {
+        viewModelScope.launch {
+            distroService.setActiveEnvironmentAwaitingPersist(environmentId)
+            restartApp()
+        }
     }
 
     fun deleteEnvironment(environmentId: String) {

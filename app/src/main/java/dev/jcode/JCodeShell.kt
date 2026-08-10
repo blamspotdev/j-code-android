@@ -1644,6 +1644,33 @@ fun JCodeApp(
         )
     }
 
+    // Switching environments restarts the app, which takes any foreground process with it.
+    val pendingEnvironmentSwitch by viewModel.pendingEnvironmentSwitch.collectAsStateWithLifecycle()
+    pendingEnvironmentSwitch?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelEnvironmentSwitch() },
+            title = { Text("Switch environment?") },
+            text = {
+                Text(
+                    "JCode restarts to switch to ${pending.environmentId}. Editors and unsaved changes " +
+                        "are kept; these will be stopped:\n" +
+                        pending.running.joinToString("\n") { "•  $it" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            // Same slot order as TerminalRunningDialog: the destructive action stays out of the
+            // rightmost (reflexive-tap) position, "Cancel" is the safe default at the end.
+            confirmButton = {
+                TextButton(onClick = { viewModel.confirmEnvironmentSwitch() }) {
+                    Text("Restart", color = MaterialTheme.colorScheme.error)
+                }
+                TextButton(onClick = { viewModel.cancelEnvironmentSwitch() }) { Text("Cancel") }
+            },
+            dismissButton = {},
+        )
+    }
+
     if (showFirstRunEnvironmentScreen) {
         OnboardingFeature.FirstRunEnvironmentScreen(
             environmentState = environmentState,
