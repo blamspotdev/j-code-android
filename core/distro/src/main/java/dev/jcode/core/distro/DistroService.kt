@@ -37,7 +37,6 @@ import kotlinx.coroutines.withContext
  *  first-run setup screen instantly on launch — see [DistroService]'s seededConfigured). */
 private const val KEY_ENV_CONFIGURED = "env_configured"
 private const val KEY_SELECTED_DISTRO = "selected_distro"
-private const val KEY_VERIFIED_USERS = "verified_distro_users"
 
 /**
  * Manages the embedded Linux environment using bundled proot.
@@ -266,7 +265,6 @@ class DistroService(
         if (ok) {
             rootfsManager.writeMetadata(profile)
             verifiedDistroUsers.keys.removeAll { it.startsWith("${profile.id}:") }
-            forgetVerifiedUsers("${profile.id}:")
             refreshEnvironment()
         }
         ok
@@ -297,7 +295,6 @@ class DistroService(
     suspend fun deleteEnvironment(environmentId: String): Boolean {
         val removed = rootfsManager.removeDistro(environmentId)
         verifiedDistroUsers.keys.removeAll { it.startsWith("$environmentId:") }
-            forgetVerifiedUsers("$environmentId:")
         networkingConfigured.remove(environmentId)
         dataStore.edit { prefs ->
             prefs.remove(installedEntriesKey(environmentId))
@@ -1399,24 +1396,26 @@ class DistroService(
     private val verifiedDistroUsers = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
     /**
-     * The same verification, surviving process death. [ensureDistroUser] runs a full user + sudo
-     * bootstrap under proot; measured at ~12s, and it was the whole of a cold start, re-proving on
-     * every launch what the previous run had already established. Held in the synchronous startup
-     * store beside the environment seed, guarded on the rootfs still being installed, and cleared
-     * wherever the in-memory cache is — so a reinstall or delete re-runs it.
+     * Whether [user]'s bootstrap is already present in [distroId]'s rootfs, judged from the rootfs
+     * itself rather than from a remembered verdict.
+     *
+     * [ensureDistroUser] costs ~12s under proot and was the whole of a cold start, re-proving every
+     * launch what the last one had established. But everything it writes is a plain file in
+     * app-private storage, so the same question answers from a few stats — and unlike a persisted
+     * flag this reads the CURRENT state, so deleting the account inside the distro makes the next
+     * launch rebuild it. That self-healing is the property the check was built around.
      */
-    private fun persistedVerifiedUsers(): MutableSet<String> =
-        startupPrefs.getStringSet(KEY_VERIFIED_USERS, emptySet()).orEmpty().toMutableSet()
-
-    private fun rememberVerifiedUser(cacheKey: String) {
-        startupPrefs.edit()
-            .putStringSet(KEY_VERIFIED_USERS, persistedVerifiedUsers().apply { add(cacheKey) })
-            .apply()
-    }
-
-    private fun forgetVerifiedUsers(prefix: String) {
-        val kept = persistedVerifiedUsers().filterNotTo(mutableSetOf()) { it.startsWith(prefix) }
-        startupPrefs.edit().putStringSet(KEY_VERIFIED_USERS, kept).apply()
+    private fun distroUserBootstrapped(distroId: String, user: String): Boolean {
+        val rootfs = rootfsManager.getRootfsPath(distroId)
+        if (!rootfs.isDirectory) return false
+        val registered = runCatching {
+            File(rootfs, "etc/passwd").useLines { lines -> lines.any { it.startsWith("$user:") } }
+        }.getOrDefault(false)
+        if (!registered) return false
+        if (!File(rootfs, "home/$user").isDirectory) return false
+        if (!File(rootfs, "etc/sudoers.d/$user").isFile) return false
+        // Either a real sudo or the shim ensureDistroUser drops in for minimal images.
+        return File(rootfs, "usr/bin/sudo").exists() || File(rootfs, "usr/local/bin/sudo").exists()
     }
 
     /** distroIds whose DNS/host config has been ensured this process, so it runs at most once each. */
@@ -1441,9 +1440,7 @@ class DistroService(
         if (verifiedDistroUsers[cacheKey] == true) {
             return ExecResult(stdout = "user $user ready.", exitCode = 0)
         }
-        // Verified by an earlier run of the app; the rootfs check keeps a deleted or replaced image
-        // from inheriting it.
-        if (cacheKey in persistedVerifiedUsers() && rootfsManager.isDistroInstalled(distroId)) {
+        if (distroUserBootstrapped(distroId, user)) {
             verifiedDistroUsers[cacheKey] = true
             return ExecResult(stdout = "user $user ready.", exitCode = 0)
         }
@@ -1502,7 +1499,6 @@ class DistroService(
                 _environmentState.value.runtime.selectedDistro.id == distroId
             ) {
                 verifiedDistroUsers[cacheKey] = true
-                rememberVerifiedUser(cacheKey)
             }
         } else {
             distroUserEnsureFailures[cacheKey] = System.currentTimeMillis()
