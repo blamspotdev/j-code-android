@@ -442,6 +442,7 @@ class DistroService(
             _lspCatalogState.value = _lspCatalogState.value.copy(
                 entries = lspCatalogEntries(),
                 installedEntryIds = readInstalledLspEntries(distroId),
+                loaded = true,
                 runningEntryId = null,
                 runningAction = null,
                 selectedDistroId = distroId,
@@ -2173,6 +2174,8 @@ class DistroService(
 
     private fun lspCatalogEntries(): List<LspCatalogEntry> = LspServerCatalog.BUILT_IN
 
+    /** Note: deliberately leaves [LspCatalogState.loaded] alone — this runs during startup with a
+     *  distro selection that may still be the default, so it cannot vouch for the installed set. */
     private suspend fun syncLspCatalogSelection(distroId: String) {
         _lspCatalogState.value = _lspCatalogState.value.copy(
             entries = _lspCatalogState.value.entries.ifEmpty { lspCatalogEntries() },

@@ -32,6 +32,15 @@ enum class LspCatalogAction(val label: String) {
 data class LspCatalogState(
     val entries: List<LspCatalogEntry> = emptyList(),
     val installedEntryIds: Set<String> = emptySet(),
+    /**
+     * Whether [installedEntryIds] has been loaded for the active distro at least once.
+     *
+     * Until then an empty set means "not known yet", not "nothing installed" — and the two are
+     * indistinguishable by timing, because the load is quiet for ~10s on a cold launch while the
+     * environment is probed first. Anything that would accuse a server of being missing must wait
+     * for this.
+     */
+    val loaded: Boolean = false,
     val updatableEntryIds: Set<String> = emptySet(),
     val checking: Boolean = false,
     val runningEntryId: String? = null,

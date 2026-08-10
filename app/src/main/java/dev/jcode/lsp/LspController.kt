@@ -24,7 +24,9 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -256,7 +258,6 @@ class LspController(
             return null
         }
         if (descriptor.id !in distroService.lspCatalogState.value.installedEntryIds) {
-            log("no session: ${descriptor.id} is not installed")
             promptInstall(descriptor.id)
             return null
         }
@@ -360,9 +361,29 @@ class LspController(
         return project?.path
     }
 
+    /**
+     * The installed set is read from DataStore asynchronously, so on a cold launch the restored tabs
+     * routinely ask before it lands — every server looks absent for a moment. Re-checking after a
+     * grace period is what keeps that from accusing installed servers of being missing; the
+     * `installedEntryIds` collector separately re-runs `documentOpened` once the real set arrives.
+     */
     private fun promptInstall(serverId: String) {
         if (!promptedServerIds.add(serverId)) return
-        LspServerCatalog.findById(serverId)?.let { _missingServer.tryEmit(it) }
+        scope.launch {
+            // Wait for the catalog to actually report itself loaded. Timing cannot substitute for
+            // this: on a cold launch the environment is probed first, so the installed set stays
+            // empty AND quiet for ~10s, which is indistinguishable from a fresh device with nothing
+            // installed. The timeout is a backstop, not the mechanism.
+            withTimeoutOrNull(CATALOG_LOAD_TIMEOUT_MS) {
+                distroService.lspCatalogState.first { it.loaded }
+            }
+            if (serverId in distroService.lspCatalogState.value.installedEntryIds) {
+                promptedServerIds.remove(serverId)
+                return@launch
+            }
+            log("no session: $serverId is not installed")
+            LspServerCatalog.findById(serverId)?.let { _missingServer.emit(it) }
+        }
     }
 
     /** Keyed by root as well as server so two projects sharing a server cannot clobber each other. */
@@ -394,6 +415,7 @@ class LspController(
     private companion object {
         const val TAG = "LspController"
         const val CHANGE_DEBOUNCE_MS = 400L
+        const val CATALOG_LOAD_TIMEOUT_MS = 60_000L
     }
 }
 
