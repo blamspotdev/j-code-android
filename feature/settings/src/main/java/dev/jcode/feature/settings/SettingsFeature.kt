@@ -1055,10 +1055,11 @@ object SettingsFeature {
                         onReset = { diagnostics.onSetLevel(SettingsDefaults.DIAGNOSTIC_LEVEL) },
                     )
                     ToggleRow(
-                        label = "Include the app's system log",
-                        supporting = "Adds this app's own logcat output, which is where most of the detail " +
-                            "about the Linux environment, extensions and language servers ends up. Only " +
-                            "JCode's own entries are readable — never another app's.",
+                        label = "Include the system log",
+                        supporting = "Adds JCode's logcat output — including proot and the Linux " +
+                            "environment running under it, which is where most of the detail about " +
+                            "toolchains, extensions and language servers ends up. Only JCode's own " +
+                            "entries are readable; another app's never are.",
                         checked = diagnostics.captureSystemLog,
                         onCheckedChange = diagnostics.onSetCaptureSystemLog,
                         modified = diagnostics.captureSystemLog != SettingsDefaults.DIAGNOSTIC_SYSTEM_LOG,

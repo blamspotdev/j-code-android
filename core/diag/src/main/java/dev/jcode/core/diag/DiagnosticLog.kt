@@ -12,11 +12,14 @@ import kotlin.concurrent.thread
 /** Suggested file name for a shared/exported diagnostic log. */
 const val DIAGNOSTIC_LOG_FILE_NAME = "jcode-diagnostic.log"
 
-/** How much a session records. Each level includes the ones above it. */
-enum class DiagLevel(val label: String) {
-    Errors("Errors only"),
-    Normal("Normal"),
-    Verbose("Verbose"),
+/**
+ * How much a session records. Each level includes the ones above it. [logcatPriority] is the same
+ * choice applied to the captured system log, so the two stay in step.
+ */
+enum class DiagLevel(val label: String, val logcatPriority: String) {
+    Errors("Errors only", "E"),
+    Normal("Normal", "I"),
+    Verbose("Verbose", "V"),
 }
 
 /** Which part of the app a line came from — the first filter to reach for when reading a log. */
@@ -36,10 +39,10 @@ enum class DiagArea {
  * Three sources feed one file so a report is a single attachment:
  *
  * 1. Explicit [event] / [failure] calls from the app.
- * 2. The app's **own** logcat (`--pid`), when [captureSystemLog] is on. The log daemon only ever
- *    hands an unprivileged app its own entries, so this needs no permission and costs nothing to
- *    maintain — it picks up every existing `android.util.Log` call and native/framework message for
- *    this process.
+ * 2. The app's logcat, when [captureSystemLog] is on. The log daemon hands an unprivileged reader
+ *    only its own **uid**'s entries, so this needs no permission — and since proot and every distro
+ *    process share that uid, the Linux environment's output lands here too, not just the app's. It
+ *    picks up every existing `android.util.Log` call for free.
  * 3. Uncaught exceptions, when [captureCrashes] is on. The previous handler still runs, so the
  *    normal crash dialog and any other reporter are unaffected.
  *
@@ -65,6 +68,8 @@ object DiagnosticLog {
     @Volatile private var redactions: List<Pair<String, String>> = emptyList()
 
     private var logcatProcess: Process? = null
+    /** The filter the running logcat was started with, so a level change restarts it. */
+    private var logcatFilter: String? = null
     private var crashHandlerInstalled = false
 
     /** True while a session is recording — drives the Settings summary and the status indicator. */
@@ -199,6 +204,9 @@ object DiagnosticLog {
 
     private fun buildRedactions(context: Context): List<Pair<String, String>> = buildList {
         runCatching { context.dataDir.absolutePath }.getOrNull()?.let { add(it to "<app-data>") }
+        // The same directory reached the other way: framework APIs report /data/user/0/<pkg> while
+        // proot and the guest tooling log the /data/data/<pkg> form, so both have to be covered.
+        add("/data/data/${context.packageName}" to "<app-data>")
         add(context.filesDir.absolutePath to "<app-files>")
         val external = Environment.getExternalStorageDirectory().absolutePath
         add("$external/JCode" to "<jcode>")
@@ -225,18 +233,24 @@ object DiagnosticLog {
     }
 
     /**
-     * Tee this process's own logcat into the file. `--pid` keeps it to us; an unprivileged app is
-     * only ever shown its own entries anyway, so this needs no permission.
+     * Tee the app's logcat into the file.
+     *
+     * Deliberately **not** filtered by pid: the log daemon already restricts an unprivileged reader
+     * to its own **uid**, and proot — plus every distro process under it — runs as a separate pid
+     * sharing that uid. A `--pid` filter would have excluded exactly the environment the log is most
+     * often needed for, while adding nothing to privacy (another app's entries are unreachable
+     * either way). The detail level maps onto logcat's own priority filter so a Verbose session is
+     * the only one that pays for the noise.
      */
     private fun startSystemLogCapture() {
-        if (logcatProcess != null) return
+        val filter = "*:${level.logcatPriority}"
+        if (logcatProcess != null && filter == logcatFilter) return
+        stopSystemLogCapture()
+        logcatFilter = filter
         val started = runCatching {
-            ProcessBuilder(
-                "logcat",
-                "--pid=${android.os.Process.myPid()}",
-                "-v", "threadtime",
-                "-T", "1",
-            ).redirectErrorStream(true).start()
+            ProcessBuilder("logcat", "-v", "threadtime", "-T", "1", filter)
+                .redirectErrorStream(true)
+                .start()
         }.getOrElse { error ->
             append("${timestamp.format(Date())} ERROR App/diag: system log capture unavailable: ${error.message}")
             return
@@ -255,6 +269,7 @@ object DiagnosticLog {
     private fun stopSystemLogCapture() {
         logcatProcess?.let { runCatching { it.destroy() } }
         logcatProcess = null
+        logcatFilter = null
     }
 
     private fun installCrashHandler() {
