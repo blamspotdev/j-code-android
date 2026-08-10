@@ -37,6 +37,7 @@ import kotlinx.coroutines.withContext
  *  first-run setup screen instantly on launch — see [DistroService]'s seededConfigured). */
 private const val KEY_ENV_CONFIGURED = "env_configured"
 private const val KEY_SELECTED_DISTRO = "selected_distro"
+private const val KEY_VERIFIED_USERS = "verified_distro_users"
 
 /**
  * Manages the embedded Linux environment using bundled proot.
@@ -265,6 +266,7 @@ class DistroService(
         if (ok) {
             rootfsManager.writeMetadata(profile)
             verifiedDistroUsers.keys.removeAll { it.startsWith("${profile.id}:") }
+            forgetVerifiedUsers("${profile.id}:")
             refreshEnvironment()
         }
         ok
@@ -295,6 +297,7 @@ class DistroService(
     suspend fun deleteEnvironment(environmentId: String): Boolean {
         val removed = rootfsManager.removeDistro(environmentId)
         verifiedDistroUsers.keys.removeAll { it.startsWith("$environmentId:") }
+            forgetVerifiedUsers("$environmentId:")
         networkingConfigured.remove(environmentId)
         dataStore.edit { prefs ->
             prefs.remove(installedEntriesKey(environmentId))
@@ -863,22 +866,25 @@ class DistroService(
      * Callers must ensure the lock is already held.
      */
     private suspend fun refreshEnvironmentInternal() {
-        val availableDistros = rootfsManager.downloader.fetchManifest().profiles()
-            .ifEmpty { DistroProfile.defaults() }
-        _environmentState.value = _environmentState.value.copy(availableDistros = availableDistros)
-
-        val persistedSelection = readSelectedDistro(availableDistros)
-        if (persistedSelection != null) {
+        // Bring up the SELECTED environment from local state first — the persisted id and the rootfs
+        // on disk. fetchManifest() is a network round-trip that only feeds the list of images
+        // available to INSTALL, so leading with it made every start wait on the network before so
+        // much as looking at the distro it was about to run, with the splash held up behind it.
+        val knownDistros = _environmentState.value.availableDistros.ifEmpty { DistroProfile.defaults() }
+        readSelectedDistro(knownDistros)?.let { persisted ->
             _environmentState.value = _environmentState.value.copy(
-                runtime = _environmentState.value.runtime.copy(selectedDistro = persistedSelection),
-            )
-        } else {
-            _environmentState.value = _environmentState.value.copy(
-                runtime = _environmentState.value.runtime.copy(selectedDistro = availableDistros.first()),
+                runtime = _environmentState.value.runtime.copy(selectedDistro = persisted),
             )
         }
-
+        // No fallback to the first catalog entry: an unreadable selection means "keep what is
+        // running", never "silently retarget to whatever sits on top of the list".
         deriveSelectedDistroState()
+
+        // Now the installable catalog, off the startup path. It never re-points the selection: an id
+        // absent from the manifest still names a rootfs that is on disk and possibly active.
+        val availableDistros = rootfsManager.downloader.fetchManifest().profiles()
+            .ifEmpty { knownDistros }
+        _environmentState.value = _environmentState.value.copy(availableDistros = availableDistros)
     }
 
     /**
@@ -1392,6 +1398,27 @@ class DistroService(
     /** (distroId:user) pairs verified to exist in the rootfs, so execs don't re-check every time. */
     private val verifiedDistroUsers = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
+    /**
+     * The same verification, surviving process death. [ensureDistroUser] runs a full user + sudo
+     * bootstrap under proot; measured at ~12s, and it was the whole of a cold start, re-proving on
+     * every launch what the previous run had already established. Held in the synchronous startup
+     * store beside the environment seed, guarded on the rootfs still being installed, and cleared
+     * wherever the in-memory cache is — so a reinstall or delete re-runs it.
+     */
+    private fun persistedVerifiedUsers(): MutableSet<String> =
+        startupPrefs.getStringSet(KEY_VERIFIED_USERS, emptySet()).orEmpty().toMutableSet()
+
+    private fun rememberVerifiedUser(cacheKey: String) {
+        startupPrefs.edit()
+            .putStringSet(KEY_VERIFIED_USERS, persistedVerifiedUsers().apply { add(cacheKey) })
+            .apply()
+    }
+
+    private fun forgetVerifiedUsers(prefix: String) {
+        val kept = persistedVerifiedUsers().filterNotTo(mutableSetOf()) { it.startsWith(prefix) }
+        startupPrefs.edit().putStringSet(KEY_VERIFIED_USERS, kept).apply()
+    }
+
     /** distroIds whose DNS/host config has been ensured this process, so it runs at most once each. */
     private val networkingConfigured = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
@@ -1412,6 +1439,12 @@ class DistroService(
         }
         val cacheKey = "$distroId:$user"
         if (verifiedDistroUsers[cacheKey] == true) {
+            return ExecResult(stdout = "user $user ready.", exitCode = 0)
+        }
+        // Verified by an earlier run of the app; the rootfs check keeps a deleted or replaced image
+        // from inheriting it.
+        if (cacheKey in persistedVerifiedUsers() && rootfsManager.isDistroInstalled(distroId)) {
+            verifiedDistroUsers[cacheKey] = true
             return ExecResult(stdout = "user $user ready.", exitCode = 0)
         }
         val lastFailure = distroUserEnsureFailures[cacheKey]
@@ -1469,6 +1502,7 @@ class DistroService(
                 _environmentState.value.runtime.selectedDistro.id == distroId
             ) {
                 verifiedDistroUsers[cacheKey] = true
+                rememberVerifiedUser(cacheKey)
             }
         } else {
             distroUserEnsureFailures[cacheKey] = System.currentTimeMillis()
