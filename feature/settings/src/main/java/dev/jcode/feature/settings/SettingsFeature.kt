@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -56,6 +57,9 @@ import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -72,7 +76,9 @@ import dev.jcode.design.ExtraKeysVisibility
 import dev.jcode.design.LocalBottomBarSetting
 import dev.jcode.design.LocalFontSettings
 import dev.jcode.design.LocalEditorDragMovesCursor
+import dev.jcode.design.LocalDiagnosticsSetting
 import dev.jcode.design.LocalEditorFontSizeSetting
+import dev.jcode.design.LocalTerminalFontSizeSetting
 import dev.jcode.design.LocalEditorWordWrapSetting
 import dev.jcode.design.LocalExtraKeysSetting
 import dev.jcode.design.LocalPerformanceSettings
@@ -107,8 +113,14 @@ import dev.jcode.design.SettingsDropdownRow
 import dev.jcode.design.SettingsResettableRow
 import dev.jcode.design.SettingsTextFieldRow
 import dev.jcode.design.ThemeBundleRegistry
+import dev.jcode.core.diag.DiagLevel
+import dev.jcode.core.distro.AppProcesses
 import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.design.ThemeMode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import java.util.Locale
 import kotlin.math.roundToInt
 
 object SettingsFeature {
@@ -380,6 +392,22 @@ object SettingsFeature {
                     optionLabel = fontLabel,
                     modified = fontSettings.terminalFontId != fontSettings.terminalDefaultId,
                     onReset = { fontSettings.onSelectTerminalFont(fontSettings.terminalDefaultId) },
+                )
+            }
+
+            SettingsCard(
+                title = "Terminal",
+                description = "Text size for terminal sessions. Applies to every open terminal.",
+                keywords = "terminal font size text scale sp bigger smaller zoom console shell tty readable",
+            ) {
+                val terminalFontSizeSetting = LocalTerminalFontSizeSetting.current
+                StepperRow(
+                    label = "Font size",
+                    value = "${terminalFontSizeSetting.value.toInt()} sp",
+                    onDecrease = { terminalFontSizeSetting.onChange((terminalFontSizeSetting.value - 1f).coerceAtLeast(6f)) },
+                    onIncrease = { terminalFontSizeSetting.onChange((terminalFontSizeSetting.value + 1f).coerceAtMost(40f)) },
+                    modified = terminalFontSizeSetting.value != SettingsDefaults.TERMINAL_FONT_SIZE,
+                    onReset = { terminalFontSizeSetting.onChange(SettingsDefaults.TERMINAL_FONT_SIZE) },
                 )
             }
 
@@ -812,6 +840,53 @@ object SettingsFeature {
             }
 
             SettingsCard(
+                title = "Background process limit",
+                description = "Android caps how many processes an app may fork and kills the rest — " +
+                    "which takes the whole Linux environment down mid-command. Raising the cap needs " +
+                    "one adb command; JCode cannot set it itself.",
+                keywords = "phantom process limit killed died crashed dies terminal closes distro proot stopped " +
+                    "background max_phantom_processes device_config adb activity manager trimming long session " +
+                    "claude agent build gradle npm disappears exits by itself",
+            ) {
+                val clipboard = LocalClipboardManager.current
+                var processCount by remember { mutableStateOf<Int?>(null) }
+                // Only polls while this card is actually on screen (the group is collapsed by default).
+                LaunchedEffect(Unit) {
+                    while (true) {
+                        processCount = withContext(Dispatchers.IO) { AppProcesses.count() }
+                        delay(3_000L)
+                    }
+                }
+                SummaryRow(
+                    label = "Linux processes",
+                    value = processCount?.let { "$it of ${AppProcesses.DEFAULT_PHANTOM_LIMIT} (default cap)" }
+                        ?: "Unknown",
+                )
+                Text(
+                    text = "Android 12+ kills an app's forked processes once they pass the cap — 32 by " +
+                        "default. proot, the shell and everything under it count, so a long build or " +
+                        "coding-agent session goes over it and the terminal dies while JCode keeps " +
+                        "running. Run these from a computer with the device connected (or from this " +
+                        "device's own adb) to lift it; it survives reboots but has to be redone after a " +
+                        "factory reset.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = AppProcesses.RAISE_LIMIT_COMMANDS,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                OutlinedButton(
+                    onClick = { clipboard.setText(AnnotatedString(AppProcesses.RAISE_LIMIT_COMMANDS)) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Copy commands")
+                }
+            }
+
+            SettingsCard(
                 title = "Android device",
                 description = "Pair JCode with this phone's own adb so builds install and launch on it.",
                 keywords = "android device adb bridge wireless debugging pair pairing code relay serial apk " +
@@ -941,6 +1016,96 @@ object SettingsFeature {
             }
 
             } // end About
+
+            SettingsGroup("Diagnostics") {
+            SettingsCard(
+                title = "Diagnostic logging",
+                description = "Off unless you turn it on. When something misbehaves, record what the " +
+                    "app is doing to a file you can attach to a bug report, then switch it back off.",
+                keywords = "diagnostic diagnostics log logging logcat debug trace record capture crash report " +
+                    "bug issue troubleshoot export share verbose file",
+            ) {
+                val diagnostics = LocalDiagnosticsSetting.current
+                var showLog by remember { mutableStateOf(false) }
+                // Size/location only move while recording, and only matter while this card is open.
+                LaunchedEffect(diagnostics.enabled) {
+                    while (diagnostics.enabled) {
+                        diagnostics.onRefresh()
+                        delay(2_000L)
+                    }
+                }
+                ToggleRow(
+                    label = "Record diagnostics",
+                    supporting = "Writes app events to a log file on this device. Nothing is sent anywhere " +
+                        "— you choose when to export it. File paths are replaced with placeholders so the " +
+                        "log is safe to share.",
+                    checked = diagnostics.enabled,
+                    onCheckedChange = diagnostics.onSetEnabled,
+                    modified = diagnostics.enabled != SettingsDefaults.DIAGNOSTIC_LOGGING,
+                    onReset = { diagnostics.onSetEnabled(SettingsDefaults.DIAGNOSTIC_LOGGING) },
+                )
+                if (diagnostics.enabled) {
+                    SettingsDropdownRow(
+                        label = "Detail",
+                        options = DiagLevel.entries.map { it.name },
+                        selected = diagnostics.level.name,
+                        onSelect = { diagnostics.onSetLevel(DiagLevel.valueOf(it)) },
+                        optionLabel = { DiagLevel.valueOf(it).label },
+                        modified = diagnostics.level != SettingsDefaults.DIAGNOSTIC_LEVEL,
+                        onReset = { diagnostics.onSetLevel(SettingsDefaults.DIAGNOSTIC_LEVEL) },
+                    )
+                    ToggleRow(
+                        label = "Include the system log",
+                        supporting = "Adds JCode's logcat output — including proot and the Linux " +
+                            "environment running under it, which is where most of the detail about " +
+                            "toolchains, extensions and language servers ends up. Only JCode's own " +
+                            "entries are readable; another app's never are.",
+                        checked = diagnostics.captureSystemLog,
+                        onCheckedChange = diagnostics.onSetCaptureSystemLog,
+                        modified = diagnostics.captureSystemLog != SettingsDefaults.DIAGNOSTIC_SYSTEM_LOG,
+                        onReset = { diagnostics.onSetCaptureSystemLog(SettingsDefaults.DIAGNOSTIC_SYSTEM_LOG) },
+                    )
+                    ToggleRow(
+                        label = "Record crashes",
+                        supporting = "Append the stack trace when the app crashes, so the log covers the " +
+                            "failure itself and not just what led up to it.",
+                        checked = diagnostics.captureCrashes,
+                        onCheckedChange = diagnostics.onSetCaptureCrashes,
+                        modified = diagnostics.captureCrashes != SettingsDefaults.DIAGNOSTIC_CRASHES,
+                        onReset = { diagnostics.onSetCaptureCrashes(SettingsDefaults.DIAGNOSTIC_CRASHES) },
+                    )
+                    SummaryRow(label = "Recorded", value = formatLogSize(diagnostics.sizeBytes))
+                    SummaryRow(label = "Location", value = diagnostics.location.ifBlank { "Starting…" })
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(
+                        onClick = { showLog = true },
+                        enabled = diagnostics.sizeBytes > 0L,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("View")
+                    }
+                    OutlinedButton(
+                        onClick = diagnostics.onExport,
+                        enabled = diagnostics.sizeBytes > 0L,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Export…")
+                    }
+                    OutlinedButton(
+                        onClick = diagnostics.onClear,
+                        enabled = diagnostics.sizeBytes > 0L,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Clear")
+                    }
+                }
+                if (showLog) {
+                    DiagnosticLogDialog(lines = diagnostics.recentLines(), onDismiss = { showLog = false })
+                }
+            }
+
+            } // end Diagnostics
 
             SettingsGroup("Editor") {
             SettingsCard(
@@ -1674,6 +1839,62 @@ private fun IconBundleRow(
             )
         }
     }
+}
+
+/** Human-readable size for the Diagnostics card's "Recorded" row. */
+private fun formatLogSize(bytes: Long): String = when {
+    bytes <= 0L -> "Nothing yet"
+    bytes < 1024L -> "$bytes B"
+    bytes < 1024L * 1024L -> "${bytes / 1024L} KB"
+    else -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+}
+
+/**
+ * The tail of the current diagnostic session. Shown so a user can see exactly what is being recorded
+ * before deciding to share it — opting in should not mean opting in blind.
+ */
+@Composable
+private fun DiagnosticLogDialog(lines: List<String>, onDismiss: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Recent diagnostics") },
+        text = {
+            if (lines.isEmpty()) {
+                Text("Nothing recorded yet.", style = MaterialTheme.typography.bodySmall)
+            } else {
+                // Newest last, scrolled to the bottom: the end of the log is what a report is about.
+                val scroll = rememberScrollState()
+                LaunchedEffect(lines.size) { scroll.scrollTo(scroll.maxValue) }
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(scroll)
+                        .horizontalScroll(rememberScrollState()),
+                ) {
+                    lines.forEach { line ->
+                        Text(
+                            text = line,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        dismissButton = {
+            TextButton(
+                onClick = {
+                    clipboard.setText(AnnotatedString(buildString { lines.forEach { appendLine(it) } }))
+                },
+                enabled = lines.isNotEmpty(),
+            ) {
+                Text("Copy")
+            }
+        },
+    )
 }
 
 @Composable

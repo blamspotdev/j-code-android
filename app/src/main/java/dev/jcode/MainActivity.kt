@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -29,6 +30,8 @@ class MainActivity : ComponentActivity() {
 
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+
+    private val mouseContextClick = MouseContextClick(::dispatchReplayedTouch)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         setTheme(R.style.Theme_JCode)
@@ -74,10 +77,27 @@ class MainActivity : ComponentActivity() {
         const val KEY_RESPECT_CUTOUT = "respect_device_cutout"
     }
 
+    // A mouse right-click opens the context menu instead of going Back — see MouseContextClick.
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (mouseContextClick.onTouchEvent(ev)) return true
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+        if (mouseContextClick.onGenericMotionEvent(ev)) return true
+        return super.dispatchGenericMotionEvent(ev)
+    }
+
+    /** Entry point for the replayed long-press; goes to the window, bypassing our own filter. */
+    private fun dispatchReplayedTouch(ev: MotionEvent) {
+        super.dispatchTouchEvent(ev)
+    }
+
     // Volume buttons can be remapped (Settings → Input → Volume keys). Activity.dispatchKeyEvent is
     // the only hook that reliably sees volume keys regardless of which pane holds focus, and can
     // suppress the OS volume change by consuming the event before the window handles it.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (mouseContextClick.shouldSwallowBack(event)) return true
         val keyCode = event.keyCode
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
             val action = if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {

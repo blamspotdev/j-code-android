@@ -11,10 +11,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.isActive
+import dev.jcode.core.diag.DiagArea
+import dev.jcode.core.diag.DiagnosticLog
 import kotlinx.coroutines.launch
 
 /** Upper bound for the user-configurable session limit (Settings default is 12). */
 private const val MAX_SESSIONS_CAP = 24
+
+/** How close together two self-exits have to be to read as one external kill of the whole tree. */
+private const val EXTERNAL_KILL_BURST_MS = 1_500L
+
+/** SIGKILL, as [PtyProcess.waitForExit] reports it (negated). What a phantom-process trim sends. */
+private const val SIGKILL = 9
+
+/** How long to wait for the child's exit status before giving up on it (see awaitExitStatus). */
+private const val EXIT_STATUS_WAIT_MS = 300L
 
 /**
  * Manages terminal sessions backed by real PTY processes.
@@ -100,6 +111,18 @@ class TerminalSessionManager(
     /** Invoked (off the main thread) when a session's shell exits on its own and it is auto-reaped,
      *  so the host can release the session's foreground-service hold and the UI can drop its tab. */
     var onSessionExit: ((String) -> Unit)? = null
+
+    /** Invoked (off the main thread, after [onSessionExit]) when a shell died in a way an ordinary
+     *  exit cannot explain — its whole process tree was killed from outside the app. On Android 12+
+     *  that is almost always ActivityManager trimming "phantom processes": everything an app forks
+     *  beyond `max_phantom_processes` (32 out of the box) is killed, which takes proot and the entire
+     *  distro down while the app itself keeps running. The host uses this to explain what happened
+     *  instead of leaving the terminal to vanish mid-command. */
+    var onExternalKill: ((String) -> Unit)? = null
+
+    /** Epoch millis of the last self-exit, so a whole-tree kill is recognised by its burst. */
+    @Volatile
+    private var lastSelfExitAt = 0L
 
     /** Invoked (off the main thread) when a guest `code`/`jcode <path>[:line[:col]]` command runs,
      *  carrying the path token so the host can open + focus it in the editor. */
@@ -505,6 +528,16 @@ class TerminalSessionManager(
     /** Tear down a session whose shell exited by itself (see [startReader]). Idempotent. */
     private fun reapExitedSession(id: String) {
         val session = synchronized(sessionsLock) { _sessions.remove(id) } ?: return
+        // Why the tree ended, decided BEFORE the teardown reaps the child itself. waitForExit reports
+        // a negative value when the child died on a signal, and SIGKILL is what a phantom-process trim
+        // (or the OOM killer) sends — proot never signals itself that way. The burst rule catches the
+        // same event from a second angle: a trim takes every session at once, and independent shells
+        // do not exit within milliseconds of each other. The child is already gone at EOF, so the wait
+        // returns immediately.
+        val exitStatus = awaitExitStatus(session)
+        val now = System.currentTimeMillis()
+        val externallyKilled = exitStatus == -SIGKILL || now - lastSelfExitAt <= EXTERNAL_KILL_BURST_MS
+        lastSelfExitAt = now
         session.onUpdate = null
         // Close only the PTY (already at EOF). Do NOT close the VtParser here: a bound TerminalView may
         // still be drawing it on the main thread, and closing native parser state from this IO thread
@@ -515,6 +548,35 @@ class TerminalSessionManager(
             activeSessionId = synchronized(sessionsLock) { _sessions.keys.firstOrNull() }
         }
         onSessionExit?.invoke(id)
+        if (externallyKilled) {
+            DiagnosticLog.failure(
+                DiagArea.Terminal,
+                "external-kill",
+                "session $id was killed from outside (exit=$exitStatus, " +
+                    "running=${session.foreground ?: "nothing"}, sessions left=$sessionCount) — " +
+                    "see the phantom-process cap in Settings > Environment",
+            )
+            onExternalKill?.invoke(id)
+        } else {
+            DiagnosticLog.event(DiagArea.Terminal, "exit") {
+                "session $id shell exited (status ${exitStatus ?: "unknown"})"
+            }
+        }
+    }
+
+    /**
+     * The child's exit status, or null when it has not reported in time. `waitForExit` blocks on
+     * `waitpid`, and EOF on the master only *usually* means the child is gone — a program that closes
+     * its tty and keeps running would otherwise wedge this reader forever. An unknown status simply
+     * leaves the burst rule to decide.
+     */
+    private fun awaitExitStatus(session: Session): Int? {
+        var status: Int? = null
+        val waiter = Thread { status = runCatching { session.pty.waitForExit() }.getOrNull() }
+        waiter.isDaemon = true
+        waiter.start()
+        waiter.join(EXIT_STATUS_WAIT_MS)
+        return status
     }
 
     /**

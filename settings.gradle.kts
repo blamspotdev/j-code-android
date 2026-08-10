@@ -42,6 +42,7 @@ include(":core:search")
 include(":core:config")
 include(":core:ext")
 include(":core:state")
+include(":core:diag")
 
 // Feature modules
 include(":feature:explorer")

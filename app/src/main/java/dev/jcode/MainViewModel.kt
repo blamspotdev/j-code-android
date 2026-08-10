@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
@@ -47,6 +48,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import dev.jcode.design.BottomBarVisibility
 import dev.jcode.design.ExtraKeysVisibility
+import dev.jcode.core.diag.DiagArea
+import dev.jcode.core.diag.DiagLevel
+import dev.jcode.core.diag.DiagnosticLog
 import dev.jcode.design.SettingsDefaults
 import dev.jcode.design.TabColoring
 import dev.jcode.design.TabMaxSize
@@ -122,6 +126,9 @@ const val EXTENSION_API_VERSION = 1
  *  must not be able to grow the decoration maps without limit. */
 const val MAX_EXPLORER_DECORATIONS = 20_000
 
+/** Throttle for the "Android killed the distro" prompt — one kill takes every terminal at once. */
+private const val PROCESS_LIMIT_PROMPT_INTERVAL_MS = 60_000L
+
 /**
  * Process-singleton holder for the app-level UI-preferences DataStore. A DataStore must be created
  * exactly once per file per process; constructing a second one (e.g. when MainViewModel is rebuilt
@@ -186,6 +193,9 @@ sealed interface PendingFolderType {
 sealed interface WorkbenchPrompt {
     /** A change only applies on a fresh process — offer to restart the app. */
     data class RestartApp(val message: String) : WorkbenchPrompt
+
+    /** Android killed the distro's processes; point the user at the setting that explains it. */
+    data object ProcessLimit : WorkbenchPrompt
 }
 
 /** An updated extension awaiting a reload; surfaced as a compact banner atop the Extensions panel. */
@@ -313,6 +323,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Actionable prompts surfaced as a snackbar with a button (restart the app). */
     private val _prompts = MutableSharedFlow<WorkbenchPrompt>(extraBufferCapacity = 4)
     val prompts = _prompts.asSharedFlow()
+
+    private var lastProcessLimitPromptAt = 0L
+
+    /**
+     * A terminal's process tree was killed from outside the app (see
+     * [dev.jcode.core.term.TerminalSessionManager.onExternalKill]). One kill takes every session down
+     * at once, so the prompt is throttled — otherwise the user gets a snackbar per dead terminal.
+     */
+    fun reportExternalProcessKill() {
+        val now = System.currentTimeMillis()
+        if (now - lastProcessLimitPromptAt < PROCESS_LIMIT_PROMPT_INTERVAL_MS) return
+        lastProcessLimitPromptAt = now
+        _prompts.tryEmit(WorkbenchPrompt.ProcessLimit)
+    }
 
     /**
      * Sideload an extension from a picked `.jext` [uri] (Developer options). Streams it to a cache
@@ -1430,6 +1454,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val terminalFontSizeGlobalKey = floatPreferencesKey("terminal_font_size_global")
+
+    /** App-level (Global settings) terminal font size, in sp. Unlike the editor's, this has no
+     *  workspace/project override — a terminal is not tied to one file tree. */
+    val terminalFontSizeGlobal: StateFlow<Float> = uiPreferences.data
+        .map { prefs -> (prefs[terminalFontSizeGlobalKey] ?: SettingsDefaults.TERMINAL_FONT_SIZE).coerceIn(6f, 40f) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.TERMINAL_FONT_SIZE)
+
+    fun setTerminalFontSizeGlobal(size: Float) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[terminalFontSizeGlobalKey] = size.coerceIn(6f, 40f) }
+        }
+    }
+
     private val editorWordWrapKey = booleanPreferencesKey("editor_word_wrap")
 
     /** App-level (Global settings) editor word-wrap toggle. Drives [dev.jcode.core.editor.RenderConfig]
@@ -1442,6 +1480,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             uiPreferences.edit { prefs -> prefs[editorWordWrapKey] = enabled }
         }
+    }
+
+    private val diagnosticLoggingKey = booleanPreferencesKey("diagnostic_logging")
+    private val diagnosticLevelKey = stringPreferencesKey("diagnostic_level")
+    private val diagnosticSystemLogKey = booleanPreferencesKey("diagnostic_system_log")
+    private val diagnosticCrashesKey = booleanPreferencesKey("diagnostic_crashes")
+
+    /** Settings → Diagnostics, opt-in. Collected into [DiagnosticLog.configure] below, which is the
+     *  only thing that ever starts recording. */
+    data class DiagnosticsPrefs(
+        val enabled: Boolean = SettingsDefaults.DIAGNOSTIC_LOGGING,
+        val level: DiagLevel = SettingsDefaults.DIAGNOSTIC_LEVEL,
+        val captureSystemLog: Boolean = SettingsDefaults.DIAGNOSTIC_SYSTEM_LOG,
+        val captureCrashes: Boolean = SettingsDefaults.DIAGNOSTIC_CRASHES,
+    )
+
+    val diagnosticsPrefs: StateFlow<DiagnosticsPrefs> = uiPreferences.data
+        .map { prefs ->
+            DiagnosticsPrefs(
+                enabled = prefs[diagnosticLoggingKey] ?: SettingsDefaults.DIAGNOSTIC_LOGGING,
+                level = prefs[diagnosticLevelKey]
+                    ?.let { name -> DiagLevel.entries.firstOrNull { it.name == name } }
+                    ?: SettingsDefaults.DIAGNOSTIC_LEVEL,
+                captureSystemLog = prefs[diagnosticSystemLogKey] ?: SettingsDefaults.DIAGNOSTIC_SYSTEM_LOG,
+                captureCrashes = prefs[diagnosticCrashesKey] ?: SettingsDefaults.DIAGNOSTIC_CRASHES,
+            )
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, DiagnosticsPrefs())
+
+    fun setDiagnosticLogging(enabled: Boolean) = editDiagnostics { it[diagnosticLoggingKey] = enabled }
+
+    fun setDiagnosticLevel(level: DiagLevel) = editDiagnostics { it[diagnosticLevelKey] = level.name }
+
+    fun setDiagnosticSystemLog(enabled: Boolean) = editDiagnostics { it[diagnosticSystemLogKey] = enabled }
+
+    fun setDiagnosticCrashes(enabled: Boolean) = editDiagnostics { it[diagnosticCrashesKey] = enabled }
+
+    private fun editDiagnostics(edit: (MutablePreferences) -> Unit) {
+        viewModelScope.launch { uiPreferences.edit { prefs -> edit(prefs) } }
     }
 
     private val developerOptionsKey = booleanPreferencesKey("developer_options")
@@ -1960,6 +2037,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // re-publishes effectiveConfig, so the collector below live-updates open editors.
         viewModelScope.launch {
             editorFontSizeGlobal.collect { configService.setGlobalEditorFontSize(it) }
+        }
+
+        // The ONLY thing that starts diagnostic recording: it follows the user's opt-in and stops
+        // the moment they switch it back off.
+        viewModelScope.launch {
+            diagnosticsPrefs.collect { prefs ->
+                DiagnosticLog.configure(
+                    context = appContext,
+                    enabled = prefs.enabled,
+                    level = prefs.level,
+                    captureSystemLog = prefs.captureSystemLog,
+                    captureCrashes = prefs.captureCrashes,
+                )
+            }
         }
 
         viewModelScope.launch {

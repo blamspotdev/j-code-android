@@ -23,4 +23,5 @@ dependencies {
     implementation(libs.core.ktx)
     implementation(libs.coroutines.android)
     implementation(project(":core:distro"))
+    implementation(project(":core:diag"))
 }

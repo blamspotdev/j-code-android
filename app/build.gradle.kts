@@ -153,6 +153,7 @@ dependencies {
     implementation(project(":core:config"))
     implementation(project(":core:ext"))
     implementation(project(":core:state"))
+    implementation(project(":core:diag"))
 
     // Feature modules
     implementation(project(":feature:explorer"))

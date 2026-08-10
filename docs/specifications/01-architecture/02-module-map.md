@@ -57,8 +57,9 @@ Largest files: `JCodeShell.kt` (4,999 lines), `MainViewModel.kt` (4,844).
 | `:core:buffer` | `:native:buffer` | Implemented | Text buffer, piece table, snapshots, native tokenizer facade |
 | `:core:config` | — | Implemented | Workspace/project YAML, merge to effective config, `run.yaml` |
 | `:core:ctags` | — | **Stub** | Marker only. Intended: universal-ctags driver + Room index |
+| `:core:diag` | — | Implemented | Opt-in `DiagnosticLog`: redacted rotating file, own-process logcat tee, crash capture |
 | `:core:debug` | `:core:term`, `:core:distro` | Implemented | DAP client |
-| `:core:design` | — | Implemented | Design system, theme/icon bundles, settings widgets, command registry |
+| `:core:design` | `:core:diag` | Implemented | Design system, theme/icon bundles, settings widgets, command registry |
 | `:core:distro` | `:core:config` | Implemented | proot, rootfs, toolchain catalog, ADB stack. Largest core module |
 | `:core:editor` | `:core:buffer`, `:core:resource` | Implemented | `EditorState`, `EditorView`, `Renderer`, `UndoManager`, `WrapMap`, decorations |
 | `:core:editor-completion` | `:core:editor`, `:core:editor-decor` | Implemented | Completion model, snippet engine, completion popup |
@@ -69,7 +70,7 @@ Largest files: `JCodeShell.kt` (4,999 lines), `MainViewModel.kt` (4,844).
 | `:core:resource` | — | Implemented | Memory-pressure registry, managed caches, pools, `NativeHandle` base |
 | `:core:search` | — | Implemented | Search engine over ripgrep FFI with a Kotlin fallback |
 | `:core:state` | — | **Stub** | Marker only. Session restore actually lives in `app/src/main/java/dev/jcode/SessionStore.kt` |
-| `:core:term` | `:core:distro` | Implemented | PTY, VT parser, session manager, terminal view |
+| `:core:term` | `:core:distro`, `:core:diag` | Implemented | PTY, VT parser, session manager, terminal view |
 | `:core:treesitter` | `:core:editor`, `:core:editor-decor`, `:core:buffer` | **Built but unwired** | Complete tree-sitter binding; no grammar is ever loaded |
 | `:core:vcs` | — | **Stub** | Marker only. SCM is implemented as a WebView-hosted extension |
 

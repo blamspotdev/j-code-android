@@ -77,8 +77,14 @@ class TerminalView @JvmOverloads constructor(
     // typed character, then cleared. CTRL turns a letter into its control byte; ALT prefixes ESC.
     var pendingCtrl = false
     var pendingAlt = false
+    // Shift armed for the NEXT key, from either the extra-keys row's SHIFT chip or an on-screen
+    // keyboard: soft keyboards (Gboard) send Shift as a key of its own and leave META_SHIFT_ON off the
+    // key that follows, so it is latched here and folded in — that is what makes Shift+Enter (Claude
+    // Code's newline) and Shift+Tab reachable without a hardware keyboard. Hardware keyboards report
+    // the meta state on the event itself and never set this.
+    var pendingShift = false
     // Notified after an armed modifier is consumed (or discarded) by typed input, so the row can
-    // un-highlight its CTRL/ALT chips.
+    // un-highlight its CTRL/ALT/SHIFT chips.
     var onPendingModifiersConsumed: (() -> Unit)? = null
     // Kept normalized: (startRow, startCol) <= (endRow, endCol) row-major; end column is inclusive.
     private var selectionStartRow = 0
@@ -991,7 +997,11 @@ class TerminalView @JvmOverloads constructor(
             // Alt+F1-F12 (function keys with Alt modifier)
             isAlt && keyCode == KeyEvent.KEYCODE_F1 -> "\u001B\u001BOP".toByteArray()
             isAlt && keyCode == KeyEvent.KEYCODE_F2 -> "\u001B\u001BOQ".toByteArray()
-            // Standard keys
+            // Standard keys. Shift+Enter sends ESC CR — the sequence CLIs that offer a terminal setup
+            // step (Claude Code, Codex) read as "insert a newline" instead of "submit", and which a
+            // plain CR cannot express. Unshifted Enter stays CR.
+            isShift && (keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) ->
+                byteArrayOf(0x1B, 0x0D)
             keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER -> byteArrayOf(0x0D)
             keyCode == KeyEvent.KEYCODE_DEL -> byteArrayOf(0x7F)
             keyCode == KeyEvent.KEYCODE_DPAD_UP -> (if (appCursor) "\u001BOA" else "\u001B[A").toByteArray()
@@ -1033,8 +1043,12 @@ class TerminalView @JvmOverloads constructor(
      * handled separately via [onCreateInputConnection]. Printable characters are sent as UTF-8;
      * control/navigation keys go through [sendKey].
      */
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (pty?.isOpen != true) return super.onKeyDown(keyCode, event)
+    override fun onKeyDown(keyCode: Int, event0: KeyEvent): Boolean {
+        if (pty?.isOpen != true) return super.onKeyDown(keyCode, event0)
+        // A soft keyboard that routes through the view (rather than the InputConnection), and the
+        // extra-keys SHIFT chip, both arm the same latch; fold it in here too so the paths match.
+        val event = withPendingShift(event0)
+        consumePendingShift()
         // Control/navigation keys first: some hardware keyboards report a unicodeChar for Enter
         // (e.g. '\n'), which must not be sent verbatim — Enter must always resolve to CR (0x0D) via
         // sendKey so a TUI like Claude Code submits the line instead of inserting a newline.
@@ -1477,16 +1491,23 @@ class TerminalView @JvmOverloads constructor(
             }
 
             override fun sendKeyEvent(event: KeyEvent): Boolean {
-                if (event.action == KeyEvent.ACTION_DOWN) {
-                    when {
-                        event.keyCode == KeyEvent.KEYCODE_ENTER -> sendInput(byteArrayOf(0x0D))
-                        event.keyCode == KeyEvent.KEYCODE_DEL -> sendInput(byteArrayOf(0x7F))
-                        event.unicodeChar != 0 -> {
-                            val ch = event.unicodeChar.toChar()
-                            val mapped = if (ch == '\n' || ch == '\r') "\r" else ch.toString()
-                            if (!sendWithPendingModifiers(mapped)) sendInput(mapped)
-                        }
-                    }
+                val keyCode = event.keyCode
+                // Latch a standalone Shift from the soft keyboard rather than dropping it (see pendingShift).
+                if (keyCode == KeyEvent.KEYCODE_SHIFT_LEFT || keyCode == KeyEvent.KEYCODE_SHIFT_RIGHT) {
+                    if (event.action == KeyEvent.ACTION_DOWN) pendingShift = true
+                    return true
+                }
+                if (event.action != KeyEvent.ACTION_DOWN) return true
+                val shifted = withPendingShift(event)
+                consumePendingShift()
+                // Same routing as the hardware path: sendKey resolves Enter to CR, Shift+Tab to CSI Z,
+                // arrows/Home/End to the mode-correct sequence; printable keys fall through to it.
+                if (sendKey(keyCode, shifted)) return true
+                val uch = shifted.getUnicodeChar(shifted.metaState)
+                if (uch != 0) {
+                    val ch = uch.toChar()
+                    val mapped = if (ch == '\n' || ch == '\r') "\r" else ch.toString()
+                    if (!sendWithPendingModifiers(mapped)) sendInput(mapped)
                 }
                 return true
             }
@@ -1532,6 +1553,31 @@ class TerminalView @JvmOverloads constructor(
             sendReport(if (gainFocus) "\u001B[I" else "\u001B[O")
         }
         onFocusStateChanged?.invoke(gainFocus)
+    }
+
+    /** Clear the armed Shift and let the extra-keys row drop its SHIFT highlight with it. */
+    private fun consumePendingShift() {
+        if (!pendingShift) return
+        pendingShift = false
+        onPendingModifiersConsumed?.invoke()
+    }
+
+    /** [event] with the armed [pendingShift] folded into its meta state, so both the key tables and
+     *  `getUnicodeChar` see it. Returns [event] itself when there is nothing to add. */
+    private fun withPendingShift(event: KeyEvent): KeyEvent {
+        if (!pendingShift || event.isShiftPressed) return event
+        return KeyEvent(
+            event.downTime,
+            event.eventTime,
+            event.action,
+            event.keyCode,
+            event.repeatCount,
+            event.metaState or KeyEvent.META_SHIFT_ON or KeyEvent.META_SHIFT_LEFT_ON,
+            event.deviceId,
+            event.scanCode,
+            event.flags,
+            event.source,
+        )
     }
 
     /**

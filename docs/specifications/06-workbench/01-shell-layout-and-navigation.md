@@ -142,6 +142,16 @@ See [Extension API and hosts](../07-extensions/04-extension-api-and-hosts.md).
 smallestScreenSize, keyboard, keyboardHidden, navigation, uiMode, density, fontScale, locale,
 layoutDirection) so the activity is not recreated for these changes.
 
+**Mouse right-click opens a context menu, not Back.** Android synthesizes a Back key press when
+nothing consumes the secondary mouse button, so with a mouse attached every right-click navigated
+backwards. `MouseContextClick` (owned by `MainActivity`, the only place that sees pointer events
+whichever pane has focus) swallows the whole secondary-button gesture — `ACTION_BUTTON_PRESS` /
+`ACTION_BUTTON_RELEASE` on the generic-motion path, `ACTION_DOWN`…`ACTION_UP` on the touch path —
+and replays it as a **touch long-press** at the same point. Every surface with a long-press menu
+therefore gets the desktop behaviour without opting in, and one with no menu simply does nothing.
+A Back key arriving within 400 ms of a right-click is dropped as a backstop; the real Back button
+and the system back gesture are untouched.
+
 ---
 
 ## 7. Session restore
