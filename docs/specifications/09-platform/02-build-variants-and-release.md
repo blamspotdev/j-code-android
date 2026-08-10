@@ -102,7 +102,7 @@ packaging {
 Single source of truth in `app/build.gradle.kts`:
 
 ```kotlin
-val jcodeVersion = "1.4.2"
+val jcodeVersion = "1.4.3"
 val jcodeVersionName = findProperty("jcodeVersionName") ?: jcodeVersion
 val jcodeVersionCode = MAJOR * 10000 + MINOR * 100 + PATCH   // falls back to 10000
 ```
@@ -111,7 +111,7 @@ Properties of the scheme, as documented in the file: monotonic, deterministic, o
 independent of git history — **a squash-merge collapsed the old git-commit-count scheme and produced
 downgrades**.
 
-Pre-release suffixes (`1.4.2-beta`) are ignored by the code derivation.
+Pre-release suffixes (`1.4.3-beta`) are ignored by the code derivation.
 
 > **The formula is duplicated in three places** and they must agree: `app/build.gradle.kts`
 > (`jcodeVersionCode`), `scripts/build-release.ps1` (`$Code`), and
