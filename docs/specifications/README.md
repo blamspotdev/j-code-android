@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| **Product version** | 1.4.4 (`app/build.gradle.kts`, `val jcodeVersion`) |
+| **Product version** | 1.4.5 (`app/build.gradle.kts`, `val jcodeVersion`) |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 | **Scope** | The whole system: 43 Gradle modules across `:app`, `:core:*`, `:feature:*`, `:native:*` |
 

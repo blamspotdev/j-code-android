@@ -102,7 +102,7 @@ packaging {
 Single source of truth in `app/build.gradle.kts`:
 
 ```kotlin
-val jcodeVersion = "1.4.4"
+val jcodeVersion = "1.4.5"
 val jcodeVersionName = findProperty("jcodeVersionName") ?: jcodeVersion
 val jcodeVersionCode = MAJOR * 10000 + MINOR * 100 + PATCH   // falls back to 10000
 ```
@@ -111,7 +111,7 @@ Properties of the scheme, as documented in the file: monotonic, deterministic, o
 independent of git history — **a squash-merge collapsed the old git-commit-count scheme and produced
 downgrades**.
 
-Pre-release suffixes (`1.4.4-beta`) are ignored by the code derivation, and are never stored in
+Pre-release suffixes (`1.4.5-beta`) are ignored by the code derivation, and are never stored in
 `app/build.gradle.kts` — the release scripts apply them at build time via `-PjcodeVersionName`.
 `scripts/bump-patch-version.sh` refuses to bump a version that has one, on the grounds that a
 suffix in the file means something upstream is wrong.
