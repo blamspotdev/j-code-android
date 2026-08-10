@@ -1,29 +1,24 @@
 name: version bump
 
-# Keeps the patch version moving without anyone having to remember it (main has merged
-# a feature batch unbumped more than once — see the #28 and #34 bump PRs).
+# Bumps the patch version on `main` after every merged PR, so nobody has to remember it
+# (main has merged a feature batch unbumped more than once — see the #28 and #34 bump PRs).
 #
-# It opens a PR rather than committing to main, because it CANNOT commit to main: the
-# `protect-main` ruleset requires a pull request and lists no bypass actors, so rulesets
-# apply to every actor including admins and GITHUB_TOKEN. Granting Actions a bypass would
-# let any workflow with contents:write push to main, which is a bigger change than this
-# problem is worth.
+# **This needs a bypass actor on the `protect-main` ruleset.** That ruleset requires a pull
+# request and, with no bypass actors, binds every actor — admins and GITHUB_TOKEN included —
+# so a direct push to `main` is refused. Add one under
+# Settings > Rules > protect-main > Bypass list:
 #
-# The PR is a standing one on `chore/bump-version`, always rebuilt as "current main + 1
-# patch" and force-pushed. Several merges before you take it therefore produce ONE version
-# bump, not one per PR — a version per release rather than per merge, which is what the
-# semver scheme in app/build.gradle.kts is for. Merge it when you cut a release.
+#   - the "GitHub Actions" app, to let the built-in GITHUB_TOKEN through, or
+#   - "Repository admin" if you run this with a PAT in secrets.VERSION_BUMP_TOKEN.
 #
-# Opening the PR needs "Allow GitHub Actions to create and approve pull requests"
-# (Settings > Actions > General > Workflow permissions), which is OFF by default. Without it
-# the branch is still pushed with the bump on it and the run reports the compare link instead
-# of failing — the version is never lost, it just costs a click. That toggle covers approving
-# as well as creating, which is worth knowing before enabling it on a repo whose ruleset
-# requires a review.
+# Until that exists the push is rejected and the run falls back to offering the bump as a PR
+# on `chore/bump-version`, so merges keep working and the version is never lost. The run
+# summary says which path it took.
 #
-# Note: PRs opened with GITHUB_TOKEN do not trigger other workflows, so the no-host-root
-# guard does not run on the bump PR. Harmless here — the diff is version strings only —
-# but do not extend this workflow to touch code without revisiting that.
+# Note: pushes made with GITHUB_TOKEN do not trigger other workflows, so a direct bump will
+# not re-run this workflow (no loop) and will not re-run the no-host-root guard either. A PAT
+# in VERSION_BUMP_TOKEN does trigger them; that is still no loop — a push cannot fire
+# `pull_request`.
 on:
   pull_request:
     types: [closed]
@@ -34,8 +29,8 @@ permissions:
   contents: write
   pull-requests: write
 
-# Merges can land in quick succession; queue the runs instead of cancelling, so the last
-# one leaves the branch consistent with main rather than half-written.
+# Merges can land in quick succession; queue the runs instead of cancelling so each one sees
+# the previous bump rather than racing it.
 concurrency:
   group: version-bump
   cancel-in-progress: false
@@ -52,6 +47,9 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          # A PAT (paired with a "Repository admin" bypass) if you have one; the built-in
+          # token otherwise, which needs the GitHub Actions app on the bypass list instead.
+          token: ${{ secrets.VERSION_BUMP_TOKEN || github.token }}
 
       - name: Skip when the merged PR moved the version itself
         id: guard
@@ -74,69 +72,86 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Bump the patch version
-        id: bump
-        if: steps.guard.outputs.skip != 'true'
-        run: |
-          set -eu
-          version="$(sh scripts/bump-patch-version.sh)"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Open or refresh the bump PR
+      - name: Bump main
         if: steps.guard.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.bump.outputs.version }}
           BRANCH: chore/bump-version
         run: |
           set -eu
-          if git diff --quiet; then
-            echo "main already reads $VERSION; nothing to open."
-            exit 0
-          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout -B "$BRANCH"
-          git commit -am "Bump version to $VERSION" -m \
-            "Opened automatically after a merge to main. versionCode derives from the semver in app/build.gradle.kts, so this single line is the whole change; the specifications that state the product version move with it."
-          # Rebuilt from main every run, so the branch is replaced rather than appended to.
-          git push --force origin "$BRANCH"
+          blocked=0
 
-          body="$(printf '%s\n' \
-            "Automatic patch bump to \`$VERSION\`, opened after a merge to \`main\`." \
-            "" \
-            "\`versionCode\` derives from the semver (\`MAJOR*10000 + MINOR*100 + PATCH\`), so this one line is the whole change; the specifications that state the product version move with it." \
-            "" \
-            "This branch is rebuilt from \`main\` after every merge, so it always reads **current main + 1 patch**. Several merges before you take it produce one bump, not one per PR — merge it when you cut a release." \
-            "" \
-            "To skip the bump for a PR, label it \`skip-bump\`. A PR that changes \`jcodeVersion\` itself is detected and skipped.")"
+          # Recomputed from the current tip on every attempt: another merge may have bumped main
+          # since this run started, and replaying a stale bump would reuse a version number.
+          for attempt in 1 2 3; do
+            git fetch --quiet origin main
+            git reset --quiet --hard origin/main
+            version="$(sh scripts/bump-patch-version.sh)"
+            git commit --quiet -am "Bump version to $version" -m "Pushed automatically after a merge to main. versionCode derives from the semver in app/build.gradle.kts, so this single line is the whole change; the specifications that state the product version move with it."
 
-          compare="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...${BRANCH}?expand=1"
-
-          # The bump is already safe on the branch by this point, so failing to open the PR is an
-          # inconvenience, not a lost result — opening one by hand takes a click. Creating a PR
-          # needs "Allow GitHub Actions to create and approve pull requests" (Settings > Actions >
-          # General), which is off by default; without it `gh pr create` returns
-          # "GitHub Actions is not permitted to create or approve pull requests". Rather than paint
-          # the run red for a missing repo setting, say so and hand over the compare link.
-          existing="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)"
-          if [ -n "$existing" ]; then
-            if gh pr edit "$existing" --title "Bump version to $VERSION" --body "$body"; then
-              echo "Refreshed PR #$existing -> $VERSION"
+            if git push origin HEAD:main 2>push.err; then
+              echo "main bumped to $version"
+              echo "main bumped to $version." >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
-          elif gh pr create --base main --head "$BRANCH" \
-                 --title "Bump version to $VERSION" --body "$body"; then
-            exit 0
+            cat push.err
+
+            # A ruleset refusal will not go away by retrying; losing a race to another run will.
+            if grep -qEi 'protected branch|through a pull request|rule violations|GH006' push.err; then
+              blocked=1
+              break
+            fi
+            echo "Push rejected (attempt $attempt) — refetching and recomputing."
+          done
+
+          if [ "$blocked" -ne 1 ]; then
+            echo "Could not push the bump to main after 3 attempts." >&2
+            exit 1
+          fi
+
+          # main is protected against us: offer the bump as a PR instead. The commit and $version
+          # from the loop above are still in place.
+          git push --force origin HEAD:"$BRANCH"
+
+          body="$(cat <<EOF
+          Automatic patch bump to $version, pushed after a merge to main.
+
+          The workflow tried to bump main directly and was refused by the protect-main ruleset.
+          Add a bypass actor (Settings > Rules > protect-main > Bypass list) and future merges
+          will bump main without going through a PR.
+
+          versionCode derives from the semver (MAJOR*10000 + MINOR*100 + PATCH), so this one line
+          is the whole change; the specifications that state the product version move with it.
+
+          To skip the bump for a PR, label it skip-bump. A PR that changes jcodeVersion itself is
+          detected and skipped.
+          EOF
+          )"
+
+          compare="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...${BRANCH}?expand=1"
+          existing="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          opened=0
+          if [ -n "$existing" ]; then
+            if gh pr edit "$existing" --title "Bump version to $version" --body "$body"; then
+              opened=1
+            fi
+          elif gh pr create --base main --head "$BRANCH" --title "Bump version to $version" --body "$body"; then
+            opened=1
           fi
 
           {
-            echo "### Bump to \`$VERSION\` is ready, but the PR could not be opened"
+            echo "### main could not be bumped directly"
             echo
-            echo "The branch \`$BRANCH\` is pushed and holds the whole change — [open the PR]($compare)."
+            echo "The protect-main ruleset refused the push, so the bump to $version is on"
+            echo "$BRANCH instead — [open the PR]($compare)."
             echo
-            echo "To have this step open it automatically, enable **Settings → Actions → General →"
-            echo "Workflow permissions → Allow GitHub Actions to create and approve pull requests**."
-            echo "Note that toggle covers approving as well as creating."
+            echo "To have merges bump main itself, add a bypass actor under **Settings > Rules >"
+            echo "protect-main > Bypass list**: the **GitHub Actions** app for the built-in token,"
+            echo "or **Repository admin** if you put a PAT in VERSION_BUMP_TOKEN."
+            if [ "$opened" -ne 1 ]; then
+              echo
+              echo "(Opening the PR also needs *Allow GitHub Actions to create and approve pull requests*.)"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "Branch pushed. Open the PR here: $compare"

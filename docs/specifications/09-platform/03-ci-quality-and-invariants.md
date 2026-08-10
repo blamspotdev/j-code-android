@@ -75,34 +75,37 @@ sh scripts/check-no-host-root.sh
 ## 2a. Automatic patch bumping
 
 `main` has merged a feature batch without a version bump more than once (the #28 and #34 bump PRs
-exist only to correct that), so `.github/workflows/version-bump.yml` now does it.
+exist only to correct that), so `.github/workflows/version-bump.yml` now does it: every merged PR
+bumps the patch on `main`.
 
-It **opens a PR rather than committing to `main`**, because it cannot commit to `main`: the
-`protect-main` ruleset requires a pull request and declares no bypass actors, and rulesets bind every
-actor — admins and `GITHUB_TOKEN` included. Granting Actions a bypass would let any workflow holding
-`contents: write` push to `main`, which is a larger change than the problem warrants.
+**This requires a bypass actor on the `protect-main` ruleset.** That ruleset requires a pull request
+and declares no bypass actors, and rulesets bind every actor — admins and `GITHUB_TOKEN` included —
+so a direct push to `main` is refused. Add one under *Settings → Rules → protect-main → Bypass list*:
+the **GitHub Actions** app (for the built-in token), or **Repository admin** paired with a PAT in
+`secrets.VERSION_BUMP_TOKEN`.
+
+Without it the run does not fail: it falls back to pushing the bump to `chore/bump-version` and
+offering it as a PR, and the run summary says which path it took and what to configure.
 
 | Aspect | Behaviour |
 |---|---|
 | Trigger | A pull request **merged** into `main`, plus `workflow_dispatch` |
-| Branch | `chore/bump-version`, rebuilt from `main` each run and force-pushed |
-| Version | Always *current `main` + 1 patch*, so several merges yield **one** bump, not one per PR |
+| Normal path | Commit straight onto `main` |
+| Fallback | `chore/bump-version` + a PR, when the ruleset refuses the push |
 | Skipped when | The merged PR changed `jcodeVersion` itself, or carries the `skip-bump` label |
+
+Each push attempt re-reads `main` and recomputes the bump rather than replaying a stale one, so two
+merges landing together cannot reuse a version number; only a ruleset refusal breaks the retry loop
+early, because retrying that cannot help.
 
 The bump itself is `scripts/bump-patch-version.sh` — a script, not YAML, so it can be run and tested
 locally. It refuses anything that is not a plain `MAJOR.MINOR.PATCH` (a pre-release label belongs on
 `-PjcodeVersionName` at build time, never in the file), and rewrites both `app/build.gradle.kts` and
 the specifications that state the product version.
 
-Opening the PR requires **Settings → Actions → General → Workflow permissions → "Allow GitHub
-Actions to create and approve pull requests"**, which is off by default; without it `gh pr create`
-fails with *"GitHub Actions is not permitted to create or approve pull requests"*. The workflow
-treats that as a missing setting rather than a failure: the branch is pushed with the bump on it
-either way, and the run summary hands over the compare link. Note the toggle covers **approving** as
-well as creating, which matters on a repo whose ruleset requires a review.
-
-> PRs opened with `GITHUB_TOKEN` do not trigger other workflows, so the no-host-root guard does not
-> run on the bump PR. That is acceptable only while the diff is version strings alone.
+> Pushes made with `GITHUB_TOKEN` do not trigger other workflows, so a direct bump neither re-runs
+> this workflow nor the no-host-root guard. A PAT does trigger them, which is still not a loop — a
+> push cannot fire `pull_request`.
 
 ---
 
