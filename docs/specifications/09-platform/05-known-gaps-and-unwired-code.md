@@ -108,15 +108,13 @@ Five `:feature:*` modules are marker objects; their working implementations are 
 
 ### 5.1 Editor ↔ language server
 
-`LspSession` speaks completion, hover, definition, and can reach references and rename through
-`sendRequest`. But:
+Wired, via `dev.jcode.lsp.LspController` — diagnostics, completions, Go to Definition, Find
+References, Rename Symbol and Format Document all reach a running server. See
+[LSP client](../04-language-services/01-lsp-client.md). What remains:
 
-- **Go to Definition / Find References / Rename Symbol** still surface a "needs a language server
-  (coming soon)" notice.
-- **LSP diagnostics never reach the UI.** `LspSession.diagnostics` is populated; nothing forwards it
-  into `DiagnosticsBus`, so there are no LSP squiggles and no LSP rows in the Issues panel. The
-  Issues panel is fed by config-file errors and on-save syntax checks only.
-- **LSP completions never reach the popup**, which is fed only from Dev Pack keywords.
+- **Document sync is full-document, not incremental**: each debounced change re-sends the whole file.
+- **Hover has no editor UI.** `LspSession.hover` and `LspController.hover` work; nothing calls them.
+- No code actions, semantic tokens, signature help, document symbols, or workspace symbol search.
 
 ### 5.2 External formatters
 
@@ -148,18 +146,7 @@ Device-verified findings:
 
 Real bugs found while writing these specifications. They are not hypothetical.
 
-### 6.1 LSP framing is not byte-exact
-
-`LspSession.processAccumulated` operates on a **`String`** and slices by char index, but
-`Content-Length` is a **byte** count. Any message containing multi-byte UTF-8 is mis-sliced, and
-every later message on that stream is misframed. A second, related defect: `String(buffer, 0, n)`
-decodes each 8 KiB chunk independently, so a character straddling a chunk boundary becomes
-replacement characters.
-
-`DebugSession.process` solves exactly this on `ByteArray` and carries a comment explaining why. The
-LSP client has not adopted it.
-
-### 6.2 `MemoryPressure.LOW` is unreachable
+### 6.1 `MemoryPressure.LOW` is unreachable
 
 `fromTrimLevel` tests `level < 40 → BACKGROUND`, then `level < 60 → MODERATE`, then
 `level < 10 → LOW`. Any level below 10 already matched the first branch, so `LOW` is never returned,
@@ -167,12 +154,12 @@ and levels ≥ 60 fall through to `CRITICAL`. Android's real trim constants are 
 severity (`RUNNING_LOW = 10` is numerically below `BACKGROUND = 40`), which is what makes this easy
 to get wrong.
 
-### 6.3 Rootfs downloads are unverified on the fallback path
+### 6.2 Rootfs downloads are unverified on the fallback path
 
 The built-in default manifest entries carry `sha256 = ""`, so integrity verification engages only
 when a served manifest supplies a hash.
 
-### 6.4 `TsParseService` document keying
+### 6.3 `TsParseService` document keying
 
 Per-document state is keyed on `editorState.hashCode().toString()`, which is not a guaranteed-unique
 identity. (Moot while tree-sitter is unwired.)
@@ -183,7 +170,6 @@ identity. (Moot while tree-sitter is unwired.)
 
 | Declaration | Where | Reality |
 |---|---|---|
-| `lsp4j` | `core/lsp/build.gradle.kts` | Never imported; the client is hand-rolled over `org.json` |
 | `kotlinx-serialization-json` | `core/debug/build.gradle.kts` | Never used; parsing is `org.json` |
 | BouncyCastle | `core/vcs/build.gradle.kts` | The module is a stub |
 | Room, Hilt, DataStore | `core/ctags`, `core/state`, `core/ext` | Those modules are stubs |

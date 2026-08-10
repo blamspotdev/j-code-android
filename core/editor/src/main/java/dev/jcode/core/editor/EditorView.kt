@@ -28,7 +28,13 @@ import kotlin.math.max
 import kotlin.math.min
 
 /** A long-press context request: pixel position and the selected word (empty if none). */
-data class EditorContextRequest(val xPx: Float, val yPx: Float, val word: String)
+data class EditorContextRequest(
+    val xPx: Float,
+    val yPx: Float,
+    val word: String,
+    /** Byte offset the press landed on — the position language-server actions resolve against. */
+    val offset: Int,
+)
 
 /**
  * The identifier prefix being typed at the caret, with the byte range it occupies and the pixel
@@ -283,7 +289,7 @@ class EditorView @JvmOverloads constructor(
                     runBlocking { editorState?.setSelection(listOf(Caret(word.first, word.second))) }
                 }
                 performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                onContextRequest?.invoke(EditorContextRequest(e.x, e.y, word?.third ?: ""))
+                onContextRequest?.invoke(EditorContextRequest(e.x, e.y, word?.third ?: "", offset))
             }
         },
     )

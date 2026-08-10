@@ -63,7 +63,10 @@ import dev.jcode.core.editor.EditorContextRequest
 import dev.jcode.core.editor.EditorTheme
 import dev.jcode.core.editor.EditorLanguageAction
 import dev.jcode.core.editor.EditorView
+import dev.jcode.core.buffer.offsetToUtf16Position
 import dev.jcode.core.editor.completion.CompletionContext
+import dev.jcode.core.editor.completion.CompletionItem
+import dev.jcode.core.editor.completion.CompletionQuery
 import dev.jcode.core.editor.completion.CompletionWindow
 import dev.jcode.core.editor.completion.EditorCompletionModule
 import dev.jcode.core.editor.completion.LocalCompletionSource
@@ -99,7 +102,7 @@ fun EditorPane(
     onSave: () -> Unit = {},
     onFind: () -> Unit = {},
     languageActionsEnabled: Boolean = false,
-    onLanguageAction: (EditorLanguageAction, String) -> Unit = { _, _ -> },
+    onLanguageAction: (EditorLanguageAction, String, Int) -> Unit = { _, _, _ -> },
     breakpointLinesFor: (EditorTab) -> Set<Int> = { emptySet() },
     stoppedLineFor: (EditorTab) -> Int? = { null },
     onToggleBreakpoint: (EditorTab, Int) -> Unit = { _, _ -> },
@@ -134,6 +137,7 @@ fun EditorPane(
                 if (editorState != null && !activeTab.previewMode) {
                     EditorViewHost(
                         editorState = editorState,
+                        documentPath = activeTab.filePath.path,
                         onSave = onSave,
                         onFind = onFind,
                         onCloseTab = { onTabClosed(activeTab.id) },
@@ -349,11 +353,13 @@ private fun ModifiedDot() {
 fun EditorViewHost(
     editorState: dev.jcode.core.editor.EditorState,
     modifier: Modifier = Modifier,
+    /** Host path of the open document; a language server resolves requests against it. */
+    documentPath: String = "",
     onSave: () -> Unit = {},
     onFind: () -> Unit = {},
     onCloseTab: () -> Unit = {},
     languageActionsEnabled: Boolean = false,
-    onLanguageAction: (EditorLanguageAction, String) -> Unit = { _, _ -> },
+    onLanguageAction: (EditorLanguageAction, String, Int) -> Unit = { _, _, _ -> },
     breakpointLines: Set<Int> = emptySet(),
     stoppedLine: Int? = null,
     onToggleBreakpoint: (Int) -> Unit = {},
@@ -498,8 +504,26 @@ fun EditorViewHost(
         )
 
         val anchor = completionAnchor
-        val completionItems = remember(anchor?.prefix, completionSource) {
-            anchor?.let { completionSource(it.prefix) } ?: emptyList()
+        // A language server answers over IPC, so the list arrives after the popup could have opened.
+        // Keyed on the caret as well as the prefix: the same prefix at a different position is a
+        // different question, and re-typing over a stale list would show the wrong suggestions.
+        var completionItems by remember { mutableStateOf<List<CompletionItem>>(emptyList()) }
+        LaunchedEffect(anchor?.prefix, anchor?.caret, completionSource, documentPath) {
+            val current = anchor
+            if (current == null) {
+                completionItems = emptyList()
+                return@LaunchedEffect
+            }
+            val snapshot = editorState.snapshot.value
+            val (line, character) = snapshot.offsetToUtf16Position(current.caret)
+            completionItems = completionSource.completions(
+                CompletionQuery(
+                    prefix = current.prefix,
+                    path = documentPath,
+                    line = line,
+                    character = character,
+                ),
+            )
         }
         if (anchor != null && completionItems.isNotEmpty()) {
             CompletionWindow(
@@ -557,7 +581,9 @@ fun EditorViewHost(
                     }
                     if (languageActionsEnabled) {
                         EditorLanguageAction.entries.forEach { action ->
-                            add(ContextAction(action.menuIcon(), action.label) { onLanguageAction(action, req.word) })
+                            add(ContextAction(action.menuIcon(), action.label) {
+                                onLanguageAction(action, req.word, req.offset)
+                            })
                         }
                     }
                     menuExtras.contributions.forEach { c ->

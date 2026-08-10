@@ -169,7 +169,17 @@ data class CompletionContext(val items: List<CompletionItem>, val triggerOffset:
 | Source | Where | Status |
 |---|---|---|
 | Dev Pack keywords/snippets | `app/src/main/java/dev/jcode/editor/LanguagePackCompletions.kt` → `languagePackCompletionItems(lang, prefix)` | Live |
-| Language server | `:core:lsp` `LspSession.completion(...)` | Client exists; not fed into the editor popup |
+| Language server | `LspController.completions(...)` → `MainViewModel.lspCompletions(...)` → `app/src/main/java/dev/jcode/editor/LspCompletions.kt` | Live |
+
+Both are merged in `JCodeShell`'s `CompletionSource`: server items first (they know what is actually
+in scope), then pack keywords, deduplicated by label. Server results are filtered to the typed prefix
+and capped at `MAX_LSP_COMPLETIONS` (200) — a member list on a bare `.` runs to thousands.
+
+`CompletionSource` is a **suspend** `fun interface` taking a `CompletionQuery(prefix, path, line,
+character)` rather than a bare prefix: a language server resolves a *position*, and the same prefix
+means different things at different points in a file. `line`/`character` are LSP coordinates
+(0-based, UTF-16), converted from the caret's byte offset by
+`Snapshot.offsetToUtf16Position` in `:core:buffer`.
 
 ### 4.3 Anchor and popup
 
@@ -200,6 +210,10 @@ Parses LSP snippet syntax:
 
 ## 5. Formatting
 
+**Format Document** prefers `textDocument/formatting` when a ready language server advertises it — a
+server formats to the project's own rules (a prettier config, gofmt, rustfmt). The built-in formatter
+below is the fallback.
+
 `CodeFormatter.format(text, lang)` is the built-in **Format Document**. It is deliberately modest:
 normalizes line endings, trims trailing whitespace, and converts leading tabs to `indent` spaces
 when the Dev Pack specifies an indent width (`expandLeadingTabs`).
@@ -224,12 +238,8 @@ see §7.
 
 - **Tree-sitter is entirely unwired** (§3). The 14 grammar `.so` files ship in the APK and are never
   loaded.
-- **LSP completions do not reach the editor.** The client can issue `textDocument/completion`, but
-  the popup is fed only from Dev Pack keywords.
-- **External formatters are not executed.** A Dev Pack's `formatter.command` is parsed and ignored;
-  only the built-in `CodeFormatter` runs.
-- **LSP diagnostics do not become squiggles or Issues rows.** `SquiggleDecoration` and
-  `DiagnosticsBus` both exist; the wiring from `LspSession` to them is absent.
+- **External formatters are not executed.** A Dev Pack's `formatter.command` is parsed and ignored.
+  Formatting falls to the language server when one offers it, else the built-in `CodeFormatter`.
 - `ColoredSpan`'s KDoc still credits "tree-sitter's `HighlightSpanProducer`" as its producer.
 
 ---

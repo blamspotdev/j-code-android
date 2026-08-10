@@ -6,6 +6,7 @@ import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
 import dev.jcode.design.EditorSaveActions
 import dev.jcode.design.IconBundleRegistry
+import dev.jcode.core.editor.completion.CompletionSource
 import dev.jcode.core.editor.completion.LocalCompletionSource
 import dev.jcode.editor.languagePackCompletionItems
 import dev.jcode.design.LocalEditorSaveActions
@@ -265,6 +266,8 @@ import dev.jcode.feature.lspmanager.LspManagerFeature
 import dev.jcode.feature.sdkmanager.SdkManagerFeature
 import dev.jcode.feature.settings.SettingsFeature
 import dev.jcode.workbench.dialog.ImportProgressHost
+import dev.jcode.workbench.dialog.LspLocationPickerDialog
+import dev.jcode.workbench.dialog.LspRenameDialog
 import dev.jcode.workbench.dialog.NewItemDialog
 import dev.jcode.workbench.dialog.PostCloneDialog
 import dev.jcode.workbench.dialog.OpenFolderTypeDialog
@@ -419,6 +422,8 @@ fun JCodeApp(
     val editorGroup by viewModel.editorGroup.collectAsStateWithLifecycle()
     val pendingEditorClose by viewModel.pendingEditorClose.collectAsStateWithLifecycle()
     val showNewItemDialog by viewModel.showNewItemDialog.collectAsStateWithLifecycle()
+    val lspLocationPicker by viewModel.lspLocationPicker.collectAsStateWithLifecycle()
+    val lspRenameRequest by viewModel.lspRenameRequest.collectAsStateWithLifecycle()
     val postClonePrompt by viewModel.postClonePrompt.collectAsStateWithLifecycle()
     val templates by viewModel.templates.collectAsStateWithLifecycle()
     val workspaceConfig by viewModel.workspaceConfig.collectAsStateWithLifecycle()
@@ -430,6 +435,7 @@ fun JCodeApp(
     val installedEnvironments by viewModel.environments.collectAsStateWithLifecycle()
     val sdkCatalogState by viewModel.sdkCatalogState.collectAsStateWithLifecycle()
     val lspCatalogState by viewModel.lspCatalogState.collectAsStateWithLifecycle()
+    val lspServers by viewModel.lspServers.collectAsStateWithLifecycle()
     val debugCatalogState by viewModel.debugCatalogState.collectAsStateWithLifecycle()
     val catalogProgress by viewModel.catalogProgress.collectAsStateWithLifecycle()
     val sdkInstallRequestedId by viewModel.sdkInstallRequestedId.collectAsStateWithLifecycle()
@@ -822,8 +828,20 @@ fun JCodeApp(
     val activeLanguagePack = remember(activeFileName, activeLanguageExtensions) {
         activeFileName?.let { n -> activeLanguageExtensions.firstNotNullOfOrNull { it.languageFor(n) } }
     }
-    val completionSource = remember(activeLanguagePack) {
-        { prefix: String -> languagePackCompletionItems(activeLanguagePack, prefix) }
+    // Language-pack keywords and snippets are instant and always available; a language server knows
+    // what is actually in scope, so its items lead. Deduped by label so a keyword the server also
+    // suggests appears once.
+    val completionSource = remember(activeLanguagePack, viewModel) {
+        CompletionSource { query ->
+            val packItems = languagePackCompletionItems(activeLanguagePack, query.prefix)
+            val serverItems = viewModel.lspCompletions(
+                hostPath = query.path,
+                line = query.line,
+                character = query.character,
+                prefix = query.prefix,
+            )
+            (serverItems + packItems).distinctBy { it.label }
+        }
     }
     // Debug launch target = the active source file, if it has an installed debug engine (stdio adapters
     // and js-debug's TCP adapter are both supported now).
@@ -964,6 +982,21 @@ fun JCodeApp(
                     }
                 }
             }
+        }
+    }
+
+    // Opening a file whose language server isn't installed offers to install it, rather than silently
+    // giving no diagnostics or completions. The controller emits once per server per session, so
+    // declining is not re-asked on every file of that language. Install pulls the server's required
+    // SDKs first (jdtls needs a JDK, csharp-ls the .NET SDK), which is why it stays an explicit choice.
+    LaunchedEffect(viewModel) {
+        viewModel.lspMissingServer.collect { entry ->
+            val result = snackbarHostState.showSnackbar(
+                message = "${entry.name} isn't installed — code intelligence is off for these files.",
+                actionLabel = "Install",
+                duration = SnackbarDuration.Long,
+            )
+            if (result == SnackbarResult.ActionPerformed) viewModel.installLspCatalogEntry(entry.id)
         }
     }
 
@@ -1443,6 +1476,8 @@ fun JCodeApp(
         autoSetupProgress = autoSetupProgress,
         sdkCatalogState = sdkCatalogState,
         lspCatalogState = lspCatalogState,
+        lspServers = lspServers,
+        onEditorLanguageAction = viewModel::editorLanguageAction,
         workspaceManager = viewModel.workspaceManager,
         snackbarHostState = snackbarHostState,
         openFolderLauncher = openFolderLauncher,
@@ -1569,6 +1604,22 @@ fun JCodeApp(
 
     ImportProgressHost(viewModel.importProgress)
 
+    lspLocationPicker?.let { picker ->
+        LspLocationPickerDialog(
+            picker = picker,
+            onSelect = viewModel::openLspLocationEntry,
+            onDismiss = viewModel::dismissLspLocationPicker,
+        )
+    }
+
+    lspRenameRequest?.let { request ->
+        LspRenameDialog(
+            symbol = request.symbol,
+            onConfirm = viewModel::confirmLspRename,
+            onDismiss = viewModel::dismissLspRename,
+        )
+    }
+
     // Closing tabs with unsaved changes: Save / Discard / Close Saved (dismiss = keep everything).
     pendingEditorClose?.let { pending ->
         UnsavedChangesDialog(
@@ -1616,6 +1667,8 @@ private fun JCodeShell(
     autoSetupProgress: DistroWizardProgress,
     sdkCatalogState: SdkCatalogState,
     lspCatalogState: LspCatalogState,
+    lspServers: List<dev.jcode.lsp.LspServerStatus>,
+    onEditorLanguageAction: (EditorLanguageAction, String, Int) -> Unit,
     workspaceManager: WorkspaceManager,
     snackbarHostState: SnackbarHostState,
     openFolderLauncher: ActivityResultLauncher<Uri?>,
@@ -2831,6 +2884,7 @@ private fun JCodeShell(
                                 environmentState.jcodeUserReady,
                                 environmentState.runtime.selectedDistro.id,
                             ) { distroStatusOf(environmentState) },
+                            lspServers = lspServers,
                         )
                     }
                 }
@@ -2942,21 +2996,17 @@ private fun JCodeShell(
                                 leftSidebarExpanded = true
                             }
                         },
+                        // Shown when a language pack claims the file OR a catalog language server
+                        // covers its extension; the action itself explains anything still missing
+                        // (not installed, still starting, capability unsupported).
                         languageActionsEnabled = run {
                             val name = editorGroup.activeTab?.filePath?.name
-                            name != null && activeLanguageExtensions.any { it.languageFor(name) != null }
+                            name != null && (
+                                activeLanguageExtensions.any { it.languageFor(name) != null } ||
+                                    dev.jcode.core.lsp.LspServerDescriptor.findForFile(name) != null
+                                )
                         },
-                        onEditorLanguageAction = { action, word ->
-                            if (action == EditorLanguageAction.FormatDocument) {
-                                editorActions.onFormat()
-                            } else {
-                                // Semantic actions need a language server (deferred); surface intent.
-                                scope.launch {
-                                    val target = if (word.isNotBlank()) " \"$word\"" else ""
-                                    snackbarHostState.showSnackbar("${action.label}$target — needs a language server (coming soon)")
-                                }
-                            }
-                        },
+                        onEditorLanguageAction = onEditorLanguageAction,
                         editorPageContent = { tab ->
                             when (tab.pageKind) {
                                 EditorPageKind.Settings -> SettingsFeature.Content(
@@ -3703,7 +3753,7 @@ private fun EditorWorkspace(
     onFind: () -> Unit,
     onOpenFileRequest: () -> Unit,
     languageActionsEnabled: Boolean,
-    onEditorLanguageAction: (EditorLanguageAction, String) -> Unit,
+    onEditorLanguageAction: (EditorLanguageAction, String, Int) -> Unit,
     editorPageContent: @Composable (EditorTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {

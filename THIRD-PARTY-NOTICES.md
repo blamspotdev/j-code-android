@@ -96,7 +96,6 @@ Bundled into the APK (`classes.dex` / merged resources). Unless noted, each is
 
 | Component | Version | License | Notes |
 |---|---|---|---|
-| Eclipse LSP4J | 0.23.1 | **EPL-2.0 / EDL** | Java library; dynamically linked. EPL is weak copyleft and applies only to modifications of LSP4J itself. https://github.com/eclipse-lsp4j/lsp4j |
 | Bouncy Castle (`bcprov-jdk18on`, `bcpkix-jdk18on`) | 1.80 | Bouncy Castle (MIT-style) | https://www.bouncycastle.org/ |
 | XZ for Java (`org.tukaani:xz`) | 1.10 | 0BSD / public domain | https://tukaani.org/xz/java.html |
 

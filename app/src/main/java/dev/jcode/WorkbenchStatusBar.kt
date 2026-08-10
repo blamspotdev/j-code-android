@@ -80,6 +80,7 @@ internal fun WorkbenchStatusBar(
     activeTab: EditorTab?,
     selectedProject: Project?,
     distroStatus: DistroStatus,
+    lspServers: List<dev.jcode.lsp.LspServerStatus> = emptyList(),
 ) {
     // Collected here (not hoisted into JCodeShell): the caret/snapshot flows emit on every
     // keystroke and caret move, so reading them in this bottomBar scope keeps a keystroke from
@@ -119,7 +120,21 @@ internal fun WorkbenchStatusBar(
                 "distro: ${distroStatus.label}",
                 color = if (distroStatus.isError) MaterialTheme.colorScheme.error else Color.Unspecified,
             )
+            // Only while a server is coming up or has failed. A healthy server announces itself
+            // through squiggles and completions, and this row has no space for a permanent cell.
+            LanguageServerCell(lspServers)
         }
+    }
+}
+
+/** Reports a language server that is still starting, or one that failed — nothing when all are ready. */
+@Composable
+private fun LanguageServerCell(servers: List<dev.jcode.lsp.LspServerStatus>) {
+    val failed = servers.firstOrNull { it.state == dev.jcode.core.lsp.LspState.ERROR }
+    val pending = servers.firstOrNull { it.state != dev.jcode.core.lsp.LspState.READY }
+    when {
+        failed != null -> StatusCell("lsp: ${failed.name} failed", color = MaterialTheme.colorScheme.error)
+        pending != null -> StatusCell("lsp: starting ${pending.name}")
     }
 }
 

@@ -1797,17 +1797,20 @@ class DistroService(
     }
 
     /**
-     * Spawn a long-lived process inside the active distro for a debug adapter, with stdin/stdout PIPES
-     * (no PTY — clean bidirectional DAP, no echo). The caller reads DAP from `process.inputStream` and
-     * writes to `process.outputStream`; stderr is kept separate. Returns null if the runtime isn't ready.
+     * Spawn a long-lived process inside the active distro with stdin/stdout PIPES (no PTY — clean
+     * bidirectional protocol traffic, no echo). The caller reads from `process.inputStream` and writes
+     * to `process.outputStream`; stderr is kept separate. Returns null if the runtime isn't ready.
+     *
+     * Used for both debug adapters (DAP) and language servers (LSP): both frame JSON over stdio, and
+     * a PTY would echo every request back into the read stream.
      */
-    fun spawnDapProcess(
+    fun spawnStdioProcess(
         command: String,
         workdir: String = _environmentState.value.runtime.workdir,
         // Some adapters must run as a specific user — e.g. netcoredbg needs root, where the .NET SDK
         // (installed under /root/.dotnet) is readable. Defaults to the runtime user.
         userOverride: String? = null,
-        // Prepended to PATH so the adapter can find its runtime (e.g. /root/.dotnet for netcoredbg).
+        // Prepended to PATH so the process can find its runtime (e.g. /root/.dotnet for netcoredbg).
         extraPath: String = "",
     ): Process? {
         val runtime = _environmentState.value.runtime
@@ -1843,7 +1846,7 @@ class DistroService(
             }
             builder.start()
         } catch (e: Exception) {
-            android.util.Log.e("DistroService", "spawnDapProcess failed", e)
+            android.util.Log.e("DistroService", "spawnStdioProcess failed", e)
             null
         }
     }

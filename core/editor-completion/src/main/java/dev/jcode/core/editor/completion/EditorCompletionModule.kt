@@ -5,7 +5,7 @@ package dev.jcode.core.editor.completion
  *
  * Provides:
  * - [CompletionItem] model with kind, label, detail, snippet
- * - [CompletionProvider] interface for pluggable completion sources
+ * - [CompletionSource] the caret-position query the host answers (language pack + language server)
  * - [CompletionWindow] composable popup anchored to caret
  * - [SnippetEngine] for LSP snippet syntax ($0, ${1:placeholder}, etc.)
  * - [GhostTextProvider] for AI inline completion previews

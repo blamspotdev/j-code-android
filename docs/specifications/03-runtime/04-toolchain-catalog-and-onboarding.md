@@ -157,6 +157,35 @@ Two entries are shaped by what does not work under proot:
 "so the catalog never drifts". Descriptor fields: `id`, `languageIds`, `verifyCommand`,
 `installCommand`, `runCommand`, `extensions`, `rootDetectors`.
 
+### 3.1 Every entry must put its binary on the fixed PATH
+
+Catalog scripts and the LSP launcher both run **non-interactively** (`su - jcode -c '…'`) with a fixed
+`PATH` of `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`. Anything that installs
+outside those directories is invisible to both `verifyCommand` and `runCommand`, and the failure looks
+like "installed but the server never starts".
+
+Every affected entry therefore symlinks into `/usr/local/bin`:
+
+| Installer | Real location | Handled by |
+|---|---|---|
+| `go install` | `$GOPATH/bin` | explicit `ln -sf` in the gopls entry |
+| `rustup component` | `~/.cargo/bin` | explicit `ln -sf` in the rust-analyzer entry |
+| `npm install -g` | `$(npm prefix -g)/bin` | `linkNpmBin(...)` |
+
+The npm case is the subtle one. Node is installed through nvm, whose init sits at the **bottom** of
+`~/.bashrc` — and Ubuntu's `.bashrc` returns immediately when the shell is not interactive:
+
+```sh
+case $- in
+    *i*) ;;
+      *) return;;
+esac
+```
+
+So nvm never loads for any catalog or launcher command, and `$(npm prefix -g)/bin` is never on PATH.
+`node`/`npm` themselves work only because the `nodejs` entry symlinks them; every server installed
+with `npm i -g` afterwards needs `linkNpmBin` (and `unlinkNpmBin` on uninstall) or it is unusable.
+
 ---
 
 ## 4. Debug-engine catalog

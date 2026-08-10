@@ -58,23 +58,6 @@ data class CompletionItem(
 )
 
 /**
- * Interface for completion providers.
- */
-interface CompletionProvider {
-    /** Unique identifier for this provider */
-    val id: String
-
-    /**
-     * Provide completion items for the given context.
-     * @param text The full document text
-     * @param offset The cursor byte offset
-     * @param triggerChar The character that triggered completion, or null
-     * @return List of completion items
-     */
-    suspend fun provide(text: String, offset: Int, triggerChar: Char?): List<CompletionItem>
-}
-
-/**
  * Context for the current completion session.
  */
 data class CompletionContext(
