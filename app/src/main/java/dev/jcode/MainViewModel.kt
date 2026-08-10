@@ -602,6 +602,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun installRequiredLsp(entryId: String): Boolean = withContext(Dispatchers.IO) {
+        // The server's own prerequisites first, exactly as installLspCatalogEntry and
+        // installRequiredDbg do. Without this an extension that requires jdtls installs the server's
+        // files and no JVM, so its verify fails and it can never launch.
+        val entry = LspServerCatalog.findById(entryId)
+        if (entry != null && !installRequiredSdks(entry.requiredSdks, entry.name)) return@withContext false
         val session = SessionRegistry.registerSession(
             context = getApplication(),
             kind = BackendSessionKind.JOB,
