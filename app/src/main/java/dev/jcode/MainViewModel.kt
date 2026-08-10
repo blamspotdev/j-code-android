@@ -2093,6 +2093,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             emitMessage(
                 when {
                     descriptor == null -> "$actionLabel needs a language server; none supports $name"
+                    // Unpaired: the server may well be installed, but no extension claims this
+                    // language, so pointing at Toolchains would send the user to the wrong place.
+                    !isLanguageServerPaired(descriptor.id, name) ->
+                        "$actionLabel needs a Dev Pack for $name; install one from Extensions"
                     descriptor.id !in lspCatalogState.value.installedEntryIds ->
                         "$actionLabel needs ${entry?.name ?: descriptor.id}; install it from Toolchains"
                     else -> "$actionLabel needs the Linux environment to be ready"

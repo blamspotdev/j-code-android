@@ -79,7 +79,18 @@ class LspController(
     ) {
         var diagnosticsJob: Job? = null
         var stateJob: Job? = null
-        @Volatile var lastStderr: String? = null
+
+        /**
+         * The first stderr lines the server produced. First, not last: when a server dies during the
+         * handshake the useful part is the exception header, while the tail is stack frames.
+         */
+        private val stderrHead = java.util.concurrent.CopyOnWriteArrayList<String>()
+
+        fun recordStderr(line: String) {
+            if (line.isNotBlank() && stderrHead.size < MAX_STDERR_LINES) stderrHead.add(line.trim())
+        }
+
+        val stderr: String? get() = stderrHead.joinToString(" | ").ifBlank { null }
     }
 
     private class OpenDocument(val key: SessionKey, val uri: String, val languageId: String) {
@@ -301,7 +312,7 @@ class LspController(
                 command = command,
                 workdir = WorkspaceHostPaths.hostToGuest(key.root),
             )?.let { process ->
-                ProcessLspTransport(process) { line -> sessions[key]?.lastStderr = line }
+                ProcessLspTransport(process) { line -> sessions[key]?.recordStderr(line) }
             }
         }
         val managed = Managed(session, descriptor, key)
@@ -321,7 +332,7 @@ class LspController(
                     LspState.READY -> log("${descriptor.id} ready in ${key.root.substringAfterLast('/')}")
                     LspState.ERROR -> log(
                         "${descriptor.id} failed: ${session.errorMessage ?: "unknown"}" +
-                            (managed.lastStderr?.let { " | $it" } ?: ""),
+                            (managed.stderr?.let { " | $it" } ?: ""),
                     )
                     else -> Unit
                 }
@@ -418,7 +429,7 @@ class LspController(
         name = LspServerCatalog.findById(descriptor.id)?.name ?: descriptor.id,
         root = key.root,
         state = session.state.value,
-        detail = session.errorMessage ?: lastStderr,
+        detail = session.errorMessage ?: stderr,
     )
 
     /** ".kt" for "Main.kt"; null for a file with no extension. */
@@ -436,6 +447,7 @@ class LspController(
         const val TAG = "LspController"
         const val CHANGE_DEBOUNCE_MS = 400L
         const val CATALOG_LOAD_TIMEOUT_MS = 60_000L
+        const val MAX_STDERR_LINES = 12
     }
 }
 

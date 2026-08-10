@@ -199,9 +199,14 @@ object LspServerCatalog {
             // fwcd/kotlin-language-server ships a `server.zip` on each release; /releases/latest/download
             // always resolves to the newest asset, so no version needs pinning. It's a JVM app, so `jdk`
             // (which provides `java`) is required first.
-            installCommand = "set -e; jcode_apt 0 15 'Installing download prerequisites' curl unzip; " +
+            installCommand = "set -e; jcode_apt 0 10 'Installing download prerequisites' curl unzip; " +
+                // The server bundles kotlin-compiler 2.1, whose IntelliJ JavaVersion.parse throws
+                // IllegalArgumentException on a "26.0.1" version string — so it cannot run on the
+                // JDK 26 that Ubuntu 26.04's default-jdk provides. Install an LTS JVM for this
+                // server and pin it in runCommand; jdtls is unaffected and keeps using `jdk`.
+                "jcode_apt 10 35 'Installing a compatible JVM (Kotlin needs an LTS JDK)' openjdk-21-jdk-headless; " +
                 "jcode_fetch https://github.com/fwcd/kotlin-language-server/releases/latest/download/server.zip " +
-                "/tmp/kls.zip 15 85 'Downloading the Kotlin language server'; " +
+                "/tmp/kls.zip 35 85 'Downloading the Kotlin language server'; " +
                 "jcode_progress 88 'Unpacking the Kotlin language server'; " +
                 "sudo rm -rf /opt/kotlin-language-server; sudo unzip -q -o /tmp/kls.zip -d /opt/kotlin-language-server; " +
                 "sudo ln -sf /opt/kotlin-language-server/server/bin/kotlin-language-server /usr/local/bin/kotlin-language-server; " +
@@ -210,9 +215,12 @@ object LspServerCatalog {
             // `--version` makes it throw and exit 1, so a launch-based verify misreports a good
             // install as failed. Check the launcher and the JVM it needs instead.
             verifyCommand = "test -x /opt/kotlin-language-server/server/bin/kotlin-language-server && " +
-                "command -v java >/dev/null 2>&1 && echo ready",
+                "ls -d /usr/lib/jvm/java-21-openjdk-* >/dev/null 2>&1 && echo ready",
             uninstallCommand = "sudo rm -rf /opt/kotlin-language-server /usr/local/bin/kotlin-language-server",
-            runCommand = "kotlin-language-server",
+            // JAVA_HOME pins the LTS JVM installed above; the launcher is a Gradle start script, which
+            // prefers JAVA_HOME over whatever `java` PATH happens to resolve to.
+            runCommand = "env JAVA_HOME=\"\$(ls -d /usr/lib/jvm/java-21-openjdk-* | head -1)\" " +
+                "kotlin-language-server",
             languageIds = listOf("kotlin"),
             extensions = listOf(".kt", ".kts"),
             rootDetectors = listOf("build.gradle.kts", "settings.gradle.kts", ".git"),
