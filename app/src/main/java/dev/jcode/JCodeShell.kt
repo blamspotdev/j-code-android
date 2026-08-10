@@ -1186,7 +1186,10 @@ fun JCodeApp(
     }
 
     val issueActions = remember(viewModel) {
-        IssueActions(onOpen = { path, line -> viewModel.openFileByGuestPath("$path:${line + 1}") })
+        // Diagnostics are 0-based; the `path:line:col` token openFileByGuestPath parses is 1-based.
+        IssueActions(onOpen = { path, line, column ->
+            viewModel.openFileByGuestPath("$path:${line + 1}:${column + 1}")
+        })
     }
 
     // Mirror the active file's bus diagnostics onto its editor as squiggly underlines. Positions are
