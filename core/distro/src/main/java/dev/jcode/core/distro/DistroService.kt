@@ -36,6 +36,7 @@ import kotlinx.coroutines.withContext
 /** SharedPreferences flag: the environment finished configuring at least once (used to skip the
  *  first-run setup screen instantly on launch — see [DistroService]'s seededConfigured). */
 private const val KEY_ENV_CONFIGURED = "env_configured"
+private const val KEY_SELECTED_DISTRO = "selected_distro"
 
 /**
  * Manages the embedded Linux environment using bundled proot.
@@ -83,6 +84,14 @@ class DistroService(
     private val startupPrefs = appContext.getSharedPreferences("jcode-distro-startup", Context.MODE_PRIVATE)
     private val seededConfigured: Boolean? = if (startupPrefs.getBoolean(KEY_ENV_CONFIGURED, false)) true else null
 
+    // Which environment was active last time, read synchronously alongside [seededConfigured]. The
+    // persisted selection otherwise only arrives with the async probe, and until it does
+    // `runtime.selectedDistro` is the catalog default — so a terminal opened in that window spawns
+    // against the WRONG rootfs and stays there for life, while the status bar later corrects itself
+    // to the real selection. That is how a shell ends up reporting a different distro than the app.
+    private val seededDistro: DistroProfile? =
+        startupPrefs.getString(KEY_SELECTED_DISTRO, null)?.let { DistroProfile.fromId(it) }
+
     private val _environmentState = MutableStateFlow(
         DistroEnvironmentState(
             // proot is seeded from the same flag: the status bar reads "not installed" off
@@ -92,6 +101,8 @@ class DistroService(
             prootInstalled = seededConfigured == true,
             distroInstalled = seededConfigured,
             smokeTestPassed = seededConfigured,
+            runtime = seededDistro?.let { DistroRuntimeConfig(selectedDistro = it) }
+                ?: DistroRuntimeConfig(),
         ),
     )
     val environmentState: StateFlow<DistroEnvironmentState> = _environmentState.asStateFlow()
@@ -948,7 +959,10 @@ class DistroService(
 
         // Remember (fast, synchronous) whether the environment is configured, so the next launch can skip
         // the first-run setup screen without waiting for this async probe to re-run.
-        startupPrefs.edit().putBoolean(KEY_ENV_CONFIGURED, _environmentState.value.smokeTestPassed == true).apply()
+        startupPrefs.edit()
+            .putBoolean(KEY_ENV_CONFIGURED, _environmentState.value.smokeTestPassed == true)
+            .putString(KEY_SELECTED_DISTRO, _environmentState.value.runtime.selectedDistro.id)
+            .apply()
         persistCompletedSteps(completedSteps.toSet())
         syncSdkCatalogSelection(_environmentState.value.runtime.selectedDistro.id)
         syncLspCatalogSelection(_environmentState.value.runtime.selectedDistro.id)
@@ -2017,6 +2031,9 @@ class DistroService(
     }
 
     private suspend fun persistSelectedDistro(profile: DistroProfile) {
+        // Mirrored into startupPrefs so the next launch knows the selection before DataStore is read
+        // — see seededDistro. DataStore stays the source of truth; this is only the startup seed.
+        startupPrefs.edit().putString(KEY_SELECTED_DISTRO, profile.id).apply()
         dataStore.edit { prefs ->
             prefs[PreferencesKeys.SelectedDistro] = profile.id
         }
