@@ -19,50 +19,70 @@ LTS rootfs in app-private storage. No Termux dependency, no root.
 
 ## Features
 
-- **Editor** — an in-house `Canvas` + IME code editor: tree-sitter + Dev-Pack
-  syntax highlighting, as-you-type completions + snippet helpers, a built-in
-  **Format Document**, multi-tab editing, text-selection handles, word wrap, Save
-  (`Ctrl+S` / button / dirty indicator), and auto-reload of unmodified files
-  changed on disk.
+- **Editor** — an in-house `Canvas` + IME code editor with a native piece-tree
+  buffer, syntax colouring, LSP + Dev Pack completions, snippets, multi-tab
+  editing, selection handles, word wrap, Save (`Ctrl+S` / button / dirty
+  indicator), and auto-reload of unmodified files changed on disk.
+- **Language intelligence** — language servers run inside the selected distro and
+  provide diagnostics, completions, Go to Definition, Find References, Rename
+  Symbol, and document formatting. Missing servers can be installed from the
+  editor; their lifecycle follows the open project and documents.
 - **Terminals** — real PTY sessions through `proot` that survive app backgrounding,
   with full xterm/VT support (mouse reporting, SGR, alt-screen), in-place progress
   redraw, and a `code`/`jcode` command to open files in the editor.
 - **Build & Run** — per-project `.jcode/run.yaml`; multi-terminal dev setups (e.g.
   an ASP.NET Core API + a Vite dev server side by side); a read-only **Output** log
-  teed from the run terminals.
+  teed from the run terminals; and ready-port polling into a web preview.
 - **Debugging** — a Debug Adapter Protocol (DAP) client with gutter breakpoints,
   stepping, call stack, variables, and a debug console. Python (debugpy) and Java
   are device-verified under `proot`.
-- **Source Control** — a Git panel (status, stage, commit, branch, diffs) in the
-  left drawer, plus live VCS status decorations in the Explorer.
+- **Android app sandbox** — build an APK and run it inside an editor tab, with a
+  device-side ADB bridge and JDWP debugging against the same device.
+- **Source Control** — an extension-hosted Git panel (status, stage, commit,
+  branch, diffs) in the left drawer, plus live VCS status decorations in the
+  Explorer. Git itself runs inside the distro.
 - **Search** — project-wide find (ripgrep-backed) with Content / File-name /
-  current-document scopes.
+  Current-document scopes and a Kotlin fallback when the native search library is
+  unavailable.
 - **Problems** — an Issues panel and status-bar count fed by a shared diagnostics
-  bus (config-file errors, on-save syntax checks), with in-gutter squiggles.
-- **Extensions & Toolchains** — a marketplace of cryptographically-verified `.jext`
-  packages (Dev Packs, project templates), plus a unified **Toolchains** manager for
-  installing SDKs, language servers, and debug engines per distro.
-- **Embedded Linux** — bundled `proot` (arm64-v8a / x86_64) + a downloaded minimal
-  rootfs (Ubuntu 24.04 / 26.04 LTS); `apt`-managed toolchains; project dirs
-  bind-mounted into the distro.
+  bus (language servers, config-file errors, and syntax checks), with in-gutter
+  squiggles.
+- **Extensions** — a marketplace of Ed25519-verified `.jext` packages (Dev Packs,
+  project templates, and manager UIs), plus `.vsix` import for the supported
+  WebView slice of the VS Code API.
+- **Toolchains** — a unified manager for installing and updating SDKs, language
+  servers, debug engines, database clients, and developer tools per distro.
+- **Embedded Linux** — bundled `proot` binaries for arm64-v8a and x86_64, with
+  downloaded ARM64 Ubuntu 24.04 / 26.04 LTS profiles; `apt`-managed toolchains;
+  project directories bind-mounted into the distro.
 
 ## Status
 
-Active development. The app builds clean and the major features are device-verified
-on arm64 (AYN Odin2). Honest gaps, not yet wired:
+Active development. The app builds clean, and its major editor, terminal, runtime,
+debugging, and app-sandbox paths have been exercised on arm64 hardware (AYN Odin2).
+It is not yet a production-stable release. The most relevant current limitations:
 
-- **Editor ↔ language-server integration.** The LSP client exists (`core/lsp`
-  speaks hover / definition / references / rename), but the editor's semantic
-  actions (Go to Definition / Find References / Rename Symbol) still surface a
-  "needs a language server (coming soon)" notice, and LSP diagnostics aren't yet
-  fed to the Issues panel.
-- **External formatters.** The built-in **Format Document** works; a Dev Pack's
-  external `formatter.command` is parsed but not yet executed.
+- **Tree-sitter is built but unwired.** The APK ships the native parser and 14
+  grammars, but syntax colouring currently comes from JCode's native hand-written
+  tokenizer.
+- **Language intelligence is not the whole LSP surface.** Document sync sends the
+  full document, hover has no editor UI, and code actions, semantic tokens,
+  signature help, and symbol search are not implemented.
+- **External formatters are not executed.** Format Document uses a ready language
+  server when available and otherwise falls back to the built-in formatter; a Dev
+  Pack's `formatter.command` is parsed but not run.
+- **Release builds are ARM64-only.** Cross-architecture user-mode emulation is not
+  shipped, even though scaffolding for it exists.
+
+See the complete [known-gaps inventory](docs/specifications/09-platform/05-known-gaps-and-unwired-code.md)
+for stubs, built-but-unwired subsystems, and current runtime limitations.
 
 ## Build
 
 Requirements: **JDK 21**, the Android SDK (`compileSdk 36`), **NDK r27c**
-(`27.2.12479018`), and CMake 3.28+. `minSdk`/`targetSdk` 33 (Android 13+). AGP 8.13.x / Gradle 8.14.x.
+(`27.2.12479018`), and **CMake 3.28.3**. `minSdk`/`targetSdk` 33
+(Android 13+). The repository currently uses AGP 8.13.0, Kotlin 2.2.20, and the
+Gradle 8.14.3 wrapper.
 
 ```bash
 git clone https://github.com/blamspotdev/j-code-android.git
@@ -73,14 +93,18 @@ cd j-code-android
 > **Windows note:** build from a short path (e.g. `X:\jc`). Deep checkout paths can
 > exceed the Win32 `MAX_PATH` limit during the native (tree-sitter) build.
 
+The first native build needs network access because CMake fetches pinned upstream
+dependencies. Release builds and signing are documented in the
+[build and release specification](docs/specifications/09-platform/02-build-variants-and-release.md).
+
 ## Architecture
 
 A multi-module Gradle project:
 
 ```
 :app            integration layer + the JCode shell
-:core:*         editor, buffer, term, distro, lsp, vcs, debug, search, config,
-                design, fs, treesitter, ctags, resource, state, …
+:core:*         editor, buffer, term, distro, lsp, debug, search, config, diagnostics,
+                design, fs, treesitter, resource, and compatibility stubs
 :feature:*      explorer, editor-pane, terminal-pane, scm, debug, problems, search,
                 settings, sdk-manager, lsp-manager, marketplace, onboarding
 :native:*       proot, vt (terminal), pty, tree-sitter, buffer (piece tree),
@@ -95,8 +119,9 @@ wrapped as `AutoCloseable` + `Cleaner`.
 ## Documentation
 
 Full as-built engineering specifications live in
-[`docs/specifications/`](docs/specifications/README.md) — architecture, module contracts, wire
-protocols, on-disk formats, and an honest inventory of what is and isn't wired up.
+[`docs/specifications/`](docs/specifications/README.md) — architecture, module
+contracts, wire protocols, on-disk formats, build/release details, and an honest
+inventory of what is and is not wired up.
 
 ## Extensions
 
