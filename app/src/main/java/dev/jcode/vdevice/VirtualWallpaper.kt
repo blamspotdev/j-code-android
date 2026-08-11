@@ -3,6 +3,7 @@ package dev.jcode.vdevice
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
+import androidx.core.graphics.withTranslation
 import kotlin.math.min
 
 /**
@@ -67,11 +68,10 @@ internal object VirtualWallpaper {
             path.rewind()
             figure.draw(path, unit * figure.size / 2f)
             paint.alpha = figure.alpha
-            canvas.save()
-            canvas.translate(figure.x * width, figure.y * height)
-            canvas.rotate(figure.turn)
-            canvas.drawPath(path, paint)
-            canvas.restore()
+            canvas.withTranslation(figure.x * width, figure.y * height) {
+                rotate(figure.turn)
+                drawPath(path, paint)
+            }
         }
     }
 
