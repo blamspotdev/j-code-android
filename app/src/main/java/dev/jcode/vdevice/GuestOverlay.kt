@@ -22,6 +22,9 @@ private const val IDLE_COLLAPSE_MS = 4_000L
 private const val PILL_COLOR = 0xFF2B2F36.toInt()
 private const val ON_PILL_COLOR = 0xFFE3E6EB.toInt()
 
+/** The tab tints Stop with the theme's error colour; this is that colour on a dark surface. */
+private const val STOP_COLOR = 0xFFFFB4AB.toInt()
+
 /**
  * The collapsed handle, matching the device tab's own: a fifth of the width, sized like a sheet
  * grabber, at the same 55% the tab tints its. The numbers are repeated rather than shared because
@@ -80,6 +83,14 @@ private class Controls(private val activity: Activity) : FrameLayout(activity) {
         setOnClickListener { show(expanded = true) }
     }
 
+    /**
+     * What a full-screen guest can be told to do, and no two of them the same thing.
+     *
+     * The bar used to offer "Back" and "Close", which for a single-screen app are the same key —
+     * and "Close" only ever finished the *top* activity, so a guest that had pushed a screen was
+     * left running under it. These three are the device tab's, in the tab's order and with the same
+     * destructive one last: move inside the app, start it over, or take it off the device.
+     */
     private val bar = LinearLayout(activity).apply {
         orientation = LinearLayout.HORIZONTAL
         layoutParams = LayoutParams(
@@ -91,7 +102,10 @@ private class Controls(private val activity: Activity) : FrameLayout(activity) {
             @Suppress("DEPRECATION")
             activity.onBackPressed()
         })
-        addView(action("Close") { activity.finish() })
+        addView(action("Restart") { GuestRuntime.restartGuest(activity) })
+        // Leaves the whole task, however many screens the guest pushed onto it, and lands back in
+        // J Code rather than on the phone's launcher.
+        addView(action("Stop", STOP_COLOR) { GuestRuntime.leaveGuest(activity) })
     }
 
     init {
@@ -114,9 +128,13 @@ private class Controls(private val activity: Activity) : FrameLayout(activity) {
         if (expanded) postDelayed(collapse, IDLE_COLLAPSE_MS)
     }
 
-    private fun action(label: String, onClick: () -> Unit): TextView = TextView(activity).apply {
+    private fun action(
+        label: String,
+        color: Int = ON_PILL_COLOR,
+        onClick: () -> Unit,
+    ): TextView = TextView(activity).apply {
         text = label
-        setTextColor(ON_PILL_COLOR)
+        setTextColor(color)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         minHeight = context.dp(44)
         gravity = Gravity.CENTER

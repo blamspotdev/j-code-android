@@ -183,6 +183,53 @@ internal object GuestRuntime {
      * Only a full-screen guest is given the overlay: one in the tab already has the tab's controls
      * floating over it.
      */
+    /**
+     * Relaunches the guest a full-screen activity belongs to, from scratch.
+     *
+     * `CLEAR_TASK` is what makes it a restart rather than a second copy: the guest's whole back
+     * stack goes and the launch activity comes back as the new root, which is what "restart the app"
+     * means to someone iterating on it. The APK and activity come off the launch intent, so this
+     * needs nothing the container did not already put there.
+     */
+    fun restartGuest(from: Activity) {
+        val apkPath = from.intent?.getStringExtra(EXTRA_APK) ?: return
+        val guest = runCatching { GuestLoader.load(from, apkPath) }.getOrElse {
+            Log.e(TAG, "cannot reload $apkPath", it)
+            return
+        }
+        active = guest
+        from.startActivity(
+            stubIntent(guest, guest.launchActivity)
+                .addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TASK or
+                        Intent.FLAG_ACTIVITY_NO_ANIMATION,
+                ),
+        )
+    }
+
+    /**
+     * Takes the guest off the device and hands the user back to J Code.
+     *
+     * A full-screen guest is a task of its own, so finishing it alone reveals whatever happened to
+     * be behind — usually the phone's launcher, which is not where someone who left the IDE to try
+     * an app expects to land. The workbench is brought forward first, by its *host* package: by this
+     * point `activity.packageName` is the guest's.
+     */
+    fun leaveGuest(from: Activity) {
+        // Finish first, start second. The other order loses a race: tearing the task down before the
+        // queued launch resolves leaves the start looking like it came from the background, which
+        // the platform drops — measured, the workbench's MainActivity was accepted by the activity
+        // manager and the phone still went to its launcher. Finishing only marks the activities, so
+        // this is still a foreground app when the intent goes out.
+        from.finishAffinity()
+        runCatching {
+            host.packageManager.getLaunchIntentForPackage(host.packageName)
+                ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                ?.let(from::startActivity)
+        }.onFailure { Log.w(TAG, "cannot bring the workbench back", it) }
+    }
+
     fun created(activity: Activity) {
         if (embedding || activity is GuestActivity || activity is GuestBootstrapActivity) return
         if (resolve(activity.intent) == null) return
