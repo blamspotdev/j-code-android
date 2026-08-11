@@ -159,6 +159,7 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
             onSnackbar(it.reason)
             session.close()
             running = false
+            surfaceView?.paintWallpaper()
         }
     }
 
