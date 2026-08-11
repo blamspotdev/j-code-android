@@ -2742,6 +2742,15 @@ private fun JCodeShell(
             group = "Tools",
             icon = JCodeIcon.Palette,
         ) { colorPickActive = true }
+        // The device is worth opening on its own now that it has a launcher on it: without this it
+        // is only ever reached by finishing a virtual-device build, which is no way to get at the
+        // apps already installed on it — or at the screen `adb` is driving.
+        registerConfigurable(
+            id = "tools.virtualDevice",
+            title = "Open Virtual Device",
+            group = "Tools",
+            icon = JCodeIcon.Destinations,
+        ) { AppSandbox.requestOpen(null) }
         CommandRegistry.register(
             id = "workspace.newFolder",
             title = "New Folder",

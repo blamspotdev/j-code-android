@@ -23,6 +23,7 @@ val PaletteCommandCatalog: List<PaletteCommandInfo> = listOf(
     PaletteCommandInfo("view.keepAwake", "Keep Awake", "Prevent the screen from sleeping while the app is open."),
     PaletteCommandInfo("editor.goToLine", "Go to Line", "Jump the active editor to a line (or line:column)."),
     PaletteCommandInfo("tools.colorSearch", "Color Search", "Tap anywhere on screen to sample a pixel as copyable HEX/RGB(A)."),
+    PaletteCommandInfo("tools.virtualDevice", "Open Virtual Device", "Open the virtual device's screen and its launcher in a tab."),
     PaletteCommandInfo("editor.formatDocument", "Format Document", "Format the active file when its language is identified."),
     PaletteCommandInfo("editor.fontSizeIncrease", "Increase Editor Font Size", "Bump the editor font one point (8–72)."),
     PaletteCommandInfo("editor.fontSizeDecrease", "Decrease Editor Font Size", "Shrink the editor font one point (8–72)."),

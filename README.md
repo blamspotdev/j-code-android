@@ -56,27 +56,6 @@ LTS rootfs in app-private storage. No Termux dependency, no root.
   downloaded ARM64 Ubuntu 24.04 / 26.04 LTS profiles; `apt`-managed toolchains;
   project directories bind-mounted into the distro.
 
-## Status
-
-Active development. The app builds clean, and its major editor, terminal, runtime,
-debugging, and app-sandbox paths have been exercised on arm64 hardware (AYN Odin2).
-It is not yet a production-stable release. The most relevant current limitations:
-
-- **Tree-sitter is built but unwired.** The APK ships the native parser and 14
-  grammars, but syntax colouring currently comes from JCode's native hand-written
-  tokenizer.
-- **Language intelligence is not the whole LSP surface.** Document sync sends the
-  full document, hover has no editor UI, and code actions, semantic tokens,
-  signature help, and symbol search are not implemented.
-- **External formatters are not executed.** Format Document uses a ready language
-  server when available and otherwise falls back to the built-in formatter; a Dev
-  Pack's `formatter.command` is parsed but not run.
-- **Release builds are ARM64-only.** Cross-architecture user-mode emulation is not
-  shipped, even though scaffolding for it exists.
-
-See the complete [known-gaps inventory](docs/specifications/09-platform/05-known-gaps-and-unwired-code.md)
-for stubs, built-but-unwired subsystems, and current runtime limitations.
-
 ## Build
 
 Requirements: **JDK 21**, the Android SDK (`compileSdk 36`), **NDK r27c**
@@ -120,8 +99,9 @@ wrapped as `AutoCloseable` + `Cleaner`.
 
 Full as-built engineering specifications live in
 [`docs/specifications/`](docs/specifications/README.md) — architecture, module
-contracts, wire protocols, on-disk formats, build/release details, and an honest
-inventory of what is and is not wired up.
+contracts, wire protocols, on-disk formats, and build/release details. The
+[known-gaps inventory](docs/specifications/09-platform/05-known-gaps-and-unwired-code.md)
+records stubs, built-but-unwired subsystems, and runtime limitations.
 
 ## Extensions
 

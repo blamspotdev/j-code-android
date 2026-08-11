@@ -8,6 +8,7 @@ import android.text.InputType
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceControlViewHost
+import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
@@ -36,9 +37,41 @@ internal class AppSandboxSurfaceView(
     private val onSized: (Int, Int) -> Unit,
 ) : SurfaceView(context) {
 
+    /**
+     * The home screen this surface is showing, or null while a guest owns the screen.
+     *
+     * Non-null is what makes the device's own launcher live: it is drawn onto this surface (so
+     * `screencap` sees it) and it is what a touch is resolved against (so `input tap` reaches it).
+     */
+    private var home: List<LauncherApp>? = null
+
+    /** Set by the tab each composition, so a tap does not call back into a stale lambda. */
+    var onLaunchApp: (VirtualDeviceApp) -> Unit = {}
+    var onAppMenu: (VirtualDeviceApp, Float, Float) -> Unit = { _, _, _ -> }
+
+    private var pressed: VirtualDeviceApp? = null
+    private var pressedAt = 0f to 0f
+    private val longPress = Runnable {
+        pressed?.let { app ->
+            pressed = null
+            onAppMenu(app, pressedAt.first, pressedAt.second)
+        }
+    }
+
     init {
         isFocusable = true
         isFocusableInTouchMode = true
+        // The home screen has to be painted onto the surface itself: a SurfaceView punches a hole in
+        // the window, so nothing composed behind it is ever seen. A guest's own surface package is
+        // reparented above this one, which is why starting an app needs no matching erase.
+        holder.addCallback(object : SurfaceHolder.Callback {
+            override fun surfaceCreated(holder: SurfaceHolder) = paintHome()
+
+            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) =
+                paintHome()
+
+            override fun surfaceDestroyed(holder: SurfaceHolder) = Unit
+        })
         // A raw listener, not a Compose gesture: the guest expects real pointer ids and pressures,
         // and Compose's pointer input reports neither.
         setOnTouchListener { _, event ->
@@ -47,13 +80,79 @@ internal class AppSandboxSurfaceView(
                 parent?.requestDisallowInterceptTouchEvent(true)
                 requestFocus()
             }
-            session.touch(event)
+            if (home != null) touchHome(event) else session.touch(event)
             true
         }
     }
 
+    /**
+     * Puts the device's launcher on the screen, or takes it off for [apps] of null — which is what a
+     * guest starting looks like from here.
+     */
+    fun showHome(apps: List<LauncherApp>?) {
+        home = apps
+        cancelPress()
+        if (apps != null) paintHome()
+    }
+
+    /**
+     * Taps and long-presses on the launcher, resolved against the very rectangles [VirtualLauncher]
+     * drew — so an agent that reads an icon's position out of `screencap` can tap it.
+     */
+    private fun touchHome(event: MotionEvent) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                pressed = hit(event.x, event.y)
+                pressedAt = event.x to event.y
+                if (pressed != null) postDelayed(longPress, LONG_PRESS_MS)
+            }
+
+            MotionEvent.ACTION_MOVE ->
+                // A drag off the icon is a scroll gesture that missed, not a launch.
+                if (pressed != null && hit(event.x, event.y) != pressed) cancelPress()
+
+            MotionEvent.ACTION_UP -> {
+                val app = pressed
+                cancelPress()
+                app?.takeIf { hit(event.x, event.y) == it }?.let(onLaunchApp)
+            }
+
+            MotionEvent.ACTION_CANCEL -> cancelPress()
+        }
+    }
+
+    private fun hit(x: Float, y: Float): VirtualDeviceApp? = home?.let { apps ->
+        VirtualLauncher.hit(width, height, resources.displayMetrics.density, apps, x, y)
+    }
+
+    private fun cancelPress() {
+        pressed = null
+        removeCallbacks(longPress)
+    }
+
     fun adopt(surface: SurfaceControlViewHost.SurfacePackage) {
         setChildSurfacePackage(surface)
+    }
+
+    /**
+     * Redraws the idle screen — wallpaper, the device's name, and whatever is installed. Called when
+     * the surface appears, when the installed set changes, and whenever an app leaves the device, so
+     * stopping one lands back on a live home screen rather than on whatever it drew last.
+     */
+    fun paintHome() {
+        if (!holder.surface.isValid) return
+        val canvas = runCatching { holder.lockCanvas() }.getOrNull() ?: return
+        try {
+            VirtualLauncher.draw(
+                canvas = canvas,
+                width = canvas.width,
+                height = canvas.height,
+                density = resources.displayMetrics.density,
+                apps = home.orEmpty(),
+            )
+        } finally {
+            runCatching { holder.unlockCanvasAndPost(canvas) }
+        }
     }
 
     /**
@@ -137,4 +236,9 @@ internal class AppSandboxSurfaceView(
 
     private fun inputMethodManager(): InputMethodManager? =
         context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+
+    private companion object {
+        /** The platform's own long-press threshold, so the launcher feels like every other one. */
+        val LONG_PRESS_MS = android.view.ViewConfiguration.getLongPressTimeout().toLong()
+    }
 }

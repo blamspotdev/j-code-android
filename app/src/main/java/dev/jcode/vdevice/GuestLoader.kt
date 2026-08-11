@@ -52,6 +52,20 @@ internal class LoadedGuest(
     }
 
     /**
+     * A theme built directly out of the guest's own resource table, layered the way
+     * `ContextThemeWrapper.initializeTheme` layers one: the application's theme is the base an
+     * activity's own theme is applied over.
+     *
+     * A style *id* alone is not enough to theme a guest — see [GuestRuntime.bind]. The id only means
+     * anything next to the resource table it was compiled against, and the object is the only way to
+     * say which one that is.
+     */
+    fun newTheme(activityClass: String): Resources.Theme = resources.newTheme().apply {
+        applicationInfo.theme.takeIf { it != 0 }?.let { applyStyle(it, true) }
+        activities[activityClass]?.theme?.takeIf { it != 0 }?.let { applyStyle(it, true) }
+    }
+
+    /**
      * Resolved here rather than left to `PackageItemInfo.loadLabel`, which would look a `labelRes` up
      * through the host `PackageManager` under J Code's package name and hand back J Code's label.
      */
@@ -68,15 +82,29 @@ internal class LoadedGuest(
 /** Loads guest APKs into the guest process. One [LoadedGuest] per APK path, cached for the process. */
 internal object GuestLoader {
 
-    private val loaded = HashMap<String, LoadedGuest>()
+    /** A loaded guest, plus what the APK looked like when it was loaded. */
+    private class Cached(val guest: LoadedGuest, val modified: Long, val size: Long)
+
+    private val loaded = HashMap<String, Cached>()
 
     @Synchronized
     fun load(context: Context, apkPath: String): LoadedGuest {
-        loaded[apkPath]?.let { return it }
-
         val host = context.applicationContext
         val apk = File(apkPath)
         if (!apk.canRead()) throw VirtualDeviceException("Cannot read APK: $apkPath")
+
+        // Keyed on the APK's identity, not just its path. Unbinding the service is *supposed* to
+        // take `:guest` with it, but Android keeps an emptied process around and rebinds into it —
+        // so a rebuilt APK at the same path was being answered out of this cache, and the device
+        // quietly ran the previous build. That is the one thing a device you iterate against must
+        // never do. Measured: the pid survived `am force-stop` + `am start`, and the guest that came
+        // back was the old code.
+        val modified = apk.lastModified()
+        val size = apk.length()
+        loaded[apkPath]?.let { cached ->
+            if (cached.modified == modified && cached.size == size) return cached.guest
+            Log.i(TAG, "$apkPath changed on disk; reloading it")
+        }
 
         val flags = PackageManager.GET_ACTIVITIES or PackageManager.GET_META_DATA
         val info = host.packageManager.getPackageArchiveInfo(apkPath, flags)
@@ -97,11 +125,24 @@ internal object GuestLoader {
         appInfo.uid = Process.myUid()
         appInfo.processName = "${host.packageName}:guest"
 
+        // The parent is the *boot* class loader, not J Code's, and that is load-bearing.
+        //
+        // Delegating to J Code's would be parent-first, so every library the IDE also ships —
+        // AndroidX, Kotlin, Compose — would be answered out of the IDE's dex instead of the guest's.
+        // The classes would run, which is what makes this so quiet, but each library's generated `R`
+        // would carry *J Code's* resource ids while the guest's resource table only knows the
+        // guest's. That is exactly how an AppCompat guest carrying a perfectly good
+        // Theme.AppCompat theme was told to "use a Theme.AppCompat theme (or descendant)":
+        // AppCompatDelegate looked up J Code's `windowActionBar` id and the guest's table, quite
+        // correctly, had never heard of it.
+        //
+        // Isolating the parent gives the guest its own copy of everything it ships, which is what a
+        // real app process has. Nothing crosses between the two loaders but framework types.
         val classLoader = DexClassLoader(
             apkPath,
             File(guestDataDir, "dex").apply { mkdirs() }.absolutePath,
             nativeLibDir?.absolutePath,
-            host.classLoader,
+            Context::class.java.classLoader,
         )
 
         val assets = newAssetManager()
@@ -133,12 +174,13 @@ internal object GuestLoader {
             guest.noBackupDir, guest.databasesDir, guest.sharedPrefsDir,
         ).forEach { it.mkdirs() }
 
-        loaded[apkPath] = guest
+        loaded[apkPath] = Cached(guest, modified, size)
         Log.i(
             TAG,
             "loaded $packageName launch=$launchActivity activities=${activities.size} " +
                 "data=$guestDataDir libs=${nativeLibDir ?: "none"}",
         )
+        VirtualDeviceLog.append(host, 'I', TAG, "loaded $packageName from $apkPath")
         return guest
     }
 
@@ -223,7 +265,11 @@ internal object GuestLoader {
         val abiDir = File(target, abi).apply { mkdirs() }
         entries.getValue(abi).forEach { entry ->
             val out = File(abiDir, File(entry.name).name)
-            if (out.exists() && out.length() == entry.size) return@forEach
+            // Same size is not the same file once the APK has been rebuilt, so the extraction is
+            // only skipped for a copy that is also newer than the APK it came from.
+            if (out.exists() && out.length() == entry.size && out.lastModified() >= apk.lastModified()) {
+                return@forEach
+            }
             zip.getInputStream(entry).use { input -> out.outputStream().use { input.copyTo(it) } }
             out.setExecutable(true, false)
         }

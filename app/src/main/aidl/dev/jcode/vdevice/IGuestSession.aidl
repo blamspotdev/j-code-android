@@ -27,6 +27,10 @@ interface IGuestSession {
      *  data directory, so a file beats a Bundle that a large screen would burst. */
     Bundle capture(String pngPath);
 
+    /** Writes the guest's view tree to xmlPath as uiautomator-shaped XML, for `uiautomator dump`.
+     *  A file for the same reason capture() uses one: a deep tree outgrows a Bundle. */
+    Bundle dump(String xmlPath);
+
     // Everything below is called from the IDE's UI thread, so none of it may block on the guest's.
     oneway void resize(int width, int height);
 

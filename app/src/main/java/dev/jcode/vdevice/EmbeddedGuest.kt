@@ -5,7 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Color
+import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.os.IBinder
 import android.os.SystemClock
@@ -128,7 +128,9 @@ internal class EmbeddedGuest(
         )
         try {
             val canvas = Canvas(bitmap)
-            canvas.drawColor(Color.BLACK)
+            // The device's own screen is what a guest is drawn on top of, so it is what shows
+            // through anything translucent — the same picture an idle capture answers with.
+            VirtualWallpaper.draw(canvas, bitmap.width, bitmap.height)
             container.draw(canvas)
             windows?.children()?.forEach { child ->
                 canvas.save()
@@ -141,6 +143,20 @@ internal class EmbeddedGuest(
         } finally {
             bitmap.recycle()
         }
+    }
+
+    /**
+     * Writes the guest's view tree to [xml] for `uiautomator dump`.
+     *
+     * Dialogs and popups are separate windows rather than children of [container], so they are
+     * walked as their own roots — each offset by the frame [EmbeddedWindows] placed it at, which is
+     * what keeps every `bounds` in the coordinates `input tap` takes.
+     */
+    fun dump(xml: File) {
+        val container = container ?: throw VirtualDeviceException("no guest is running")
+        val roots = listOf<Pair<View, Rect>>(container to Rect()) +
+            windows?.children().orEmpty().map { it.view to it.frame }
+        GuestHierarchy.write(xml, roots)
     }
 
     fun touch(event: MotionEvent) {

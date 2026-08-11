@@ -5,7 +5,7 @@
 | **Status** | Implemented |
 | **Modules** | `:core:distro` (package `dev.jcode.core.distro.adb`), `:app` (`dev.jcode.adb`) |
 | **Primary sources** | core/distro/src/main/java/dev/jcode/core/distro/adb/AdbWire.kt, AdbAuth.kt, AdbDaemon.kt, AdbHostClient.kt, AdbRelayServer.kt, AdbBackendDiscovery.kt, AdbBridge.kt, AdbBridgeLocator.kt, AdbModels.kt, app/src/main/java/dev/jcode/adb/VirtualDeviceAdbService.kt |
-| **Verified against** | commit `cea581c`, 2026-08-09 |
+| **Verified against** | device-verified on Android 13, 2026-08-11 |
 
 ---
 
@@ -209,12 +209,68 @@ A device-side adb daemon so the guest's `adb` can drive JCode's app sandbox.
 | `shell:getprop` | Answers from the virtual identity |
 | `shell:echo` | |
 | `shell:pm list packages` | Lists sandbox-installed packages |
+| `shell:pm uninstall\|clear\|path <pkg>` | Removes the APK and its data, wipes its data, or prints its staged path |
 | `shell:am start -n …` | Routes to `AppSandbox.requestOpen` (embedded tab) or `VirtualDevice.launch` (full screen, `--windowingMode 1`) |
+| `shell:am force-stop <pkg>` | Takes the guest off the device, leaving the screen on |
+| `shell:input tap\|swipe\|text\|keyevent` | Synthesised into the running guest through the tab's own AIDL input path; with nothing running, a `tap` hits the device's **launcher** and starts the app whose icon it landed on |
+| `shell:uiautomator dump` | The guest's view tree as uiautomator-shaped XML, on the stream — or the launcher's icons when nothing is running |
+| `shell:wm size` / `shell:wm density` | The device's resolution and density |
+| `shell:logcat [-d] [-t n] [-c]` | The **virtual device's** log — see §10.1 |
 | `shell:screencap` | PNG via `VirtualScreen` |
 | `exec:cmd package 'install' -S <n>` | Single-stream `adb install` |
 
+Between `install`, `am start`, `input`, `uiautomator dump` and `screencap`, an agent with nothing but
+a terminal can put an app on the device, drive it, read what is on screen, and take it off again.
+`input` events are built as a touchscreen's would be — real down/move/up streams sharing one down
+time — and go through the same calls a finger does, so the guest cannot tell them apart.
+
+`uiautomator dump` and `screencap` **write to the stream, not a file**: this device has no
+filesystem to write one to, and a path argument is answered with the `exec-out` redirect to use
+instead.
+
+An **idle device is not a dead one** — it is showing its launcher, so all three answer it rather than
+refusing: `screencap` returns the wallpaper with the app icons on it, `uiautomator dump` lists those
+icons (`content-desc` is the package, which is what `am start` and `pm uninstall` take), and
+`input tap` on one starts it. All three read the same layout, so the coordinates agree. `swipe`,
+`text` and `keyevent` still need a guest and say so in one line — the home screen has nothing else to
+act on.
+
 **`sync:` is not implemented**, so `adb push`/`pull` do not work against the virtual device; only
 the single-stream install form is supported.
+
+> The device is emptied on every JCode start (see
+> [App sandbox architecture §7a](../08-virtual-device/01-app-sandbox-architecture.md#7a-the-device-with-nothing-on-it)),
+> so a session always begins with `pm list packages` empty.
+
+`unwrap` strips the shell wrapper adb puts around some commands before dispatch. `adb logcat` does
+not send `logcat`; it sends `export ANDROID_LOG_TAGS="…"; exec logcat …`, because on a real device
+there is a shell to run that. There is none here, so leading assignments, `export`, `exec` and `;`
+are dropped and what remains is the command.
+
+### 10.1 `logcat` — the device's own log, not the phone's
+
+**The phone's log is not on offer and could not be.** Reading it needs `READ_LOGS`
+(`signature|privileged`), and an app cannot read back even its own entries — measured on Android 13,
+where `logcat` run as JCode's uid returns nothing whatever. A driver that wanted the stack trace
+behind a crash therefore had no way to get one.
+
+JCode does not need to read the system log, though: it *is* the process running the guest. So
+`VirtualDeviceLog` is written by the container itself, into `filesDir/vdevice/device.log`:
+
+| Source | Written by |
+|---|---|
+| Container events (loaded, started, refused) | `GuestLoader`, `GuestRuntime`, `AppSandboxSession.fail` |
+| Anything the guest **printed** | `System.out`/`System.err` tee'd in `:guest` — catches `println` and `printStackTrace()` |
+| The guest's **uncaught exceptions**, full trace | `Thread.setDefaultUncaughtExceptionHandler` in `:guest`, which still chains to the previous handler so the process dies exactly as it would have |
+| Why the guest process **died** | `ActivityManager.getHistoricalProcessExitReasons` — public API for one's own package, reachable where `logcat` is not |
+
+A file, deliberately: `:guest` and the IDE both write it, a full-screen guest has no session bound to
+carry lines over, and the two processes share a uid and a data directory. `resetOnStart` wipes it
+with everything else, so the log covers exactly one JCode session.
+
+> **Known gap.** A guest's own `android.util.Log` calls go to the system log through a native call
+> there is no reaching, so they are absent. There is no follow mode either — there is no `logcat`
+> process here to hold open — so `-d` is implied.
 
 ---
 
@@ -246,6 +302,8 @@ coroutine.
 | mDNS resolution fails | `Discovering` persists | No backend port found |
 | All ports in a range busy | `Failed` | Relay or daemon cannot bind |
 | Guest sends `sync:` to the virtual device | Refused | `adb push`/`pull` unsupported |
+| `input swipe/text/keyevent` with an idle device | Refused | One line naming `am start`; nothing hangs |
+| `input tap` on an idle device's wallpaper | Refused | Names the coordinates that hit nothing |
 
 ---
 

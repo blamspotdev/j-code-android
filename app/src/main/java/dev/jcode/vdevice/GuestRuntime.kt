@@ -75,8 +75,36 @@ internal object GuestRuntime {
 
         val launch = GuestHooks.installLaunchHook(activityThread, ::onLaunchActivity)
         val navigation = GuestHooks.installStartActivityHook(::rewriteOutgoing)
+        installCrashHandler()
+        VirtualDeviceLog.captureStandardStreams(host)
         isInstalled = true
         Log.i(TAG, "hooks installed: instrumentation=true launch=$launch navigation=$navigation")
+        VirtualDeviceLog.append(host, 'I', TAG, "container ready in ${Application.getProcessName()}")
+    }
+
+    /**
+     * Records what killed a guest.
+     *
+     * A crash in `:guest` goes to the system log, which no app on this platform can read back — so
+     * without this the device could show that an app died and never say why. The previous handler
+     * still runs, so the process dies exactly as it would have; this only writes the trace down
+     * first, where `adb logcat` against the virtual device can reach it.
+     */
+    private fun installCrashHandler() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            runCatching {
+                VirtualDeviceLog.append(
+                    context = host,
+                    level = 'E',
+                    tag = "AndroidRuntime",
+                    message = "FATAL EXCEPTION: ${thread.name}\n" +
+                        "Process: ${Application.getProcessName()}, guest: ${active?.packageName ?: "none"}\n" +
+                        error.stackTraceToString(),
+                )
+            }
+            previous?.uncaughtException(thread, error)
+        }
     }
 
     /** Starts [activityClass] (or the guest's launcher activity) on one of the stubs. */
@@ -155,6 +183,53 @@ internal object GuestRuntime {
      * Only a full-screen guest is given the overlay: one in the tab already has the tab's controls
      * floating over it.
      */
+    /**
+     * Relaunches the guest a full-screen activity belongs to, from scratch.
+     *
+     * `CLEAR_TASK` is what makes it a restart rather than a second copy: the guest's whole back
+     * stack goes and the launch activity comes back as the new root, which is what "restart the app"
+     * means to someone iterating on it. The APK and activity come off the launch intent, so this
+     * needs nothing the container did not already put there.
+     */
+    fun restartGuest(from: Activity) {
+        val apkPath = from.intent?.getStringExtra(EXTRA_APK) ?: return
+        val guest = runCatching { GuestLoader.load(from, apkPath) }.getOrElse {
+            Log.e(TAG, "cannot reload $apkPath", it)
+            return
+        }
+        active = guest
+        from.startActivity(
+            stubIntent(guest, guest.launchActivity)
+                .addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TASK or
+                        Intent.FLAG_ACTIVITY_NO_ANIMATION,
+                ),
+        )
+    }
+
+    /**
+     * Takes the guest off the device and hands the user back to J Code.
+     *
+     * A full-screen guest is a task of its own, so finishing it alone reveals whatever happened to
+     * be behind — usually the phone's launcher, which is not where someone who left the IDE to try
+     * an app expects to land. The workbench is brought forward first, by its *host* package: by this
+     * point `activity.packageName` is the guest's.
+     */
+    fun leaveGuest(from: Activity) {
+        // Finish first, start second. The other order loses a race: tearing the task down before the
+        // queued launch resolves leaves the start looking like it came from the background, which
+        // the platform drops — measured, the workbench's MainActivity was accepted by the activity
+        // manager and the phone still went to its launcher. Finishing only marks the activities, so
+        // this is still a foreground app when the intent goes out.
+        from.finishAffinity()
+        runCatching {
+            host.packageManager.getLaunchIntentForPackage(host.packageName)
+                ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                ?.let(from::startActivity)
+        }.onFailure { Log.w(TAG, "cannot bring the workbench back", it) }
+    }
+
     fun created(activity: Activity) {
         if (embedding || activity is GuestActivity || activity is GuestBootstrapActivity) return
         if (resolve(activity.intent) == null) return
@@ -298,12 +373,31 @@ internal object GuestRuntime {
         ensureApplication(target.guest)
         if (!GuestHooks.rebase(activity, target.guest)) return
 
+        // Two calls, and the second is what makes the first safe.
+        //
+        // The int form is the one the activity's Window watches, so it still has to happen. What it
+        // cannot do on its own is guarantee *which* resource table the theme is built from:
+        // ContextThemeWrapper.initializeTheme only creates mTheme the first time, so a guest that
+        // had mTheme created before bind() — against J Code's resources, since that is the context
+        // the activity was attached to — would have its style id applied to the wrong table, and
+        // mTheme is max-target-p and cannot be cleared.
+        //
+        // The object form replaces mTheme outright with one built from the guest's own resources,
+        // so that stops being a matter of timing. It is public SDK from API 29; the container never
+        // needed the field it cannot touch.
         val theme = target.guest.themeOf(target.activityClass)
         if (theme != 0) activity.setTheme(theme)
+        activity.setTheme(target.guest.newTheme(target.activityClass))
         Log.i(
             TAG,
             "bound ${target.activityClass}: package=${activity.packageName} " +
                 "filesDir=${activity.filesDir} theme=$theme",
+        )
+        VirtualDeviceLog.append(
+            host,
+            'I',
+            TAG,
+            "started ${target.guest.packageName}/${target.activityClass}",
         )
     }
 
