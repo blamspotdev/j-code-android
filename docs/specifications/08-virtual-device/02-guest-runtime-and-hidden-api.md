@@ -5,7 +5,7 @@
 | **Status** | Implemented — verified on Android 13 with `targetSdk = 33` |
 | **Modules** | `:app` (`dev.jcode.vdevice`) |
 | **Primary sources** | app/src/main/java/dev/jcode/vdevice/HiddenApi.kt, GuestLoader.kt, GuestContext.kt, GuestRuntime.kt, GuestHooks.kt, GuestInstrumentation.kt, GuestOverlay.kt, VirtualIdentity.kt, EmbeddedWindows.kt |
-| **Verified against** | commit `cea581c`, 2026-08-09 |
+| **Verified against** | device-verified on Android 13, 2026-08-11 (`tools/appcompat-fixture`) |
 
 ---
 
@@ -37,11 +37,29 @@ internal class LoadedGuest(
 
 | Step | Mechanism |
 |---|---|
-| Code | `DexClassLoader` over the raw APK |
+| Code | `DexClassLoader` over the raw APK, parented to the **boot** class loader |
 | Resources | A hand-built `AssetManager` via the hidden `addAssetPath` |
 | Manifest | Parsed with `XmlResourceParser` to find activities and the MAIN/LAUNCHER entry |
 | Native libraries | Extracted from `lib/<abi>/*.so` (regex `lib/([^/]+)/[^/]+\.so`) |
 | Data directory | Redirected to `filesDir/vdevice/<packageName>/` |
+
+### 2.1 Why the class loader's parent is the boot loader
+
+`DexClassLoader(apk, …, Context::class.java.classLoader)` — **not** JCode's own loader.
+
+Parenting to JCode's would be parent-first, so every library the IDE also ships (AndroidX, Kotlin,
+Compose) would be answered out of the IDE's dex rather than the guest's APK. The classes run, which
+is what makes the mistake so quiet, but each library's generated `R` then carries **JCode's**
+resource ids while the guest's resource table only knows the guest's.
+
+> Measured: an `AppCompatActivity` whose theme *was* a `Theme.AppCompat` descendant, correctly
+> applied and resolving `android:windowBackground` out of the guest's table, still died on
+> `setContentView` with "You need to use a Theme.AppCompat theme (or descendant) with this
+> activity." — `AppCompatDelegate` was reading JCode's `windowActionBar` attr id, which the guest's
+> table has never heard of. `tools/appcompat-fixture` is the regression test.
+
+Isolating the parent gives the guest its own copy of everything it ships, which is what a real app
+process has. Nothing crosses between the two loaders but framework types.
 
 ---
 
@@ -134,7 +152,7 @@ Accessing these logs a warning and nothing more:
 
 | Member | Status | Workaround |
 |---|---|---|
-| `ContextThemeWrapper.mTheme` | `max-target-p` — cannot be cleared | `GuestRuntime.onLaunchActivity` keeps it from ever being created (rewrites `ActivityInfo.theme` to `0`) |
+| `ContextThemeWrapper.mTheme` | `max-target-p` — cannot be cleared | Never needed: **`ContextThemeWrapper.setTheme(Resources.Theme)` is public SDK from API 29** and replaces `mTheme` outright. `GuestRuntime.bind` builds the theme from the guest's own `Resources` and installs it, so which table the theme belongs to is no longer a matter of when `mTheme` happened to be created. `onLaunchActivity` still rewrites `ActivityInfo.theme` to `0` so nothing is built against JCode's resources in the first place |
 | `ActivityThread.startActivityNow` | Absent from declared members — the signature of a **denied** member | The embedded path uses the public `Instrumentation.newActivity` |
 | **Every** non-SDK member of `SurfaceControlViewHost`, including `SurfacePackage` | The class carries no `@UnsupportedAppUsage` at all | `EmbeddedWindows` reaches the host's view root through the container's public `getParent()`, and the root layer through `SurfacePackage`'s own public `Parcelable` contract |
 | `Activity.performStart` / `performResume` | Denied | Driven through the public lifecycle path |
@@ -192,9 +210,12 @@ JCode draws nothing over it.
 3. Only descriptive `Build` strings are rewritten; hardware-derived values are left alone.
 4. Every reflective access is guarded and degrades rather than crashing.
 5. Prefer a public API wherever one exists (`Instrumentation.newActivity`, `Parcelable`,
-   `getParent()`).
+   `getParent()`, `ContextThemeWrapper.setTheme(Resources.Theme)`).
 6. The guest's `dataDir` is always redirected under `filesDir/vdevice/<package>/`.
-7. `ActivityInfo.theme` is rewritten to `0` so `ContextThemeWrapper.mTheme` is never created.
+7. `ActivityInfo.theme` is rewritten to `0`, and the activity's theme is then installed as an
+   *object* built from the guest's `Resources` — a style id alone never says which table it means.
+8. The guest's class loader never delegates to JCode's. A library the IDE also ships must still come
+   out of the guest's APK, or its `R` ids belong to the wrong resource table.
 
 ---
 
@@ -203,7 +224,7 @@ JCode draws nothing over it.
 | Failure | Effect |
 |---|---|
 | A greylisted member is demoted by a platform update | The guarded step degrades; the affected capability stops working |
-| `ContextThemeWrapper.mTheme` created despite the rewrite | It cannot be cleared; the guest renders with the wrong theme |
+| A guest library resolved from JCode's dex | Its `R` ids miss the guest's resource table — see §2.1 |
 | A child window without the host token | Not routed into the windowless session |
 | `EmbeddedWindows` not installed | Dialogs and popups draw at 1×1 in the top-left corner |
 | Guest APK missing a native library for this ABI | `UnsatisfiedLinkError` inside the guest |

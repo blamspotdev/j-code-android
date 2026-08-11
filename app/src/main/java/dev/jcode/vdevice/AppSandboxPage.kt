@@ -4,8 +4,10 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -17,6 +19,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -26,7 +31,6 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.PhoneAndroid
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Warning
@@ -43,13 +47,17 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -57,18 +65,26 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jcode.core.distro.WorkspaceHostPaths
 import dev.jcode.design.CompactFilledButton
 import dev.jcode.design.CompactOutlinedButton
+import dev.jcode.design.ContextAction
+import dev.jcode.design.CompactContextMenu
+import dev.jcode.design.JCodeIcon
 import dev.jcode.design.ManagerNoticeCard
 import dev.jcode.design.ManagerSectionCard
 import dev.jcode.design.SettingsTextFieldRow
 import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * How long the device's controls stay up once they are left alone. Long enough to reach a second
@@ -122,8 +138,9 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
     var running by AppSandbox.running
     var size by remember { mutableStateOf(IntSize.Zero) }
     var surfaceView by remember { mutableStateOf<AppSandboxSurfaceView?>(null) }
-    var launcherOpen by remember { mutableStateOf(false) }
+    var installOpen by remember { mutableStateOf(false) }
     val surface by session.surface.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
 
     // The guest display is the tab, so the surface's own pixel size is what the container is asked
     // for — which keeps forwarded touches in the guest's coordinates with no mapping at all.
@@ -145,17 +162,29 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
         }
     }
 
-    fun runFullScreen() {
-        launcherOpen = false
-        VirtualDevice.launch(context, apkPath.trim(), activityClass)
+    fun runFullScreen(path: String = apkPath, activity: String? = activityClass) {
+        installOpen = false
+        VirtualDevice.launch(context, path.trim(), activity)
             .onSuccess { onSnackbar("Started ${it.label} full screen.") }
             .onFailure { onSnackbar(it.message ?: "Could not start the app.") }
+    }
+
+    /** Puts an app from the device's own launcher on its screen — a tap on an icon. */
+    fun open(app: VirtualDeviceApp) {
+        installOpen = false
+        // The launcher runs an app as the device would: its own MAIN/LAUNCHER activity, whatever
+        // the last run happened to name.
+        AppSandbox.activityClass.value = null
+        apkPath = app.apkPath
+        if (tier == AppSandboxTier.Embedded) running = true else runFullScreen(app.apkPath, null)
     }
 
     fun stop() {
         surfaceView?.hideKeyboard()
         session.close()
         running = false
+        // Back to a live, blank device rather than the last frame the guest left on the surface.
+        surfaceView?.paintWallpaper()
     }
 
     Box(modifier) {
@@ -163,6 +192,7 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
             session = session,
             status = status,
             running = running,
+            tier = tier,
             onSurface = { surfaceView = it },
             onSized = { width, height -> size = IntSize(width, height) },
             onRetry = {
@@ -170,12 +200,25 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
             },
             onFullScreen = { runFullScreen() },
             onDismiss = { stop() },
-            onLaunch = { launcherOpen = true },
+            onOpen = { open(it) },
+            onOpenFullScreen = { runFullScreen(it.apkPath, null) },
+            onUninstall = { app ->
+                if (app.apkPath == apkPath) stop()
+                scope.launch(Dispatchers.IO) {
+                    VirtualDeviceApps.uninstall(context, app.packageName)
+                }
+                onSnackbar("Uninstalled ${app.label}.")
+            },
+            onClearData = { app ->
+                scope.launch(Dispatchers.IO) { VirtualDeviceApps.clearData(context, app.packageName) }
+                onSnackbar("Cleared ${app.label}'s data.")
+            },
+            onInstall = { installOpen = true },
             modifier = Modifier.fillMaxSize(),
         )
 
-        if (launcherOpen) {
-            DeviceLauncher(
+        if (installOpen) {
+            InstallSheet(
                 tier = tier,
                 apkPath = apkPath,
                 onApkPathChange = {
@@ -183,21 +226,31 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
                     // The activity a launch named belongs to the APK it named, not to this one.
                     AppSandbox.activityClass.value = null
                 },
+                onInstall = { path ->
+                    scope.launch {
+                        withContext(Dispatchers.IO) { VirtualDeviceApps.installCopy(context, File(path)) }
+                            .onSuccess {
+                                installOpen = false
+                                onSnackbar("Installed ${it.label} on ${VirtualIdentity.MODEL}.")
+                            }
+                            .onFailure { onSnackbar(it.message ?: "Could not install that APK.") }
+                    }
+                },
                 onRunHere = {
-                    launcherOpen = false
+                    installOpen = false
                     running = true
                 },
                 onRunFullScreen = { runFullScreen() },
-                onClose = { launcherOpen = false },
+                onClose = { installOpen = false },
                 modifier = Modifier.fillMaxSize(),
             )
-        } else {
+        } else if (running) {
+            // Every control on the bar acts on a running guest, and the home screen already names
+            // the device — so with nothing running there is nothing for it to say.
             DeviceControls(
-                running = running,
                 caveat = (status as? SandboxStatus.Running)?.warning,
                 onBack = { session.back() },
                 onKeyboard = { surfaceView?.showKeyboard() },
-                onLaunch = { launcherOpen = true },
                 onRestart = {
                     session.restart(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
                 },
@@ -218,15 +271,25 @@ private fun DeviceScreen(
     session: AppSandboxSession,
     status: SandboxStatus,
     running: Boolean,
+    tier: AppSandboxTier,
     onSurface: (AppSandboxSurfaceView?) -> Unit,
     onSized: (Int, Int) -> Unit,
     onRetry: () -> Unit,
     onFullScreen: () -> Unit,
     onDismiss: () -> Unit,
-    onLaunch: () -> Unit,
+    onOpen: (VirtualDeviceApp) -> Unit,
+    onOpenFullScreen: (VirtualDeviceApp) -> Unit,
+    onUninstall: (VirtualDeviceApp) -> Unit,
+    onClearData: (VirtualDeviceApp) -> Unit,
+    onInstall: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Box(modifier = modifier.background(Color.Black), contentAlignment = Alignment.Center) {
+    // Matches the wallpaper painted onto the surface, so the two never disagree along its edges
+    // while the surface is being created or resized.
+    Box(
+        modifier = modifier.background(Color(VirtualWallpaper.BACKGROUND)),
+        contentAlignment = Alignment.Center,
+    ) {
         AndroidView(
             factory = { context ->
                 AppSandboxSurfaceView(context, session) { width, height ->
@@ -239,7 +302,16 @@ private fun DeviceScreen(
         DisposableEffect(Unit) { onDispose { onSurface(null) } }
 
         when {
-            !running -> IdleScreen(onLaunch)
+            !running -> DeviceHome(
+                tier = tier,
+                onOpen = onOpen,
+                onOpenFullScreen = onOpenFullScreen,
+                onUninstall = onUninstall,
+                onClearData = onClearData,
+                onInstall = onInstall,
+                modifier = Modifier.fillMaxSize(),
+            )
+
             status is SandboxStatus.Starting || status is SandboxStatus.Idle ->
                 ScreenMessage("Starting the app…")
 
@@ -255,13 +327,79 @@ private fun DeviceScreen(
     }
 }
 
-/** A device with nothing on it — the tab's resting state, and what `screencap` answers black for. */
+/**
+ * The device's home screen: what is installed on it, and nothing else.
+ *
+ * This is the tab's resting state and what `screencap` answers with when no app is running, so it is
+ * deliberately a *device* screen rather than an IDE panel — the wallpaper behind it is the surface's
+ * own, and the grid is the same set `adb shell pm list packages` reports, in the same order every
+ * time. An app installed over adb appears here without the tab being touched: [VirtualDeviceApps]
+ * bumps a revision the list is keyed on.
+ */
 @Composable
-private fun IdleScreen(onLaunch: () -> Unit) {
+private fun DeviceHome(
+    tier: AppSandboxTier,
+    onOpen: (VirtualDeviceApp) -> Unit,
+    onOpenFullScreen: (VirtualDeviceApp) -> Unit,
+    onUninstall: (VirtualDeviceApp) -> Unit,
+    onClearData: (VirtualDeviceApp) -> Unit,
+    onInstall: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val revision = VirtualDeviceApps.revision.intValue
+    var apps by remember { mutableStateOf<List<VirtualDeviceApp>?>(null) }
+    LaunchedEffect(revision) {
+        apps = withContext(Dispatchers.IO) { VirtualDeviceApps.list(context) }
+    }
+
     Column(
+        modifier = modifier.padding(horizontal = 12.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        modifier = Modifier.padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = VirtualIdentity.MODEL,
+            style = MaterialTheme.typography.titleSmall,
+            color = Color.White.copy(alpha = 0.8f),
+        )
+        // Null is "not read yet", which must not flash the empty state on the way to a full grid.
+        val installed = apps
+        when {
+            installed == null -> Box(modifier = Modifier.weight(1f))
+            installed.isEmpty() -> EmptyHome(onInstall, modifier = Modifier.weight(1f))
+            else -> LazyVerticalGrid(
+                columns = GridCells.Adaptive(88.dp),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(installed, key = { it.packageName }) { app ->
+                    AppTile(
+                        app = app,
+                        tier = tier,
+                        onOpen = { onOpen(app) },
+                        onOpenFullScreen = { onOpenFullScreen(app) },
+                        onUninstall = { onUninstall(app) },
+                        onClearData = { onClearData(app) },
+                    )
+                }
+            }
+        }
+        // The empty state carries its own copy of this button, next to the sentence explaining it.
+        if (!installed.isNullOrEmpty()) {
+            CompactOutlinedButton(text = "Install an app", onClick = onInstall)
+        }
+    }
+}
+
+/** A device that has never had anything put on it. */
+@Composable
+private fun EmptyHome(onInstall: () -> Unit, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
     ) {
         Icon(
             imageVector = Icons.Rounded.PhoneAndroid,
@@ -270,19 +408,82 @@ private fun IdleScreen(onLaunch: () -> Unit) {
             modifier = Modifier.size(40.dp),
         )
         Text(
-            text = VirtualIdentity.MODEL,
-            style = MaterialTheme.typography.titleSmall,
-            color = Color.White.copy(alpha = 0.75f),
-        )
-        Text(
-            text = "The screen is on and nothing is running. Install and launch over adb, or pick " +
-                "an APK here.",
+            text = "The screen is on and nothing is installed. Install over adb, or point this at " +
+                "an APK you have already built.",
             style = MaterialTheme.typography.bodySmall,
             color = Color.White.copy(alpha = 0.45f),
             textAlign = TextAlign.Center,
             modifier = Modifier.widthIn(max = 300.dp),
         )
-        CompactOutlinedButton(text = "Run an app", onClick = onLaunch)
+        CompactOutlinedButton(text = "Install an app", onClick = onInstall)
+    }
+}
+
+/** One installed app: its own icon and label, tapped to run and held for everything else. */
+@Composable
+private fun AppTile(
+    app: VirtualDeviceApp,
+    tier: AppSandboxTier,
+    onOpen: () -> Unit,
+    onOpenFullScreen: () -> Unit,
+    onUninstall: () -> Unit,
+    onClearData: () -> Unit,
+) {
+    val context = LocalContext.current
+    var menuOpen by remember { mutableStateOf(false) }
+    // The icon is decoded off an APK archive, which is slow enough to keep out of the first frame.
+    val icon by produceState<ImageBitmap?>(initialValue = null, app.apkPath) {
+        value = withContext(Dispatchers.IO) {
+            VirtualDevice.icon(context, app.apkPath)?.let { runCatching { it.toBitmap() }.getOrNull() }
+        }?.asImageBitmap()
+    }
+
+    Box {
+        Column(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .combinedClickable(onClick = onOpen, onLongClick = { menuOpen = true })
+                .padding(vertical = 8.dp, horizontal = 4.dp)
+                .fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            val iconBitmap = icon
+            if (iconBitmap != null) {
+                Image(
+                    bitmap = iconBitmap,
+                    contentDescription = null,
+                    modifier = Modifier.size(46.dp).clip(RoundedCornerShape(11.dp)),
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(11.dp))
+                        .background(Color.White.copy(alpha = 0.10f)),
+                )
+            }
+            Text(
+                text = app.label,
+                style = MaterialTheme.typography.labelMedium,
+                color = Color.White.copy(alpha = 0.85f),
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        CompactContextMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false },
+            listActions = buildList {
+                add(ContextAction(JCodeIcon.Run, "Open", onClick = onOpen))
+                if (tier == AppSandboxTier.Embedded) {
+                    add(ContextAction(JCodeIcon.Fullscreen, "Open full screen", onClick = onOpenFullScreen))
+                }
+                add(ContextAction(JCodeIcon.Clear, "Clear data", onClick = onClearData))
+                add(ContextAction(JCodeIcon.Delete, "Uninstall", destructive = true, onClick = onUninstall))
+            },
+        )
     }
 }
 
@@ -351,11 +552,9 @@ private fun ScreenFallback(
  */
 @Composable
 private fun BoxScope.DeviceControls(
-    running: Boolean,
     caveat: String?,
     onBack: () -> Unit,
     onKeyboard: () -> Unit,
-    onLaunch: () -> Unit,
     onRestart: () -> Unit,
     onFullScreen: () -> Unit,
     onStop: () -> Unit,
@@ -399,12 +598,10 @@ private fun BoxScope.DeviceControls(
         ) {
             Column {
                 DeviceToolbar(
-                    running = running,
                     caveat = caveat,
                     onBack = onBack,
                     onKeyboard = onKeyboard,
                     onCaveat = { caveatOpen = true },
-                    onLaunch = onLaunch,
                     onRestart = onRestart,
                     onFullScreen = onFullScreen,
                     onStop = onStop,
@@ -477,12 +674,10 @@ private fun DeviceControlsHandle(onClick: () -> Unit, modifier: Modifier = Modif
 
 @Composable
 private fun DeviceToolbar(
-    running: Boolean,
     caveat: String?,
     onBack: () -> Unit,
     onKeyboard: () -> Unit,
     onCaveat: () -> Unit,
-    onLaunch: () -> Unit,
     onRestart: () -> Unit,
     onFullScreen: () -> Unit,
     onStop: () -> Unit,
@@ -492,17 +687,8 @@ private fun DeviceToolbar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        if (running) {
-            ToolbarAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onBack)
-            ToolbarAction(Icons.Rounded.Keyboard, "Keyboard", onKeyboard)
-        } else {
-            Text(
-                text = VirtualIdentity.MODEL,
-                modifier = Modifier.padding(start = 8.dp),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        ToolbarAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onBack)
+        ToolbarAction(Icons.Rounded.Keyboard, "Keyboard", onKeyboard)
         // Only lit when this guest actually lost something: a warning that is always on is a warning
         // nobody reads. Carries the same colour ManagerNoticeCard gives the launcher's version of it.
         if (caveat != null) {
@@ -514,12 +700,9 @@ private fun DeviceToolbar(
             )
         }
         Box(modifier = Modifier.weight(1f))
-        ToolbarAction(Icons.Rounded.PlayArrow, "Run an app", onLaunch)
-        if (running) {
-            ToolbarAction(Icons.Rounded.Fullscreen, "Run full screen", onFullScreen)
-            ToolbarAction(Icons.Rounded.RestartAlt, "Restart app", onRestart)
-            ToolbarAction(Icons.Rounded.Stop, "Stop", onStop, tint = MaterialTheme.colorScheme.error)
-        }
+        ToolbarAction(Icons.Rounded.Fullscreen, "Run full screen", onFullScreen)
+        ToolbarAction(Icons.Rounded.RestartAlt, "Restart app", onRestart)
+        ToolbarAction(Icons.Rounded.Stop, "Stop", onStop, tint = MaterialTheme.colorScheme.error)
     }
 }
 
@@ -535,12 +718,16 @@ private fun ToolbarAction(
     }
 }
 
-/** Picks what to put on the device. Over the screen, not instead of it — the device stays up. */
+/**
+ * Puts an APK on the device from a path — the tab's half of `adb install`, plus the one-off run that
+ * skips installing entirely. Over the screen, not instead of it: the device stays up.
+ */
 @Composable
-private fun DeviceLauncher(
+private fun InstallSheet(
     tier: AppSandboxTier,
     apkPath: String,
     onApkPathChange: (String) -> Unit,
+    onInstall: (String) -> Unit,
     onRunHere: () -> Unit,
     onRunFullScreen: () -> Unit,
     onClose: () -> Unit,
@@ -558,10 +745,11 @@ private fun DeviceLauncher(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Run an app", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("Install an app", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(
-                        text = "Put a freshly built APK on ${VirtualIdentity.MODEL} — no install, no " +
-                            "ADB. It runs in J Code's own process under a virtual device identity.",
+                        text = "Put a freshly built APK on ${VirtualIdentity.MODEL} — no install on " +
+                            "this phone, no ADB. It runs in J Code's own process under a virtual " +
+                            "device identity, and everything it stores is cleared when J Code starts.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -587,8 +775,10 @@ private fun DeviceLauncher(
 
             ManagerSectionCard(
                 title = "App",
-                description = "The APK to run. A virtual-device run config fills this in with whatever it " +
-                    "just built, and `adb shell am start` launches it here too.",
+                description = "The APK to put on the device. Installing it leaves an icon on the home " +
+                    "screen and lists it under `adb shell pm list packages`; running it straight from " +
+                    "here does neither. A virtual-device run config fills this in with whatever it just " +
+                    "built, and `adb install` reaches the same device.",
             ) {
                 SettingsTextFieldRow(
                     label = "APK path",
@@ -604,9 +794,15 @@ private fun DeviceLauncher(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
+                CompactFilledButton(
+                    text = "Install on ${VirtualIdentity.MODEL}",
+                    enabled = readable,
+                    onClick = { onInstall(apkPath.trim()) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 if (tier == AppSandboxTier.Embedded) {
-                    CompactFilledButton(
-                        text = "Run on this device",
+                    CompactOutlinedButton(
+                        text = "Run once, without installing",
                         enabled = readable,
                         onClick = onRunHere,
                         modifier = Modifier.fillMaxWidth(),

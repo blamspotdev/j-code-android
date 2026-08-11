@@ -298,8 +298,21 @@ internal object GuestRuntime {
         ensureApplication(target.guest)
         if (!GuestHooks.rebase(activity, target.guest)) return
 
+        // Two calls, and the second is what makes the first safe.
+        //
+        // The int form is the one the activity's Window watches, so it still has to happen. What it
+        // cannot do on its own is guarantee *which* resource table the theme is built from:
+        // ContextThemeWrapper.initializeTheme only creates mTheme the first time, so a guest that
+        // had mTheme created before bind() — against J Code's resources, since that is the context
+        // the activity was attached to — would have its style id applied to the wrong table, and
+        // mTheme is max-target-p and cannot be cleared.
+        //
+        // The object form replaces mTheme outright with one built from the guest's own resources,
+        // so that stops being a matter of timing. It is public SDK from API 29; the container never
+        // needed the field it cannot touch.
         val theme = target.guest.themeOf(target.activityClass)
         if (theme != 0) activity.setTheme(theme)
+        activity.setTheme(target.guest.newTheme(target.activityClass))
         Log.i(
             TAG,
             "bound ${target.activityClass}: package=${activity.packageName} " +

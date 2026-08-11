@@ -8,6 +8,7 @@ import android.text.InputType
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceControlViewHost
+import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
@@ -39,6 +40,17 @@ internal class AppSandboxSurfaceView(
     init {
         isFocusable = true
         isFocusableInTouchMode = true
+        // The wallpaper has to be painted onto the surface itself: a SurfaceView punches a hole in
+        // the window, so nothing composed behind it is ever seen. A guest's own surface package is
+        // reparented above this one, which is why starting an app needs no matching erase.
+        holder.addCallback(object : SurfaceHolder.Callback {
+            override fun surfaceCreated(holder: SurfaceHolder) = paintWallpaper()
+
+            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) =
+                paintWallpaper()
+
+            override fun surfaceDestroyed(holder: SurfaceHolder) = Unit
+        })
         // A raw listener, not a Compose gesture: the guest expects real pointer ids and pressures,
         // and Compose's pointer input reports neither.
         setOnTouchListener { _, event ->
@@ -54,6 +66,20 @@ internal class AppSandboxSurfaceView(
 
     fun adopt(surface: SurfaceControlViewHost.SurfacePackage) {
         setChildSurfacePackage(surface)
+    }
+
+    /**
+     * Redraws the idle screen. Called when the surface appears and again whenever an app leaves the
+     * device, so stopping one lands back on a live wallpaper rather than on whatever it drew last.
+     */
+    fun paintWallpaper() {
+        if (!holder.surface.isValid) return
+        val canvas = runCatching { holder.lockCanvas() }.getOrNull() ?: return
+        try {
+            VirtualWallpaper.draw(canvas, canvas.width, canvas.height)
+        } finally {
+            runCatching { holder.unlockCanvasAndPost(canvas) }
+        }
     }
 
     /**

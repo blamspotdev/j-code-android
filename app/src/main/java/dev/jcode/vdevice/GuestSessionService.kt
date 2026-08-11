@@ -95,6 +95,15 @@ class GuestSessionService : Service() {
             }
         }
 
+        override fun dump(xmlPath: String?): Bundle = Bundle().also { result ->
+            runCatching {
+                onMain { guest.dump(File(xmlPath ?: throw VirtualDeviceException("no dump path"))) }
+            }.onFailure {
+                Log.w(TAG, "cannot dump the guest's view tree", it)
+                result.putString(KEY_ERROR, it.message ?: it.toString())
+            }
+        }
+
         override fun resize(width: Int, height: Int) = post { guest.resize(width, height) }
 
         override fun touch(event: MotionEvent?) {

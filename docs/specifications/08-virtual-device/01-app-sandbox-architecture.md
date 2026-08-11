@@ -4,8 +4,8 @@
 |---|---|
 | **Status** | Implemented — device-verified on Android 13 |
 | **Modules** | `:app` (`dev.jcode.vdevice`) |
-| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, AppSandbox.kt, AppSandboxPage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestBootstrapActivity.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
-| **Verified against** | commit `cea581c`, 2026-08-09 |
+| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, AppSandbox.kt, AppSandboxPage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestBootstrapActivity.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
+| **Verified against** | device-verified on Android 13, 2026-08-11 |
 
 ---
 
@@ -92,6 +92,7 @@ interface IGuestSession {
                  IBinder hostToken, IGuestSessionCallback callback);
     Bundle surface();
     Bundle capture(String pngPath);
+    Bundle dump(String xmlPath);
 
     oneway void resize(int width, int height);
     oneway void touch(in MotionEvent event);
@@ -113,6 +114,7 @@ Design decisions recorded in the AIDL itself:
 | `hostToken` is **required** | It is the `SurfaceView`'s input token. Without it the window manager refuses to grant the embedded hierarchy an input channel at all, so a null token is refused with a message rather than embedded |
 | `surface()` exists separately | A `SurfaceView` releases its surface package when it detaches, so switching editor tabs and back needs a **new** package rather than a session restart |
 | `capture(pngPath)` writes a **file** | The processes share a uid and a data directory, so a file beats a `Bundle` that a large screen would burst |
+| `dump(xmlPath)` likewise | `GuestHierarchy` walks the guest's live view tree into uiautomator-shaped XML; a deep tree outgrows a `Bundle` for the same reason a screen does |
 | Everything else is `oneway` | It is called from the IDE's UI thread and must never block on the guest's |
 
 ---
@@ -157,11 +159,44 @@ nothing over a full-screen guest.
 
 `VirtualScreen` renders the guest's current screen to a PNG.
 
-> `screencap -d <displayId>` returns **0 bytes** for this kind of surface. Capture uses `PixelCopy`
-> instead.
+> `screencap -d <displayId>` returns **0 bytes** for this kind of surface, and `PixelCopy` over the
+> tab's `SurfaceView` answers `ERROR_SOURCE_NO_DATA` — the guest's pixels live in a `SurfaceControl`
+> the view only *parents*. So the screen is asked of whoever is drawing it: the guest re-draws its
+> own hierarchy (`EmbeddedGuest.capture`), and an idle device draws its wallpaper.
 
 This is what backs `adb shell screencap` against the virtual device — see
 [ADB bridge §10](../03-runtime/05-adb-bridge.md#10-adbdaemon--serving-the-virtual-device).
+
+---
+
+## 7a. The device with nothing on it
+
+The tab's resting state is a **device**, not an empty panel: `VirtualWallpaper` (dark grey, outlined
+square/triangle/circle) with a launcher of installed apps over it.
+
+The wallpaper is painted onto the `SurfaceView`'s **own surface** via `lockCanvas`, not composed
+behind it — a `SurfaceView` punches a hole in the window, so nothing drawn behind it is ever
+visible. A guest's surface package is reparented *above* that surface, so starting an app needs no
+matching erase and stopping one repaints. `VirtualScreen.blank` draws the same picture into a bitmap,
+so `screencap` on an idle device answers what the user is looking at.
+
+### `VirtualDeviceApps` — the package store
+
+`filesDir/vdevice/apps/<package>.apk`, with each app's private storage beside it at
+`filesDir/vdevice/<package>/`. One store behind all three readers: the launcher grid, the adb
+daemon's `pm`/`am`, and the start-up reset.
+
+> **Nothing survives a restart.** `resetOnStart` empties `filesDir/vdevice/` once per process — no
+> apps, no data, no preferences a previous run left. Both the workbench (`MainViewModel` init) and
+> `VirtualDeviceAdbService.daemon` call it, because those two race and the loser must not wipe what
+> the winner just installed; `@Synchronized` plus a one-shot flag makes the second call a no-op.
+
+A `revision` snapshot-state counter is bumped on every install/uninstall, so an `adb install` shows
+up on the home screen without the tab being touched.
+
+The device is reachable on its own through the `tools.virtualDevice` palette command
+("Open Virtual Device") — otherwise the tab only ever appears when a virtual-device build finishes,
+which is no way to reach the apps already installed on it.
 
 ---
 
@@ -186,9 +221,12 @@ internal sealed interface SandboxStatus {
 2. `hostToken` must be the real `SurfaceView` input token.
 3. Re-acquire the surface package after a detach; do not restart the session.
 4. All `oneway` methods are called from the IDE UI thread and must not block.
-5. Capture goes through a file path, not a `Bundle`.
+5. Capture and hierarchy dumps go through a file path, not a `Bundle`.
 6. Unbinding the service is the teardown; there is no separate stop call.
 7. Treat every guest as trusted code — it shares JCode's uid.
+8. The device is emptied on every JCode start. Nothing may assume an app installed in a previous
+   session is still there.
+9. Everything installed goes through `VirtualDeviceApps`; nothing else writes `filesDir/vdevice/`.
 
 ---
 
@@ -197,6 +235,7 @@ internal sealed interface SandboxStatus {
 | Failure | Effect |
 |---|---|
 | `hostToken` null | `start` returns an error message rather than embedding |
+| `input`/`uiautomator dump` with nothing running | Answered with one line naming `am start`, not a hang |
 | Embedding unsupported on the window | Falls back to `AppSandboxTier.FullScreen` |
 | Guest activity finishes | `onGuestFinished(reason)`; the tab reports the session ended |
 | `:guest` process killed | Same callback path; the IDE process is unaffected |

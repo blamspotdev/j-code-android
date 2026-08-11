@@ -2,7 +2,7 @@ package dev.jcode.vdevice
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.Color
+import android.graphics.Canvas
 import android.view.WindowManager
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -24,8 +24,9 @@ import kotlinx.coroutines.withContext
  * exact for everything the view system draws. A surface the guest composites itself — a `VideoView`,
  * say — would come back empty, and there is no way from here to know it did.
  *
- * A device with no app on it is not an error: it answers a black screen at the size the tab gives
- * the device, which is what a real device with a blank display would give back.
+ * A device with no app on it is not an error: it answers the idle screen at the size the tab gives
+ * the device — the same [VirtualWallpaper] the tab paints — so what a driver captures is what the
+ * user is looking at.
  */
 internal object VirtualScreen {
 
@@ -38,6 +39,9 @@ internal object VirtualScreen {
     fun sized(width: Int, height: Int) {
         if (width > 0 && height > 0) size = width to height
     }
+
+    /** The device's resolution, for `wm size` and for anything mapping its own coordinates onto it. */
+    fun resolution(context: Context): Pair<Int, Int> = size ?: displaySize(context)
 
     /** The current screen as PNG bytes. Never fails: with nothing running the screen is black. */
     suspend fun png(context: Context): ByteArray {
@@ -52,7 +56,7 @@ internal object VirtualScreen {
     private fun blank(context: Context): Bitmap {
         val (width, height) = size ?: displaySize(context)
         return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            .apply { eraseColor(Color.BLACK) }
+            .also { VirtualWallpaper.draw(Canvas(it), width, height) }
     }
 
     /** With no tab ever opened the device is the size of this phone's screen, as its identity says. */

@@ -12,6 +12,8 @@ data class VirtualDeviceApp(
     val versionName: String?,
     /** Fully-qualified activity class names, in manifest order. */
     val activities: List<String>,
+    /** The APK this was read out of — where the device's launcher and `am start` run it from. */
+    val apkPath: String,
 )
 
 /**
@@ -58,8 +60,24 @@ object VirtualDevice {
             label = label,
             versionName = info.versionName,
             activities = info.activities.orEmpty().map { it.name },
+            apkPath = apkPath,
         )
     }
+
+    /**
+     * The APK's own launcher icon, for the device's launcher.
+     *
+     * Same trick [inspect] uses for the label: an archive's drawables resolve as long as
+     * `sourceDir` points back at the APK, so this stays public-API only and safe in the IDE process.
+     */
+    fun icon(context: Context, apkPath: String): android.graphics.drawable.Drawable? = runCatching {
+        val pm = context.packageManager
+        val info = pm.getPackageArchiveInfo(apkPath, 0) ?: return null
+        val appInfo = info.applicationInfo ?: return null
+        appInfo.sourceDir = apkPath
+        appInfo.publicSourceDir = apkPath
+        pm.getApplicationIcon(appInfo)
+    }.getOrNull()
 
     /**
      * Starts [apkPath] in the guest process and returns the guest's identity.

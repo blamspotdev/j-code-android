@@ -5,7 +5,7 @@
 | **Status** | Implemented |
 | **Modules** | `:core:distro` (package `dev.jcode.core.distro.adb`), `:app` (`dev.jcode.adb`) |
 | **Primary sources** | core/distro/src/main/java/dev/jcode/core/distro/adb/AdbWire.kt, AdbAuth.kt, AdbDaemon.kt, AdbHostClient.kt, AdbRelayServer.kt, AdbBackendDiscovery.kt, AdbBridge.kt, AdbBridgeLocator.kt, AdbModels.kt, app/src/main/java/dev/jcode/adb/VirtualDeviceAdbService.kt |
-| **Verified against** | commit `cea581c`, 2026-08-09 |
+| **Verified against** | device-verified on Android 13, 2026-08-11 |
 
 ---
 
@@ -209,12 +209,31 @@ A device-side adb daemon so the guest's `adb` can drive JCode's app sandbox.
 | `shell:getprop` | Answers from the virtual identity |
 | `shell:echo` | |
 | `shell:pm list packages` | Lists sandbox-installed packages |
+| `shell:pm uninstall\|clear\|path <pkg>` | Removes the APK and its data, wipes its data, or prints its staged path |
 | `shell:am start -n …` | Routes to `AppSandbox.requestOpen` (embedded tab) or `VirtualDevice.launch` (full screen, `--windowingMode 1`) |
+| `shell:am force-stop <pkg>` | Takes the guest off the device, leaving the screen on |
+| `shell:input tap\|swipe\|text\|keyevent` | Synthesised into the running guest through the tab's own AIDL input path |
+| `shell:uiautomator dump` | The guest's view tree as uiautomator-shaped XML, on the stream |
+| `shell:wm size` / `shell:wm density` | The device's resolution and density |
 | `shell:screencap` | PNG via `VirtualScreen` |
 | `exec:cmd package 'install' -S <n>` | Single-stream `adb install` |
 
+Between `install`, `am start`, `input`, `uiautomator dump` and `screencap`, an agent with nothing but
+a terminal can put an app on the device, drive it, read what is on screen, and take it off again.
+`input` events are built as a touchscreen's would be — real down/move/up streams sharing one down
+time — and go through the same calls a finger does, so the guest cannot tell them apart.
+
+`uiautomator dump` and `screencap` **write to the stream, not a file**: this device has no
+filesystem to write one to, and a path argument is answered with the `exec-out` redirect to use
+instead. `input` and `uiautomator dump` need a running guest and say so in one line when there is
+none.
+
 **`sync:` is not implemented**, so `adb push`/`pull` do not work against the virtual device; only
 the single-stream install form is supported.
+
+> The device is emptied on every JCode start (see
+> [App sandbox architecture §7a](../08-virtual-device/01-app-sandbox-architecture.md#7a-the-device-with-nothing-on-it)),
+> so a session always begins with `pm list packages` empty.
 
 ---
 
@@ -246,6 +265,7 @@ coroutine.
 | mDNS resolution fails | `Discovering` persists | No backend port found |
 | All ports in a range busy | `Failed` | Relay or daemon cannot bind |
 | Guest sends `sync:` to the virtual device | Refused | `adb push`/`pull` unsupported |
+| `input` or `uiautomator dump` with an idle device | Refused | One line naming `am start`; nothing hangs |
 
 ---
 

@@ -110,6 +110,21 @@ internal object AppSandbox {
     @Synchronized
     fun sessionOrNull(): AppSandboxSession? = session
 
+    /**
+     * Takes whatever is running off the device and leaves the screen on — `am force-stop`, and the
+     * same place the tab's Stop button lands.
+     *
+     * Marshalled for the same reason [requestOpen] is: the caller is usually the adb daemon on an IO
+     * dispatcher, and [running] is Compose snapshot state.
+     */
+    fun requestStop() {
+        val stop = Runnable {
+            session?.close()
+            running.value = false
+        }
+        if (Looper.myLooper() == main.looper) stop.run() else main.post(stop)
+    }
+
     @Synchronized
     fun close() {
         session?.close()
@@ -244,6 +259,21 @@ internal class AppSandboxSession(context: Context) {
         result.exceptionOrNull()?.let { Log.w(TAG, "guest screen capture failed", it) }
         return png.isFile && png.length() > 0
     }
+
+    /** Writes the running guest's view tree into [xml]; false when there is nothing to dump. */
+    suspend fun dump(xml: File): Boolean {
+        if (_status.value !is SandboxStatus.Running) return false
+        val guest = service ?: return false
+        xml.delete()
+        val result = withContext(Dispatchers.IO) { runCatching { guest.dump(xml.absolutePath) } }
+        result.getOrNull()?.getString(GuestSessionService.KEY_ERROR)
+            ?.let { Log.w(TAG, "guest view dump: $it") }
+        result.exceptionOrNull()?.let { Log.w(TAG, "guest view dump failed", it) }
+        return xml.isFile && xml.length() > 0
+    }
+
+    /** True while an app is actually up — what input injection needs before it means anything. */
+    val isRunning: Boolean get() = _status.value is SandboxStatus.Running
 
     private suspend fun readSurface(): SurfaceControlViewHost.SurfacePackage? {
         val guest = service ?: return null

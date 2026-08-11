@@ -52,6 +52,20 @@ internal class LoadedGuest(
     }
 
     /**
+     * A theme built directly out of the guest's own resource table, layered the way
+     * `ContextThemeWrapper.initializeTheme` layers one: the application's theme is the base an
+     * activity's own theme is applied over.
+     *
+     * A style *id* alone is not enough to theme a guest — see [GuestRuntime.bind]. The id only means
+     * anything next to the resource table it was compiled against, and the object is the only way to
+     * say which one that is.
+     */
+    fun newTheme(activityClass: String): Resources.Theme = resources.newTheme().apply {
+        applicationInfo.theme.takeIf { it != 0 }?.let { applyStyle(it, true) }
+        activities[activityClass]?.theme?.takeIf { it != 0 }?.let { applyStyle(it, true) }
+    }
+
+    /**
      * Resolved here rather than left to `PackageItemInfo.loadLabel`, which would look a `labelRes` up
      * through the host `PackageManager` under J Code's package name and hand back J Code's label.
      */
@@ -97,11 +111,24 @@ internal object GuestLoader {
         appInfo.uid = Process.myUid()
         appInfo.processName = "${host.packageName}:guest"
 
+        // The parent is the *boot* class loader, not J Code's, and that is load-bearing.
+        //
+        // Delegating to J Code's would be parent-first, so every library the IDE also ships —
+        // AndroidX, Kotlin, Compose — would be answered out of the IDE's dex instead of the guest's.
+        // The classes would run, which is what makes this so quiet, but each library's generated `R`
+        // would carry *J Code's* resource ids while the guest's resource table only knows the
+        // guest's. That is exactly how an AppCompat guest carrying a perfectly good
+        // Theme.AppCompat theme was told to "use a Theme.AppCompat theme (or descendant)":
+        // AppCompatDelegate looked up J Code's `windowActionBar` id and the guest's table, quite
+        // correctly, had never heard of it.
+        //
+        // Isolating the parent gives the guest its own copy of everything it ships, which is what a
+        // real app process has. Nothing crosses between the two loaders but framework types.
         val classLoader = DexClassLoader(
             apkPath,
             File(guestDataDir, "dex").apply { mkdirs() }.absolutePath,
             nativeLibDir?.absolutePath,
-            host.classLoader,
+            Context::class.java.classLoader,
         )
 
         val assets = newAssetManager()

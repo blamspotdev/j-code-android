@@ -36,6 +36,7 @@ import dev.jcode.core.distro.DistroService
 import dev.jcode.core.distro.DistroServiceLocator
 import dev.jcode.adb.VirtualDeviceAdbService
 import dev.jcode.vdevice.AppSandbox
+import dev.jcode.vdevice.VirtualDeviceApps
 import dev.jcode.core.distro.adb.AdbBridge
 import dev.jcode.core.distro.adb.AdbBridgeLocator
 import dev.jcode.core.distro.adb.AdbBridgeState
@@ -955,6 +956,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         sessionFlushBlocking = { runCatching { runBlocking { persistSession() } } }
         viewModelScope.launch { exitOnSwipeAway.collect { exitOnSwipeAwayEnabled = it } }
+        // The virtual device is a clean room, not a second phone: every J Code start hands it back
+        // with no apps installed and nothing any of them stored. Off the main thread because it is a
+        // recursive delete, and before anything can install to it — see VirtualDeviceApps.
+        viewModelScope.launch(Dispatchers.IO) { VirtualDeviceApps.resetOnStart(appContext) }
         // Bring the adb bridge back up, but only once a serial has been restored — i.e. only for a
         // device that was paired before. Otherwise every cold start of a fresh install would pay a
         // full mDNS discovery plus an `adb start-server` in the distro for nothing.
