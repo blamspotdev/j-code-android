@@ -41,4 +41,18 @@
         android:layout_marginTop="8dp"
         android:text="Second screen" />
 
+    <Button
+        android:id="@+id/print_button"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Print to log" />
+
+    <Button
+        android:id="@+id/crash_button"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Crash" />
+
 </LinearLayout>

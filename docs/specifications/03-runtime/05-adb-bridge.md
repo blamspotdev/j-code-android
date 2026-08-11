@@ -215,6 +215,7 @@ A device-side adb daemon so the guest's `adb` can drive JCode's app sandbox.
 | `shell:input tap\|swipe\|text\|keyevent` | Synthesised into the running guest through the tab's own AIDL input path; with nothing running, a `tap` hits the device's **launcher** and starts the app whose icon it landed on |
 | `shell:uiautomator dump` | The guest's view tree as uiautomator-shaped XML, on the stream — or the launcher's icons when nothing is running |
 | `shell:wm size` / `shell:wm density` | The device's resolution and density |
+| `shell:logcat [-d] [-t n] [-c]` | The **virtual device's** log — see §10.1 |
 | `shell:screencap` | PNG via `VirtualScreen` |
 | `exec:cmd package 'install' -S <n>` | Single-stream `adb install` |
 
@@ -240,6 +241,36 @@ the single-stream install form is supported.
 > The device is emptied on every JCode start (see
 > [App sandbox architecture §7a](../08-virtual-device/01-app-sandbox-architecture.md#7a-the-device-with-nothing-on-it)),
 > so a session always begins with `pm list packages` empty.
+
+`unwrap` strips the shell wrapper adb puts around some commands before dispatch. `adb logcat` does
+not send `logcat`; it sends `export ANDROID_LOG_TAGS="…"; exec logcat …`, because on a real device
+there is a shell to run that. There is none here, so leading assignments, `export`, `exec` and `;`
+are dropped and what remains is the command.
+
+### 10.1 `logcat` — the device's own log, not the phone's
+
+**The phone's log is not on offer and could not be.** Reading it needs `READ_LOGS`
+(`signature|privileged`), and an app cannot read back even its own entries — measured on Android 13,
+where `logcat` run as JCode's uid returns nothing whatever. A driver that wanted the stack trace
+behind a crash therefore had no way to get one.
+
+JCode does not need to read the system log, though: it *is* the process running the guest. So
+`VirtualDeviceLog` is written by the container itself, into `filesDir/vdevice/device.log`:
+
+| Source | Written by |
+|---|---|
+| Container events (loaded, started, refused) | `GuestLoader`, `GuestRuntime`, `AppSandboxSession.fail` |
+| Anything the guest **printed** | `System.out`/`System.err` tee'd in `:guest` — catches `println` and `printStackTrace()` |
+| The guest's **uncaught exceptions**, full trace | `Thread.setDefaultUncaughtExceptionHandler` in `:guest`, which still chains to the previous handler so the process dies exactly as it would have |
+| Why the guest process **died** | `ActivityManager.getHistoricalProcessExitReasons` — public API for one's own package, reachable where `logcat` is not |
+
+A file, deliberately: `:guest` and the IDE both write it, a full-screen guest has no session bound to
+carry lines over, and the two processes share a uid and a data directory. `resetOnStart` wipes it
+with everything else, so the log covers exactly one JCode session.
+
+> **Known gap.** A guest's own `android.util.Log` calls go to the system log through a native call
+> there is no reaching, so they are absent. There is no follow mode either — there is no `logcat`
+> process here to hold open — so `-d` is implied.
 
 ---
 

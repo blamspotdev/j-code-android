@@ -82,15 +82,29 @@ internal class LoadedGuest(
 /** Loads guest APKs into the guest process. One [LoadedGuest] per APK path, cached for the process. */
 internal object GuestLoader {
 
-    private val loaded = HashMap<String, LoadedGuest>()
+    /** A loaded guest, plus what the APK looked like when it was loaded. */
+    private class Cached(val guest: LoadedGuest, val modified: Long, val size: Long)
+
+    private val loaded = HashMap<String, Cached>()
 
     @Synchronized
     fun load(context: Context, apkPath: String): LoadedGuest {
-        loaded[apkPath]?.let { return it }
-
         val host = context.applicationContext
         val apk = File(apkPath)
         if (!apk.canRead()) throw VirtualDeviceException("Cannot read APK: $apkPath")
+
+        // Keyed on the APK's identity, not just its path. Unbinding the service is *supposed* to
+        // take `:guest` with it, but Android keeps an emptied process around and rebinds into it —
+        // so a rebuilt APK at the same path was being answered out of this cache, and the device
+        // quietly ran the previous build. That is the one thing a device you iterate against must
+        // never do. Measured: the pid survived `am force-stop` + `am start`, and the guest that came
+        // back was the old code.
+        val modified = apk.lastModified()
+        val size = apk.length()
+        loaded[apkPath]?.let { cached ->
+            if (cached.modified == modified && cached.size == size) return cached.guest
+            Log.i(TAG, "$apkPath changed on disk; reloading it")
+        }
 
         val flags = PackageManager.GET_ACTIVITIES or PackageManager.GET_META_DATA
         val info = host.packageManager.getPackageArchiveInfo(apkPath, flags)
@@ -160,12 +174,13 @@ internal object GuestLoader {
             guest.noBackupDir, guest.databasesDir, guest.sharedPrefsDir,
         ).forEach { it.mkdirs() }
 
-        loaded[apkPath] = guest
+        loaded[apkPath] = Cached(guest, modified, size)
         Log.i(
             TAG,
             "loaded $packageName launch=$launchActivity activities=${activities.size} " +
                 "data=$guestDataDir libs=${nativeLibDir ?: "none"}",
         )
+        VirtualDeviceLog.append(host, 'I', TAG, "loaded $packageName from $apkPath")
         return guest
     }
 
@@ -250,7 +265,11 @@ internal object GuestLoader {
         val abiDir = File(target, abi).apply { mkdirs() }
         entries.getValue(abi).forEach { entry ->
             val out = File(abiDir, File(entry.name).name)
-            if (out.exists() && out.length() == entry.size) return@forEach
+            // Same size is not the same file once the APK has been rebuilt, so the extraction is
+            // only skipped for a copy that is also newer than the APK it came from.
+            if (out.exists() && out.length() == entry.size && out.lastModified() >= apk.lastModified()) {
+                return@forEach
+            }
             zip.getInputStream(entry).use { input -> out.outputStream().use { input.copyTo(it) } }
             out.setExecutable(true, false)
         }

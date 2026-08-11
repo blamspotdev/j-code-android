@@ -171,6 +171,8 @@ internal class AppSandboxSession(context: Context) {
         override fun onServiceDisconnected(name: ComponentName?) {
             service = null
             connected.value = false
+            // The process is gone, so it wrote no trace of its own — ask the system why instead.
+            VirtualDeviceLog.appendExitReason(appContext)
             _status.value = SandboxStatus.Failed("The guest process stopped unexpectedly.")
         }
     }
@@ -318,6 +320,7 @@ internal class AppSandboxSession(context: Context) {
 
     private fun fail(message: String) {
         _surface.value = null
+        VirtualDeviceLog.append(appContext, 'E', TAG, message)
         _status.value = SandboxStatus.Failed(message)
     }
 

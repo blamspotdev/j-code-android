@@ -14,6 +14,7 @@ import dev.jcode.vdevice.AppSandboxSession
 import dev.jcode.vdevice.LauncherApp
 import dev.jcode.vdevice.VirtualDevice
 import dev.jcode.vdevice.VirtualDeviceApps
+import dev.jcode.vdevice.VirtualDeviceLog
 import dev.jcode.vdevice.VirtualIdentity
 import dev.jcode.vdevice.VirtualInput
 import dev.jcode.vdevice.VirtualLauncher
@@ -70,7 +71,25 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
             service.startsWith(EXEC) -> service.removePrefix(EXEC)
             else -> return stream.write(unsupportedService(service))
         }
-        dispatch(adbCommandArgs(command), stream)
+        dispatch(unwrap(adbCommandArgs(command)), stream)
+    }
+
+    /**
+     * Strips the shell wrapper adb puts around some commands before the command itself.
+     *
+     * `adb logcat` does not send `logcat`; it sends
+     * `export ANDROID_LOG_TAGS="…"; exec logcat …`, because on a real device there is a shell to
+     * run that. There is none here, so the environment assignments and the `exec` are dropped and
+     * what is left is the command — which is what a shell would have run anyway.
+     */
+    private fun unwrap(args: List<String>): List<String> {
+        var index = 0
+        while (index < args.size) {
+            val arg = args[index]
+            val isAssignment = arg.contains('=') && !arg.startsWith("-")
+            if (arg == "export" || arg == "exec" || arg == ";" || isAssignment) index++ else break
+        }
+        return args.drop(index)
     }
 
     private suspend fun dispatch(args: List<String>, stream: AdbStream) {
@@ -81,6 +100,7 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
             "am" -> stream.write(am(args.drop(1)) ?: unsupportedService(stream.service))
             "wm" -> stream.write(wm(args.drop(1)) ?: unsupportedService(stream.service))
             "input" -> stream.write(input(args.drop(1)))
+            "logcat" -> stream.write(logcat(args.drop(1)))
             "uiautomator" -> uiautomator(args.drop(1), stream)
             "screencap" -> screencap(args.drop(1), stream)
             "cmd" -> install(args, stream)
@@ -173,6 +193,31 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
 
             else -> "input: expected tap, swipe, text or keyevent\n"
         }
+    }
+
+    /**
+     * `logcat`, answering the **virtual device's** log rather than the phone's.
+     *
+     * The phone's is not on offer and could not be: reading it needs `READ_LOGS`, and an app cannot
+     * read back even its own entries — measured on Android 13, where `logcat` run as J Code's uid
+     * returns nothing whatever. What this answers instead is written by the container itself, and is
+     * the more useful log for a driver anyway: it contains this device's business and nothing else —
+     * what was loaded and started, what the container refused and why, anything the guest printed,
+     * the full stack trace of an uncaught exception in it, and the system's reason when the guest
+     * process was killed outright rather than crashing.
+     *
+     * `-d` is implied and `-t <n>`, `-c` and `-b <buffer>` are honoured; there is no follow mode,
+     * because there is no `logcat` process here to keep open. A guest's own `android.util.Log` calls
+     * go to the system log through a native call there is no reaching, so they are absent — said
+     * plainly rather than quietly missing.
+     */
+    private fun logcat(args: List<String>): String {
+        if (args.contains("-c") || args.contains("--clear")) {
+            VirtualDeviceLog.clear(appContext)
+            return ""
+        }
+        val tail = args.zipWithNext().firstOrNull { it.first == "-t" }?.second?.toIntOrNull()
+        return VirtualDeviceLog.read(appContext, tail).ifEmpty { EMPTY_LOG }
     }
 
     /** `wm size` / `wm density`, in the words real `wm` answers them. */
@@ -363,6 +408,11 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
 
         /** What real `input` calls the source; accepted and ignored, since this device has one. */
         private val INPUT_SOURCES = setOf("touchscreen", "touchpad", "touchnavigation", "keyboard", "mouse")
+
+        private const val EMPTY_LOG =
+            "--------- beginning of jcode virtual device\n" +
+                "(nothing logged yet — the device's log covers this J Code session only, and holds " +
+                "what the container did plus anything the guest printed or crashed with)\n"
 
         private const val NOTHING_RUNNING =
             "error: no app is running on the virtual device — `am start -n <pkg>/<activity>` first\n"

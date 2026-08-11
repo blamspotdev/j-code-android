@@ -61,6 +61,21 @@ resource ids while the guest's resource table only knows the guest's.
 Isolating the parent gives the guest its own copy of everything it ships, which is what a real app
 process has. Nothing crosses between the two loaders but framework types.
 
+### 2.2 Why the cache is keyed on the APK, not its path
+
+`GuestLoader` keeps one `LoadedGuest` per APK **path plus its `lastModified` and length**, and
+reloads when either moves.
+
+Path alone is not enough, and the failure is the worst kind — silent and wrong. Unbinding
+`GuestSessionService` is *supposed* to take `:guest` with it, but Android keeps the emptied process
+around and rebinds into it, so a rebuilt APK written to the same path was answered out of this cache
+and the device went on running the **previous build**. Measured: the `:guest` pid survived
+`am force-stop` + `am start`, and the guest that came back had none of the newly added views.
+
+That is the one thing a device you iterate against must never do, since build → install → run at one
+path is the whole workflow. Native libraries are re-extracted on the same test (same size is not the
+same file once an APK has been rebuilt).
+
 ---
 
 ## 3. Identity — `GuestContext`

@@ -75,8 +75,36 @@ internal object GuestRuntime {
 
         val launch = GuestHooks.installLaunchHook(activityThread, ::onLaunchActivity)
         val navigation = GuestHooks.installStartActivityHook(::rewriteOutgoing)
+        installCrashHandler()
+        VirtualDeviceLog.captureStandardStreams(host)
         isInstalled = true
         Log.i(TAG, "hooks installed: instrumentation=true launch=$launch navigation=$navigation")
+        VirtualDeviceLog.append(host, 'I', TAG, "container ready in ${Application.getProcessName()}")
+    }
+
+    /**
+     * Records what killed a guest.
+     *
+     * A crash in `:guest` goes to the system log, which no app on this platform can read back — so
+     * without this the device could show that an app died and never say why. The previous handler
+     * still runs, so the process dies exactly as it would have; this only writes the trace down
+     * first, where `adb logcat` against the virtual device can reach it.
+     */
+    private fun installCrashHandler() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            runCatching {
+                VirtualDeviceLog.append(
+                    context = host,
+                    level = 'E',
+                    tag = "AndroidRuntime",
+                    message = "FATAL EXCEPTION: ${thread.name}\n" +
+                        "Process: ${Application.getProcessName()}, guest: ${active?.packageName ?: "none"}\n" +
+                        error.stackTraceToString(),
+                )
+            }
+            previous?.uncaughtException(thread, error)
+        }
     }
 
     /** Starts [activityClass] (or the guest's launcher activity) on one of the stubs. */
@@ -317,6 +345,12 @@ internal object GuestRuntime {
             TAG,
             "bound ${target.activityClass}: package=${activity.packageName} " +
                 "filesDir=${activity.filesDir} theme=$theme",
+        )
+        VirtualDeviceLog.append(
+            host,
+            'I',
+            TAG,
+            "started ${target.guest.packageName}/${target.activityClass}",
         )
     }
 

@@ -50,6 +50,16 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.second_button).setOnClickListener {
             startActivity(android.content.Intent(this, SecondActivity::class.java))
         }
+        // The two things a driver needs the device's log for, on demand.
+        findViewById<Button>(R.id.print_button).setOnClickListener {
+            println("appcompat-fixture: println reached the device log")
+            System.err.println("appcompat-fixture: and so did stderr")
+            runCatching { error("a caught failure") }
+                .onFailure { it.printStackTrace() }
+        }
+        findViewById<Button>(R.id.crash_button).setOnClickListener {
+            throw IllegalStateException("appcompat-fixture crashed on purpose")
+        }
     }
 
 }
