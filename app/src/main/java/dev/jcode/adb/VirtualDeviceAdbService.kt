@@ -11,10 +11,12 @@ import dev.jcode.core.distro.adb.adbCommandArgs
 import dev.jcode.core.distro.adb.unsupportedService
 import dev.jcode.vdevice.AppSandbox
 import dev.jcode.vdevice.AppSandboxSession
+import dev.jcode.vdevice.LauncherApp
 import dev.jcode.vdevice.VirtualDevice
 import dev.jcode.vdevice.VirtualDeviceApps
 import dev.jcode.vdevice.VirtualIdentity
 import dev.jcode.vdevice.VirtualInput
+import dev.jcode.vdevice.VirtualLauncher
 import dev.jcode.vdevice.VirtualScreen
 import java.io.File
 
@@ -113,7 +115,11 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
         pathArgument(args.drop(1))?.let { path ->
             return stream.write(noFilesystem("uiautomator", path, "uiautomator dump > window.xml"))
         }
-        val session = running() ?: return stream.write(NOTHING_RUNNING)
+        // An idle device is showing its launcher, and the launcher is tappable — so it is what the
+        // dump answers with, rather than claiming there is nothing on the screen.
+        val session = running() ?: return stream.write(
+            home { width, height, density, apps -> VirtualLauncher.dump(width, height, density, apps) },
+        )
         val xml = File(appContext.filesDir, DUMP_FILE)
         if (!session.dump(xml)) {
             return stream.write("uiautomator: could not read the guest's view tree\n")
@@ -130,8 +136,8 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
      */
     private suspend fun input(args: List<String>): String {
         val rest = if (args.firstOrNull() in INPUT_SOURCES) args.drop(1) else args
-        val session = running() ?: return NOTHING_RUNNING
         val points = rest.drop(1).mapNotNull { it.toFloatOrNull() }
+        val session = running() ?: return launcherTap(rest.firstOrNull(), points)
         return when (rest.firstOrNull()) {
             "tap" -> {
                 if (points.size < 2) return "input: tap needs <x> <y>\n"
@@ -285,8 +291,36 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
         )
     }
 
-    /** The session behind a guest that is actually up; null is a device with only its screen on. */
+    /** The session behind a guest that is actually up; null is a device showing its launcher. */
     private fun running(): AppSandboxSession? = AppSandbox.sessionOrNull()?.takeIf { it.isRunning }
+
+    /**
+     * Reads the home screen at the size and density it is drawn at, which is what makes a capture,
+     * a dump and a tap agree on where an icon is.
+     */
+    private fun <T> home(block: (Int, Int, Float, List<LauncherApp>) -> T): T {
+        val (width, height) = VirtualScreen.resolution(appContext)
+        return block(
+            width,
+            height,
+            appContext.resources.displayMetrics.density,
+            VirtualLauncher.load(appContext),
+        )
+    }
+
+    /**
+     * A tap on the device's own home screen: the launcher is what is on the screen when no app is,
+     * so tapping an icon starts it, exactly as a finger on the tab would. Anything else there is
+     * still "nothing is running" — the wallpaper has no other affordances.
+     */
+    private fun launcherTap(verb: String?, points: List<Float>): String {
+        if (verb != "tap" || points.size < 2) return NOTHING_RUNNING
+        val app = home { width, height, density, apps ->
+            VirtualLauncher.hit(width, height, density, apps, points[0], points[1])
+        } ?: return "input: no app icon at (${points[0].toInt()}, ${points[1].toInt()})\n"
+        AppSandbox.requestOpen(app.apkPath, null, run = true)
+        return "Starting: ${app.packageName}\n"
+    }
 
     /** The first non-flag argument, which for this device is always a file it cannot write. */
     private fun pathArgument(args: List<String>): String? {

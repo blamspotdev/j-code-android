@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented — device-verified on Android 13 |
 | **Modules** | `:app` (`dev.jcode.vdevice`) |
-| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, AppSandbox.kt, AppSandboxPage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestBootstrapActivity.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
+| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestBootstrapActivity.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
 | **Verified against** | device-verified on Android 13, 2026-08-11 |
 
 ---
@@ -162,7 +162,7 @@ nothing over a full-screen guest.
 > `screencap -d <displayId>` returns **0 bytes** for this kind of surface, and `PixelCopy` over the
 > tab's `SurfaceView` answers `ERROR_SOURCE_NO_DATA` — the guest's pixels live in a `SurfaceControl`
 > the view only *parents*. So the screen is asked of whoever is drawing it: the guest re-draws its
-> own hierarchy (`EmbeddedGuest.capture`), and an idle device draws its wallpaper.
+> own hierarchy (`EmbeddedGuest.capture`), and an idle device draws its home screen — see §7a.
 
 This is what backs `adb shell screencap` against the virtual device — see
 [ADB bridge §10](../03-runtime/05-adb-bridge.md#10-adbdaemon--serving-the-virtual-device).
@@ -172,13 +172,30 @@ This is what backs `adb shell screencap` against the virtual device — see
 ## 7a. The device with nothing on it
 
 The tab's resting state is a **device**, not an empty panel: `VirtualWallpaper` (dark grey, outlined
-square/triangle/circle) with a launcher of installed apps over it.
+square/triangle/circle), the device's name, and either the installed apps as icons or the words
+"No app installed".
 
-The wallpaper is painted onto the `SurfaceView`'s **own surface** via `lockCanvas`, not composed
-behind it — a `SurfaceView` punches a hole in the window, so nothing drawn behind it is ever
-visible. A guest's surface package is reparented *above* that surface, so starting an app needs no
-matching erase and stopping one repaints. `VirtualScreen.blank` draws the same picture into a bitmap,
-so `screencap` on an idle device answers what the user is looking at.
+**The launcher is device content, not IDE chrome, and that is a correctness property rather than a
+style.** It is drawn onto the `SurfaceView`'s **own surface** by `VirtualLauncher` — not composed
+over it, since a `SurfaceView` punches a hole in the window and nothing behind it is ever visible —
+and `VirtualScreen.blank` draws it through the same code. So:
+
+| | Answered by |
+|---|---|
+| What the tab shows | `VirtualLauncher.draw` onto the surface |
+| What `screencap` returns | `VirtualLauncher.draw` into a bitmap |
+| Where a finger lands | `VirtualLauncher.hit`, from `AppSandboxSurfaceView` |
+| Where `input tap` lands | `VirtualLauncher.hit`, from `VirtualDeviceAdbService` |
+| What `uiautomator dump` lists | `VirtualLauncher.dump`, off the same `tiles` |
+
+One `tiles(width, height, density, apps)` behind all five, so **what an agent screenshots is where
+its taps land**. Drawing the launcher a second time for the capture would have put the icons it sees
+in one place and the taps it sends in another.
+
+What is *not* on the device's screen is J Code's "Install an app" button: it is the IDE reaching onto
+the device, so it is composed over the surface and is deliberately absent from a capture, exactly
+like the control bar. A guest's surface package reparents above the surface, so starting an app needs
+no matching erase and stopping one repaints.
 
 ### `VirtualDeviceApps` — the package store
 

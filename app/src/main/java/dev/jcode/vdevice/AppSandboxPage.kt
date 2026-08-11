@@ -4,10 +4,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -19,9 +17,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -30,7 +25,6 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.Keyboard
-import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Warning
@@ -47,7 +41,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -55,21 +48,20 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jcode.core.distro.WorkspaceHostPaths
 import dev.jcode.design.CompactFilledButton
@@ -142,6 +134,20 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
     val surface by session.surface.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
+    // The device's launcher lives on the surface, not in this composition — see VirtualLauncher. All
+    // that is left here is reading what is installed and handing it over, and hosting the one menu
+    // that is J Code's rather than the device's.
+    val revision = VirtualDeviceApps.revision.intValue
+    var home by remember { mutableStateOf<List<LauncherApp>?>(null) }
+    var menuFor by remember { mutableStateOf<Pair<VirtualDeviceApp, Offset>?>(null) }
+    LaunchedEffect(revision, running) {
+        home = if (running) null else withContext(Dispatchers.IO) { VirtualLauncher.load(context) }
+    }
+    LaunchedEffect(home, size, surfaceView) {
+        surfaceView?.showHome(home)
+        if (home != null) menuFor = null
+    }
+
     // The guest display is the tab, so the surface's own pixel size is what the container is asked
     // for — which keeps forwarded touches in the guest's coordinates with no mapping at all.
     LaunchedEffect(size, running, apkPath, surfaceView) {
@@ -159,7 +165,6 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
             onSnackbar(it.reason)
             session.close()
             running = false
-            surfaceView?.paintWallpaper()
         }
     }
 
@@ -180,12 +185,24 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
         if (tier == AppSandboxTier.Embedded) running = true else runFullScreen(app.apkPath, null)
     }
 
+    // Clearing `running` is the whole teardown: the home effect below reloads what is installed and
+    // repaints the surface, so there is one place that decides what an idle device shows.
     fun stop() {
         surfaceView?.hideKeyboard()
         session.close()
         running = false
-        // Back to a live, blank device rather than the last frame the guest left on the surface.
-        surfaceView?.paintWallpaper()
+    }
+
+    fun uninstall(app: VirtualDeviceApp) {
+        if (app.apkPath == apkPath) stop()
+        scope.launch(Dispatchers.IO) { VirtualDeviceApps.uninstall(context, app.packageName) }
+        onSnackbar("Uninstalled ${app.label}.")
+    }
+
+    // Re-set rather than captured once: the surface outlives every composition that reads these.
+    LaunchedEffect(surfaceView, tier) {
+        surfaceView?.onLaunchApp = { open(it) }
+        surfaceView?.onAppMenu = { app, x, y -> menuFor = app to Offset(x, y) }
     }
 
     Box(modifier) {
@@ -193,7 +210,6 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
             session = session,
             status = status,
             running = running,
-            tier = tier,
             onSurface = { surfaceView = it },
             onSized = { width, height -> size = IntSize(width, height) },
             onRetry = {
@@ -201,22 +217,38 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
             },
             onFullScreen = { runFullScreen() },
             onDismiss = { stop() },
-            onOpen = { open(it) },
-            onOpenFullScreen = { runFullScreen(it.apkPath, null) },
-            onUninstall = { app ->
-                if (app.apkPath == apkPath) stop()
-                scope.launch(Dispatchers.IO) {
-                    VirtualDeviceApps.uninstall(context, app.packageName)
-                }
-                onSnackbar("Uninstalled ${app.label}.")
-            },
-            onClearData = { app ->
-                scope.launch(Dispatchers.IO) { VirtualDeviceApps.clearData(context, app.packageName) }
-                onSnackbar("Cleared ${app.label}'s data.")
-            },
             onInstall = { installOpen = true },
             modifier = Modifier.fillMaxSize(),
         )
+
+        // Held over the icon that was long-pressed. A menu is J Code's, not the device's, so it is
+        // composed here rather than drawn onto the screen a capture reads.
+        menuFor?.let { (app, at) ->
+            val density = LocalDensity.current
+            CompactContextMenu(
+                expanded = true,
+                onDismissRequest = { menuFor = null },
+                offset = with(density) { DpOffset(at.x.toDp(), at.y.toDp()) },
+                listActions = buildList {
+                    add(ContextAction(JCodeIcon.Run, "Open") { menuFor = null; open(app) })
+                    if (tier == AppSandboxTier.Embedded) {
+                        add(ContextAction(JCodeIcon.Fullscreen, "Open full screen") {
+                            menuFor = null
+                            runFullScreen(app.apkPath, null)
+                        })
+                    }
+                    add(ContextAction(JCodeIcon.Clear, "Clear data") {
+                        menuFor = null
+                        scope.launch(Dispatchers.IO) { VirtualDeviceApps.clearData(context, app.packageName) }
+                        onSnackbar("Cleared ${app.label}'s data.")
+                    })
+                    add(ContextAction(JCodeIcon.Delete, "Uninstall", destructive = true) {
+                        menuFor = null
+                        uninstall(app)
+                    })
+                },
+            )
+        }
 
         if (installOpen) {
             InstallSheet(
@@ -272,16 +304,11 @@ private fun DeviceScreen(
     session: AppSandboxSession,
     status: SandboxStatus,
     running: Boolean,
-    tier: AppSandboxTier,
     onSurface: (AppSandboxSurfaceView?) -> Unit,
     onSized: (Int, Int) -> Unit,
     onRetry: () -> Unit,
     onFullScreen: () -> Unit,
     onDismiss: () -> Unit,
-    onOpen: (VirtualDeviceApp) -> Unit,
-    onOpenFullScreen: (VirtualDeviceApp) -> Unit,
-    onUninstall: (VirtualDeviceApp) -> Unit,
-    onClearData: (VirtualDeviceApp) -> Unit,
     onInstall: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -303,15 +330,9 @@ private fun DeviceScreen(
         DisposableEffect(Unit) { onDispose { onSurface(null) } }
 
         when {
-            !running -> DeviceHome(
-                tier = tier,
-                onOpen = onOpen,
-                onOpenFullScreen = onOpenFullScreen,
-                onUninstall = onUninstall,
-                onClearData = onClearData,
-                onInstall = onInstall,
-                modifier = Modifier.fillMaxSize(),
-            )
+            // The home screen itself is on the surface, drawn by VirtualLauncher — only the chrome
+            // that does not belong to the device is composed over it.
+            !running -> HomeChrome(onInstall, modifier = Modifier.fillMaxSize())
 
             status is SandboxStatus.Starting || status is SandboxStatus.Idle ->
                 ScreenMessage("Starting the app…")
@@ -329,161 +350,21 @@ private fun DeviceScreen(
 }
 
 /**
- * The device's home screen: what is installed on it, and nothing else.
+ * The only part of the home screen that is *not* the device: J Code's own affordance for putting an
+ * app on it.
  *
- * This is the tab's resting state and what `screencap` answers with when no app is running, so it is
- * deliberately a *device* screen rather than an IDE panel — the wallpaper behind it is the surface's
- * own, and the grid is the same set `adb shell pm list packages` reports, in the same order every
- * time. An app installed over adb appears here without the tab being touched: [VirtualDeviceApps]
- * bumps a revision the list is keyed on.
+ * Everything the device itself shows — wallpaper, its name, the app icons, the "No app installed"
+ * placeholder — is drawn onto the surface by [VirtualLauncher], so `adb shell screencap` answers
+ * with it. This button is deliberately outside that: it is the IDE reaching onto the device, the
+ * same as the control bar, and a capture must not show it as though it were part of the app grid.
  */
 @Composable
-private fun DeviceHome(
-    tier: AppSandboxTier,
-    onOpen: (VirtualDeviceApp) -> Unit,
-    onOpenFullScreen: (VirtualDeviceApp) -> Unit,
-    onUninstall: (VirtualDeviceApp) -> Unit,
-    onClearData: (VirtualDeviceApp) -> Unit,
-    onInstall: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val context = LocalContext.current
-    val revision = VirtualDeviceApps.revision.intValue
-    var apps by remember { mutableStateOf<List<VirtualDeviceApp>?>(null) }
-    LaunchedEffect(revision) {
-        apps = withContext(Dispatchers.IO) { VirtualDeviceApps.list(context) }
-    }
-
-    Column(
-        modifier = modifier.padding(horizontal = 12.dp, vertical = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(
-            text = VirtualIdentity.MODEL,
-            style = MaterialTheme.typography.titleSmall,
-            color = Color.White.copy(alpha = 0.8f),
-        )
-        // Null is "not read yet", which must not flash the empty state on the way to a full grid.
-        val installed = apps
-        when {
-            installed == null -> Box(modifier = Modifier.weight(1f))
-            installed.isEmpty() -> EmptyHome(onInstall, modifier = Modifier.weight(1f))
-            else -> LazyVerticalGrid(
-                columns = GridCells.Adaptive(88.dp),
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                items(installed, key = { it.packageName }) { app ->
-                    AppTile(
-                        app = app,
-                        tier = tier,
-                        onOpen = { onOpen(app) },
-                        onOpenFullScreen = { onOpenFullScreen(app) },
-                        onUninstall = { onUninstall(app) },
-                        onClearData = { onClearData(app) },
-                    )
-                }
-            }
-        }
-        // The empty state carries its own copy of this button, next to the sentence explaining it.
-        if (!installed.isNullOrEmpty()) {
-            CompactOutlinedButton(text = "Install an app", onClick = onInstall)
-        }
-    }
-}
-
-/** A device that has never had anything put on it. */
-@Composable
-private fun EmptyHome(onInstall: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier.padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
-    ) {
-        Icon(
-            imageVector = Icons.Rounded.PhoneAndroid,
-            contentDescription = null,
-            tint = Color.White.copy(alpha = 0.35f),
-            modifier = Modifier.size(40.dp),
-        )
-        Text(
-            text = "The screen is on and nothing is installed. Install over adb, or point this at " +
-                "an APK you have already built.",
-            style = MaterialTheme.typography.bodySmall,
-            color = Color.White.copy(alpha = 0.45f),
-            textAlign = TextAlign.Center,
-            modifier = Modifier.widthIn(max = 300.dp),
-        )
-        CompactOutlinedButton(text = "Install an app", onClick = onInstall)
-    }
-}
-
-/** One installed app: its own icon and label, tapped to run and held for everything else. */
-@Composable
-private fun AppTile(
-    app: VirtualDeviceApp,
-    tier: AppSandboxTier,
-    onOpen: () -> Unit,
-    onOpenFullScreen: () -> Unit,
-    onUninstall: () -> Unit,
-    onClearData: () -> Unit,
-) {
-    val context = LocalContext.current
-    var menuOpen by remember { mutableStateOf(false) }
-    // The icon is decoded off an APK archive, which is slow enough to keep out of the first frame.
-    val icon by produceState<ImageBitmap?>(initialValue = null, app.apkPath) {
-        value = withContext(Dispatchers.IO) {
-            VirtualDevice.icon(context, app.apkPath)?.let { runCatching { it.toBitmap() }.getOrNull() }
-        }?.asImageBitmap()
-    }
-
-    Box {
-        Column(
-            modifier = Modifier
-                .clip(RoundedCornerShape(12.dp))
-                .combinedClickable(onClick = onOpen, onLongClick = { menuOpen = true })
-                .padding(vertical = 8.dp, horizontal = 4.dp)
-                .fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            val iconBitmap = icon
-            if (iconBitmap != null) {
-                Image(
-                    bitmap = iconBitmap,
-                    contentDescription = null,
-                    modifier = Modifier.size(46.dp).clip(RoundedCornerShape(11.dp)),
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(RoundedCornerShape(11.dp))
-                        .background(Color.White.copy(alpha = 0.10f)),
-                )
-            }
-            Text(
-                text = app.label,
-                style = MaterialTheme.typography.labelMedium,
-                color = Color.White.copy(alpha = 0.85f),
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        CompactContextMenu(
-            expanded = menuOpen,
-            onDismissRequest = { menuOpen = false },
-            listActions = buildList {
-                add(ContextAction(JCodeIcon.Run, "Open", onClick = onOpen))
-                if (tier == AppSandboxTier.Embedded) {
-                    add(ContextAction(JCodeIcon.Fullscreen, "Open full screen", onClick = onOpenFullScreen))
-                }
-                add(ContextAction(JCodeIcon.Clear, "Clear data", onClick = onClearData))
-                add(ContextAction(JCodeIcon.Delete, "Uninstall", destructive = true, onClick = onUninstall))
-            },
+private fun HomeChrome(onInstall: () -> Unit, modifier: Modifier = Modifier) {
+    Box(modifier = modifier) {
+        CompactOutlinedButton(
+            text = "Install an app",
+            onClick = onInstall,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp),
         )
     }
 }

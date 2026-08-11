@@ -212,8 +212,8 @@ A device-side adb daemon so the guest's `adb` can drive JCode's app sandbox.
 | `shell:pm uninstall\|clear\|path <pkg>` | Removes the APK and its data, wipes its data, or prints its staged path |
 | `shell:am start -n …` | Routes to `AppSandbox.requestOpen` (embedded tab) or `VirtualDevice.launch` (full screen, `--windowingMode 1`) |
 | `shell:am force-stop <pkg>` | Takes the guest off the device, leaving the screen on |
-| `shell:input tap\|swipe\|text\|keyevent` | Synthesised into the running guest through the tab's own AIDL input path |
-| `shell:uiautomator dump` | The guest's view tree as uiautomator-shaped XML, on the stream |
+| `shell:input tap\|swipe\|text\|keyevent` | Synthesised into the running guest through the tab's own AIDL input path; with nothing running, a `tap` hits the device's **launcher** and starts the app whose icon it landed on |
+| `shell:uiautomator dump` | The guest's view tree as uiautomator-shaped XML, on the stream — or the launcher's icons when nothing is running |
 | `shell:wm size` / `shell:wm density` | The device's resolution and density |
 | `shell:screencap` | PNG via `VirtualScreen` |
 | `exec:cmd package 'install' -S <n>` | Single-stream `adb install` |
@@ -225,8 +225,14 @@ time — and go through the same calls a finger does, so the guest cannot tell t
 
 `uiautomator dump` and `screencap` **write to the stream, not a file**: this device has no
 filesystem to write one to, and a path argument is answered with the `exec-out` redirect to use
-instead. `input` and `uiautomator dump` need a running guest and say so in one line when there is
-none.
+instead.
+
+An **idle device is not a dead one** — it is showing its launcher, so all three answer it rather than
+refusing: `screencap` returns the wallpaper with the app icons on it, `uiautomator dump` lists those
+icons (`content-desc` is the package, which is what `am start` and `pm uninstall` take), and
+`input tap` on one starts it. All three read the same layout, so the coordinates agree. `swipe`,
+`text` and `keyevent` still need a guest and say so in one line — the home screen has nothing else to
+act on.
 
 **`sync:` is not implemented**, so `adb push`/`pull` do not work against the virtual device; only
 the single-stream install form is supported.
@@ -265,7 +271,8 @@ coroutine.
 | mDNS resolution fails | `Discovering` persists | No backend port found |
 | All ports in a range busy | `Failed` | Relay or daemon cannot bind |
 | Guest sends `sync:` to the virtual device | Refused | `adb push`/`pull` unsupported |
-| `input` or `uiautomator dump` with an idle device | Refused | One line naming `am start`; nothing hangs |
+| `input swipe/text/keyevent` with an idle device | Refused | One line naming `am start`; nothing hangs |
+| `input tap` on an idle device's wallpaper | Refused | Names the coordinates that hit nothing |
 
 ---
 

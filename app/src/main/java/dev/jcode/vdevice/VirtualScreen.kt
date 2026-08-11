@@ -52,11 +52,25 @@ internal object VirtualScreen {
         return encode(blank(context))
     }
 
-    /** A screen with nothing on it, at the size the tab last gave the device. */
+    /**
+     * The device with no app on it: its home screen, at the size the tab last gave it.
+     *
+     * Drawn through the same [VirtualLauncher] the tab's surface uses, so a capture shows the icons
+     * that are really there, at the coordinates `input tap` really takes — and says "No app
+     * installed" outright rather than answering an empty rectangle a driver would have to guess at.
+     */
     private fun blank(context: Context): Bitmap {
         val (width, height) = size ?: displaySize(context)
-        return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            .also { VirtualWallpaper.draw(Canvas(it), width, height) }
+        val apps = runCatching { VirtualLauncher.load(context) }.getOrDefault(emptyList())
+        return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also {
+            VirtualLauncher.draw(
+                canvas = Canvas(it),
+                width = width,
+                height = height,
+                density = context.resources.displayMetrics.density,
+                apps = apps,
+            )
+        }
     }
 
     /** With no tab ever opened the device is the size of this phone's screen, as its identity says. */
