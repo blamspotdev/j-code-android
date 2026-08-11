@@ -5,7 +5,7 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
-import android.graphics.Path
+import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
 import android.util.Log
 import android.util.TypedValue
@@ -22,6 +22,16 @@ private const val IDLE_COLLAPSE_MS = 4_000L
 private const val PILL_COLOR = 0xFF2B2F36.toInt()
 private const val ON_PILL_COLOR = 0xFFE3E6EB.toInt()
 
+/**
+ * The collapsed handle, matching the device tab's own: a fifth of the width, sized like a sheet
+ * grabber, at the same 55% the tab tints its. The numbers are repeated rather than shared because
+ * the tab's are Compose `dp` in the IDE process and this runs in `:guest` with no theme to read.
+ */
+private const val HANDLE_COLOR = 0x8CE3E6EB.toInt()
+private const val HANDLE_WIDTH_FRACTION = 0.2f
+private const val HANDLE_THICKNESS_DP = 4
+private const val HANDLE_TOUCH_HEIGHT_DP = 24
+
 private fun Context.dp(value: Int): Int =
     (value * resources.displayMetrics.density).toInt().coerceAtLeast(1)
 
@@ -30,7 +40,7 @@ private fun Context.dp(value: Int): Int =
  *
  * Full screen is a real activity in its own task, so J Code draws nothing over it and the only
  * control left is the system Back gesture — which the guest is free to consume. This puts the tab's
- * pill on that window too. `Activity.addContentView` is public, adds into `android.R.id.content` on
+ * controls on that window too. `Activity.addContentView` is public, adds into `android.R.id.content` on
  * top of whatever the guest put there, and — installed after `onCreate` — lands after the
  * `setContentView` that would otherwise have cleared it.
  *
@@ -55,16 +65,18 @@ internal object GuestOverlay {
     }
 }
 
-/** The pill and the bar it opens into, in one slot so neither moves the other. */
+/** The handle and the bar it opens into, in one slot so neither moves the other. */
 @SuppressLint("ViewConstructor")
 private class Controls(private val activity: Activity) : FrameLayout(activity) {
 
     private val collapse = Runnable { show(expanded = false) }
 
-    private val pill = Chevron(activity).apply {
-        val side = context.dp(44)
-        layoutParams = LayoutParams(side, side)
-        background = pillBackground(context)
+    private val handle = Handle(activity).apply {
+        layoutParams = LayoutParams(
+            (resources.displayMetrics.widthPixels * HANDLE_WIDTH_FRACTION).toInt(),
+            context.dp(HANDLE_TOUCH_HEIGHT_DP),
+        )
+        contentDescription = "Show the device controls"
         setOnClickListener { show(expanded = true) }
     }
 
@@ -85,7 +97,7 @@ private class Controls(private val activity: Activity) : FrameLayout(activity) {
     init {
         val margin = context.dp(4)
         setPadding(margin, margin, margin, margin)
-        addView(pill)
+        addView(handle)
         addView(bar)
         show(expanded = true)
     }
@@ -96,7 +108,7 @@ private class Controls(private val activity: Activity) : FrameLayout(activity) {
     }
 
     private fun show(expanded: Boolean) {
-        pill.visibility = if (expanded) GONE else VISIBLE
+        handle.visibility = if (expanded) GONE else VISIBLE
         bar.visibility = if (expanded) VISIBLE else GONE
         removeCallbacks(collapse)
         if (expanded) postDelayed(collapse, IDLE_COLLAPSE_MS)
@@ -122,26 +134,22 @@ private fun pillBackground(context: Context) = GradientDrawable().apply {
     setColor(PILL_COLOR)
 }
 
-/** The same chevron the workbench's restore pill wears, drawn rather than inflated. */
-private class Chevron(context: Context) : View(context) {
+/**
+ * The collapsed controls: a grabber line, not a button — the same one the device tab shows, drawn
+ * rather than inflated.
+ *
+ * It sits over whatever the guest is drawing, so it stays deliberately small: the touch target is
+ * the view, and the line it shows is a few pixels in the middle of it.
+ */
+private class Handle(context: Context) : View(context) {
 
-    private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = ON_PILL_COLOR
-        style = Paint.Style.STROKE
-        strokeWidth = context.dp(2).toFloat()
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-    }
-    private val path = Path()
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = HANDLE_COLOR }
+    private val bar = RectF()
 
     override fun onDraw(canvas: Canvas) {
-        val arm = width * 0.16f
-        val centreX = width / 2f
-        val centreY = height / 2f
-        path.reset()
-        path.moveTo(centreX - arm, centreY - arm / 2)
-        path.lineTo(centreX, centreY + arm / 2)
-        path.lineTo(centreX + arm, centreY - arm / 2)
-        canvas.drawPath(path, stroke)
+        val thickness = context.dp(HANDLE_THICKNESS_DP).toFloat()
+        val top = (height - thickness) / 2f
+        bar.set(0f, top, width.toFloat(), top + thickness)
+        canvas.drawRoundRect(bar, thickness / 2f, thickness / 2f, fill)
     }
 }
