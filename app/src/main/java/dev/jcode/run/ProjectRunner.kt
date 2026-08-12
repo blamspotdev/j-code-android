@@ -8,6 +8,7 @@ import dev.jcode.core.config.ProjectConfigs
 import dev.jcode.core.config.RunConfig
 import dev.jcode.core.config.RunConfigStore
 import dev.jcode.core.config.RunConfigTerminal
+import dev.jcode.core.distro.WorkspaceHostPaths
 import dev.jcode.feature.marketplace.RunConfigPreset
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
@@ -624,7 +625,14 @@ object ProjectRunner {
                 File(dir, scriptName).writeText(terminal.command)
             }.isSuccess
             if (written) {
-                val guestDir = project.distroBindTarget.trimEnd('/')
+                // Resolve the real guest path the way terminal sessions mount it (projectsRoot →
+                // /workspace, so a nested project lands at /workspace/<relative path>, not at the flat
+                // distroBindTarget which only exists when a per-project bind is applied). Fall back to
+                // distroBindTarget for projects living outside the projects root, where a per-project
+                // bind is the only thing that could make the script reachable.
+                val guestDir = WorkspaceHostPaths.hostToGuest(hostDir.absolutePath)
+                    .takeIf { it == WorkspaceHostPaths.WORKSPACE_GUEST || it.startsWith("${WorkspaceHostPaths.WORKSPACE_GUEST}/") }
+                    ?: project.distroBindTarget.trimEnd('/')
                 return "bash \"$guestDir/.jcode/$scriptName\""
             }
         }
