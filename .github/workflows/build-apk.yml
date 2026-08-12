@@ -71,7 +71,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload CI-generated signing keystore
-        if: ${{ secrets.JCODE_KEYSTORE == '' }}
+        if: ${{ hashFiles('.release-signing/password.txt') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: jcode-release-keystore
