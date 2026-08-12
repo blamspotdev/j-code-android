@@ -226,6 +226,40 @@ reach code the container had never exercised.
 > manager's crash cleanup finished `MainActivity` along with it — so a guest's bug took the IDE off
 > the screen. Embedded guests share no task and are unaffected.
 
+## 4b. The embedded activity's token — `GuestActivityClient`
+
+An embedded activity is built by hand, so its token is a bare `Binder` rather than something the
+window manager minted, and the server rejects it before doing anything:
+
+```
+Bad activity token: android.os.BinderProxy@5fb1255
+java.lang.ClassCastException: android.os.BinderProxy cannot be cast to
+    com.android.server.wm.ActivityRecord$Token
+    at com.android.server.wm.ActivityRecord.getTaskForActivityLocked
+```
+
+Everything the framework routes through `ActivityClient` carries that token, so the whole surface —
+`getTaskForActivity`, `setTaskDescription`, `finishActivity`, `getDisplayId` — failed. Measured on
+CPU-Z, whose Mobile Ads SDK asks for its task from inside a WebView and took the guest down with a
+native `SIGTRAP` when no answer came.
+
+`IActivityClientController` is an interface, so one `Proxy` covers every entry point. Calls carrying
+a token this container minted are answered locally; everything else — including a full-screen
+guest's, whose token *is* real — passes through.
+
+**Where the proxy gets in matters.** Not through `ActivityClient.INTERFACE_SINGLETON`, which is
+**blocked** at `targetSdk` 33 (measured: `blocked, reflection, denied`). One level up instead: that
+singleton builds its controller by calling `IActivityTaskManager.getActivityClientController()`, and
+the `IActivityTaskManager` binder is already proxied through a greylisted member. The container
+answers that call with a wrapper and the singleton caches it as though the server had handed it over
+— no new hidden member, and the one it leans on was already load-bearing. It follows that the hook
+must be installed before anything in `:guest` touches an activity: the singleton asks once.
+
+A method the proxy does not model returns a type-appropriate nothing rather than being forwarded,
+because the alternative is not a correct answer but the exception above. Separately, an embedded
+token is blanked out of any outgoing `startActivity` — `resultTo` naming an activity the server has
+never heard of is rejected outright, and null is both accepted and accurate.
+
 ## 5a. Non-activity components — `GuestComponents`
 
 Providers, services and receivers cannot be registered with the system: they belong to a package the
@@ -351,11 +385,14 @@ JCode draws nothing over it.
 - Compose guests can start with an empty view tree where the app gates its first composition on
   something the container does not provide — measured on AI Edge Gallery, which loads and starts
   clean but dumps a bare `FrameLayout`.
-- An embedded activity's token is a bare `Binder`, so anything asking the activity manager about it
-  fails: `getTaskForActivity` answers `BinderProxy cannot be cast to ActivityRecord$Token`. Measured
-  on CPU-Z, whose Mobile Ads SDK reaches for it from a WebView and takes the guest down with a
-  native `SIGTRAP`. Hosting providers is what makes such an SDK initialise at all, so this is a case
-  the container now reaches where before it silently never ran.
+- The token answers of §4b are *plausible*, not real. `getTaskForActivity` hands back a synthetic id
+  and unmodelled calls become no-ops, so a guest leaning hard on its own task — recents entries,
+  picture-in-picture, task descriptions — sees those features inert rather than working. CPU-Z runs
+  and stays up under this, but its tab content never populates.
+- Some guests render nothing while running perfectly happily. Measured on AI Edge Gallery: it loads
+  with its 3 splits, starts, stays alive, and dumps a near-empty view tree — an app that gates its
+  first composition on something the container does not supply. Neither the token hook nor provider
+  hosting changed it.
 
 ---
 

@@ -188,10 +188,13 @@ internal object GuestRuntime {
         onLaunchActivity(stub, info)
         val target = resolve(stub) ?: throw VirtualDeviceException("$stub carries no guest identity")
 
+        // Registered before the activity is built: the guest can reach ActivityClient from its own
+        // onCreate, and a token the hook has not heard of yet is one the server rejects.
+        val token = Binder().also(GuestActivityClient::register)
         val activity = instrumentation.newActivity(
             target.guest.classLoader.loadClass(target.activityClass),
             host,
-            Binder(),
+            token,
             null,
             stub,
             info,

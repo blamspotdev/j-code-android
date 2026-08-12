@@ -141,7 +141,19 @@ internal object GuestHooks {
 
             val handler = object : InvocationHandler {
                 override fun invoke(proxy: Any?, method: Method, args: Array<Any?>?): Any? {
+                    // The one place an embedded activity's controller can be substituted: this call
+                    // is how ActivityClient's singleton obtains it, and the singleton's own field is
+                    // blocked at targetSdk 33. See GuestActivityClient.
+                    if (method.name == GuestActivityClient.CONTROLLER_GETTER && args.isNullOrEmpty()) {
+                        val controller = try {
+                            method.invoke(real)
+                        } catch (e: InvocationTargetException) {
+                            throw e.targetException
+                        }
+                        return controller?.let(GuestActivityClient::wrap)
+                    }
                     if (args != null && method.name.startsWith("startActivity")) {
+                        GuestActivityClient.detachEmbeddedTokens(args)
                         val slot = args.indexOfFirst { it is Intent }
                         if (slot >= 0) {
                             when (val action = decide(args[slot] as Intent)) {
