@@ -30,12 +30,50 @@ jobs:
       - name: Grant exec permission to wrapper
         run: chmod +x gradlew
 
-      - name: Build debug APK
-        run: ./gradlew --no-daemon :app:assembleDebug
+      - name: Build release APK
+        run: ./gradlew --no-daemon :app:assembleRelease
 
-      - name: Upload APK
+      - name: Sign release APK
+        shell: bash
+        env:
+          JCODE_KEYSTORE: ${{ secrets.JCODE_KEYSTORE }}
+          JCODE_KEYSTORE_PASS: ${{ secrets.JCODE_KEYSTORE_PASS }}
+        run: |
+          set -euo pipefail
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          [ -n "$APK" ] || { echo "No release APK found"; exit 1; }
+          KEYSTORE="$GITHUB_WORKSPACE/.release-signing/jcode-release.jks"
+          mkdir -p "$(dirname "$KEYSTORE")"
+          if [ -n "${JCODE_KEYSTORE:-}" ]; then
+            echo "$JCODE_KEYSTORE" | base64 -d > "$KEYSTORE"
+            PASS="${JCODE_KEYSTORE_PASS:?JCODE_KEYSTORE set but JCODE_KEYSTORE_PASS missing}"
+            echo "Signed with the configured release keystore."
+          else
+            keytool -genkeypair -v -keystore "$KEYSTORE" -alias jcode -keyalg RSA -keysize 4096 \
+              -validity 10000 -storepass jcode-ci -keypass jcode-ci \
+              -dname "CN=JCode CI,O=JCode,C=US" >/dev/null 2>&1
+            PASS="jcode-ci"
+            printf '%s' "jcode-ci" > "$GITHUB_WORKSPACE/.release-signing/password.txt"
+            echo "No JCODE_KEYSTORE secret: generated a fresh CI keystore (key changes every run)."
+            echo "KEEP the generated keystore + password (in the artifact) to sign future releases."
+          fi
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          "$APKSIGNER" sign --ks "$KEYSTORE" --ks-pass "pass:$PASS" \
+            --ks-key-alias jcode --key-pass "pass:$PASS" \
+            --out "${APK%.apk}-signed.apk" "$APK"
+          echo "Signed APK: ${APK%.apk}-signed.apk"
+
+      - name: Upload signed release APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: app-release-apk
+          path: app/build/outputs/apk/release/*-signed.apk
+          if-no-files-found: error
+
+      - name: Upload CI-generated signing keystore
+        if: ${{ secrets.JCODE_KEYSTORE == '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: jcode-release-keystore
+          path: .release-signing/
           if-no-files-found: error
