@@ -86,63 +86,78 @@ subprojects {
 
                 compileSdk = 36
 
+                // Rust FFI modules (:native:ripgrep-ffi, :native:wasmtime-ffi) are built by cargo
+                // (see gradle/cargo.gradle.kts); their CMake target is only a stub for cargo-less
+                // machines. When cargo is available the real libs land in generated/cargoJniLibs,
+                // so the stub must not be built or merged or the jniLibs merger sees duplicates.
+                val cargoModule = path == ":native:ripgrep-ffi" || path == ":native:wasmtime-ffi"
+                val cargoAvailable = cargoModule && runCatching {
+                    val output = java.io.ByteArrayOutputStream()
+                    project.exec {
+                        commandLine("cargo", "--version")
+                        standardOutput = output
+                        errorOutput = output
+                        isIgnoreExitValue = true
+                    }.exitValue == 0
+                }.getOrDefault(false)
+
                 defaultConfig {
                     minSdk = 33
+                }
+
+                if (!(cargoModule && cargoAvailable)) {
+                    defaultConfig {
+                        externalNativeBuild {
+                            cmake {
+                                arguments.addAll(
+                                    listOf(
+                                        "-DANDROID_STL=c++_static",
+                                        "-DJCODE_NATIVE_MODULE=$nativeModuleId",
+                                        "-DJCODE_JNI_OUTPUT_DIR=$jniOutputRoot"
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    buildTypes {
+                        getByName("debug") {
+                            ndk {
+                                abiFilters.add("arm64-v8a")
+                            }
+
+                            externalNativeBuild {
+                                cmake {
+                                    arguments.add("-DJCODE_VARIANT_DIR=debug")
+                                }
+                            }
+                        }
+
+                        getByName("release") {
+                            ndk {
+                                abiFilters.add("arm64-v8a")
+                            }
+
+                            externalNativeBuild {
+                                cmake {
+                                    arguments.add("-DJCODE_VARIANT_DIR=release")
+                                }
+                            }
+                        }
+                    }
 
                     externalNativeBuild {
                         cmake {
-                            arguments.addAll(
-                                listOf(
-                                    "-DANDROID_STL=c++_static",
-                                    "-DJCODE_NATIVE_MODULE=$nativeModuleId",
-                                    "-DJCODE_JNI_OUTPUT_DIR=$jniOutputRoot"
-                                )
-                            )
+                            path = rootProject.file("native/CMakeLists.txt")
+                            version = configuredCmakeVersion
                         }
                     }
                 }
 
-                buildTypes {
-                    getByName("debug") {
-                        ndk {
-                            abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
-                        }
-
-                        externalNativeBuild {
-                            cmake {
-                                arguments.add("-DJCODE_VARIANT_DIR=debug")
-                            }
-                        }
-                    }
-
-                    getByName("release") {
-                        ndk {
-                            abiFilters.add("arm64-v8a")
-                        }
-
-                        externalNativeBuild {
-                            cmake {
-                                arguments.add("-DJCODE_VARIANT_DIR=release")
-                            }
-                        }
-                    }
-                }
-
-                externalNativeBuild {
-                    cmake {
-                        path = rootProject.file("native/CMakeLists.txt")
-                        version = configuredCmakeVersion
-                    }
-                }
-
-                // Rust FFI modules also register generated/cargoJniLibs (see gradle/cargo.gradle.kts).
-                // Their CMake target is only a stub for cargo-less machines: once real cargo-built
-                // libs exist for a variant, drop the stub dir or the jniLibs merger sees duplicates.
-                val cargoModule = path == ":native:ripgrep-ffi" || path == ":native:wasmtime-ffi"
+                // Cargo-built Rust FFI libs live in generated/cargoJniLibs; the CMake stub output in
+                // generated/jniLibs is only merged on cargo-less machines.
                 listOf("debug", "release").forEach { variant ->
-                    val cargoLibs = layout.buildDirectory.dir("generated/cargoJniLibs/$variant").get().asFile
-                    val hasCargoLibs = cargoModule && cargoLibs.walkTopDown().any { it.extension == "so" }
-                    if (!hasCargoLibs) {
+                    if (!cargoAvailable) {
                         sourceSets.getByName(variant).jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs/$variant"))
                     }
                 }
