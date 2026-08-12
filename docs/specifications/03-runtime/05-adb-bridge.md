@@ -218,6 +218,7 @@ A device-side adb daemon so the guest's `adb` can drive JCode's app sandbox.
 | `shell:logcat [-d] [-t n] [-c]` | The **virtual device's** log — see §10.1 |
 | `shell:screencap` | PNG via `VirtualScreen` |
 | `exec:cmd package 'install' -S <n>` | Single-stream `adb install` |
+| `exec:cmd package install-create\|install-write\|install-commit\|install-abandon` | Session-based `adb install-multiple`, for an app bundle's base plus its config splits — see [App sandbox architecture §7a](../08-virtual-device/01-app-sandbox-architecture.md#virtualdeviceapps--the-package-store) |
 
 Between `install`, `am start`, `input`, `uiautomator dump` and `screencap`, an agent with nothing but
 a terminal can put an app on the device, drive it, read what is on screen, and take it off again.

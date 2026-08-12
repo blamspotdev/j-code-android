@@ -76,7 +76,7 @@ class GuestSessionService : Service() {
             }.onFailure { error ->
                 Log.e(TAG, "cannot embed $apkPath", error)
                 onMain { guest.stop() }
-                result.putString(KEY_ERROR, error.message ?: error.toString())
+                result.putString(KEY_ERROR, error.describe())
             }
         }
 

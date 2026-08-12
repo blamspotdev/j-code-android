@@ -912,8 +912,9 @@ object SettingsFeature {
                     supporting = "An Android run config built for the virtual device starts its APK inside " +
                         "JCode — no install and no ADB setup — under a virtual device identity, with its " +
                         "storage kept under JCode. The app still inherits JCode's permissions, and the " +
-                        "services and providers it declares are not registered, so use this for quick " +
-                        "iteration and install the app for real before trusting what you see.",
+                        "providers, services and receivers it declares run inside the device only, so " +
+                        "nothing outside can reach them. Use this for quick iteration and install the app " +
+                        "for real before trusting what you see.",
                     checked = virtualDevice.enabled,
                     onCheckedChange = virtualDevice.onChange,
                     modified = virtualDevice.enabled != SettingsDefaults.RUN_IN_VIRTUAL_DEVICE,

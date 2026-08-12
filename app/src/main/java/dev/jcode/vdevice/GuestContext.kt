@@ -1,7 +1,10 @@
 package dev.jcode.vdevice
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
+import android.content.ServiceConnection
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.res.AssetManager
@@ -41,9 +44,14 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
     override fun getPackageResourcePath(): String = guest.apkPath
     override fun getApplicationContext(): Context = guest.application ?: guest.appContext
 
+    /**
+     * The guest's theme, never an empty one: an app that declares no `android:theme` is asking for
+     * the platform default for its `targetSdkVersion`, not for a theme with no styles in it — see
+     * [selectDefaultTheme].
+     */
     override fun getTheme(): Resources.Theme {
         theme?.let { return it }
-        if (themeResource == 0) themeResource = guest.applicationInfo.theme
+        if (themeResource == 0) themeResource = guest.applicationTheme
         return guest.resources.newTheme().also {
             if (themeResource != 0) it.applyStyle(themeResource, true)
             theme = it
@@ -131,6 +139,46 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
 
     override fun createPackageContext(packageName: String, flags: Int): Context =
         if (packageName == guest.packageName) this else super.createPackageContext(packageName, flags)
+
+    // ------------------------------------------------- the guest's own components
+    //
+    // A guest's services and receivers belong to a package the real PackageManager has never heard
+    // of, so letting these calls through unchanged ends in the activity manager refusing a component
+    // that does not exist. Each one is offered to [GuestComponents] first and only falls through to
+    // the host when the target is not the guest's — which is what keeps a guest able to fire an
+    // intent at the phone (a share sheet, a browser) while talking to itself in-process.
+
+    override fun startService(service: Intent): ComponentName? =
+        guest.components.startService(this, service) ?: super.startService(service)
+
+    override fun startForegroundService(service: Intent): ComponentName? =
+        guest.components.startService(this, service) ?: super.startForegroundService(service)
+
+    override fun stopService(name: Intent): Boolean =
+        if (guest.components.stopService(name)) true else super.stopService(name)
+
+    override fun bindService(service: Intent, conn: ServiceConnection, flags: Int): Boolean =
+        if (guest.components.bindService(this, service, conn)) true else super.bindService(service, conn, flags)
+
+    override fun unbindService(conn: ServiceConnection) {
+        if (!guest.components.unbindService(conn)) super.unbindService(conn)
+    }
+
+    /**
+     * A broadcast is offered to the guest's own manifest receivers and *still* sent on, because the
+     * two audiences do not overlap: a hosted receiver is invisible to the system, and a system
+     * receiver is invisible to [GuestComponents]. Only an explicit intent naming the guest is kept
+     * in-process, since the system would reject that one anyway.
+     */
+    override fun sendBroadcast(intent: Intent) {
+        val handled = guest.components.sendBroadcast(this, intent)
+        if (handled == 0 || intent.component == null) super.sendBroadcast(intent)
+    }
+
+    override fun sendBroadcast(intent: Intent, receiverPermission: String?) {
+        val handled = guest.components.sendBroadcast(this, intent)
+        if (handled == 0 || intent.component == null) super.sendBroadcast(intent, receiverPermission)
+    }
 
     private fun File.ensure(): File = also { if (!it.isDirectory) it.mkdirs() }
 }

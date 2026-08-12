@@ -203,6 +203,13 @@ no matching erase and stopping one repaints.
 `filesDir/vdevice/<package>/`. One store behind all three readers: the launcher grid, the adb
 daemon's `pm`/`am`, and the start-up reset.
 
+An app bundle's config splits go in `filesDir/vdevice/apps/<package>.splits/`, a directory *beside*
+the base rather than one replacing it — so every reader that already knew where a package's APK is
+keeps working unchanged, and `GuestLoader` finds the rest by the same convention without anything
+crossing the binder. `adb install-multiple` stages a session under `apps/session-<n>/` and commits it
+whole; the base is whichever staged file parses as a package on its own, since a config split's
+manifest has no `<application>` in it.
+
 > **Nothing survives a restart.** `resetOnStart` empties `filesDir/vdevice/` once per process — no
 > apps, no data, no preferences a previous run left. Both the workbench (`MainViewModel` init) and
 > `VirtualDeviceAdbService.daemon` call it, because those two race and the loser must not wipe what

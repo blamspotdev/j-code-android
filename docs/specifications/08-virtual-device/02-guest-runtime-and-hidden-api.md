@@ -37,11 +37,40 @@ internal class LoadedGuest(
 
 | Step | Mechanism |
 |---|---|
-| Code | `DexClassLoader` over the raw APK, parented to the **boot** class loader |
-| Resources | A hand-built `AssetManager` via the hidden `addAssetPath` |
-| Manifest | Parsed with `XmlResourceParser` to find activities and the MAIN/LAUNCHER entry |
-| Native libraries | Extracted from `lib/<abi>/*.so` (regex `lib/([^/]+)/[^/]+\.so`) |
+| Code | `DexClassLoader` over the base APK **and its splits**, parented to the **boot** class loader |
+| Resources | A hand-built `AssetManager` via the hidden `addAssetPath`, base first then each split |
+| Manifest | Parsed with `XmlResourceParser` for the MAIN/LAUNCHER entry and for service/receiver actions |
+| Native libraries | Extracted from `lib/<abi>/*.so` across **every** APK (regex `lib/([^/]+)/[^/]+\.so`) |
 | Data directory | Redirected to `filesDir/vdevice/<packageName>/` |
+
+### 2.0 Split APKs
+
+An app bundle is not optional packaging — it is what `./gradlew bundle` and every Play install
+produce, and its base APK contains **no native libraries at all**: they are the whole content of
+`split_config.<abi>.apk`. Loading the base alone therefore yields an app whose `System.loadLibrary`
+finds nothing, which is the quietest possible way to fail.
+
+Splits are discovered from the store rather than passed in — `<package>.apk` beside
+`<package>.splits/` — so `IGuestSession.start` still takes a single path and every caller that names
+an APK is untouched. The cache fingerprint covers the splits too, so replacing one reloads the guest.
+
+### 2.3 The default theme
+
+An app that declares no `android:theme` is not asking for an empty theme; `ContextThemeWrapper` runs
+the declared id through the hidden `Resources.selectSystemTheme` first, which picks a platform
+default by `targetSdkVersion`. `selectDefaultTheme` reproduces that with the four **public**
+`android.R.style` constants:
+
+| `targetSdkVersion` | Theme |
+|---|---|
+| < 11 | `Theme` |
+| < 14 | `Theme_Holo` |
+| < 24 | `Theme_DeviceDefault` |
+| ≥ 24 | `Theme_DeviceDefault_Light_DarkActionBar` |
+
+> Skipping this leaves a guest with `theme={InheritanceMap=[], Themes=[]}` and the first framework
+> layout that resolves a `?attr/…` against it dies. Measured: RetroArch (`targetSdk` 28, no
+> `android:theme` anywhere in its manifest) failing to inflate `android:layout/screen_title`.
 
 ### 2.1 Why the class loader's parent is the boot loader
 
@@ -183,6 +212,55 @@ point), not a bypass.
 
 ---
 
+## 5a. Non-activity components — `GuestComponents`
+
+Providers, services and receivers cannot be registered with the system: they belong to a package the
+real `PackageManager` has never heard of, and every registration path ends at a binder call that
+checks exactly that. What the container does instead is what `ActivityThread` does inside an app
+process — build the objects, attach them to a `GuestContext`, drive their lifecycle by hand.
+
+| Component | Hosting |
+|---|---|
+| `<provider>` | Instantiated and `attachInfo(context, info)` — public API, and it calls `onCreate` itself. Ordered by descending `initOrder`, **between** `Application.attachBaseContext` and `Application.onCreate`, exactly where `ActivityThread.handleBindApplication` runs `installContentProviders` |
+| `<service>` | `Service.attach` (greylisted) when available, else a `ContextWrapper.mBase` swap; then `onCreate`, and `onStartCommand`/`onBind` per call. `bindService` calls back on the main thread, never inline |
+| `<receiver>` | Instantiated per broadcast and given `onReceive`. Resolved by explicit component, or by action from the manifest scan |
+
+`Context.startService`/`bindService`/`sendBroadcast` on a `GuestContext` offer the intent to the
+guest first and fall through to the host when the target is not the guest's — so a guest can still
+fire an intent at the phone while talking to itself in-process.
+
+> **In-process only, and that is the boundary.** Another app cannot query a hosted provider, no
+> system broadcast arrives on its own, and a service gets no process to be restarted in. What it buys
+> is an app talking to itself, which is where the frameworks live: `androidx.startup` — and so
+> WorkManager, Firebase, `emoji2`, ProfileInstaller and Coil — boots from a `<provider>`. Measured
+> before this existed: NewPipe dying on "WorkManager is not initialized properly" before its first
+> frame.
+
+## 5b. The guest's own package — `GuestPackageHook`
+
+Hosting a provider is not enough on its own. `androidx.startup` reads its `InitializationProvider`'s
+`<meta-data>` back through `getProviderInfo`; AppCompat looks its own activity up through
+`getActivityInfo`; analytics libraries read `getPackageInfo(…).versionName`. All of those go out to a
+package manager that has never heard of the guest:
+
+```
+androidx.startup.StartupException: PackageManager$NameNotFoundException:
+    ComponentInfo{org.newpipex/androidx.startup.InitializationProvider}
+    at androidx.startup.AppInitializer.discoverAndInitialize(AppInitializer.java:208)
+```
+
+`PackageManager` is an abstract class with a couple of hundred abstract members, so a delegating
+wrapper is not writable by hand. `IPackageManager` is an *interface*, which is what `Proxy` needs,
+and it sits underneath every `ApplicationPackageManager` method — so one proxy on
+`ActivityThread.sPackageManager` (plus the `mPM` the existing instance already cached) covers every
+entry point. Same shape as the `IActivityTaskManager` hook, for the same reason.
+
+Answered for a loaded guest: `getActivityInfo`, `getServiceInfo`, `getReceiverInfo`,
+`getProviderInfo`, `getPackageInfo`, `getApplicationInfo`, `resolveContentProvider`, and the two
+enabled-setting queries. Everything else passes straight through. Arguments are matched **by type**,
+never by position, because these signatures gained a `userId` and widened `flags` to `long` across
+releases.
+
 ## 6. Child windows — `EmbeddedWindows`
 
 Dialogs, popup menus and drop-downs inside an embedded guest are the subtlest part of the system.
@@ -250,9 +328,15 @@ JCode draws nothing over it.
 ## 10. Known gaps
 
 - Validated on **Android 13 / targetSdk 33** only. Other platform versions are untested.
-- Content providers, services and broadcast receivers declared by the guest are not hosted — only
-  activities.
+- Hosted components are reachable only from inside `:guest` — see §5a. A `ContentResolver` query
+  from another process, a system broadcast, and a service restarted after death all remain out of
+  scope.
+- Only **config** splits are merged. A *feature* split that declares components of its own has its
+  code and resources loaded, but its manifest is not scanned.
 - The guest's own permissions are not honoured; it inherits JCode's.
+- Compose guests can start with an empty view tree where the app gates its first composition on
+  something the container does not provide — measured on AI Edge Gallery, which loads and starts
+  clean but dumps a bare `FrameLayout`.
 
 ---
 

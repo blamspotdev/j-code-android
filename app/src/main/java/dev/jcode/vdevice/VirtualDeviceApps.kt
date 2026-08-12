@@ -91,6 +91,55 @@ internal object VirtualDeviceApps {
         staged.delete()
     }
 
+    /**
+     * Where [packageName]'s split APKs live, beside its base: `apps/<package>.splits/`.
+     *
+     * Splits sit in a directory *next to* the base rather than replacing it with one, so every
+     * reader that already knew where a package's APK is — [list], [packages], [apk], the launcher,
+     * `pm path` — keeps working unchanged, and [GuestLoader.splitsOf] finds the rest by the same
+     * convention without anything having to be passed across the binder.
+     */
+    fun splitsDir(context: Context, packageName: String): File =
+        File(apksDir(context), packageName + SPLITS_SUFFIX)
+
+    /**
+     * Takes over a whole install session: a base APK plus the config splits that belong with it,
+     * which is what an app bundle actually is by the time `adb install-multiple` streams it over.
+     *
+     * The base is whichever staged file parses as a package on its own. A config split carries a
+     * manifest with no `<application>` in it, so it is exactly the file [VirtualDevice.inspect]
+     * refuses — which makes "the one that inspects" a sound test rather than a guess about names.
+     * Every staged file is consumed either way.
+     */
+    fun installSession(context: Context, staged: List<File>): Result<VirtualDeviceApp> = try {
+        runCatching {
+            val base = staged.firstNotNullOfOrNull { file ->
+                VirtualDevice.inspect(context, file.absolutePath).getOrNull()?.let { file to it }
+            } ?: throw VirtualDeviceException("no base APK among ${staged.size} staged file(s)")
+            val (baseFile, app) = base
+
+            val target = File(apksDir(context), app.packageName + APK)
+            val splitsTarget = splitsDir(context, app.packageName)
+            target.delete()
+            splitsTarget.deleteRecursively()
+            if (!baseFile.renameTo(target)) throw VirtualDeviceException("cannot store ${app.packageName}")
+
+            val splits = staged.filter { it != baseFile }
+            if (splits.isNotEmpty()) {
+                splitsTarget.mkdirs()
+                splits.forEach { split ->
+                    val name = if (split.name.endsWith(APK)) split.name else split.name + APK
+                    split.renameTo(File(splitsTarget, name))
+                }
+            }
+            revision.intValue++
+            Log.i(TAG, "installed ${app.packageName} ${app.versionName} with ${splits.size} split(s)")
+            app.copy(apkPath = target.absolutePath)
+        }
+    } finally {
+        staged.forEach { it.delete() }
+    }
+
     /** Installs a copy of [apk] — the launcher's "Install", and any APK a build just produced. */
     fun installCopy(context: Context, apk: File): Result<VirtualDeviceApp> = runCatching {
         if (!apk.canRead()) throw VirtualDeviceException("Cannot read APK: ${apk.absolutePath}")
@@ -103,10 +152,11 @@ internal object VirtualDeviceApps {
     fun staging(context: Context): File =
         File(apksDir(context), "staged-${System.nanoTime()}$APK")
 
-    /** Removes the app and everything it stored. False when it was not installed. */
+    /** Removes the app and everything it stored — its base, its splits, and its data. */
     fun uninstall(context: Context, packageName: String): Boolean {
         val apk = apk(context, packageName) ?: return false
         val removed = apk.delete()
+        splitsDir(context, packageName).deleteRecursively()
         dataDir(context, packageName).deleteRecursively()
         if (removed) revision.intValue++
         return removed

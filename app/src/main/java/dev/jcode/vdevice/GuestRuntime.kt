@@ -75,10 +75,15 @@ internal object GuestRuntime {
 
         val launch = GuestHooks.installLaunchHook(activityThread, ::onLaunchActivity)
         val navigation = GuestHooks.installStartActivityHook(::rewriteOutgoing)
+        val packages = GuestPackageHook.install(host.packageManager)
         installCrashHandler()
         VirtualDeviceLog.captureStandardStreams(host)
         isInstalled = true
-        Log.i(TAG, "hooks installed: instrumentation=true launch=$launch navigation=$navigation")
+        Log.i(
+            TAG,
+            "hooks installed: instrumentation=true launch=$launch navigation=$navigation " +
+                "packages=$packages",
+        )
         VirtualDeviceLog.append(host, 'I', TAG, "container ready in ${Application.getProcessName()}")
     }
 
@@ -413,6 +418,12 @@ internal object GuestRuntime {
         runCatching {
             val app = instrumentation.newApplication(guest.classLoader, className, guest.appContext)
             guest.application = app
+            // Between the Application being attached and its onCreate, exactly where
+            // ActivityThread.handleBindApplication runs installContentProviders. Libraries that boot
+            // from a provider — androidx.startup, and so WorkManager, Firebase and emoji2 — are
+            // written to be up by the time application code runs, and putting this either side of
+            // that line is the difference between them working and not.
+            guest.components.installProviders(guest.appContext)
             instrumentation.callApplicationOnCreate(app)
             Log.i(TAG, "guest Application $className created")
         }.onFailure { Log.e(TAG, "guest Application $className failed", it) }
