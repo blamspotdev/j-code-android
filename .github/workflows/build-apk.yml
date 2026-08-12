@@ -42,7 +42,7 @@ jobs:
           set -euo pipefail
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
           [ -n "$APK" ] || { echo "No release APK found"; exit 1; }
-          KEYSTORE="$GITHUB_WORKSPACE/.release-signing/jcode-release.jks"
+          KEYSTORE="$GITHUB_WORKSPACE/release-signing/jcode-release.jks"
           mkdir -p "$(dirname "$KEYSTORE")"
           if [ -n "${JCODE_KEYSTORE:-}" ]; then
             echo "$JCODE_KEYSTORE" | base64 -d > "$KEYSTORE"
@@ -53,7 +53,7 @@ jobs:
               -validity 10000 -storepass jcode-ci -keypass jcode-ci \
               -dname "CN=JCode CI,O=JCode,C=US" >/dev/null 2>&1
             PASS="jcode-ci"
-            printf '%s' "jcode-ci" > "$GITHUB_WORKSPACE/.release-signing/password.txt"
+            printf '%s' "jcode-ci" > "$GITHUB_WORKSPACE/release-signing/password.txt"
             echo "No JCODE_KEYSTORE secret: generated a fresh CI keystore (key changes every run)."
             echo "KEEP the generated keystore + password (in the artifact) to sign future releases."
           fi
@@ -71,9 +71,10 @@ jobs:
           if-no-files-found: error
 
       - name: Upload CI-generated signing keystore
-        if: ${{ hashFiles('.release-signing/password.txt') != '' }}
+        if: ${{ hashFiles('release-signing/password.txt') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: jcode-release-keystore
-          path: .release-signing/
+          path: release-signing/
+          include-hidden-files: true
           if-no-files-found: error
