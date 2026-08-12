@@ -24,7 +24,7 @@ jobs:
 
       - name: Set up Rust for native modules
         run: |
-          rustup target add aarch64-linux-android
+          rustup target add aarch64-linux-android x86_64-linux-android
           cargo install cargo-ndk --locked
 
       - name: Grant exec permission to wrapper
