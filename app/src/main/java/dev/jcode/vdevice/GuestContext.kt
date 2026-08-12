@@ -88,7 +88,20 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
     override fun openFileOutput(name: String, mode: Int): FileOutputStream =
         FileOutputStream(getFileStreamPath(name), mode and MODE_APPEND != 0)
 
-    override fun getDatabasePath(name: String): File = File(guest.databasesDir.ensure(), name)
+    /**
+     * `ContextImpl.getDatabasePath` accepts an **absolute** name and returns it as-is, and libraries
+     * rely on it: WorkManager hands Room a full path under `no_backup/`, and Room passes that
+     * straight back through here. Joining it onto `databases/` produced
+     * `…/databases/data/user/0/…/no_backup/androidx.work.workdb`, whose parent does not exist, and
+     * the `SQLiteCantOpenDatabaseException` came back on a WorkManager thread where nothing catches
+     * it — killing `:guest` and, with it, the activity J Code was showing.
+     */
+    override fun getDatabasePath(name: String): File =
+        if (name.startsWith(File.separatorChar)) {
+            File(name).also { it.parentFile?.mkdirs() }
+        } else {
+            File(guest.databasesDir.ensure(), name)
+        }
     override fun databaseList(): Array<String> = guest.databasesDir.list() ?: emptyArray()
     override fun deleteDatabase(name: String): Boolean = SQLiteDatabase.deleteDatabase(getDatabasePath(name))
 

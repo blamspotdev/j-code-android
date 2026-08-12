@@ -10,6 +10,7 @@ import android.content.pm.ApplicationInfo
 import android.os.Binder
 import android.os.IBinder
 import android.util.Log
+import android.webkit.WebView
 
 /**
  * The container itself, living in the `:guest` process: it installs the hooks in [GuestHooks] and
@@ -34,6 +35,9 @@ internal object GuestRuntime {
 
     /** Embedded-activity id, the `Activity.getId()` a system launch would never produce. */
     private const val EMBEDDED_ID = "jcode-embedded"
+
+    /** Keeps the guest's WebView data out of J Code's, which already holds the lock on its own. */
+    private const val GUEST_WEBVIEW_SUFFIX = "jcode-guest"
 
     private class Target(val guest: LoadedGuest, val activityClass: String)
 
@@ -66,6 +70,7 @@ internal object GuestRuntime {
         if (isInstalled) return
         host = context.applicationContext
         VirtualIdentity.apply(Application.getProcessName())
+        claimWebViewDirectory()
 
         val activityThread = GuestHooks.currentActivityThread()
             ?: throw VirtualDeviceException("no ActivityThread in this process")
@@ -85,6 +90,32 @@ internal object GuestRuntime {
                 "packages=$packages",
         )
         VirtualDeviceLog.append(host, 'I', TAG, "container ready in ${Application.getProcessName()}")
+    }
+
+    /**
+     * Gives `:guest` a WebView data directory of its own.
+     *
+     * WebView takes an exclusive lock on its data directory and refuses to load in a second process
+     * of the same app without one — and J Code's own process, which is full of WebViews, always gets
+     * there first. So a guest that touches a WebView **at all** died on:
+     *
+     * ```
+     * java.lang.RuntimeException: Using WebView from more than one process at once with the same
+     * data directory is not supported. … Current process dev.jcode.debug:guest, lock owner
+     * dev.jcode.debug
+     * ```
+     *
+     * That is not a niche case: ad SDKs, sign-in flows, Cordova and Ionic apps, and anything with an
+     * in-app browser all reach for one. Measured on CPU-Z, whose Mobile Ads provider loads WebView
+     * from `Application.onCreate` — the crash killed `:guest`, and with it the activity J Code was
+     * showing.
+     *
+     * `setDataDirectorySuffix` is public API from API 28 and must run before WebView is used in the
+     * process, which is what makes this the first thing [install] does.
+     */
+    private fun claimWebViewDirectory() {
+        runCatching { WebView.setDataDirectorySuffix(GUEST_WEBVIEW_SUFFIX) }
+            .onFailure { Log.w(TAG, "guest WebViews may not work: $it") }
     }
 
     /**

@@ -212,6 +212,20 @@ point), not a bypass.
 
 ---
 
+## 4a. Two things `:guest` must claim before the guest runs
+
+Both were found the same way — by hosting providers, which made guests run enough of themselves to
+reach code the container had never exercised.
+
+| Claim | Why |
+|---|---|
+| `WebView.setDataDirectorySuffix("jcode-guest")` | WebView takes an **exclusive lock** on its data directory and refuses to load in a second process of the same app without a suffix. J Code's own process always gets there first, so a guest that touched a WebView at all died with `Using WebView from more than one process at once with the same data directory is not supported`. Not a niche case: ad SDKs, sign-in flows, Cordova/Ionic apps and any in-app browser reach for one. Public API from API 28, and it must run before WebView is used — which is why it is the first thing `install` does |
+| `GuestContext.getDatabasePath` accepting an **absolute** name | `ContextImpl` returns an absolute name as-is, and libraries rely on it: WorkManager hands Room a full path under `no_backup/`, and Room passes it straight back. Joining it onto `databases/` produced `…/databases/data/user/0/…/no_backup/androidx.work.workdb`, and the `SQLiteCantOpenDatabaseException` came back on a WorkManager thread where nothing catches it |
+
+> Both crashes killed `:guest`, and where a **full-screen** guest was in J Code's task the activity
+> manager's crash cleanup finished `MainActivity` along with it — so a guest's bug took the IDE off
+> the screen. Embedded guests share no task and are unaffected.
+
 ## 5a. Non-activity components — `GuestComponents`
 
 Providers, services and receivers cannot be registered with the system: they belong to a package the
@@ -337,6 +351,11 @@ JCode draws nothing over it.
 - Compose guests can start with an empty view tree where the app gates its first composition on
   something the container does not provide — measured on AI Edge Gallery, which loads and starts
   clean but dumps a bare `FrameLayout`.
+- An embedded activity's token is a bare `Binder`, so anything asking the activity manager about it
+  fails: `getTaskForActivity` answers `BinderProxy cannot be cast to ActivityRecord$Token`. Measured
+  on CPU-Z, whose Mobile Ads SDK reaches for it from a WebView and takes the guest down with a
+  native `SIGTRAP`. Hosting providers is what makes such an SDK initialise at all, so this is a case
+  the container now reaches where before it silently never ran.
 
 ---
 
