@@ -145,14 +145,24 @@ internal object AppSandbox {
         session = null
         running.value = false
     }
+
+    /** Turns the device off, process and all — see [AppSandboxSession.shutdown]. */
+    @Synchronized
+    fun shutdown() {
+        session?.shutdown()
+        session = null
+        running.value = false
+    }
 }
 
 /**
  * The IDE's half of an embedded guest: binds [GuestSessionService], holds the resulting
  * `SurfacePackage`, and forwards input.
  *
- * Unbinding is the teardown: nothing else in the app keeps `:guest` alive, so dropping the binding
- * takes the guest's heap, its framework hooks and its faked `Build` identity with it.
+ * Unbinding takes the *guest* down, and for a tab switch or a Stop that is the whole teardown. It
+ * does **not** take the process: Android keeps an emptied `:guest` around and rebinds into it, so the
+ * loaded dex, the swapped `Instrumentation` and the faked `Build` all survive a close. [shutdown] is
+ * what ends the process, and closing the tab is the one thing that means it.
  */
 internal class AppSandboxSession(context: Context) {
 
@@ -319,6 +329,20 @@ internal class AppSandboxSession(context: Context) {
         connected.value = false
         _surface.value = null
         _status.value = SandboxStatus.Idle
+    }
+
+    /**
+     * Turns the device off, rather than putting its screen away.
+     *
+     * [close] unbinds, which is what a tab switch or a Stop wants: the guest goes, the device stays,
+     * and the launcher is drawn by the IDE without needing `:guest` at all. Closing the *tab* is a
+     * different statement — there is no device any more — and unbinding does not make it true, since
+     * Android keeps the emptied process and rebinds into it with everything the container had
+     * accumulated still in place.
+     */
+    fun shutdown() {
+        runCatching { service?.shutdown() }
+        close()
     }
 
     private fun bind(): Boolean {

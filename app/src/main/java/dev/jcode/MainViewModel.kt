@@ -4473,10 +4473,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ?.let { _editorGroup.value = _editorGroup.value.withTabUpdated(it.copy(title = title)) }
     }
 
-    /** Stop the guest once its editor tab is gone. Page tabs get no close callback, so the shell
-     *  calls this whenever the tab list changes. */
+    /** Turn the device off once its editor tab is gone — process and all, not merely unbound. Page
+     *  tabs get no close callback, so the shell calls this whenever the tab list changes. */
     fun pruneAppSandbox() {
-        if (_editorGroup.value.tabs.none { it.pageKind == EditorPageKind.AppSandbox }) AppSandbox.close()
+        if (_editorGroup.value.tabs.none { it.pageKind == EditorPageKind.AppSandbox }) AppSandbox.shutdown()
     }
 
     /**

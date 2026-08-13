@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.Process
 import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -119,6 +120,26 @@ class GuestSessionService : Service() {
         }
 
         override fun back() = post { guest.back() }
+
+        /**
+         * Ends the device, process and all.
+         *
+         * Killing our own pid is allowed — same uid, same app — and it is the only thing that
+         * actually clears what this process has accumulated: the loaded guests and their class
+         * loaders, anything `GuestComponents` is still hosting, the `Instrumentation` swapped into
+         * `ActivityThread`, the rewritten `Build`, and the WebView data directory claimed for the
+         * guest. None of that has an undo, which is why the container is in a process of its own.
+         *
+         * Posted rather than immediate so this transaction can return first; the caller is one-way,
+         * but the unbind that follows it is not.
+         */
+        override fun shutdown() {
+            post { guest.stop() }
+            main.postDelayed({
+                Log.i(TAG, "virtual device off; ending the guest process")
+                Process.killProcess(Process.myPid())
+            }, SHUTDOWN_DELAY_MS)
+        }
     }
 
     private fun post(block: () -> Unit) {
@@ -150,6 +171,9 @@ class GuestSessionService : Service() {
     companion object {
         const val KEY_SURFACE = "surface"
         const val KEY_ERROR = "error"
+
+        /** Long enough for the shutdown transaction and the unbind behind it to finish. */
+        private const val SHUTDOWN_DELAY_MS = 150L
 
         /** False when the container could not reach the activity's `ActivityLifecycleCallbacks` and
          *  had to nudge the guest's own `LifecycleRegistry` — see [GuestRuntime.resumeEmbedded]. */
