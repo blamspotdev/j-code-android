@@ -189,6 +189,11 @@ internal object GuestRuntime {
         // above all theme 0, so no theme is built against J Code's resources before bind() runs.
         onLaunchActivity(stub, info)
         val target = resolve(stub) ?: throw VirtualDeviceException("$stub carries no guest identity")
+        // Embedded means windowed: the tab is the only window shape on offer, so an activity that
+        // declares itself unresizeable or pins an orientation has to give that up here — see
+        // GuestWindow. A full-screen guest keeps its declarations, where they can be honoured.
+        target.guest.activities[target.activityClass]?.let(GuestWindow::makeResizable)
+        GuestWindow.makeResizable(info)
 
         // Registered before the activity is built: the guest can reach ActivityClient from its own
         // onCreate, and a token the hook has not heard of yet is one the server rejects.
@@ -295,6 +300,22 @@ internal object GuestRuntime {
 
     /** The package a hook should attribute the current call to, or null outside a guest. */
     fun activePackage(): String? = active?.packageName
+
+    /**
+     * Tells the loaded guest how big its window is, before anything of it is built.
+     *
+     * Called by [EmbeddedGuest] on start and on every resize, so a guest that is laid out for the
+     * tab stays laid out for it when the tab changes shape — a rotation, or the drawer opening.
+     */
+    fun sizeEmbeddedWindow(apkPath: String, widthPx: Int, heightPx: Int) {
+        val guest = runCatching { GuestLoader.load(host, apkPath) }.getOrNull() ?: return
+        GuestWindow.applySize(guest, widthPx, heightPx)
+    }
+
+    /** The resize path, once a guest is already loaded and running. */
+    fun sizeEmbeddedWindow(widthPx: Int, heightPx: Int) {
+        active?.let { GuestWindow.applySize(it, widthPx, heightPx) }
+    }
 
     /** The label the device's status bar names the running app by. */
     fun activeLabel(): String? = active?.let { guest -> guest.labelOf(guest.launchActivity).toString() }

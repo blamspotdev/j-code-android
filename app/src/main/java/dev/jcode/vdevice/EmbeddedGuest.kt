@@ -91,6 +91,9 @@ internal class EmbeddedGuest(
             host.setView(container, width, height)
             windows = EmbeddedWindows.install(host, container, width, height)
 
+            // Before the activity exists, so its very first measure is against the window it is
+            // actually going into rather than against the whole phone — see GuestWindow.
+            GuestRuntime.sizeEmbeddedWindow(apkPath, width, height)
             val guest = GuestRuntime.embed(apkPath, activityClass, windows?.token)
             activity = guest
             container.addView(guest.window.decorView, matchParent())
@@ -116,6 +119,9 @@ internal class EmbeddedGuest(
         host?.surfacePackage ?: throw VirtualDeviceException("no guest is running")
 
     fun resize(width: Int, height: Int) {
+        // The guest's own configuration first: relayout is what asks it to measure again, so it has
+        // to already know the size it is measuring for.
+        GuestRuntime.sizeEmbeddedWindow(width, height)
         windows?.resize(width, height)
         host?.relayout(width, height)
     }
