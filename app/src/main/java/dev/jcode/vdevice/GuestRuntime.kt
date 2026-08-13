@@ -229,6 +229,36 @@ internal object GuestRuntime {
         return activity
     }
 
+    /** Whether the device lets [packageName] keep running once it is not the app on the screen. */
+    fun mayRunInBackground(packageName: String): Boolean =
+        runCatching { VirtualDeviceApps.backgroundAllowed(host, packageName) }.getOrDefault(false)
+
+    /**
+     * Ends what the active guest is still hosting: its services, its bound connections, its
+     * providers. Its code stays loaded, so reopening it is a start rather than a reload.
+     */
+    fun releaseComponents() {
+        active?.let { guest -> runCatching { guest.components.shutdown() } }
+    }
+
+    /**
+     * Force-stop: the app is gone, whatever it was allowed to do.
+     *
+     * Everything [releaseComponents] ends, plus its notifications and its place in the loader's
+     * cache — so the next launch re-reads the APK rather than reusing a heap the user just asked to
+     * be rid of.
+     */
+    fun forceStop(packageName: String) {
+        GuestLoader.forPackage(packageName)?.let { guest ->
+            runCatching { guest.components.shutdown() }
+                .onFailure { Log.w(TAG, "cannot stop $packageName's components", it) }
+        }
+        VirtualNotifications.cancelAll(packageName)
+        GuestLoader.forget(packageName)
+        if (active?.packageName == packageName) active = null
+        Log.i(TAG, "force-stopped $packageName")
+    }
+
     /** The package a hook should attribute the current call to, or null outside a guest. */
     fun activePackage(): String? = active?.packageName
 

@@ -121,6 +121,10 @@ class GuestSessionService : Service() {
 
         override fun back() = post { guest.back() }
 
+        override fun forceStop(packageName: String?) {
+            packageName?.let { name -> post { GuestRuntime.forceStop(name) } }
+        }
+
         /**
          * Ends the device, process and all.
          *

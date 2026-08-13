@@ -139,6 +139,19 @@ internal object GuestLoader {
     @Synchronized
     fun forPackage(packageName: String): LoadedGuest? = byPackage[packageName]
 
+    /**
+     * Drops a guest from both caches, so the next launch loads it again from its APK.
+     *
+     * The class loader and everything it holds are not unloaded — ART has no way to — so this is not
+     * reclaiming memory, it is making sure a force-stopped app comes back as a *start* rather than
+     * as the heap the user just asked to be rid of.
+     */
+    @Synchronized
+    fun forget(packageName: String) {
+        byPackage.remove(packageName) ?: return
+        loaded.entries.removeAll { it.value.guest.packageName == packageName }
+    }
+
     /** The declared `<provider>` behind [authority], across every guest loaded in this process. */
     @Synchronized
     fun providerFor(authority: String): ProviderInfo? = byPackage.values

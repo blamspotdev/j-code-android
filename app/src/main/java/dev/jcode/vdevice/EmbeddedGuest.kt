@@ -251,11 +251,15 @@ internal class EmbeddedGuest(
     }
 
     fun stop() {
-        // A notification outlives the app that posted it only on a phone, where the app is still
-        // installed and could be reopened. Taking a guest off the device is closer to uninstalling
-        // it, and leaving its notifications behind means the next app's status bar counts somebody
-        // else's — measured as CPU-Z reporting the fixture's two.
-        VirtualNotifications.clearAll()
+        // Whether the app is allowed to outlive its screen is the one question here, and the answer
+        // decides both halves: an app kept in the background keeps its services *and* the
+        // notifications that are usually the only way to reach them, and one that is not keeps
+        // neither. Leaving notifications behind for an app that has actually gone means the next
+        // app's status bar counts somebody else's — measured as CPU-Z reporting the fixture's two.
+        if (GuestRuntime.activePackage()?.let { GuestRuntime.mayRunInBackground(it) } != true) {
+            VirtualNotifications.clearAll()
+            GuestRuntime.releaseComponents()
+        }
         GuestRuntime.setEmbeddedLauncher(null)
         GuestRuntime.setEmbeddedFinisher(null)
         GuestRuntime.setEmbeddedBackHandler(null)

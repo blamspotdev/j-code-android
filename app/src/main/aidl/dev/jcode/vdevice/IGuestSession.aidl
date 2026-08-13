@@ -43,6 +43,9 @@ interface IGuestSession {
     /** Pops the embedded back stack, or sends Back to the only activity. */
     oneway void back();
 
+    /** Force-stop: ends everything the named guest is hosting and drops it from the loader. */
+    oneway void forceStop(String packageName);
+
     /**
      * Ends the device: tears the guest down and takes the :guest process with it.
      *

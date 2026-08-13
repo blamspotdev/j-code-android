@@ -1,5 +1,6 @@
 package dev.jcode.vdevice
 
+import android.content.pm.PackageManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -136,6 +137,7 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
     val revision = VirtualDeviceApps.revision.intValue
     var home by remember { mutableStateOf<List<LauncherApp>?>(null) }
     var menuFor by remember { mutableStateOf<Pair<VirtualDeviceApp, Offset>?>(null) }
+    var detailsFor by remember { mutableStateOf<VirtualDeviceApp?>(null) }
     LaunchedEffect(revision, running) {
         home = if (running) null else withContext(Dispatchers.IO) { VirtualLauncher.load(context) }
     }
@@ -219,6 +221,27 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
                 offset = with(density) { DpOffset(at.x.toDp(), at.y.toDp()) },
                 listActions = buildList {
                     add(ContextAction(JCodeIcon.Run, "Open") { menuFor = null; open(app) })
+                    val background = VirtualDeviceApps.backgroundAllowed(context, app.packageName)
+                    add(
+                        ContextAction(
+                            icon = JCodeIcon.KeepAwake,
+                            label = if (background) "Allow background ✓" else "Allow background",
+                        ) {
+                            menuFor = null
+                            VirtualDeviceApps.setBackgroundAllowed(context, app.packageName, !background)
+                            onSnackbar(
+                                if (background) "${'$'}{app.label} stops when you leave it."
+                                else "${'$'}{app.label} keeps running in the background.",
+                            )
+                        },
+                    )
+                    add(ContextAction(JCodeIcon.Stop, "Force stop") {
+                        menuFor = null
+                        if (app.apkPath == apkPath) stop()
+                        AppSandbox.forceStop(app.packageName)
+                        onSnackbar("Force-stopped ${'$'}{app.label}.")
+                    })
+                    add(ContextAction(JCodeIcon.Help, "Details") { menuFor = null; detailsFor = app })
                     add(ContextAction(JCodeIcon.Clear, "Clear data") {
                         menuFor = null
                         scope.launch(Dispatchers.IO) { VirtualDeviceApps.clearData(context, app.packageName) }
@@ -229,6 +252,14 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
                         uninstall(app)
                     })
                 },
+            )
+        }
+
+        detailsFor?.let { app ->
+            AppDetailsDialog(
+                app = app,
+                backgroundAllowed = VirtualDeviceApps.backgroundAllowed(context, app.packageName),
+                onDismiss = { detailsFor = null },
             )
         }
 
@@ -680,5 +711,89 @@ private fun apkProblem(path: String): String? {
             "app/build/outputs/apk/debug/ inside the project."
         !file.canRead() -> "J Code cannot read that file."
         else -> null
+    }
+}
+
+/**
+ * What the device knows about an installed app, read back out of its APK.
+ *
+ * A modal rather than another screen on the device: this is J Code talking about the app, not the
+ * app talking, and putting it on the device's own screen would put it in `screencap` where it would
+ * read as something the guest drew.
+ *
+ * Everything here comes from the archive rather than from a running guest, so it answers the same
+ * whether the app has ever been opened.
+ */
+@Composable
+private fun AppDetailsDialog(
+    app: VirtualDeviceApp,
+    backgroundAllowed: Boolean,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val facts = remember(app.apkPath) { appFacts(context, app, backgroundAllowed) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        title = { Text(app.label) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                facts.forEach { (name, value) ->
+                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        Text(
+                            text = name,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(text = value, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        },
+    )
+}
+
+/** Reads the archive once and flattens it into label/value pairs the dialog just prints. */
+private fun appFacts(
+    context: android.content.Context,
+    app: VirtualDeviceApp,
+    backgroundAllowed: Boolean,
+): List<Pair<String, String>> {
+    val flags = PackageManager.GET_ACTIVITIES or PackageManager.GET_SERVICES or
+        PackageManager.GET_RECEIVERS or PackageManager.GET_PROVIDERS or
+        PackageManager.GET_PERMISSIONS
+    val info = runCatching { context.packageManager.getPackageArchiveInfo(app.apkPath, flags) }
+        .getOrNull()
+    val apk = File(app.apkPath)
+    return buildList {
+        add("Package" to app.packageName)
+        add("Version" to (app.versionName ?: "unknown"))
+        info?.applicationInfo?.let { application ->
+            add("Target SDK" to application.targetSdkVersion.toString())
+            add("Minimum SDK" to application.minSdkVersion.toString())
+        }
+        add(
+            "Components" to listOf(
+                "${info?.activities?.size ?: app.activities.size} activities",
+                "${info?.services?.size ?: 0} services",
+                "${info?.receivers?.size ?: 0} receivers",
+                "${info?.providers?.size ?: 0} providers",
+            ).joinToString(", "),
+        )
+        info?.requestedPermissions?.takeIf { it.isNotEmpty() }?.let { permissions ->
+            // The guest inherits J Code's permissions wholesale, so this is what the app *asked* for
+            // rather than what it has — worth saying, and worth not implying otherwise.
+            add(
+                "Requests (not granted separately)" to
+                    permissions.joinToString(separator = "\n") {
+                        it.removePrefix("android.permission.")
+                    },
+            )
+        }
+        add("Runs in background" to if (backgroundAllowed) "Allowed" else "Stops when you leave it")
+        add("APK" to "${apk.name} (${apk.length() / 1024} KB)")
     }
 }

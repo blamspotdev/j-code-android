@@ -123,6 +123,11 @@ internal object AppSandbox {
         running.value = false
     }
 
+    /** Force-stops one app on the device, running or merely still loaded. */
+    fun forceStop(packageName: String) {
+        session?.forceStop(packageName)
+    }
+
     /** Turns the device off, process and all — see [AppSandboxSession.shutdown]. */
     @Synchronized
     fun shutdown() {
@@ -296,6 +301,8 @@ internal class AppSandboxSession(context: Context) {
     fun text(text: String) = ignoringDeath { it.text(text) }
 
     fun back() = ignoringDeath { it.back() }
+
+    fun forceStop(packageName: String) = ignoringDeath { it.forceStop(packageName) }
 
     fun close() {
         startup?.cancel()

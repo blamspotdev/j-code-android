@@ -29,6 +29,34 @@ internal object VirtualDeviceApps {
     /** Assets directory holding the APKs the device is born with — see [installBuiltIns]. */
     private const val BUILT_INS = "vdevice"
 
+    /** Where "Allow background" is kept. Both processes read it, so it cannot live in memory. */
+    private const val POLICY = "vdevice-policy"
+    private const val BACKGROUND = "background"
+
+    /**
+     * Whether [packageName] may keep running once it is not the app on the screen.
+     *
+     * Off by default, and the default is the honest one: the device shows one app at a time, so
+     * leaving an app is the closest thing it has to closing one. An app told otherwise keeps its
+     * services and its notifications when it goes away — which is what a music player or a download
+     * needs, and what nothing else should have.
+     *
+     * A file rather than a field because the two processes disagree otherwise: the launcher that
+     * sets it is in the IDE, and the container that acts on it is in `:guest`.
+     */
+    fun backgroundAllowed(context: Context, packageName: String): Boolean =
+        policy(context).getStringSet(BACKGROUND, emptySet()).orEmpty().contains(packageName)
+
+    fun setBackgroundAllowed(context: Context, packageName: String, allowed: Boolean) {
+        val current = policy(context).getStringSet(BACKGROUND, emptySet()).orEmpty().toMutableSet()
+        if (allowed) current += packageName else current -= packageName
+        policy(context).edit().putStringSet(BACKGROUND, current).apply()
+        revision.intValue++
+    }
+
+    private fun policy(context: Context) =
+        context.applicationContext.getSharedPreferences(POLICY, Context.MODE_PRIVATE)
+
     /**
      * Bumped whenever the installed set changes, so the launcher redraws for an `adb install` it did
      * not initiate. Snapshot state rather than a flow: the only reader is a composable.
