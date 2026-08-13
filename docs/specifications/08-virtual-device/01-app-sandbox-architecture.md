@@ -215,8 +215,20 @@ no matching erase and stopping one repaints.
 
 ### 7b. The device's status bar and shade
 
-`VirtualStatusBar` is a slim bar across the top of the device's screen, plus a notification shade
-that pulls down from it.
+A slim bar across the top of the device's screen, plus a notification shade that pulls down from it.
+
+**The bar is persistent — a property of the device, not of whatever app is on it.** It is drawn
+twice, because the device's screen is drawn two ways, and both must produce the same strip:
+
+| While | Drawn by | Shows |
+|---|---|---|
+| An app is running | `VirtualStatusBar`, real views in the guest's container | The app's label, and what it has posted |
+| The home screen | `VirtualLauncher.drawStatusBar`, canvas | The device's name |
+
+One height and one palette (`VirtualStatusBar`'s companion) behind both, so the strip does not change
+shape the moment an app starts. On the home screen it carries the device's name and nothing else:
+there is no app to report the state of and no notifications to count, because the guest process is
+what holds them and there is no guest process.
 
 **No clock and no battery, deliberately.** Those belong to the phone, and the phone's own status bar
 is directly above this one — a second copy would be either a duplicate or a lie. What the device has

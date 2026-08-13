@@ -235,11 +235,17 @@ internal class VirtualStatusBar(
         return super.onTouchEvent(event)
     }
 
-    private companion object {
+    /**
+     * Not private: [VirtualLauncher] draws the same bar onto the device's home screen with a canvas
+     * rather than views, and the two must be the same bar. One palette and one height, so the strip
+     * does not change shape the moment an app starts.
+     */
+    internal companion object {
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
         const val BAR_DP = 22f
+        const val TEXT_DP = 11f
         const val GRAB_DP = 30f
         const val TOUCH_SLOP_DP = 8f
 
