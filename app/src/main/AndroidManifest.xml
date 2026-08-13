@@ -6,6 +6,23 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Held for the virtual device's guests, not for J Code itself.
+         A guest runs under J Code's uid, so it holds J Code's permissions and no others — an app
+         that merely asks whether it is online died on
+         "ConnectivityService: Neither user 10211 nor current process has ACCESS_NETWORK_STATE"
+         before drawing a frame. Measured on Ookla Speedtest.
+         Every one of these is protection level *normal*: granted at install, no prompt, and none of
+         them reaches user data. The dangerous ones — camera, microphone, location, contacts — are
+         deliberately absent, so a guest that wants those still cannot have them, which is the line
+         worth keeping between "runs the app" and "runs the app with the user's phone". -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- "All files access": raw file-path access to /storage/emulated/0/JCode (workspace root and
          proot bind mounts). Legacy storage permissions stopped working at targetSdk 30+; granted
          via the system settings toggle, checked with Environment.isExternalStorageManager(). -->

@@ -2,6 +2,7 @@ package dev.jcode.vdevice
 
 import android.content.ComponentName
 import android.content.pm.PackageManager
+import android.os.Process
 import android.util.Log
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.InvocationTargetException
@@ -91,8 +92,38 @@ internal object GuestPackageHook {
             return try {
                 method.invoke(real, *(args ?: emptyArray()))
             } catch (e: InvocationTargetException) {
-                throw e.targetException
+                val cause = e.targetException
+                // The safety net for everything not modelled above. A guest is not in the package
+                // database, so any query the container forgot lands on "Unknown package" — an
+                // IllegalArgumentException, thrown across the binder, which kills whatever asked.
+                // Measured: Crashlytics calling getInstallerPackageName took Firebase's whole
+                // InitProvider down with it, and Speedtest lost analytics before its first frame.
+                //
+                // Converting exactly that failure into "nothing to report" is not a guess about
+                // semantics — for a package that genuinely is not installed, nothing *is* the
+                // honest answer, and it is the one a caller is written to handle.
+                if (namesGuest(args) && cause.isUnknownPackage()) return empty(method.returnType)
+                throw cause
             }
+        }
+
+        private fun namesGuest(args: Array<Any?>?): Boolean = args != null && args.any { arg ->
+            when (arg) {
+                is ComponentName -> GuestLoader.forPackage(arg.packageName) != null
+                is String -> GuestLoader.forPackage(arg) != null
+                else -> false
+            }
+        }
+
+        private fun Throwable.isUnknownPackage(): Boolean =
+            this is IllegalArgumentException && message?.startsWith(UNKNOWN_PACKAGE) == true
+
+        private fun empty(type: Class<*>): Any? = when (type) {
+            Void.TYPE -> null
+            Boolean::class.javaPrimitiveType -> false
+            Int::class.javaPrimitiveType -> 0
+            Long::class.javaPrimitiveType -> 0L
+            else -> null
         }
 
         /** Null when this is not a guest's question; a box — possibly of null — when it is. */
@@ -114,6 +145,23 @@ internal object GuestPackageHook {
                 "getApplicationInfo" -> Box(guest.applicationInfo)
                 "getApplicationEnabledSetting" -> Box(PackageManager.COMPONENT_ENABLED_STATE_DEFAULT)
                 "getComponentEnabledSetting" -> Box(PackageManager.COMPONENT_ENABLED_STATE_DEFAULT)
+                // Null is what a sideloaded app sees on a real phone, and a sideloaded app is
+                // exactly what a guest is. Answering it at all is the point: the real package
+                // manager throws for a package it has never heard of.
+                "getInstallerPackageName", "getInstallSourceInfo" -> Box(null)
+                // Every binder call the guest makes already goes out under J Code's uid, so this is
+                // the truthful answer rather than a flattering one.
+                "getPackageUid" -> Box(Process.myUid())
+                "isPackageAvailable" -> Box(true)
+                "getTargetSdkVersion" -> Box(guest.applicationInfo.targetSdkVersion)
+                // The guest inherits J Code's permissions wholesale — see the security notes — so a
+                // permission check that reached the server would ask about the wrong package.
+                "checkPermission" -> Box(PackageManager.PERMISSION_GRANTED)
+                // The server refuses to change the state of a component in a package it does not
+                // have — "Attempt to change component state" — and WorkManager does exactly this to
+                // enable its own JobService. Accepting it is honest here: the container decides what
+                // a guest's components do, so there is nothing for the system to enable.
+                "setComponentEnabledSetting", "setApplicationEnabledSetting" -> Box(null)
                 else -> null
             }
         }
@@ -132,4 +180,7 @@ internal object GuestPackageHook {
 
     /** Distinguishes "the guest's answer is null" from "not the guest's question". */
     private class Box(val value: Any?)
+
+    /** How the package manager says a package is not installed, across every service that says it. */
+    private const val UNKNOWN_PACKAGE = "Unknown package"
 }

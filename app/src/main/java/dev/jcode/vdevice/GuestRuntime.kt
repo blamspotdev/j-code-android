@@ -82,13 +82,14 @@ internal object GuestRuntime {
         val navigation = GuestHooks.installStartActivityHook(::rewriteOutgoing)
         val packages = GuestPackageHook.install(host.packageManager)
         val notifications = GuestNotificationHook.install()
+        val intents = GuestActivityManagerHook.install(host.packageName)
         installCrashHandler()
         VirtualDeviceLog.captureStandardStreams(host)
         isInstalled = true
         Log.i(
             TAG,
             "hooks installed: instrumentation=true launch=$launch navigation=$navigation " +
-                "packages=$packages notifications=$notifications",
+                "packages=$packages notifications=$notifications intents=$intents",
         )
         VirtualDeviceLog.append(host, 'I', TAG, "container ready in ${Application.getProcessName()}")
     }
