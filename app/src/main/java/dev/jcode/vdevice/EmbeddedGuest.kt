@@ -225,6 +225,11 @@ internal class EmbeddedGuest(
     }
 
     fun stop() {
+        // A notification outlives the app that posted it only on a phone, where the app is still
+        // installed and could be reopened. Taking a guest off the device is closer to uninstalling
+        // it, and leaving its notifications behind means the next app's status bar counts somebody
+        // else's — measured as CPU-Z reporting the fixture's two.
+        VirtualNotifications.clear()
         GuestRuntime.setEmbeddedLauncher(null)
         stack.asReversed().forEach { activity ->
             (activity.window.decorView.parent as? ViewGroup)?.removeView(activity.window.decorView)

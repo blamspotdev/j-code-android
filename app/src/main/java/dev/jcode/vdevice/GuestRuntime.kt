@@ -195,6 +195,20 @@ internal object GuestRuntime {
         target.guest.activities[target.activityClass]?.let(GuestWindow::makeResizable)
         GuestWindow.makeResizable(info)
 
+        // Before newActivity, not after. `ActivityThread` builds an app's Application in
+        // handleBindApplication, long before it instantiates any activity, and apps rely on that
+        // ordering far more than they say: a field initialiser or a static <clinit> reached from the
+        // activity's *constructor* routinely reads a context some holder captured in
+        // Application.onCreate. Creating it inside bind() — which the framework only reaches on the
+        // way into onCreate — is one step too late. Measured on MiXplorer:
+        //
+        //   ExceptionInInitializerError at libs.v04.<clinit>
+        //   Caused by: NullPointerException: Context.getResources() on a null object reference
+        //
+        // — its static holder was still null because the constructor had beaten the Application to
+        // it, and the activity could not even be built.
+        ensureApplication(target.guest)
+
         // Registered before the activity is built: the guest can reach ActivityClient from its own
         // onCreate, and a token the hook has not heard of yet is one the server rejects.
         val token = Binder().also(GuestActivityClient::register)

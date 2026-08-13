@@ -309,6 +309,24 @@ caught and fed straight back into the device they came from.
 > Verified on `tools/notification-fixture`: two notifications posted from `onCreate` appear in the
 > device's own bar and shade, and `dumpsys notification` on the host counts **zero** of them.
 
+## 4c-bis. The Application comes first
+
+`ActivityThread` builds an app's `Application` in `handleBindApplication`, long before it instantiates
+any activity, and apps depend on that ordering far more than they ever say so. A field initialiser or
+a static `<clinit>` reached from an activity's **constructor** routinely reads a context some holder
+captured in `Application.onCreate`.
+
+The container used to create the guest's `Application` inside `bind()`, which the framework only
+reaches on the way into `onCreate` — one step too late. Measured on MiXplorer:
+
+```
+ExceptionInInitializerError at libs.v04.<clinit>
+Caused by: NullPointerException: Context.getResources() on a null object reference
+```
+
+Its static holder was still null because the constructor had beaten the `Application` to it, and the
+activity could not even be built. `ensureApplication` now runs before `Instrumentation.newActivity`.
+
 ## 4d. Two reasons a guest drew nothing
 
 Both looked identical from outside — an app that loaded, started, stayed alive and showed an empty
