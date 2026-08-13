@@ -154,13 +154,32 @@ internal object GuestHooks {
                     }
                     if (args != null && method.name.startsWith("startActivity")) {
                         GuestActivityClient.detachEmbeddedTokens(args)
+                        // Logged because "the app opened, but the phone's copy of it" is otherwise
+                        // indistinguishable from "the container hosted it", and the difference is
+                        // which binder call carried the intent.
+                        args.filterIsInstance<Intent>().firstOrNull()?.let { outgoing ->
+                            Log.i(TAG, "outgoing ${method.name}: ${outgoing.component}")
+                        }
                         val slot = args.indexOfFirst { it is Intent }
                         if (slot >= 0) {
                             when (val action = decide(args[slot] as Intent)) {
                                 is StartAction.Proceed -> Unit
                                 is StartAction.Redirect -> args[slot] = action.intent
-                                is StartAction.Consumed ->
-                                    if (method.returnType == Int::class.javaPrimitiveType) return START_SUCCESS
+                                // Consumed means the tab has already hosted this activity, so the
+                                // binder call must not happen at all — whatever it returns.
+                                //
+                                // Guarding on an int return let every other overload fall through
+                                // and go out **with the original intent**, and where the phone has
+                                // its own copy of the package installed the system then resolved the
+                                // component against that copy: the app opened twice, once in the
+                                // device and once outside it, and the one the user saw was the
+                                // wrong one. Measured on ES-DE, whose ConfiguratorActivity was
+                                // hosted correctly and still launched the installed app over J Code.
+                                is StartAction.Consumed -> return when (method.returnType) {
+                                    Int::class.javaPrimitiveType -> START_SUCCESS
+                                    Boolean::class.javaPrimitiveType -> true
+                                    else -> null
+                                }
                             }
                         }
                     }

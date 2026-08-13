@@ -1,5 +1,6 @@
 package dev.jcode.vdevice
 
+import android.content.Intent
 import android.util.Log
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.InvocationTargetException
@@ -76,6 +77,19 @@ internal object GuestActivityManagerHook {
                     if (GuestLoader.forPackage(name) != null) args[index] = hostPackage
                 }
             }
+            // Sending one is the other half, and the half that decides *what runs*. A PendingIntent
+            // aimed at a guest's own activity is sent through here rather than through the activity
+            // task manager, so it never meets the hook that redirects a guest's `startActivity` —
+            // and the system then resolves the component against the phone's own copy of that
+            // package, where one is installed. Measured on ES-DE: its ConfiguratorActivity opened
+            // the *installed* app over the top of J Code, which is both the wrong application and
+            // outside the device entirely.
+            if (args != null && method.name == SEND_INTENT_SENDER) {
+                for (index in args.indices) {
+                    val intent = args[index] as? Intent ?: continue
+                    GuestRuntime.redirectForGuest(intent)?.let { args[index] = it }
+                }
+            }
             return try {
                 method.invoke(real, *(args ?: emptyArray()))
             } catch (e: InvocationTargetException) {
@@ -86,4 +100,7 @@ internal object GuestActivityManagerHook {
 
     /** Covers `getIntentSender` and the `WithFeature` variant later platforms added beside it. */
     private const val INTENT_SENDER = "getIntentSender"
+
+    /** Where a `PendingIntent` is actually fired, and so where its target has to be redirected. */
+    private const val SEND_INTENT_SENDER = "sendIntentSender"
 }

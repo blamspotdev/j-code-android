@@ -593,8 +593,13 @@ internal object GuestRuntime {
      * onto a free stub and let the system launch it full screen.
      */
     private fun rewriteOutgoing(intent: Intent): StartAction {
-        val guest = active ?: return StartAction.Proceed
         val component = intent.component
+        // Resolved against *every* loaded guest rather than only the active one. A guest naming its
+        // own package must never reach the real system, and `active` is a moving target — the
+        // component is the reliable statement of whose activity this is.
+        val guest = component?.let { GuestLoader.forPackage(it.packageName) }
+            ?: active
+            ?: return StartAction.Proceed
         if (component == null) {
             if (intent.`package` == guest.packageName || intent.selector != null) {
                 Log.w(TAG, "implicit intents inside ${guest.packageName} are not supported: $intent")
@@ -602,9 +607,18 @@ internal object GuestRuntime {
             return StartAction.Proceed
         }
         if (component.packageName != guest.packageName) return StartAction.Proceed
+        // Deliberately not Proceed. The phone may have its **own copy** of this package installed —
+        // the guest is a sideloaded build of something the user already has — and letting the intent
+        // out means the system resolves it to that copy and runs the wrong app, outside the device,
+        // with the user's own data. Measured on ES-DE, whose ConfiguratorActivity opened the
+        // installed app over the top of J Code. A stub that fails inside the device is a far better
+        // outcome than the right screen from the wrong application.
         if (!guest.activities.containsKey(component.className)) {
-            Log.w(TAG, "${guest.packageName} has no activity ${component.className}")
-            return StartAction.Proceed
+            Log.w(
+                TAG,
+                "${guest.packageName} has no activity ${component.className}; " +
+                    "keeping it on the device rather than letting the phone answer it",
+            )
         }
         val stub = stubIntent(guest, component.className, Intent(intent))
         val launcher = embeddedLauncher ?: return StartAction.Redirect(stub)
@@ -612,6 +626,20 @@ internal object GuestRuntime {
             .onFailure { Log.e(TAG, "cannot host $intent in the sandbox tab", it) }
             .getOrDefault(false)
         return if (hosted) StartAction.Consumed else StartAction.Redirect(stub)
+    }
+
+    /**
+     * The stub an intent aimed at a loaded guest should be launched as, or null when it is not one.
+     *
+     * Exposed for [GuestActivityManagerHook]: a `PendingIntent` is sent through the activity
+     * *manager*, not the activity task manager, so it never passes the hook that redirects a guest's
+     * own `startActivity` and would otherwise be resolved by the system against the phone's copy of
+     * the package.
+     */
+    fun redirectForGuest(intent: Intent): Intent? {
+        val component = intent.component ?: return null
+        val guest = GuestLoader.forPackage(component.packageName) ?: return null
+        return stubIntent(guest, component.className, Intent(intent))
     }
 
     private fun stubIntent(guest: LoadedGuest, activityClass: String, from: Intent? = null): Intent {
