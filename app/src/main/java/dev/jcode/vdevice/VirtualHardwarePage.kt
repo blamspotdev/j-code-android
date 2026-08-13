@@ -4,6 +4,7 @@ import android.Manifest
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -34,6 +35,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -47,6 +54,7 @@ import dev.jcode.design.ManagerSummaryRow
 import dev.jcode.design.SettingsDropdownRow
 import dev.jcode.design.SettingsTextFieldRow
 import java.util.Locale
+import kotlin.math.cos
 import kotlinx.coroutines.delay
 
 /** How often the readout re-reads the device. Fast enough to look live, slow enough to be free. */
@@ -55,6 +63,10 @@ private const val READOUT_MS = 150L
 /** Two columns of tiles, which is what fits a phone in portrait without shrinking the labels. */
 private const val TILE_COLUMNS = 2
 private val TILE_HEIGHT = 82.dp
+
+/** Tall enough for a trail to have a shape, short enough to leave its controls on the screen. */
+private val MAP_HEIGHT = 200.dp
+private val MAP_PADDING = 16.dp
 
 /** An attitude worth reaching in one tap, as pitch and roll in degrees. */
 private class Pose(val label: String, val pitch: Float, val roll: Float)
@@ -309,39 +321,57 @@ private fun Mode(hardware: VirtualHardware) {
 @Composable
 private fun LocationTools(settings: HardwareSettings, now: HardwareSample) {
     val context = LocalContext.current
-    val running = settings.locationMode == LocationMode.Route && settings.routeStartedAt > 0L
+    val moving = settings.locationMode != LocationMode.Fixed && settings.routeStartedAt > 0L
+    // What the device would do if started now: the stored mode while it is parked, and the one it is
+    // actually on while it moves.
+    var method by remember(settings.locationMode) {
+        mutableStateOf(settings.locationMode.takeIf { it != LocationMode.Fixed } ?: LocationMode.Route)
+    }
 
     ManagerSectionCard(
-        title = "Where it is",
-        description = "Point to point walks between two fixes at the speed you set, reporting the " +
-            "bearing and speed a real receiver would — which is what a navigation app reads rather " +
-            "than differencing positions itself.",
+        title = "How it moves",
+        description = "Whatever it is doing, the device reports the bearing and speed a real " +
+            "receiver would — which is what a navigation app reads rather than differencing " +
+            "positions itself — and the compass turns to face the way it is going.",
+    ) {
+        SettingsDropdownRow(
+            label = "Method",
+            options = listOf(LocationMode.Route, LocationMode.Trail).map { it.name },
+            selected = method.name,
+            optionLabel = { LocationMode.valueOf(it).label },
+            onSelect = { method = LocationMode.valueOf(it) },
+        )
+    }
+
+    if (method == LocationMode.Trail) {
+        TrailTools(settings = settings, now = now, moving = moving)
+        return
+    }
+
+    ManagerSectionCard(
+        title = "Point to point",
+        description = "A straight line between two fixes, at the speed you set.",
     ) {
         Coordinate(
             label = "Latitude",
             value = settings.latitude,
-            enabled = !running,
+            enabled = !moving,
             limit = 90.0,
         ) { VirtualDevicePolicy.setFix(context, it, settings.longitude) }
         Coordinate(
             label = "Longitude",
             value = settings.longitude,
-            enabled = !running,
+            enabled = !moving,
             limit = 180.0,
         ) { VirtualDevicePolicy.setFix(context, settings.latitude, it) }
 
-        Text(
-            text = "Point to point",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Coordinate("To latitude", settings.toLatitude, !running, limit = 90.0) {
+        Coordinate("To latitude", settings.toLatitude, !moving, limit = 90.0) {
             VirtualDevicePolicy.setRoute(context, it, settings.toLongitude, settings.speedMps, settings.repeat)
         }
-        Coordinate("To longitude", settings.toLongitude, !running, limit = 180.0) {
+        Coordinate("To longitude", settings.toLongitude, !moving, limit = 180.0) {
             VirtualDevicePolicy.setRoute(context, settings.toLatitude, it, settings.speedMps, settings.repeat)
         }
-        Speed(settings = settings, enabled = !running)
+        Speed(settings = settings, enabled = !moving)
         SettingsDropdownRow(
             label = "At the far end",
             supporting = "What the device does when it arrives.",
@@ -370,32 +400,194 @@ private fun LocationTools(settings: HardwareSettings, now: HardwareSample) {
         ManagerSummaryRow(label = "Route", value = journey(metres, settings.speedMps))
         ManagerSummaryRow(
             label = "Device is at",
-            value = if (running) {
+            value = if (moving) {
                 "%s · %s".format(coordinates(now.latitude, now.longitude), heading(now))
             } else {
                 coordinates(now.latitude, now.longitude)
             },
         )
-        if (running) {
-            CompactOutlinedButton(
-                text = "Stop here",
-                onClick = {
-                    // Left where it got to rather than snapped back to the start: stopping a moving
-                    // device should put it where it was, which is also the point a person is usually
-                    // stopping in order to look at.
-                    VirtualDevicePolicy.setFix(context, now.latitude, now.longitude)
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        } else {
-            CompactFilledButton(
-                text = "Start moving",
-                enabled = metres > 0.5,
-                onClick = {
-                    VirtualDevicePolicy.setRouteRunning(context, true, SystemClock.elapsedRealtime())
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
+        Go(moving = moving, enabled = metres > 0.5, now = now, mode = LocationMode.Route)
+    }
+}
+
+/**
+ * Start and stop, for either method.
+ *
+ * Stopping leaves the device where it got to rather than snapping it back to the start: that is
+ * where it was, and it is usually the point somebody is stopping in order to look at.
+ */
+@Composable
+private fun Go(moving: Boolean, enabled: Boolean, now: HardwareSample, mode: LocationMode) {
+    val context = LocalContext.current
+    if (moving) {
+        CompactOutlinedButton(
+            text = "Stop here",
+            onClick = { VirtualDevicePolicy.setFix(context, now.latitude, now.longitude) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    } else {
+        CompactFilledButton(
+            text = "Start moving",
+            enabled = enabled,
+            onClick = { VirtualDevicePolicy.setMoving(context, mode, SystemClock.elapsedRealtime()) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/**
+ * The trail method: pick one of the device's paths, watch it walked on the map.
+ *
+ * The map is drawn from the trail's own points rather than fetched — there are no tiles here, no
+ * network, and nothing to attribute. That is partly what makes it work offline, and partly the
+ * point: these paths are sketches of real places, deliberately displaced, and a real map under them
+ * would invite the comparison the displacement exists to prevent. See [LocationTrail].
+ */
+@Composable
+private fun TrailTools(settings: HardwareSettings, now: HardwareSample, moving: Boolean) {
+    val context = LocalContext.current
+    val trail = remember(settings.trailId) {
+        LocationTrail.byId(settings.trailId) ?: TRAILS.first()
+    }
+
+    ManagerSectionCard(
+        title = trail.name,
+        description = trail.summary,
+    ) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            TRAILS.forEach { option ->
+                ManagerFilterChip(selected = option.id == trail.id, label = option.place) {
+                    VirtualDevicePolicy.setTrail(context, option.id)
+                    // Picking a different trail while one is being walked starts the new one from
+                    // its beginning rather than dropping the device somewhere along it — the two
+                    // are nowhere near each other, and a tap that did nothing would be worse.
+                    if (moving) {
+                        VirtualDevicePolicy.setMoving(
+                            context,
+                            LocationMode.Trail,
+                            SystemClock.elapsedRealtime(),
+                        )
+                    }
+                }
+            }
+        }
+        TrailMap(
+            trail = trail,
+            now = now,
+            showDevice = moving,
+            modifier = Modifier.fillMaxWidth().height(MAP_HEIGHT),
+        )
+        Text(
+            text = "North is up. The arrow is the device, pointing the way it is going — which is " +
+                "what the compass is reporting while it moves.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Speed(settings = settings, enabled = !moving)
+        SettingsDropdownRow(
+            label = "At the far end",
+            supporting = "What the device does when it gets there.",
+            options = RouteRepeat.entries.map { it.name },
+            selected = settings.repeat.name,
+            optionLabel = { RouteRepeat.valueOf(it).label },
+            onSelect = {
+                VirtualDevicePolicy.setRoute(
+                    context,
+                    settings.toLatitude,
+                    settings.toLongitude,
+                    settings.speedMps,
+                    RouteRepeat.valueOf(it),
+                )
+            },
+        )
+        ManagerSummaryRow(label = "Trail", value = journey(trail.length, settings.speedMps))
+        ManagerSummaryRow(
+            label = "Device is at",
+            value = if (moving) {
+                "%s · %s".format(coordinates(now.latitude, now.longitude), heading(now))
+            } else {
+                "not on the trail"
+            },
+        )
+        Go(moving = moving, enabled = true, now = now, mode = LocationMode.Trail)
+    }
+    ManagerNoticeCard(
+        title = "These are not survey data",
+        message = "Every trail is hand-drawn, simplified and moved a few hundred metres from the " +
+            "real place, and the compass is skewed a few degrees off the true bearing. A faithful " +
+            "replay of a real street at a realistic speed is worth nothing to somebody testing a " +
+            "maps app and a great deal to somebody faking a journey — so there is no faithful trace " +
+            "here to replay. Nor does any of it leave the device: a simulated fix is answered to " +
+            "guests inside J Code and never to the phone.",
+    )
+}
+
+/**
+ * The trail, and where the device is on it.
+ *
+ * Longitude is scaled by the cosine of the middle latitude before anything is fitted, or the
+ * hairpins at 62° north would come out twice as wide as they are on the ground — which would make
+ * the map disagree with the bearings the device is reporting from the same points.
+ */
+@Composable
+private fun TrailMap(
+    trail: LocationTrail,
+    now: HardwareSample,
+    showDevice: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val line = MaterialTheme.colorScheme.primary
+    val ends = MaterialTheme.colorScheme.onSurfaceVariant
+    val device = MaterialTheme.colorScheme.error
+    val background = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.22f)
+
+    Canvas(modifier = modifier.clip(RoundedCornerShape(10.dp)).background(background)) {
+        val points = trail.points
+        if (points.size < 2) return@Canvas
+        val midLatitude = cos(Math.toRadians(points.sumOf { it.latitude } / points.size))
+        val xs = points.map { it.longitude * midLatitude }
+        val ys = points.map { it.latitude }
+        val spanX = (xs.max() - xs.min()).takeIf { it > 0 } ?: 1.0
+        val spanY = (ys.max() - ys.min()).takeIf { it > 0 } ?: 1.0
+        val pad = MAP_PADDING.toPx()
+        val scale = minOf((size.width - pad * 2) / spanX, (size.height - pad * 2) / spanY)
+        val originX = (size.width - spanX * scale) / 2
+        val originY = (size.height - spanY * scale) / 2
+
+        fun project(latitude: Double, longitude: Double) = Offset(
+            x = (originX + (longitude * midLatitude - xs.min()) * scale).toFloat(),
+            // Latitude grows northwards and the screen grows downwards.
+            y = (originY + (ys.max() - latitude) * scale).toFloat(),
+        )
+
+        val path = Path()
+        points.forEachIndexed { index, point ->
+            val at = project(point.latitude, point.longitude)
+            if (index == 0) path.moveTo(at.x, at.y) else path.lineTo(at.x, at.y)
+        }
+        drawPath(
+            path = path,
+            color = line,
+            style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+        )
+        drawCircle(ends, radius = 4.dp.toPx(), center = project(points.first().latitude, points.first().longitude))
+        drawCircle(ends, radius = 4.dp.toPx(), center = project(points.last().latitude, points.last().longitude), style = Stroke(2.dp.toPx()))
+
+        if (!showDevice) return@Canvas
+        val at = project(now.latitude, now.longitude)
+        // Rotated to the heading the device is reporting, so the arrow and the compass are the same
+        // number seen two ways.
+        rotate(degrees = now.bearing, pivot = at) {
+            val nose = 13.dp.toPx()
+            val tail = 8.dp.toPx()
+            val arrow = Path().apply {
+                moveTo(at.x, at.y - nose)
+                lineTo(at.x + tail, at.y + tail)
+                lineTo(at.x, at.y + tail / 2)
+                lineTo(at.x - tail, at.y + tail)
+                close()
+            }
+            drawPath(arrow, color = device)
         }
     }
 }

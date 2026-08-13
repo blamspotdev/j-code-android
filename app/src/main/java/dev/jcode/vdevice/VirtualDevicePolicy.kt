@@ -253,6 +253,7 @@ internal object VirtualDevicePolicy {
     private const val SPEED = "location.speed"
     private const val REPEAT = "location.repeat"
     private const val ROUTE_STARTED = "location.startedAt"
+    private const val TRAIL = "location.trail"
 
     private const val PITCH = "motion.pitch"
     private const val ROLL = "motion.roll"
@@ -389,6 +390,7 @@ internal object VirtualDevicePolicy {
                 ?.let { runCatching { RouteRepeat.valueOf(it) }.getOrNull() }
                 ?: RouteRepeat.Once,
             routeStartedAt = stamp(ROUTE_STARTED),
+            trailId = stored.getProperty(TRAIL) ?: TRAILS.first().id,
             pitch = decimal(PITCH, 0f),
             roll = decimal(ROLL, 0f),
             azimuth = decimal(AZIMUTH, 0f),
@@ -425,14 +427,21 @@ internal object VirtualDevicePolicy {
         }
     }
 
+    /** Which of [TRAILS] the device walks when it is following one. */
+    fun setTrail(context: Context, trailId: String) {
+        edit(context) { it.setProperty(TRAIL, trailId) }
+    }
+
     /**
-     * Starts or stops the route. Starting stamps the clock it is measured from — the position is a
-     * function of how long ago this happened, so this *is* the moving.
+     * Starts or stops the device moving, on [mode] — a straight line between two points, or one of
+     * the trails. Starting stamps the clock it is measured from: the position is a function of how
+     * long ago this happened, so this *is* the moving.
      */
-    fun setRouteRunning(context: Context, running: Boolean, nowElapsed: Long) {
+    fun setMoving(context: Context, mode: LocationMode, nowElapsed: Long) {
         edit(context) {
-            it.setProperty(LOCATION_MODE, if (running) LocationMode.Route.name else LocationMode.Fixed.name)
-            it.setProperty(ROUTE_STARTED, (if (running) nowElapsed else 0L).toString())
+            it.setProperty(LOCATION_MODE, mode.name)
+            val moving = mode != LocationMode.Fixed
+            it.setProperty(ROUTE_STARTED, (if (moving) nowElapsed else 0L).toString())
         }
     }
 

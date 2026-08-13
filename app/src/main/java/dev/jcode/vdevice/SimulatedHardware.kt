@@ -31,7 +31,11 @@ private const val IMPULSE_MS = 700L
 private const val IMPULSE_SWINGS = 5
 
 /** What the device's simulated GPS is doing. */
-internal enum class LocationMode { Fixed, Route }
+internal enum class LocationMode(val label: String) {
+    Fixed("Fixed point"),
+    Route("Point to point"),
+    Trail("Follow a trail"),
+}
 
 /** What a route does when it reaches the far end. */
 internal enum class RouteRepeat(val label: String) {
@@ -73,6 +77,8 @@ internal class HardwareSettings(
     val speedMps: Float,
     val repeat: RouteRepeat,
     val routeStartedAt: Long,
+    /** Which of [TRAILS] is being followed, when the mode is [LocationMode.Trail]. */
+    val trailId: String,
     val pitch: Float,
     val roll: Float,
     val azimuth: Float,
@@ -141,7 +147,10 @@ internal object SimulatedHardware {
      */
     fun sample(settings: HardwareSettings, nowElapsed: Long): HardwareSample {
         val place = place(settings, nowElapsed)
-        val motion = motion(settings, nowElapsed)
+        // A device that is going somewhere is facing that way. While it moves, the direction of
+        // travel *is* the heading — which is what a phone on a dashboard reads, and what makes the
+        // compass turn through a corner without anybody reaching for the heading slider.
+        val motion = motion(settings, nowElapsed, facing = place.bearing.takeIf { place.speed > 0f })
         val world = rotation(motion.azimuth, motion.pitch, motion.roll)
         val gravity = world.apply(0f, 0f, GRAVITY)
         val accelerometer = floatArrayOf(
@@ -186,6 +195,7 @@ internal object SimulatedHardware {
         if (settings.locationMode == LocationMode.Fixed || settings.routeStartedAt <= 0L) {
             return Place(settings.latitude, settings.longitude, 0f, 0f)
         }
+        if (settings.locationMode == LocationMode.Trail) return trail(settings, nowElapsed)
         val metres = distance(settings.latitude, settings.longitude, settings.toLatitude, settings.toLongitude)
         val speed = max(0.1f, settings.speedMps)
         val seconds = metres / speed
@@ -208,6 +218,42 @@ internal object SimulatedHardware {
             latitude = settings.latitude + (settings.toLatitude - settings.latitude) * progress,
             longitude = settings.longitude + (settings.toLongitude - settings.longitude) * progress,
             bearing = bearing,
+            speed = if (arrived) 0f else speed,
+        )
+    }
+
+    /**
+     * Where a trail has got to.
+     *
+     * Distance rather than fraction, because a trail's legs are not equal: walking it at a steady
+     * speed means covering metres at a steady rate, not spending the same time on a 60 m corner as
+     * on a 300 m straight. The bearing comes from the leg the device is on and carries the trail's
+     * own skew — see [LocationTrail] for why the trails are not survey data.
+     */
+    private fun trail(settings: HardwareSettings, nowElapsed: Long): Place {
+        val trail = LocationTrail.byId(settings.trailId)
+            ?: return Place(settings.latitude, settings.longitude, 0f, 0f)
+        if (trail.length <= 0.0) return Place(settings.latitude, settings.longitude, 0f, 0f)
+
+        val speed = max(0.1f, settings.speedMps)
+        val travelled = (nowElapsed - settings.routeStartedAt).coerceAtLeast(0L) / 1000.0 * speed
+        val laps = travelled / trail.length
+        val (metres, forwards) = when (settings.repeat) {
+            RouteRepeat.Once -> travelled.coerceIn(0.0, trail.length) to true
+            RouteRepeat.Loop -> (travelled % trail.length) to true
+            RouteRepeat.PingPong -> {
+                val cycle = laps % 2.0
+                if (cycle <= 1.0) cycle * trail.length to true
+                else (2.0 - cycle) * trail.length to false
+            }
+        }
+        val arrived = settings.repeat == RouteRepeat.Once && laps >= 1.0
+        val fix = trail.at(metres)
+        return Place(
+            latitude = fix.latitude,
+            longitude = fix.longitude,
+            // Walking a trail backwards means facing the other way along it.
+            bearing = normalise(fix.bearing + trail.headingSkew + if (forwards) 0f else 180f),
             speed = if (arrived) 0f else speed,
         )
     }
@@ -253,8 +299,9 @@ internal object SimulatedHardware {
      * loop started a moment ago would be — except [MotionLoop.Spin], where accumulating *is* the
      * behaviour.
      */
-    private fun motion(settings: HardwareSettings, nowElapsed: Long): Motion {
-        val resting = Motion(settings.azimuth, settings.pitch, settings.roll, 0f, 0f, 0f, 0f)
+    private fun motion(settings: HardwareSettings, nowElapsed: Long, facing: Float? = null): Motion {
+        val heading = facing ?: settings.azimuth
+        val resting = Motion(heading, settings.pitch, settings.roll, 0f, 0f, 0f, 0f)
         val impulse = impulse(settings, nowElapsed)
         val period = settings.periodMs.coerceAtLeast(50L)
         val elapsed = (nowElapsed - settings.loopStartedAt).coerceAtLeast(0L)
@@ -279,7 +326,7 @@ internal object SimulatedHardware {
             // Turning clockwise — east, then south — is a *negative* rotation about the device's own
             // Z axis, which points out of its screen.
             MotionLoop.Spin -> resting.copy(
-                azimuth = settings.azimuth + 360f * (elapsed.toFloat() / period),
+                azimuth = heading + 360f * (elapsed.toFloat() / period),
                 rateZ = -rate,
             ).plusShake(impulse)
         }

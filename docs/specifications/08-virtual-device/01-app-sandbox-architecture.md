@@ -447,6 +447,7 @@ anywhere else they looked like properties of an app.
 |---|---|
 | Fixed location | Two coordinates the device is parked on |
 | **Point to point** | Walks between two coordinates at a set speed, reporting the bearing and speed a real receiver would — `Location.speed` and `.bearing`, which is what a navigation app reads rather than differencing positions itself. Stops at the far end, starts over, or turns around |
+| **Follow a trail** | Walks one of three built-in paths, drawn on a map with an arrow for the device that rotates to the heading it is reporting. Distance-based rather than fraction-based, so a steady speed means steady metres and not equal time on a 60 m corner and a 300 m straight |
 | Attitude | Pitch, roll and heading, with five one-tap poses named after the accelerometer readings they produce |
 | **Loops** | Shake and bounce (linear acceleration on one axis), tilt (the pitch rocking), spin (the heading turning, which is the one that accumulates) — each with an amplitude and a period |
 | Shake once | One swing that dies away, so the device ends where it started |
@@ -454,6 +455,34 @@ anywhere else they looked like properties of an app.
 
 Everything is a property of the **device**, not of one app, because a phone has one GPS and one set
 of sensors however many apps read them.
+
+**While the device is moving, the compass faces the way it is going.** The direction of travel is the
+heading, which is what a phone on a dashboard reads, and it is what makes the simulated compass turn
+through a corner without anybody touching the heading slider. The stored attitude is not changed —
+it is what the device goes back to when it stops.
+
+#### The trails, and why they are wrong on purpose
+
+Three, chosen for the three shapes of heading change a location app has to survive, and sitting in
+three latitude bands and three time zones:
+
+| Trail | Shape | What it is for |
+|---|---|---|
+| **Sunset Boulevard, Dipolog City** | 3.5 km of curving seafront | A heading that drifts a few degrees at a time and never settles — the hardest case for a compass that smooths |
+| **Eixample, Barcelona** | Eight 230 m runs across a grid set 45° off north | A heading that *jumps* 90° and then holds still |
+| **Trollstigen, Norway** | Eight switchbacks | ~180° reversals, at 62° north where a degree of longitude is half its equatorial width — which is where flat-earth distance maths shows itself |
+
+Every one is **hand-drawn, simplified and displaced a few hundred metres**, and each carries a
+`headingSkew` that puts the reported compass a few degrees off the true bearing of travel. That is
+deliberate and it is the point of the design: a tool that replays a faithful trace of a real street,
+at a realistic speed, with a matching compass, is a tool for making a fake journey look real. So the
+repository contains no faithful trace to replay — the offsets are written down in `LocationTrails.kt`
+rather than hidden, because the protection is that there is nothing accurate underneath them, not
+that the numbers are secret.
+
+The map is drawn from the trail's own points. No tiles, no network, nothing to attribute — which is
+what makes it work offline, and which also keeps a real map from being laid under a deliberately
+displaced path.
 
 **Nothing is streamed.** The tab writes a *description* — "walk from here to there at 14 m/s,
 starting at this clock reading" — and both the guest's `SensorManager` and the tab's own readout

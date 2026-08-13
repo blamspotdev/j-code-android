@@ -170,6 +170,15 @@ present for the framework's requirements.
   own tooling makes.
 - `VirtualIdentity` reports a synthetic device identity to a guest APK (`JCode vDevice`,
   `JCODEVD00000000`) while leaving hardware-derived values truthful.
+- **The built-in location trails are deliberately not survey data.** Each of the three is hand-drawn,
+  simplified, displaced a few hundred metres from the real place, and reported through a compass
+  skewed a few degrees off the true bearing — see
+  [App sandbox architecture §7f](../08-virtual-device/01-app-sandbox-architecture.md#7f-the-hardware-bench--virtualhardwarepage).
+  A faithful replay of a real street at a realistic speed with a matching compass is worth nothing to
+  somebody testing a maps app and a great deal to somebody fabricating a journey, so the repository
+  holds no faithful trace to replay. The offsets are documented rather than hidden: the protection is
+  the absence of accurate data, not the secrecy of a constant. The outer guarantee is the device's —
+  a simulated fix is answered only to guests inside the virtual device, never to the phone.
 - **A guest is not given the phone's camera, microphone or location by default, and the first two of
   those are the only ones it can ever be given** — the microphone on an explicit per-app choice that
   prompts the user, the camera never. Location is simulated or nothing. The motion sensors default
