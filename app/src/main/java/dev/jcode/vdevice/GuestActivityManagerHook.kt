@@ -89,16 +89,46 @@ internal object GuestActivityManagerHook {
             if (args != null && method.name == SEND_INTENT_SENDER) {
                 for (index in args.indices) {
                     val intent = args[index] as? Intent ?: continue
+                    if (deliverToGuestReceiver(intent)) return zero(method.returnType)
                     GuestRuntime.redirectForGuest(intent)?.let { args[index] = it }
                 }
             }
             if (method.name == SERVICE_FOREGROUND && args != null && takeForeground(args)) return null
-            return try {
+            val result = try {
                 method.invoke(real, *(args ?: emptyArray()))
             } catch (e: InvocationTargetException) {
                 throw e.targetException
             }
+            return result
         }
+    }
+
+
+    /**
+     * Delivers a `PendingIntent` aimed at one of the guest's own receivers, in-process.
+     *
+     * A guest builds a notification's buttons with `PendingIntent.getBroadcast`, and the token comes
+     * back owned by J Code — but the *component* inside it still names a package the real system has
+     * never heard of, so firing it resolves nothing and fails silently.
+     *
+     * This is the half that can be caught: a broadcast that comes through the activity manager. The
+     * other half cannot — see the note on [VirtualStatusBar.actionRow].
+     */
+    private fun deliverToGuestReceiver(intent: Intent): Boolean {
+        val component = intent.component ?: return false
+        val guest = GuestLoader.forPackage(component.packageName) ?: return false
+        if (!guest.receivers.containsKey(component.className)) return false
+        return runCatching { guest.components.sendBroadcast(guest.appContext, intent) > 0 }
+            .onFailure { Log.w(TAG, "cannot deliver $component from a notification action", it) }
+            .getOrDefault(false)
+    }
+
+    /** What a consumed call hands back; `sendIntentSender` returns an int the caller reads. */
+    private fun zero(type: Class<*>): Any? = when (type) {
+        Int::class.javaPrimitiveType -> 0
+        Boolean::class.javaPrimitiveType -> true
+        Long::class.javaPrimitiveType -> 0L
+        else -> null
     }
 
     /**
@@ -126,6 +156,7 @@ internal object GuestActivityManagerHook {
                 component.className,
                 id,
                 notification,
+                foregroundService = true,
             )
         }
         return true
@@ -137,6 +168,6 @@ internal object GuestActivityManagerHook {
     /** What `Service.startForeground`/`stopForeground` reach, and where a media player lives or dies. */
     private const val SERVICE_FOREGROUND = "setServiceForeground"
 
-    /** Where a `PendingIntent` is actually fired, and so where its target has to be redirected. */
+    /** The activity manager's own send path. Kept because some callers do come through it. */
     private const val SEND_INTENT_SENDER = "sendIntentSender"
 }

@@ -270,6 +270,51 @@ screen belongs to the guest, because pagers live there.
 > `Notify Fixture`, `2 notifications`, both notification rows with their text, and `Clear all` — so
 > an agent can read the device's notifications and tap them, not just a person.
 
+#### What a notification carries
+
+| | |
+|---|---|
+| **Icon** | The notification's own `smallIcon`, loaded against the **guest's** context — its resource id is from the guest's table and a package the real `PackageManager` has never heard of, so J Code's context would resolve nothing, or worse, whatever J Code has at that id. Falls back to the app icon. One per app in the bar, deduped; one per row in the shade |
+| **Actions** | `Notification.actions`, drawn as buttons that fire the `PendingIntent` |
+| **Ongoing** | `FLAG_ONGOING_EVENT` or `FLAG_NO_CLEAR`, **and** anything handed to `startForeground` — the platform treats a foreground service's notification as ongoing whether or not the app also said so, and most do not because on a phone they never had to. Measured on NewPipe, whose player notification arrives with no flags at all |
+
+**Clear all leaves the ongoing ones**, as a phone does. Not decoration: a media player's notification
+*is* its transport controls and a download's is its progress, so sweeping them would take a running
+app's only handle away while the app kept running. Only the app takes those down.
+
+> Verified: three notes posted, one ongoing; Clear all leaves `Ongoing note 3` and the count goes
+> from `3 notifications` to `1 notification`.
+
+**A guest's buttons do not reach the guest's own components, and cannot from here.** The token is
+real — minted under J Code's package by `GuestActivityManagerHook` — but the *component* inside it
+names a package the real system has never heard of, so it resolves to nothing and reports no error.
+Neither end can be caught: `PendingIntent.send` marshals the token to the real activity manager
+rather than calling anything this process can stand in front of (traced across a tap, a wrapped
+`IIntentSender` sees `asBinder` and never `send`), and the intent inside cannot be recovered either
+because `PendingIntent.mTarget` is **blocked** at `targetSdk` 33 —
+`NoSuchFieldException: No field mTarget`. Buttons aimed anywhere the real system can reach work
+normally; what is lost is an app's buttons on its own screens, where its own UI still has them.
+
+#### The bar follows the app under it
+
+A bar that is the same colour and the same presence over every app is not a device's status bar, it
+is a strip J Code drew. `GuestWindow.statusBarStyleOf` reads the foreground activity's window, the
+same places the platform reads it, and `EmbeddedGuest.followForegroundApp` reshapes the bar around
+the answer — on every layout pass, because an app changes its mind at runtime (full screen for a
+video, back afterwards) and nothing else tells the container.
+
+| The app sets | The bar |
+|---|---|
+| `FLAG_FULLSCREEN`, or `SYSTEM_UI_FLAG_FULLSCREEN` | is gone, and the guest's window grows into the space |
+| `FLAG_TRANSLUCENT_STATUS`, `FLAG_LAYOUT_NO_LIMITS`, or a transparent `statusBarColor` | floats over the app rather than pushing it down |
+| an opaque `statusBarColor` | is painted that colour, with the app below it |
+| `SYSTEM_UI_FLAG_LIGHT_STATUS_BAR` / `APPEARANCE_LIGHT_STATUS_BARS` | switches to dark markings, so a pale bar stays readable |
+
+The guest's `Configuration` is re-sized whenever that changes, not just its margin: a window that
+gains or loses the bar's height has to measure again for it.
+
+> Verified: NewPipe's bar is painted `0xFF992722`, its own dark red, continuous with its toolbar.
+
 ### 7c. The device's built-in apps
 
 `filesDir/vdevice/` is emptied on every start, so anything that should always be on the device has to

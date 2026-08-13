@@ -3,12 +3,15 @@ package dev.jcode.vdevice
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.math.abs
@@ -54,6 +57,12 @@ internal class VirtualStatusBar(
         ellipsize = android.text.TextUtils.TruncateAt.END
     }
 
+    /** One small icon per app that has posted something — the row a phone's status bar carries. */
+    private val icons = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+    }
+
     private val summary = TextView(context).apply {
         setTextColor(FOREGROUND)
         textSize = 11f
@@ -66,8 +75,13 @@ internal class VirtualStatusBar(
         setBackgroundColor(BAR_BACKGROUND)
         setPadding(dp(10f), 0, dp(10f), 0)
         addView(status, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        addView(icons, LinearLayout.LayoutParams(WRAP, WRAP))
         addView(summary, LinearLayout.LayoutParams(WRAP, WRAP))
     }
+
+    /** What the foreground app has asked the bar to look like — see [GuestWindow.statusBarStyleOf]. */
+    private var ink = FOREGROUND
+    private var inkMuted = MUTED
 
     private val shadeList = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -124,10 +138,41 @@ internal class VirtualStatusBar(
         super.onDetachedFromWindow()
     }
 
-    /** Redraws the bar's summary and rebuilds the shade's rows from what is posted now. */
+    /**
+     * Dresses the bar the way the foreground app asked for — see [GuestWindow.statusBarStyleOf].
+     *
+     * A phone's status bar takes the colour of the app under it and switches its icons to dark when
+     * that colour is light, so the same bar has to do both or it is a bar from a different device
+     * sitting on top of this one.
+     */
+    fun apply(style: GuestWindow.StatusBarStyle) {
+        bar.setBackgroundColor(style.background)
+        ink = if (style.lightBackground) ON_LIGHT else FOREGROUND
+        inkMuted = if (style.lightBackground) ON_LIGHT_MUTED else MUTED
+        status.setTextColor(ink)
+        summary.setTextColor(ink)
+        refresh()
+    }
+
+    /** Redraws the bar's icons and summary and rebuilds the shade's rows from what is posted now. */
     fun refresh() {
         val posted = VirtualNotifications.list()
         status.text = appLabel
+        // One icon per app rather than one per notification: the device runs a handful of packages,
+        // not a phone's hundred, so what is worth saying at a glance is *who* is asking rather than
+        // how many times. The count says the rest.
+        val byApp = posted.distinctBy { it.packageName }
+        icons.removeAllViews()
+        byApp.take(MAX_ICONS).forEach { entry ->
+            iconFor(entry)?.let { drawable ->
+                icons.addView(
+                    ImageView(context).apply { setImageDrawable(drawable) },
+                    LinearLayout.LayoutParams(dp(ICON_DP), dp(ICON_DP)).apply {
+                        marginEnd = dp(4f)
+                    },
+                )
+            }
+        }
         summary.text = when {
             posted.isEmpty() -> ""
             posted.size == 1 -> "1 notification"
@@ -136,35 +181,120 @@ internal class VirtualStatusBar(
 
         shadeList.removeAllViews()
         if (posted.isEmpty()) {
-            shadeList.addView(row("No notifications", "", muted = true))
+            shadeList.addView(row(null, "No notifications", "", emptyList(), dim = true))
         } else {
-            posted.forEach { shadeList.addView(row(it.title, it.text, muted = false)) }
+            posted.forEach {
+                shadeList.addView(row(iconFor(it), it.title, it.text, it.actions, dim = false))
+            }
         }
-        clearAll.visibility = if (posted.isEmpty()) GONE else VISIBLE
+        clearAll.visibility = if (VirtualNotifications.anyClearable()) VISIBLE else GONE
     }
 
-    private fun row(title: String, text: String, muted: Boolean): View =
-        LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14f), dp(10f), dp(14f), dp(10f))
+    /**
+     * The notification's own small icon, loaded against the **guest's** resources.
+     *
+     * An `Icon` posted by a guest carries a resource id from the guest's table and a package name the
+     * real `PackageManager` has never heard of, so loading it with J Code's context resolves either
+     * nothing or — worse — whatever J Code happens to have at that id. The guest's own context is the
+     * only one that can read it, and the app icon is the honest fallback when there is no small icon
+     * or it will not load.
+     */
+    private fun iconFor(entry: VirtualNotifications.Posted): Drawable? {
+        val guest = GuestLoader.forPackage(entry.packageName) ?: return null
+        val guestContext = runCatching { guest.appContext }.getOrNull() ?: return null
+        entry.icon?.let { icon ->
+            runCatching { icon.loadDrawable(guestContext) }.getOrNull()?.let { return it }
+        }
+        return runCatching { guest.resources.getDrawable(guest.applicationInfo.icon, null) }
+            .getOrNull()
+    }
+
+    private fun row(
+        icon: Drawable?,
+        title: String,
+        text: String,
+        actions: List<VirtualNotifications.Act>,
+        dim: Boolean,
+    ): View = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        setPadding(dp(14f), dp(10f), dp(14f), dp(10f))
+        if (icon != null) {
             addView(
-                TextView(context).apply {
-                    this.text = title
-                    setTextColor(if (muted) MUTED else FOREGROUND)
-                    textSize = 13f
-                    isSingleLine = true
-                    ellipsize = android.text.TextUtils.TruncateAt.END
+                ImageView(context).apply { setImageDrawable(icon) },
+                LinearLayout.LayoutParams(dp(ICON_DP), dp(ICON_DP)).apply {
+                    marginEnd = dp(10f)
+                    topMargin = dp(2f)
                 },
             )
-            if (text.isNotBlank()) {
+        }
+        addView(
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
                 addView(
                     TextView(context).apply {
-                        this.text = text
-                        setTextColor(MUTED)
-                        textSize = 12f
-                        maxLines = 2
+                        this.text = title
+                        setTextColor(if (dim) inkMuted else ink)
+                        textSize = 13f
+                        isSingleLine = true
                         ellipsize = android.text.TextUtils.TruncateAt.END
                     },
+                )
+                if (text.isNotBlank()) {
+                    addView(
+                        TextView(context).apply {
+                            this.text = text
+                            setTextColor(inkMuted)
+                            textSize = 12f
+                            maxLines = 2
+                            ellipsize = android.text.TextUtils.TruncateAt.END
+                        },
+                    )
+                }
+                actions.filter { it.intent != null }.takeIf { it.isNotEmpty() }?.let { usable ->
+                    addView(actionRow(usable), LinearLayout.LayoutParams(MATCH, WRAP))
+                }
+            },
+            LinearLayout.LayoutParams(0, WRAP, 1f),
+        )
+    }
+
+    /**
+     * A notification's buttons, which are the whole point of one for a media player or a download.
+     *
+     * Firing is all a shade may do with a `PendingIntent`, and the token itself is real: it was
+     * minted under J Code's package by [GuestActivityManagerHook], so the system honours it.
+     *
+     * **Where it stops, measured.** A button whose intent names one of the guest's *own* components
+     * does nothing, and cannot be made to from here. `PendingIntent.send` marshals the token to the
+     * real activity manager rather than calling anything this process can stand in front of — traced
+     * across a tap, a wrapped `IIntentSender` sees `asBinder` and never `send` — and the intent
+     * inside it cannot be recovered either, because `PendingIntent.mTarget` is **blocked** at
+     * `targetSdk` 33 (`NoSuchFieldException: No field mTarget`). So the component goes out to a
+     * system that has never heard of the package, resolves to nothing, and reports no error.
+     *
+     * A button aimed anywhere the real system can reach works normally. What is lost is an app's
+     * buttons on its own screens, which for a media player is its transport controls — the app's own
+     * UI still has them. A cancelled intent is the app having moved on, not an error worth showing.
+     */
+    private fun actionRow(actions: List<VirtualNotifications.Act>): View =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(6f), 0, 0)
+            actions.forEach { action ->
+                addView(
+                    TextView(context).apply {
+                        text = action.title.ifBlank { "Action" }.uppercase()
+                        setTextColor(ACCENT)
+                        textSize = 12f
+                        isSingleLine = true
+                        setPadding(0, dp(4f), dp(18f), dp(4f))
+                        setOnClickListener {
+                            runCatching { action.intent?.send() }
+                                .onFailure { Log.i(TAG, "notification action went nowhere", it) }
+                            collapse()
+                        }
+                    },
+                    LinearLayout.LayoutParams(WRAP, WRAP),
                 )
             }
         }
@@ -248,11 +378,19 @@ internal class VirtualStatusBar(
         const val TEXT_DP = 11f
         const val GRAB_DP = 30f
         const val TOUCH_SLOP_DP = 8f
+        const val ICON_DP = 14f
+
+        /** Past this the row is wider than the label beside it; the count carries the rest. */
+        const val MAX_ICONS = 4
 
         val BAR_BACKGROUND = Color.argb(0xCC, 0x12, 0x14, 0x1A)
         val SHADE_BACKGROUND = Color.argb(0xF2, 0x1B, 0x1E, 0x27)
         val FOREGROUND = Color.argb(0xFF, 0xE6, 0xE8, 0xEF)
         val MUTED = Color.argb(0xFF, 0x9A, 0xA0, 0xB0)
         val ACCENT = Color.argb(0xFF, 0x8A, 0xB4, 0xF8)
+
+        /** For when the app has tinted the bar a light colour and dark markings are what read. */
+        val ON_LIGHT = Color.argb(0xFF, 0x14, 0x16, 0x1C)
+        val ON_LIGHT_MUTED = Color.argb(0xFF, 0x4A, 0x4F, 0x5A)
     }
 }

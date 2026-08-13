@@ -9,6 +9,7 @@ import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.os.IBinder
 import android.os.SystemClock
+import android.util.Log
 import android.view.Display
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
@@ -61,6 +62,10 @@ internal class EmbeddedGuest(
     /** Embedded back stack, bottom first. Only the top activity's decor is visible. */
     private val stack = ArrayList<Activity>()
 
+    /** The tab's size, kept because the bar appearing or going away re-divides it — see [followForegroundApp]. */
+    private var width = 0
+    private var height = 0
+
     /** False once an activity's own `ActivityLifecycleCallbacks` proved out of reach — see
      *  [GuestHooks.dispatchLifecycleCallback]. */
     var fullLifecycle = true
@@ -77,6 +82,8 @@ internal class EmbeddedGuest(
         if (hostToken == null) {
             throw VirtualDeviceException("this window has no input token to host a guest under")
         }
+        this.width = width
+        this.height = height
         val display = context.getSystemService(DisplayManager::class.java)
             ?.getDisplay(Display.DEFAULT_DISPLAY)
             ?: throw VirtualDeviceException("no default display")
@@ -113,6 +120,7 @@ internal class EmbeddedGuest(
             // first — which is what lets the shade be pulled down over a guest that is drawing
             // full-bleed underneath it.
             addStatusBar(container)
+            followForegroundApp()
             watchForSurfaces(container)
 
             return host.surfacePackage
@@ -128,9 +136,11 @@ internal class EmbeddedGuest(
         host?.surfacePackage ?: throw VirtualDeviceException("no guest is running")
 
     fun resize(width: Int, height: Int) {
+        this.width = width
+        this.height = height
         // The guest's own configuration first: relayout is what asks it to measure again, so it has
         // to already know the size it is measuring for.
-        GuestRuntime.sizeEmbeddedWindow(width, height - statusBarHeight())
+        GuestRuntime.sizeEmbeddedWindow(width, height - contentTop())
         windows?.resize(width, height)
         host?.relayout(width, height)
     }
@@ -245,7 +255,7 @@ internal class EmbeddedGuest(
         // installed and could be reopened. Taking a guest off the device is closer to uninstalling
         // it, and leaving its notifications behind means the next app's status bar counts somebody
         // else's — measured as CPU-Z reporting the fixture's two.
-        VirtualNotifications.clear()
+        VirtualNotifications.clearAll()
         GuestRuntime.setEmbeddedLauncher(null)
         GuestRuntime.setEmbeddedFinisher(null)
         GuestRuntime.setEmbeddedBackHandler(null)
@@ -274,7 +284,13 @@ internal class EmbeddedGuest(
      */
     private fun watchForSurfaces(container: FrameLayout) {
         if (surfaceWatcher != null) return
-        val watcher = ViewTreeObserver.OnGlobalLayoutListener { GuestSurfaces.raiseFullBleed(container) }
+        // The same pass also re-reads the foreground app's status bar style, because an app changes
+        // its mind about that at runtime — full-screen for a video, back afterwards — and a layout
+        // is the one moment the container is told something happened.
+        val watcher = ViewTreeObserver.OnGlobalLayoutListener {
+            GuestSurfaces.raiseFullBleed(container)
+            followForegroundApp()
+        }
         surfaceWatcher = watcher
         container.viewTreeObserver.addOnGlobalLayoutListener(watcher)
     }
@@ -307,6 +323,7 @@ internal class EmbeddedGuest(
         addStatusBar(container)
         stack += activity
         if (!GuestRuntime.resumeEmbedded(activity)) fullLifecycle = false
+        followForegroundApp()
         return true
     }
 
@@ -333,6 +350,7 @@ internal class EmbeddedGuest(
         }
         below.window.decorView.visibility = View.VISIBLE
         GuestRuntime.resumeEmbedded(below)
+        followForegroundApp()
     }
 
     /**
@@ -355,7 +373,48 @@ internal class EmbeddedGuest(
      * that reads them, and one that does not would still draw underneath. A window that stops where
      * the bar starts is true for every guest, however it lays itself out.
      */
-    private fun contentParams() = matchParent().apply { topMargin = statusBarHeight() }
+    private fun contentParams() = matchParent().apply { topMargin = contentTop() }
+
+    /** Where the guest's window starts: below the bar, or at the top when the bar is not taking room. */
+    private fun contentTop(): Int = if (style.hidden || style.overlay) 0 else statusBarHeight()
+
+    /**
+     * What the bar currently looks like. Held rather than recomputed on every layout pass so that
+     * [followForegroundApp] can tell a real change from the hundred times a frame it is asked.
+     */
+    private var style = GuestWindow.StatusBarStyle()
+
+    /**
+     * Re-reads the foreground activity's window and reshapes the bar around it.
+     *
+     * Called after anything that changes which activity is in front, and again on every layout pass,
+     * because an app does not only decide this at startup: a video player goes full-screen when a
+     * video starts and comes back when it ends, and the bar has to follow it both ways. Nothing
+     * happens unless the answer actually changed, which is what keeps a layout listener from
+     * requesting layout from inside a layout.
+     */
+    private fun followForegroundApp() {
+        val activity = stack.lastOrNull() ?: return
+        val next = GuestWindow.statusBarStyleOf(activity)
+        if (next == style) return
+        style = next
+        val bar = statusBar ?: return
+        bar.visibility = if (next.hidden) View.GONE else View.VISIBLE
+        bar.apply(next)
+        // The guest's own window grows into the space the bar gives up, and shrinks when it takes it
+        // back. Its configuration has to be told first — relayout is what makes it measure again.
+        GuestRuntime.sizeEmbeddedWindow(width, height - contentTop())
+        stack.forEach { hosted ->
+            val decor = hosted.window.decorView
+            (decor.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+                if (params.topMargin != contentTop()) {
+                    params.topMargin = contentTop()
+                    decor.layoutParams = params
+                }
+            }
+        }
+        Log.i(TAG, "status bar over ${GuestRuntime.activePackage()}: $next")
+    }
 
     private fun matchParent() = FrameLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,

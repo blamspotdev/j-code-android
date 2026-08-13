@@ -1,10 +1,15 @@
 package dev.jcode.vdevice
 
+import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.content.pm.ApplicationInfo
 import android.content.res.Configuration
+import android.graphics.Color
 import android.util.DisplayMetrics
 import android.util.Log
+import android.view.View
+import android.view.WindowInsetsController
+import android.view.WindowManager
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -110,4 +115,84 @@ internal object GuestWindow {
                 .onFailure { Log.w(TAG, "cannot mark ${info.name} resizeable", it) }
         }
     }
+
+    /**
+     * How the device's status bar should look over a given activity.
+     *
+     * @property hidden the app asked for the whole screen; the bar goes away entirely
+     * @property overlay the app draws behind the bar, so the bar floats over it instead of pushing
+     *   it down
+     * @property background what to paint the bar, which may be fully transparent
+     * @property lightBackground the bar is pale enough that dark markings are what read on it
+     */
+    internal data class StatusBarStyle(
+        val hidden: Boolean = false,
+        val overlay: Boolean = false,
+        val background: Int = VirtualStatusBar.BAR_BACKGROUND,
+        val lightBackground: Boolean = false,
+    )
+
+    /**
+     * Reads the style out of the activity's own window, the same places the platform reads it.
+     *
+     * A status bar that is the same colour and the same presence over every app is not a device's
+     * status bar, it is a strip J Code drew. On a phone the bar takes the app's `statusBarColor`,
+     * gets out of the way when the app goes full-screen, and lets the app draw underneath it when
+     * the app says it has handled the insets — and an app says all three through its window, so that
+     * is where this looks:
+     *
+     * | The app sets | The bar |
+     * |---|---|
+     * | `FLAG_FULLSCREEN`, or `SYSTEM_UI_FLAG_FULLSCREEN` | is not there — a game or a video player asked for the screen and means it |
+     * | `FLAG_TRANSLUCENT_STATUS`, `FLAG_LAYOUT_NO_LIMITS`, or a transparent `statusBarColor` | floats over the app, painted with the app's own colour |
+     * | an opaque `statusBarColor` | is painted that colour, with the app pushed below it |
+     * | nothing in particular | keeps the device's own dark bar |
+     *
+     * `SYSTEM_UI_FLAG_LIGHT_STATUS_BAR` and the `APPEARANCE_LIGHT_STATUS_BARS` that replaced it both
+     * mean "I have made this bar pale, put dark things on it" — worth honouring, because an app that
+     * tints the bar white and gets white text has a bar it cannot read.
+     */
+    fun statusBarStyleOf(activity: Activity): StatusBarStyle {
+        val window = runCatching { activity.window }.getOrNull() ?: return StatusBarStyle()
+        val flags = window.attributes?.flags ?: 0
+        val decor = runCatching { window.decorView }.getOrNull()
+
+        @Suppress("DEPRECATION")
+        val systemUi = decor?.systemUiVisibility ?: 0
+
+        @Suppress("DEPRECATION")
+        val fullscreen = flags and WindowManager.LayoutParams.FLAG_FULLSCREEN != 0 ||
+            systemUi and View.SYSTEM_UI_FLAG_FULLSCREEN != 0
+        if (fullscreen) return StatusBarStyle(hidden = true)
+
+        @Suppress("DEPRECATION")
+        val translucent = flags and WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS != 0 ||
+            flags and WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS != 0
+
+        val declared = runCatching { window.statusBarColor }.getOrDefault(0)
+
+        @Suppress("DEPRECATION")
+        val light = systemUi and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR != 0 ||
+            appearanceIsLight(decor)
+
+        // Transparent is a statement, not an absence: an app that sets it has laid its own content
+        // out to be seen through the bar. A colour with *some* alpha is left as the app chose it.
+        val transparent = translucent || Color.alpha(declared) == 0
+        return StatusBarStyle(
+            overlay = transparent,
+            background = when {
+                transparent -> Color.TRANSPARENT
+                declared != 0 -> declared
+                else -> VirtualStatusBar.BAR_BACKGROUND
+            },
+            lightBackground = light,
+        )
+    }
+
+    /** The API 30 replacement for the light-status-bar flag; absent on nothing this app runs on. */
+    private fun appearanceIsLight(decor: View?): Boolean = runCatching {
+        val controller = decor?.windowInsetsController ?: return false
+        controller.systemBarsAppearance and
+            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS != 0
+    }.getOrDefault(false)
 }
