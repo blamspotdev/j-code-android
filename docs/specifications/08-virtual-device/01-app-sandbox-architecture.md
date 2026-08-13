@@ -226,7 +226,19 @@ twice, because the device's screen is drawn two ways, and both must produce the 
 | The home screen | `VirtualLauncher.drawStatusBar`, canvas | The device's name |
 
 One height and one palette (`VirtualStatusBar`'s companion) behind both, so the strip does not change
-shape the moment an app starts. On the home screen it carries the device's name and nothing else:
+shape the moment an app starts.
+
+**The guest's window stops where the bar starts.** Its decor view is added with a top margin of the
+bar's height, and `GuestWindow.applySize` is told that reduced height, so the app both lays out for
+the space it has and cannot draw into the strip. Measured before this: NewPipe's toolbar came out
+with "Trending" half-hidden behind the device's own name.
+
+A margin rather than dispatched insets, deliberately: insets only help an app that reads them, and
+one that does not would still draw underneath. A phone does not ask an app to avoid the status bar —
+it gives the app a window that does not include it — and a window that stops at the bar is true for
+every guest however it lays itself out. Touch, capture and `uiautomator dump` all go through the
+container, so the offset applies to all three at once and a dumped node's bounds are still exactly
+where `input tap` lands. On the home screen it carries the device's name and nothing else:
 there is no app to report the state of and no notifications to count, because the guest process is
 what holds them and there is no guest process.
 

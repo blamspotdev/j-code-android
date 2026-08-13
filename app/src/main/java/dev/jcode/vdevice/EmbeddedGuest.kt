@@ -93,10 +93,12 @@ internal class EmbeddedGuest(
 
             // Before the activity exists, so its very first measure is against the window it is
             // actually going into rather than against the whole phone — see GuestWindow.
-            GuestRuntime.sizeEmbeddedWindow(apkPath, width, height)
+            // The size the guest is told it has is the size it is actually given — the container
+            // minus the status bar — or it lays out for a screen taller than its window.
+            GuestRuntime.sizeEmbeddedWindow(apkPath, width, height - statusBarHeight())
             val guest = GuestRuntime.embed(apkPath, activityClass, windows?.token)
             activity = guest
-            container.addView(guest.window.decorView, matchParent())
+            container.addView(guest.window.decorView, contentParams())
             stack += guest
             fullLifecycle = GuestRuntime.resumeEmbedded(guest)
             GuestRuntime.setEmbeddedLauncher(::push)
@@ -121,7 +123,7 @@ internal class EmbeddedGuest(
     fun resize(width: Int, height: Int) {
         // The guest's own configuration first: relayout is what asks it to measure again, so it has
         // to already know the size it is measuring for.
-        GuestRuntime.sizeEmbeddedWindow(width, height)
+        GuestRuntime.sizeEmbeddedWindow(width, height - statusBarHeight())
         windows?.resize(width, height)
         host?.relayout(width, height)
     }
@@ -268,7 +270,7 @@ internal class EmbeddedGuest(
         val container = container ?: return false
         val activity = GuestRuntime.embed(stub, windows?.token)
         stack.lastOrNull()?.window?.decorView?.visibility = View.GONE
-        container.addView(activity.window.decorView, matchParent())
+        container.addView(activity.window.decorView, contentParams())
         addStatusBar(container)
         stack += activity
         if (!GuestRuntime.resumeEmbedded(activity)) fullLifecycle = false
@@ -296,8 +298,25 @@ internal class EmbeddedGuest(
         while (stack.lastOrNull()?.isFinishing == true) pop()
     }
 
+    /**
+     * The guest's window: the whole container **below the device's status bar**.
+     *
+     * The bar is drawn over the container's top strip, and a guest laid out to the full height drew
+     * underneath it — NewPipe's toolbar came out with its title half-hidden behind the device's own
+     * name. A phone does not ask an app to avoid the status bar, it gives the app a window that does
+     * not include it, and that is what the top margin is.
+     *
+     * Doing it by margin rather than by dispatching insets is deliberate: insets only help an app
+     * that reads them, and one that does not would still draw underneath. A window that stops where
+     * the bar starts is true for every guest, however it lays itself out.
+     */
+    private fun contentParams() = matchParent().apply { topMargin = statusBarHeight() }
+
     private fun matchParent() = FrameLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
         ViewGroup.LayoutParams.MATCH_PARENT,
     )
+
+    private fun statusBarHeight(): Int =
+        (VirtualStatusBar.BAR_DP * context.resources.displayMetrics.density).toInt()
 }
