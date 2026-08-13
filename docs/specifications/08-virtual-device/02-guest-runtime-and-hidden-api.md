@@ -256,9 +256,54 @@ answers that call with a wrapper and the singleton caches it as though the serve
 must be installed before anything in `:guest` touches an activity: the singleton asks once.
 
 A method the proxy does not model returns a type-appropriate nothing rather than being forwarded,
-because the alternative is not a correct answer but the exception above. Separately, an embedded
-token is blanked out of any outgoing `startActivity` — `resultTo` naming an activity the server has
-never heard of is rejected outright, and null is both accepted and accurate.
+because the alternative is not a correct answer but the exception above. That policy has one cost,
+and it is the reason unmodelled calls are now **logged by name**: a feature that quietly did nothing
+looks exactly like one that was never used. `onBackPressed` hid there for as long as it did — and
+cost a build cycle to find — because nothing said it had been swallowed.
+
+Separately, an embedded token is blanked out of any outgoing `startActivity` — `resultTo` naming an
+activity the server has never heard of is rejected outright, and null is both accepted and accurate.
+
+### 4b.1 Leaving a screen
+
+Three separate things have to be true before Back can leave a screen an app pushed, and each was
+found broken by walking into NewPipe's settings and being unable to walk out.
+
+**The activity decides first.** `EmbeddedGuest.back` used to pop its own stack whenever it held more
+than one activity, which skipped the activity entirely. A preference sub-screen is a *fragment*, so
+Back left the sub-screen, the settings list and the settings activity in one step and landed back on
+the app's main screen. Every other back stack an activity keeps — an open drawer, a WebView's
+history, a multi-step form — was skipped the same way. The top activity now gets `onBackPressed`, and
+an activity with nothing of its own to pop finishes itself, which is what the container acts on.
+
+**`onBackPressed` is a question for the server.** Since Android 12 an activity does not act on Back:
+`Activity.onBackPressed` hands the decision to the system, because only the system knows whether this
+is the last activity in the task — in which case the task goes to the back rather than the app
+closing. Swallowed by the proxy, Back did nothing on any pushed screen. AppCompat pops its own
+fragment back stack before delegating, which is why exactly *one* level of Back appeared to work and
+disguised the rest. A guest's tab is its own task, so the container always answers "finish".
+
+**A finish has to be noticed.** `Activity.finish()` reaches a task manager that has never heard of
+the activity, so it does nothing but set `isFinishing`, and the container was checking for that after
+each touch. A click does not run inline with the touch that produced it — `View` posts
+`performClick` — so the check ran a message *earlier* than the `finish()` it was meant to catch, and
+nothing reaped it. The proxy now says so from `finishActivity` itself, posted to the main thread
+because `finish()` sets `mFinished` after the call returns. Being told beats looking: it also covers
+a `finish()` from a timer, a callback or an async result, none of which the touch-driven check could
+ever have seen.
+
+`adb shell input keyevent BACK` routes to the same place the tab's Back button does rather than
+dispatching a key. Dispatching KEYCODE_BACK to a view does nothing — `View.dispatchKeyEvent` on a
+decor view never reaches `onBackPressed` — so the key was silently inert, and there was no way to
+leave a second screen from a terminal.
+
+**Measured, and not implemented: `Activity.recreate()` never reaches the container.** Tracing every
+call carrying an embedded token across a full theme change shows `onBackPressed`,
+`getTaskForActivity` and `finishActivity` and no relaunch of any kind, so a hook for one would be
+speculation rather than a measurement. An app that recreates itself to apply a setting therefore
+keeps the old appearance until it is started again; the tab's restart control is the working
+equivalent. The setting itself is applied — verified by setting NewPipe's theme to light, restarting,
+and getting a light app.
 
 ## 4c. The notification service — `GuestNotificationHook`
 
@@ -447,6 +492,23 @@ Answered for a loaded guest: `getActivityInfo`, `getServiceInfo`, `getReceiverIn
 enabled-setting queries. Everything else passes straight through. Arguments are matched **by type**,
 never by position, because these signatures gained a `userId` and widened `flags` to `long` across
 releases.
+
+The `PackageInfo` handed back is the one parsed at load, so **what the load asks for is what a guest
+can ever learn about itself**. Signing certificates are asked for on that basis: an app is entitled
+to ask who signed it, and null is not an answer any of them are written to survive. NewPipe reads
+`PackageInfoCompat.hasSignatures` in `MainActivity.onCreate` to decide whether it is an official
+release build, and threw straight out of `onCreate`:
+
+```
+java.lang.NullPointerException: Attempt to invoke virtual method
+    'boolean android.content.pm.SigningInfo.hasMultipleSigners()' on a null object reference
+  at androidx.core.content.pm.PackageInfoCompat$Api28Impl.hasMultipleSigners
+  at org.schabi.newpipe.util.ReleaseVersionUtil$isReleaseApk$2.invoke
+  at org.schabi.newpipe.MainActivity.onCreate(MainActivity.java:174)
+```
+
+Collecting them costs one pass over the APK signing block per load, and the honest answer — signed,
+but not by whoever built the original — is what a sideloaded copy reports anyway.
 
 ## 6. Child windows — `EmbeddedWindows`
 

@@ -73,6 +73,7 @@ internal object GuestActivityClient {
     /** The `IActivityTaskManager` method that hands the controller out — see the class docs. */
     const val CONTROLLER_GETTER = "getActivityClientController"
 
+
     fun register(token: IBinder) {
         tokens += token
     }
@@ -120,7 +121,7 @@ internal object GuestActivityClient {
 
         override fun invoke(proxy: Any?, method: Method, args: Array<Any?>?): Any? {
             val token = args?.firstNotNullOfOrNull { it as? IBinder }
-            if (token != null && isEmbedded(token)) return answer(method)
+            if (token != null && isEmbedded(token)) return answer(method, args)
             return try {
                 method.invoke(real, *(args ?: emptyArray()))
             } catch (e: InvocationTargetException) {
@@ -128,7 +129,7 @@ internal object GuestActivityClient {
             }
         }
 
-        private fun answer(method: Method): Any? = when (method.name) {
+        private fun answer(method: Method, args: Array<Any?>?): Any? = when (method.name) {
             "getTaskForActivity" -> EMBEDDED_TASK_ID
             "getDisplayId" -> Display.DEFAULT_DISPLAY
             /*
@@ -148,11 +149,42 @@ internal object GuestActivityClient {
             "getRequestedOrientation" -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             // The tab shows one activity at a time and it is the one being asked about.
             "isTopOfTask", "willActivityBeVisible" -> true
+            /*
+             * Since Android 12 an activity does not act on Back itself: `Activity.onBackPressed`
+             * hands the decision to the system, because only the system knows whether this is the
+             * last activity in the task — in which case the task goes to the back rather than the
+             * app closing. The server answers by calling `requestFinish()` on a callback it is
+             * passed.
+             *
+             * Swallowing it meant Back did nothing on any screen an app had pushed. NewPipe's
+             * settings could be opened and never left: the first Back popped a preference fragment,
+             * which AppCompat does itself before delegating, and the second arrived here and
+             * stopped.
+             *
+             * The container answers instead of the callback. Reflecting `requestFinish` out of the
+             * arguments was tried first and found nothing — measured, `carried no finish callback` —
+             * so rather than guess at a shape, this tells the tab, which holds the activity itself
+             * and finishes it down the same path a guest's own `finish()` takes. A guest's tab is
+             * its own task and the container decides when the device is done with an app, so
+             * "finish" is always the answer here.
+             */
+            "onBackPressed" -> null.also { GuestRuntime.onEmbeddedBackPressed() }
             // Activity.finish() only sets mFinished when this returns true, and the container reaps
             // a finished activity by asking isFinishing() — so answering false would leave a guest
             // that called finish() on screen for good.
-            "finishActivity", "finishActivityAffinity" -> true
-            else -> empty(method.returnType)
+            //
+            // Saying true is necessary but not sufficient: something has to *look* afterwards. This
+            // is the only point in the process that knows a finish happened at all, so it says so
+            // rather than leaving the container to notice on the next touch — which it could not,
+            // since a click handler runs a message later than the touch that produced it.
+            "finishActivity", "finishActivityAffinity" -> true.also { GuestRuntime.onEmbeddedFinish() }
+            // Named, because a swallowed call is invisible by construction and that is the whole
+            // cost of the policy above: the feature that quietly did nothing looks identical to one
+            // that was never used. recreate() cost a build cycle to find for exactly that reason.
+            else -> {
+                Log.d(TAG, "activity client call not modelled: ${method.name}")
+                empty(method.returnType)
+            }
         }
 
         private fun empty(type: Class<*>): Any? = when (type) {

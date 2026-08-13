@@ -62,7 +62,23 @@ internal object VirtualInput {
         session.send(down, down + duration, MotionEvent.ACTION_UP, toX, toY)
     }
 
+    /**
+     * Back is not a key the guest is handed; it is a decision about the device.
+     *
+     * On a phone the key never reaches the app either — the window manager reads it and calls
+     * `onBackPressed`. Here the equivalent knowledge lives in [EmbeddedGuest.back], which closes the
+     * shade first, then any open dialog, then pops the activity stack. Dispatching KEYCODE_BACK to a
+     * view instead does *nothing*: `View.dispatchKeyEvent` on a decor view never reaches
+     * `Activity.onBackPressed`, so `adb shell input keyevent 4` was silently a no-op and there was no
+     * way to leave a second screen from a terminal. [AppSandboxSurfaceView.forward] already refuses
+     * to relay this key for the same reason; the tab's own Back button has always called
+     * [AppSandboxSession.back].
+     */
     fun key(session: AppSandboxSession, keyCode: Int) {
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            session.back()
+            return
+        }
         val now = SystemClock.uptimeMillis()
         session.key(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0))
         session.key(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0))

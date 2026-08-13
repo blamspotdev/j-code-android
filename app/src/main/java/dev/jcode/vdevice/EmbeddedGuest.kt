@@ -106,6 +106,8 @@ internal class EmbeddedGuest(
             stack += guest
             fullLifecycle = GuestRuntime.resumeEmbedded(guest)
             GuestRuntime.setEmbeddedLauncher(::push)
+            GuestRuntime.setEmbeddedFinisher(::reapFinished)
+            GuestRuntime.setEmbeddedBackHandler(::finishTop)
             // Added last, so it is the topmost child: the device's own status bar has to sit over
             // the app the way a phone's does, and a FrameLayout hands the front child the touch
             // first — which is what lets the shade be pulled down over a guest that is drawing
@@ -222,10 +224,17 @@ internal class EmbeddedGuest(
             child.view.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK, 0))
             return
         }
-        if (stack.size > 1) {
-            pop()
-            return
-        }
+        // The activity decides first, exactly as it does on a phone — the window manager never pops
+        // a task itself, it calls onBackPressed and lets the activity answer.
+        //
+        // Popping the stack directly whenever it held more than one activity skipped that answer.
+        // NewPipe's Appearance screen is a *fragment* inside the settings activity, so Back left the
+        // sub-screen, the settings list and the settings activity all at once and landed back on the
+        // main screen. Every other back stack an activity keeps — an open drawer, a WebView's
+        // history, a multi-step form — was being skipped the same way.
+        //
+        // An activity with nothing of its own to pop finishes itself, and that is what [reapFinished]
+        // acts on, so "the activity consumed it" and "leave this screen" stay one decision.
         @Suppress("DEPRECATION")
         stack.lastOrNull()?.onBackPressed()
         reapFinished()
@@ -238,6 +247,8 @@ internal class EmbeddedGuest(
         // else's — measured as CPU-Z reporting the fixture's two.
         VirtualNotifications.clear()
         GuestRuntime.setEmbeddedLauncher(null)
+        GuestRuntime.setEmbeddedFinisher(null)
+        GuestRuntime.setEmbeddedBackHandler(null)
         stack.asReversed().forEach { activity ->
             (activity.window.decorView.parent as? ViewGroup)?.removeView(activity.window.decorView)
             runCatching { GuestRuntime.destroyEmbedded(activity) }
@@ -297,6 +308,18 @@ internal class EmbeddedGuest(
         stack += activity
         if (!GuestRuntime.resumeEmbedded(activity)) fullLifecycle = false
         return true
+    }
+
+    /**
+     * [GuestRuntime.setEmbeddedBackHandler] callback: the platform asked the server to answer a Back.
+     *
+     * `finish()` rather than `pop()`, so the activity learns it is going away and runs its own
+     * teardown — the same path it takes when a guest closes a screen itself, and the one
+     * [reapFinished] is already waiting on.
+     */
+    private fun finishTop() {
+        stack.lastOrNull()?.finish()
+        reapFinished()
     }
 
     private fun pop() {

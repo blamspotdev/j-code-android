@@ -182,9 +182,16 @@ internal object GuestLoader {
             Log.i(TAG, "$apkPath changed on disk; reloading it")
         }
 
+        // Signing certificates are asked for because an app is entitled to ask who signed it, and a
+        // null answer is not one any of them are written to survive. NewPipe reads
+        // `PackageInfoCompat.hasSignatures` in `MainActivity.onCreate` to decide whether it is an
+        // official release build, and threw straight out of onCreate on the null. Collecting them
+        // costs one pass over the APK signing block per load, and the honest answer — signed, but
+        // not by whoever built the original — is what a sideloaded copy would report anyway.
         val flags = PackageManager.GET_ACTIVITIES or PackageManager.GET_META_DATA or
             PackageManager.GET_PROVIDERS or PackageManager.GET_SERVICES or
-            PackageManager.GET_RECEIVERS
+            PackageManager.GET_RECEIVERS or PackageManager.GET_SIGNING_CERTIFICATES or
+            @Suppress("DEPRECATION") PackageManager.GET_SIGNATURES
         val info = host.packageManager.getPackageArchiveInfo(apkPath, flags)
             ?: throw VirtualDeviceException("Not a readable APK: $apkPath")
         val appInfo = info.applicationInfo

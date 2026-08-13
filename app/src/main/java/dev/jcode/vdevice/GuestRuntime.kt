@@ -8,7 +8,9 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.ApplicationInfo
 import android.os.Binder
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import android.webkit.WebView
 
@@ -54,6 +56,14 @@ internal object GuestRuntime {
      *  launch. */
     @Volatile
     private var embeddedLauncher: ((Intent) -> Boolean)? = null
+
+    /** Set alongside [embeddedLauncher]: told when an embedded activity has called `finish()`. */
+    @Volatile
+    private var embeddedFinisher: (() -> Unit)? = null
+
+    /** Set alongside [embeddedLauncher]: told when Back on an embedded activity reached the server. */
+    @Volatile
+    private var embeddedBackHandler: (() -> Unit)? = null
 
     /** Guest activity class -> stub slot, so a given guest activity always lands on the same stub. */
     private val stubSlots = LinkedHashMap<String, Int>()
@@ -338,6 +348,42 @@ internal object GuestRuntime {
     fun setEmbeddedLauncher(launcher: ((Intent) -> Boolean)?) {
         embeddedLauncher = launcher
     }
+
+    /** Tells the tab an embedded activity finished itself, while [finisher] is set. */
+    fun setEmbeddedFinisher(finisher: (() -> Unit)?) {
+        embeddedFinisher = finisher
+    }
+
+    /**
+     * [GuestActivityClient] calls this when a guest finishes an embedded activity.
+     *
+     * Posted rather than run inline for two reasons. `Activity.finish()` sets `mFinished` *after*
+     * this returns, so a container that reaped immediately would look at the activity before it
+     * admitted to finishing; and `finishActivity` can arrive on any thread, while the stack is the
+     * main thread's alone.
+     *
+     * Being told beats looking. The reap used to be attempted after each touch, which missed every
+     * `finish()` that did not happen inline with input — and a click is one of those: `View` posts
+     * `performClick`, so the handler ran a message *later* than the reap that was supposed to catch
+     * it. NewPipe's error screen therefore could not be dismissed by its own back arrow, and neither
+     * could anything else on a second screen.
+     */
+    fun onEmbeddedFinish() {
+        val finisher = embeddedFinisher ?: return
+        Handler(Looper.getMainLooper()).post(finisher)
+    }
+
+    /** Tells the tab an embedded activity's Back was handed to the system, while [handler] is set. */
+    fun setEmbeddedBackHandler(handler: (() -> Unit)?) {
+        embeddedBackHandler = handler
+    }
+
+    /** [GuestActivityClient] calls this for the `onBackPressed` the platform routes to the server. */
+    fun onEmbeddedBackPressed() {
+        val handler = embeddedBackHandler ?: return
+        Handler(Looper.getMainLooper()).post(handler)
+    }
+
 
     /**
      * Drives one embedded activity to RESUMED, the way `ActivityThread` would.
