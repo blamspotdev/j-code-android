@@ -372,7 +372,39 @@ internal object GuestRuntime {
             advanceLifecycle(activity, "ON_START")
             advanceLifecycle(activity, "ON_RESUME")
         }
+        focus(activity, true)
         return started && resumed
+    }
+
+    /**
+     * Tells an embedded guest whether it has the window's focus.
+     *
+     * Nothing else will. `onWindowFocusChanged` is delivered by the window manager to a *real*
+     * window, and an embedded guest has a token no `ActivityRecord` answers to — so as far as the
+     * system is concerned there is no window here to give focus to. The activity is nonetheless the
+     * only thing on the device's screen, so the honest answer is the one the system cannot give.
+     *
+     * This is not a detail. Frameworks gate their **render thread** on it: SDL will not start until
+     * it has a surface *and* focus, and says so —
+     *
+     * ```
+     * V SDL: surfaceCreated()
+     * V SDL: Window size: 1080x1420
+     * V SDL: Skip .. Surface is not ready.
+     * ```
+     *
+     * — which is why ES-DE ran perfectly, initialised SDL, read the device's identity, created its
+     * surface, and drew nothing at all. Unity and most game engines pause on the same signal, so
+     * this is the difference between a black rectangle and a running app for that whole family.
+     *
+     * Both routes are dispatched because frameworks listen on either: the activity's own callback,
+     * and the view tree's, which is what a `ViewRootImpl` would have driven.
+     */
+    fun focus(activity: Activity, hasFocus: Boolean) {
+        runCatching { activity.onWindowFocusChanged(hasFocus) }
+            .onFailure { Log.w(TAG, "cannot tell ${activity.javaClass.name} it has focus", it) }
+        runCatching { activity.window?.decorView?.dispatchWindowFocusChanged(hasFocus) }
+            .onFailure { Log.w(TAG, "cannot dispatch window focus into the guest's views", it) }
     }
 
     /**
@@ -441,6 +473,10 @@ internal object GuestRuntime {
      */
     fun destroyEmbedded(activity: Activity) {
         val instrumentation = instrumentation ?: return
+        // Focus goes before the lifecycle does, the way it would on a real window: an engine that
+        // started its render thread on gaining focus stops it on losing focus, and one told it still
+        // had focus while being destroyed would keep drawing into a surface that is going away.
+        focus(activity, false)
         instrumentation.callActivityOnPause(activity)
         GuestHooks.dispatchLifecycleCallback(activity, "onActivityPreStopped")
         instrumentation.callActivityOnStop(activity)

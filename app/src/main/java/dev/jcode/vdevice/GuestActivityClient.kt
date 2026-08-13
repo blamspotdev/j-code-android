@@ -1,5 +1,6 @@
 package dev.jcode.vdevice
 
+import android.content.pm.ActivityInfo
 import android.os.IBinder
 import android.util.Log
 import android.view.Display
@@ -130,6 +131,21 @@ internal object GuestActivityClient {
         private fun answer(method: Method): Any? = when (method.name) {
             "getTaskForActivity" -> EMBEDDED_TASK_ID
             "getDisplayId" -> Display.DEFAULT_DISPLAY
+            /*
+             * Not the generic int default, which is 0 — and 0 is SCREEN_ORIENTATION_LANDSCAPE.
+             *
+             * Every embedded guest was therefore answering "I asked for landscape" while sitting in
+             * a portrait tab, and a framework that compares the two disagreed with the screen it had
+             * been given. SDL refuses to start its render thread on exactly that mismatch:
+             *
+             *   V SDL: Window size: 1080x1510
+             *   V SDL: Skip .. Surface is not ready.
+             *
+             * — so ES-DE initialised, created its surface, and drew nothing. UNSPECIFIED is also the
+             * honest answer: the tab has one shape, the guest does not get to choose it, and
+             * GuestWindow.makeResizable already strips the same declaration from the manifest.
+             */
+            "getRequestedOrientation" -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             // The tab shows one activity at a time and it is the one being asked about.
             "isTopOfTask", "willActivityBeVisible" -> true
             // Activity.finish() only sets mFinished when this returns true, and the container reaps

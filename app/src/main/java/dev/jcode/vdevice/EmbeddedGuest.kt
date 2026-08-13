@@ -16,6 +16,7 @@ import android.view.MotionEvent
 import android.view.SurfaceControlViewHost
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.widget.FrameLayout
 import java.io.File
 
@@ -53,6 +54,9 @@ internal class EmbeddedGuest(
 
     /** The device's own status bar, over whatever activity is on the screen — see [VirtualStatusBar]. */
     private var statusBar: VirtualStatusBar? = null
+
+    /** Layout listener that catches `SurfaceView`s a guest adds after it has started. */
+    private var surfaceWatcher: ViewTreeObserver.OnGlobalLayoutListener? = null
 
     /** Embedded back stack, bottom first. Only the top activity's decor is visible. */
     private val stack = ArrayList<Activity>()
@@ -107,6 +111,7 @@ internal class EmbeddedGuest(
             // first — which is what lets the shade be pulled down over a guest that is drawing
             // full-bleed underneath it.
             addStatusBar(container)
+            watchForSurfaces(container)
 
             return host.surfacePackage
                 ?: throw VirtualDeviceException("the view host produced no surface package")
@@ -239,11 +244,28 @@ internal class EmbeddedGuest(
         }
         stack.clear()
         statusBar = null
+        surfaceWatcher?.let { watcher ->
+            runCatching { container?.viewTreeObserver?.removeOnGlobalLayoutListener(watcher) }
+        }
+        surfaceWatcher = null
         container = null
         windows?.release()
         windows = null
         host?.release()
         host = null
+    }
+
+    /**
+     * Watches for `SurfaceView`s the guest creates, which it may do at any point rather than only
+     * while its activity is being built — SDL and every engine like it add theirs from native code
+     * once it has started. A layout listener catches all of them for the cost of one early-out per
+     * pass; see [GuestSurfaces] for what is done with them and why only some.
+     */
+    private fun watchForSurfaces(container: FrameLayout) {
+        if (surfaceWatcher != null) return
+        val watcher = ViewTreeObserver.OnGlobalLayoutListener { GuestSurfaces.raiseFullBleed(container) }
+        surfaceWatcher = watcher
+        container.viewTreeObserver.addOnGlobalLayoutListener(watcher)
     }
 
     /**

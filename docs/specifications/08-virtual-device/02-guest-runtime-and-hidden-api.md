@@ -351,6 +351,38 @@ could see it. Oversized children are now re-measured `AT_MOST` the tab, which is
 manager would have asked for; a window cannot be wider than the screen it is on, so a number saying
 otherwise is wrong wherever it came from.
 
+## 4e. What a game engine waits for
+
+Three things an embedded guest is never given, each of which a rendering framework treats as a
+reason not to start.
+
+**Window focus.** `onWindowFocusChanged` is delivered by the window manager to a *real* window, and
+an embedded guest's token is one no `ActivityRecord` answers to — so the system has no window here to
+give focus to. `GuestRuntime.focus` says it anyway, on both routes a framework might listen on (the
+activity's callback and the view tree's), because in the tab the guest genuinely is the only thing on
+the screen. SDL will not start its render thread without focus *and* a surface; most game engines
+pause on the same signal.
+
+**A believable orientation.** `getRequestedOrientation` goes through `ActivityClient`, and the
+container's generic integer default was `0` — which is `SCREEN_ORIENTATION_LANDSCAPE`, not
+`UNSPECIFIED`. Every embedded guest was claiming it had asked for landscape while sitting in a
+portrait tab, and SDL refuses on exactly that mismatch:
+
+```
+V SDL: Window size: 1080x1510
+V SDL: Skip .. Surface is not ready.
+```
+
+Answering `SCREEN_ORIENTATION_UNSPECIFIED` is both the fix and the honest answer — the tab has one
+shape and the guest does not choose it, which is what `GuestWindow.makeResizable` already says about
+the manifest.
+
+**A visible surface.** A `SurfaceView` does not paint; its pixels are a separate `SurfaceControl`
+below the window, shown through a transparent hole the window punches. A windowless host does not
+honour that hole, so the guest's own opaque background covers it. `GuestSurfaces` raises a
+**full-bleed** surface above the window instead — only full-bleed, because a video player putting one
+behind its controls means it, and raising that would trade a black screen for an unusable one.
+
 ## 5a. Non-activity components — `GuestComponents`
 
 Providers, services and receivers cannot be registered with the system: they belong to a package the
@@ -483,6 +515,14 @@ JCode draws nothing over it.
 - A Compose guest's content is in its composition, not its view tree, so `uiautomator dump` shows
   the `AndroidComposeView` and nothing inside it. Semantics are not walked. A driver can screenshot
   a Compose guest and tap by coordinate, but cannot find a node by text the way it can in a View app.
+- **`screencap` cannot see a `SurfaceView`.** `EmbeddedGuest.capture` re-draws the container's view
+  hierarchy into a bitmap, and a `SurfaceView`'s pixels are not in that hierarchy — they are in its
+  own `SurfaceControl`. So an SDL, Unity or video guest captures as black whether or not it is
+  rendering, and the tab on the phone is the only place to tell. Worth knowing before concluding a
+  GL app is broken from a capture.
+- A guest's `startActivity` can still escape to the phone's own copy of the same package where one
+  is installed: measured on ES-DE, whose `ConfiguratorActivity` opened the *installed* app rather
+  than the guest's. Same family as the `PendingIntent` escape.
 
 ---
 
