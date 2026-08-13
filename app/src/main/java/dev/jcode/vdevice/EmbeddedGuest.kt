@@ -51,6 +51,9 @@ internal class EmbeddedGuest(
     private var container: FrameLayout? = null
     private var windows: EmbeddedWindows? = null
 
+    /** The device's own status bar, over whatever activity is on the screen — see [VirtualStatusBar]. */
+    private var statusBar: VirtualStatusBar? = null
+
     /** Embedded back stack, bottom first. Only the top activity's decor is visible. */
     private val stack = ArrayList<Activity>()
 
@@ -94,6 +97,11 @@ internal class EmbeddedGuest(
             stack += guest
             fullLifecycle = GuestRuntime.resumeEmbedded(guest)
             GuestRuntime.setEmbeddedLauncher(::push)
+            // Added last, so it is the topmost child: the device's own status bar has to sit over
+            // the app the way a phone's does, and a FrameLayout hands the front child the touch
+            // first — which is what lets the shade be pulled down over a guest that is drawing
+            // full-bleed underneath it.
+            addStatusBar(container)
 
             return host.surfacePackage
                 ?: throw VirtualDeviceException("the view host produced no surface package")
@@ -187,6 +195,12 @@ internal class EmbeddedGuest(
     }
 
     fun back() {
+        // The device's own shade is above everything, so it takes Back first — the same order a
+        // phone answers in, and the guest never sees a key that was not meant for it.
+        statusBar?.takeIf { it.isOpen }?.let {
+            it.collapse()
+            return
+        }
         // A dialog or popup closes itself on Back, so it is sent the key rather than being reached
         // around — dismissing it from here would skip the guest's own cancel handling.
         topWindow()?.let { child ->
@@ -211,11 +225,31 @@ internal class EmbeddedGuest(
             runCatching { GuestRuntime.destroyEmbedded(activity) }
         }
         stack.clear()
+        statusBar = null
         container = null
         windows?.release()
         windows = null
         host?.release()
         host = null
+    }
+
+    /**
+     * The device's status bar, kept as the container's last child.
+     *
+     * Re-added rather than moved whenever an activity goes in below it, because `addView` appends
+     * and a new decor view would otherwise be drawn over the bar — and take its touches with it.
+     */
+    private fun addStatusBar(container: FrameLayout) {
+        statusBar?.let(container::removeView)
+        val bar = statusBar ?: VirtualStatusBar(context, GuestRuntime.activeLabel().orEmpty())
+            .also { statusBar = it }
+        container.addView(
+            bar,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
     }
 
     /** [GuestRuntime.setEmbeddedLauncher] callback: a guest activity started another one. */
@@ -224,6 +258,7 @@ internal class EmbeddedGuest(
         val activity = GuestRuntime.embed(stub, windows?.token)
         stack.lastOrNull()?.window?.decorView?.visibility = View.GONE
         container.addView(activity.window.decorView, matchParent())
+        addStatusBar(container)
         stack += activity
         if (!GuestRuntime.resumeEmbedded(activity)) fullLifecycle = false
         return true

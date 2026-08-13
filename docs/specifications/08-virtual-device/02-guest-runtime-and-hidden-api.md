@@ -260,6 +260,29 @@ because the alternative is not a correct answer but the exception above. Separat
 token is blanked out of any outgoing `startActivity` — `resultTo` naming an activity the server has
 never heard of is rejected outright, and null is both accepted and accurate.
 
+## 4c. The notification service — `GuestNotificationHook`
+
+Every binder call a guest makes goes out under **J Code's** uid and package, so a guest that posts a
+notification puts it in the *phone's* real shade, attributed to J Code, where it outlives the device
+being emptied. The virtual device exists so an app can be tried without leaving anything on the
+phone, and the notification shade is part of the phone.
+
+`INotificationManager` is an interface, so the same `Proxy` shape as the other hooks works, taken
+from `NotificationManager.sService`. Posting and cancelling are answered into `VirtualNotifications`
+and never reach the system; what a guest merely *asks* — whether notifications are enabled, what
+importance it has — is answered as a permissive yes, because a "no" is a guest that never posts at
+all and so never proves anything. Channel bookkeeping is accepted and dropped: the device keeps no
+channels, and accepting them silently is what lets an O+ guest reach the `notify()` that matters.
+
+Anything unmodelled still goes through to the real service — most of it is harmless reads, and a
+notification manager that throws is worse than one that over-answers.
+
+The store lives in `:guest` and dies with it, which is the same lifetime the device's screen has:
+stopping an app takes its process, and a stopped app's notifications with it.
+
+> Verified on `tools/notification-fixture`: two notifications posted from `onCreate` appear in the
+> device's own bar and shade, and `dumpsys notification` on the host counts **zero** of them.
+
 ## 5a. Non-activity components — `GuestComponents`
 
 Providers, services and receivers cannot be registered with the system: they belong to a package the

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A guest that posts notifications, for the virtual device's own status bar and shade.
+     Deliberately declares no android:theme, so it also exercises the platform default-theme
+     fallback the container has to reproduce. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.notifyguest">
+
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application android:label="Notify Fixture">
+        <activity
+            android:name=".NotifyMain"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

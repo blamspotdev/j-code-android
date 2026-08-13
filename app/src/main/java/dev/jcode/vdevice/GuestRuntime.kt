@@ -81,13 +81,14 @@ internal object GuestRuntime {
         val launch = GuestHooks.installLaunchHook(activityThread, ::onLaunchActivity)
         val navigation = GuestHooks.installStartActivityHook(::rewriteOutgoing)
         val packages = GuestPackageHook.install(host.packageManager)
+        val notifications = GuestNotificationHook.install()
         installCrashHandler()
         VirtualDeviceLog.captureStandardStreams(host)
         isInstalled = true
         Log.i(
             TAG,
             "hooks installed: instrumentation=true launch=$launch navigation=$navigation " +
-                "packages=$packages",
+                "packages=$packages notifications=$notifications",
         )
         VirtualDeviceLog.append(host, 'I', TAG, "container ready in ${Application.getProcessName()}")
     }
@@ -274,6 +275,12 @@ internal object GuestRuntime {
         if (resolve(activity.intent) == null) return
         GuestOverlay.install(activity)
     }
+
+    /** The package a hook should attribute the current call to, or null outside a guest. */
+    fun activePackage(): String? = active?.packageName
+
+    /** The label the device's status bar names the running app by. */
+    fun activeLabel(): String? = active?.let { guest -> guest.labelOf(guest.launchActivity).toString() }
 
     /** Hosts intra-guest `startActivity` calls in the tab while [launcher] is set. */
     fun setEmbeddedLauncher(launcher: ((Intent) -> Boolean)?) {

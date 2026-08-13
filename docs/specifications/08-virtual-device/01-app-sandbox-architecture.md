@@ -197,6 +197,39 @@ the device, so it is composed over the surface and is deliberately absent from a
 like the control bar. A guest's surface package reparents above the surface, so starting an app needs
 no matching erase and stopping one repaints.
 
+### 7b. The device's status bar and shade
+
+`VirtualStatusBar` is a slim bar across the top of the device's screen, plus a notification shade
+that pulls down from it.
+
+**No clock and no battery, deliberately.** Those belong to the phone, and the phone's own status bar
+is directly above this one — a second copy would be either a duplicate or a lie. What the device has
+that the phone's bar cannot show is the state of the app *inside* it, so that is all it carries: the
+running app's label on the left, and what it has posted on the right.
+
+| Gesture | Effect |
+|---|---|
+| Drag down from the top strip | Opens the shade: one row per notification, title and text, with **Clear all** |
+| Drag up, or tap below an open shade | Closes it |
+| `back` | Closes the shade first, the way a phone answers, before the guest ever sees the key |
+| Tap the pill in the middle | J Code's own control bar — back, keyboard, restart, full screen, stop. IDE chrome, not the device's |
+
+It is a child of `EmbeddedGuest`'s container, added **last** so it is the topmost view, rather than
+composed over the tab by the IDE. That one decision is what makes it part of the device:
+
+| | Falls out of being a child of the container |
+|---|---|
+| `screencap` shows it | `EmbeddedGuest.capture` draws the container |
+| `uiautomator dump` lists it | `EmbeddedGuest.dump` walks the container, and these are real views with real text |
+| A finger and `input tap` reach it | Both arrive through `EmbeddedGuest.touch`, which dispatches into the container |
+
+Only vertical movement in the top strip is claimed. A horizontal swipe starting at the top of the
+screen belongs to the guest, because pagers live there.
+
+> Verified on the Odin2: `uiautomator dump` against a guest with the shade open lists
+> `Notify Fixture`, `2 notifications`, both notification rows with their text, and `Clear all` — so
+> an agent can read the device's notifications and tap them, not just a person.
+
 ### `VirtualDeviceApps` — the package store
 
 `filesDir/vdevice/apps/<package>.apk`, with each app's private storage beside it at
