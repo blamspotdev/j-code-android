@@ -30,7 +30,7 @@ internal fun emptyValue(type: Class<*>): Any? = when (type) {
  * `ActivityThread.mH`, building a bare `AssetManager`, replacing the `IActivityTaskManager` binder
  * proxy — lives on non-SDK ("hidden") members, so **this is coupled to `targetSdk`.**
  *
- * Verified on Android 13 with J Code's `targetSdk = 33`: the members the full-screen path touches
+ * Verified on Android 13 with JCode's `targetSdk = 33`: the members the full-screen path touches
  * are all on the `unsupported` greylist, which carries no `maxTargetSdk`, so they are *allowed* (the
  * runtime logs a warning per access and nothing more). Measured on this device, and added to that
  * list: `ActivityThread.sPackageManager` and `ApplicationPackageManager.mPM` are both readable and

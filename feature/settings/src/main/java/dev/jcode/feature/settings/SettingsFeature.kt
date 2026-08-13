@@ -350,7 +350,7 @@ object SettingsFeature {
             SettingsCard(
                 title = "Icon bundle",
                 description = "Icon set used across the app.",
-                keywords = "icon bundle icons set material rounded j code line appearance",
+                keywords = "icon bundle icons set material rounded jcode line appearance",
             ) {
                 val activeIcons = iconBundleId.ifEmpty { IconBundleRegistry.default.id }
                 IconBundleRegistry.builtIns.forEach { bundle ->

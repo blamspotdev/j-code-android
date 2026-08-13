@@ -6,7 +6,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import java.io.File
 
 /**
- * What is installed on J Code's virtual device — the one place the launcher, `adb` and the start-up
+ * What is installed on JCode's virtual device — the one place the launcher, `adb` and the start-up
  * reset all read and write it.
  *
  * "Installed" means staged under `filesDir/vdevice/apps/<package>.apk`, with the app's private
@@ -15,7 +15,7 @@ import java.io.File
  * never heard of any of these, which is the whole point — an app can be put on this device and taken
  * off again without touching the phone.
  *
- * **Nothing here survives a restart.** [resetOnStart] wipes the whole tree the first time J Code's
+ * **Nothing here survives a restart.** [resetOnStart] wipes the whole tree the first time JCode's
  * process asks for it, so every session begins with an empty device: no apps, no data, no
  * preferences a previous run left behind. That is what makes the device a clean room rather than a
  * second phone slowly filling up inside the IDE.
@@ -63,17 +63,23 @@ internal object VirtualDeviceApps {
     }
 
     /**
-     * Puts J Code's own apps back on the freshly emptied device.
+     * Puts JCode's own apps back on the freshly emptied device.
      *
      * The device is wiped on every start, so anything that should always be there has to be put
      * there again — a built-in is not exempt from the clean room, it is reinstalled into it. They go
      * through [install] like any other APK: no container privileges, no special casing, and they
      * exercise the same load, embed, window and WebView paths every other guest takes.
      *
-     * The browser is the one that matters. Without it the only way to open a URL from the device was
-     * the phone's browser, which takes the user out of J Code and loads the page under their own
-     * profile — their cookies, their signed-in accounts. Inside the device it is wiped with
-     * everything else.
+     * There are two. The **browser** is the one that makes the device usable: without it the only way
+     * to open a URL from here was the phone's browser, which takes the user out of JCode and loads
+     * the page under their own profile — their cookies, their signed-in accounts. Inside the device
+     * it is wiped with everything else.
+     *
+     * The **hardware fixture** is the one that makes the device *checkable*. It prints what a guest
+     * can actually see of the device's camera, microphone, location and three motion sensors, so the
+     * hardware bench and Manage permissions can be watched having an effect on a real app rather than
+     * being taken on trust — and it is on every device by default because the moment you want it is
+     * the moment something looks wrong, which is not the moment to go and build an APK.
      */
     private fun installBuiltIns(context: Context) {
         val assets = runCatching { context.assets.list(BUILT_INS).orEmpty() }.getOrDefault(emptyArray())
@@ -93,12 +99,12 @@ internal object VirtualDeviceApps {
      * Empties the WebView profile a guest browsed into.
      *
      * It is the one thing a guest leaves outside `filesDir/vdevice/`: WebView keeps its data beside
-     * J Code's own, under the suffix [GuestRuntime.GUEST_WEBVIEW_SUFFIX] gives it, and nothing under
+     * JCode's own, under the suffix [GuestRuntime.GUEST_WEBVIEW_SUFFIX] gives it, and nothing under
      * this object's tree ever touched it. So cookies, local storage and any session an app signed
      * into survived a restart on a device whose whole premise is that nothing does — and would have
      * been handed to whatever app was installed next.
      *
-     * The suffix is what keeps it out of J Code's own browsing data; wiping it is what keeps it out
+     * The suffix is what keeps it out of JCode's own browsing data; wiping it is what keeps it out
      * of the *next* guest's.
      */
     private fun clearGuestWebViewData(context: Context) {

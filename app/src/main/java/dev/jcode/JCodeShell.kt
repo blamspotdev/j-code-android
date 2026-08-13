@@ -1800,7 +1800,7 @@ private fun JCodeShell(
     // the editor-page dispatch is invoked in a subcomposition where the local would fall back to default.
     val vcs = LocalVcsActions.current
     val appContext = LocalContext.current.applicationContext
-    // The guest runs in J Code's task, so the container is handed the hosting activity when there is
+    // The guest runs in JCode's task, so the container is handed the hosting activity when there is
     // one (the application context would push it into a task of its own).
     val hostActivity = LocalContext.current.findActivity()
     val virtualDevice = LocalVirtualDevice.current

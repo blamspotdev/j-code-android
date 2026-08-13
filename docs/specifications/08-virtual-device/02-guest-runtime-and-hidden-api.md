@@ -224,10 +224,10 @@ reach code the container had never exercised.
 
 | Claim | Why |
 |---|---|
-| `WebView.setDataDirectorySuffix("jcode-guest")` | WebView takes an **exclusive lock** on its data directory and refuses to load in a second process of the same app without a suffix. J Code's own process always gets there first, so a guest that touched a WebView at all died with `Using WebView from more than one process at once with the same data directory is not supported`. Not a niche case: ad SDKs, sign-in flows, Cordova/Ionic apps and any in-app browser reach for one. Public API from API 28, and it must run before WebView is used — which is why it is the first thing `install` does |
+| `WebView.setDataDirectorySuffix("jcode-guest")` | WebView takes an **exclusive lock** on its data directory and refuses to load in a second process of the same app without a suffix. JCode's own process always gets there first, so a guest that touched a WebView at all died with `Using WebView from more than one process at once with the same data directory is not supported`. Not a niche case: ad SDKs, sign-in flows, Cordova/Ionic apps and any in-app browser reach for one. Public API from API 28, and it must run before WebView is used — which is why it is the first thing `install` does |
 | `GuestContext.getDatabasePath` accepting an **absolute** name | `ContextImpl` returns an absolute name as-is, and libraries rely on it: WorkManager hands Room a full path under `no_backup/`, and Room passes it straight back. Joining it onto `databases/` produced `…/databases/data/user/0/…/no_backup/androidx.work.workdb`, and the `SQLiteCantOpenDatabaseException` came back on a WorkManager thread where nothing catches it |
 
-> Both crashes killed `:guest`, and where a **full-screen** guest was in J Code's task the activity
+> Both crashes killed `:guest`, and where a **full-screen** guest was in JCode's task the activity
 > manager's crash cleanup finished `MainActivity` along with it — so a guest's bug took the IDE off
 > the screen. Embedded guests share no task and are unaffected.
 
@@ -312,8 +312,8 @@ and getting a light app.
 
 ## 4c. The notification service — `GuestNotificationHook`
 
-Every binder call a guest makes goes out under **J Code's** uid and package, so a guest that posts a
-notification puts it in the *phone's* real shade, attributed to J Code, where it outlives the device
+Every binder call a guest makes goes out under **JCode's** uid and package, so a guest that posts a
+notification puts it in the *phone's* real shade, attributed to JCode, where it outlives the device
 being emptied. The virtual device exists so an app can be tried without leaving anything on the
 phone, and the notification shade is part of the phone.
 
@@ -491,8 +491,8 @@ notification goes to the device's own status bar and shade instead — the same 
 stream: video renders in the tab and the player's notification appears in the device shade.
 
 **The real system is therefore never told the service is foreground**, so it confers no protection
-from being killed. That is not a gap to close: the guest runs inside J Code's own `:guest` process,
-and what keeps it alive is J Code's foreground state, not a claim made on the guest's behalf about a
+from being killed. That is not a gap to close: the guest runs inside JCode's own `:guest` process,
+and what keeps it alive is JCode's foreground state, not a claim made on the guest's behalf about a
 package that does not exist.
 
 > **In-process only, and that is the boundary.** Another app cannot query a hosted provider, no
@@ -599,7 +599,7 @@ rather than offered as hardware that never reports.
 ### Location — `GuestLocation`
 
 There is no passthrough mode and there never will be: a guest is somebody else's APK running under
-J Code's uid, and the single most valuable thing it could take is where the user is standing. What
+JCode's uid, and the single most valuable thing it could take is where the user is standing. What
 it *is* given — a fixed point, or a position walked between two of them — comes from the hardware
 bench, and every fix is worked out at the moment of asking rather than stored, so a route reports
 where it has got to along with the bearing and speed a receiver would have measured.

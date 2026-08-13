@@ -24,7 +24,7 @@ captures/
 *.apk
 output-metadata.json
 
-# The virtual device's built-in apps are shipped, not built here: they are assets J Code installs
+# The virtual device's built-in apps are shipped, not built here: they are assets JCode installs
 # onto the device on every start (see VirtualDeviceApps.installBuiltIns). Their sources live in
 # tools/, but the signed APK is an input to the app's build, so it has to be tracked.
 !app/src/main/assets/vdevice/*.apk

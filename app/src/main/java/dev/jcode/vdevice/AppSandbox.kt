@@ -43,7 +43,7 @@ internal sealed interface SandboxStatus {
 }
 
 /**
- * Shared state for J Code's single device-sandbox tab: the run flow only asks for one, the shell
+ * Shared state for JCode's single device-sandbox tab: the run flow only asks for one, the shell
  * opens the tab, and the page reads the APK back out.
  *
  * The device outlives every app that runs on it — its screen is blank rather than absent when

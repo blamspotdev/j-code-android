@@ -11,7 +11,7 @@ import android.util.Log
  * alone, so a guest still measures the machine it is really running on.
  *
  * `Build`'s fields are `static final`, so this is process-wide and irreversible; [apply] therefore
- * refuses to run anywhere but the `:guest` process, where nothing of J Code's own runs.
+ * refuses to run anywhere but the `:guest` process, where nothing of JCode's own runs.
  */
 internal object VirtualIdentity {
 

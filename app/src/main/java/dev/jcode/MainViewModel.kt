@@ -956,7 +956,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         sessionFlushBlocking = { runCatching { runBlocking { persistSession() } } }
         viewModelScope.launch { exitOnSwipeAway.collect { exitOnSwipeAwayEnabled = it } }
-        // The virtual device is a clean room, not a second phone: every J Code start hands it back
+        // The virtual device is a clean room, not a second phone: every JCode start hands it back
         // with no apps installed and nothing any of them stored. Off the main thread because it is a
         // recursive delete, and before anything can install to it — see VirtualDeviceApps.
         viewModelScope.launch(Dispatchers.IO) { VirtualDeviceApps.resetOnStart(appContext) }
@@ -987,7 +987,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *
      * That is what makes it reachable from the distro without a new proot bind — `<rootfs>/run/x` on
      * this side is `/run/x` on that one — and unreachable from anywhere else, since the whole rootfs
-     * lives in J Code's private storage where no other uid may open a file.
+     * lives in JCode's private storage where no other uid may open a file.
      */
     private fun virtualDeviceSocket(): Pair<File, String>? {
         val distro = distroService.selectedEnvironment().id.takeIf { it.isNotBlank() } ?: return null
@@ -1169,7 +1169,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val runInVirtualDeviceKey = booleanPreferencesKey("run_in_virtual_device")
 
-    /** When true, an Android run config built for the container starts its APK inside J Code's own
+    /** When true, an Android run config built for the container starts its APK inside JCode's own
      *  process (no install, no adb) once the build finishes — see [dev.jcode.vdevice.VirtualDevice]. */
     val runInVirtualDevice: StateFlow<Boolean> = uiPreferences.data
         .map { prefs -> prefs[runInVirtualDeviceKey] ?: SettingsDefaults.RUN_IN_VIRTUAL_DEVICE }

@@ -26,7 +26,7 @@ internal class TrailFix(val latitude: Double, val longitude: Double, val bearing
  * that there is no accurate data underneath them, not that the numbers are a secret.
  *
  * The outer guarantee is stronger still and belongs to the device rather than to this file: a
- * simulated fix is only ever answered to a guest inside J Code's virtual device. It does not mock
+ * simulated fix is only ever answered to a guest inside JCode's virtual device. It does not mock
  * the phone's own location, no app outside the IDE can see it, and it is wiped on every restart.
  *
  * What survives the alteration is everything a developer actually needs — a plausible speed, a

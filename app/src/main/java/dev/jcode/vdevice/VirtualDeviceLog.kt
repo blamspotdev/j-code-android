@@ -15,10 +15,10 @@ import java.util.Locale
  *
  * It cannot be the phone's log. Reading `logcat` needs `READ_LOGS`, which is `signature|privileged`,
  * and an app has not been able to read even its own entries since Android 4.1 — measured here on
- * Android 13, where `logcat` run as J Code's uid returns nothing at all. So a driver that wanted the
+ * Android 13, where `logcat` run as JCode's uid returns nothing at all. So a driver that wanted the
  * stack trace behind a crash had no way to get it.
  *
- * J Code does not need to read the system log, though: it *is* the process running the guest. Every
+ * JCode does not need to read the system log, though: it *is* the process running the guest. Every
  * line here is written by the container itself — what it loaded, what it bound, what it refused, and
  * above all the uncaught exceptions it catches in `:guest` — which is a better log than a filtered
  * `logcat` would be, because it contains only this device's business.
@@ -26,7 +26,7 @@ import java.util.Locale
  * **A file, deliberately.** The `:guest` process and the IDE both write it, and a full-screen guest
  * has no session bound to carry the lines over — but the two processes share a uid and a data
  * directory, so an appending write is all the coordination needed. `VirtualDeviceApps.resetOnStart`
- * wipes it with everything else, so the log covers exactly one J Code session.
+ * wipes it with everything else, so the log covers exactly one JCode session.
  */
 internal object VirtualDeviceLog {
 

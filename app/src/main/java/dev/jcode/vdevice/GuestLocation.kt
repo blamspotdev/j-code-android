@@ -35,7 +35,7 @@ private val PROVIDERS = listOf(
  * it.
  *
  * There is no passthrough mode here and there never will be. A guest is somebody else's APK running
- * inside the IDE, under J Code's uid, and the single most valuable thing it could steal is where the
+ * inside the IDE, under JCode's uid, and the single most valuable thing it could steal is where the
  * user is standing. So the phone's real location is not one of the choices — the device either has
  * no location hardware at all, or it has one that always says the same thing.
  *
@@ -74,7 +74,7 @@ internal object GuestLocation {
      *
      * Called from [GuestRuntime.install], which is before any guest exists and therefore before
      * anything in `:guest` has asked for a `LocationManager`. False leaves guests with the phone's
-     * location service — which still refuses them everything, because J Code holds no location
+     * location service — which still refuses them everything, because JCode holds no location
      * permission, so the failure is "no simulated location" rather than "the user's coordinates".
      */
     @Synchronized

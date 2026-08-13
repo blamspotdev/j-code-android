@@ -18,7 +18,7 @@ import kotlin.math.roundToInt
  * small.
  *
  * The tab is a window the size of a tab, and until this ran a guest inside it was told otherwise:
- * its `Resources` were built from J Code's configuration, so `screenWidthDp`, `orientation` and
+ * its `Resources` were built from JCode's configuration, so `screenWidthDp`, `orientation` and
  * every `-sw600dp`/`-land` resource qualifier described **the whole phone**, while the surface it
  * actually drew into was the editor pane. An app that trusts that — and a layout system is nothing
  * but an app that trusts that — lays itself out for a screen it does not have.
@@ -136,7 +136,7 @@ internal object GuestWindow {
      * Reads the style out of the activity's own window, the same places the platform reads it.
      *
      * A status bar that is the same colour and the same presence over every app is not a device's
-     * status bar, it is a strip J Code drew. On a phone the bar takes the app's `statusBarColor`,
+     * status bar, it is a strip JCode drew. On a phone the bar takes the app's `statusBarColor`,
      * gets out of the way when the app goes full-screen, and lets the app draw underneath it when
      * the app says it has handled the insets — and an app says all three through its window, so that
      * is where this looks:

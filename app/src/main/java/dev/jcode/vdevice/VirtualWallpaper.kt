@@ -7,7 +7,7 @@ import androidx.core.graphics.withTranslation
 import kotlin.math.min
 
 /**
- * What J Code's virtual device shows when nothing is running on it.
+ * What JCode's virtual device shows when nothing is running on it.
  *
  * A device with its screen on and no app on it should look like a device, not like a failure, so the
  * idle screen is a wallpaper rather than the black a dead surface gives back. Three outlined

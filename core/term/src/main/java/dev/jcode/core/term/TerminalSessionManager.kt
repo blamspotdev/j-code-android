@@ -210,7 +210,7 @@ class TerminalSessionManager(
      * `adb connect` spec for JCode's OWN adbd — the virtual device — or empty when it is not running.
      *
      * A `localfilesystem:` socket rather than an address, because that daemon is reachable only from
-     * inside J Code's own storage and deliberately has no port for anything else on the phone to
+     * inside JCode's own storage and deliberately has no port for anything else on the phone to
      * find. Takes precedence over [adbRelayPort]: when both are up, guest tooling should address the
      * virtual device, since running it at all means the user asked not to go through the host phone.
      */

@@ -35,7 +35,7 @@ import java.io.File
  * host down with it on the next traversal.
  *
  * Having the channel is still not the same as being fed by it. Measured on Android 13: touches over
- * the tab are dispatched to J Code's window, not to the embedded one, so every event is relayed
+ * the tab are dispatched to JCode's window, not to the embedded one, so every event is relayed
  * over Binder from the IDE and dispatched straight into [container]. That is safe rather than
  * doubled — the IDE only ever sees an event the dispatcher did *not* give to the guest — but it does
  * cost the soft keyboard, which is why text arrives here as synthesised key events.

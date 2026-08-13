@@ -17,15 +17,15 @@ data class VirtualDeviceApp(
 )
 
 /**
- * Runs a built APK inside J Code — no install, no ADB, no root.
+ * Runs a built APK inside JCode — no install, no ADB, no root.
  *
  * The guest is loaded into a **separate process of this app** (`:guest`, declared on the stub
  * activities in `AndroidManifest.xml`) so it gets its own ART heap and its own framework hooks and
  * cannot corrupt the IDE. Inside that process the container loads the APK's dex, resources and
  * native libraries by hand and persuades `ActivityThread` to instantiate the guest's activities in
- * place of J Code's stubs, so the *system* still drives attach and the whole activity lifecycle.
+ * place of JCode's stubs, so the *system* still drives attach and the whole activity lifecycle.
  *
- * The guest therefore shares J Code's uid, its permissions and its process — this is a **sandboxed
+ * The guest therefore shares JCode's uid, its permissions and its process — this is a **sandboxed
  * preview, not a security boundary**.
  *
  * [launch] is the full-screen path: a real activity, in its own task, with everything a real window

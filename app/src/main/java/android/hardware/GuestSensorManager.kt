@@ -23,7 +23,7 @@ private const val MAX_PERIOD_MS = 200L
 private const val WATCH_MS = 250L
 
 /**
- * The `SensorManager` a guest on J Code's virtual device is handed instead of the phone's.
+ * The `SensorManager` a guest on JCode's virtual device is handed instead of the phone's.
  *
  * Motion sensors are the one piece of hardware Android has never put behind a permission: any app
  * may read the accelerometer, the magnetometer and the gyroscope without asking anybody. That is

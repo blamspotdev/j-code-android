@@ -7,8 +7,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- Held for the virtual device's guests, not for J Code itself.
-         A guest runs under J Code's uid, so it holds J Code's permissions and no others — an app
+    <!-- Held for the virtual device's guests, not for JCode itself.
+         A guest runs under JCode's uid, so it holds JCode's permissions and no others — an app
          that merely asks whether it is online died on
          "ConnectivityService: Neither user 10211 nor current process has ACCESS_NETWORK_STATE"
          before drawing a frame. Measured on Ookla Speedtest.
@@ -28,7 +28,7 @@
     <!-- The one dangerous permission held for the virtual device, and the only hardware a guest can
          be given for real: the microphone. Never granted by holding it — it is requested from the
          user at the moment an app on the device is switched to a real microphone in Manage
-         permissions, and until that happens J Code does not have it and neither does any guest.
+         permissions, and until that happens JCode does not have it and neither does any guest.
          Every other guest is offered a simulated microphone, which records silence. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- "All files access": raw file-path access to /storage/emulated/0/JCode (workspace root and

@@ -94,7 +94,7 @@ private val HANDLE_THICKNESS = 4.dp
 private val HANDLE_TOUCH_HEIGHT = 24.dp
 
 /**
- * Editor tab holding J Code's virtual device — a screen the IDE owns, that an app can be put on and
+ * Editor tab holding JCode's virtual device — a screen the IDE owns, that an app can be put on and
  * taken off again.
  *
  * The device is the tab, not the app: with nothing running it is a live blank screen that `adb` can
@@ -137,7 +137,7 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
 
     // The device's launcher lives on the surface, not in this composition — see VirtualLauncher. All
     // that is left here is reading what is installed and handing it over, and hosting the one menu
-    // that is J Code's rather than the device's.
+    // that is JCode's rather than the device's.
     val revision = VirtualDeviceApps.revision.intValue
     var home by remember { mutableStateOf<List<LauncherApp>?>(null) }
     var menuFor by remember { mutableStateOf<Pair<VirtualDeviceApp, Offset>?>(null) }
@@ -217,7 +217,7 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
             modifier = Modifier.fillMaxSize(),
         )
 
-        // Held over the icon that was long-pressed. A menu is J Code's, not the device's, so it is
+        // Held over the icon that was long-pressed. A menu is JCode's, not the device's, so it is
         // composed here rather than drawn onto the screen a capture reads.
         menuFor?.let { (app, at) ->
             val density = LocalDensity.current
@@ -255,7 +255,7 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
             AppDetailsDialog(app = app, onDismiss = { detailsFor = null })
         }
 
-        // The device's own permission prompt. It belongs to J Code rather than to the guest — a
+        // The device's own permission prompt. It belongs to JCode rather than to the guest — a
         // dialog the app could draw itself would be a dialog the app could answer itself.
         permissionRequest?.let { request ->
             GuestPermissionDialog(
@@ -376,7 +376,7 @@ private fun DeviceScreen(
 }
 
 /**
- * The only part of the home screen that is *not* the device: J Code's own affordances for putting an
+ * The only part of the home screen that is *not* the device: JCode's own affordances for putting an
  * app on it, and for the bench the device's hardware is set from.
  *
  * Everything the device itself shows — wallpaper, its name, the app icons, the "No app installed"
@@ -725,8 +725,8 @@ private fun InstallSheet(
                     Text("Install an app", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(
                         text = "Put a freshly built APK on ${VirtualIdentity.MODEL} — no install on " +
-                            "this phone, no ADB. It runs in J Code's own process under a virtual " +
-                            "device identity, and everything it stores is cleared when J Code starts.",
+                            "this phone, no ADB. It runs in JCode's own process under a virtual " +
+                            "device identity, and everything it stores is cleared when JCode starts.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -746,7 +746,7 @@ private fun InstallSheet(
                     title = "Hardware acceleration is off",
                     message = "The device is composited onto a surface, which needs the GPU. Turn " +
                         "Settings → Performance → Rendering → Hardware acceleration back on and " +
-                        "restart J Code; until then the device cannot draw.",
+                        "restart JCode; until then the device cannot draw.",
                 )
             }
 
@@ -806,7 +806,7 @@ private fun apkProblem(path: String): String? {
         file.isDirectory -> "That is a folder — point this at the .apk file inside it."
         !file.exists() -> "Nothing is at that path. A debug build leaves its APK under " +
             "app/build/outputs/apk/debug/ inside the project."
-        !file.canRead() -> "J Code cannot read that file."
+        !file.canRead() -> "JCode cannot read that file."
         else -> null
     }
 }
@@ -814,7 +814,7 @@ private fun apkProblem(path: String): String? {
 /**
  * What the device knows about an installed app, read back out of its APK.
  *
- * A modal rather than another screen on the device: this is J Code talking about the app, not the
+ * A modal rather than another screen on the device: this is JCode talking about the app, not the
  * app talking, and putting it on the device's own screen would put it in `screencap` where it would
  * read as something the guest drew.
  *
@@ -889,7 +889,7 @@ private fun appFacts(
             ).joinToString(", "),
         )
         info?.requestedPermissions?.takeIf { it.isNotEmpty() }?.let { permissions ->
-            // The guest inherits J Code's permissions wholesale, so this is what the app *asked* for
+            // The guest inherits JCode's permissions wholesale, so this is what the app *asked* for
             // rather than what it has — worth saying, and worth not implying otherwise.
             add(
                 "Requests (not granted separately)" to

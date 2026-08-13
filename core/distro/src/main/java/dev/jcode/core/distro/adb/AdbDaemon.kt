@@ -86,11 +86,11 @@ fun adbCommandArgs(command: String): List<String> {
  * the [AdbServiceHandler] it is given.
  *
  * **Why it is a Unix socket and not a port.** This daemon exposes `exec:cmd package install` — "run
- * this APK inside JCode" — which is arbitrary code execution with J Code's uid and permissions. On
+ * this APK inside JCode" — which is arbitrary code execution with JCode's uid and permissions. On
  * Android every app shares one loopback interface, so a listener on `127.0.0.1:<port>` is reachable
  * by *every other app on the phone*; the only thing standing between them and that service was adb's
- * AUTH exchange. A socket bound in J Code's own storage cannot be reached at all by a process that
- * cannot open the file, which is every uid but J Code's — so the proot distro, which runs under that
+ * AUTH exchange. A socket bound in JCode's own storage cannot be reached at all by a process that
+ * cannot open the file, which is every uid but JCode's — so the proot distro, which runs under that
  * uid, still reaches it and nothing else does.
  *
  * Authentication against [authorizedKeys] stays exactly as it was. It is now the second line rather
@@ -173,7 +173,7 @@ class AdbDaemon(
     /**
      * Binds an AF_UNIX listener at [path], in the **filesystem** namespace rather than the abstract
      * one. That is the whole security property: an abstract socket has a name and no owner, while
-     * this one is a file in J Code's private storage, so the kernel's own permission check on
+     * this one is a file in JCode's private storage, so the kernel's own permission check on
      * `connect` is what keeps every other app out.
      *
      * `LocalServerSocket(FileDescriptor)` is what listens; the bound `LocalSocket` has to be kept

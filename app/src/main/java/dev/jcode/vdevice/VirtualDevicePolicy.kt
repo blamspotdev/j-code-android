@@ -38,10 +38,10 @@ internal enum class PermissionRule(val label: String) {
 }
 
 /**
- * The hardware J Code's virtual device can be given, and what each piece is allowed to be.
+ * The hardware JCode's virtual device can be given, and what each piece is allowed to be.
  *
- * The asymmetry between these is not a matter of taste. A guest runs under J Code's uid and holds
- * J Code's permissions, so what the container can offer is bounded by what the *IDE* is allowed to
+ * The asymmetry between these is not a matter of taste. A guest runs under JCode's uid and holds
+ * JCode's permissions, so what the container can offer is bounded by what the *IDE* is allowed to
  * do — and by what can be synthesised convincingly enough to be worth offering at all.
  *
  *  - **Camera and location have no [HardwareMode.Real].** Not because the plumbing is hard, but
@@ -52,7 +52,7 @@ internal enum class PermissionRule(val label: String) {
  *    why a guest has been getting the phone's real accelerometer, magnetometer and gyroscope since
  *    the day the device could run an app — with nothing anywhere able to say no. That is what
  *    [HardwareMode.Off] is for, and it is the reason this whole file exists.
- *  - **The microphone is the only one whose Real needs something of J Code**, namely `RECORD_AUDIO`,
+ *  - **The microphone is the only one whose Real needs something of JCode**, namely `RECORD_AUDIO`,
  *    which is asked for at the moment an app is switched to it and never before.
  *
  * [features] is what the device *declares* — the answers [GuestPackageHook] gives `hasSystemFeature`,
@@ -91,7 +91,7 @@ internal enum class VirtualHardware(
         id = "microphone",
         label = "Microphone",
         summary = "Simulated gives the device a microphone that records nothing. Real is the " +
-            "phone's, and asks J Code for permission to record the first time you choose it.",
+            "phone's, and asks JCode for permission to record the first time you choose it.",
         modes = listOf(HardwareMode.Off, HardwareMode.Simulated, HardwareMode.Real),
         fallback = HardwareMode.Off,
         permissions = listOf(Manifest.permission.RECORD_AUDIO),
@@ -169,7 +169,7 @@ internal enum class VirtualHardware(
     /**
      * Whether [HardwareMode.Real] can actually be honoured here, which is a question about the
      * *phone*: a compass the host does not have cannot be passed through to anybody, and the
-     * microphone is the phone's only once the user has let J Code record.
+     * microphone is the phone's only once the user has let JCode record.
      */
     fun realAvailable(context: Context): Boolean = when {
         !modes.contains(HardwareMode.Real) -> false
@@ -181,7 +181,7 @@ internal enum class VirtualHardware(
     /**
      * Whether [HardwareMode.Real] is worth putting in front of the user.
      *
-     * Not the same question as [realAvailable]. The microphone is offered even while J Code holds no
+     * Not the same question as [realAvailable]. The microphone is offered even while JCode holds no
      * `RECORD_AUDIO`, because choosing it is what asks for it — but a compass the phone does not
      * have is not a choice, it is a dead end, so it is not shown.
      */
@@ -535,7 +535,7 @@ internal object VirtualDevicePolicy {
         val staged = File(file.parentFile, "${file.name}.new")
         runCatching {
             file.parentFile?.mkdirs()
-            staged.outputStream().use { properties.store(it, "J Code virtual device") }
+            staged.outputStream().use { properties.store(it, "JCode virtual device") }
             if (!staged.renameTo(file)) throw VirtualDeviceException("cannot store the device policy")
             cached = properties
             cachedAt = file.lastModified()

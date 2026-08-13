@@ -39,7 +39,7 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * "Installing" here means staging the APK under the container's own storage; there is no system
  * package database involved, so a guest is still invisible to the real `pm` — and
- * [VirtualDeviceApps] empties the whole tree on every J Code start.
+ * [VirtualDeviceApps] empties the whole tree on every JCode start.
  */
 class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
 
@@ -205,7 +205,7 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
      * `logcat`, answering the **virtual device's** log rather than the phone's.
      *
      * The phone's is not on offer and could not be: reading it needs `READ_LOGS`, and an app cannot
-     * read back even its own entries — measured on Android 13, where `logcat` run as J Code's uid
+     * read back even its own entries — measured on Android 13, where `logcat` run as JCode's uid
      * returns nothing whatever. What this answers instead is written by the container itself, and is
      * the more useful log for a driver anyway: it contains this device's business and nothing else —
      * what was loaded and started, what the container refused and why, anything the guest printed,
@@ -485,7 +485,7 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
 
         private const val EMPTY_LOG =
             "--------- beginning of jcode virtual device\n" +
-                "(nothing logged yet — the device's log covers this J Code session only, and holds " +
+                "(nothing logged yet — the device's log covers this JCode session only, and holds " +
                 "what the container did plus anything the guest printed or crashed with)\n"
 
         private const val NOTHING_RUNNING =

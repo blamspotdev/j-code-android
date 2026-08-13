@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger
 /**
  * How a guest's permissions are answered, now that the device has an opinion about them.
  *
- * A guest holds J Code's permissions and no others, which used to make every permission question a
+ * A guest holds JCode's permissions and no others, which used to make every permission question a
  * question about the *IDE* — and the container answered `checkPermission` with a flat
  * `PERMISSION_GRANTED` so that libraries expecting a straight answer got one. That was fine while
  * there was nothing to decide. It is not fine now that a person can hand one app the microphone and
@@ -35,7 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * `requestPermissions` was broken outright before any of this. An app that called it built an intent
  * for the permission controller, which went out to the real system, which was being asked to grant a
- * permission to **J Code** — a package that does not declare most of them — and the result came back
+ * permission to **JCode** — a package that does not declare most of them — and the result came back
  * addressed to an activity token no `ActivityRecord` answers to. So the dialog never appeared, the
  * callback never arrived, and an app that waits for one before doing anything simply stopped there.
  *
@@ -60,7 +60,7 @@ internal object GuestPermissions {
     /**
      * Set while this object is deciding, because deciding asks questions of its own.
      *
-     * "Is Real available for the microphone" is answered by checking whether **J Code** holds
+     * "Is Real available for the microphone" is answered by checking whether **JCode** holds
      * `RECORD_AUDIO` — a `checkSelfPermission` that arrives back here through the very hook that
      * asked it, and would go round for ever. On re-entry the device has no opinion, which sends that
      * inner question to the real system, which is the one that can answer it.
@@ -168,7 +168,7 @@ internal object GuestPermissions {
 
     /**
      * Answers a guest's `requestPermissions` where it stands, rather than letting it go to a system
-     * that would refuse it on J Code's behalf. True when the launch has been dealt with and the
+     * that would refuse it on JCode's behalf. True when the launch has been dealt with and the
      * binder call must not happen.
      *
      * The request code is the one thing here that has to be read positionally. It is the first `int`
@@ -368,7 +368,7 @@ internal object GuestPermissions {
      * `PermissionManager` memoises `checkPermission` behind a `PropertyInvalidatedCache` whose nonce
      * only the system bumps — so the first answer this device gave for a permission would be the
      * answer it kept giving, and revoking the camera would not be visible to the app until something
-     * outside J Code invalidated the cache. Both caches are off by request here, in `:guest` only,
+     * outside JCode invalidated the cache. Both caches are off by request here, in `:guest` only,
      * where the whole process exists to run one guest at a time.
      */
     private fun disableCaches() {

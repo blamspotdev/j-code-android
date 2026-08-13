@@ -12,8 +12,8 @@ import java.lang.reflect.Proxy
  * The virtual device's notification service: keeps a guest's notifications on the device instead of
  * in the user's own shade.
  *
- * Without this a guest's `notify()` goes out over binder under **J Code's** uid and package, so it
- * lands in the phone's real notification shade, attributed to J Code, and survives the device being
+ * Without this a guest's `notify()` goes out over binder under **JCode's** uid and package, so it
+ * lands in the phone's real notification shade, attributed to JCode, and survives the device being
  * emptied. That is the one thing the virtual device exists to avoid — an app should be triable
  * without leaving anything behind on the phone.
  *
@@ -31,7 +31,7 @@ internal object GuestNotificationHook {
     private var installed = false
 
     /**
-     * Set while [HostNotificationMirror] is posting J Code's own copy of a guest's notification.
+     * Set while [HostNotificationMirror] is posting JCode's own copy of a guest's notification.
      *
      * Without it the mirror's calls would be caught by this very hook and fed straight back into the
      * device they came from — a loop, and no notification on the phone. A thread local rather than a
@@ -39,7 +39,7 @@ internal object GuestNotificationHook {
      */
     private val delivering = ThreadLocal.withInitial { false }
 
-    /** Runs [block]'s notification calls as J Code's, past this hook. */
+    /** Runs [block]'s notification calls as JCode's, past this hook. */
     fun <T> asHost(block: () -> T): T {
         delivering.set(true)
         return try {
@@ -132,7 +132,7 @@ internal object GuestNotificationHook {
 
     /**
      * The tag is the *third* string in `enqueueNotificationWithTag(pkg, opPkg, tag, …)`, and it is
-     * the only one of the three the container wants — the two before it are J Code's package name,
+     * the only one of the three the container wants — the two before it are JCode's package name,
      * which is what the guest's calls go out under.
      */
     private const val TAG_ARG = 2

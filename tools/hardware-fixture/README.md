@@ -63,12 +63,12 @@ Push-Location out; jar uf ..\base.apk classes.dex; Pop-Location
 & "$bt\apksigner.bat" sign --ks "$env:USERPROFILE\.android\debug.keystore" --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out hwfixture.apk aligned.apk
 ```
 
-Then push it somewhere J Code can read and install it from the device's **Install an app** sheet:
+Then push it somewhere JCode can read and install it from the device's **Install an app** sheet:
 
 ```powershell
 adb push hwfixture.apk /sdcard/JCode/hwfixture.apk
 ```
 
-The device is wiped on every J Code start, so the install has to be repeated after each rebuild of
+The device is wiped on every JCode start, so the install has to be repeated after each rebuild of
 the IDE. Note also that opening an app from the launcher rewrites the sheet's APK path to the
 *installed* copy — reinstalling without retyping the source path reinstalls the build already there.

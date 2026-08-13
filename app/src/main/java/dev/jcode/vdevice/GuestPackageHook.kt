@@ -16,7 +16,7 @@ import java.lang.reflect.Proxy
  * reads its `InitializationProvider`'s `<meta-data>` through `getProviderInfo` — and so, transitively,
  * do WorkManager, Firebase, `emoji2` and ProfileInstaller, none of which start if that call fails.
  * AppCompat looks its own activity up through `getActivityInfo`. Analytics libraries read
- * `getPackageInfo(…).versionName`. Every one of those goes out under J Code's uid to a package
+ * `getPackageInfo(…).versionName`. Every one of those goes out under JCode's uid to a package
  * manager that has never heard of the guest, and comes back `NameNotFoundException`.
  *
  * Measured on NewPipe before this existed:
@@ -37,7 +37,7 @@ import java.lang.reflect.Proxy
  * `IActivityTaskManager` hook in [GuestHooks], for the same reason.
  *
  * Only queries naming a loaded guest are answered here; everything else is passed straight through,
- * so J Code's own package manager behaves exactly as it did. And like every other hook, this one is
+ * so JCode's own package manager behaves exactly as it did. And like every other hook, this one is
  * guarded end to end: a platform that puts `sPackageManager` out of reach loses guest package
  * queries and nothing else.
  */
@@ -149,13 +149,13 @@ internal object GuestPackageHook {
                 // exactly what a guest is. Answering it at all is the point: the real package
                 // manager throws for a package it has never heard of.
                 "getInstallerPackageName", "getInstallSourceInfo" -> Box(null)
-                // Every binder call the guest makes already goes out under J Code's uid, so this is
+                // Every binder call the guest makes already goes out under JCode's uid, so this is
                 // the truthful answer rather than a flattering one.
                 "getPackageUid" -> Box(Process.myUid())
                 "isPackageAvailable" -> Box(true)
                 "getTargetSdkVersion" -> Box(guest.applicationInfo.targetSdkVersion)
                 // A permission check that reached the server would ask about the wrong package: the
-                // guest is not one the server has heard of, and the uid behind it is J Code's. So
+                // guest is not one the server has heard of, and the uid behind it is JCode's. So
                 // the device answers — from the user's own policy for the hardware it governs, and
                 // with the granted the container has always given for everything else.
                 "checkPermission" -> Box(

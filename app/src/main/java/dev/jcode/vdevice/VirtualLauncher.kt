@@ -32,7 +32,7 @@ internal class LauncherTile(val app: VirtualDeviceApp, val bounds: Rect)
  * [VirtualScreen]'s capture go through them. What the agent screenshots is, by construction, where
  * `input tap` lands — [hit] resolves a touch against the same rectangles.
  *
- * The consequence worth stating: only what belongs to the *device* is drawn here. J Code's own
+ * The consequence worth stating: only what belongs to the *device* is drawn here. JCode's own
  * "Install an app" button floats over the screen as IDE chrome and is deliberately absent from a
  * capture, the same way the tab's control bar is.
  *

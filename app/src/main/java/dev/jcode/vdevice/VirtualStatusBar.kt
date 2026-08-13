@@ -30,7 +30,7 @@ import kotlin.math.abs
  *
  * It is added to [EmbeddedGuest]'s container, above the guest's decor view, rather than composed
  * over the tab by the IDE. That single decision is what makes it behave like part of the device
- * rather than part of J Code:
+ * rather than part of JCode:
  *
  * | | Falls out of being a child of the container |
  * |---|---|
@@ -193,8 +193,8 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
      * The notification's own small icon, loaded against the **guest's** resources.
      *
      * An `Icon` posted by a guest carries a resource id from the guest's table and a package name the
-     * real `PackageManager` has never heard of, so loading it with J Code's context resolves either
-     * nothing or — worse — whatever J Code happens to have at that id. The guest's own context is the
+     * real `PackageManager` has never heard of, so loading it with JCode's context resolves either
+     * nothing or — worse — whatever JCode happens to have at that id. The guest's own context is the
      * only one that can read it, and the app icon is the honest fallback when there is no small icon
      * or it will not load.
      */
@@ -313,7 +313,7 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
      * A notification's buttons, which are the whole point of one for a media player or a download.
      *
      * Firing is all a shade may do with a `PendingIntent`, and the token itself is real: it was
-     * minted under J Code's package by [GuestActivityManagerHook], so the system honours it.
+     * minted under JCode's package by [GuestActivityManagerHook], so the system honours it.
      *
      * **Where it stops, measured.** A button whose intent names one of the guest's *own* components
      * does nothing, and cannot be made to from here. `PendingIntent.send` marshals the token to the

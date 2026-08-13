@@ -28,10 +28,10 @@ import java.lang.reflect.Proxy
  * The substitution costs the guest nothing it could otherwise have had. A `PendingIntent` is a token
  * the system hands to somebody else to act on the app's behalf, and a guest is not a package the
  * system can act on behalf of in the first place; what it gets back is a working token owned by
- * J Code, which is the identity every other binder call it makes already goes out under.
+ * JCode, which is the identity every other binder call it makes already goes out under.
  *
  * Scoped to `getIntentSender` on purpose. Rewriting the package on every call would be a much
- * larger claim about what a guest is allowed to do under J Code's name, and only this one was
+ * larger claim about what a guest is allowed to do under JCode's name, and only this one was
  * measured to need it.
  */
 internal object GuestActivityManagerHook {
@@ -84,7 +84,7 @@ internal object GuestActivityManagerHook {
             // task manager, so it never meets the hook that redirects a guest's `startActivity` —
             // and the system then resolves the component against the phone's own copy of that
             // package, where one is installed. Measured on ES-DE: its ConfiguratorActivity opened
-            // the *installed* app over the top of J Code, which is both the wrong application and
+            // the *installed* app over the top of JCode, which is both the wrong application and
             // outside the device entirely.
             if (args != null && method.name == SEND_INTENT_SENDER) {
                 for (index in args.indices) {
@@ -116,7 +116,7 @@ internal object GuestActivityManagerHook {
      * Delivers a `PendingIntent` aimed at one of the guest's own receivers, in-process.
      *
      * A guest builds a notification's buttons with `PendingIntent.getBroadcast`, and the token comes
-     * back owned by J Code — but the *component* inside it still names a package the real system has
+     * back owned by JCode — but the *component* inside it still names a package the real system has
      * never heard of, so firing it resolves nothing and fails silently.
      *
      * This is the half that can be caught: a broadcast that comes through the activity manager. The

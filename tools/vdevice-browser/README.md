@@ -3,10 +3,10 @@
 The virtual device's **built-in browser** — an address bar, a page, and Back.
 
 It exists so the device has a way to open a URL without reaching for the phone's browser, which
-would take the user out of J Code and load the page under their own profile: their cookies, their
+would take the user out of JCode and load the page under their own profile: their cookies, their
 signed-in accounts. Inside the device, everything it loads is wiped with the device.
 
-It is an **ordinary guest**. No container privileges, no special casing — J Code installs it onto the
+It is an **ordinary guest**. No container privileges, no special casing — JCode installs it onto the
 device on every start like any other APK, and it goes through the same load, embed, window and
 WebView paths every other app takes. That makes it a live test of those paths as much as a feature.
 
@@ -24,7 +24,7 @@ not exempt from the clean room — it is put back into it.
   the device's status bar and the only control the browser has.
 - **A framework icon** (`@android:drawable/ic_menu_search`) rather than one of its own, so this stays
   a single-dex, resource-free APK that plain `javac` + `d8` + `aapt2` can build.
-- `INTERNET` and `ACCESS_NETWORK_STATE` are declared, but a guest inherits J Code's permissions
+- `INTERNET` and `ACCESS_NETWORK_STATE` are declared, but a guest inherits JCode's permissions
   regardless — they are there so the manifest is honest about what it needs.
 
 ## Build

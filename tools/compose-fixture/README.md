@@ -6,7 +6,7 @@ The guest that answers one question the plain-view [`guest-fixture`](../guest-fi
 Compose's frame clock starts *paused* and is resumed only on `Lifecycle.Event.ON_START`. A
 `ComponentActivity` gets that event from `ReportFragment`, which on API 29+ listens to
 `onActivityPostStarted` — one of the `Application.ActivityLifecycleCallbacks` that
-`Activity.performStart` dispatches, and `performStart` is denied to J Code at `targetSdk` 33. If the
+`Activity.performStart` dispatches, and `performStart` is denied to JCode at `targetSdk` 33. If the
 container does not re-create that dispatch itself, this app composes and then draws **nothing at
 all**: a black screen, not a broken one.
 
@@ -21,7 +21,7 @@ So the screen is deliberately unsubtle:
 
 ## Build
 
-It is a normal Gradle project, standalone so it can be built and broken without touching J Code's
+It is a normal Gradle project, standalone so it can be built and broken without touching JCode's
 own build. From the repo root, with the repo's wrapper:
 
 ```powershell

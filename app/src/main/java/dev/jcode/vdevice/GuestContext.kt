@@ -23,12 +23,12 @@ import java.io.FileOutputStream
 /**
  * The [Context] the guest sees.
  *
- * Wraps J Code's real `ContextImpl` — so every binder call still goes out under J Code's uid and
+ * Wraps JCode's real `ContextImpl` — so every binder call still goes out under JCode's uid and
  * package, which is what makes them succeed — but reports the guest's identity for everything the
  * guest can observe about itself: package name, `ApplicationInfo`, resources, class loader, and a
- * private storage tree redirected under `<J Code filesDir>/vdevice/<guest package>/`.
+ * private storage tree redirected under `<JCode filesDir>/vdevice/<guest package>/`.
  *
- * The redirect is what keeps a guest from ever seeing (or writing into) J Code's own data directory.
+ * The redirect is what keeps a guest from ever seeing (or writing into) JCode's own data directory.
  */
 internal class GuestContext(base: Context, private val guest: LoadedGuest) : ContextWrapper(base) {
 
@@ -76,7 +76,7 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
      *
      * The base context is what looks the policy up, not this one: `getApplicationContext` here
      * answers with the guest's, whose `filesDir` is the redirected tree, and the device's policy
-     * lives in J Code's.
+     * lives in JCode's.
      *
      * Location is *not* here. It is replaced a layer lower, at the binder the framework builds every
      * `LocationManager` around, because the manager itself admits to no field that could be patched
@@ -133,7 +133,7 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
      * straight back through here. Joining it onto `databases/` produced
      * `…/databases/data/user/0/…/no_backup/androidx.work.workdb`, whose parent does not exist, and
      * the `SQLiteCantOpenDatabaseException` came back on a WorkManager thread where nothing catches
-     * it — killing `:guest` and, with it, the activity J Code was showing.
+     * it — killing `:guest` and, with it, the activity JCode was showing.
      */
     override fun getDatabasePath(name: String): File =
         if (name.startsWith(File.separatorChar)) {
@@ -161,7 +161,7 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
     /**
      * `Context.getSharedPreferences(File, int)` is the hidden overload every implementation funnels
      * into; calling it on the base context is what lets the guest's preferences land in its own
-     * `shared_prefs/` instead of J Code's. Without it the guest's files would sit next to the IDE's.
+     * `shared_prefs/` instead of JCode's. Without it the guest's files would sit next to the IDE's.
      */
     override fun getSharedPreferences(name: String, mode: Int): SharedPreferences {
         val byFile = HiddenApi.method(

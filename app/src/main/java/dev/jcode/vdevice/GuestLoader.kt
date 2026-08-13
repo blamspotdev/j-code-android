@@ -49,7 +49,7 @@ internal fun selectDefaultTheme(declared: Int, targetSdkVersion: Int): Int = whe
 
 /**
  * A guest APK loaded into the current process: its code, its resources, and the private storage tree
- * its [GuestContext] hands out in place of J Code's.
+ * its [GuestContext] hands out in place of JCode's.
  */
 internal class LoadedGuest(
     val apkPath: String,
@@ -123,7 +123,7 @@ internal class LoadedGuest(
 
     /**
      * Resolved here rather than left to `PackageItemInfo.loadLabel`, which would look a `labelRes` up
-     * through the host `PackageManager` under J Code's package name and hand back J Code's label.
+     * through the host `PackageManager` under JCode's package name and hand back JCode's label.
      */
     fun labelOf(activityClass: String): CharSequence =
         activities[activityClass]?.let { text(it.nonLocalizedLabel, it.labelRes) }
@@ -238,19 +238,19 @@ internal object GuestLoader {
         appInfo.dataDir = guestDataDir.absolutePath
         appInfo.deviceProtectedDataDir = guestDataDir.absolutePath
         appInfo.nativeLibraryDir = nativeLibDir?.absolutePath
-        // Same uid as the IDE by construction: the guest is code running inside J Code's own app.
+        // Same uid as the IDE by construction: the guest is code running inside JCode's own app.
         appInfo.uid = Process.myUid()
         appInfo.processName = "${host.packageName}:guest"
 
-        // The parent is the *boot* class loader, not J Code's, and that is load-bearing.
+        // The parent is the *boot* class loader, not JCode's, and that is load-bearing.
         //
-        // Delegating to J Code's would be parent-first, so every library the IDE also ships —
+        // Delegating to JCode's would be parent-first, so every library the IDE also ships —
         // AndroidX, Kotlin, Compose — would be answered out of the IDE's dex instead of the guest's.
         // The classes would run, which is what makes this so quiet, but each library's generated `R`
-        // would carry *J Code's* resource ids while the guest's resource table only knows the
+        // would carry *JCode's* resource ids while the guest's resource table only knows the
         // guest's. That is exactly how an AppCompat guest carrying a perfectly good
         // Theme.AppCompat theme was told to "use a Theme.AppCompat theme (or descendant)":
-        // AppCompatDelegate looked up J Code's `windowActionBar` id and the guest's table, quite
+        // AppCompatDelegate looked up JCode's `windowActionBar` id and the guest's table, quite
         // correctly, had never heard of it.
         //
         // Isolating the parent gives the guest its own copy of everything it ships, which is what a
@@ -331,7 +331,7 @@ internal object GuestLoader {
     /**
      * `AssetManager`'s no-arg constructor is hidden but yields an asset manager that already carries
      * the framework's own assets, so `addAssetPath` on top of it gives the guest working resources
-     * without disturbing J Code's.
+     * without disturbing JCode's.
      */
     private fun newAssetManager(): AssetManager =
         AssetManager::class.java.getDeclaredConstructor().apply { isAccessible = true }.newInstance()

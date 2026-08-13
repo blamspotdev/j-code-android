@@ -5,7 +5,7 @@ The guest that answers the question neither [`guest-fixture`](../guest-fixture) 
 libraries it ships?**
 
 Both older fixtures theme themselves out of `android:Theme.*` and draw with code that never looks an
-attribute up, so both pass even when a guest's libraries are being answered out of J Code's dex
+attribute up, so both pass even when a guest's libraries are being answered out of JCode's dex
 instead of its own APK. `AppCompatDelegate` does not: before it inflates anything it reads
 `windowActionBar` off the activity's theme, using an id out of the *guest's* generated
 `androidx.appcompat.R`. If the container let the IDE's class loader answer for AppCompat, that id is
@@ -31,7 +31,7 @@ Every view carries an id, which also makes this the fixture to point `uiautomato
 
 ## Build
 
-It is a normal Gradle project, standalone so it can be built and broken without touching J Code's
+It is a normal Gradle project, standalone so it can be built and broken without touching JCode's
 own build. From the repo root, with the repo's wrapper:
 
 ```powershell

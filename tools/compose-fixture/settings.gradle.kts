@@ -14,6 +14,6 @@ dependencyResolutionManagement {
     }
 }
 
-// Standalone on purpose: this is a guest to test J Code with, not a part of it, and it must be
+// Standalone on purpose: this is a guest to test JCode with, not a part of it, and it must be
 // buildable (and breakable) without touching the IDE's own build.
 rootProject.name = "compose-fixture"

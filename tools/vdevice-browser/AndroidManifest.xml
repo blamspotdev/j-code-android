@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The virtual device's built-in browser.
 
-     Shipped in J Code's assets and installed onto the device on every start, so the device always
+     Shipped in JCode's assets and installed onto the device on every start, so the device always
      has one app on it. It is an ordinary guest — no container privileges, no special casing — which
      is the point: it exercises the same load, embed, window and WebView paths every other app takes,
      and its browsing data is wiped with the device like any other guest's.

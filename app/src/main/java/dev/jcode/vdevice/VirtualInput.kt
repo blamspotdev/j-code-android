@@ -8,7 +8,7 @@ import kotlin.math.roundToLong
 import kotlinx.coroutines.delay
 
 /**
- * `adb shell input` for J Code's virtual device.
+ * `adb shell input` for JCode's virtual device.
  *
  * The tab already relays real `MotionEvent`s and `KeyEvent`s to the guest, so driving the device
  * from a terminal is a matter of *making* the right events rather than finding a way in: these are

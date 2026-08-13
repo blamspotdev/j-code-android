@@ -98,7 +98,7 @@ private val POSES = listOf(
  * them anywhere else made them look like properties of an app.
  *
  * A tab of its own rather than more of the device's own screen, for the reason every other piece of
- * J Code chrome is: what `screencap` answers with has to be the device, and a control panel drawn
+ * JCode chrome is: what `screencap` answers with has to be the device, and a control panel drawn
  * over it would read as something the guest put there.
  *
  * What each *app* is allowed to do with any of this is the other half, in Manage permissions. Both
@@ -587,7 +587,7 @@ private fun TrailTools(
             "replay of a real street at a realistic speed is worth nothing to somebody testing a " +
             "maps app and a great deal to somebody faking a journey — so there is no faithful trace " +
             "here to replay. Nor does any of it leave the device: a simulated fix is answered to " +
-            "guests inside J Code and never to the phone.",
+            "guests inside JCode and never to the phone.",
     )
 }
 
@@ -796,7 +796,7 @@ private fun SensorReadout(hardware: VirtualHardware, now: HardwareSample) {
         }
     }
     ManagerNoticeCard(
-        title = "Cleared when J Code restarts",
+        title = "Cleared when JCode restarts",
         message = "The device is wiped on every start, and this goes with it — a route still " +
             "running against an app that is no longer installed is nobody's idea of a clean room.",
     )

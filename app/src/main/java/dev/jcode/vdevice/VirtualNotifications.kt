@@ -10,8 +10,8 @@ import android.util.Log
  * What the virtual device has been told to show in its status bar.
  *
  * A guest's notifications cannot go to the real one, and the reason is worth stating plainly: every
- * binder call a guest makes goes out under **J Code's** uid and package, so a guest that posts a
- * notification would put it in the user's own shade, attributed to J Code, and leave it there after
+ * binder call a guest makes goes out under **JCode's** uid and package, so a guest that posts a
+ * notification would put it in the user's own shade, attributed to JCode, and leave it there after
  * the device was emptied. The point of the virtual device is that an app can be tried without
  * touching the phone, and the notification shade is part of the phone.
  *
@@ -44,7 +44,7 @@ internal object VirtualNotifications {
      * One of a notification's buttons.
      *
      * The `PendingIntent` is kept rather than the intent inside it, because firing one is the only
-     * thing a shade is allowed to do with it — and because a guest's was minted under J Code's
+     * thing a shade is allowed to do with it — and because a guest's was minted under JCode's
      * package by [GuestActivityManagerHook], so it is a real token the system will honour.
      */
     internal data class Act(val title: String, val intent: PendingIntent?)

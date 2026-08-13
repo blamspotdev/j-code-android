@@ -29,7 +29,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Says out loud what hardware a guest can actually see on J Code's virtual device.
+ * Says out loud what hardware a guest can actually see on JCode's virtual device.
  *
  * Every line is something the container has to get right for "Manage permissions" to mean anything:
  * what the device declares it has, what it says the app may use, which sensors are in the list,

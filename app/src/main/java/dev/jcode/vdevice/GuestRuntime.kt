@@ -35,7 +35,7 @@ internal object GuestRuntime {
     /** Embedded-activity id, the `Activity.getId()` a system launch would never produce. */
     private const val EMBEDDED_ID = "jcode-embedded"
 
-    /** Keeps the guest's WebView data out of J Code's, which already holds the lock on its own. */
+    /** Keeps the guest's WebView data out of JCode's, which already holds the lock on its own. */
     internal const val GUEST_WEBVIEW_SUFFIX = "jcode-guest"
 
     private class Target(val guest: LoadedGuest, val activityClass: String)
@@ -120,7 +120,7 @@ internal object GuestRuntime {
      * Gives `:guest` a WebView data directory of its own.
      *
      * WebView takes an exclusive lock on its data directory and refuses to load in a second process
-     * of the same app without one — and J Code's own process, which is full of WebViews, always gets
+     * of the same app without one — and JCode's own process, which is full of WebViews, always gets
      * there first. So a guest that touches a WebView **at all** died on:
      *
      * ```
@@ -131,7 +131,7 @@ internal object GuestRuntime {
      *
      * That is not a niche case: ad SDKs, sign-in flows, Cordova and Ionic apps, and anything with an
      * in-app browser all reach for one. Measured on CPU-Z, whose Mobile Ads provider loads WebView
-     * from `Application.onCreate` — the crash killed `:guest`, and with it the activity J Code was
+     * from `Application.onCreate` — the crash killed `:guest`, and with it the activity JCode was
      * showing.
      *
      * `setDataDirectorySuffix` is public API from API 28 and must run before WebView is used in the
@@ -200,7 +200,7 @@ internal object GuestRuntime {
         val component = stub.component ?: throw VirtualDeviceException("no stub component")
         val info = host.packageManager.getActivityInfo(component, 0)
         // The same rewrite the LAUNCH_ACTIVITY hook applies: guest component, guest resource ids, and
-        // above all theme 0, so no theme is built against J Code's resources before bind() runs.
+        // above all theme 0, so no theme is built against JCode's resources before bind() runs.
         onLaunchActivity(stub, info)
         val target = resolve(stub) ?: throw VirtualDeviceException("$stub carries no guest identity")
         // The tab is the only window shape on offer, so an activity that declares itself
@@ -499,8 +499,8 @@ internal object GuestRuntime {
 
         // Whatever the client resolves out of this ActivityInfo, it resolves against the *activity's*
         // resources — which bind() is about to make the guest's. So every resource id here has to be
-        // one of the guest's, or the framework looks a J Code id up in the guest's table and throws.
-        // `applicationInfo` still keeps J Code's identity otherwise: swapping it wholesale sends
+        // one of the guest's, or the framework looks a JCode id up in the guest's table and throws.
+        // `applicationInfo` still keeps JCode's identity otherwise: swapping it wholesale sends
         // ActivityThread looking for a LoadedApk — and an installed package record — for a package
         // the system has never heard of.
         target.guest.activities[target.activityClass]?.let { guestInfo ->
@@ -513,8 +513,8 @@ internal object GuestRuntime {
         info.labelRes = 0
 
         // The theme is the one id that must be zeroed rather than translated. performLaunchActivity
-        // applies it while the activity is still on J Code's context, which builds
-        // ContextThemeWrapper.mTheme out of J Code's resource table — and mTheme is the only member
+        // applies it while the activity is still on JCode's context, which builds
+        // ContextThemeWrapper.mTheme out of JCode's resource table — and mTheme is the only member
         // the container needs but cannot reach to undo that, being max-target-p and so denied at
         // targetSdk 33. With getThemeResource() forced to 0 no theme is created at all, and bind()
         // applies the guest's own against the right resources a moment later.
@@ -549,7 +549,7 @@ internal object GuestRuntime {
         // The int form is the one the activity's Window watches, so it still has to happen. What it
         // cannot do on its own is guarantee *which* resource table the theme is built from:
         // ContextThemeWrapper.initializeTheme only creates mTheme the first time, so a guest that
-        // had mTheme created before bind() — against J Code's resources, since that is the context
+        // had mTheme created before bind() — against JCode's resources, since that is the context
         // the activity was attached to — would have its style id applied to the wrong table, and
         // mTheme is max-target-p and cannot be cleared.
         //
@@ -575,7 +575,7 @@ internal object GuestRuntime {
     /**
      * The guest's own [Application], so `getApplication()` casts and
      * `registerActivityLifecycleCallbacks` work. `Instrumentation.newApplication` is public API and
-     * attaches the context for us; only the `LoadedApk` behind it stays J Code's.
+     * attaches the context for us; only the `LoadedApk` behind it stays JCode's.
      */
     private fun ensureApplication(guest: LoadedGuest) {
         if (guest.application != null) return
@@ -619,7 +619,7 @@ internal object GuestRuntime {
         // the guest is a sideloaded build of something the user already has — and letting the intent
         // out means the system resolves it to that copy and runs the wrong app, outside the device,
         // with the user's own data. Measured on ES-DE, whose ConfiguratorActivity opened the
-        // installed app over the top of J Code. A stub that fails inside the device is a far better
+        // installed app over the top of JCode. A stub that fails inside the device is a far better
         // outcome than the right screen from the wrong application.
         if (!guest.activities.containsKey(component.className)) {
             Log.w(

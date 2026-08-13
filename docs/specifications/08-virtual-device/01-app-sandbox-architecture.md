@@ -208,7 +208,7 @@ One `tiles(width, height, density, apps)` behind all five, so **what an agent sc
 its taps land**. Drawing the launcher a second time for the capture would have put the icons it sees
 in one place and the taps it sends in another.
 
-What is *not* on the device's screen is J Code's "Install an app" button: it is the IDE reaching onto
+What is *not* on the device's screen is JCode's "Install an app" button: it is the IDE reaching onto
 the device, so it is composed over the surface and is deliberately absent from a capture, exactly
 like the control bar. A guest's surface package reparents above the surface, so starting an app needs
 no matching erase and stopping one repaints.
@@ -252,7 +252,7 @@ running app's label on the left, and what it has posted on the right.
 | Drag down from the top strip | Opens the shade: one row per notification, title and text, with **Clear all** |
 | Drag up, or tap below an open shade | Closes it |
 | `back` | Closes the shade first, the way a phone answers, before the guest ever sees the key |
-| Tap the pill in the middle | J Code's own control bar — back, keyboard, restart, full screen, stop. IDE chrome, not the device's |
+| Tap the pill in the middle | JCode's own control bar — back, keyboard, restart, full screen, stop. IDE chrome, not the device's |
 
 It is a child of `EmbeddedGuest`'s container, added **last** so it is the topmost view, rather than
 composed over the tab by the IDE. That one decision is what makes it part of the device:
@@ -274,7 +274,7 @@ screen belongs to the guest, because pagers live there.
 
 | | |
 |---|---|
-| **Icon** | The notification's own `smallIcon`, loaded against the **guest's** context — its resource id is from the guest's table and a package the real `PackageManager` has never heard of, so J Code's context would resolve nothing, or worse, whatever J Code has at that id. Falls back to the app icon. One per app in the bar, deduped; one per row in the shade |
+| **Icon** | The notification's own `smallIcon`, loaded against the **guest's** context — its resource id is from the guest's table and a package the real `PackageManager` has never heard of, so JCode's context would resolve nothing, or worse, whatever JCode has at that id. Falls back to the app icon. One per app in the bar, deduped; one per row in the shade |
 | **Actions** | `Notification.actions`, drawn as buttons that fire the `PendingIntent` |
 | **Ongoing** | `FLAG_ONGOING_EVENT` or `FLAG_NO_CLEAR`, **and** anything handed to `startForeground` — the platform treats a foreground service's notification as ongoing whether or not the app also said so, and most do not because on a phone they never had to. Measured on NewPipe, whose player notification arrives with no flags at all |
 
@@ -286,7 +286,7 @@ app's only handle away while the app kept running. Only the app takes those down
 > from `3 notifications` to `1 notification`.
 
 **A guest's buttons do not reach the guest's own components, and cannot from here.** The token is
-real — minted under J Code's package by `GuestActivityManagerHook` — but the *component* inside it
+real — minted under JCode's package by `GuestActivityManagerHook` — but the *component* inside it
 names a package the real system has never heard of, so it resolves to nothing and reports no error.
 Neither end can be caught: `PendingIntent.send` marshals the token to the real activity manager
 rather than calling anything this process can stand in front of (traced across a tap, a wrapped
@@ -298,7 +298,7 @@ normally; what is lost is an app's buttons on its own screens, where its own UI 
 #### The bar follows the app under it
 
 A bar that is the same colour and the same presence over every app is not a device's status bar, it
-is a strip J Code drew. `GuestWindow.statusBarStyleOf` reads the foreground activity's window, the
+is a strip JCode drew. `GuestWindow.statusBarStyleOf` reads the foreground activity's window, the
 same places the platform reads it, and `EmbeddedGuest.followForegroundApp` reshapes the bar around
 the answer — on every layout pass, because an app changes its mind at runtime (full screen for a
 video, back afterwards) and nothing else tells the container.
@@ -323,7 +323,7 @@ be put back — a built-in is not exempt from the clean room, it is reinstalled 
 `install` path any other APK takes.
 
 Today that is one app: **the browser** (`tools/vdevice-browser`). It exists so the device can open a
-URL without reaching for the phone's browser, which would take the user out of J Code and load the
+URL without reaching for the phone's browser, which would take the user out of JCode and load the
 page under their own profile — their cookies, their signed-in accounts. Inside the device, what it
 loads is wiped with the device, including the WebView profile (§7d).
 
@@ -333,7 +333,7 @@ window and WebView paths as much as a feature.
 ### 7d. What a guest leaves behind
 
 Nothing, and WebView was the exception that proved it needed saying. WebView keeps its profile beside
-J Code's own — under the suffix `GuestRuntime` gives it, which is what stops the two colliding — and
+JCode's own — under the suffix `GuestRuntime` gives it, which is what stops the two colliding — and
 that directory is outside `filesDir/vdevice/`, so nothing in the reset ever touched it. Cookies,
 local storage and any session an app signed into survived a restart and would have been handed to
 whatever app was installed next. `resetOnStart` now clears it too.
@@ -412,7 +412,7 @@ answered `CAMERA=granted RECORD_AUDIO=denied ACCESS_FINE_LOCATION=denied`.
 | `Context.checkSelfPermission` | **`GuestContext`**, which overrides the three public `check*Permission` members. It has to be in front rather than underneath: `PermissionManager` memoises the answer in a cache only the system can invalidate, and `disablePermissionCache` is blocked — measured, a camera granted while an app was running went on reading as denied through the binder hook |
 | The same, from anywhere without a guest `Context` | `GuestActivityManagerHook`, on `IActivityManager.checkPermission` |
 | `PackageManager.checkPermission`, `hasSystemFeature` | `GuestPackageHook` |
-| `Activity.requestPermissions` | `GuestPermissions.consume`, off the start-activity hook. **This was broken outright before**: the intent went to the real permission controller, which was being asked to grant a permission to *J Code*, and the result came back addressed to an activity token no `ActivityRecord` answers to — so no dialog, no callback, and an app that waits for one stopped there. What is already decided is answered from the policy; what is still Ask goes to the person through the device's own dialog, over the session AIDL |
+| `Activity.requestPermissions` | `GuestPermissions.consume`, off the start-activity hook. **This was broken outright before**: the intent went to the real permission controller, which was being asked to grant a permission to *JCode*, and the result came back addressed to an activity token no `ActivityRecord` answers to — so no dialog, no callback, and an app that waits for one stopped there. What is already decided is answered from the policy; what is still Ask goes to the person through the device's own dialog, over the session AIDL |
 | `getSystemService(SENSOR_SERVICE)`, and every location call | `GuestSensorManager` and `GuestLocation` — see [Guest runtime §5c](02-guest-runtime-and-hidden-api.md#5c-the-devices-own-hardware) |
 
 > **One runtime request per activity instance.** `Activity.requestPermissions` sets

@@ -131,7 +131,7 @@ internal object GuestHooks {
                                 // component against that copy: the app opened twice, once in the
                                 // device and once outside it, and the one the user saw was the
                                 // wrong one. Measured on ES-DE, whose ConfiguratorActivity was
-                                // hosted correctly and still launched the installed app over J Code.
+                                // hosted correctly and still launched the installed app over JCode.
                                 is StartAction.Consumed -> return consumed(method.returnType)
                             }
                         }
@@ -271,7 +271,7 @@ internal object GuestHooks {
     /**
      * Points an already-attached guest activity at its own [GuestContext].
      *
-     * `ActivityThread` attaches every activity to a `ContextImpl` belonging to J Code, and
+     * `ActivityThread` attaches every activity to a `ContextImpl` belonging to JCode, and
      * `ContextThemeWrapper` caches resources and inflater off it during `attach()`. Swapping `mBase`
      * and dropping those caches — after `attach`, before `onCreate` — is what makes
      * `getPackageName()`, `getFilesDir()`, `getResources()` and layout inflation report the guest.

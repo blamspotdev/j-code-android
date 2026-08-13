@@ -53,7 +53,7 @@ private class Declared(
  * The two are deliberately separate: one is about trust, the other about equipment.
  *
  * Over the device's screen rather than on it, like [InstallSheet] and for the same reason: it is
- * J Code talking about the app, so it must not appear in what `screencap` answers with, where it
+ * JCode talking about the app, so it must not appear in what `screencap` answers with, where it
  * would read as something the guest drew.
  */
 @Composable
@@ -184,7 +184,7 @@ internal fun AppPermissionsSheet(
             )
 
             ManagerNoticeCard(
-                title = "Cleared when J Code restarts",
+                title = "Cleared when JCode restarts",
                 message = "The device is wiped on every start — apps, their data, and these answers " +
                     "with them. A grant that outlived the app it was given to would be waiting for " +
                     "whatever was installed under that name next.",
