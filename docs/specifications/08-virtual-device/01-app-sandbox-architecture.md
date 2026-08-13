@@ -30,6 +30,22 @@ try an Android app on the same device, in an editor tab.
 internal enum class AppSandboxTier { Embedded, FullScreen }
 ```
 
+The tier is chosen by two things: embedding is impossible without hardware acceleration, and
+**Settings → Virtual device → "Always run in full screen"** lets the user insist on a real window.
+
+That switch exists because embedding is a trade, not a strict improvement. It buys the IDE around the
+app and a screen an agent can read, and it costs the guest a real window: its activity token is one
+no `ActivityRecord` answers to, so anything asking the activity manager about itself is answered by
+the container rather than the system (see
+[Guest runtime §4b](02-guest-runtime-and-hidden-api.md#4b-the-embedded-activitys-token--guestactivityclient)).
+An app that wants a real task — its own recents entry, a `PendingIntent` the system will act on, an
+SDK that interrogates its own activity — is better served by the full-screen path, and for those the
+switch is the answer rather than a workaround for a bug.
+
+`AppSandbox.alwaysFullScreen` holds it rather than the DataStore being read at each call site,
+because the tab and the adb daemon's `am start` both have to give the same answer and the daemon is
+not a composable. `am start --windowingMode 1` still asks for full screen explicitly.
+
 ### 2.1 Why not a virtual display
 
 Putting a **system-launched** activity on a display the app owns is impossible for a normal app:

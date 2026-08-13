@@ -1353,13 +1353,21 @@ fun JCodeApp(
     val runInVirtualDevice by viewModel.runInVirtualDevice.collectAsStateWithLifecycle()
     val adbToolInstalled = ADB_CATALOG_ENTRY in sdkCatalogState.installedEntryIds
     val virtualDeviceReconnecting by viewModel.virtualDeviceAdbReconnecting.collectAsStateWithLifecycle()
-    val virtualDeviceSetting = remember(runInVirtualDevice, adbToolInstalled, virtualDeviceReconnecting) {
+    val virtualDeviceFullScreen by viewModel.virtualDeviceAlwaysFullScreen.collectAsStateWithLifecycle()
+    val virtualDeviceSetting = remember(
+        runInVirtualDevice,
+        adbToolInstalled,
+        virtualDeviceReconnecting,
+        virtualDeviceFullScreen,
+    ) {
         VirtualDeviceSetting(
             enabled = runInVirtualDevice,
             onChange = viewModel::setRunInVirtualDevice,
             adbAvailable = adbToolInstalled,
             onReconnect = viewModel::reconnectVirtualDeviceAdb,
             reconnecting = virtualDeviceReconnecting,
+            alwaysFullScreen = virtualDeviceFullScreen,
+            onSetAlwaysFullScreen = viewModel::setVirtualDeviceAlwaysFullScreen,
         )
     }
     val envBackupStatus by viewModel.envBackupStatus.collectAsStateWithLifecycle()

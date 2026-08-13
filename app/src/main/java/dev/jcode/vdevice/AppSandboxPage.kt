@@ -123,7 +123,14 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
         withFrameNanos { }
         hardwareAccelerated = view.isHardwareAccelerated
     }
-    val tier = if (hardwareAccelerated) AppSandboxTier.Embedded else AppSandboxTier.FullScreen
+    // Software rendering cannot composite an embedded hierarchy at all; "always full screen" is the
+    // user saying they would rather have a real window than the tab, for an app that needs one.
+    val alwaysFullScreen by AppSandbox.alwaysFullScreen
+    val tier = if (hardwareAccelerated && !alwaysFullScreen) {
+        AppSandboxTier.Embedded
+    } else {
+        AppSandboxTier.FullScreen
+    }
 
     var apkPath by AppSandbox.apkPath
     val activityClass by AppSandbox.activityClass

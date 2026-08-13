@@ -400,7 +400,9 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
         val apk = VirtualDeviceApps.apk(appContext, packageName)
             ?: return "Error: Package $packageName is not installed on the virtual device\n"
         val className = activity.takeIf { it.isNotEmpty() }?.let { qualify(it, packageName) }
-        val fullScreen =
+        // The setting is the device's answer to "how do apps run here", so `am start` has to give the
+        // same answer the launcher does; `--windowingMode 1` still asks for it explicitly.
+        val fullScreen = AppSandbox.alwaysFullScreen.value ||
             args.zipWithNext().firstOrNull { it.first == "--windowingMode" }?.second == FULLSCREEN_MODE
         val started = if (fullScreen) {
             VirtualDevice.launch(appContext, apk.absolutePath, className)

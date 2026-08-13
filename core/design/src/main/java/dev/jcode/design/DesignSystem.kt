@@ -275,6 +275,9 @@ class VirtualDeviceSetting(
     val onReconnect: () -> Unit = {},
     /** True while a reconnect is in flight, so the action can show it is working. */
     val reconnecting: Boolean = false,
+    /** Start every app as a real full-screen activity rather than embedding it in the tab. */
+    val alwaysFullScreen: Boolean = false,
+    val onSetAlwaysFullScreen: (Boolean) -> Unit = {},
 )
 
 val LocalVirtualDevice = compositionLocalOf { VirtualDeviceSetting() }

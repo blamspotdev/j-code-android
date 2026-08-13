@@ -42,6 +42,7 @@ object SettingsDefaults {
     const val RIGHT_DRAWER_MIN_FRACTION = 0.3f
     const val RIGHT_DRAWER_MAX_FRACTION = 0.7f
     const val RUN_IN_VIRTUAL_DEVICE = false
+    const val VIRTUAL_DEVICE_ALWAYS_FULL_SCREEN = false
     val VOLUME_UP_ACTION = VolumeKeyAction.SystemDefault
     val VOLUME_DOWN_ACTION = VolumeKeyAction.SystemDefault
     // Default to ephemeral Random so the feature is visible out of the box WITHOUT silently writing
