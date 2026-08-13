@@ -383,6 +383,22 @@ honour that hole, so the guest's own opaque background covers it. `GuestSurfaces
 **full-bleed** surface above the window instead — only full-bleed, because a video player putting one
 behind its controls means it, and raising that would trade a black screen for an unusable one.
 
+Measured with `tools/gl-fixture`, an APK that clears to magenta and does nothing else, written
+because every real GL app has a setup flow in the way and so a black tab could always mean either
+*the container cannot composite* or *the app has not drawn yet*:
+
+```
+I GLFIXTURE: onSurfaceCreated: GL is up, renderer=Adreno (TM) 740
+I VDEVICE  : raised android.opengl.GLSurfaceView above the window so it can be seen
+```
+
+The tab is magenta. The renderer string is the device's real GPU driver, which is the point: nothing
+about rendering is emulated or proxied for a guest. Its `SurfaceControl` comes from the real
+`SurfaceFlinger`, its EGL/GLES calls reach the vendor driver directly, and a `.so` shipped inside the
+guest APK is loaded into JCode's own process and links against the platform's `libEGL`/`libGLESv2`
+like any other library. Only the **binder metadata** layer is proxied (§4); the pixel path is the
+host's, used first-hand. PPSSPP — native C++ on GL — renders its full UI embedded on that basis.
+
 ## 5a. Non-activity components — `GuestComponents`
 
 Providers, services and receivers cannot be registered with the system: they belong to a package the
