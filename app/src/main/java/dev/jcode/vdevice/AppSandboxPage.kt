@@ -23,7 +23,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Stop
@@ -100,13 +99,12 @@ private val HANDLE_TOUCH_HEIGHT = 24.dp
  * ([EmbeddedGuest]) and shown here through a `SurfaceControlViewHost` surface package.
  *
  * Embedding can fail for reasons this tab cannot fix — the window may not be hardware accelerated,
- * and the out-of-band activity creation the container depends on rests on non-SDK members — so every
- * failure lands on the same visible fallback: run the app full screen, the way the container has
- * always been able to.
+ * and the out-of-band activity creation the container depends on rests on non-SDK members — so a
+ * failure is reported on the device's own screen rather than worked around. There is nowhere else to
+ * run an app: a guest is the tab, and full screen means full screen *within* it.
  *
- * One-off results — a full-screen launch, an app that closed itself — go to [onSnackbar] rather than
- * to a band along the bottom: they are over once they have been read, and the device's screen is the
- * scarce thing here. What a running guest could not do is not one-off, so it stays reachable from the
+ * One-off results — an app that closed itself — go to [onSnackbar] rather than to a band along the
+ * bottom: they are over once they have been read, and the device's screen is the scarce thing here. What a running guest could not do is not one-off, so it stays reachable from the
  * control bar for as long as that guest is up.
  */
 @Composable
@@ -123,15 +121,6 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
         withFrameNanos { }
         hardwareAccelerated = view.isHardwareAccelerated
     }
-    // Software rendering cannot composite an embedded hierarchy at all; "always full screen" is the
-    // user saying they would rather have a real window than the tab, for an app that needs one.
-    val alwaysFullScreen by AppSandbox.alwaysFullScreen
-    val tier = if (hardwareAccelerated && !alwaysFullScreen) {
-        AppSandboxTier.Embedded
-    } else {
-        AppSandboxTier.FullScreen
-    }
-
     var apkPath by AppSandbox.apkPath
     val activityClass by AppSandbox.activityClass
     var running by AppSandbox.running
@@ -175,13 +164,6 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
         }
     }
 
-    fun runFullScreen(path: String = apkPath, activity: String? = activityClass) {
-        installOpen = false
-        VirtualDevice.launch(context, path.trim(), activity)
-            .onSuccess { onSnackbar("Started ${it.label} full screen.") }
-            .onFailure { onSnackbar(it.message ?: "Could not start the app.") }
-    }
-
     /** Puts an app from the device's own launcher on its screen — a tap on an icon. */
     fun open(app: VirtualDeviceApp) {
         installOpen = false
@@ -189,7 +171,7 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
         // the last run happened to name.
         AppSandbox.activityClass.value = null
         apkPath = app.apkPath
-        if (tier == AppSandboxTier.Embedded) running = true else runFullScreen(app.apkPath, null)
+        running = true
     }
 
     // Clearing `running` is the whole teardown: the home effect below reloads what is installed and
@@ -207,7 +189,7 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
     }
 
     // Re-set rather than captured once: the surface outlives every composition that reads these.
-    LaunchedEffect(surfaceView, tier) {
+    LaunchedEffect(surfaceView) {
         surfaceView?.onLaunchApp = { open(it) }
         surfaceView?.onAppMenu = { app, x, y -> menuFor = app to Offset(x, y) }
     }
@@ -222,7 +204,6 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
             onRetry = {
                 session.restart(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
             },
-            onFullScreen = { runFullScreen() },
             onDismiss = { stop() },
             onInstall = { installOpen = true },
             modifier = Modifier.fillMaxSize(),
@@ -238,12 +219,6 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
                 offset = with(density) { DpOffset(at.x.toDp(), at.y.toDp()) },
                 listActions = buildList {
                     add(ContextAction(JCodeIcon.Run, "Open") { menuFor = null; open(app) })
-                    if (tier == AppSandboxTier.Embedded) {
-                        add(ContextAction(JCodeIcon.Fullscreen, "Open full screen") {
-                            menuFor = null
-                            runFullScreen(app.apkPath, null)
-                        })
-                    }
                     add(ContextAction(JCodeIcon.Clear, "Clear data") {
                         menuFor = null
                         scope.launch(Dispatchers.IO) { VirtualDeviceApps.clearData(context, app.packageName) }
@@ -259,7 +234,7 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
 
         if (installOpen) {
             InstallSheet(
-                tier = tier,
+                hardwareAccelerated = hardwareAccelerated,
                 apkPath = apkPath,
                 onApkPathChange = {
                     apkPath = it
@@ -280,7 +255,6 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
                     installOpen = false
                     running = true
                 },
-                onRunFullScreen = { runFullScreen() },
                 onClose = { installOpen = false },
                 modifier = Modifier.fillMaxSize(),
             )
@@ -294,7 +268,6 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
                 onRestart = {
                     session.restart(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
                 },
-                onFullScreen = { runFullScreen() },
                 onStop = { stop() },
             )
         }
@@ -314,7 +287,6 @@ private fun DeviceScreen(
     onSurface: (AppSandboxSurfaceView?) -> Unit,
     onSized: (Int, Int) -> Unit,
     onRetry: () -> Unit,
-    onFullScreen: () -> Unit,
     onDismiss: () -> Unit,
     onInstall: () -> Unit,
     modifier: Modifier = Modifier,
@@ -347,7 +319,6 @@ private fun DeviceScreen(
             status is SandboxStatus.Failed -> ScreenFallback(
                 message = status.message,
                 onRetry = onRetry,
-                onFullScreen = onFullScreen,
                 onDismiss = onDismiss,
             )
 
@@ -392,7 +363,6 @@ private fun ScreenMessage(text: String) {
 private fun ScreenFallback(
     message: String,
     onRetry: () -> Unit,
-    onFullScreen: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     Surface(
@@ -414,11 +384,6 @@ private fun ScreenFallback(
                 text = message,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            CompactFilledButton(
-                text = "Run full screen instead",
-                onClick = onFullScreen,
-                modifier = Modifier.fillMaxWidth(),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 CompactOutlinedButton(text = "Try again", onClick = onRetry, modifier = Modifier.weight(1f))
@@ -445,7 +410,6 @@ private fun BoxScope.DeviceControls(
     onBack: () -> Unit,
     onKeyboard: () -> Unit,
     onRestart: () -> Unit,
-    onFullScreen: () -> Unit,
     onStop: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(true) }
@@ -492,8 +456,7 @@ private fun BoxScope.DeviceControls(
                     onKeyboard = onKeyboard,
                     onCaveat = { caveatOpen = true },
                     onRestart = onRestart,
-                    onFullScreen = onFullScreen,
-                    onStop = onStop,
+                        onStop = onStop,
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
             }
@@ -568,7 +531,6 @@ private fun DeviceToolbar(
     onKeyboard: () -> Unit,
     onCaveat: () -> Unit,
     onRestart: () -> Unit,
-    onFullScreen: () -> Unit,
     onStop: () -> Unit,
 ) {
     Row(
@@ -589,7 +551,6 @@ private fun DeviceToolbar(
             )
         }
         Box(modifier = Modifier.weight(1f))
-        ToolbarAction(Icons.Rounded.Fullscreen, "Run full screen", onFullScreen)
         ToolbarAction(Icons.Rounded.RestartAlt, "Restart app", onRestart)
         ToolbarAction(Icons.Rounded.Stop, "Stop", onStop, tint = MaterialTheme.colorScheme.error)
     }
@@ -613,12 +574,11 @@ private fun ToolbarAction(
  */
 @Composable
 private fun InstallSheet(
-    tier: AppSandboxTier,
+    hardwareAccelerated: Boolean,
     apkPath: String,
     onApkPathChange: (String) -> Unit,
     onInstall: (String) -> Unit,
     onRunHere: () -> Unit,
-    onRunFullScreen: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -653,12 +613,12 @@ private fun InstallSheet(
                 }
             }
 
-            if (tier == AppSandboxTier.FullScreen) {
+            if (!hardwareAccelerated) {
                 ManagerNoticeCard(
                     title = "Hardware acceleration is off",
-                    message = "The guest is composited onto a surface, which needs the GPU. Turn " +
-                        "Settings → Performance → Rendering → Hardware acceleration back on and restart " +
-                        "J Code; until then the app can only take over the whole screen.",
+                    message = "The device is composited onto a surface, which needs the GPU. Turn " +
+                        "Settings → Performance → Rendering → Hardware acceleration back on and " +
+                        "restart J Code; until then the device cannot draw.",
                 )
             }
 
@@ -689,30 +649,21 @@ private fun InstallSheet(
                     onClick = { onInstall(apkPath.trim()) },
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (tier == AppSandboxTier.Embedded) {
-                    CompactOutlinedButton(
-                        text = "Run once, without installing",
-                        enabled = readable,
-                        onClick = onRunHere,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
                 CompactOutlinedButton(
-                    text = "Run full screen",
+                    text = "Run once, without installing",
                     enabled = readable,
-                    onClick = onRunFullScreen,
+                    onClick = onRunHere,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
 
             ManagerNoticeCard(
-                title = "What an embedded guest gives up",
+                title = "What a guest gives up",
                 message = "The app runs without an activity of its own, so it cannot raise the soft " +
-                    "keyboard itself — use the keyboard button — and it lays itself out against this " +
-                    "phone's screen rather than the tab, which can leave content past the edges. Its " +
-                    "own Lifecycle is driven directly, but callbacks it registers on the activity " +
-                    "with registerActivityLifecycleCallbacks miss the pre/post start, resume and stop " +
-                    "steps. Run it full screen, or install it, before trusting what you see.",
+                    "keyboard itself — use the keyboard button. Its own Lifecycle is driven directly, " +
+                    "but callbacks it registers on the activity with registerActivityLifecycleCallbacks " +
+                    "miss the pre/post start, resume and stop steps, because Android 13 puts that list " +
+                    "out of reach.",
             )
         }
     }

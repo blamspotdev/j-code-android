@@ -12,8 +12,8 @@ import java.lang.reflect.Modifier
  *
  * Both overrides are public SDK API and sit at exactly the points the container needs: `newActivity`
  * decides which class gets instantiated, and `callActivityOnCreate` brackets the guest's `onCreate` —
- * before it the activity is attached but has run no code of its own, so its context can be replaced;
- * after it the activity has a content view to hang the full-screen controls on.
+ * before it the activity is attached but has run no code of its own, so its context can be
+ * replaced.
  */
 internal class GuestInstrumentation(base: Instrumentation) : Instrumentation() {
 
@@ -36,7 +36,6 @@ internal class GuestInstrumentation(base: Instrumentation) : Instrumentation() {
     override fun callActivityOnCreate(activity: Activity, icicle: Bundle?) {
         GuestRuntime.bind(activity)
         super.callActivityOnCreate(activity, icicle)
-        GuestRuntime.created(activity)
     }
 
     override fun callActivityOnCreate(
@@ -46,13 +45,5 @@ internal class GuestInstrumentation(base: Instrumentation) : Instrumentation() {
     ) {
         GuestRuntime.bind(activity)
         super.callActivityOnCreate(activity, icicle, persistentState)
-        GuestRuntime.created(activity)
-    }
-
-    /** Public SDK, and the counterpart to [callActivityOnCreate]: it is where a full-screen guest's
-     *  borrowed place in the host's notification shade is given back. */
-    override fun callActivityOnDestroy(activity: Activity) {
-        super.callActivityOnDestroy(activity)
-        GuestRuntime.destroyed(activity)
     }
 }

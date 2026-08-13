@@ -79,32 +79,6 @@ object VirtualDevice {
         pm.getApplicationIcon(appInfo)
     }.getOrNull()
 
-    /**
-     * Starts [apkPath] in the guest process and returns the guest's identity.
-     *
-     * [activityClassName] picks a specific activity; when null the container resolves the
-     * MAIN/LAUNCHER one from the APK's manifest, falling back to the first declared activity.
-     *
-     * Returns as soon as the launch intent is dispatched — the guest process starts asynchronously,
-     * and failures past this point surface in logcat under the `VDEVICE` tag.
-     */
-    fun launch(
-        context: Context,
-        apkPath: String,
-        activityClassName: String? = null,
-    ): Result<VirtualDeviceApp> = inspect(context, apkPath).mapCatching { app ->
-        if (app.activities.isEmpty()) {
-            throw VirtualDeviceException("${app.packageName} declares no activities")
-        }
-        val intent = Intent(context, GuestBootstrapActivity::class.java)
-            .putExtra(GuestRuntime.EXTRA_APK, apkPath)
-            .putExtra(GuestRuntime.EXTRA_ACTIVITY, activityClassName)
-            .addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
-        if (context !is android.app.Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
-        Log.i(TAG, "launch ${app.packageName} (${activityClassName ?: "launcher"}) from $apkPath")
-        app
-    }
 }
 
 class VirtualDeviceException(message: String, cause: Throwable? = null) : Exception(message, cause)

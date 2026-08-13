@@ -159,8 +159,8 @@ internal class AppSandboxSurfaceView(
      * The token the window manager parents the guest's input channel to.
      *
      * Non-SDK, and there is no public equivalent before `getInputTransferToken` in API 35. Without
-     * it the guest cannot be embedded at all, so a null here is what turns the tab into its
-     * full-screen fallback.
+     * it the guest cannot be embedded at all, and there is no other way to run one — a null here is
+     * the device reporting that it cannot start the app.
      */
     fun hostToken(): IBinder? = runCatching {
         SurfaceView::class.java.getDeclaredMethod("getHostToken")

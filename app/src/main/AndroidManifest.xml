@@ -102,46 +102,14 @@
             android:name=".AppInstallReceiver"
             android:exported="false" />
 
-        <!-- Virtual device (dev.jcode.vdevice): the stubs the app-virtualization container launches
-             in place of a guest APK's own activities, since the system cannot be asked to start an
-             activity of a package it has never heard of. They run in their own :guest process so the
-             guest gets its own ART heap and framework hooks and cannot corrupt the IDE, and they are
-             never used as themselves — GuestRuntime swaps in the guest's class before the system
-             instantiates them. launchMode is standard so one stub can back several guest instances,
-             and configChanges is deliberately broad so the guest handles rotation itself instead of
-             being relaunched through the stub. -->
+        <!-- Virtual device (dev.jcode.vdevice): a declared activity the container never launches.
+             A guest activity belongs to a package the system has never heard of, so there is no
+             ActivityInfo to build one from; this stub is that template, and nothing else. It is
+             declared in the :guest process so the guest gets its own ART heap and framework hooks
+             and cannot corrupt the IDE, and configChanges is deliberately broad so a guest handles
+             configuration changes itself rather than being relaunched. -->
         <activity
-            android:name=".vdevice.GuestBootstrapActivity"
-            android:process=":guest"
-            android:exported="true"
-            android:excludeFromRecents="true"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
-        <activity
-            android:name=".vdevice.GuestActivity0"
-            android:process=":guest"
-            android:exported="false"
-            android:launchMode="standard"
-            android:windowSoftInputMode="adjustResize"
-            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|layoutDirection|fontScale|density|colorMode"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
-        <activity
-            android:name=".vdevice.GuestActivity1"
-            android:process=":guest"
-            android:exported="false"
-            android:launchMode="standard"
-            android:windowSoftInputMode="adjustResize"
-            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|layoutDirection|fontScale|density|colorMode"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
-        <activity
-            android:name=".vdevice.GuestActivity2"
-            android:process=":guest"
-            android:exported="false"
-            android:launchMode="standard"
-            android:windowSoftInputMode="adjustResize"
-            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|layoutDirection|fontScale|density|colorMode"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
-        <activity
-            android:name=".vdevice.GuestActivity3"
+            android:name=".vdevice.GuestActivity"
             android:process=":guest"
             android:exported="false"
             android:launchMode="standard"

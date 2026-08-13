@@ -1179,30 +1179,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { uiPreferences.edit { it[runInVirtualDeviceKey] = enabled } }
     }
 
-    private val virtualDeviceFullScreenKey = booleanPreferencesKey("vdevice_always_full_screen")
-
-    /** When true, the device starts every app as a real activity instead of embedding it in the tab.
-     *  Mirrored onto [AppSandbox.alwaysFullScreen], which the tab and the adb daemon both read. */
-    val virtualDeviceAlwaysFullScreen: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs ->
-            prefs[virtualDeviceFullScreenKey] ?: SettingsDefaults.VIRTUAL_DEVICE_ALWAYS_FULL_SCREEN
-        }
-        .stateIn(
-            viewModelScope,
-            SharingStarted.WhileSubscribed(5_000),
-            SettingsDefaults.VIRTUAL_DEVICE_ALWAYS_FULL_SCREEN,
-        )
-
-    fun setVirtualDeviceAlwaysFullScreen(enabled: Boolean) {
-        viewModelScope.launch { uiPreferences.edit { it[virtualDeviceFullScreenKey] = enabled } }
-    }
-
-    // Third init block, for the same reason as the second: it collects a flow declared above it.
-    init {
-        viewModelScope.launch {
-            virtualDeviceAlwaysFullScreen.collect { AppSandbox.alwaysFullScreen.value = it }
-        }
-    }
 
     // A second init block, deliberately: it collects [runInVirtualDevice], which is declared above
     // but well below the main init block — referencing it from there reads an uninitialised field

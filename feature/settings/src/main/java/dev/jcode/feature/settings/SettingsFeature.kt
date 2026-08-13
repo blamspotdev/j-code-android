@@ -920,24 +920,6 @@ object SettingsFeature {
                     modified = virtualDevice.enabled != SettingsDefaults.RUN_IN_VIRTUAL_DEVICE,
                     onReset = { virtualDevice.onChange(SettingsDefaults.RUN_IN_VIRTUAL_DEVICE) },
                 )
-                ToggleRow(
-                    label = "Always run in full screen",
-                    supporting = "Start apps as a real full-screen activity instead of inside the " +
-                        "device tab. An embedded app has no window of its own, so one that wants a " +
-                        "real task — its own recents entry, a PendingIntent the system will act on, " +
-                        "an SDK that asks the system about its own activity — can misbehave or show " +
-                        "nothing. Turn this on for those; the tab is the better place for everything " +
-                        "else, since it keeps the IDE around the app.",
-                    checked = virtualDevice.alwaysFullScreen,
-                    onCheckedChange = virtualDevice.onSetAlwaysFullScreen,
-                    modified = virtualDevice.alwaysFullScreen !=
-                        SettingsDefaults.VIRTUAL_DEVICE_ALWAYS_FULL_SCREEN,
-                    onReset = {
-                        virtualDevice.onSetAlwaysFullScreen(
-                            SettingsDefaults.VIRTUAL_DEVICE_ALWAYS_FULL_SCREEN,
-                        )
-                    },
-                )
                 // The device is reached through the runtime's own adb, so there is nothing to
                 // reconnect without it — and the button would be a dead end rather than a fix.
                 if (virtualDevice.adbAvailable) {

@@ -25,15 +25,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** How a guest app can be shown, given what this window supports. */
-internal enum class AppSandboxTier {
-    /** Composited into the editor tab out of the `:guest` process. */
-    Embedded,
-
-    /** No embedding possible; the app can still take over the screen as its own task. */
-    FullScreen,
-}
-
 internal sealed interface SandboxStatus {
     data object Idle : SandboxStatus
     data object Starting : SandboxStatus
@@ -68,20 +59,6 @@ internal object AppSandbox {
 
     /** True while an app should be on the device's screen. False is a live, blank device. */
     val running = mutableStateOf(false)
-
-    /**
-     * "Always run in full screen" — the escape hatch for an app the embedded path cannot host.
-     *
-     * Embedding buys the IDE around the app and a screen an agent can read, but it costs the guest a
-     * real window: its activity token is one no `ActivityRecord` answers to, so anything reaching
-     * the activity manager about itself is answered by the container rather than the system. Some
-     * apps want more than that — a real task, a real token, `PendingIntent`s the system will act on
-     * — and for those a full-screen guest is not a downgrade, it is the only thing that works.
-     *
-     * Kept here rather than read from the DataStore at each call site because both the tab and the
-     * adb daemon's `am start` have to agree on it, and the daemon is not a composable.
-     */
-    val alwaysFullScreen = mutableStateOf(false)
 
     private val main = Handler(Looper.getMainLooper())
 

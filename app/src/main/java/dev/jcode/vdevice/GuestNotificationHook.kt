@@ -84,12 +84,7 @@ internal object GuestNotificationHook {
         override fun invoke(proxy: Any?, method: Method, args: Array<Any?>?): Any? {
             val guest = GuestRuntime.activePackage()
             if (guest != null && !delivering.get()) {
-                answer(guest, method, args ?: emptyArray())?.let { answered ->
-                    // The device changed; a full-screen guest has no status bar of its own, so the
-                    // phone's shade stands in for it until it exits. A no-op otherwise.
-                    HostNotificationMirror.sync()
-                    return answered.value
-                }
+                answer(guest, method, args ?: emptyArray())?.let { return it.value }
             }
             return try {
                 method.invoke(real, *(args ?: emptyArray()))

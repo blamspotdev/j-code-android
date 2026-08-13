@@ -400,18 +400,10 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
         val apk = VirtualDeviceApps.apk(appContext, packageName)
             ?: return "Error: Package $packageName is not installed on the virtual device\n"
         val className = activity.takeIf { it.isNotEmpty() }?.let { qualify(it, packageName) }
-        // The setting is the device's answer to "how do apps run here", so `am start` has to give the
-        // same answer the launcher does; `--windowingMode 1` still asks for it explicitly.
-        val fullScreen = AppSandbox.alwaysFullScreen.value ||
-            args.zipWithNext().firstOrNull { it.first == "--windowingMode" }?.second == FULLSCREEN_MODE
-        val started = if (fullScreen) {
-            VirtualDevice.launch(appContext, apk.absolutePath, className)
-        } else {
-            // inspect() is the same parse launch() would do, so a broken APK still fails here rather
-            // than silently opening an empty tab.
-            VirtualDevice.inspect(appContext, apk.absolutePath)
-                .onSuccess { AppSandbox.requestOpen(apk.absolutePath, className, run = true) }
-        }
+        // inspect() parses the APK the same way the load will, so a broken one fails here rather
+        // than silently opening an empty tab.
+        val started = VirtualDevice.inspect(appContext, apk.absolutePath)
+            .onSuccess { AppSandbox.requestOpen(apk.absolutePath, className, run = true) }
         return started.fold(
             onSuccess = { "Starting: Intent { cmp=$component }\n" },
             onFailure = { "Error: ${it.message}\n" },

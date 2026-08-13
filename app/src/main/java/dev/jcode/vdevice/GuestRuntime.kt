@@ -18,22 +18,19 @@ import android.webkit.WebView
  * The container itself, living in the `:guest` process: it installs the hooks in [GuestHooks] and
  * then decides what each of them should do.
  *
- * The launch path is a relay. J Code cannot ask the system to start an activity that is not
- * installed, so it starts one of its own stubs ([GuestActivity0]…[GuestActivity3]) carrying the
- * guest's identity in extras. On the way back in, [onLaunchActivity] rewrites the transaction to
- * name the guest activity, [newActivity] instantiates that class out of the guest's class loader,
- * and [bind] hands the instance a [GuestContext] — all before `onCreate` runs, and all while the
- * system remains the one performing `attach` and driving the lifecycle.
+ * A guest activity belongs to a package the system has never heard of, so there is no `ActivityInfo`
+ * to build one from. [GuestActivity] is that template and nothing more: an intent naming it carries
+ * the real guest's identity in extras, [onLaunchActivity] rewrites it to name the guest activity,
+ * [newActivity] instantiates that class out of the guest's class loader, and [bind] hands the
+ * instance a [GuestContext] — all before `onCreate` runs.
  *
- * [embed] is the same thing without the system: it builds the activity here so the device-sandbox
+ * [embed] does that without the system: it builds the activity here so the device-sandbox
  * editor tab can host its decor view, and takes over driving the lifecycle in exchange.
  */
 internal object GuestRuntime {
 
     const val EXTRA_APK = "dev.jcode.vdevice.apk"
     const val EXTRA_ACTIVITY = "dev.jcode.vdevice.activity"
-
-    private const val STUB_COUNT = 4
 
     /** Embedded-activity id, the `Activity.getId()` a system launch would never produce. */
     private const val EMBEDDED_ID = "jcode-embedded"
@@ -51,9 +48,8 @@ internal object GuestRuntime {
     private var instrumentation: GuestInstrumentation? = null
     private var activityThread: Any? = null
 
-    /** Set while a device-sandbox tab is showing this process, so intra-guest navigation is hosted in
-     *  the tab instead of being bounced onto a full-screen stub. Returns true when it took the
-     *  launch. */
+    /** Set while a device-sandbox tab is showing this process, so intra-guest navigation is hosted
+     *  in the tab. Returns true when it took the launch. */
     @Volatile
     private var embeddedLauncher: ((Intent) -> Boolean)? = null
 
@@ -64,9 +60,6 @@ internal object GuestRuntime {
     /** Set alongside [embeddedLauncher]: told when Back on an embedded activity reached the server. */
     @Volatile
     private var embeddedBackHandler: (() -> Unit)? = null
-
-    /** Guest activity class -> stub slot, so a given guest activity always lands on the same stub. */
-    private val stubSlots = LinkedHashMap<String, Int>()
 
     /** The guest whose intents outgoing `startActivity` calls should be redirected for. */
     @Volatile
@@ -88,7 +81,6 @@ internal object GuestRuntime {
         instrumentation = GuestHooks.installInstrumentation(activityThread)
             ?: throw VirtualDeviceException("cannot replace ActivityThread.mInstrumentation")
 
-        val launch = GuestHooks.installLaunchHook(activityThread, ::onLaunchActivity)
         val navigation = GuestHooks.installStartActivityHook(::rewriteOutgoing)
         val packages = GuestPackageHook.install(host.packageManager)
         val notifications = GuestNotificationHook.install()
@@ -98,7 +90,7 @@ internal object GuestRuntime {
         isInstalled = true
         Log.i(
             TAG,
-            "hooks installed: instrumentation=true launch=$launch navigation=$navigation " +
+            "hooks installed: instrumentation=true navigation=$navigation " +
                 "packages=$packages notifications=$notifications intents=$intents",
         )
         VirtualDeviceLog.append(host, 'I', TAG, "container ready in ${Application.getProcessName()}")
@@ -155,14 +147,6 @@ internal object GuestRuntime {
         }
     }
 
-    /** Starts [activityClass] (or the guest's launcher activity) on one of the stubs. */
-    fun startGuest(from: Activity, apkPath: String, activityClass: String?) {
-        val guest = GuestLoader.load(from, apkPath)
-        active = guest
-        val target = activityClass?.takeIf { guest.activities.containsKey(it) } ?: guest.launchActivity
-        from.startActivity(stubIntent(guest, target).addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION))
-    }
-
     /**
      * Creates a guest activity with no window of its own, for the device-sandbox editor tab.
      *
@@ -199,9 +183,8 @@ internal object GuestRuntime {
         // above all theme 0, so no theme is built against J Code's resources before bind() runs.
         onLaunchActivity(stub, info)
         val target = resolve(stub) ?: throw VirtualDeviceException("$stub carries no guest identity")
-        // Embedded means windowed: the tab is the only window shape on offer, so an activity that
-        // declares itself unresizeable or pins an orientation has to give that up here — see
-        // GuestWindow. A full-screen guest keeps its declarations, where they can be honoured.
+        // The tab is the only window shape on offer, so an activity that declares itself
+        // unresizeable or pins an orientation has to give that up here — see GuestWindow.
         target.guest.activities[target.activityClass]?.let(GuestWindow::makeResizable)
         GuestWindow.makeResizable(info)
 
@@ -244,82 +227,6 @@ internal object GuestRuntime {
             embedding = false
         }
         return activity
-    }
-
-    /**
-     * Called once a guest activity's `onCreate` has returned — the first moment its content view
-     * exists, and the last before `setContentView` could clear anything added to it.
-     *
-     * Only a full-screen guest is given the overlay: one in the tab already has the tab's controls
-     * floating over it.
-     */
-    /**
-     * Relaunches the guest a full-screen activity belongs to, from scratch.
-     *
-     * `CLEAR_TASK` is what makes it a restart rather than a second copy: the guest's whole back
-     * stack goes and the launch activity comes back as the new root, which is what "restart the app"
-     * means to someone iterating on it. The APK and activity come off the launch intent, so this
-     * needs nothing the container did not already put there.
-     */
-    fun restartGuest(from: Activity) {
-        val apkPath = from.intent?.getStringExtra(EXTRA_APK) ?: return
-        val guest = runCatching { GuestLoader.load(from, apkPath) }.getOrElse {
-            Log.e(TAG, "cannot reload $apkPath", it)
-            return
-        }
-        active = guest
-        from.startActivity(
-            stubIntent(guest, guest.launchActivity)
-                .addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_CLEAR_TASK or
-                        Intent.FLAG_ACTIVITY_NO_ANIMATION,
-                ),
-        )
-    }
-
-    /**
-     * Takes the guest off the device and hands the user back to J Code.
-     *
-     * A full-screen guest is a task of its own, so finishing it alone reveals whatever happened to
-     * be behind — usually the phone's launcher, which is not where someone who left the IDE to try
-     * an app expects to land. The workbench is brought forward first, by its *host* package: by this
-     * point `activity.packageName` is the guest's.
-     */
-    fun leaveGuest(from: Activity) {
-        // Finish first, start second. The other order loses a race: tearing the task down before the
-        // queued launch resolves leaves the start looking like it came from the background, which
-        // the platform drops — measured, the workbench's MainActivity was accepted by the activity
-        // manager and the phone still went to its launcher. Finishing only marks the activities, so
-        // this is still a foreground app when the intent goes out.
-        from.finishAffinity()
-        runCatching {
-            host.packageManager.getLaunchIntentForPackage(host.packageName)
-                ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-                ?.let(from::startActivity)
-        }.onFailure { Log.w(TAG, "cannot bring the workbench back", it) }
-    }
-
-    /** Full-screen guest activities that are alive, so the mirror is taken down with the last one. */
-    private val fullScreenGuests = java.util.concurrent.atomic.AtomicInteger(0)
-
-    fun created(activity: Activity) {
-        if (embedding || activity is GuestActivity || activity is GuestBootstrapActivity) return
-        if (resolve(activity.intent) == null) return
-        GuestOverlay.install(activity)
-        // A full-screen guest has left the tab behind, and the device's status bar with it — see
-        // HostNotificationMirror for why the phone's shade stands in until it comes back.
-        fullScreenGuests.incrementAndGet()
-        HostNotificationMirror.enable(host, activeLabel().orEmpty())
-    }
-
-    /** The other side of [created]: the last full-screen guest to go returns the host's shade. */
-    fun destroyed(activity: Activity) {
-        if (activity is GuestActivity || activity is GuestBootstrapActivity) return
-        if (resolve(activity.intent) == null) return
-        if (fullScreenGuests.get() > 0 && fullScreenGuests.decrementAndGet() == 0) {
-            HostNotificationMirror.disable()
-        }
     }
 
     /** The package a hook should attribute the current call to, or null outside a guest. */
@@ -577,7 +484,7 @@ internal object GuestRuntime {
 
     /** Called from [GuestInstrumentation.callActivityOnCreate], after `attach` and before `onCreate`. */
     fun bind(activity: Activity) {
-        if (activity is GuestActivity || activity is GuestBootstrapActivity) return
+        if (activity is GuestActivity) return
         val target = resolve(activity.intent) ?: return
         ensureApplication(target.guest)
         if (!GuestHooks.rebase(activity, target.guest)) return
@@ -635,8 +542,8 @@ internal object GuestRuntime {
 
     /**
      * Decides what to do with an intent the guest started: nothing, if it is not one of its own
-     * activities; host it in the device-sandbox tab, if one is showing this guest; otherwise redirect it
-     * onto a free stub and let the system launch it full screen.
+     * activities; otherwise host it in the device-sandbox tab. A guest's own activity must never
+     * reach the real system, which would resolve it against the phone's copy of the package.
      */
     private fun rewriteOutgoing(intent: Intent): StartAction {
         val component = intent.component
@@ -688,15 +595,20 @@ internal object GuestRuntime {
         return stubIntent(guest, component.className, Intent(intent))
     }
 
-    private fun stubIntent(guest: LoadedGuest, activityClass: String, from: Intent? = null): Intent {
-        val slot = synchronized(stubSlots) {
-            stubSlots.getOrPut(activityClass) { stubSlots.size % STUB_COUNT }
-        }
-        return (from ?: Intent())
-            .setComponent(ComponentName(host, GuestActivity.stub(slot)))
+    /**
+     * The shape an embedded launch is carried in: which guest, which of its activities.
+     *
+     * The component is [GuestActivity] every time. It is never started — it is there so that
+     * `getActivityInfo` has something to answer with, since the activity actually being built
+     * belongs to a package the system has never heard of. One stub is enough for that; there used to
+     * be four, so several guest activities could hold separate places in a real task, and with the
+     * full-screen path gone there is no task to hold a place in.
+     */
+    private fun stubIntent(guest: LoadedGuest, activityClass: String, from: Intent? = null): Intent =
+        (from ?: Intent())
+            .setComponent(ComponentName(host, GuestActivity::class.java))
             .putExtra(EXTRA_APK, guest.apkPath)
             .putExtra(EXTRA_ACTIVITY, activityClass)
-    }
 
     private fun resolve(intent: Intent?): Target? {
         val apkPath = intent?.getStringExtra(EXTRA_APK) ?: return null

@@ -6,10 +6,7 @@ import android.app.Instrumentation
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
-import android.content.pm.ActivityInfo
-import android.os.Handler
 import android.os.IBinder
-import android.os.Message
 import android.util.Log
 import android.view.ContextThemeWrapper
 import java.lang.reflect.Field
@@ -18,8 +15,6 @@ import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 
-private const val CLIENT_TRANSACTION = "android.app.servertransaction.ClientTransaction"
-private const val LAUNCH_ACTIVITY_ITEM = "android.app.servertransaction.LaunchActivityItem"
 private const val CALLBACKS_FIELD = "mActivityLifecycleCallbacks"
 private const val PRE_PREFIX = "onActivityPre"
 
@@ -68,48 +63,6 @@ internal object GuestHooks {
         return runCatching { field.set(activityThread, replacement); replacement }
             .onFailure { Log.e(TAG, "cannot install instrumentation", it) }
             .getOrNull()
-    }
-
-    /**
-     * Intercepts activity launches on `ActivityThread.mH` before the system acts on them.
-     *
-     * A `Handler` consults its `mCallback` first, so installing one there gives a look at every
-     * `ClientTransaction` on its way in — including the `LaunchActivityItem` carrying the stub's
-     * `Intent` and `ActivityInfo`, which [onLaunch] rewrites into the guest's. The callback always
-     * reports "unhandled" so `ActivityThread.H.handleMessage` still runs as usual.
-     */
-    fun installLaunchHook(activityThread: Any, onLaunch: (Intent, ActivityInfo?) -> Unit): Boolean {
-        val handler = HiddenApi.field(activityThread.javaClass, "mH")
-            ?.let { runCatching { it.get(activityThread) }.getOrNull() } as? Handler ?: return false
-        val callbackField = HiddenApi.field(Handler::class.java, "mCallback") ?: return false
-        val previous = runCatching { callbackField.get(handler) }.getOrNull() as? Handler.Callback
-        if (previous is LaunchCallback) return true
-        return runCatching {
-            callbackField.set(handler, LaunchCallback(previous, onLaunch))
-            true
-        }.onFailure { Log.e(TAG, "cannot install launch hook", it) }.getOrDefault(false)
-    }
-
-    private class LaunchCallback(
-        private val previous: Handler.Callback?,
-        private val onLaunch: (Intent, ActivityInfo?) -> Unit,
-    ) : Handler.Callback {
-        override fun handleMessage(msg: Message): Boolean {
-            runCatching { inspect(msg) }.onFailure { Log.w(TAG, "launch hook", it) }
-            return previous?.handleMessage(msg) ?: false
-        }
-
-        private fun inspect(msg: Message) {
-            val transaction = msg.obj ?: return
-            if (transaction.javaClass.name != CLIENT_TRANSACTION) return
-            val items = HiddenApi.method(transaction.javaClass, "getCallbacks")
-                ?.let { runCatching { it.invoke(transaction) }.getOrNull() } as? List<*> ?: return
-            for (item in items) {
-                if (item == null || item.javaClass.name != LAUNCH_ACTIVITY_ITEM) continue
-                val intent = HiddenApi.field(item.javaClass, "mIntent")?.get(item) as? Intent ?: continue
-                onLaunch(intent, HiddenApi.field(item.javaClass, "mInfo")?.get(item) as? ActivityInfo)
-            }
-        }
     }
 
     /**
