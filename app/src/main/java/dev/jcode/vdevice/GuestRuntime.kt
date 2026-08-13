@@ -348,6 +348,13 @@ internal object GuestRuntime {
         val resumed = GuestHooks.dispatchLifecycleCallback(activity, "onActivityPostResumed")
 
         if (!started || !resumed) {
+            // ON_CREATE first, and that is not belt-and-braces. `ReportFragment` is what would
+            // normally dispatch it, and on API 29+ it registers on the activity's own callback list
+            // — the one that is blocked here — so the registry is still at INITIALIZED. Sending
+            // ON_START to a registry that has never been created is an illegal transition, and
+            // LifecycleRegistry refuses it: the guest would stay INITIALIZED, Compose would never
+            // start a composition, and the app would draw nothing.
+            advanceLifecycle(activity, "ON_CREATE")
             advanceLifecycle(activity, "ON_START")
             advanceLifecycle(activity, "ON_RESUME")
         }
@@ -384,9 +391,31 @@ internal object GuestRuntime {
             val registry = loader.loadClass("androidx.lifecycle.LifecycleRegistry")
             if (!registry.isInstance(lifecycle)) return
             val events = loader.loadClass("androidx.lifecycle.Lifecycle\$Event")
-            val value = events.getMethod("valueOf", String::class.java).invoke(null, event)
+            val value = eventConstant(events, event) ?: return
             registry.getMethod("handleLifecycleEvent", events).invoke(lifecycle, value)
         }.onFailure { Log.w(TAG, "cannot advance the guest's lifecycle to $event", it) }
+    }
+
+    /**
+     * One `Lifecycle.Event` constant, out of a guest that has been through R8.
+     *
+     * Not `Enum.valueOf`: R8 **removes** it from an enum nothing looks up by name, and a release
+     * build of an app that only ever writes `Lifecycle.Event.ON_START` gives
+     * `NoSuchMethodException: androidx.lifecycle.Lifecycle$Event.valueOf`. Measured on AI Edge
+     * Gallery — and because that was the only route to the registry, the guest's lifecycle stayed at
+     * INITIALIZED, so Compose never started a composition and the app drew nothing at all.
+     *
+     * The static field survives where the method does not, since the enum's own code reads it. The
+     * other two are fallbacks for a shape neither assumption fits.
+     */
+    private fun eventConstant(events: Class<*>, name: String): Any? {
+        runCatching { return events.getField(name).get(null) }
+        runCatching {
+            return events.enumConstants?.firstOrNull { (it as? Enum<*>)?.name == name }
+        }
+        runCatching { return events.getMethod("valueOf", String::class.java).invoke(null, name) }
+        Log.w(TAG, "no Lifecycle.Event.$name in this guest")
+        return null
     }
 
     /**

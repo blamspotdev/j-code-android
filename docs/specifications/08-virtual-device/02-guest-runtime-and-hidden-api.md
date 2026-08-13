@@ -309,6 +309,30 @@ caught and fed straight back into the device they came from.
 > Verified on `tools/notification-fixture`: two notifications posted from `onCreate` appear in the
 > device's own bar and shade, and `dumpsys notification` on the host counts **zero** of them.
 
+## 4d. Two reasons a guest drew nothing
+
+Both looked identical from outside — an app that loaded, started, stayed alive and showed an empty
+screen — and neither was what it appeared to be. Measured on AI Edge Gallery, which now renders in
+full.
+
+**The lifecycle never advanced.** `ReportFragment` registers on the *activity's* callback list, which
+is blocked here, so `GuestRuntime.resumeEmbedded` drives the guest's `LifecycleRegistry` by hand
+instead. That fallback resolved its event constants with `Enum.valueOf` — and **R8 removes `valueOf`
+from an enum nothing looks up by name**, so against any release build it threw
+`NoSuchMethodException: androidx.lifecycle.Lifecycle$Event.valueOf`. The registry stayed at
+INITIALIZED, Compose never started a composition, and the app drew nothing. The static field survives
+where the method does not, because the enum's own code reads it. The sequence also has to begin at
+`ON_CREATE`: sending `ON_START` to a registry that has never been created is an illegal transition
+and `LifecycleRegistry` refuses it.
+
+**A dialog was placed off the screen.** `EmbeddedWindows.place` sized a child window from the child
+*view's* own measured width, and a view that measured itself before there was a real frame keeps that
+size — Gallery's Compose `Dialog` came back **8190px wide on a 1080px device**, so gravity centred it
+at `left = -3555`. The app had opened its welcome dialog correctly and it was simply nowhere anyone
+could see it. Oversized children are now re-measured `AT_MOST` the tab, which is what a window
+manager would have asked for; a window cannot be wider than the screen it is on, so a number saying
+otherwise is wrong wherever it came from.
+
 ## 5a. Non-activity components — `GuestComponents`
 
 Providers, services and receivers cannot be registered with the system: they belong to a package the
@@ -438,10 +462,9 @@ JCode draws nothing over it.
   and unmodelled calls become no-ops, so a guest leaning hard on its own task — recents entries,
   picture-in-picture, task descriptions — sees those features inert rather than working. CPU-Z runs
   and stays up under this, but its tab content never populates.
-- Some guests render nothing while running perfectly happily. Measured on AI Edge Gallery: it loads
-  with its 3 splits, starts, stays alive, and dumps a near-empty view tree — an app that gates its
-  first composition on something the container does not supply. Neither the token hook nor provider
-  hosting changed it.
+- A Compose guest's content is in its composition, not its view tree, so `uiautomator dump` shows
+  the `AndroidComposeView` and nothing inside it. Semantics are not walked. A driver can screenshot
+  a Compose guest and tap by coordinate, but cannot find a node by text the way it can in a View app.
 
 ---
 
