@@ -523,12 +523,18 @@ entries:
       fi
 
       jcode_progress 46 "Swapping in this device's native ARM binaries"
-      # Replace the x86_64 aapt2/aapt/zipalign with the distro's native aarch64 builds — in EVERY
+      # Replace the x86_64 build-tools executables with the distro's native aarch64 builds — in EVERY
       # build-tools directory present, not just the newest: a project that pins buildToolsVersion
       # picks its own, and an unswapped one fails with a bare "not found" (a wrong-arch ELF).
+      #
+      # Swap EVERY executable the Debian package provides, not the three we first hit. aidl was the
+      # one that got away: it is not on the path of a simple app, so nothing noticed until a project
+      # with an .aidl file reached :compileDebugAidl and died on "A problem occurred starting process
+      # 'command .../build-tools/35.0.0/aidl'" — a message that names no architecture and reads like a
+      # missing file. Everything else here is a jar, a script or data, which run anywhere.
       for BTDIR in "$ANDROID_HOME"/build-tools/*/; do
         [ -d "$BTDIR" ] || continue
-        for b in aapt2 aapt zipalign; do
+        for b in aapt2 aapt zipalign aidl aidl-cpp split-select; do
           if [ -e "$DEB/$b" ]; then cp -f "$DEB/$b" "$BTDIR$b"; fi
         done
       done

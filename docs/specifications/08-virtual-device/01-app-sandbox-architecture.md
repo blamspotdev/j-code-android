@@ -322,13 +322,27 @@ be put back — a built-in is not exempt from the clean room, it is reinstalled 
 `installBuiltIns` does that from `assets/vdevice/*.apk` immediately after the wipe, through the same
 `install` path any other APK takes.
 
-Today that is one app: **the browser** (`tools/vdevice-browser`). It exists so the device can open a
-URL without reaching for the phone's browser, which would take the user out of JCode and load the
-page under their own profile — their cookies, their signed-in accounts. Inside the device, what it
-loads is wiped with the device, including the WebView profile (§7d).
+Today that is two apps.
 
-It is an ordinary guest with no container privileges, which makes it a live test of the load, embed,
-window and WebView paths as much as a feature.
+**The browser** (`tools/vdevice-browser`) is the one that makes the device usable: it opens a URL
+without reaching for the phone's browser, which would take the user out of JCode and load the page
+under their own profile — their cookies, their signed-in accounts. Inside the device, what it loads
+is wiped with the device, including the WebView profile (§7d). Being resource-free is a packaging
+constraint — one Java file, so plain `javac` and `aapt2` can produce it without a Gradle project —
+not a licence to look unfinished, so its chrome is drawn in code in the device's own palette: a
+rounded address pill, glyph buttons that dim when they would do nothing, a hairline instead of a
+raised bar, and its own offline page rather than the platform's white one, which reads as a crash on
+a surface this dark. The address shows the **host** while a page is loaded and the whole URL while it
+is being edited.
+
+**The hardware fixture** (`tools/hardware-fixture`) is the one that makes the device *checkable*. It
+prints what a guest can actually see of the camera, microphone, location and three motion sensors, so
+the bench (§7f) and Manage permissions (§7e) can be watched having an effect on a real app rather
+than taken on trust. It is on every device by default because the moment you want it is the moment
+something looks wrong, which is not the moment to go and build an APK.
+
+Both are ordinary guests with no container privileges, which makes them a live test of the load,
+embed, window and WebView paths as much as a feature.
 
 ### 7d. What a guest leaves behind
 

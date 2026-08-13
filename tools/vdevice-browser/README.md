@@ -6,6 +6,14 @@ It exists so the device has a way to open a URL without reaching for the phone's
 would take the user out of JCode and load the page under their own profile: their cookies, their
 signed-in accounts. Inside the device, everything it loads is wiped with the device.
 
+Resource-free is a *packaging* constraint, not a licence to look unfinished: with no `res/` there is
+no theme, no drawable and no dimension to inherit, so every surface is built in code instead. The
+chrome is the device's own palette — a rounded address pill, glyph buttons for back, forward and
+reload that dim when they would do nothing, a two-pixel progress line, a hairline instead of a raised
+bar — and a failed load gets a page of ours rather than the platform's white one, which reads as a
+crash on a surface this dark. The address shows the **host** while a page is loaded and the whole URL
+(selected, ready to replace) while it is being edited.
+
 It is an **ordinary guest**. No container privileges, no special casing — JCode installs it onto the
 device on every start like any other APK, and it goes through the same load, embed, window and
 WebView paths every other app takes. That makes it a live test of those paths as much as a feature.

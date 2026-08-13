@@ -143,6 +143,63 @@ Two entries are shaped by what does not work under proot:
 - **`yes | sdkmanager` deadlocks under proot.** Android SDK scripts use `< /dev/null` instead —
   the difference is a 2-second run versus an effectively infinite hang.
 
+### 2.6 The Android SDK is x86_64, the phone is not
+
+`sdkmanager` has no ARM Linux packages. Everything it downloads for `linux` is an x86_64 ELF, which
+on this device does not run at all — and the error it produces says nothing about architecture. It is
+`A problem occurred starting process 'command …/aidl'`, or `Exec failed, error: 2 (No such file or
+directory)` for a file that plainly exists. Every constraint below is a consequence of that one fact.
+
+The `android-sdk` entry works around it in three places:
+
+1. **Copy the distro's native aarch64 build-tools over the downloaded ones** — `aapt2`, `aapt`,
+   `zipalign`, `aidl`, `aidl-cpp`, `split-select` — into **every** `build-tools/` directory present,
+   because a project that pins `buildToolsVersion` picks its own.
+2. **Point AGP at the native `aapt2`** with `android.aapt2FromMavenOverride`, written into both
+   Gradle homes. AGP resolves its own `aapt2` as a Maven artifact, so replacing the one in
+   `build-tools/` is not enough on its own.
+3. **Copy the native `adb` over platform-tools'**, because AGP invokes it by absolute path — a native
+   `adb` earlier on `PATH` does not save `installDebug`.
+
+Two ceilings remain. Both were measured by exporting this repo onto a phone and building it inside
+JCode's own distro:
+
+- **AIDL stops at `compileSdk 33`.** The only aarch64 `aidl` in Ubuntu 24.04 is
+  `android-sdk-build-tools 29.0.3`, from 2019. It compiles an `.aidl` file against `android-33`'s
+  `framework.aidl` correctly, and fails on `android-34+`, whose preprocessed file uses syntax it
+  never learned: `malformed preprocessed file line: '@JavaOnlyStableParcelable parcelable …'`. JCode's
+  own `compileSdk` is 36, so JCode cannot build itself on-device today.
+- **The NDK has no ARM Linux host toolchain**, so `cmake` and `clang` under `$ANDROID_HOME` cannot
+  execute here either, and unlike build-tools there is nothing in the archive to copy over them.
+
+The second one is crossable and the way is known — it is only unbuilt. The distro carries a full
+native **LLVM 18**, the same major version NDK 27 ships, and it cross-compiles to Android when it is
+given the NDK's sysroot and resource directory:
+
+```sh
+clang --target=aarch64-linux-android33 \
+      --sysroot=$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot \
+      -resource-dir=$NDK/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18 \
+      -rtlib=compiler-rt -unwindlib=libunwind -fPIC -shared t.c -o libt.so
+```
+
+> Verified: produces `Machine: AArch64`, `NEEDED libc.so`, `NEEDED libdl.so` — a real Android object.
+> Both extra flags are needed. Without `-resource-dir` and `-rtlib` the Ubuntu driver reaches for
+> `-lgcc`, which Android does not have, and the link fails with `unable to find library -lgcc`.
+
+Turning that into a shipped feature means a `bin/clang` wrapper carrying those flags inside each NDK,
+symlinks for `ld.lld` and the `llvm-*` tools, and the same swap for `cmake`/`ninja` — plus somewhere
+to run it, since AGP downloads whichever NDK a project pins long after this entry has finished.
+
+**What does build on-device today**, measured on an Odin2 (Android 13, aarch64):
+
+| Path | Result |
+|---|---|
+| `javac` + `d8` + `aapt2` + `zipalign` + `apksigner`, no Gradle | **Works.** `tools/hardware-fixture` builds here and runs on the virtual device |
+| Gradle 8.14.3 + AGP 8.13 + Kotlin 2.2 + Compose, library module | **Works.** `:core:design:assembleDebug` produces a 329 KB AAR |
+| A module with `.aidl` and `compileSdk` ≥ 34 | Fails — `aidl` is 29.0.3 |
+| A module with `externalNativeBuild` | Fails — `cmake` and `clang` are x86_64 |
+
 ---
 
 ## 3. Language-server catalog
