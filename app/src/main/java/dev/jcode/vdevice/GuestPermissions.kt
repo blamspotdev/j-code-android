@@ -104,6 +104,21 @@ internal object GuestPermissions {
         if (it) PackageManager.PERMISSION_GRANTED else PackageManager.PERMISSION_DENIED
     }
 
+    /**
+     * The same answer, about a named app rather than whichever one is on the screen.
+     *
+     * For anything an app can still hold while it is *not* the app on the screen — a location
+     * registration belonging to a service that was allowed to keep running. Asking the active-guest
+     * question there would answer one app with another app's permissions, which is the wrong answer
+     * however the two happen to be set.
+     */
+    fun answerFor(packageName: String, permission: String): Int? {
+        val guest = GuestLoader.forPackage(packageName) ?: return null
+        return allowed(guest, permission)?.let {
+            if (it) PackageManager.PERMISSION_GRANTED else PackageManager.PERMISSION_DENIED
+        }
+    }
+
     /** Whether the device declares [feature] as hardware it has, or null when it does not govern it. */
     fun feature(feature: String): Boolean? {
         val hardware = VirtualHardware.byFeature(feature) ?: return null
@@ -115,8 +130,12 @@ internal object GuestPermissions {
      * guest at all, which is the only case the container stays out of.
      */
     private fun allowed(permission: String): Boolean? {
-        if (!::host.isInitialized || deciding.get() == true) return null
         val guest = GuestRuntime.activeGuest() ?: return null
+        return allowed(guest, permission)
+    }
+
+    private fun allowed(guest: LoadedGuest, permission: String): Boolean? {
+        if (!::host.isInitialized || deciding.get() == true) return null
         // Undeclared is denied, exactly as the platform would answer: a permission an app did not
         // ask for in its manifest is one it does not have, however the device feels about it.
         if (!guest.requestedPermissions.contains(permission)) return false

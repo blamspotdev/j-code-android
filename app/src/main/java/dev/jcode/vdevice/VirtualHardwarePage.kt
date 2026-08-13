@@ -127,10 +127,12 @@ internal fun VirtualHardwarePage(modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Header(opened = opened, onBack = { opened = null })
+            val travelling = settings.locationMode != LocationMode.Fixed && settings.routeStartedAt > 0L
             when (val hardware = opened) {
                 null -> HardwareGrid(revision = revision, now = now) { opened = it }
                 VirtualHardware.Location -> {
                     Mode(hardware)
+                    Inert(hardware, revision)
                     LocationTools(settings = settings, now = now)
                 }
                 VirtualHardware.Accelerometer,
@@ -138,10 +140,15 @@ internal fun VirtualHardwarePage(modifier: Modifier = Modifier) {
                 VirtualHardware.Gyroscope,
                 -> {
                     Mode(hardware)
-                    MotionTools(settings = settings)
+                    Inert(hardware, revision)
+                    Mixed(revision)
+                    MotionTools(settings = settings, travelling = travelling)
                     SensorReadout(hardware = hardware, now = now)
                 }
-                else -> Mode(hardware)
+                else -> {
+                    Mode(hardware)
+                    Inert(hardware, revision)
+                }
             }
         }
     }
@@ -318,15 +325,67 @@ private fun Mode(hardware: VirtualHardware) {
     }
 }
 
+/**
+ * Says when the tools below are running into a device that does not have the hardware.
+ *
+ * They keep working, and the readouts stay honest — what they report is what an app *would* be told.
+ * It is simply that no app is being told it. Without this the two settings look like they disagree:
+ * a route visibly walking a map while every app on the device is refused a fix.
+ */
+@Composable
+private fun Inert(hardware: VirtualHardware, revision: Int) {
+    val context = LocalContext.current
+    val mode = remember(revision, hardware) { VirtualDevicePolicy.mode(context, hardware) }
+    if (mode != HardwareMode.Off) return
+    ManagerNoticeCard(
+        title = "The device has no ${hardware.label.lowercase()}",
+        message = "Everything below still runs and the readouts are what an app would be told — but " +
+            "no app is being told it, because this is switched off above. Nothing here reaches a " +
+            "guest until it is on.",
+    )
+}
+
+/**
+ * Says when the three motion sensors are not wired the same way.
+ *
+ * They are three views of one attitude, and an app is entitled to treat them that way:
+ * `getRotationMatrix` takes gravity *and* the magnetic field together and derives one orientation
+ * from the pair. Feed it the phone's gravity and the device's simulated field and it is being asked
+ * about two devices at once — the answer is not wrong so much as meaningless.
+ */
+@Composable
+private fun Mixed(revision: Int) {
+    val context = LocalContext.current
+    val motion = listOf(
+        VirtualHardware.Accelerometer,
+        VirtualHardware.Compass,
+        VirtualHardware.Gyroscope,
+    )
+    val modes = remember(revision) { motion.map { VirtualDevicePolicy.mode(context, it) } }
+    val mixed = modes.filter { it != HardwareMode.Off }.distinct().size > 1
+    if (!mixed) return
+    ManagerNoticeCard(
+        title = "These three do not agree",
+        message = motion.zip(modes).joinToString(", ") { "${it.first.label.lowercase()} ${it.second.label.lowercase()}" } +
+            ". They are three views of one attitude, so an app that derives an orientation from " +
+            "gravity and the magnetic field together is being handed two different devices. Wire " +
+            "them the same way unless that mismatch is what you are testing.",
+    )
+}
+
 @Composable
 private fun LocationTools(settings: HardwareSettings, now: HardwareSample) {
     val context = LocalContext.current
-    val moving = settings.locationMode != LocationMode.Fixed && settings.routeStartedAt > 0L
-    // What the device would do if started now: the stored mode while it is parked, and the one it is
-    // actually on while it moves.
+    // Two different questions, and answering them with one flag was a conflict: *something* is
+    // moving, which is what stops a coordinate being edited out from under it, and *this method* is
+    // moving, which is what the map and the readout are about. The trail's map drew the device at
+    // the position of a running point-to-point route otherwise — a marker nowhere near the trail
+    // under it.
+    val movingAny = settings.locationMode != LocationMode.Fixed && settings.routeStartedAt > 0L
     var method by remember(settings.locationMode) {
         mutableStateOf(settings.locationMode.takeIf { it != LocationMode.Fixed } ?: LocationMode.Route)
     }
+    val movingHere = movingAny && settings.locationMode == method
 
     ManagerSectionCard(
         title = "How it moves",
@@ -344,7 +403,7 @@ private fun LocationTools(settings: HardwareSettings, now: HardwareSample) {
     }
 
     if (method == LocationMode.Trail) {
-        TrailTools(settings = settings, now = now, moving = moving)
+        TrailTools(settings = settings, now = now, movingHere = movingHere, movingAny = movingAny)
         return
     }
 
@@ -355,23 +414,23 @@ private fun LocationTools(settings: HardwareSettings, now: HardwareSample) {
         Coordinate(
             label = "Latitude",
             value = settings.latitude,
-            enabled = !moving,
+            enabled = !movingAny,
             limit = 90.0,
         ) { VirtualDevicePolicy.setFix(context, it, settings.longitude) }
         Coordinate(
             label = "Longitude",
             value = settings.longitude,
-            enabled = !moving,
+            enabled = !movingAny,
             limit = 180.0,
         ) { VirtualDevicePolicy.setFix(context, settings.latitude, it) }
 
-        Coordinate("To latitude", settings.toLatitude, !moving, limit = 90.0) {
+        Coordinate("To latitude", settings.toLatitude, !movingAny, limit = 90.0) {
             VirtualDevicePolicy.setRoute(context, it, settings.toLongitude, settings.speedMps, settings.repeat)
         }
-        Coordinate("To longitude", settings.toLongitude, !moving, limit = 180.0) {
+        Coordinate("To longitude", settings.toLongitude, !movingAny, limit = 180.0) {
             VirtualDevicePolicy.setRoute(context, settings.toLatitude, it, settings.speedMps, settings.repeat)
         }
-        Speed(settings = settings, enabled = !moving)
+        Speed(settings = settings, enabled = !movingAny)
         SettingsDropdownRow(
             label = "At the far end",
             supporting = "What the device does when it arrives.",
@@ -400,13 +459,16 @@ private fun LocationTools(settings: HardwareSettings, now: HardwareSample) {
         ManagerSummaryRow(label = "Route", value = journey(metres, settings.speedMps))
         ManagerSummaryRow(
             label = "Device is at",
-            value = if (moving) {
-                "%s · %s".format(coordinates(now.latitude, now.longitude), heading(now))
-            } else {
-                coordinates(now.latitude, now.longitude)
+            value = when {
+                movingHere -> "%s · %s".format(coordinates(now.latitude, now.longitude), heading(now))
+                movingAny -> "following a trail"
+                else -> coordinates(now.latitude, now.longitude)
             },
         )
-        Go(moving = moving, enabled = metres > 0.5, now = now, mode = LocationMode.Route)
+        // Stop is offered whenever the device is moving at all, even on the other method's card: the
+        // button is about the device, and one that said "start" while it was already moving would be
+        // lying about which.
+        Go(moving = movingAny, enabled = metres > 0.5, now = now, mode = LocationMode.Route)
     }
 }
 
@@ -444,7 +506,12 @@ private fun Go(moving: Boolean, enabled: Boolean, now: HardwareSample, mode: Loc
  * would invite the comparison the displacement exists to prevent. See [LocationTrail].
  */
 @Composable
-private fun TrailTools(settings: HardwareSettings, now: HardwareSample, moving: Boolean) {
+private fun TrailTools(
+    settings: HardwareSettings,
+    now: HardwareSample,
+    movingHere: Boolean,
+    movingAny: Boolean,
+) {
     val context = LocalContext.current
     val trail = remember(settings.trailId) {
         LocationTrail.byId(settings.trailId) ?: TRAILS.first()
@@ -461,7 +528,7 @@ private fun TrailTools(settings: HardwareSettings, now: HardwareSample, moving: 
                     // Picking a different trail while one is being walked starts the new one from
                     // its beginning rather than dropping the device somewhere along it — the two
                     // are nowhere near each other, and a tap that did nothing would be worse.
-                    if (moving) {
+                    if (movingHere) {
                         VirtualDevicePolicy.setMoving(
                             context,
                             LocationMode.Trail,
@@ -474,7 +541,9 @@ private fun TrailTools(settings: HardwareSettings, now: HardwareSample, moving: 
         TrailMap(
             trail = trail,
             now = now,
-            showDevice = moving,
+            // Only when *this* trail is what is being walked. The arrow is drawn at the device's
+            // coordinates, and those are somewhere else entirely while a point-to-point route runs.
+            showDevice = movingHere,
             modifier = Modifier.fillMaxWidth().height(MAP_HEIGHT),
         )
         Text(
@@ -483,7 +552,7 @@ private fun TrailTools(settings: HardwareSettings, now: HardwareSample, moving: 
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Speed(settings = settings, enabled = !moving)
+        Speed(settings = settings, enabled = !movingAny)
         SettingsDropdownRow(
             label = "At the far end",
             supporting = "What the device does when it gets there.",
@@ -503,13 +572,13 @@ private fun TrailTools(settings: HardwareSettings, now: HardwareSample, moving: 
         ManagerSummaryRow(label = "Trail", value = journey(trail.length, settings.speedMps))
         ManagerSummaryRow(
             label = "Device is at",
-            value = if (moving) {
-                "%s · %s".format(coordinates(now.latitude, now.longitude), heading(now))
-            } else {
-                "not on the trail"
+            value = when {
+                movingHere -> "%s · %s".format(coordinates(now.latitude, now.longitude), heading(now))
+                movingAny -> "on a point-to-point route, not this trail"
+                else -> "not on the trail"
             },
         )
-        Go(moving = moving, enabled = true, now = now, mode = LocationMode.Trail)
+        Go(moving = movingAny, enabled = true, now = now, mode = LocationMode.Trail)
     }
     ManagerNoticeCard(
         title = "These are not survey data",
@@ -593,13 +662,18 @@ private fun TrailMap(
 }
 
 @Composable
-private fun MotionTools(settings: HardwareSettings) {
+private fun MotionTools(settings: HardwareSettings, travelling: Boolean) {
     val context = LocalContext.current
 
     ManagerSectionCard(
         title = "How it is held",
         description = "One attitude for the device, shared by the accelerometer, the compass and " +
-            "the gyroscope — they are three views of it, so turning the heading turns all of them.",
+            "the gyroscope — they are three views of it, so turning the heading turns all of them." +
+            if (travelling) {
+                " The device is moving, so its heading is the direction of travel until it stops."
+            } else {
+                ""
+            },
     ) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             POSES.forEach { pose ->
@@ -615,13 +689,25 @@ private fun MotionTools(settings: HardwareSettings) {
         Degrees("Roll", settings.roll, -180f..180f) {
             VirtualDevicePolicy.setAttitude(context, settings.pitch, it, settings.azimuth)
         }
-        Degrees("Heading", settings.azimuth, 0f..359f) {
+        // Left visible but inert while travelling rather than hidden: it still says where the device
+        // will be pointing when it stops, and a slider that silently did nothing would be the worse
+        // of the two.
+        Degrees(
+            label = if (travelling) "Heading (the trail is steering)" else "Heading",
+            value = settings.azimuth,
+            range = 0f..359f,
+            enabled = !travelling,
+        ) {
             VirtualDevicePolicy.setAttitude(context, settings.pitch, settings.roll, it)
         }
 
         SettingsDropdownRow(
             label = "Loop",
-            supporting = "A movement repeated for as long as it is selected.",
+            supporting = if (travelling && settings.loop == MotionLoop.Spin) {
+                "A spin waits while the device is travelling — the heading is the direction of travel."
+            } else {
+                "A movement repeated for as long as it is selected."
+            },
             options = MotionLoop.entries.map { it.name },
             selected = settings.loop.name,
             optionLabel = { MotionLoop.valueOf(it).label },
@@ -790,8 +876,17 @@ private fun Degrees(
     label: String,
     value: Float,
     range: ClosedFloatingPointRange<Float>,
+    enabled: Boolean = true,
     onCommit: (Float) -> Unit,
-) = Amount(label = label, value = value, range = range, decimals = 0, suffix = "°", onCommit = onCommit)
+) = Amount(
+    label = label,
+    value = value,
+    range = range,
+    decimals = 0,
+    suffix = "°",
+    enabled = enabled,
+    onCommit = onCommit,
+)
 
 @Composable
 private fun Amount(
@@ -800,6 +895,7 @@ private fun Amount(
     range: ClosedFloatingPointRange<Float>,
     decimals: Int = 1,
     suffix: String = "",
+    enabled: Boolean = true,
     onCommit: (Float) -> Unit,
 ) {
     var dragged by remember(value) { mutableStateOf(value) }
@@ -823,6 +919,7 @@ private fun Amount(
         Slider(
             value = dragged.coerceIn(range.start, range.endInclusive),
             valueRange = range,
+            enabled = enabled,
             onValueChange = { dragged = it },
             onValueChangeFinished = { onCommit(dragged) },
         )

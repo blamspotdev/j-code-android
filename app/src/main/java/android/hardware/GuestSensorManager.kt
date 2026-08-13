@@ -17,6 +17,12 @@ private const val MIN_PERIOD_MS = 20L
 private const val MAX_PERIOD_MS = 200L
 
 /**
+ * How often a registration looks up while the phone's own sensor is doing the reporting. It is only
+ * watching for the device to be rewired, and a quarter-second of lag on that is below noticing.
+ */
+private const val WATCH_MS = 250L
+
+/**
  * The `SensorManager` a guest on J Code's virtual device is handed instead of the phone's.
  *
  * Motion sensors are the one piece of hardware Android has never put behind a permission: any app
@@ -68,8 +74,7 @@ class GuestSensorManager(
     private val packageName: String,
 ) : SensorManager() {
 
-    private val forwarders = HashMap<SensorEventListener, MutableList<Forwarder>>()
-    private val simulations = HashMap<SensorEventListener, MutableList<Simulation>>()
+    private val registrations = HashMap<SensorEventListener, MutableList<Registration>>()
 
     // ------------------------------------------------------------------ the hidden abstract members
 
@@ -95,27 +100,29 @@ class GuestSensorManager(
         reservedFlags: Int,
     ): Boolean {
         if (listener == null || sensor == null) return false
-        return when (modeOf(sensor.type)) {
-            HardwareMode.Off -> false
-            HardwareMode.Real -> forward(listener, sensor, delayUs, maxBatchReportLatencyUs, handler)
-            HardwareMode.Simulated -> simulateFor(listener, sensor, delayUs, handler)
-        }
+        // Refused outright when the device does not have it — the same answer a phone gives for a
+        // sensor that is not there, and the reason it stays refused rather than resuming later is
+        // that the sensor was not in the list the app read either.
+        if (modeOf(sensor.type) == HardwareMode.Off) return false
+        val registration = Registration(
+            listener = listener,
+            sensor = sensor,
+            delayUs = delayUs,
+            maxBatchUs = maxBatchReportLatencyUs,
+            handler = handler ?: Handler(Looper.getMainLooper()),
+        )
+        synchronized(this) { registrations.getOrPut(listener) { ArrayList() } += registration }
+        registration.start()
+        return true
     }
 
     fun unregisterListenerImpl(listener: SensorEventListener?, sensor: Sensor?) {
         if (listener == null) return
         synchronized(this) {
-            simulations[listener]?.let { running ->
-                running.filter { sensor == null || it.sensor == sensor }.forEach { it.stop() }
-                running.removeAll { sensor == null || it.sensor == sensor }
-                if (running.isEmpty()) simulations.remove(listener)
-            }
-            forwarders[listener]?.let { forwarding ->
-                forwarding.filter { sensor == null || it.sensor == sensor }.forEach {
-                    if (sensor == null) host.unregisterListener(it) else host.unregisterListener(it, sensor)
-                }
-                forwarding.removeAll { sensor == null || it.sensor == sensor }
-                if (forwarding.isEmpty()) forwarders.remove(listener)
+            registrations[listener]?.let { open ->
+                open.filter { sensor == null || it.sensor == sensor }.forEach { it.stop() }
+                open.removeAll { sensor == null || it.sensor == sensor }
+                if (open.isEmpty()) registrations.remove(listener)
             }
         }
     }
@@ -123,8 +130,9 @@ class GuestSensorManager(
     /** A simulated stream is never behind, so there is nothing of it to flush. */
     fun flushImpl(listener: SensorEventListener?): Boolean {
         val target = listener ?: return true
-        val forwarding = synchronized(this) { forwarders[target]?.firstOrNull() } ?: return true
-        return runCatching { host.flush(forwarding) }.getOrDefault(true)
+        val open = synchronized(this) { registrations[target]?.firstOrNull { it.forwarding() } }
+            ?: return true
+        return open.flush()
     }
 
     /**
@@ -172,115 +180,114 @@ class GuestSensorManager(
 
     // ------------------------------------------------------------------------------- the two routes
 
-    private fun forward(
-        listener: SensorEventListener,
-        sensor: Sensor,
-        delayUs: Int,
-        maxBatchReportLatencyUs: Int,
-        handler: Handler?,
-    ): Boolean {
-        val forwarder = Forwarder(listener, sensor)
-        val registered = host.registerListener(
-            forwarder,
-            sensor,
-            delayUs,
-            maxBatchReportLatencyUs,
-            handler ?: Handler(Looper.getMainLooper()),
-        )
-        if (!registered) return false
-        synchronized(this) { forwarders.getOrPut(listener) { ArrayList() } += forwarder }
-        return true
-    }
-
-    private fun simulateFor(
-        listener: SensorEventListener,
-        sensor: Sensor,
-        delayUs: Int,
-        handler: Handler?,
-    ): Boolean {
-        val event = GuestSensorEvents.newEvent(valueCount(sensor.type)) ?: return false
-        event.sensor = sensor
-        event.accuracy = SENSOR_STATUS_ACCURACY_HIGH
-        val simulation = Simulation(
-            listener = listener,
-            sensor = sensor,
-            event = event,
-            periodMs = (delayUs / 1_000L).coerceIn(MIN_PERIOD_MS, MAX_PERIOD_MS),
-            handler = handler ?: Handler(Looper.getMainLooper()),
-        )
-        synchronized(this) { simulations.getOrPut(listener) { ArrayList() } += simulation }
-        simulation.start()
-        return true
-    }
-
     /**
-     * A real sensor's events, passed on only while the app is still allowed to have them.
+     * One app's registration on one sensor, for as long as it holds it — however the device is
+     * rewired underneath.
      *
-     * Registering the guest's own listener with the host directly would work, and would also mean
-     * that revoking the sensor did nothing until the app happened to unregister — the stream is set
-     * up once and runs in the sensor service from then on. Going through here costs one virtual call
-     * per event and makes "Off" mean off from the next event onwards.
+     * **The two routes are one object because switching between them has to be seamless.** They were
+     * two, and the seam showed: a simulated stream stopped itself the moment the sensor was switched
+     * to Real and nothing took over, while a Real one went on being forwarded and never became
+     * simulated. Either way the app was left holding a registration that had quietly stopped
+     * reporting, with no error and nothing to re-register in response to. A sensor changing what it
+     * is wired to is not a reason for an app to stop hearing from it.
+     *
+     * So the registration owns a ticker of its own and decides on every tick. Simulated, it ticks at
+     * the rate the app asked for and delivers. Real, it holds a forwarder against the host and ticks
+     * slowly, watching for the mode to move — the events themselves arrive from the sensor service in
+     * between. Off, it holds nothing and waits, because the device may be given the hardware back.
      */
-    private inner class Forwarder(
+    private inner class Registration(
         private val listener: SensorEventListener,
         val sensor: Sensor,
-    ) : SensorEventListener {
-
-        override fun onSensorChanged(event: SensorEvent) {
-            if (modeOf(sensor.type) != HardwareMode.Real) return
-            listener.onSensorChanged(event)
-        }
-
-        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-            if (modeOf(this.sensor.type) != HardwareMode.Real) return
-            listener.onAccuracyChanged(sensor, accuracy)
-        }
-    }
-
-    /**
-     * The device's own sensor, reporting on a ticker.
-     *
-     * One [SensorEvent] per registration, refilled in place and handed out again — which is what the
-     * platform does too, and why an app is documented not to keep the object it is given.
-     */
-    private inner class Simulation(
-        private val listener: SensorEventListener,
-        val sensor: Sensor,
-        private val event: SensorEvent,
-        private val periodMs: Long,
+        private val delayUs: Int,
+        private val maxBatchUs: Int,
         private val handler: Handler,
     ) : Runnable {
+
+        private val periodMs = (delayUs / 1_000L).coerceIn(MIN_PERIOD_MS, MAX_PERIOD_MS)
+        private val event: SensorEvent? = GuestSensorEvents.newEvent(valueCount(sensor.type))?.also {
+            it.sensor = sensor
+            it.accuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
+        }
+
+        /** Registered with the host while the sensor is the phone's; null otherwise. */
+        private var forwarder: SensorEventListener? = null
+        private var wiredTo: HardwareMode? = null
 
         @Volatile
         private var running = true
 
-        fun start() {
-            handler.post {
-                if (running) listener.onAccuracyChanged(sensor, SENSOR_STATUS_ACCURACY_HIGH)
-            }
-            handler.post(this)
-        }
+        fun start() = handler.post(this)
 
         fun stop() {
             running = false
             handler.removeCallbacks(this)
+            detach()
         }
+
+        fun forwarding(): Boolean = forwarder != null
+
+        fun flush(): Boolean =
+            forwarder?.let { runCatching { host.flush(it) }.getOrDefault(true) } ?: true
 
         override fun run() {
             if (!running) return
-            // Re-read rather than captured: revoking a sensor has to stop the stream that is already
-            // going, not only refuse the next registration.
-            if (modeOf(sensor.type) != HardwareMode.Simulated) {
-                running = false
-                return
+            val mode = modeOf(sensor.type)
+            if (mode != wiredTo) {
+                rewire(mode)
+                wiredTo = mode
             }
+            if (mode == HardwareMode.Simulated) deliver()
+            // Fast enough to be the sensor while it is simulated; slow enough to be free while the
+            // phone's own is doing the reporting and this is only watching for a change.
+            handler.postDelayed(this, if (mode == HardwareMode.Simulated) periodMs else WATCH_MS)
+        }
+
+        private fun rewire(mode: HardwareMode) {
+            detach()
+            if (mode == HardwareMode.Real) attach() else if (mode == HardwareMode.Simulated) {
+                // A sensor that has just started reporting says how good it is, the way one coming
+                // out of a calibration does.
+                runCatching {
+                    listener.onAccuracyChanged(sensor, SensorManager.SENSOR_STATUS_ACCURACY_HIGH)
+                }
+            }
+        }
+
+        private fun attach() {
+            val relay = object : SensorEventListener {
+                override fun onSensorChanged(event: SensorEvent) {
+                    // Checked per event as well as per tick: the mode can move between the two, and
+                    // "Off" has to mean off from the next event rather than the next tick.
+                    if (modeOf(sensor.type) == HardwareMode.Real) listener.onSensorChanged(event)
+                }
+
+                override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+                    if (modeOf(this@Registration.sensor.type) == HardwareMode.Real) {
+                        listener.onAccuracyChanged(sensor, accuracy)
+                    }
+                }
+            }
+            if (host.registerListener(relay, sensor, delayUs, maxBatchUs, handler)) forwarder = relay
+        }
+
+        private fun detach() {
+            forwarder?.let { runCatching { host.unregisterListener(it, sensor) } }
+            forwarder = null
+        }
+
+        /**
+         * One [SensorEvent] per registration, refilled in place and handed out again — which is what
+         * the platform does too, and why an app is documented not to keep the object it is given.
+         */
+        private fun deliver() {
+            val event = event ?: return
             simulate(sensor.type, SimulatedHardware.sample(context))?.let { values ->
                 values.copyInto(event.values)
                 event.timestamp = SystemClock.elapsedRealtimeNanos()
                 runCatching { listener.onSensorChanged(event) }
                     .onFailure { Log.w(TAG, "$packageName threw on a simulated ${sensor.stringType}", it) }
             }
-            handler.postDelayed(this, periodMs)
         }
     }
 

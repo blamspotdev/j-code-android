@@ -325,7 +325,13 @@ internal object SimulatedHardware {
             }
             // Turning clockwise — east, then south — is a *negative* rotation about the device's own
             // Z axis, which points out of its screen.
-            MotionLoop.Spin -> resting.copy(
+            //
+            // Suppressed while the device is travelling, and that is a decision rather than an
+            // oversight. Two things would otherwise be turning one heading: the direction of travel
+            // and the spin. The compass would report neither of them — it would report the sum —
+            // and it would disagree with the bearing in the same reading and with the arrow on the
+            // map drawn from it. One device has one heading, so travel wins and the spin waits.
+            MotionLoop.Spin -> if (facing != null) resting.plusShake(impulse) else resting.copy(
                 azimuth = heading + 360f * (elapsed.toFloat() / period),
                 rateZ = -rate,
             ).plusShake(impulse)

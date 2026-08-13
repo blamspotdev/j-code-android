@@ -561,6 +561,20 @@ Handed to the guest from `GuestContext.getSystemService(SENSOR_SERVICE)`, one pe
   and drops events once the mode is no longer Real — otherwise revoking a sensor would do nothing
   until the app happened to unregister, because the stream lives in the sensor service from the
   moment it is set up.
+
+**One registration object owns both routes, and that is what makes rewiring seamless.** They were
+two, and the seam showed: a simulated stream stopped itself the moment the sensor was switched to
+Real and nothing took over, while a Real one went on being forwarded and never became simulated.
+Either way the app was left holding a registration that had quietly stopped reporting, with no error
+and nothing to re-register in response to. A registration now owns a ticker and decides on every
+tick — simulated, it ticks at the rate the app asked for and delivers; real, it holds a forwarder and
+ticks slowly, only watching for the mode to move; off, it holds nothing and waits, because the device
+may be given the hardware back. Device-verified both ways: an app reading the accelerometer went from
+`+0.00000, +0.00000, +9.80665` to the phone's own `+0.12450, +4.83150, +8.62870` and back again,
+without re-registering.
+
+A registration is still *refused* when the sensor is Off at the time — the same answer a phone gives
+for hardware it does not have, and consistent with the sensor not being in the list the app read.
 - **Simulated** delivers on a ticker at the rate the app asked for, clamped to 20–200 ms, reading
   whatever the hardware bench says the device is doing — an attitude, a loop, or with nothing set a
   device lying flat, face up, pointing north and not moving. Every type comes out of one
@@ -596,6 +610,12 @@ The seam is `ServiceManager.sCache`. `SystemServiceRegistry` builds the one `Loc
 carrying our own `ILocationManager` put there by `GuestRuntime.install`, before any guest exists,
 means every location manager built afterwards is a genuine, complete client object that happens to
 be talking to us; `asInterface` hands back the local object, so not one call leaves the process.
+
+A feed asks about **the app that registered it**, not the app on the screen, and keeps ticking while
+the answer is no. Both are the same rule the sensors follow: a registration outlives being in the
+foreground — that is the point of letting an app run in the background — so resolving it against the
+active guest would answer one app with another's permissions, and stopping it when location is
+switched off would leave an app holding a registration that never resumed.
 
 The handler **never delegates**. An unmodelled method answers with nothing rather than falling
 through to the real location service, because falling through is the failure this guards against:

@@ -1,6 +1,7 @@
 package dev.jcode.vdevice
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
 import android.os.Binder
@@ -153,9 +154,24 @@ internal object GuestLocation {
          * of the three flavours will do — an app that only ever declared the coarse one is not
          * refused for lacking the fine one.
          */
-        private val enabled: Boolean
-            get() = VirtualHardware.Location.permissions.any {
-                GuestPermissions.answer(it) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        private val enabled: Boolean get() = allows(null)
+
+        /**
+         * The same question about a named app.
+         *
+         * A registration outlives being the app on the screen — that is the whole point of letting
+         * one run in the background — so a feed asks about the app that *registered* it. Asking the
+         * active-guest question would let a music player's location follow whatever the user opened
+         * next, which is one app's answer given to another.
+         */
+        private fun allows(packageName: String?): Boolean =
+            VirtualHardware.Location.permissions.any {
+                val answer = if (packageName == null) {
+                    GuestPermissions.answer(it)
+                } else {
+                    GuestPermissions.answerFor(packageName, it)
+                }
+                answer == PackageManager.PERMISSION_GRANTED
             }
 
         override fun invoke(proxy: Any?, method: Method, args: Array<Any?>?): Any? {
@@ -205,16 +221,20 @@ internal object GuestLocation {
                 )
                 return null
             }
-            if (!enabled) return null
+            val owner = GuestRuntime.activePackage()
             synchronized(feeds) {
                 if (feeds.containsKey(listener)) return null
                 val tick = object : Runnable {
                     override fun run() {
-                        if (!enabled) {
+                        // The app that asked, not the app on the screen. And it keeps ticking while
+                        // the answer is no: location switched off and on again has to resume the
+                        // updates an app is still registered for, rather than leave it holding a
+                        // registration that quietly stopped — the same rule the sensors follow.
+                        if (owner == null || GuestLoader.forPackage(owner) == null) {
                             synchronized(feeds) { feeds.remove(listener) }
                             return
                         }
-                        deliver(listener)
+                        if (allows(owner)) deliver(listener)
                         handler.postDelayed(this, UPDATE_MS)
                     }
                 }

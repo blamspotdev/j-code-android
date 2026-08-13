@@ -461,6 +461,25 @@ heading, which is what a phone on a dashboard reads, and it is what makes the si
 through a corner without anybody touching the heading slider. The stored attitude is not changed —
 it is what the device goes back to when it stops.
 
+#### One output, one thing driving it
+
+Several controls can reach the same reading, so each has a stated winner rather than a sum. A device
+has one heading and one position; two settings quietly averaging into them is the failure mode this
+table exists to prevent.
+
+| When these overlap | What wins | Why |
+|---|---|---|
+| Travel heading vs the **heading slider** | Travel, while moving | The slider stays visible but inert, and says the trail is steering — it is still where the device points once it stops |
+| Travel heading vs the **spin loop** | Travel; the spin waits | Otherwise the compass reports neither, but their sum — disagreeing with the bearing in the same reading and with the map arrow drawn from it |
+| Travel heading vs the **tilt loop** | Both | Different axes: tilt rocks the pitch, travel turns the heading |
+| A point-to-point route vs a **trail** | Whichever was started last | One `locationMode`, so starting either stops the other. The map and the readout only show the device when *its own* method is the one running |
+| An app's rule vs the **device's mode** | Both must allow it | See §7e — an app cannot be given hardware the device does not have |
+
+Two more overlaps are legal but worth saying out loud, so the bench says them rather than looking
+broken: tools that run while their hardware is **Off** (the readouts stay honest, no app is being
+told), and the three motion sensors wired **differently from each other** (an app deriving one
+orientation from gravity and the magnetic field together is then being handed two devices).
+
 #### The trails, and why they are wrong on purpose
 
 Three, chosen for the three shapes of heading change a location app has to survive, and sitting in
