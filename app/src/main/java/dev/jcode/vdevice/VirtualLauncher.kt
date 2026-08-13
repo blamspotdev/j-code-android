@@ -133,6 +133,9 @@ internal object VirtualLauncher {
         )
         // The bar is on the screen whether or not anything is installed, so it is in the dump the
         // same way — a driver reading the device's state should not have to infer it from pixels.
+        // It carries no text on the home screen: the bar reports the *app*, and with nothing running
+        // there is no app to report. Naming the device there only repeated what the tab's own title
+        // already says.
         UiXml.node(
             out = out,
             depth = 2,
@@ -141,7 +144,6 @@ internal object VirtualLauncher {
             className = STATUS_BAR_CLASS,
             packageName = LAUNCHER_PACKAGE,
             selfClosing = true,
-            text = VirtualIdentity.MODEL,
         )
         if (apps.isNotEmpty()) {
             tiles(width, height, density, apps).forEachIndexed { index, tile ->
@@ -208,25 +210,12 @@ internal object VirtualLauncher {
      * is no guest process.
      */
     private fun drawStatusBar(canvas: Canvas, width: Int, density: Float) {
-        val bar = barHeight(density)
         canvas.drawRect(
             0f,
             0f,
             width.toFloat(),
-            bar,
+            barHeight(density),
             Paint(Paint.ANTI_ALIAS_FLAG).apply { color = VirtualStatusBar.BAR_BACKGROUND },
-        )
-        val text = textPaint(
-            VirtualStatusBar.TEXT_DP * density,
-            VirtualStatusBar.FOREGROUND,
-            Paint.Align.LEFT,
-        )
-        val metrics = text.fontMetrics
-        canvas.drawText(
-            VirtualIdentity.MODEL,
-            PADDING_DP * density,
-            bar / 2f - (metrics.ascent + metrics.descent) / 2f,
-            text,
         )
     }
 

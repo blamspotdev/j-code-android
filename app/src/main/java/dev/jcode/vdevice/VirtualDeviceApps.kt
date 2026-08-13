@@ -46,10 +46,34 @@ internal object VirtualDeviceApps {
     fun resetOnStart(context: Context) {
         if (reset) return
         reset = true
-        val root = File(context.applicationContext.filesDir, ROOT)
+        val app = context.applicationContext
+        val root = File(app.filesDir, ROOT)
         val removed = root.listFiles().orEmpty().count { it.deleteRecursively() }
         if (removed > 0) Log.i(TAG, "virtual device reset: $removed entries cleared from $root")
+        clearGuestWebViewData(app)
         revision.intValue++
+    }
+
+    /**
+     * Empties the WebView profile a guest browsed into.
+     *
+     * It is the one thing a guest leaves outside `filesDir/vdevice/`: WebView keeps its data beside
+     * J Code's own, under the suffix [GuestRuntime.GUEST_WEBVIEW_SUFFIX] gives it, and nothing under
+     * this object's tree ever touched it. So cookies, local storage and any session an app signed
+     * into survived a restart on a device whose whole premise is that nothing does — and would have
+     * been handed to whatever app was installed next.
+     *
+     * The suffix is what keeps it out of J Code's own browsing data; wiping it is what keeps it out
+     * of the *next* guest's.
+     */
+    private fun clearGuestWebViewData(context: Context) {
+        val data = context.dataDir
+        val dirs = data.listFiles().orEmpty().filter {
+            it.isDirectory && it.name.endsWith("_${GuestRuntime.GUEST_WEBVIEW_SUFFIX}")
+        }
+        dirs.forEach { dir ->
+            if (dir.deleteRecursively()) Log.i(TAG, "cleared guest WebView data in ${dir.name}")
+        }
     }
 
     /** Every app staged on the device, by label. Unreadable APKs are skipped, not reported. */

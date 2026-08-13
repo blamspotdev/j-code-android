@@ -37,7 +37,7 @@ internal object GuestRuntime {
     private const val EMBEDDED_ID = "jcode-embedded"
 
     /** Keeps the guest's WebView data out of J Code's, which already holds the lock on its own. */
-    private const val GUEST_WEBVIEW_SUFFIX = "jcode-guest"
+    internal const val GUEST_WEBVIEW_SUFFIX = "jcode-guest"
 
     private class Target(val guest: LoadedGuest, val activityClass: String)
 
