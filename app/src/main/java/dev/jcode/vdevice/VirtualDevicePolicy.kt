@@ -3,6 +3,7 @@ package dev.jcode.vdevice
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.content.pm.PermissionInfo
 import android.hardware.Sensor
 import android.hardware.SensorManager
 import android.os.SystemClock
@@ -11,9 +12,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import java.io.File
 import java.util.Properties
 
-/** What one piece of the virtual device's hardware is wired to, for one app. */
+/** What one piece of the virtual device's hardware is wired to. A property of the *device*. */
 internal enum class HardwareMode(val label: String) {
-    /** The device does not have it: not declared, not permitted, and no data. */
+    /** The device does not have it: not declared, and no data. */
     Off("Off"),
 
     /** The device has one of its own, and it is not the phone's. */
@@ -21,6 +22,19 @@ internal enum class HardwareMode(val label: String) {
 
     /** The phone's, passed straight through. */
     Real("Real"),
+}
+
+/**
+ * What one app may do with one permission it declares. A property of the *app*.
+ *
+ * The same three states a phone has, and they mean the same things. [Ask] is not a third answer to
+ * `checkSelfPermission` — Android has only two — it is the state of not having decided, which reads
+ * as denied until the app asks and the user says otherwise.
+ */
+internal enum class PermissionRule(val label: String) {
+    Allow("Allow"),
+    Deny("Deny"),
+    Ask("Ask"),
 }
 
 /**
@@ -61,8 +75,8 @@ internal enum class VirtualHardware(
     Camera(
         id = "camera",
         label = "Camera",
-        summary = "Simulated declares a camera and permits it; no frames ever arrive, because the " +
-            "phone's camera is never lent to a guest.",
+        summary = "Simulated gives the device a camera that no frame ever arrives from, because the " +
+            "phone's is never lent to a guest.",
         modes = listOf(HardwareMode.Off, HardwareMode.Simulated),
         fallback = HardwareMode.Off,
         permissions = listOf(Manifest.permission.CAMERA),
@@ -76,8 +90,8 @@ internal enum class VirtualHardware(
     Microphone(
         id = "microphone",
         label = "Microphone",
-        summary = "Simulated declares a microphone that records nothing. Real is the phone's, and " +
-            "asks J Code for permission to record the first time you choose it.",
+        summary = "Simulated gives the device a microphone that records nothing. Real is the " +
+            "phone's, and asks J Code for permission to record the first time you choose it.",
         modes = listOf(HardwareMode.Off, HardwareMode.Simulated, HardwareMode.Real),
         fallback = HardwareMode.Off,
         permissions = listOf(Manifest.permission.RECORD_AUDIO),
@@ -87,8 +101,8 @@ internal enum class VirtualHardware(
     Location(
         id = "location",
         label = "Location",
-        summary = "A fixed fix you set below, reported as GPS. The phone's own location is never " +
-            "offered — an app on this device cannot learn where you are.",
+        summary = "A fix you set, reported as GPS, and a route it can walk. The phone's own " +
+            "location is never offered — an app on this device cannot learn where you are.",
         modes = listOf(HardwareMode.Off, HardwareMode.Simulated),
         fallback = HardwareMode.Off,
         permissions = listOf(
@@ -106,8 +120,8 @@ internal enum class VirtualHardware(
     Accelerometer(
         id = "accelerometer",
         label = "Accelerometer",
-        summary = "Simulated reports a device lying flat and still. Real is the phone's, so the app " +
-            "feels every time you move it.",
+        summary = "Simulated reports the attitude and motion set on this bench. Real is the " +
+            "phone's, so an app feels every time you move it.",
         modes = listOf(HardwareMode.Off, HardwareMode.Simulated, HardwareMode.Real),
         fallback = HardwareMode.Simulated,
         features = listOf(PackageManager.FEATURE_SENSOR_ACCELEROMETER),
@@ -125,7 +139,7 @@ internal enum class VirtualHardware(
     Compass(
         id = "compass",
         label = "Compass",
-        summary = "Simulated points north and stays there. Real is the phone's magnetometer.",
+        summary = "Simulated follows the heading set on this bench. Real is the phone's magnetometer.",
         modes = listOf(HardwareMode.Off, HardwareMode.Simulated, HardwareMode.Real),
         fallback = HardwareMode.Simulated,
         features = listOf(PackageManager.FEATURE_SENSOR_COMPASS),
@@ -140,7 +154,7 @@ internal enum class VirtualHardware(
     Gyroscope(
         id = "gyroscope",
         label = "Gyroscope",
-        summary = "Simulated reports a device that is not turning. Real is the phone's.",
+        summary = "Simulated turns only when a loop is turning the device. Real is the phone's.",
         modes = listOf(HardwareMode.Off, HardwareMode.Simulated, HardwareMode.Real),
         fallback = HardwareMode.Simulated,
         features = listOf(PackageManager.FEATURE_SENSOR_GYROSCOPE),
@@ -274,10 +288,16 @@ internal object VirtualDevicePolicy {
      */
     private const val RESTAT_MS = 250L
 
-    /** How [packageName] is wired to [hardware] — its [VirtualHardware.fallback] until asked otherwise. */
-    fun mode(context: Context, packageName: String, hardware: VirtualHardware): HardwareMode {
-        val stored = read(context).getProperty(key(packageName, hardware.id))
-            ?: return hardware.fallback
+    /**
+     * What the device's [hardware] is wired to — its [VirtualHardware.fallback] until asked
+     * otherwise.
+     *
+     * One answer for the whole device, not one per app: a phone has one camera and one GPS however
+     * many apps read them, and what each *app* may do with them is a separate question with a
+     * separate answer — see [rule].
+     */
+    fun mode(context: Context, hardware: VirtualHardware): HardwareMode {
+        val stored = read(context).getProperty("hardware/${hardware.id}") ?: return hardware.fallback
         val mode = runCatching { HardwareMode.valueOf(stored) }.getOrNull() ?: hardware.fallback
         // A stored Real that the phone can no longer honour — permission revoked in system settings,
         // or a policy carried onto a device with no gyroscope — reads as Simulated rather than as a
@@ -289,9 +309,42 @@ internal object VirtualDevicePolicy {
         }
     }
 
-    fun setMode(context: Context, packageName: String, hardware: VirtualHardware, mode: HardwareMode) {
-        edit(context) { it.setProperty(key(packageName, hardware.id), mode.name) }
+    fun setMode(context: Context, hardware: VirtualHardware, mode: HardwareMode) {
+        edit(context) { it.setProperty("hardware/${hardware.id}", mode.name) }
     }
+
+    /**
+     * What [packageName] may do with [permission].
+     *
+     * The default is the platform's own: a permission the platform asks for at runtime starts at
+     * [PermissionRule.Ask], and everything else — the install-time ones an app never prompts for —
+     * starts at [PermissionRule.Allow], because "ask" for a permission nothing ever asks about is a
+     * state that could never be left.
+     */
+    fun rule(context: Context, packageName: String, permission: String): PermissionRule {
+        val stored = read(context).getProperty(key(packageName, "perm/$permission"))
+        return stored?.let { runCatching { PermissionRule.valueOf(it) }.getOrNull() }
+            ?: defaultRule(context, permission)
+    }
+
+    fun setRule(context: Context, packageName: String, permission: String, rule: PermissionRule) {
+        edit(context) { it.setProperty(key(packageName, "perm/$permission"), rule.name) }
+    }
+
+    /**
+     * Whether the platform treats [permission] as one to ask about at runtime.
+     *
+     * Asked of the *phone's* package manager, which is the authority on the platform's own
+     * permissions and has never heard of a permission a guest declares itself. An unknown one is
+     * treated as install-time, which is what a custom permission is.
+     */
+    fun dangerous(context: Context, permission: String): Boolean = runCatching {
+        val info = context.applicationContext.packageManager.getPermissionInfo(permission, 0)
+        info.protection == PermissionInfo.PROTECTION_DANGEROUS
+    }.getOrDefault(false)
+
+    private fun defaultRule(context: Context, permission: String): PermissionRule =
+        if (dangerous(context, permission)) PermissionRule.Ask else PermissionRule.Allow
 
     /**
      * Whether [packageName] may keep running once it is not the app on the screen.

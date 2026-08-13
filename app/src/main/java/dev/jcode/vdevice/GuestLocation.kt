@@ -144,11 +144,18 @@ internal object GuestLocation {
          */
         private val seen = HashSet<String>()
 
+        /**
+         * Whether the app on the screen may have a fix at all.
+         *
+         * Asked as a permission rather than as a setting, because that is one decision rather than
+         * two that could disagree: [GuestPermissions.answer] already requires the app to have
+         * declared it, to have been allowed it, *and* the device to have location switched on. Any
+         * of the three flavours will do — an app that only ever declared the coarse one is not
+         * refused for lacking the fine one.
+         */
         private val enabled: Boolean
-            get() {
-                val guest = GuestRuntime.activePackage() ?: return false
-                return VirtualDevicePolicy.mode(context, guest, VirtualHardware.Location) !=
-                    HardwareMode.Off
+            get() = VirtualHardware.Location.permissions.any {
+                GuestPermissions.answer(it) == android.content.pm.PackageManager.PERMISSION_GRANTED
             }
 
         override fun invoke(proxy: Any?, method: Method, args: Array<Any?>?): Any? {

@@ -1,8 +1,7 @@
 package dev.jcode.vdevice
 
-import android.Manifest
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import android.content.Context
+import android.content.pm.PackageManager
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,16 +31,26 @@ import androidx.compose.ui.unit.dp
 import dev.jcode.design.CompactOutlinedButton
 import dev.jcode.design.ManagerNoticeCard
 import dev.jcode.design.ManagerSectionCard
-import dev.jcode.design.ManagerSummaryRow
 import dev.jcode.design.SettingsDropdownRow
-import java.util.Locale
+
+/** One permission an app declares, as the sheet needs to show it. */
+private class Declared(
+    val name: String,
+    val label: String,
+    /** True for the ones the platform asks about at runtime; the rest are granted at install. */
+    val runtime: Boolean,
+)
 
 /**
- * What one app installed on the virtual device is allowed to reach.
+ * What one app installed on the virtual device may do.
  *
- * This is the device's settings screen for an app, not the phone's — nothing here touches what J
- * Code itself may do, with the single exception of a real microphone, which needs the user's own
- * permission and asks for it here.
+ * The list is the app's **own manifest** — every `<uses-permission>` it declares, and nothing else,
+ * because a permission an app never asked for is one the platform would refuse it whatever anybody
+ * here decided. Each gets the three states a phone has, and they mean the same things.
+ *
+ * This is only half of the answer. It says what the *app* may do; the hardware bench says what the
+ * *device* has, and both are required — an app cannot be given a camera the device does not have.
+ * The two are deliberately separate: one is about trust, the other about equipment.
  *
  * Over the device's screen rather than on it, like [InstallSheet] and for the same reason: it is
  * J Code talking about the app, so it must not appear in what `screencap` answers with, where it
@@ -57,27 +66,7 @@ internal fun AppPermissionsSheet(
     val context = LocalContext.current
     // Read so that every write below redraws the sheet: the policy lives in a file, not in state.
     val revision = VirtualDevicePolicy.revision.intValue
-
-    // Held across the system's own prompt: the mode is only stored once recording is actually
-    // allowed, so a refused prompt leaves the app exactly where it was rather than pointing it at a
-    // microphone J Code cannot open.
-    val microphone = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted) {
-            VirtualDevicePolicy.setMode(
-                context,
-                app.packageName,
-                VirtualHardware.Microphone,
-                HardwareMode.Real,
-            )
-            onSnackbar("${app.label} can use the phone's microphone.")
-        } else {
-            // Deliberately unchanged rather than downgraded: the app is where the user left it, and
-            // pointing it at a microphone J Code cannot open would be the one dishonest outcome.
-            onSnackbar("J Code was not allowed to record, so ${app.label}'s microphone is unchanged.")
-        }
-    }
+    val declared = remember(app.apkPath) { declaredBy(context, app) }
 
     Surface(modifier = modifier, color = MaterialTheme.colorScheme.surface) {
         Column(
@@ -98,9 +87,9 @@ internal fun AppPermissionsSheet(
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        text = "What ${app.label} may reach on ${VirtualIdentity.MODEL}. Simulated " +
-                            "hardware belongs to the device and tells the app the same thing every " +
-                            "time; real hardware is the phone's.",
+                        text = "What ${app.label} declared in its manifest, and what this device " +
+                            "answers when it asks. Whether the device has the hardware at all is " +
+                            "the other half, on the hardware tab.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -115,42 +104,38 @@ internal fun AppPermissionsSheet(
                 }
             }
 
-            ManagerSectionCard(
-                title = "Hardware",
-                description = "An app is told the device has only what is switched on here, and is " +
-                    "refused the permission for anything that is off — both before it asks and when " +
-                    "it does.",
-            ) {
-                VirtualHardware.entries.forEach { hardware ->
-                    SettingsDropdownRow(
-                        label = hardware.label,
-                        supporting = hardware.summary,
-                        options = hardware.modes
-                            .filter { it != HardwareMode.Real || hardware.realOffered(context) }
-                            .map { it.name },
-                        selected = VirtualDevicePolicy.mode(context, app.packageName, hardware).name,
-                        optionLabel = { HardwareMode.valueOf(it).label },
-                        onSelect = { chosen ->
-                            val mode = HardwareMode.valueOf(chosen)
-                            // The one choice that is not ours to make: a real microphone is the
-                            // phone's, so the user is asked for it before the app is pointed at it.
-                            if (hardware == VirtualHardware.Microphone &&
-                                mode == HardwareMode.Real &&
-                                !hardware.realAvailable(context)
-                            ) {
-                                microphone.launch(Manifest.permission.RECORD_AUDIO)
-                            } else {
-                                VirtualDevicePolicy.setMode(context, app.packageName, hardware, mode)
-                            }
-                        },
-                    )
+            val runtime = declared.filter { it.runtime }
+            val install = declared.filterNot { it.runtime }
+
+            if (declared.isEmpty()) {
+                ManagerNoticeCard(
+                    title = "It asked for nothing",
+                    message = "${app.label} declares no permissions at all, so there is nothing here " +
+                        "to decide. Anything it reaches for is refused, which is what the platform " +
+                        "would do too.",
+                )
+            }
+
+            if (runtime.isNotEmpty()) {
+                ManagerSectionCard(
+                    title = "Asked for at runtime",
+                    description = "The dangerous ones. Ask means undecided — it reads as denied " +
+                        "until the app asks and you answer the device's prompt, exactly as a " +
+                        "phone behaves.",
+                ) {
+                    runtime.forEach { Rule(app = app, permission = it, revision = revision) }
                 }
             }
 
-            if (VirtualDevicePolicy.mode(context, app.packageName, VirtualHardware.Location) !=
-                HardwareMode.Off
-            ) {
-                SimulatedFix()
+            if (install.isNotEmpty()) {
+                ManagerSectionCard(
+                    title = "Granted at install",
+                    description = "The ordinary ones, which a phone grants without asking and an " +
+                        "app never prompts for. Deny still works, and is the only way to take one " +
+                        "away.",
+                ) {
+                    install.forEach { Rule(app = app, permission = it, revision = revision) }
+                }
             }
 
             ManagerSectionCard(
@@ -192,43 +177,79 @@ internal fun AppPermissionsSheet(
                 }
             }
 
+            CompactOutlinedButton(
+                text = "Open hardware",
+                onClick = { SimulatedHardware.requestOpen() },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
             ManagerNoticeCard(
                 title = "Cleared when J Code restarts",
-                message = "The device is wiped on every start — apps, their data, and these " +
-                    "permissions with them. A grant that outlived the app it was given to would be " +
-                    "waiting for whatever was installed under that name next.",
+                message = "The device is wiped on every start — apps, their data, and these answers " +
+                    "with them. A grant that outlived the app it was given to would be waiting for " +
+                    "whatever was installed under that name next.",
             )
         }
     }
 }
 
-/**
- * Where the device's simulated GPS currently says it is.
- *
- * A reading rather than an editor: this is one fix for the whole device — a phone has one receiver
- * and every app on it reads the same coordinates — so it is set on the hardware bench along with
- * everything else that moves, and shown here because an app being given location is the moment
- * somebody wants to know where the device thinks it is.
- */
+/** One permission's three-way control, plus what the device says about it right now. */
 @Composable
-private fun SimulatedFix() {
+private fun Rule(app: VirtualDeviceApp, permission: Declared, revision: Int) {
     val context = LocalContext.current
-    val settings = VirtualDevicePolicy.hardware(context)
-    val now = SimulatedHardware.sample(context)
+    val rule = VirtualDevicePolicy.rule(context, app.packageName, permission.name)
+    // The hardware this permission is about, if any: a camera that is off is worth saying out loud,
+    // because otherwise "Allow" and "denied" appear to disagree.
+    val hardware = remember(permission.name) { VirtualHardware.byPermission(permission.name) }
+    val missing = hardware != null &&
+        remember(revision, hardware) { VirtualDevicePolicy.mode(context, hardware) } == HardwareMode.Off
 
-    ManagerSectionCard(
-        title = "Simulated location",
-        description = "What every app on this device is told. Set it — and start it moving — on the " +
-            "hardware bench.",
-    ) {
-        ManagerSummaryRow(
-            label = if (settings.locationMode == LocationMode.Route) "Moving through" else "Parked at",
-            value = "%.5f, %.5f".format(Locale.US, now.latitude, now.longitude),
-        )
-        CompactOutlinedButton(
-            text = "Open hardware",
-            onClick = { SimulatedHardware.requestOpen() },
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
+    SettingsDropdownRow(
+        label = permission.label,
+        supporting = when {
+            missing && rule == PermissionRule.Allow ->
+                "Allowed, but the device's ${hardware!!.label.lowercase()} is off — so it is refused."
+            else -> permission.name
+        },
+        options = PermissionRule.entries.map { it.name },
+        selected = rule.name,
+        optionLabel = { PermissionRule.valueOf(it).label },
+        onSelect = {
+            VirtualDevicePolicy.setRule(
+                context,
+                app.packageName,
+                permission.name,
+                PermissionRule.valueOf(it),
+            )
+        },
+    )
 }
+
+/**
+ * Everything the APK's manifest asks for, named the way the platform names it.
+ *
+ * Read straight out of the archive rather than from a running guest, so the sheet answers the same
+ * whether the app has ever been opened.
+ */
+private fun declaredBy(context: Context, app: VirtualDeviceApp): List<Declared> {
+    val info = runCatching {
+        context.packageManager.getPackageArchiveInfo(app.apkPath, PackageManager.GET_PERMISSIONS)
+    }.getOrNull()
+    return info?.requestedPermissions.orEmpty().map { name ->
+        Declared(
+            name = name,
+            label = label(context, name),
+            runtime = VirtualDevicePolicy.dangerous(context, name),
+        )
+    }.sortedWith(compareByDescending<Declared> { it.runtime }.thenBy { it.label.lowercase() })
+}
+
+/**
+ * A permission as a person would name it: the platform's own label where there is one, since the
+ * phone's package manager has already translated its own permissions, and the tail of the name for
+ * one a guest declares itself.
+ */
+private fun label(context: Context, permission: String): String = runCatching {
+    val info = context.packageManager.getPermissionInfo(permission, 0)
+    info.loadLabel(context.packageManager).toString().replaceFirstChar { it.uppercase() }
+}.getOrDefault(permission.substringAfterLast('.').replace('_', ' '))

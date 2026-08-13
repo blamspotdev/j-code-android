@@ -46,7 +46,7 @@ A practical consequence: JCode **cannot** enable wireless debugging for the user
 | App ↔ guest Linux processes | **Partly** | proot is a ptrace-based *convenience* sandbox, not a security boundary. Guest processes run as the app's uid and can reach anything the app can |
 | App ↔ `:guest` (virtual device) | **No** | Separate process, **same uid, same permissions, same data access**. A memory and lifecycle boundary, not a security one |
 | Guest APK ↔ JCode's data | **Partly** | `GuestContext` redirects the guest's `dataDir` to `filesDir/vdevice/<package>/`, which "keeps a guest from ever seeing (or writing into) JCode's own data directory" — but the guest runs arbitrary code as JCode's uid and can bypass the wrapper |
-| Guest APK ↔ the phone's hardware | **Partly** | `VirtualDevicePolicy` decides per app what the device declares, permits and reports — see [App sandbox architecture §7e](../08-virtual-device/01-app-sandbox-architecture.md#7e-the-devices-hardware-per-app--virtualdevicepolicy). The outer lock is real and is the platform's: JCode holds no camera or location permission, so those cannot be reached whatever the container says. The motion sensors have no outer lock — Android does not gate them — so for those the policy **is** the boundary, and a guest that bypasses `GuestContext` reaches the phone's |
+| Guest APK ↔ the phone's hardware | **Partly** | Two settings, both required: what the device has, and what the app may do with it — see [App sandbox architecture §7e](../08-virtual-device/01-app-sandbox-architecture.md#7e-two-settings-not-one--virtualdevicepolicy). The outer lock is real and is the platform's: JCode holds no camera or location permission, so those cannot be reached whatever the container says. The motion sensors have no outer lock — Android does not gate them — so for those the policy **is** the boundary, and a guest that bypasses `GuestContext` reaches the phone's |
 
 **Do not run untrusted APKs in the app sandbox, and do not treat proot as a jail.** Both exist for
 developer convenience.
@@ -189,9 +189,13 @@ present for the framework's requirements.
   the microphone and location the platform is underneath it and refuses independently; for the three
   motion sensors nothing is underneath it, because Android puts no permission on them. A guest that
   reaches around `GuestContext` for a `SensorManager` gets the phone's.
-- A simulated camera **declares** a camera and grants `CAMERA`, and no frame ever arrives. That is a
-  true statement about a device with a camera that produces nothing, and an app written to assume
+- A simulated camera **declares** a camera and permits it, and no frame ever arrives. That is a true
+  statement about a device with a camera that produces nothing, and an app written to assume
   otherwise will hang or fail rather than fall back.
+- **An activity gets one runtime permission request.** Every route to clearing the platform's
+  `mHasCurrentPermissionsRequest` is blocked at `targetSdk` 33, so a second `requestPermissions` from
+  the same activity instance is cancelled by the platform before the container sees it. The app is
+  answered with two empty arrays — a documented cancellation — and reopening it clears the flag.
 - No signing-key revocation path for extensions.
 - The `exec` capability is effectively full control of the guest environment; the permission UI
   cannot express anything finer.

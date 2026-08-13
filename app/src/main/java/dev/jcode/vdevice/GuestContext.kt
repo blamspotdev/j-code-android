@@ -92,6 +92,26 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
         else -> super.getSystemService(name)
     }
 
+    // ------------------------------------------------------------------------------ permissions
+    //
+    // Answered here, in front of everything, and that position is the whole point.
+    //
+    // `Context.checkSelfPermission` reaches the system through `PermissionManager`, which memoises
+    // the answer in a `PropertyInvalidatedCache` that only the *system* can invalidate — so the
+    // container's binder hook underneath it gets asked once and its answer is then repeated for the
+    // life of the process. Measured: a camera granted while an app was running went on reading as
+    // denied. `PermissionManager.disablePermissionCache` is blocked at `targetSdk` 33, so the cache
+    // cannot be turned off; it can only be got in front of, and these three overrides are public SDK.
+
+    override fun checkPermission(permission: String, pid: Int, uid: Int): Int =
+        GuestPermissions.answer(permission) ?: super.checkPermission(permission, pid, uid)
+
+    override fun checkSelfPermission(permission: String): Int =
+        GuestPermissions.answer(permission) ?: super.checkSelfPermission(permission)
+
+    override fun checkCallingOrSelfPermission(permission: String): Int =
+        GuestPermissions.answer(permission) ?: super.checkCallingOrSelfPermission(permission)
+
     override fun getDataDir(): File = guest.dataDir.ensure()
     override fun getFilesDir(): File = guest.filesDir.ensure()
     override fun getCacheDir(): File = guest.cacheDir.ensure()

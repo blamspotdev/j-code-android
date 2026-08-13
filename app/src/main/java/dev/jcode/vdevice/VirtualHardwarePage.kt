@@ -1,14 +1,26 @@
 package dev.jcode.vdevice
 
+import android.Manifest
 import android.os.SystemClock
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -21,8 +33,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.jcode.design.CompactFilledButton
 import dev.jcode.design.CompactOutlinedButton
@@ -37,6 +51,10 @@ import kotlinx.coroutines.delay
 
 /** How often the readout re-reads the device. Fast enough to look live, slow enough to be free. */
 private const val READOUT_MS = 150L
+
+/** Two columns of tiles, which is what fits a phone in portrait without shrinking the labels. */
+private const val TILE_COLUMNS = 2
+private val TILE_HEIGHT = 82.dp
 
 /** An attitude worth reaching in one tap, as pitch and roll in degrees. */
 private class Pose(val label: String, val pitch: Float, val roll: Float)
@@ -60,25 +78,29 @@ private val POSES = listOf(
 )
 
 /**
- * The virtual device's hardware bench: where its GPS is, which way it is being held, and what is
- * shaking it.
+ * The virtual device's hardware bench: what the device has, and what it is doing.
+ *
+ * Opens on a grid of what the device is made of — one tile per piece of hardware, each showing what
+ * it is wired to and what it is reporting — and each tile opens onto that piece's own controls. That
+ * shape is the point: the six Off/Simulated/Real choices are properties of the *device*, and putting
+ * them anywhere else made them look like properties of an app.
  *
  * A tab of its own rather than more of the device's own screen, for the reason every other piece of
  * J Code chrome is: what `screencap` answers with has to be the device, and a control panel drawn
  * over it would read as something the guest put there.
  *
- * Everything here is a property of the **device**, not of one app — a phone has one GPS however many
- * apps are reading it. What each app is allowed to see of it is the other half, in Manage
- * permissions, and an app with its location switched off is unaffected by anything set here.
+ * What each *app* is allowed to do with any of this is the other half, in Manage permissions. Both
+ * are required — an app cannot be given a camera the device does not have.
  */
 @Composable
 internal fun VirtualHardwarePage(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val revision = VirtualDevicePolicy.revision.intValue
     val settings = remember(revision) { VirtualDevicePolicy.hardware(context) }
+    var opened by remember { mutableStateOf<VirtualHardware?>(null) }
 
     // The readout is computed, not received: the same function of the same clock the guest's own
-    // sensors are running, so what this shows is what the app is being told. See VirtualHardware.
+    // sensors are running, so what this shows is what the app is being told — see SimulatedHardware.
     var now by remember { mutableStateOf(SimulatedHardware.sample(context)) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -92,33 +114,195 @@ internal fun VirtualHardwarePage(modifier: Modifier = Modifier) {
             modifier = Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    text = "Hardware",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = "What ${VirtualIdentity.MODEL} reports to the apps on it: where it is, " +
-                        "which way it is being held, and what is moving it. One setting for the " +
-                        "device — an app only sees it if its hardware is switched on in Manage " +
-                        "permissions.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Header(opened = opened, onBack = { opened = null })
+            when (val hardware = opened) {
+                null -> HardwareGrid(revision = revision, now = now) { opened = it }
+                VirtualHardware.Location -> {
+                    Mode(hardware)
+                    LocationTools(settings = settings, now = now)
+                }
+                VirtualHardware.Accelerometer,
+                VirtualHardware.Compass,
+                VirtualHardware.Gyroscope,
+                -> {
+                    Mode(hardware)
+                    MotionTools(settings = settings)
+                    SensorReadout(hardware = hardware, now = now)
+                }
+                else -> Mode(hardware)
+            }
+        }
+    }
+}
+
+@Composable
+private fun Header(opened: VirtualHardware?, onBack: () -> Unit) {
+    Row(
+        // Top-aligned: centring puts the arrow beside the middle of a three-line description rather
+        // than beside the title it goes back from.
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (opened != null) {
+            IconButton(onClick = onBack, modifier = Modifier.size(34.dp)) {
+                Icon(
+                    Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = "Back to the device's hardware",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(19.dp),
                 )
             }
-
-            LocationTools(settings = settings, now = now)
-            MotionTools(settings = settings)
-            Readout(now = now)
-
-            ManagerNoticeCard(
-                title = "Cleared when J Code restarts",
-                message = "The device is wiped on every start, and this goes with it — a route " +
-                    "still running against an app that is no longer installed is nobody's idea of " +
-                    "a clean room.",
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                text = opened?.label ?: "Hardware",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = opened?.summary
+                    ?: "What ${VirtualIdentity.MODEL} is made of, and what it is doing. One setting " +
+                    "for the device — what each app may do with it is in Manage permissions.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/** The device, as the things it is made of. */
+@Composable
+private fun HardwareGrid(revision: Int, now: HardwareSample, onOpen: (VirtualHardware) -> Unit) {
+    val context = LocalContext.current
+    // Weights rather than a width fraction: two halves plus the gap between them is wider than the
+    // row, so a fraction wraps every tile onto a line of its own.
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        maxItemsInEachRow = TILE_COLUMNS,
+    ) {
+        VirtualHardware.entries.forEach { hardware ->
+            val mode = remember(revision, hardware) { VirtualDevicePolicy.mode(context, hardware) }
+            Tile(
+                hardware = hardware,
+                mode = mode,
+                detail = detail(hardware, mode, now),
+                modifier = Modifier.weight(1f),
+                onClick = { onOpen(hardware) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun Tile(
+    hardware: VirtualHardware,
+    mode: HardwareMode,
+    detail: String?,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = modifier
+            .height(TILE_HEIGHT)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (mode == HardwareMode.Off) 0.10f else 0.22f),
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = hardware.label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = mode.label,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (mode == HardwareMode.Off) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.primary
+                },
+            )
+            detail?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/** What a tile can say about itself beyond its mode — the reading, where there is one worth having. */
+private fun detail(hardware: VirtualHardware, mode: HardwareMode, now: HardwareSample): String? =
+    when {
+        mode == HardwareMode.Off -> null
+        hardware == VirtualHardware.Location ->
+            "%.4f, %.4f".format(Locale.US, now.latitude, now.longitude) +
+                if (now.moving) " · moving" else ""
+        hardware == VirtualHardware.Accelerometer && mode == HardwareMode.Simulated ->
+            "%+.1f, %+.1f, %+.1f".format(Locale.US, now.accelerometer[0], now.accelerometer[1], now.accelerometer[2])
+        hardware == VirtualHardware.Compass && mode == HardwareMode.Simulated ->
+            "%.0f° from north".format(Locale.US, now.orientation[0])
+        hardware == VirtualHardware.Gyroscope && mode == HardwareMode.Simulated ->
+            "%+.2f rad/s".format(Locale.US, now.gyroscope[2])
+        mode == HardwareMode.Real -> "the phone's"
+        else -> null
+    }
+
+/**
+ * What one piece of hardware is wired to.
+ *
+ * The microphone is the only choice here that is not ours to make: real means the phone's, so the
+ * user is asked for `RECORD_AUDIO` before the device is pointed at it, and a refusal leaves the
+ * setting alone rather than half-applied.
+ */
+@Composable
+private fun Mode(hardware: VirtualHardware) {
+    val context = LocalContext.current
+    val revision = VirtualDevicePolicy.revision.intValue
+    val mode = remember(revision, hardware) { VirtualDevicePolicy.mode(context, hardware) }
+    val microphone = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) VirtualDevicePolicy.setMode(context, VirtualHardware.Microphone, HardwareMode.Real)
+    }
+
+    ManagerSectionCard(
+        title = "Wired to",
+        description = "Off means the device does not have it at all: not declared, and refused to " +
+            "every app whatever its permissions say.",
+    ) {
+        SettingsDropdownRow(
+            // No supporting text: the header above has just said what this is, and saying it twice
+            // on a screen this short reads as two different things that happen to match.
+            label = hardware.label,
+            options = hardware.modes
+                .filter { it != HardwareMode.Real || hardware.realOffered(context) }
+                .map { it.name },
+            selected = mode.name,
+            optionLabel = { HardwareMode.valueOf(it).label },
+            onSelect = { chosen ->
+                val next = HardwareMode.valueOf(chosen)
+                if (hardware == VirtualHardware.Microphone &&
+                    next == HardwareMode.Real &&
+                    !hardware.realAvailable(context)
+                ) {
+                    microphone.launch(Manifest.permission.RECORD_AUDIO)
+                } else {
+                    VirtualDevicePolicy.setMode(context, hardware, next)
+                }
+            },
+        )
     }
 }
 
@@ -128,10 +312,10 @@ private fun LocationTools(settings: HardwareSettings, now: HardwareSample) {
     val running = settings.locationMode == LocationMode.Route && settings.routeStartedAt > 0L
 
     ManagerSectionCard(
-        title = "Location",
-        description = "A fix the device reports as GPS. Point to point walks between two of them at " +
-            "the speed you set, reporting the bearing and speed a real receiver would — which is " +
-            "what a navigation app reads rather than differencing positions itself.",
+        title = "Where it is",
+        description = "Point to point walks between two fixes at the speed you set, reporting the " +
+            "bearing and speed a real receiver would — which is what a navigation app reads rather " +
+            "than differencing positions itself.",
     ) {
         Coordinate(
             label = "Latitude",
@@ -221,10 +405,9 @@ private fun MotionTools(settings: HardwareSettings) {
     val context = LocalContext.current
 
     ManagerSectionCard(
-        title = "Motion",
-        description = "How the device is being held, and what is moving it. The accelerometer, the " +
-            "compass and the rotation vector are three views of the same attitude, so turning the " +
-            "heading turns all of them together.",
+        title = "How it is held",
+        description = "One attitude for the device, shared by the accelerometer, the compass and " +
+            "the gyroscope — they are three views of it, so turning the heading turns all of them.",
     ) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             POSES.forEach { pose ->
@@ -299,32 +482,46 @@ private fun MotionTools(settings: HardwareSettings) {
 }
 
 /**
- * What the device is reporting at this moment.
+ * What this one sensor is reporting at this moment.
  *
- * Worth having for its own sake — it is the only place the tools can be seen to be working without
- * an app installed to watch — but it is also the check that the two sides agree: these are the
- * numbers a guest's `SensorManager` is delivering, computed the same way from the same clock.
+ * Worth having for its own sake — it is the only way to see the tools working without an app
+ * installed to watch — but it is also the check that the two sides agree: these are the numbers a
+ * guest's `SensorManager` is delivering, computed the same way from the same clock.
  */
 @Composable
-private fun Readout(now: HardwareSample) {
+private fun SensorReadout(hardware: VirtualHardware, now: HardwareSample) {
     ManagerSectionCard(
         title = "Reporting now",
-        description = "What an app with this hardware switched on is being told, as it is told it.",
+        description = "What an app with this switched on is being told, as it is told it.",
     ) {
-        ManagerSummaryRow("Accelerometer", "${vector(now.accelerometer)} m/s²")
-        ManagerSummaryRow("Magnetic field", "${vector(now.magnetic)} µT")
-        ManagerSummaryRow("Gyroscope", "${vector(now.gyroscope)} rad/s")
-        ManagerSummaryRow(
-            "Orientation",
-            "%.0f° · %.0f° · %.0f°".format(
-                Locale.US,
-                now.orientation[0],
-                now.orientation[1],
-                now.orientation[2],
-            ),
-        )
-        ManagerSummaryRow("Position", coordinates(now.latitude, now.longitude))
+        when (hardware) {
+            VirtualHardware.Accelerometer -> {
+                ManagerSummaryRow("Accelerometer", "${vector(now.accelerometer)} m/s²")
+                ManagerSummaryRow("Gravity", "${vector(now.gravity)} m/s²")
+            }
+            VirtualHardware.Compass -> {
+                ManagerSummaryRow("Magnetic field", "${vector(now.magnetic)} µT")
+                ManagerSummaryRow("Heading", "%.0f° from north".format(Locale.US, now.orientation[0]))
+            }
+            else -> {
+                ManagerSummaryRow("Gyroscope", "${vector(now.gyroscope)} rad/s")
+                ManagerSummaryRow(
+                    "Orientation",
+                    "%.0f° · %.0f° · %.0f°".format(
+                        Locale.US,
+                        now.orientation[0],
+                        now.orientation[1],
+                        now.orientation[2],
+                    ),
+                )
+            }
+        }
     }
+    ManagerNoticeCard(
+        title = "Cleared when J Code restarts",
+        message = "The device is wiped on every start, and this goes with it — a route still " +
+            "running against an app that is no longer installed is nobody's idea of a clean room.",
+    )
 }
 
 // ------------------------------------------------------------------------------------ small pieces
@@ -332,8 +529,8 @@ private fun Readout(now: HardwareSample) {
 /**
  * A coordinate, held as text while it is being typed.
  *
- * Committed only when the text parses, so a half-finished number does not move the device — and
- * keyed on the stored value so that a route stopping somewhere else refills the field.
+ * Committed only when the text parses and lands on Earth, so a half-finished number does not move
+ * the device.
  */
 @Composable
 private fun Coordinate(

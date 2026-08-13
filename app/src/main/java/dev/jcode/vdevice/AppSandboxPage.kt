@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jcode.core.distro.WorkspaceHostPaths
 import dev.jcode.humanSize
@@ -131,6 +132,7 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
     var surfaceView by remember { mutableStateOf<AppSandboxSurfaceView?>(null) }
     var installOpen by remember { mutableStateOf(false) }
     val surface by session.surface.collectAsStateWithLifecycle()
+    val permissionRequest by session.permissionRequest.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     // The device's launcher lives on the surface, not in this composition — see VirtualLauncher. All
@@ -251,6 +253,17 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
 
         detailsFor?.let { app ->
             AppDetailsDialog(app = app, onDismiss = { detailsFor = null })
+        }
+
+        // The device's own permission prompt. It belongs to J Code rather than to the guest — a
+        // dialog the app could draw itself would be a dialog the app could answer itself.
+        permissionRequest?.let { request ->
+            GuestPermissionDialog(
+                request = request,
+                onAnswer = { allow ->
+                    session.answerPermissions(request.requestId, BooleanArray(request.permissions.size) { allow })
+                },
+            )
         }
 
         if (installOpen) {
@@ -545,6 +558,71 @@ private fun GuestCaveatDialog(message: String, onDismiss: () -> Unit) {
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
 }
+
+/**
+ * The device asking on an app's behalf — what a phone puts up when an app calls
+ * `requestPermissions`, for the same reason and at the same moment.
+ *
+ * There is no dismiss: the guest is blocked on the answer, and a dialog that could be swiped away
+ * would leave an app waiting on a callback that never comes. Back and a tap outside are both
+ * refused, so the only ways out are the two answers.
+ *
+ * One dialog for the whole request rather than one per permission. The platform asks in sequence;
+ * this asks once, because an app that wants the camera and the microphone together is asking one
+ * question — "may I do the thing I am for" — and answering it three times is the part of the phone
+ * experience nobody was hoping to reproduce.
+ */
+@Composable
+private fun GuestPermissionDialog(request: PermissionRequest, onAnswer: (Boolean) -> Unit) {
+    val context = LocalContext.current
+    val label = remember(request.packageName) {
+        VirtualDeviceApps.apk(context, request.packageName)
+            ?.let { VirtualDevice.inspect(context, it.absolutePath).getOrNull()?.label }
+            ?: request.packageName
+    }
+    val wanted = remember(request.permissions) {
+        request.permissions.map { permissionLabel(context, it) }
+    }
+    AlertDialog(
+        onDismissRequest = {},
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+        title = {
+            Text(
+                if (wanted.size == 1) "Allow $label to use the ${wanted.first().lowercase()}?"
+                else "Allow $label to use these?",
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (wanted.size > 1) {
+                    wanted.forEach { Text("• $it", style = MaterialTheme.typography.bodyMedium) }
+                }
+                Text(
+                    text = "This is ${VirtualIdentity.MODEL}'s hardware, not the phone's — see the " +
+                        "hardware tab for what it is wired to.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onAnswer(true) }) { Text("Allow") } },
+        dismissButton = { TextButton(onClick = { onAnswer(false) }) { Text("Deny") } },
+    )
+}
+
+/**
+ * A permission as a person would name it.
+ *
+ * The platform's own label where there is one — "Camera", "approximate location" — because the
+ * phone's package manager is the authority on its own permissions and has already translated them.
+ * A permission a guest declares itself has no label there, so the last segment of its name is the
+ * best that can be done.
+ */
+private fun permissionLabel(context: android.content.Context, permission: String): String =
+    runCatching {
+        val info = context.packageManager.getPermissionInfo(permission, 0)
+        info.loadLabel(context.packageManager).toString()
+    }.getOrDefault(permission.substringAfterLast('.').replace('_', ' ').lowercase())
 
 /**
  * The collapsed controls: a grabber line, not a button. It sits over whatever the guest is drawing,

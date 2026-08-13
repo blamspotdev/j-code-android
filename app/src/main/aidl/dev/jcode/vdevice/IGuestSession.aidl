@@ -43,6 +43,9 @@ interface IGuestSession {
     /** Pops the embedded back stack, or sends Back to the only activity. */
     oneway void back();
 
+    /** The answer to one onPermissionRequest, in the order it asked. */
+    oneway void permissionResult(int requestId, in boolean[] granted);
+
     /** Force-stop: ends everything the named guest is hosting and drops it from the loader. */
     oneway void forceStop(String packageName);
 

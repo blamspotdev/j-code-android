@@ -282,6 +282,9 @@ internal object GuestRuntime {
     /** The package a hook should attribute the current call to, or null outside a guest. */
     fun activePackage(): String? = active?.packageName
 
+    /** The loaded guest a hook should attribute the current call to — its manifest included. */
+    fun activeGuest(): LoadedGuest? = active
+
     /**
      * Tells the loaded guest how big its window is, before anything of it is built.
      *

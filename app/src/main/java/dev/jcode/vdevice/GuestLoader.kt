@@ -70,6 +70,12 @@ internal class LoadedGuest(
     val resources: Resources,
     val dataDir: File,
 ) {
+    /**
+     * What the APK's manifest asks for, which is the outer bound on what the device can give it.
+     * A permission not in here is one the platform itself would refuse — see [GuestPermissions].
+     */
+    val requestedPermissions: Set<String> = packageInfo.requestedPermissions?.toSet().orEmpty()
+
     val filesDir = File(dataDir, "files")
     val cacheDir = File(dataDir, "cache")
     val codeCacheDir = File(dataDir, "code_cache")
@@ -208,9 +214,13 @@ internal object GuestLoader {
         // official release build, and threw straight out of onCreate on the null. Collecting them
         // costs one pass over the APK signing block per load, and the honest answer — signed, but
         // not by whoever built the original — is what a sideloaded copy would report anyway.
+        // Permissions are asked for because the device answers out of what the app *declared*, the
+        // way the platform does — see GuestPermissions. Without them every permission a guest holds
+        // would read as one it never asked for, which is denied.
         val flags = PackageManager.GET_ACTIVITIES or PackageManager.GET_META_DATA or
             PackageManager.GET_PROVIDERS or PackageManager.GET_SERVICES or
             PackageManager.GET_RECEIVERS or PackageManager.GET_SIGNING_CERTIFICATES or
+            PackageManager.GET_PERMISSIONS or
             @Suppress("DEPRECATION") PackageManager.GET_SIGNATURES
         val info = host.packageManager.getPackageArchiveInfo(apkPath, flags)
             ?: throw VirtualDeviceException("Not a readable APK: $apkPath")

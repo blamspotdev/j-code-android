@@ -204,6 +204,8 @@ Accessing these logs a warning and nothing more:
 | **Every instance member of `LocationManager`**, `mService` included | Denied. Measured from inside a guest: `LocationManager.class.getDeclaredFields()` answers with the public `String` constants and *nothing else* | The binder is replaced one step earlier, in `ServiceManager.sCache` (greylisted), before any `LocationManager` exists — see §5c |
 | **Every method of `ILocationListener` and `ILocationCallback`** | Denied. `ILocationListener.class.getMethods()` offers exactly one member, `asBinder`, inherited from the public `IInterface` — the interface cannot be invoked through, and the transport's own hidden class has its members filtered out of the same list | `IBinder.transact` with a hand-written `Parcel`. Public API, and it is what the generated stub reads anyway |
 | `SensorManager()` — the constructor | Package-private **in the SDK stub only**; the class the runtime loads has the ordinary public default constructor of a public class | `GuestSensorManager` is declared in package `android.hardware`, which satisfies the compiler. Nothing hidden is reached |
+| `PermissionManager.disablePermissionCache` and `disablePackageNamePermissionCache` | Denied. The permission cache therefore cannot be turned off, and it sits *above* the binder — so an answer given once is repeated for the life of the process | Get in front of it instead: `GuestContext` overrides the public `checkPermission` / `checkSelfPermission` / `checkCallingOrSelfPermission`, which is where a guest's question starts |
+| `Activity.mHasCurrentPermissionsRequest`, and both `dispatchRequestPermissionsResult` and `dispatchActivityResult` | All three denied — absent from `Activity`'s declared members | Nothing to design around: the flag stays set, so an activity gets **one** runtime permission request. The consequence is logged and documented rather than hidden — see [App sandbox architecture §7e](01-app-sandbox-architecture.md#7e-two-settings-not-one--virtualdevicepolicy) |
 
 ### 5.3 No escape hatch
 
@@ -546,7 +548,7 @@ but not by whoever built the original — is what a sideloaded copy reports anyw
 
 What the user chose in **Manage permissions** has to be true from inside the guest, not merely
 displayed. The policy itself is in
-[App sandbox architecture §7e](01-app-sandbox-architecture.md#7e-the-devices-hardware-per-app--virtualdevicepolicy);
+[App sandbox architecture §7e](01-app-sandbox-architecture.md#7e-two-settings-not-one--virtualdevicepolicy);
 this is how each answer is delivered.
 
 ### Sensors — `GuestSensorManager`

@@ -17,9 +17,12 @@ the interesting case is running with the hardware switched off and reporting tha
   the device's policy has to surface for any app that asks before it reaches.
 - **`hasSystemFeature`** for the six features in `VirtualHardware`, which is what the device
   *declares* it has.
-- **`requestPermissions`**, behind a button. On a phone this raises a dialog; inside the device it is
-  answered by the container from the policy, and this is the only way to see that the answer arrives
-  at all — before it did, the callback never came and an app waiting for one simply stopped.
+- **`requestPermissions`**, behind a button. On a phone this raises a dialog; inside the device it
+  raises the device's own, and this is the only way to see that the answer arrives at all — before it
+  did, the callback never came and an app waiting for one simply stopped. Note that an activity gets
+  **one** request: the platform refuses a second, and the button then reports "answered with
+  nothing", which is the platform's cancellation rather than a fault here. Reopening the app clears
+  it.
 - **The three sensors**, by name and by value, live. The values are the tell:
 
   | Reading | Means |
@@ -40,6 +43,11 @@ because they are exact rather than approximate and so make a wrong sign obvious:
 |---|---|
 | Spin, 4 s period | gyroscope `+0.00000, +0.00000, -1.57080` — that is −2π/4 s — with gravity unmoved at `+0.00000, +0.00000, +9.80665` |
 | Landscape ◀ | accelerometer `+9.80665, +0.00000, +0.00000` |
+
+The other half is that both settings are required. With the camera Simulated on the bench, everything
+else Off, and Allow tapped for all three on the device's prompt, this app is answered
+`CAMERA=granted RECORD_AUDIO=denied ACCESS_FINE_LOCATION=denied` — allowed by the app's rule, refused
+because the device has no microphone and no GPS.
 
 ## Build
 

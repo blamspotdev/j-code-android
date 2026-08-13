@@ -288,7 +288,7 @@ class GuestSensorManager(
         // Anything the device does not claim as its own is the phone's, exactly as it was before
         // this manager existed.
         val hardware = VirtualHardware.bySensorType(type) ?: return HardwareMode.Real
-        return VirtualDevicePolicy.mode(context, packageName, hardware)
+        return VirtualDevicePolicy.mode(context, hardware)
     }
 
     /**

@@ -25,6 +25,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
+/** A guest asking the person at the keyboard for permissions the device has not decided about. */
+internal class PermissionRequest(
+    val requestId: Int,
+    val permissions: List<String>,
+    val packageName: String,
+)
+
 internal sealed interface SandboxStatus {
     data object Idle : SandboxStatus
     data object Starting : SandboxStatus
@@ -183,9 +190,43 @@ internal class AppSandboxSession(context: Context) {
         }
     }
 
+    /**
+     * The question the guest is waiting on, if any.
+     *
+     * One at a time, because `Activity.requestPermissions` is one at a time: the platform refuses a
+     * second request while one is outstanding, so there is never a second to queue.
+     */
+    private val _permissionRequest = MutableStateFlow<PermissionRequest?>(null)
+    val permissionRequest: StateFlow<PermissionRequest?> = _permissionRequest.asStateFlow()
+
     private val callback = object : IGuestSessionCallback.Stub() {
         override fun onGuestFinished(reason: String?) {
             _status.value = SandboxStatus.Stopped(reason ?: "The app closed.")
+        }
+
+        override fun onPermissionRequest(
+            requestId: Int,
+            permissions: Array<out String>?,
+            packageName: String?,
+        ) {
+            val asked = permissions?.filterNotNull().orEmpty()
+            if (asked.isEmpty()) return answerPermissions(requestId, BooleanArray(0))
+            _permissionRequest.value = PermissionRequest(requestId, asked, packageName.orEmpty())
+        }
+    }
+
+    /**
+     * Hands the person's answer back to the guest, which has an app waiting on it.
+     *
+     * Sent even when the tab is being torn down: a guest left waiting on a callback that never
+     * arrives is an app frozen on its first screen, which is the failure this whole path exists to
+     * end.
+     */
+    fun answerPermissions(requestId: Int, granted: BooleanArray) {
+        _permissionRequest.value = null
+        scope.launch(Dispatchers.IO) {
+            runCatching { service?.permissionResult(requestId, granted) }
+                .onFailure { Log.w(TAG, "cannot answer the guest's permission request", it) }
         }
     }
 

@@ -363,33 +363,65 @@ The device is reachable on its own through the `tools.virtualDevice` palette com
 ("Open Virtual Device") — otherwise the tab only ever appears when a virtual-device build finishes,
 which is no way to reach the apps already installed on it.
 
-### 7e. The device's hardware, per app — `VirtualDevicePolicy`
+### 7e. Two settings, not one — `VirtualDevicePolicy`
 
-Long-press an icon → **Manage permissions**. Six pieces of hardware, each wired per app to one of
-`Off` / `Simulated` / `Real`, plus the background toggle that used to be its own menu item.
+What an app may reach is two questions with two answers, kept apart because they are about different
+things: what the **device** has, and what the **app** may do with it.
+
+**What the device has**, once for the whole device, on the hardware bench — a phone has one camera
+however many apps read it:
 
 | Hardware | Modes | Default | What each mode is |
 |---|---|---|---|
-| Camera | Off, Simulated | Off | Simulated declares a camera and grants `CAMERA`; **no frames ever arrive** — Camera2 is a native binder pipeline the container cannot stand in for, and the phone's camera is deliberately not on offer |
-| Microphone | Off, Simulated, Real | Off | Real is the phone's, and is the one thing here that asks the user for something: `RECORD_AUDIO` is requested at the moment an app is switched to it |
-| Location | Off, Simulated | Off | A fixed fix the user types, reported as GPS. The phone's own location is never offered |
-| Accelerometer | Off, Simulated, Real | **Simulated** | Simulated reads a device lying flat, face up, still |
-| Compass | Off, Simulated, Real | **Simulated** | Simulated points north; Real is offered only if the phone has a magnetometer |
-| Gyroscope | Off, Simulated, Real | **Simulated** | Simulated reports no rotation; Real is offered only if the phone has one |
+| Camera | Off, Simulated | Off | Simulated gives the device a camera; **no frame ever arrives** — Camera2 is a native binder pipeline the container cannot stand in for, and the phone's is deliberately not on offer |
+| Microphone | Off, Simulated, Real | Off | Real is the phone's, and is the one setting here that asks the user for something: `RECORD_AUDIO` is requested at the moment it is chosen |
+| Location | Off, Simulated | Off | A fix the user sets, and a route it can walk. The phone's own location is never offered |
+| Accelerometer | Off, Simulated, Real | **Simulated** | Simulated reports the attitude and motion set on the bench |
+| Compass | Off, Simulated, Real | **Simulated** | Real is offered only if the phone has a magnetometer |
+| Gyroscope | Off, Simulated, Real | **Simulated** | Real is offered only if the phone has one |
 
 The three motion sensors default to Simulated rather than Off because Android has never gated them:
 before this existed a guest was handed the host's own `SensorManager` and could feel the user's hand,
 with nothing anywhere able to say no. Simulated is the setting that neither breaks an app that wants
 a sensor nor leaks the phone's.
 
-**Where the policy is enforced** — four places, all in `:guest`, all resolving the *active* guest:
+**What each app may do**, per app, long-press an icon → **Manage permissions**. The list is the
+APK's own manifest — every `<uses-permission>` it declares and nothing else — each with the three
+states a phone has:
+
+| Rule | Means |
+|---|---|
+| **Allow** | Granted, provided the device has the hardware |
+| **Deny** | Refused |
+| **Ask** | Undecided. Reads as denied — Android has only two answers — until the app asks and the person answers the device's own prompt, which is then written down as Allow or Deny |
+
+Defaults follow the platform's: a permission it asks about at runtime starts at Ask, everything else
+at Allow, because "ask" for a permission nothing ever asks about is a state that could never be left.
+A permission the app never declared is **denied**, which is what the platform itself answers and what
+the container used to get wrong — it answered a blanket `PERMISSION_GRANTED` to everything.
+
+**Both are required.** An app cannot be given a camera the device does not have, and a device with a
+camera does not hand it to an app that was refused one. Device-verified: with the camera Simulated,
+everything else Off, and the person tapping Allow to all three of a fixture's requests, the app is
+answered `CAMERA=granted RECORD_AUDIO=denied ACCESS_FINE_LOCATION=denied`.
+
+**Where it is enforced** — all in `:guest`, all resolving the *active* guest:
 
 | Question | Answered by |
 |---|---|
-| `Context.checkSelfPermission` | `GuestActivityManagerHook` — this lands on `IActivityManager.checkPermission`, which is where AndroidX's `ContextCompat` ends up too |
-| `PackageManager.checkPermission`, `hasSystemFeature` | `GuestPackageHook`. The blanket `PERMISSION_GRANTED` the container used to answer with survives only for permissions the device has no opinion about |
-| `Activity.requestPermissions` | `GuestPermissions.consume`, off the start-activity hook. **This was broken outright before**: the intent went to the real permission controller, which was being asked to grant a permission to *J Code*, and the result came back addressed to an activity token no `ActivityRecord` answers to — so no dialog, no callback, and an app that waits for one stopped there. The device now answers it from the policy, with no prompt, because the user has already said what this app may have |
+| `Context.checkSelfPermission` | **`GuestContext`**, which overrides the three public `check*Permission` members. It has to be in front rather than underneath: `PermissionManager` memoises the answer in a cache only the system can invalidate, and `disablePermissionCache` is blocked — measured, a camera granted while an app was running went on reading as denied through the binder hook |
+| The same, from anywhere without a guest `Context` | `GuestActivityManagerHook`, on `IActivityManager.checkPermission` |
+| `PackageManager.checkPermission`, `hasSystemFeature` | `GuestPackageHook` |
+| `Activity.requestPermissions` | `GuestPermissions.consume`, off the start-activity hook. **This was broken outright before**: the intent went to the real permission controller, which was being asked to grant a permission to *J Code*, and the result came back addressed to an activity token no `ActivityRecord` answers to — so no dialog, no callback, and an app that waits for one stopped there. What is already decided is answered from the policy; what is still Ask goes to the person through the device's own dialog, over the session AIDL |
 | `getSystemService(SENSOR_SERVICE)`, and every location call | `GuestSensorManager` and `GuestLocation` — see [Guest runtime §5c](02-guest-runtime-and-hidden-api.md#5c-the-devices-own-hardware) |
+
+> **One runtime request per activity instance.** `Activity.requestPermissions` sets
+> `mHasCurrentPermissionsRequest` and refuses a second request while it is set. Every route to
+> clearing it is blocked at `targetSdk` 33 — the field, `dispatchRequestPermissionsResult` and
+> `dispatchActivityResult` are all absent from `Activity`'s declared members, and the real path in
+> goes through a record map an embedded activity was never in. The first request is answered
+> properly; a second is cancelled by the platform with two empty arrays before the container sees it,
+> which is a documented outcome apps handle, and reopening the app clears it.
 
 The policy is a properties file inside `filesDir/vdevice/`, not `SharedPreferences`: the launcher
 that writes it is in the IDE and the container that acts on it is in `:guest`, and a preferences file
@@ -403,9 +435,13 @@ to apply itself to whatever was installed under that package name next.
 
 ### 7f. The hardware bench — `VirtualHardwarePage`
 
-Manage permissions decides *whether* an app gets the hardware. This decides **what the hardware is
-doing**: a tab of its own, opened from the device's control bar (and from the idle home screen,
-because a route is usually set up before the app meant to react to it is opened).
+The device's own settings screen: a tab opened from its control bar, and from the idle home screen
+because a route is usually set up before the app meant to react to it is opened.
+
+It opens on a **grid of what the device is made of** — one tile per piece of hardware, each showing
+what it is wired to and what it is reporting — and each tile opens onto that piece's mode and its
+tools. That shape is the point: the six Off/Simulated/Real choices are properties of the device, and
+anywhere else they looked like properties of an app.
 
 | Tool | What it does |
 |---|---|

@@ -43,8 +43,14 @@ class GuestSessionService : Service() {
     override fun onUnbind(intent: Intent?): Boolean {
         onMain { guest.stop() }
         callback = null
+        // Nothing left to ask, so a request that arrives after this is denied rather than left
+        // waiting for an answer that cannot come.
+        GuestPermissions.setPrompt(null)
         return false
     }
+
+    /** Which app the question is about — the one on the device's screen. */
+    private fun guestPackage(): String = GuestRuntime.activePackage().orEmpty()
 
     private val binder = object : IGuestSession.Stub() {
 
@@ -57,6 +63,13 @@ class GuestSessionService : Service() {
             callback: IGuestSessionCallback?,
         ): Bundle = Bundle().also { result ->
             this@GuestSessionService.callback = callback
+            // The device's own permission prompt lives in the IDE, so the container can only ask
+            // while a tab is bound to it. Wired here rather than at install, because this is the
+            // moment there is somebody to ask.
+            GuestPermissions.setPrompt { requestId, permissions ->
+                runCatching { callback?.onPermissionRequest(requestId, permissions, guestPackage()) }
+                    .onFailure { throw VirtualDeviceException("the tab is not listening") }
+            }
             if (!GuestRuntime.isInstalled) {
                 result.putString(KEY_ERROR, "The container's framework hooks are not installed.")
                 return@also
@@ -120,6 +133,10 @@ class GuestSessionService : Service() {
         }
 
         override fun back() = post { guest.back() }
+
+        override fun permissionResult(requestId: Int, granted: BooleanArray?) {
+            GuestPermissions.answered(requestId, granted ?: BooleanArray(0))
+        }
 
         override fun forceStop(packageName: String?) {
             packageName?.let { name -> post { GuestRuntime.forceStop(name) } }
