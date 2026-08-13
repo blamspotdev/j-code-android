@@ -559,9 +559,13 @@ Handed to the guest from `GuestContext.getSystemService(SENSOR_SERVICE)`, one pe
   and drops events once the mode is no longer Real — otherwise revoking a sensor would do nothing
   until the app happened to unregister, because the stream lives in the sensor service from the
   moment it is set up.
-- **Simulated** delivers on a ticker at the rate the app asked for, clamped to 20–200 ms: a device
-  lying flat, face up, pointing north and not moving. Derived types go with the sensor they are
-  computed from, or turning the accelerometer off would leave the motion readable through
+- **Simulated** delivers on a ticker at the rate the app asked for, clamped to 20–200 ms, reading
+  whatever the hardware bench says the device is doing — an attitude, a loop, or with nothing set a
+  device lying flat, face up, pointing north and not moving. Every type comes out of one
+  `SimulatedHardware.sample`, so the accelerometer, the compass and the rotation vector are three
+  views of the same attitude rather than three unrelated constants, and `TYPE_LINEAR_ACCELERATION`
+  is what is left when gravity is subtracted from the shaking. Derived types go with the sensor they
+  are computed from, or turning the accelerometer off would leave the motion readable through
   `TYPE_GRAVITY` anyway.
 
 Two things make this possible at all, and both are recorded in §5.2. The class lives in package
@@ -579,7 +583,10 @@ rather than offered as hardware that never reports.
 ### Location — `GuestLocation`
 
 There is no passthrough mode and there never will be: a guest is somebody else's APK running under
-J Code's uid, and the single most valuable thing it could take is where the user is standing.
+J Code's uid, and the single most valuable thing it could take is where the user is standing. What
+it *is* given — a fixed point, or a position walked between two of them — comes from the hardware
+bench, and every fix is worked out at the moment of asking rather than stored, so a route reports
+where it has got to along with the bearing and speed a receiver would have measured.
 
 The seam is `ServiceManager.sCache`. `SystemServiceRegistry` builds the one `LocationManager` each
 `ContextImpl` gets by asking `ServiceManager.getService("location")` and wrapping the result with

@@ -4449,6 +4449,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ?.let { _editorGroup.value = _editorGroup.value.withTabUpdated(it.copy(title = title)) }
     }
 
+    /**
+     * Open (or focus) the virtual device's hardware bench.
+     *
+     * A tab beside the device rather than a panel over it: the tools are watched *while* an app runs
+     * on the device, and anything drawn over the device's screen would be in `screencap` where it
+     * would read as something the guest put there.
+     */
+    fun openVirtualHardwareTab() {
+        openDetailPage(VIRTUAL_HARDWARE_TAB_ID, EditorPageKind.VirtualHardware) { "Device hardware" }
+    }
+
     /** Turn the device off once its editor tab is gone — process and all, not merely unbound. Page
      *  tabs get no close callback, so the shell calls this whenever the tab list changes. */
     fun pruneAppSandbox() {
@@ -5378,6 +5389,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val ANDROID_DEVICE_TAB_ID = "jcode://android-device"
         /** Stable id of the single device sandbox editor tab — the container owns one `:guest` process. */
         const val APP_SANDBOX_TAB_ID = "jcode://app-sandbox"
+        /** Stable id of the virtual device's hardware bench, which the device shares with its tab. */
+        const val VIRTUAL_HARDWARE_TAB_ID = "jcode://virtual-hardware"
         /** `adb pair` is one round trip to adbd; anything past this is a wrong port or a closed dialog. */
         private const val ADB_PAIR_TIMEOUT_MS = 60_000L
         /** host:port, with nothing a shell could read as anything but a literal. */

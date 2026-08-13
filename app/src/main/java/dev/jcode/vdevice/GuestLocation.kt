@@ -101,15 +101,29 @@ internal object GuestLocation {
         }.getOrDefault(false)
     }
 
-    /** Where the device says it is, as a fix an app can read. */
-    private fun fix(context: Context): Location = Location(LocationManager.GPS_PROVIDER).apply {
-        latitude = VirtualDevicePolicy.simulatedLatitude(context)
-        longitude = VirtualDevicePolicy.simulatedLongitude(context)
-        accuracy = SIMULATED_ACCURACY
-        time = System.currentTimeMillis()
-        // Consumers reject a fix without this — it is how they tell a fresh one from a replay, and
-        // AndroidX's location helpers throw on a Location that has never had it set.
-        elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+    /**
+     * Where the device says it is, as a fix an app can read.
+     *
+     * Worked out at the moment of asking rather than stored, so a route reports where it has got to
+     * — see [VirtualHardware]. Bearing and speed come with it, because a navigation app reads those
+     * rather than differencing positions, and a fix that moves while claiming to stand still is
+     * worse than one that does not move at all.
+     */
+    private fun fix(context: Context): Location {
+        val now = SimulatedHardware.sample(context)
+        return Location(LocationManager.GPS_PROVIDER).apply {
+            latitude = now.latitude
+            longitude = now.longitude
+            accuracy = SIMULATED_ACCURACY
+            if (now.moving) {
+                speed = now.speedMps
+                bearing = now.bearing
+            }
+            time = System.currentTimeMillis()
+            // Consumers reject a fix without this — it is how they tell a fresh one from a replay,
+            // and AndroidX's location helpers throw on a Location that has never had it set.
+            elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+        }
     }
 
     private class Answers(private val context: Context) : InvocationHandler {

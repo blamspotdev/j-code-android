@@ -29,10 +29,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import dev.jcode.design.CompactOutlinedButton
 import dev.jcode.design.ManagerNoticeCard
 import dev.jcode.design.ManagerSectionCard
+import dev.jcode.design.ManagerSummaryRow
 import dev.jcode.design.SettingsDropdownRow
-import dev.jcode.design.SettingsTextFieldRow
+import java.util.Locale
 
 /**
  * What one app installed on the virtual device is allowed to reach.
@@ -148,7 +150,7 @@ internal fun AppPermissionsSheet(
             if (VirtualDevicePolicy.mode(context, app.packageName, VirtualHardware.Location) !=
                 HardwareMode.Off
             ) {
-                SimulatedFix(onSnackbar = onSnackbar)
+                SimulatedFix()
             }
 
             ManagerSectionCard(
@@ -201,50 +203,32 @@ internal fun AppPermissionsSheet(
 }
 
 /**
- * Where the device's simulated GPS says it is.
+ * Where the device's simulated GPS currently says it is.
  *
- * One fix for the whole device rather than one per app, because a phone has one receiver and every
- * app on it reads the same coordinates. Written through on each keystroke that parses; a
- * half-finished number simply does not move the device yet.
+ * A reading rather than an editor: this is one fix for the whole device — a phone has one receiver
+ * and every app on it reads the same coordinates — so it is set on the hardware bench along with
+ * everything else that moves, and shown here because an app being given location is the moment
+ * somebody wants to know where the device thinks it is.
  */
 @Composable
-private fun SimulatedFix(onSnackbar: (String) -> Unit) {
+private fun SimulatedFix() {
     val context = LocalContext.current
-    var latitude by remember {
-        mutableStateOf(VirtualDevicePolicy.simulatedLatitude(context).toString())
-    }
-    var longitude by remember {
-        mutableStateOf(VirtualDevicePolicy.simulatedLongitude(context).toString())
-    }
-
-    fun commit() {
-        val lat = latitude.trim().toDoubleOrNull()
-        val lon = longitude.trim().toDoubleOrNull()
-        if (lat == null || lon == null) return
-        if (lat !in -90.0..90.0 || lon !in -180.0..180.0) {
-            onSnackbar("That is not a place on Earth — latitude is ±90, longitude ±180.")
-            return
-        }
-        VirtualDevicePolicy.setSimulatedFix(context, lat, lon)
-    }
+    val settings = VirtualDevicePolicy.hardware(context)
+    val now = SimulatedHardware.sample(context)
 
     ManagerSectionCard(
         title = "Simulated location",
-        description = "What every app on the device is told, as a GPS fix that never moves.",
+        description = "What every app on this device is told. Set it — and start it moving — on the " +
+            "hardware bench.",
     ) {
-        SettingsTextFieldRow(
-            label = "Latitude",
-            value = latitude,
-            onValueChange = { latitude = it; commit() },
-            placeholder = VirtualDevicePolicy.DEFAULT_LATITUDE.toString(),
-            monospace = true,
+        ManagerSummaryRow(
+            label = if (settings.locationMode == LocationMode.Route) "Moving through" else "Parked at",
+            value = "%.5f, %.5f".format(Locale.US, now.latitude, now.longitude),
         )
-        SettingsTextFieldRow(
-            label = "Longitude",
-            value = longitude,
-            onValueChange = { longitude = it; commit() },
-            placeholder = VirtualDevicePolicy.DEFAULT_LONGITUDE.toString(),
-            monospace = true,
+        CompactOutlinedButton(
+            text = "Open hardware",
+            onClick = { SimulatedHardware.requestOpen() },
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }

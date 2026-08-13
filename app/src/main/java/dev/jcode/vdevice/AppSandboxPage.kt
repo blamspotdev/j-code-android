@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -294,6 +295,7 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
                 caveat = (status as? SandboxStatus.Running)?.warning,
                 onBack = { session.back() },
                 onKeyboard = { surfaceView?.showKeyboard() },
+                onHardware = { SimulatedHardware.requestOpen() },
                 onRestart = {
                     session.restart(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
                 },
@@ -340,7 +342,11 @@ private fun DeviceScreen(
         when {
             // The home screen itself is on the surface, drawn by VirtualLauncher — only the chrome
             // that does not belong to the device is composed over it.
-            !running -> HomeChrome(onInstall, modifier = Modifier.fillMaxSize())
+            !running -> HomeChrome(
+                onInstall = onInstall,
+                onHardware = { SimulatedHardware.requestOpen() },
+                modifier = Modifier.fillMaxSize(),
+            )
 
             status is SandboxStatus.Starting || status is SandboxStatus.Idle ->
                 ScreenMessage("Starting the app…")
@@ -357,22 +363,31 @@ private fun DeviceScreen(
 }
 
 /**
- * The only part of the home screen that is *not* the device: J Code's own affordance for putting an
- * app on it.
+ * The only part of the home screen that is *not* the device: J Code's own affordances for putting an
+ * app on it, and for the bench the device's hardware is set from.
  *
  * Everything the device itself shows — wallpaper, its name, the app icons, the "No app installed"
  * placeholder — is drawn onto the surface by [VirtualLauncher], so `adb shell screencap` answers
- * with it. This button is deliberately outside that: it is the IDE reaching onto the device, the
- * same as the control bar, and a capture must not show it as though it were part of the app grid.
+ * with it. These buttons are deliberately outside that: they are the IDE reaching onto the device,
+ * the same as the control bar, and a capture must not show them as though they were part of the app
+ * grid.
  */
 @Composable
-private fun HomeChrome(onInstall: () -> Unit, modifier: Modifier = Modifier) {
+private fun HomeChrome(
+    onInstall: () -> Unit,
+    onHardware: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Box(modifier = modifier) {
-        CompactOutlinedButton(
-            text = "Install an app",
-            onClick = onInstall,
+        Row(
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp),
-        )
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            CompactOutlinedButton(text = "Install an app", onClick = onInstall)
+            // Reachable with nothing running, because a route or an attitude is usually set up
+            // *before* the app that is meant to react to it is opened.
+            CompactOutlinedButton(text = "Hardware", onClick = onHardware)
+        }
     }
 }
 
@@ -438,6 +453,7 @@ private fun BoxScope.DeviceControls(
     caveat: String?,
     onBack: () -> Unit,
     onKeyboard: () -> Unit,
+    onHardware: () -> Unit,
     onRestart: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -484,8 +500,9 @@ private fun BoxScope.DeviceControls(
                     onBack = onBack,
                     onKeyboard = onKeyboard,
                     onCaveat = { caveatOpen = true },
+                    onHardware = onHardware,
                     onRestart = onRestart,
-                        onStop = onStop,
+                    onStop = onStop,
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
             }
@@ -559,6 +576,7 @@ private fun DeviceToolbar(
     onBack: () -> Unit,
     onKeyboard: () -> Unit,
     onCaveat: () -> Unit,
+    onHardware: () -> Unit,
     onRestart: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -569,6 +587,9 @@ private fun DeviceToolbar(
     ) {
         ToolbarAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onBack)
         ToolbarAction(Icons.Rounded.Keyboard, "Keyboard", onKeyboard)
+        // The bench opens beside the device rather than over it, so the app being moved stays on
+        // screen while it is being moved.
+        ToolbarAction(Icons.Rounded.Tune, "Device hardware", onHardware)
         // Only lit when this guest actually lost something: a warning that is always on is a warning
         // nobody reads. Carries the same colour ManagerNoticeCard gives the launcher's version of it.
         if (caveat != null) {

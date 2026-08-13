@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented — device-verified on Android 13 |
 | **Modules** | `:app` (`dev.jcode.vdevice`) |
-| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestBootstrapActivity.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
+| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, SimulatedHardware.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestBootstrapActivity.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
 | **Verified against** | device-verified on Android 13, 2026-08-13 |
 
 ---
@@ -400,6 +400,37 @@ else, which is the honest behaviour: a grant that outlived the app it was grante
 to apply itself to whatever was installed under that package name next.
 
 `tools/hardware-fixture` is the regression test — one guest that prints what it can see of all six.
+
+### 7f. The hardware bench — `VirtualHardwarePage`
+
+Manage permissions decides *whether* an app gets the hardware. This decides **what the hardware is
+doing**: a tab of its own, opened from the device's control bar (and from the idle home screen,
+because a route is usually set up before the app meant to react to it is opened).
+
+| Tool | What it does |
+|---|---|
+| Fixed location | Two coordinates the device is parked on |
+| **Point to point** | Walks between two coordinates at a set speed, reporting the bearing and speed a real receiver would — `Location.speed` and `.bearing`, which is what a navigation app reads rather than differencing positions itself. Stops at the far end, starts over, or turns around |
+| Attitude | Pitch, roll and heading, with five one-tap poses named after the accelerometer readings they produce |
+| **Loops** | Shake and bounce (linear acceleration on one axis), tilt (the pitch rocking), spin (the heading turning, which is the one that accumulates) — each with an amplitude and a period |
+| Shake once | One swing that dies away, so the device ends where it started |
+| Reporting now | What the guest is being told, live |
+
+Everything is a property of the **device**, not of one app, because a phone has one GPS and one set
+of sensors however many apps read them.
+
+**Nothing is streamed.** The tab writes a *description* — "walk from here to there at 14 m/s,
+starting at this clock reading" — and both the guest's `SensorManager` and the tab's own readout
+evaluate it against `SystemClock.elapsedRealtime`, which counts from the same boot in every process.
+So the two agree by construction rather than by synchronisation; there is no IPC per sample, no
+policy file rewritten at 50 Hz, and a route that has been running for an hour costs what one that
+just started costs. `SimulatedHardware.sample` is that function, and it is the only place the
+accelerometer, the magnetometer and the rotation vector are derived — three views of one attitude,
+so turning the heading turns all of them together.
+
+Device-verified: with the spin loop at a 4 s period the guest reads a gyroscope of exactly
+−1.57080 rad/s (−2π/4 s) and a rotating magnetic field, while gravity stays at (0, 0, 9.80665) —
+a device turning about its vertical does not tip.
 
 ---
 

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.compose.runtime.mutableIntStateOf
 import java.io.File
@@ -229,18 +230,49 @@ internal object VirtualDevicePolicy {
 
     private const val FILE = "policy"
     private const val BACKGROUND = "background"
+
+    private const val LOCATION_MODE = "location.mode"
     private const val LATITUDE = "location.latitude"
     private const val LONGITUDE = "location.longitude"
+    private const val TO_LATITUDE = "location.to.latitude"
+    private const val TO_LONGITUDE = "location.to.longitude"
+    private const val SPEED = "location.speed"
+    private const val REPEAT = "location.repeat"
+    private const val ROUTE_STARTED = "location.startedAt"
+
+    private const val PITCH = "motion.pitch"
+    private const val ROLL = "motion.roll"
+    private const val AZIMUTH = "motion.azimuth"
+    private const val LOOP = "motion.loop"
+    private const val AMPLITUDE = "motion.amplitude"
+    private const val PERIOD = "motion.period"
+    private const val LOOP_STARTED = "motion.startedAt"
+    private const val IMPULSE_UNTIL = "motion.impulseUntil"
 
     /** Where the emulator puts you when nobody has said otherwise, and so where this does too. */
     const val DEFAULT_LATITUDE = 37.4220
     const val DEFAULT_LONGITUDE = -122.0841
+
+    /** 50 km/h — a car on a road, which is what a route is usually standing in for. */
+    const val DEFAULT_SPEED_MPS = 13.9f
 
     /** Bumped on every write, so the sheet redraws. Snapshot state: its only reader is a composable. */
     val revision = mutableIntStateOf(0)
 
     private var cached: Properties? = null
     private var cachedAt = 0L
+    private var checkedAt = 0L
+
+    /**
+     * How stale a reader is allowed to be before it looks at the file again.
+     *
+     * The sensors are sampled up to fifty times a second and each sample asks what the policy says,
+     * so without this every reading costs a `stat`. A change made in the IDE therefore reaches a
+     * running guest within a quarter of a second rather than instantly, which is below the threshold
+     * of noticing and well above the cost of checking. The writing process is not throttled: [edit]
+     * updates the copy in memory, so the tab sees its own changes at once.
+     */
+    private const val RESTAT_MS = 250L
 
     /** How [packageName] is wired to [hardware] — its [VirtualHardware.fallback] until asked otherwise. */
     fun mode(context: Context, packageName: String, hardware: VirtualHardware): HardwareMode {
@@ -276,18 +308,102 @@ internal object VirtualDevicePolicy {
         edit(context) { it.setProperty(key(packageName, BACKGROUND), allowed.toString()) }
     }
 
-    /** Where the device's simulated GPS says it is. One fix for the device, as a phone has one GPS. */
-    fun simulatedLatitude(context: Context): Double =
-        read(context).getProperty(LATITUDE)?.toDoubleOrNull() ?: DEFAULT_LATITUDE
+    /**
+     * How the device's simulated hardware is set — one description for the whole device, because a
+     * phone has one GPS and one set of sensors however many apps are reading them.
+     *
+     * Read rather than watched: [VirtualHardware] turns this into a reading for a given instant, and
+     * both processes do that themselves. See its notes on why nothing is streamed.
+     */
+    fun hardware(context: Context): HardwareSettings {
+        val stored = read(context)
+        fun number(key: String, fallback: Double) = stored.getProperty(key)?.toDoubleOrNull() ?: fallback
+        fun decimal(key: String, fallback: Float) = stored.getProperty(key)?.toFloatOrNull() ?: fallback
+        fun stamp(key: String) = stored.getProperty(key)?.toLongOrNull() ?: 0L
+        val loop = stored.getProperty(LOOP)?.let { name ->
+            runCatching { MotionLoop.valueOf(name) }.getOrNull()
+        } ?: MotionLoop.None
+        return HardwareSettings(
+            locationMode = stored.getProperty(LOCATION_MODE)
+                ?.let { runCatching { LocationMode.valueOf(it) }.getOrNull() }
+                ?: LocationMode.Fixed,
+            latitude = number(LATITUDE, DEFAULT_LATITUDE),
+            longitude = number(LONGITUDE, DEFAULT_LONGITUDE),
+            toLatitude = number(TO_LATITUDE, DEFAULT_LATITUDE),
+            toLongitude = number(TO_LONGITUDE, DEFAULT_LONGITUDE),
+            speedMps = decimal(SPEED, DEFAULT_SPEED_MPS),
+            repeat = stored.getProperty(REPEAT)
+                ?.let { runCatching { RouteRepeat.valueOf(it) }.getOrNull() }
+                ?: RouteRepeat.Once,
+            routeStartedAt = stamp(ROUTE_STARTED),
+            pitch = decimal(PITCH, 0f),
+            roll = decimal(ROLL, 0f),
+            azimuth = decimal(AZIMUTH, 0f),
+            loop = loop,
+            amplitude = decimal(AMPLITUDE, loop.defaultAmplitude),
+            periodMs = stored.getProperty(PERIOD)?.toLongOrNull() ?: loop.defaultPeriodMs,
+            loopStartedAt = stamp(LOOP_STARTED),
+            impulseUntil = stamp(IMPULSE_UNTIL),
+        )
+    }
 
-    fun simulatedLongitude(context: Context): Double =
-        read(context).getProperty(LONGITUDE)?.toDoubleOrNull() ?: DEFAULT_LONGITUDE
-
-    fun setSimulatedFix(context: Context, latitude: Double, longitude: Double) {
+    /** Parks the device on one point — what typing coordinates means, so it also ends any route. */
+    fun setFix(context: Context, latitude: Double, longitude: Double) {
         edit(context) {
+            it.setProperty(LOCATION_MODE, LocationMode.Fixed.name)
             it.setProperty(LATITUDE, latitude.toString())
             it.setProperty(LONGITUDE, longitude.toString())
         }
+    }
+
+    /** Where a route ends, how fast it is walked, and what happens when it gets there. */
+    fun setRoute(
+        context: Context,
+        toLatitude: Double,
+        toLongitude: Double,
+        speedMps: Float,
+        repeat: RouteRepeat,
+    ) {
+        edit(context) {
+            it.setProperty(TO_LATITUDE, toLatitude.toString())
+            it.setProperty(TO_LONGITUDE, toLongitude.toString())
+            it.setProperty(SPEED, speedMps.toString())
+            it.setProperty(REPEAT, repeat.name)
+        }
+    }
+
+    /**
+     * Starts or stops the route. Starting stamps the clock it is measured from — the position is a
+     * function of how long ago this happened, so this *is* the moving.
+     */
+    fun setRouteRunning(context: Context, running: Boolean, nowElapsed: Long) {
+        edit(context) {
+            it.setProperty(LOCATION_MODE, if (running) LocationMode.Route.name else LocationMode.Fixed.name)
+            it.setProperty(ROUTE_STARTED, (if (running) nowElapsed else 0L).toString())
+        }
+    }
+
+    /** The attitude the device is resting in, in degrees. */
+    fun setAttitude(context: Context, pitch: Float, roll: Float, azimuth: Float) {
+        edit(context) {
+            it.setProperty(PITCH, pitch.toString())
+            it.setProperty(ROLL, roll.toString())
+            it.setProperty(AZIMUTH, SimulatedHardware.normalise(azimuth).toString())
+        }
+    }
+
+    fun setLoop(context: Context, loop: MotionLoop, amplitude: Float, periodMs: Long, nowElapsed: Long) {
+        edit(context) {
+            it.setProperty(LOOP, loop.name)
+            it.setProperty(AMPLITUDE, amplitude.toString())
+            it.setProperty(PERIOD, periodMs.toString())
+            it.setProperty(LOOP_STARTED, nowElapsed.toString())
+        }
+    }
+
+    /** One swing that dies away, over by the time it is asked about again. */
+    fun shakeOnce(context: Context, untilElapsed: Long) {
+        edit(context) { it.setProperty(IMPULSE_UNTIL, untilElapsed.toString()) }
     }
 
     /** Drops everything remembered about [packageName] — the other half of an uninstall. */
@@ -310,6 +426,7 @@ internal object VirtualDevicePolicy {
     fun reset() {
         cached = null
         cachedAt = 0L
+        checkedAt = 0L
         revision.intValue++
     }
 
@@ -324,6 +441,9 @@ internal object VirtualDevicePolicy {
      */
     @Synchronized
     private fun read(context: Context): Properties {
+        val now = SystemClock.elapsedRealtime()
+        cached?.takeIf { now - checkedAt < RESTAT_MS }?.let { return it }
+        checkedAt = now
         val file = file(context)
         val stamp = file.lastModified()
         cached?.takeIf { stamp == cachedAt }?.let { return it }
@@ -357,6 +477,7 @@ internal object VirtualDevicePolicy {
             if (!staged.renameTo(file)) throw VirtualDeviceException("cannot store the device policy")
             cached = properties
             cachedAt = file.lastModified()
+            checkedAt = SystemClock.elapsedRealtime()
         }.onFailure {
             staged.delete()
             Log.w(TAG, "cannot write the device policy", it)

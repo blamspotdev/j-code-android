@@ -29,8 +29,17 @@ the interesting case is running with the hardware switched off and reporting tha
   | anything that twitches | Real — the phone's own, and it is never exactly on those numbers |
 
 - **Location**: the providers the device offers, whether GPS is enabled, the last known fix, and the
-  live `requestLocationUpdates` stream. Simulated reports the fixed coordinates set in the sheet;
-  Off reports no providers at all.
+  live `requestLocationUpdates` stream. Simulated reports whatever the hardware bench says — a fixed
+  point, or a position walked along a route; Off reports no providers at all.
+
+The bench is the other half of this fixture: open **Device hardware** beside the device, set an
+attitude or start a loop, and the numbers here should move with it. Two readings worth knowing,
+because they are exact rather than approximate and so make a wrong sign obvious:
+
+| Bench setting | What this should read |
+|---|---|
+| Spin, 4 s period | gyroscope `+0.00000, +0.00000, -1.57080` — that is −2π/4 s — with gravity unmoved at `+0.00000, +0.00000, +9.80665` |
+| Landscape ◀ | accelerometer `+9.80665, +0.00000, +0.00000` |
 
 ## Build
 

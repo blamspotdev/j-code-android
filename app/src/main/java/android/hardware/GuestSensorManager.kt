@@ -6,21 +6,11 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import dev.jcode.vdevice.HardwareMode
+import dev.jcode.vdevice.HardwareSample
+import dev.jcode.vdevice.SimulatedHardware
 import dev.jcode.vdevice.TAG
 import dev.jcode.vdevice.VirtualDevicePolicy
 import dev.jcode.vdevice.VirtualHardware
-
-/** Gravity at the surface, which is what a device lying still on a table reads. */
-private val GRAVITY = SensorManager.GRAVITY_EARTH
-
-/**
- * A plausible magnetic field for a device lying face up and pointing north, in µT: nothing to the
- * east, the horizontal component along the device's own Y axis, the dip angle pulling the rest
- * through its back. Apps derive a heading from the ratio between these, so the numbers have to be
- * consistent with each other rather than merely non-zero.
- */
-private const val FIELD_NORTH = 30f
-private const val FIELD_DOWN = -40f
 
 /** The sampling period is honoured within these bounds; a simulated device is not worth 400 Hz. */
 private const val MIN_PERIOD_MS = 20L
@@ -284,7 +274,7 @@ class GuestSensorManager(
                 running = false
                 return
             }
-            simulate(sensor.type)?.let { values ->
+            simulate(sensor.type, SimulatedHardware.sample(context))?.let { values ->
                 values.copyInto(event.values)
                 event.timestamp = SystemClock.elapsedRealtimeNanos()
                 runCatching { listener.onSensorChanged(event) }
@@ -302,32 +292,56 @@ class GuestSensorManager(
     }
 
     /**
-     * What a device lying flat, face up, pointing north and not moving reads on [type] — or null for
-     * a sensor whose honest simulated behaviour is to report nothing at all.
+     * What the simulated device reads on [type] at this instant — or null for a sensor whose honest
+     * simulated behaviour is to report nothing at all.
+     *
+     * Every value comes out of one [HardwareSample], so the accelerometer, the compass and the
+     * rotation vector are three views of the same attitude rather than three unrelated constants.
+     * With nothing set that attitude is a device lying flat, face up, pointing north and still —
+     * which is where all of this started.
      */
-    private fun simulate(type: Int): FloatArray? = when (type) {
-        Sensor.TYPE_ACCELEROMETER, Sensor.TYPE_GRAVITY -> floatArrayOf(0f, 0f, GRAVITY)
-        Sensor.TYPE_ACCELEROMETER_UNCALIBRATED -> floatArrayOf(0f, 0f, GRAVITY, 0f, 0f, 0f)
-        Sensor.TYPE_LINEAR_ACCELERATION -> floatArrayOf(0f, 0f, 0f)
-        Sensor.TYPE_MAGNETIC_FIELD -> floatArrayOf(0f, FIELD_NORTH, FIELD_DOWN)
-        Sensor.TYPE_MAGNETIC_FIELD_UNCALIBRATED ->
-            floatArrayOf(0f, FIELD_NORTH, FIELD_DOWN, 0f, 0f, 0f)
-        // Azimuth, pitch and roll: north, and flat both ways.
-        Sensor.TYPE_ORIENTATION -> floatArrayOf(0f, 0f, 0f)
-        Sensor.TYPE_GYROSCOPE -> floatArrayOf(0f, 0f, 0f)
-        Sensor.TYPE_GYROSCOPE_UNCALIBRATED -> floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f)
-        // The identity quaternion, as a rotation vector: no rotation from the reference frame.
+    private fun simulate(type: Int, now: HardwareSample): FloatArray? = when (type) {
+        Sensor.TYPE_ACCELEROMETER -> now.accelerometer
+        Sensor.TYPE_ACCELEROMETER_UNCALIBRATED -> now.accelerometer.withNoBias()
+        Sensor.TYPE_GRAVITY -> now.gravity
+        // What is left of the accelerometer once gravity is taken out: the shaking, and nothing else.
+        Sensor.TYPE_LINEAR_ACCELERATION -> floatArrayOf(
+            now.accelerometer[0] - now.gravity[0],
+            now.accelerometer[1] - now.gravity[1],
+            now.accelerometer[2] - now.gravity[2],
+        )
+        Sensor.TYPE_MAGNETIC_FIELD -> now.magnetic
+        Sensor.TYPE_MAGNETIC_FIELD_UNCALIBRATED -> now.magnetic.withNoBias()
+        Sensor.TYPE_ORIENTATION -> now.orientation
+        Sensor.TYPE_GYROSCOPE -> now.gyroscope
+        Sensor.TYPE_GYROSCOPE_UNCALIBRATED -> now.gyroscope.withNoBias()
         Sensor.TYPE_ROTATION_VECTOR,
         Sensor.TYPE_GAME_ROTATION_VECTOR,
         Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR,
-        -> floatArrayOf(0f, 0f, 0f, 1f, 0f)
+        -> now.rotationVector
         Sensor.TYPE_STEP_COUNTER -> floatArrayOf(0f)
         // Step detection and significant motion are one-shot: a device that never moves never fires
         // them, and saying so by sending nothing is more truthful than inventing a step.
         else -> null
     }
 
-    private fun valueCount(type: Int): Int = simulate(type)?.size ?: 3
+    /** The uncalibrated form of a reading: the value, then the estimated bias, which here is none. */
+    private fun FloatArray.withNoBias(): FloatArray =
+        floatArrayOf(this[0], this[1], this[2], 0f, 0f, 0f)
+
+    /** How many values [type] carries, which the event is allocated for before any are read. */
+    private fun valueCount(type: Int): Int = when (type) {
+        Sensor.TYPE_ACCELEROMETER_UNCALIBRATED,
+        Sensor.TYPE_MAGNETIC_FIELD_UNCALIBRATED,
+        Sensor.TYPE_GYROSCOPE_UNCALIBRATED,
+        -> 6
+        Sensor.TYPE_ROTATION_VECTOR,
+        Sensor.TYPE_GAME_ROTATION_VECTOR,
+        Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR,
+        -> 5
+        Sensor.TYPE_STEP_COUNTER -> 1
+        else -> 3
+    }
 }
 
 /**

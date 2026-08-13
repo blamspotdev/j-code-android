@@ -341,6 +341,8 @@ import dev.jcode.design.VirtualDeviceSetting
 import dev.jcode.vdevice.AppSandbox
 import dev.jcode.vdevice.AppSandboxPage
 import dev.jcode.vdevice.VirtualDevice
+import dev.jcode.vdevice.SimulatedHardware
+import dev.jcode.vdevice.VirtualHardwarePage
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalVolumeKeysSetting
@@ -912,6 +914,11 @@ fun JCodeApp(
     // Same pattern for the device sandbox: a finished virtual-device build only bumps AppSandbox.revealSignal.
     LaunchedEffect(Unit) {
         snapshotFlow { AppSandbox.revealSignal.value }.collect { if (it > 0) viewModel.openAppSandboxTab() }
+    }
+    // And for the hardware bench, which the device's own control bar asks for.
+    LaunchedEffect(Unit) {
+        snapshotFlow { SimulatedHardware.revealSignal.intValue }
+            .collect { if (it > 0) viewModel.openVirtualHardwareTab() }
     }
     // A page tab has no close callback, so the guest is reaped by watching the tab list.
     LaunchedEffect(editorGroup.tabs) { viewModel.pruneAppSandbox() }
@@ -3250,6 +3257,8 @@ private fun JCodeShell(
                                     },
                                     modifier = Modifier.fillMaxSize(),
                                 )
+                                EditorPageKind.VirtualHardware ->
+                                    VirtualHardwarePage(modifier = Modifier.fillMaxSize())
                                 EditorPageKind.Browser -> BrowserPage(modifier = Modifier.fillMaxSize())
                                 EditorPageKind.ImageViewer -> key(tab.id) {
                                     // Key by tab id so switching between image tabs (same call site)
