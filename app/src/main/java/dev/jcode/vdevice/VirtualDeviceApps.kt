@@ -26,6 +26,9 @@ internal object VirtualDeviceApps {
     private const val APPS = "apps"
     private const val APK = ".apk"
 
+    /** Assets directory holding the APKs the device is born with — see [installBuiltIns]. */
+    private const val BUILT_INS = "vdevice"
+
     /**
      * Bumped whenever the installed set changes, so the launcher redraws for an `adb install` it did
      * not initiate. Snapshot state rather than a flow: the only reader is a composable.
@@ -51,7 +54,35 @@ internal object VirtualDeviceApps {
         val removed = root.listFiles().orEmpty().count { it.deleteRecursively() }
         if (removed > 0) Log.i(TAG, "virtual device reset: $removed entries cleared from $root")
         clearGuestWebViewData(app)
+        installBuiltIns(app)
         revision.intValue++
+    }
+
+    /**
+     * Puts J Code's own apps back on the freshly emptied device.
+     *
+     * The device is wiped on every start, so anything that should always be there has to be put
+     * there again — a built-in is not exempt from the clean room, it is reinstalled into it. They go
+     * through [install] like any other APK: no container privileges, no special casing, and they
+     * exercise the same load, embed, window and WebView paths every other guest takes.
+     *
+     * The browser is the one that matters. Without it the only way to open a URL from the device was
+     * the phone's browser, which takes the user out of J Code and loads the page under their own
+     * profile — their cookies, their signed-in accounts. Inside the device it is wiped with
+     * everything else.
+     */
+    private fun installBuiltIns(context: Context) {
+        val assets = runCatching { context.assets.list(BUILT_INS).orEmpty() }.getOrDefault(emptyArray())
+        assets.filter { it.endsWith(APK) }.forEach { name ->
+            runCatching {
+                val staged = staging(context)
+                context.assets.open("$BUILT_INS/$name").use { input ->
+                    staged.outputStream().use { input.copyTo(it) }
+                }
+                install(context, staged).getOrThrow()
+            }.onSuccess { Log.i(TAG, "built-in installed: ${it.packageName} ${it.versionName}") }
+                .onFailure { Log.w(TAG, "cannot install built-in $name", it) }
+        }
     }
 
     /**

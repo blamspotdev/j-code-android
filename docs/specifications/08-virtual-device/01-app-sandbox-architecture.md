@@ -270,6 +270,29 @@ screen belongs to the guest, because pagers live there.
 > `Notify Fixture`, `2 notifications`, both notification rows with their text, and `Clear all` — so
 > an agent can read the device's notifications and tap them, not just a person.
 
+### 7c. The device's built-in apps
+
+`filesDir/vdevice/` is emptied on every start, so anything that should always be on the device has to
+be put back — a built-in is not exempt from the clean room, it is reinstalled into it.
+`installBuiltIns` does that from `assets/vdevice/*.apk` immediately after the wipe, through the same
+`install` path any other APK takes.
+
+Today that is one app: **the browser** (`tools/vdevice-browser`). It exists so the device can open a
+URL without reaching for the phone's browser, which would take the user out of J Code and load the
+page under their own profile — their cookies, their signed-in accounts. Inside the device, what it
+loads is wiped with the device, including the WebView profile (§7d).
+
+It is an ordinary guest with no container privileges, which makes it a live test of the load, embed,
+window and WebView paths as much as a feature.
+
+### 7d. What a guest leaves behind
+
+Nothing, and WebView was the exception that proved it needed saying. WebView keeps its profile beside
+J Code's own — under the suffix `GuestRuntime` gives it, which is what stops the two colliding — and
+that directory is outside `filesDir/vdevice/`, so nothing in the reset ever touched it. Cookies,
+local storage and any session an app signed into survived a restart and would have been handed to
+whatever app was installed next. `resetOnStart` now clears it too.
+
 ### `VirtualDeviceApps` — the package store
 
 `filesDir/vdevice/apps/<package>.apk`, with each app's private storage beside it at
