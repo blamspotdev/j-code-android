@@ -48,4 +48,11 @@ internal class GuestInstrumentation(base: Instrumentation) : Instrumentation() {
         super.callActivityOnCreate(activity, icicle, persistentState)
         GuestRuntime.created(activity)
     }
+
+    /** Public SDK, and the counterpart to [callActivityOnCreate]: it is where a full-screen guest's
+     *  borrowed place in the host's notification shade is given back. */
+    override fun callActivityOnDestroy(activity: Activity) {
+        super.callActivityOnDestroy(activity)
+        GuestRuntime.destroyed(activity)
+    }
 }

@@ -271,10 +271,26 @@ internal object GuestRuntime {
         }.onFailure { Log.w(TAG, "cannot bring the workbench back", it) }
     }
 
+    /** Full-screen guest activities that are alive, so the mirror is taken down with the last one. */
+    private val fullScreenGuests = java.util.concurrent.atomic.AtomicInteger(0)
+
     fun created(activity: Activity) {
         if (embedding || activity is GuestActivity || activity is GuestBootstrapActivity) return
         if (resolve(activity.intent) == null) return
         GuestOverlay.install(activity)
+        // A full-screen guest has left the tab behind, and the device's status bar with it — see
+        // HostNotificationMirror for why the phone's shade stands in until it comes back.
+        fullScreenGuests.incrementAndGet()
+        HostNotificationMirror.enable(host, activeLabel().orEmpty())
+    }
+
+    /** The other side of [created]: the last full-screen guest to go returns the host's shade. */
+    fun destroyed(activity: Activity) {
+        if (activity is GuestActivity || activity is GuestBootstrapActivity) return
+        if (resolve(activity.intent) == null) return
+        if (fullScreenGuests.get() > 0 && fullScreenGuests.decrementAndGet() == 0) {
+            HostNotificationMirror.disable()
+        }
     }
 
     /** The package a hook should attribute the current call to, or null outside a guest. */

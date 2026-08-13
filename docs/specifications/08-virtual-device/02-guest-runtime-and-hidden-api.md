@@ -280,6 +280,32 @@ notification manager that throws is worse than one that over-answers.
 The store lives in `:guest` and dies with it, which is the same lifetime the device's screen has:
 stopping an app takes its process, and a stopped app's notifications with it.
 
+### Full screen — `HostNotificationMirror`
+
+The device's status bar is a view inside the embedded guest's container, so it exists only while the
+guest is in the tab. A **full-screen** guest has taken the whole screen and left the tab behind, and
+with it the only surface the device had to show a notification on. Posting nowhere would mean an app
+that behaves correctly appears not to, which is the failure this whole section exists to remove.
+
+So while a guest is full screen its notifications are mirrored onto the phone's own shade, and
+**taken back down when it exits**. That bound is what keeps the mirror from being the thing the hook
+above prevents: notifications are never *left* on the user's phone, only borrowed while there is
+nowhere else to put them. Each carries the guest's label as its sub-text, so it is clear which app
+inside the device is talking.
+
+| | |
+|---|---|
+| On | `GuestRuntime.created` for a full-screen guest activity |
+| Off | `callActivityOnDestroy` of the last one — public SDK, and the counterpart to the create hook |
+| Rebuilt, not forwarded | The guest's notification names a package the phone has never heard of, and its small icon is a resource id in the guest's table. Only the text is the guest's |
+| Tapping one dismisses it | Its content intent belongs to a package the system cannot start, so there is nowhere honest to send anyone |
+
+A thread-local guard makes the mirror's own calls pass through the hook; without it they would be
+caught and fed straight back into the device they came from.
+
+> Verified on the Odin2: host shade 0 before launch, 2 while full screen, 4 after posting two more,
+> and **0 again** the moment the guest exits.
+
 > Verified on `tools/notification-fixture`: two notifications posted from `onCreate` appear in the
 > device's own bar and shade, and `dumpsys notification` on the host counts **zero** of them.
 
