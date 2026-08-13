@@ -1,5 +1,7 @@
 package dev.jcode.vdevice
 
+import android.app.Notification
+import android.content.ComponentName
 import android.content.Intent
 import android.util.Log
 import java.lang.reflect.InvocationHandler
@@ -90,6 +92,7 @@ internal object GuestActivityManagerHook {
                     GuestRuntime.redirectForGuest(intent)?.let { args[index] = it }
                 }
             }
+            if (method.name == SERVICE_FOREGROUND && args != null && takeForeground(args)) return null
             return try {
                 method.invoke(real, *(args ?: emptyArray()))
             } catch (e: InvocationTargetException) {
@@ -98,8 +101,41 @@ internal object GuestActivityManagerHook {
         }
     }
 
+    /**
+     * Takes a guest's foreground-service notification onto the device instead of to the server.
+     *
+     * Now that a hosted service is attached with a real `IActivityManager`, `startForeground` gets
+     * this far — but the server is asked to promote a service in a package it has never heard of, and
+     * refuses. The device already has somewhere for a notification to go, so it goes there: the same
+     * status bar and shade [GuestNotificationHook] posts into, which is where a phone would have put
+     * it too.
+     *
+     * True when it took the call, false when this is not a guest's service and the real activity
+     * manager should see it unchanged. The component and the notification are matched by type; the
+     * id is the call's first `int`, which is the one part of this signature that has to be read
+     * positionally.
+     */
+    private fun takeForeground(args: Array<Any?>): Boolean {
+        val component = args.filterIsInstance<ComponentName>().firstOrNull() ?: return false
+        if (GuestLoader.forPackage(component.packageName) == null) return false
+        val id = args.filterIsInstance<Int>().firstOrNull() ?: 0
+        when (val notification = args.filterIsInstance<Notification>().firstOrNull()) {
+            null -> VirtualNotifications.cancel(component.packageName, component.className, id)
+            else -> VirtualNotifications.post(
+                component.packageName,
+                component.className,
+                id,
+                notification,
+            )
+        }
+        return true
+    }
+
     /** Covers `getIntentSender` and the `WithFeature` variant later platforms added beside it. */
     private const val INTENT_SENDER = "getIntentSender"
+
+    /** What `Service.startForeground`/`stopForeground` reach, and where a media player lives or dies. */
+    private const val SERVICE_FOREGROUND = "setServiceForeground"
 
     /** Where a `PendingIntent` is actually fired, and so where its target has to be redirected. */
     private const val SEND_INTENT_SENDER = "sendIntentSender"

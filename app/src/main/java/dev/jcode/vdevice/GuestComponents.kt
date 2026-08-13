@@ -209,7 +209,7 @@ internal class GuestComponents(private val guest: LoadedGuest) {
                         className,
                         Binder(),
                         application,
-                        null,
+                        activityManager(),
                     )
                     true
                 }.onFailure { Log.w(TAG, "Service.attach unavailable for $className", it) }
@@ -222,6 +222,31 @@ internal class GuestComponents(private val guest: LoadedGuest) {
             true
         }.getOrDefault(false)
     }
+
+    /**
+     * The last argument of `Service.attach` — and the one that decides whether the service can be a
+     * *foreground* service.
+     *
+     * It was being passed null, which leaves `Service.mActivityManager` null, and `startForeground`
+     * reaches straight through it with nothing in between:
+     *
+     * ```
+     * NullPointerException: Attempt to invoke interface method
+     *     'void android.app.IActivityManager.setServiceForeground(…)' on a null object reference
+     *   at android.app.Service.startForeground(Service.java:797)
+     *   at org.schabi.newpipe.player.PlayerService.onStartCommand
+     * ```
+     *
+     * A media player is a foreground service by construction, so this is the difference between a
+     * guest that can play something and one that cannot. What goes in is the process-wide
+     * `IActivityManager`, which [GuestActivityManagerHook] has already replaced with its proxy — so
+     * the call arrives somewhere that knows what a guest is rather than at a server that does not.
+     */
+    private fun activityManager(): Any? = runCatching {
+        val manager = HiddenApi.classOrNull("android.app.ActivityManager") ?: return null
+        HiddenApi.method(manager, "getService")?.invoke(null)
+    }.onFailure { Log.w(TAG, "no IActivityManager; guest services cannot go foreground", it) }
+        .getOrNull()
 
     // -------------------------------------------------------------- receivers
 

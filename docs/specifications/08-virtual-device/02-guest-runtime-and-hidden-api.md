@@ -461,6 +461,35 @@ process — build the objects, attach them to a `GuestContext`, drive their life
 guest first and fall through to the host when the target is not the guest's — so a guest can still
 fire an intent at the phone while talking to itself in-process.
 
+### 5a.1 Foreground services
+
+The last argument of `Service.attach` is the process's `IActivityManager`, and passing null there is
+what decides whether a hosted service can ever be a *foreground* one. `Service.startForeground`
+reaches straight through that field with nothing in between:
+
+```
+NullPointerException: Attempt to invoke interface method
+    'void android.app.IActivityManager.setServiceForeground(…)' on a null object reference
+  at android.app.Service.startForeground(Service.java:797)
+  at org.schabi.newpipe.player.PlayerService.onStartCommand
+```
+
+A media player is a foreground service by construction, so this was the difference between a guest
+that can play something and one that cannot — NewPipe's player died there the moment a video was
+opened. What is passed now is the process-wide `IActivityManager`, which `GuestActivityManagerHook`
+has already replaced with its proxy, so the call lands somewhere that knows what a guest is.
+
+The proxy then answers `setServiceForeground` itself for a guest's component rather than forwarding
+it, because the server would be asked to promote a service in a package it has never heard of. The
+notification goes to the device's own status bar and shade instead — the same place
+`GuestNotificationHook` posts, which is where a phone would have put it. Verified by playing a live
+stream: video renders in the tab and the player's notification appears in the device shade.
+
+**The real system is therefore never told the service is foreground**, so it confers no protection
+from being killed. That is not a gap to close: the guest runs inside J Code's own `:guest` process,
+and what keeps it alive is J Code's foreground state, not a claim made on the guest's behalf about a
+package that does not exist.
+
 > **In-process only, and that is the boundary.** Another app cannot query a hosted provider, no
 > system broadcast arrives on its own, and a service gets no process to be restarted in. What it buys
 > is an app talking to itself, which is where the frameworks live: `androidx.startup` — and so
