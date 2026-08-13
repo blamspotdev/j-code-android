@@ -94,6 +94,14 @@ internal object GuestActivityManagerHook {
                 }
             }
             if (method.name == SERVICE_FOREGROUND && args != null && takeForeground(args)) return null
+            // Where `Context.checkSelfPermission` ends up, and so where almost every permission
+            // question a guest asks is decided — including AndroidX's, which routes through it. The
+            // device answers for its own hardware and stays out of the way for everything else; see
+            // GuestPermissions.
+            if (method.name == CHECK_PERMISSION && args != null) {
+                args.filterIsInstance<String>().firstNotNullOfOrNull { GuestPermissions.answer(it) }
+                    ?.let { return it }
+            }
             val result = try {
                 method.invoke(real, *(args ?: emptyArray()))
             } catch (e: InvocationTargetException) {
@@ -123,7 +131,10 @@ internal object GuestActivityManagerHook {
             .getOrDefault(false)
     }
 
-    /** What a consumed call hands back; `sendIntentSender` returns an int the caller reads. */
+    /**
+     * What a consumed call hands back — *success*, not emptiness: `sendIntentSender` returns an int
+     * the caller reads as a result code, and 0 is the one that means the send happened.
+     */
     private fun zero(type: Class<*>): Any? = when (type) {
         Int::class.javaPrimitiveType -> 0
         Boolean::class.javaPrimitiveType -> true
@@ -170,4 +181,7 @@ internal object GuestActivityManagerHook {
 
     /** The activity manager's own send path. Kept because some callers do come through it. */
     private const val SEND_INTENT_SENDER = "sendIntentSender"
+
+    /** Where `Context.checkSelfPermission` lands, by way of `PermissionManager`. */
+    private const val CHECK_PERMISSION = "checkPermission"
 }

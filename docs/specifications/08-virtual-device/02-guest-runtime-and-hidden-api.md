@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Status** | Implemented — verified on Android 13 with `targetSdk = 33` |
-| **Modules** | `:app` (`dev.jcode.vdevice`) |
-| **Primary sources** | app/src/main/java/dev/jcode/vdevice/HiddenApi.kt, GuestLoader.kt, GuestContext.kt, GuestRuntime.kt, GuestHooks.kt, GuestInstrumentation.kt, GuestOverlay.kt, VirtualIdentity.kt, EmbeddedWindows.kt |
-| **Verified against** | device-verified on Android 13, 2026-08-11 (`tools/appcompat-fixture`) |
+| **Modules** | `:app` (`dev.jcode.vdevice`, plus `android.hardware.GuestSensorManager`) |
+| **Primary sources** | app/src/main/java/dev/jcode/vdevice/HiddenApi.kt, GuestLoader.kt, GuestContext.kt, GuestRuntime.kt, GuestHooks.kt, GuestInstrumentation.kt, GuestOverlay.kt, GuestPermissions.kt, GuestLocation.kt, GuestSensors.kt, VirtualIdentity.kt, EmbeddedWindows.kt, app/src/main/java/android/hardware/GuestSensorManager.kt |
+| **Verified against** | device-verified on Android 13, 2026-08-13 (`tools/appcompat-fixture`, `tools/hardware-fixture`) |
 
 ---
 
@@ -201,6 +201,9 @@ Accessing these logs a warning and nothing more:
 | **Every** non-SDK member of `SurfaceControlViewHost`, including `SurfacePackage` | The class carries no `@UnsupportedAppUsage` at all | `EmbeddedWindows` reaches the host's view root through the container's public `getParent()`, and the root layer through `SurfacePackage`'s own public `Parcelable` contract |
 | `Activity.performStart` / `performResume` | Denied | Driven through the public lifecycle path |
 | `Activity.mActivityLifecycleCallbacks` | Denied — the list those two dispatch to, and the one AndroidX's `ReportFragment` registers on | `GuestRuntime.resumeEmbedded` dispatches `Application.mActivityLifecycleCallbacks` (greylisted) and drives the guest's own `LifecycleRegistry` reflectively for what the other would have reached |
+| **Every instance member of `LocationManager`**, `mService` included | Denied. Measured from inside a guest: `LocationManager.class.getDeclaredFields()` answers with the public `String` constants and *nothing else* | The binder is replaced one step earlier, in `ServiceManager.sCache` (greylisted), before any `LocationManager` exists — see §5c |
+| **Every method of `ILocationListener` and `ILocationCallback`** | Denied. `ILocationListener.class.getMethods()` offers exactly one member, `asBinder`, inherited from the public `IInterface` — the interface cannot be invoked through, and the transport's own hidden class has its members filtered out of the same list | `IBinder.transact` with a hand-written `Parcel`. Public API, and it is what the generated stub reads anyway |
+| `SensorManager()` — the constructor | Package-private **in the SDK stub only**; the class the runtime loads has the ordinary public default constructor of a public class | `GuestSensorManager` is declared in package `android.hardware`, which satisfies the compiler. Nothing hidden is reached |
 
 ### 5.3 No escape hatch
 
@@ -538,6 +541,61 @@ java.lang.NullPointerException: Attempt to invoke virtual method
 
 Collecting them costs one pass over the APK signing block per load, and the honest answer — signed,
 but not by whoever built the original — is what a sideloaded copy reports anyway.
+
+## 5c. The device's own hardware
+
+What the user chose in **Manage permissions** has to be true from inside the guest, not merely
+displayed. The policy itself is in
+[App sandbox architecture §7e](01-app-sandbox-architecture.md#7e-the-devices-hardware-per-app--virtualdevicepolicy);
+this is how each answer is delivered.
+
+### Sensors — `GuestSensorManager`
+
+Handed to the guest from `GuestContext.getSystemService(SENSOR_SERVICE)`, one per loaded guest.
+
+- **Off** drops the family from `getFullSensorList`, so `getDefaultSensor` answers null and a
+  registration is refused. An app that checks finds the device has no such hardware.
+- **Real** registers a forwarder of our own with the host manager instead of the guest's listener,
+  and drops events once the mode is no longer Real — otherwise revoking a sensor would do nothing
+  until the app happened to unregister, because the stream lives in the sensor service from the
+  moment it is set up.
+- **Simulated** delivers on a ticker at the rate the app asked for, clamped to 20–200 ms: a device
+  lying flat, face up, pointing north and not moving. Derived types go with the sensor they are
+  computed from, or turning the accelerometer off would leave the motion readable through
+  `TYPE_GRAVITY` anyway.
+
+Two things make this possible at all, and both are recorded in §5.2. The class lives in package
+`android.hardware` because `SensorManager`'s constructor is package-private *in the SDK stub*; and
+its overrides carry no `override` keyword, because every abstract member of `SensorManager` is
+`@hide` and so is absent from the stub the container compiles against — they are ordinary methods
+with the same name and descriptor, which is what the runtime matches on when it links the vtable.
+A member this misses stays abstract, so `GuestSensors.forGuest` calls once through the finished
+object and falls back to the phone's manager if anything at all goes wrong.
+
+`SensorEvent`'s constructor is package-private in the **runtime** class, not only in the stub, so it
+is reached by reflection. Where that fails, simulated sensors are dropped from the guest's list
+rather than offered as hardware that never reports.
+
+### Location — `GuestLocation`
+
+There is no passthrough mode and there never will be: a guest is somebody else's APK running under
+J Code's uid, and the single most valuable thing it could take is where the user is standing.
+
+The seam is `ServiceManager.sCache`. `SystemServiceRegistry` builds the one `LocationManager` each
+`ContextImpl` gets by asking `ServiceManager.getService("location")` and wrapping the result with
+`ILocationManager.Stub.asInterface` — and `getService` consults that cache first. A local `Binder`
+carrying our own `ILocationManager` put there by `GuestRuntime.install`, before any guest exists,
+means every location manager built afterwards is a genuine, complete client object that happens to
+be talking to us; `asInterface` hands back the local object, so not one call leaves the process.
+
+The handler **never delegates**. An unmodelled method answers with nothing rather than falling
+through to the real location service, because falling through is the failure this guards against:
+one forgotten method is one route to the user's coordinates.
+
+Updates are pushed back to the guest with `IBinder.transact` and a hand-written `Parcel`, because
+there is no method to call — see §5.2. The transaction code is `IBinder.FIRST_CALL_TRANSACTION`,
+both interfaces declaring the relevant method first; a platform that reorders them says so, since
+`onTransact` answers false for a code it does not know and that is logged.
 
 ## 6. Child windows — `EmbeddedWindows`
 

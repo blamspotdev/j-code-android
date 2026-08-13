@@ -4,8 +4,8 @@
 |---|---|
 | **Status** | Implemented — device-verified on Android 13 |
 | **Modules** | `:app` (`dev.jcode.vdevice`) |
-| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestBootstrapActivity.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
-| **Verified against** | device-verified on Android 13, 2026-08-11 |
+| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestBootstrapActivity.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
+| **Verified against** | device-verified on Android 13, 2026-08-13 |
 
 ---
 
@@ -362,6 +362,44 @@ up on the home screen without the tab being touched.
 The device is reachable on its own through the `tools.virtualDevice` palette command
 ("Open Virtual Device") — otherwise the tab only ever appears when a virtual-device build finishes,
 which is no way to reach the apps already installed on it.
+
+### 7e. The device's hardware, per app — `VirtualDevicePolicy`
+
+Long-press an icon → **Manage permissions**. Six pieces of hardware, each wired per app to one of
+`Off` / `Simulated` / `Real`, plus the background toggle that used to be its own menu item.
+
+| Hardware | Modes | Default | What each mode is |
+|---|---|---|---|
+| Camera | Off, Simulated | Off | Simulated declares a camera and grants `CAMERA`; **no frames ever arrive** — Camera2 is a native binder pipeline the container cannot stand in for, and the phone's camera is deliberately not on offer |
+| Microphone | Off, Simulated, Real | Off | Real is the phone's, and is the one thing here that asks the user for something: `RECORD_AUDIO` is requested at the moment an app is switched to it |
+| Location | Off, Simulated | Off | A fixed fix the user types, reported as GPS. The phone's own location is never offered |
+| Accelerometer | Off, Simulated, Real | **Simulated** | Simulated reads a device lying flat, face up, still |
+| Compass | Off, Simulated, Real | **Simulated** | Simulated points north; Real is offered only if the phone has a magnetometer |
+| Gyroscope | Off, Simulated, Real | **Simulated** | Simulated reports no rotation; Real is offered only if the phone has one |
+
+The three motion sensors default to Simulated rather than Off because Android has never gated them:
+before this existed a guest was handed the host's own `SensorManager` and could feel the user's hand,
+with nothing anywhere able to say no. Simulated is the setting that neither breaks an app that wants
+a sensor nor leaks the phone's.
+
+**Where the policy is enforced** — four places, all in `:guest`, all resolving the *active* guest:
+
+| Question | Answered by |
+|---|---|
+| `Context.checkSelfPermission` | `GuestActivityManagerHook` — this lands on `IActivityManager.checkPermission`, which is where AndroidX's `ContextCompat` ends up too |
+| `PackageManager.checkPermission`, `hasSystemFeature` | `GuestPackageHook`. The blanket `PERMISSION_GRANTED` the container used to answer with survives only for permissions the device has no opinion about |
+| `Activity.requestPermissions` | `GuestPermissions.consume`, off the start-activity hook. **This was broken outright before**: the intent went to the real permission controller, which was being asked to grant a permission to *J Code*, and the result came back addressed to an activity token no `ActivityRecord` answers to — so no dialog, no callback, and an app that waits for one stopped there. The device now answers it from the policy, with no prompt, because the user has already said what this app may have |
+| `getSystemService(SENSOR_SERVICE)`, and every location call | `GuestSensorManager` and `GuestLocation` — see [Guest runtime §5c](02-guest-runtime-and-hidden-api.md#5c-the-devices-own-hardware) |
+
+The policy is a properties file inside `filesDir/vdevice/`, not `SharedPreferences`: the launcher
+that writes it is in the IDE and the container that acts on it is in `:guest`, and a preferences file
+is cached per process from first read — so a permission revoked while an app was on the screen would
+have gone on being granted until the process died. It is written atomically and re-read whenever its
+timestamp moves. Living inside `filesDir/vdevice/` also means `resetOnStart` takes it with everything
+else, which is the honest behaviour: a grant that outlived the app it was granted to would be waiting
+to apply itself to whatever was installed under that package name next.
+
+`tools/hardware-fixture` is the regression test — one guest that prints what it can see of all six.
 
 ---
 

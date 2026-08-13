@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jcode.core.distro.WorkspaceHostPaths
+import dev.jcode.humanSize
 import dev.jcode.design.CompactFilledButton
 import dev.jcode.design.CompactOutlinedButton
 import dev.jcode.design.ContextAction
@@ -138,6 +139,7 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
     var home by remember { mutableStateOf<List<LauncherApp>?>(null) }
     var menuFor by remember { mutableStateOf<Pair<VirtualDeviceApp, Offset>?>(null) }
     var detailsFor by remember { mutableStateOf<VirtualDeviceApp?>(null) }
+    var permissionsFor by remember { mutableStateOf<VirtualDeviceApp?>(null) }
     LaunchedEffect(revision, running) {
         home = if (running) null else withContext(Dispatchers.IO) { VirtualLauncher.load(context) }
     }
@@ -169,6 +171,7 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
     /** Puts an app from the device's own launcher on its screen — a tap on an icon. */
     fun open(app: VirtualDeviceApp) {
         installOpen = false
+        permissionsFor = null
         // The launcher runs an app as the device would: its own MAIN/LAUNCHER activity, whatever
         // the last run happened to name.
         AppSandbox.activityClass.value = null
@@ -221,20 +224,10 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
                 offset = with(density) { DpOffset(at.x.toDp(), at.y.toDp()) },
                 listActions = buildList {
                     add(ContextAction(JCodeIcon.Run, "Open") { menuFor = null; open(app) })
-                    val background = VirtualDeviceApps.backgroundAllowed(context, app.packageName)
-                    add(
-                        ContextAction(
-                            icon = JCodeIcon.KeepAwake,
-                            label = if (background) "Allow background ✓" else "Allow background",
-                        ) {
-                            menuFor = null
-                            VirtualDeviceApps.setBackgroundAllowed(context, app.packageName, !background)
-                            onSnackbar(
-                                if (background) "${'$'}{app.label} stops when you leave it."
-                                else "${'$'}{app.label} keeps running in the background.",
-                            )
-                        },
-                    )
+                    add(ContextAction(JCodeIcon.Settings, "Manage permissions") {
+                        menuFor = null
+                        permissionsFor = app
+                    })
                     add(ContextAction(JCodeIcon.Stop, "Force stop") {
                         menuFor = null
                         if (app.apkPath == apkPath) stop()
@@ -256,11 +249,7 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
         }
 
         detailsFor?.let { app ->
-            AppDetailsDialog(
-                app = app,
-                backgroundAllowed = VirtualDeviceApps.backgroundAllowed(context, app.packageName),
-                onDismiss = { detailsFor = null },
-            )
+            AppDetailsDialog(app = app, onDismiss = { detailsFor = null })
         }
 
         if (installOpen) {
@@ -289,6 +278,15 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
                 onClose = { installOpen = false },
                 modifier = Modifier.fillMaxSize(),
             )
+        } else if (permissionsFor != null) {
+            permissionsFor?.let { app ->
+                AppPermissionsSheet(
+                    app = app,
+                    onSnackbar = onSnackbar,
+                    onClose = { permissionsFor = null },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         } else if (running) {
             // Every control on the bar acts on a running guest, and the home screen already names
             // the device — so with nothing running there is nothing for it to say.
@@ -727,11 +725,16 @@ private fun apkProblem(path: String): String? {
 @Composable
 private fun AppDetailsDialog(
     app: VirtualDeviceApp,
-    backgroundAllowed: Boolean,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    val facts = remember(app.apkPath) { appFacts(context, app, backgroundAllowed) }
+    // Measuring what an app has stored means walking its tree, so the dialog opens with everything
+    // the archive can answer straight away and fills this in when it knows.
+    var stored by remember(app.apkPath) { mutableStateOf<Long?>(null) }
+    LaunchedEffect(app.apkPath) {
+        stored = withContext(Dispatchers.IO) { VirtualDeviceApps.dataSize(context, app.packageName) }
+    }
+    val facts = remember(app.apkPath, stored) { appFacts(context, app, stored) }
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
@@ -756,11 +759,14 @@ private fun AppDetailsDialog(
     )
 }
 
-/** Reads the archive once and flattens it into label/value pairs the dialog just prints. */
+/**
+ * Reads the archive once and flattens it into label/value pairs the dialog just prints. [stored] is
+ * null while the app's data is still being measured.
+ */
 private fun appFacts(
     context: android.content.Context,
     app: VirtualDeviceApp,
-    backgroundAllowed: Boolean,
+    stored: Long?,
 ): List<Pair<String, String>> {
     val flags = PackageManager.GET_ACTIVITIES or PackageManager.GET_SERVICES or
         PackageManager.GET_RECEIVERS or PackageManager.GET_PROVIDERS or
@@ -793,7 +799,20 @@ private fun appFacts(
                     },
             )
         }
-        add("Runs in background" to if (backgroundAllowed) "Allowed" else "Stops when you leave it")
-        add("APK" to "${apk.name} (${apk.length() / 1024} KB)")
+        add(
+            "Runs in background" to
+                if (VirtualDevicePolicy.backgroundAllowed(context, app.packageName)) "Allowed"
+                else "Stops when you leave it",
+        )
+        add("APK" to "${apk.name} (${humanSize(apk.length())})")
+        // Everything the app has written into its private tree — what "Clear data" would remove,
+        // and what the next restart takes with the rest of the device.
+        add(
+            "Data" to when {
+                stored == null -> "Measuring…"
+                stored == 0L -> "Nothing stored yet"
+                else -> humanSize(stored)
+            },
+        )
     }
 }

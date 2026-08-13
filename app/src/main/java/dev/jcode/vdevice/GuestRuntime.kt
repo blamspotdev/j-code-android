@@ -68,6 +68,20 @@ internal object GuestRuntime {
     /** Set while [embed] is building an activity, which is what tells [created] the two apart. */
     private var embedding = false
 
+    /**
+     * The embedded activity currently on the device's screen.
+     *
+     * Tracked here rather than asked of the tab because the two calls that decide it already come
+     * through this object — [resumeEmbedded] for whatever has just come to the front, and
+     * [destroyEmbedded] for whatever has just gone. [GuestPermissions] needs it: a permission result
+     * is delivered to an activity, and the container has to know which one asked.
+     */
+    @Volatile
+    private var foreground: Activity? = null
+
+    /** The activity a result the container answered itself should be handed to, if there is one. */
+    fun foregroundActivity(): Activity? = foreground
+
     @Synchronized
     fun install(context: Context) {
         if (isInstalled) return
@@ -81,6 +95,11 @@ internal object GuestRuntime {
         instrumentation = GuestHooks.installInstrumentation(activityThread)
             ?: throw VirtualDeviceException("cannot replace ActivityThread.mInstrumentation")
 
+        GuestPermissions.install(host)
+        // Before any guest exists, which is the whole requirement: the framework builds one
+        // LocationManager per context and caches it, so the service has to be in place before the
+        // first one is asked for.
+        val location = GuestLocation.install(host)
         val navigation = GuestHooks.installStartActivityHook(::rewriteOutgoing)
         val packages = GuestPackageHook.install(host.packageManager)
         val notifications = GuestNotificationHook.install()
@@ -91,7 +110,8 @@ internal object GuestRuntime {
         Log.i(
             TAG,
             "hooks installed: instrumentation=true navigation=$navigation " +
-                "packages=$packages notifications=$notifications intents=$intents",
+                "packages=$packages notifications=$notifications intents=$intents " +
+                "location=$location",
         )
         VirtualDeviceLog.append(host, 'I', TAG, "container ready in ${Application.getProcessName()}")
     }
@@ -231,7 +251,7 @@ internal object GuestRuntime {
 
     /** Whether the device lets [packageName] keep running once it is not the app on the screen. */
     fun mayRunInBackground(packageName: String): Boolean =
-        runCatching { VirtualDeviceApps.backgroundAllowed(host, packageName) }.getOrDefault(false)
+        runCatching { VirtualDevicePolicy.backgroundAllowed(host, packageName) }.getOrDefault(false)
 
     /**
      * Ends what the active guest is still hosting: its services, its bound connections, its
@@ -335,6 +355,7 @@ internal object GuestRuntime {
      */
     fun resumeEmbedded(activity: Activity): Boolean {
         val instrumentation = instrumentation ?: return false
+        foreground = activity
         GuestHooks.dispatchLifecycleCallback(activity, "onActivityPreStarted")
         instrumentation.callActivityOnStart(activity)
         val started = GuestHooks.dispatchLifecycleCallback(activity, "onActivityPostStarted")
@@ -456,6 +477,7 @@ internal object GuestRuntime {
      */
     fun destroyEmbedded(activity: Activity) {
         val instrumentation = instrumentation ?: return
+        if (foreground === activity) foreground = null
         // Focus goes before the lifecycle does, the way it would on a real window: an engine that
         // started its render thread on gaining focus stops it on losing focus, and one told it still
         // had focus while being destroyed would keep drawing into a surface that is going away.

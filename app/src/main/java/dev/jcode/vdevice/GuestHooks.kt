@@ -107,6 +107,10 @@ internal object GuestHooks {
                     }
                     if (args != null && method.name.startsWith("startActivity")) {
                         GuestActivityClient.detachEmbeddedTokens(args)
+                        // A runtime permission request is a launch like any other from here, and the
+                        // one launch the system cannot usefully answer — the device answers it
+                        // itself. See GuestPermissions.
+                        if (GuestPermissions.consume(args)) return consumed(method.returnType)
                         // Logged because "the app opened, but the phone's copy of it" is otherwise
                         // indistinguishable from "the container hosted it", and the difference is
                         // which binder call carried the intent.
@@ -128,11 +132,7 @@ internal object GuestHooks {
                                 // device and once outside it, and the one the user saw was the
                                 // wrong one. Measured on ES-DE, whose ConfiguratorActivity was
                                 // hosted correctly and still launched the installed app over J Code.
-                                is StartAction.Consumed -> return when (method.returnType) {
-                                    Int::class.javaPrimitiveType -> START_SUCCESS
-                                    Boolean::class.javaPrimitiveType -> true
-                                    else -> null
-                                }
+                                is StartAction.Consumed -> return consumed(method.returnType)
                             }
                         }
                     }
@@ -150,6 +150,17 @@ internal object GuestHooks {
             Log.e(TAG, "cannot install start-activity hook", t)
             return false
         }
+    }
+
+    /**
+     * What a launch the container answered itself reports back — a success, whatever shape the
+     * overload declares. Every `startActivity*` on this interface returns an int, a boolean or
+     * nothing, and a caller reading any of them must not conclude the launch failed.
+     */
+    private fun consumed(returnType: Class<*>): Any? = when (returnType) {
+        Int::class.javaPrimitiveType -> START_SUCCESS
+        Boolean::class.javaPrimitiveType -> true
+        else -> null
     }
 
     /**

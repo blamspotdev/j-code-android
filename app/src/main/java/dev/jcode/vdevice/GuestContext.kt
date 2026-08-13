@@ -12,6 +12,7 @@ import android.content.res.Configuration
 import android.content.res.Resources
 import android.database.DatabaseErrorHandler
 import android.database.sqlite.SQLiteDatabase
+import android.hardware.SensorManager
 import android.util.Log
 import android.view.Display
 import android.view.LayoutInflater
@@ -65,12 +66,30 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
     }
 
     /**
+     * Two services are the device's rather than the phone's.
+     *
      * A [LayoutInflater] from the base context would resolve layouts and custom views against J
-     * Code's resources and class loader, so hand out one cloned into this context instead.
+     * Code's resources and class loader, so the guest is handed one cloned into this context
+     * instead. And the sensors it is offered are the ones the user has given *this app* — see
+     * [GuestSensorManager], which is the only thing standing between a guest APK and the phone's
+     * real accelerometer.
+     *
+     * The base context is what looks the policy up, not this one: `getApplicationContext` here
+     * answers with the guest's, whose `filesDir` is the redirected tree, and the device's policy
+     * lives in J Code's.
+     *
+     * Location is *not* here. It is replaced a layer lower, at the binder the framework builds every
+     * `LocationManager` around, because the manager itself admits to no field that could be patched
+     * — see [GuestLocation].
      */
-    override fun getSystemService(name: String): Any? {
-        if (name != LAYOUT_INFLATER_SERVICE) return super.getSystemService(name)
-        return inflater ?: LayoutInflater.from(baseContext).cloneInContext(this).also { inflater = it }
+    override fun getSystemService(name: String): Any? = when (name) {
+        LAYOUT_INFLATER_SERVICE ->
+            inflater ?: LayoutInflater.from(baseContext).cloneInContext(this).also { inflater = it }
+
+        SENSOR_SERVICE -> (super.getSystemService(name) as? SensorManager)
+            ?.let { GuestSensors.forGuest(baseContext, guest, it) }
+
+        else -> super.getSystemService(name)
     }
 
     override fun getDataDir(): File = guest.dataDir.ensure()

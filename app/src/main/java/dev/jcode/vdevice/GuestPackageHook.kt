@@ -102,7 +102,7 @@ internal object GuestPackageHook {
                 // Converting exactly that failure into "nothing to report" is not a guess about
                 // semantics — for a package that genuinely is not installed, nothing *is* the
                 // honest answer, and it is the one a caller is written to handle.
-                if (namesGuest(args) && cause.isUnknownPackage()) return empty(method.returnType)
+                if (namesGuest(args) && cause.isUnknownPackage()) return emptyValue(method.returnType)
                 throw cause
             }
         }
@@ -118,17 +118,17 @@ internal object GuestPackageHook {
         private fun Throwable.isUnknownPackage(): Boolean =
             this is IllegalArgumentException && message?.startsWith(UNKNOWN_PACKAGE) == true
 
-        private fun empty(type: Class<*>): Any? = when (type) {
-            Void.TYPE -> null
-            Boolean::class.javaPrimitiveType -> false
-            Int::class.javaPrimitiveType -> 0
-            Long::class.javaPrimitiveType -> 0L
-            else -> null
-        }
-
         /** Null when this is not a guest's question; a box — possibly of null — when it is. */
         private fun answer(method: Method, args: Array<Any?>?): Box? {
             if (args == null) return null
+            // What hardware the device has is a question about the *device*, so it carries no
+            // package to recognise it by — and it is the question a careful app asks before it
+            // reaches for a camera. See GuestPermissions.
+            if (method.name == "hasSystemFeature") {
+                args.filterIsInstance<String>()
+                    .firstNotNullOfOrNull { GuestPermissions.feature(it) }
+                    ?.let { return Box(it) }
+            }
             val component = args.filterIsInstance<ComponentName>().firstOrNull()
             val guest = component?.let { GuestLoader.forPackage(it.packageName) }
                 ?: args.filterIsInstance<String>().firstNotNullOfOrNull { GuestLoader.forPackage(it) }
@@ -154,9 +154,15 @@ internal object GuestPackageHook {
                 "getPackageUid" -> Box(Process.myUid())
                 "isPackageAvailable" -> Box(true)
                 "getTargetSdkVersion" -> Box(guest.applicationInfo.targetSdkVersion)
-                // The guest inherits J Code's permissions wholesale — see the security notes — so a
-                // permission check that reached the server would ask about the wrong package.
-                "checkPermission" -> Box(PackageManager.PERMISSION_GRANTED)
+                // A permission check that reached the server would ask about the wrong package: the
+                // guest is not one the server has heard of, and the uid behind it is J Code's. So
+                // the device answers — from the user's own policy for the hardware it governs, and
+                // with the granted the container has always given for everything else.
+                "checkPermission" -> Box(
+                    args.filterIsInstance<String>()
+                        .firstNotNullOfOrNull { GuestPermissions.answer(it) }
+                        ?: PackageManager.PERMISSION_GRANTED,
+                )
                 // The server refuses to change the state of a component in a package it does not
                 // have — "Attempt to change component state" — and WorkManager does exactly this to
                 // enable its own JobService. Accepting it is honest here: the container decides what

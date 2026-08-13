@@ -7,6 +7,23 @@ import java.lang.reflect.Method
 internal const val TAG = "VDEVICE"
 
 /**
+ * What a binder call the container answered itself hands back when it has nothing to say.
+ *
+ * Every proxy in here has the same problem: a method it does not model still has to return
+ * *something* of the right shape, and a null where an `int` was declared is an
+ * `IllegalArgumentException` out of the reflection layer rather than a value the caller can read.
+ */
+internal fun emptyValue(type: Class<*>): Any? = when (type) {
+    Void.TYPE -> null
+    Boolean::class.javaPrimitiveType -> false
+    Int::class.javaPrimitiveType -> 0
+    Long::class.javaPrimitiveType -> 0L
+    Float::class.javaPrimitiveType -> 0f
+    Double::class.javaPrimitiveType -> 0.0
+    else -> null
+}
+
+/**
  * Reflection helpers for the framework internals the container is built on.
  *
  * Everything the virtual device does — swapping `ActivityThread.mInstrumentation`, reading

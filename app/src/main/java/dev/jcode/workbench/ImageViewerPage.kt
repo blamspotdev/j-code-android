@@ -1,6 +1,7 @@
 package dev.jcode.workbench
 
 import android.graphics.BitmapFactory
+import dev.jcode.humanSize
 import android.net.Uri
 import android.util.Base64
 import android.webkit.WebView
@@ -138,12 +139,6 @@ private fun decodeDimensions(bytes: ByteArray): Pair<Int, Int>? {
     val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
     return if (opts.outWidth > 0 && opts.outHeight > 0) opts.outWidth to opts.outHeight else null
-}
-
-private fun humanSize(bytes: Long): String = when {
-    bytes >= 1024 * 1024 -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
-    bytes >= 1024 -> String.format("%.1f KB", bytes / 1024.0)
-    else -> "$bytes B"
 }
 
 private const val MAX_BYTES = 40 * 1024 * 1024

@@ -83,6 +83,13 @@ internal class LoadedGuest(
     /** Base context handed to the guest [Application] and returned as its application context. */
     lateinit var appContext: GuestContext
 
+    /**
+     * The `SensorManager` this guest is handed — see [GuestSensors.forGuest]. Held per guest rather
+     * than per context so that one app has one set of registrations, however many of its contexts
+     * ask for the service.
+     */
+    var sensors: android.hardware.SensorManager? = null
+
     /** The guest's declared components, so [GuestComponents] can host them. */
     val components = GuestComponents(this)
 
