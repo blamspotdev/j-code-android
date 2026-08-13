@@ -1,5 +1,6 @@
 package dev.jcode.vdevice
 
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
@@ -13,6 +14,7 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.Space
 import android.widget.TextView
 import kotlin.math.abs
 
@@ -41,23 +43,19 @@ import kotlin.math.abs
  * surface and stay out of captures, which is what keeps the two tellable apart.
  */
 @SuppressLint("ViewConstructor")
-internal class VirtualStatusBar(
-    context: Context,
-    private val appLabel: String,
-) : FrameLayout(context) {
+internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
 
     private val density = resources.displayMetrics.density
     private fun dp(value: Float) = (value * density).toInt()
 
-    private val status = TextView(context).apply {
-        text = appLabel
-        setTextColor(FOREGROUND)
-        textSize = 11f
-        isSingleLine = true
-        ellipsize = android.text.TextUtils.TruncateAt.END
-    }
-
-    /** One small icon per app that has posted something — the row a phone's status bar carries. */
+    /**
+     * One small icon per app that has posted something, on the left where a phone puts them.
+     *
+     * The app's *name* is deliberately not here. It was, and it was the wrong place for it: an app
+     * already says what it is in its own app bar, and a second copy in the status bar is either a
+     * duplicate of the title or — for an app whose bar says something else, which is most of them
+     * once you are past the first screen — a contradiction of it.
+     */
     private val icons = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
@@ -74,8 +72,8 @@ internal class VirtualStatusBar(
         gravity = Gravity.CENTER_VERTICAL
         setBackgroundColor(BAR_BACKGROUND)
         setPadding(dp(10f), 0, dp(10f), 0)
-        addView(status, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         addView(icons, LinearLayout.LayoutParams(WRAP, WRAP))
+        addView(Space(context), LinearLayout.LayoutParams(0, 1, 1f))
         addView(summary, LinearLayout.LayoutParams(WRAP, WRAP))
     }
 
@@ -95,7 +93,7 @@ internal class VirtualStatusBar(
         setPadding(dp(12f), dp(10f), dp(12f), dp(12f))
         setOnClickListener {
             VirtualNotifications.clear()
-            collapse()
+            if (VirtualNotifications.count() == 0) collapse()
         }
     }
 
@@ -114,7 +112,12 @@ internal class VirtualStatusBar(
     private val grabHeight = dp(GRAB_DP)
 
     private var downY = 0f
+    private var downX = 0f
     private var dragging = false
+
+    /** Where the pane was when the drag started, and how far it can go — see [onTouchEvent]. */
+    private var dragFrom = 0
+    private var dragTo = 0
 
     init {
         val column = LinearLayout(context).apply {
@@ -149,7 +152,6 @@ internal class VirtualStatusBar(
         bar.setBackgroundColor(style.background)
         ink = if (style.lightBackground) ON_LIGHT else FOREGROUND
         inkMuted = if (style.lightBackground) ON_LIGHT_MUTED else MUTED
-        status.setTextColor(ink)
         summary.setTextColor(ink)
         refresh()
     }
@@ -157,7 +159,6 @@ internal class VirtualStatusBar(
     /** Redraws the bar's icons and summary and rebuilds the shade's rows from what is posted now. */
     fun refresh() {
         val posted = VirtualNotifications.list()
-        status.text = appLabel
         // One icon per app rather than one per notification: the device runs a handful of packages,
         // not a phone's hundred, so what is worth saying at a glance is *who* is asking rather than
         // how many times. The count says the rest.
@@ -183,9 +184,7 @@ internal class VirtualStatusBar(
         if (posted.isEmpty()) {
             shadeList.addView(row(null, "No notifications", "", emptyList(), dim = true))
         } else {
-            posted.forEach {
-                shadeList.addView(row(iconFor(it), it.title, it.text, it.actions, dim = false))
-            }
+            posted.forEach { shadeList.addView(card(it)) }
         }
         clearAll.visibility = if (VirtualNotifications.anyClearable()) VISIBLE else GONE
     }
@@ -207,6 +206,58 @@ internal class VirtualStatusBar(
         }
         return runCatching { guest.resources.getDrawable(guest.applicationInfo.icon, null) }
             .getOrNull()
+    }
+
+    /**
+     * One notification, as something that can be thrown off the screen.
+     *
+     * A shade whose entries can only be cleared all at once is a list, not a shade. Horizontal is
+     * the axis a phone uses and the axis nothing else here wants: [onInterceptTouchEvent] claims
+     * only vertical movement, so a sideways drag reaches the card untouched while an up-or-down one
+     * still opens and closes the pane over the top of it.
+     *
+     * An ongoing notification does not go. It follows the finger a little so the gesture is
+     * answered rather than ignored, then springs back — the app is still running, and the shade is
+     * not the place to argue with it.
+     */
+    private fun card(entry: VirtualNotifications.Posted): View {
+        val view = row(iconFor(entry), entry.title, entry.text, entry.actions, dim = false)
+        var startX = 0f
+        var slid = false
+        view.setOnTouchListener { self, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startX = event.rawX
+                    slid = false
+                    true
+                }
+
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - startX
+                    if (!slid && abs(dx) > dp(TOUCH_SLOP_DP)) slid = true
+                    if (slid) {
+                        // Resistance rather than refusal: an ongoing card moves a fraction of the
+                        // finger, which reads as "this one is pinned" without going nowhere at all.
+                        self.translationX = if (entry.ongoing) dx * PINNED_DRAG else dx
+                        self.alpha = 1f - (abs(self.translationX) / width).coerceIn(0f, 0.7f)
+                    }
+                    true
+                }
+
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    val far = abs(self.translationX) > width * DISMISS_FRACTION
+                    if (!entry.ongoing && far) {
+                        VirtualNotifications.cancel(entry.packageName, entry.tag, entry.id)
+                    } else {
+                        self.animate().translationX(0f).alpha(1f).setDuration(SETTLE_MS).start()
+                    }
+                    slid
+                }
+
+                else -> false
+            }
+        }
+        return view
     }
 
     private fun row(
@@ -299,19 +350,67 @@ internal class VirtualStatusBar(
             }
         }
 
-    val isOpen: Boolean get() = shade.visibility == VISIBLE
+    val isOpen: Boolean get() = shade.visibility == VISIBLE && shadeHeight() > 0
 
     fun collapse() {
-        shade.visibility = GONE
+        settle(0)
     }
 
     private fun expand() {
         refresh()
-        shade.visibility = VISIBLE
+        settle(fullShadeHeight())
     }
 
     /**
-     * A downward drag anywhere in the top strip opens the shade; an upward one closes it.
+     * How tall the shade wants to be, measured rather than remembered.
+     *
+     * Its content changes under it — a notification arrives, a card is thrown away — so a height
+     * cached at open time would be the height of a different shade by the time the finger lifts.
+     */
+    private fun fullShadeHeight(): Int {
+        val width = width.takeIf { it > 0 } ?: return 0
+        shade.measure(
+            MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED),
+        )
+        return shade.measuredHeight
+    }
+
+    private fun shadeHeight(): Int = shade.layoutParams?.height?.takeIf { it >= 0 } ?: 0
+
+    /** Notes where the pane is and how far it may go, so the drag has fixed ends to work between. */
+    private fun beginDrag() {
+        dragging = true
+        dragFrom = shadeHeight()
+        if (dragFrom == 0) refresh()
+        dragTo = fullShadeHeight()
+    }
+
+    /** Reveals exactly [height] of the shade, which is what makes the pane follow a finger. */
+    private fun setShadeHeight(height: Int) {
+        shade.visibility = if (height <= 0) GONE else VISIBLE
+        shade.layoutParams = (shade.layoutParams as LinearLayout.LayoutParams).apply {
+            this.height = height.coerceAtLeast(0)
+        }
+    }
+
+    /** Animates the pane the rest of the way, so releasing mid-drag lands somewhere deliberate. */
+    private fun settle(to: Int) {
+        val from = shadeHeight()
+        if (from == to) {
+            setShadeHeight(to)
+            return
+        }
+        ValueAnimator.ofInt(from, to).apply {
+            duration = SETTLE_MS
+            addUpdateListener { setShadeHeight(it.animatedValue as Int) }
+            start()
+        }
+    }
+
+    /**
+     * A downward drag anywhere in the top strip pulls the shade open behind the finger; an upward
+     * one pushes it back.
      *
      * Intercepted rather than handled on the bar itself, because the strip has to win the gesture
      * from the guest underneath it — which is drawing full-bleed under the bar and would otherwise
@@ -322,6 +421,7 @@ internal class VirtualStatusBar(
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downY = event.y
+                downX = event.x
                 dragging = false
                 return false
             }
@@ -331,7 +431,10 @@ internal class VirtualStatusBar(
                 val startedInGrab = downY <= grabHeight || isOpen
                 if (!startedInGrab) return false
                 if (abs(dy) < dp(TOUCH_SLOP_DP)) return false
-                dragging = true
+                // Only claim a *vertical* drag. A sideways one belongs to whatever is under the
+                // finger — a card being thrown away, or the guest's own pager.
+                if (abs(event.x - downX) > abs(dy)) return false
+                if (!dragging) beginDrag()
                 return true
             }
         }
@@ -342,22 +445,42 @@ internal class VirtualStatusBar(
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downY = event.y
+                downX = event.x
                 // Claim the strip so the gesture can finish here; anything lower is the guest's.
                 return downY <= grabHeight || isOpen
             }
 
-            MotionEvent.ACTION_MOVE -> return dragging
+            MotionEvent.ACTION_MOVE -> {
+                // The drag has to be able to *start* here as well as in onInterceptTouchEvent: once
+                // this view has claimed the gesture in ACTION_DOWN it is the target, and a target is
+                // never asked to intercept its own events.
+                val dy = event.y - downY
+                if (!dragging) {
+                    if (abs(dy) < dp(TOUCH_SLOP_DP)) return true
+                    if (abs(event.x - downX) > abs(dy)) return true
+                    beginDrag()
+                }
+                // The pane is exactly as far open as the finger has pulled it, which is the whole
+                // difference between a shade and a panel that appears.
+                setShadeHeight((dragFrom + dy).toInt().coerceIn(0, dragTo))
+                return true
+            }
 
             MotionEvent.ACTION_UP -> {
-                val dy = event.y - downY
-                if (dy > dp(TOUCH_SLOP_DP)) expand() else if (dy < -dp(TOUCH_SLOP_DP)) collapse()
-                // A tap below an open shade closes it, the way tapping outside one does on a phone.
-                else if (isOpen && event.y > grabHeight) collapse()
+                if (dragging) {
+                    // Past a third of the way is a commitment; short of it the finger changed its
+                    // mind, and either way the pane finishes the journey rather than jumping.
+                    settle(if (shadeHeight() > dragTo / 3) dragTo else 0)
+                } else if (isOpen && event.y > grabHeight) {
+                    // A tap below an open shade closes it, the way tapping outside one does.
+                    collapse()
+                }
                 dragging = false
                 return true
             }
 
             MotionEvent.ACTION_CANCEL -> {
+                if (dragging) settle(if (shadeHeight() > dragTo / 3) dragTo else 0)
                 dragging = false
                 return true
             }
@@ -379,6 +502,14 @@ internal class VirtualStatusBar(
         const val GRAB_DP = 30f
         const val TOUCH_SLOP_DP = 8f
         const val ICON_DP = 14f
+
+        /** How far across a card has to be thrown before it counts as thrown. */
+        const val DISMISS_FRACTION = 0.35f
+
+        /** What an ongoing card gives to the finger: enough to answer it, not enough to leave. */
+        const val PINNED_DRAG = 0.18f
+
+        const val SETTLE_MS = 160L
 
         /** Past this the row is wider than the label beside it; the count carries the rest. */
         const val MAX_ICONS = 4

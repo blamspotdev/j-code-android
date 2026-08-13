@@ -303,7 +303,7 @@ internal class EmbeddedGuest(
      */
     private fun addStatusBar(container: FrameLayout) {
         statusBar?.let(container::removeView)
-        val bar = statusBar ?: VirtualStatusBar(context, GuestRuntime.activeLabel().orEmpty())
+        val bar = statusBar ?: VirtualStatusBar(context)
             .also { statusBar = it }
         container.addView(
             bar,
