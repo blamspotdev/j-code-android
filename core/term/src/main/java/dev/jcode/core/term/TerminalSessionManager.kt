@@ -206,18 +206,25 @@ class TerminalSessionManager(
         return null
     }
 
-    /** Loopback port of JCode's OWN adbd — the virtual device — or 0 when it is not running. Takes
-     *  precedence over [adbRelayPort]: when both are up, guest tooling should address the virtual
-     *  device, since running it at all means the user asked not to go through the host phone. */
+    /**
+     * `adb connect` spec for JCode's OWN adbd — the virtual device — or empty when it is not running.
+     *
+     * A `localfilesystem:` socket rather than an address, because that daemon is reachable only from
+     * inside J Code's own storage and deliberately has no port for anything else on the phone to
+     * find. Takes precedence over [adbRelayPort]: when both are up, guest tooling should address the
+     * virtual device, since running it at all means the user asked not to go through the host phone.
+     */
     @Volatile
-    var virtualDeviceAdbPort: Int = 0
+    var virtualDeviceAdbSpec: String = ""
 
     private fun adbEnvVars(): Map<String, String> {
-        val port = virtualDeviceAdbPort.takeIf { it > 0 } ?: adbRelayPort
-        if (port <= 0) return emptyMap()
+        virtualDeviceAdbSpec.takeIf { it.isNotEmpty() }?.let { spec ->
+            return mapOf("ANDROID_SERIAL" to spec)
+        }
+        if (adbRelayPort <= 0) return emptyMap()
         return mapOf(
-            "JCODE_ADB_PORT" to port.toString(),
-            "ANDROID_SERIAL" to "127.0.0.1:$port",
+            "JCODE_ADB_PORT" to adbRelayPort.toString(),
+            "ANDROID_SERIAL" to "127.0.0.1:$adbRelayPort",
         )
     }
 
@@ -341,10 +348,15 @@ class TerminalSessionManager(
         runCatching {
             val profileD = File(rootfsPath, "etc/profile.d").apply { mkdirs() }
             val script = File(profileD, "jcode-adb.sh")
-            val port = virtualDeviceAdbPort.takeIf { it > 0 } ?: adbRelayPort
-            if (port > 0) {
-                val body = "$ADB_PROFILE_MARKER\nJCODE_ADB_PORT=$port\nexport JCODE_ADB_PORT\n" +
-                    "export ANDROID_SERIAL=\"127.0.0.1:\$JCODE_ADB_PORT\"\n"
+            val spec = virtualDeviceAdbSpec
+            val body = when {
+                spec.isNotEmpty() -> "$ADB_PROFILE_MARKER\nexport ANDROID_SERIAL=\"$spec\"\n"
+                adbRelayPort > 0 ->
+                    "$ADB_PROFILE_MARKER\nJCODE_ADB_PORT=$adbRelayPort\nexport JCODE_ADB_PORT\n" +
+                        "export ANDROID_SERIAL=\"127.0.0.1:\$JCODE_ADB_PORT\"\n"
+                else -> null
+            }
+            if (body != null) {
                 if (!script.exists() || script.readText() != body) script.writeText(body)
             } else if (script.exists() && script.readText().startsWith(ADB_PROFILE_MARKER)) {
                 script.delete()

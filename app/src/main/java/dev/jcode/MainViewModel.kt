@@ -982,17 +982,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Holds the guest's adb server open; see [startVirtualDeviceAdb]. */
     private var virtualDeviceAdbServer: Process? = null
 
+    /**
+     * Where the daemon's socket goes: inside the selected distro's own rootfs.
+     *
+     * That is what makes it reachable from the distro without a new proot bind — `<rootfs>/run/x` on
+     * this side is `/run/x` on that one — and unreachable from anywhere else, since the whole rootfs
+     * lives in J Code's private storage where no other uid may open a file.
+     */
+    private fun virtualDeviceSocket(): Pair<File, String>? {
+        val distro = distroService.selectedEnvironment().id.takeIf { it.isNotBlank() } ?: return null
+        val rootfs = File(appContext.filesDir, "distros/$distro/rootfs")
+        if (!rootfs.isDirectory) return null
+        return File(rootfs, "run/${AdbDaemon.SOCKET_NAME}") to "/run/${AdbDaemon.SOCKET_NAME}"
+    }
+
     private suspend fun startVirtualDeviceAdb() {
-        val port = runCatching { virtualDeviceAdb.start() }.getOrElse { error ->
+        val (socket, guestPath) = virtualDeviceSocket() ?: run {
+            OutputLog.append(
+                "Virtual device adb not started: no installed Linux runtime to host its socket\n",
+                OutputKind.Error,
+            )
+            return
+        }
+        runCatching { virtualDeviceAdb.start(socket) }.getOrElse { error ->
             OutputLog.append("Virtual device adb failed to start: ${error.message}\n", OutputKind.Error)
             return
         }
-        TerminalSessionHost.manager(appContext).virtualDeviceAdbPort = port
+        val spec = AdbDaemon.connectSpec(guestPath)
+        TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec = spec
         // The daemon only trusts the distro's own adbkey.pub, and adb does not create one until it
         // has run once — so mint it before connecting, or the first connection is refused for want
         // of a key rather than because anything is wrong.
         //
-        attachVirtualDeviceAdb(port)
+        attachVirtualDeviceAdb(spec)
     }
 
     /**
@@ -1004,12 +1026,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * empty, and `adb install` had no device to install to. Keeping this session alive keeps that
      * server alive, and every terminal shares it.
      */
-    private fun attachVirtualDeviceAdb(port: Int) {
+    private fun attachVirtualDeviceAdb(spec: String) {
         runCatching { virtualDeviceAdbServer?.destroy() }
         virtualDeviceAdbServer = distroService.spawnStdioProcess(
             command = "mkdir -p \"\$HOME/.android\" && " +
                 "{ [ -f \"\$HOME/.android/adbkey.pub\" ] || adb keygen \"\$HOME/.android/adbkey\"; } && " +
-                "adb start-server && adb connect 127.0.0.1:$port && exec sleep infinity",
+                "adb start-server && adb connect $spec && exec sleep infinity",
         )
         if (virtualDeviceAdbServer == null) {
             OutputLog.append("Virtual device adb connect failed: the Linux runtime is not ready\n", OutputKind.Error)
@@ -1020,7 +1042,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runCatching { virtualDeviceAdbServer?.destroy() }
         virtualDeviceAdbServer = null
         runCatching { virtualDeviceAdb.stop() }
-        TerminalSessionHost.manager(appContext).virtualDeviceAdbPort = 0
+        TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec = ""
     }
 
     /**
@@ -1044,17 +1066,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             _virtualDeviceAdbReconnecting.value = true
             try {
-                // Reattach to the port already in use where there is one, rather than restarting the
-                // daemon onto a fresh one: terminals are told the device's address through
-                // ANDROID_SERIAL when they start, and a new port would leave every open terminal
-                // pointing at a dead one.
-                val port = TerminalSessionHost.manager(appContext).virtualDeviceAdbPort
-                if (port > 0) attachVirtualDeviceAdb(port) else startVirtualDeviceAdb()
+                // Reattach to the socket already bound where there is one, rather than restarting the
+                // daemon: terminals are told the device's address through ANDROID_SERIAL when they
+                // start, and rebinding would leave every open terminal pointing at a dead one.
+                val spec = TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec
+                if (spec.isNotEmpty()) attachVirtualDeviceAdb(spec) else startVirtualDeviceAdb()
                 // Spawning the client only starts the connect; wait for the device to actually be
                 // listed before saying so, or the action reports success the moment it is asked and
                 // the user finds out otherwise from `adb devices`.
-                val target = "127.0.0.1:${TerminalSessionHost.manager(appContext).virtualDeviceAdbPort}"
-                val attached = awaitVirtualDeviceAttached(target)
+                val target = TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec
+                val attached = target.isNotEmpty() && awaitVirtualDeviceAttached(target)
                 OutputLog.append(
                     if (attached) "Virtual device attached at $target.\n"
                     else "Virtual device did not attach at $target.\n",

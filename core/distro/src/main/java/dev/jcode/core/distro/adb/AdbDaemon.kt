@@ -1,9 +1,10 @@
 package dev.jcode.core.distro.adb
 
+import android.net.LocalServerSocket
+import android.net.LocalSocket
+import android.net.LocalSocketAddress
+import java.io.File
 import java.io.IOException
-import java.net.InetAddress
-import java.net.ServerSocket
-import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
@@ -84,12 +85,20 @@ fun adbCommandArgs(command: String): List<String> {
  * Developer Options, and holds no privilege beyond JCode's own — everything it exposes is served by
  * the [AdbServiceHandler] it is given.
  *
- * **Why this listener is authenticated.** On Android every app shares one loopback interface, so a
- * plain bind is reachable by every other app on the device. This daemon exposes
- * `exec:cmd package install`, i.e. "run this APK inside JCode", which unauthenticated would be an
- * arbitrary-code-execution hole with JCode's uid and permissions. Hence: [InetAddress.getLoopbackAddress]
- * and never the wildcard, plus adb's own AUTH exchange against the keys [authorizedKeys] enrolls — see
- * [AdbAuth] for what "authenticated" means here.
+ * **Why it is a Unix socket and not a port.** This daemon exposes `exec:cmd package install` — "run
+ * this APK inside JCode" — which is arbitrary code execution with J Code's uid and permissions. On
+ * Android every app shares one loopback interface, so a listener on `127.0.0.1:<port>` is reachable
+ * by *every other app on the phone*; the only thing standing between them and that service was adb's
+ * AUTH exchange. A socket bound in J Code's own storage cannot be reached at all by a process that
+ * cannot open the file, which is every uid but J Code's — so the proot distro, which runs under that
+ * uid, still reaches it and nothing else does.
+ *
+ * Authentication against [authorizedKeys] stays exactly as it was. It is now the second line rather
+ * than the only one — see [AdbAuth] for what it means here.
+ *
+ * The client end is `adb connect localfilesystem:<path>`, which adb supports on Linux (and refuses on
+ * Windows, where AF_UNIX sockets are not available to it). The transport's serial is then that spec
+ * rather than an address, so the device shows up as itself and there is no port to scan for.
  *
  * [banner] is adb's connection banner *without* its terminating NUL, e.g.
  * `device::ro.product.name=…;features=cmd,…`. The `cmd` feature is load-bearing: with it `adb install`
@@ -104,33 +113,45 @@ class AdbDaemon(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val startLock = Mutex()
-    private val connections = ConcurrentHashMap.newKeySet<Socket>()
+    private val connections = ConcurrentHashMap.newKeySet<LocalSocket>()
 
     @Volatile
-    private var server: ServerSocket? = null
+    private var server: LocalServerSocket? = null
+
+    /** Held only so the bound socket is not collected out from under [server]. */
+    @Volatile
+    private var bound: LocalSocket? = null
+
+    @Volatile
+    private var socketPath: String? = null
 
     @Volatile
     private var acceptJob: Job? = null
 
-    /** Binds and starts accepting, or returns the port of the already-running listener —
-     *  `adb connect 127.0.0.1:<port>` reaches it. */
-    suspend fun start(): Int = startLock.withLock {
-        server?.takeIf { !it.isClosed }?.let { return@withLock it.localPort }
-        val bound = withContext(Dispatchers.IO) { bind() }
-        server = bound
+    /**
+     * Binds [socket] and starts accepting, or returns the path of the already-running listener.
+     *
+     * The returned path is the *host* one. What the client dials is the same file as the distro sees
+     * it, which is the caller's business — see `MainViewModel.startVirtualDeviceAdb`.
+     */
+    suspend fun start(socket: File): String = startLock.withLock {
+        socketPath?.let { return@withLock it }
+        val listener = withContext(Dispatchers.IO) { bind(socket) }
+        server = listener
+        socketPath = socket.absolutePath
         acceptJob = scope.launch {
             while (isActive) {
                 val client = try {
-                    bound.accept()
+                    listener.accept()
                 } catch (e: IOException) {
-                    if (!bound.isClosed) log("accept failed: ${e.message}")
+                    log("accept failed: ${e.message}")
                     return@launch
                 }
                 launch { Connection(client).serve() }
             }
         }
-        log("listening on ${bound.inetAddress.hostAddress}:${bound.localPort}")
-        bound.localPort
+        log("listening on ${socket.absolutePath}")
+        socket.absolutePath
     }
 
     fun stop() {
@@ -138,26 +159,39 @@ class AdbDaemon(
         acceptJob = null
         server?.let { runCatching { it.close() } }
         server = null
+        bound?.let { runCatching { it.close() } }
+        bound = null
+        // A bound AF_UNIX socket leaves its file behind; the next bind would fail on it.
+        socketPath?.let { runCatching { File(it).delete() } }
+        socketPath = null
         // Cancelling the connection coroutines is not enough: each is parked in a blocking read that
         // only a close can interrupt.
         connections.forEach { runCatching { it.close() } }
         connections.clear()
     }
 
-    private fun bind(): ServerSocket {
-        // IPv4 loopback explicitly, NOT InetAddress.getLoopbackAddress(): that resolves to ::1 here,
-        // and an adb client dialling 127.0.0.1 then gets "Connection refused" against a listener that
-        // /proc/net/tcp6 shows as perfectly healthy. Measured on-device.
-        val loopback = InetAddress.getByName(AdbHostClient.LOOPBACK)
-        for (candidate in PREFERRED_PORT..LAST_PORT) {
-            val bound = runCatching { ServerSocket(candidate, BACKLOG, loopback) }.getOrNull()
-            if (bound != null) return bound
-        }
-        throw IOException("No free adb daemon port in $PREFERRED_PORT..$LAST_PORT")
+    /**
+     * Binds an AF_UNIX listener at [path], in the **filesystem** namespace rather than the abstract
+     * one. That is the whole security property: an abstract socket has a name and no owner, while
+     * this one is a file in J Code's private storage, so the kernel's own permission check on
+     * `connect` is what keeps every other app out.
+     *
+     * `LocalServerSocket(FileDescriptor)` is what listens; the bound `LocalSocket` has to be kept
+     * alive alongside it, since closing it would take the listener with it.
+     */
+    private fun bind(path: File): LocalServerSocket {
+        path.parentFile?.mkdirs()
+        // A socket file outlives the process that bound it, so a previous run's leftover would make
+        // this bind fail with EADDRINUSE against a listener nobody is on the other end of.
+        path.delete()
+        val socket = LocalSocket()
+        socket.bind(LocalSocketAddress(path.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM))
+        bound = socket
+        return LocalServerSocket(socket.fileDescriptor)
     }
 
     /** One connected adb server: its AUTH state, its open streams, and the reader that drives both. */
-    private inner class Connection(private val socket: Socket) {
+    private inner class Connection(private val socket: LocalSocket) {
         private val transport = AdbTransport(socket.getInputStream(), socket.getOutputStream())
         private val streams = ConcurrentHashMap<Int, Stream>()
         private val nextStreamId = AtomicInteger(1)
@@ -171,7 +205,7 @@ class AdbDaemon(
         fun serve() {
             connections += socket
             try {
-                socket.tcpNoDelay = true
+                // No tcpNoDelay: there is no Nagle on a Unix socket to turn off.
                 readLoop()
             } catch (e: IOException) {
                 log("connection ended: ${e.message}")
@@ -343,11 +377,12 @@ class AdbDaemon(
     }
 
     companion object {
-        /** Clear of adb's emulator scan (5554-5585) and of [AdbRelayServer]'s range. */
-        const val PREFERRED_PORT: Int = 5620
-        const val LAST_PORT: Int = 5639
+        /** The socket file's name, under whichever directory the caller binds it in. */
+        const val SOCKET_NAME: String = "jcode-vdevice-adb.sock"
 
-        private const val BACKLOG = 4
+        /** What an adb client has to be given to reach [SOCKET_NAME] — `adb connect <this>`. */
+        fun connectSpec(guestPath: String): String = "localfilesystem:$guestPath"
+
         private const val MAX_AUTH_ATTEMPTS = 8
     }
 }

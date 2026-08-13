@@ -945,7 +945,10 @@ object SettingsFeature {
                         label = "Reconnect adb",
                         supporting = "Attach the virtual device to the runtime's adb server again, for " +
                             "when `adb devices` no longer lists it — after `adb kill-server`, or a " +
-                            "runtime restart.",
+                            "runtime restart. The device is reachable only from JCode's own terminals: " +
+                            "it listens on a socket inside JCode's storage rather than a port, so " +
+                            "nothing else on the phone can see it and there is nothing to connect to " +
+                            "from a computer.",
                         buttonLabel = "Reconnect",
                         enabled = virtualDevice.enabled,
                         busy = virtualDevice.reconnecting,
