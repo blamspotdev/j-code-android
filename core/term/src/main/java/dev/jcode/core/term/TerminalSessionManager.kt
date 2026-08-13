@@ -329,14 +329,19 @@ class TerminalSessionManager(
             }
         }
 
-        // ADB bridge: point guest tooling at the relay. This duplicates the env map below on purpose —
-        // BASH_ENV names only jcode-open.sh, so non-interactive run scripts (`bash .jcode/run-*.sh`)
-        // never source profile.d, while a shell the user starts by hand outside our env map only sees
-        // profile.d. Neither mechanism covers both cases alone. Guarded write, marker-scoped delete.
+        // ADB bridge: point guest tooling at whichever device is on offer. This duplicates the env
+        // map below on purpose — BASH_ENV names only jcode-open.sh, so non-interactive run scripts
+        // (`bash .jcode/run-*.sh`) never source profile.d, while a shell the user starts by hand
+        // outside our env map only sees profile.d. Neither mechanism covers both cases alone.
+        // Guarded write, marker-scoped delete.
+        //
+        // The port has to be chosen the way [adbEnvVars] chooses it, or the two disagree: a run
+        // script would install to the virtual device while a terminal the user opened by hand
+        // installed to the phone, from the same `adb install` and the same $ANDROID_SERIAL.
         runCatching {
             val profileD = File(rootfsPath, "etc/profile.d").apply { mkdirs() }
             val script = File(profileD, "jcode-adb.sh")
-            val port = adbRelayPort
+            val port = virtualDeviceAdbPort.takeIf { it > 0 } ?: adbRelayPort
             if (port > 0) {
                 val body = "$ADB_PROFILE_MARKER\nJCODE_ADB_PORT=$port\nexport JCODE_ADB_PORT\n" +
                     "export ANDROID_SERIAL=\"127.0.0.1:\$JCODE_ADB_PORT\"\n"
