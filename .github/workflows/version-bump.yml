@@ -118,8 +118,13 @@ jobs:
           for attempt in 1 2 3; do
             git fetch --quiet origin main
             git reset --quiet --hard origin/main
+            # The bump's body is the subject of the commit it follows, so `main` does not read as a
+            # run of bare version markers with nothing saying what shipped in them. Read AFTER the
+            # reset: a retry only happens when another run moved main, and a subject captured before
+            # that would name the wrong merge.
+            merged="$(git log -1 --pretty=%s)"
             version="$(sh scripts/bump-version.sh "$LEVEL")"
-            git commit --quiet -am "Bump version to $version" -m "Pushed automatically after a merge to main ($LEVEL bump). versionCode derives from the semver in app/build.gradle.kts, so this single line is the whole change; the specifications that state the product version move with it."
+            git commit --quiet -am "Bump version to $version" -m "$merged"
 
             if git push origin HEAD:main 2>push.err; then
               echo "main bumped to $version"
