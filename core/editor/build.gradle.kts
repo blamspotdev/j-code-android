@@ -10,6 +10,7 @@ android {
 
     defaultConfig {
         minSdk = 33
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -33,4 +34,10 @@ dependencies {
     implementation(project(":core:resource"))
     implementation(libs.coroutines.android)
     implementation(libs.coroutines.core)
+    // The wrap differential fuzz runs the native layout against WrapMap's Kotlin reference build,
+    // so the test APK needs libjcodebuffer.so the same way :core:buffer's fuzz does.
+    androidTestImplementation(project(":native:buffer"))
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
 }
