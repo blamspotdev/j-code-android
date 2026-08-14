@@ -4,8 +4,8 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:term`, `:native:pty`, `:native:vt` |
-| **Primary sources** | core/term/src/main/java/dev/jcode/core/term/PtyProcess.kt, core/term/src/main/java/dev/jcode/core/term/VtParser.kt, core/term/src/main/java/dev/jcode/core/term/TerminalSessionManager.kt (923 lines), core/term/src/main/java/dev/jcode/core/term/TerminalView.kt (1,572 lines), native/pty/src/pty.cpp, native/vt/src/vt_parser.c (1,552 lines) |
-| **Verified against** | commit `cea581c`, 2026-08-09 |
+| **Primary sources** | core/term/src/main/java/dev/jcode/core/term/PtyProcess.kt, core/term/src/main/java/dev/jcode/core/term/VtParser.kt, core/term/src/main/java/dev/jcode/core/term/TerminalSessionManager.kt (923 lines), core/term/src/main/java/dev/jcode/core/term/TerminalView.kt, native/pty/src/pty.cpp, native/vt/src/vt_parser.c, native/vt/test/vt_reflow_test.c |
+| **Verified against** | commit `d142342`, 2026-08-14 |
 
 ---
 
@@ -99,7 +99,8 @@ Wraps `libjcode_vt.so`. Unlike the other native wrappers it does **not** catch
 | `drainOsc(): List<Pair<Int, String>>` | JCode shell-integration OSC events — see [Shell integration protocol](02-shell-integration-protocol.md) |
 | `takeResponses(): ByteArray?` | Answerback bytes the parser queued (DA/DSR/CPR/DECRQM/OSC-colour). The reader writes these back to the PTY |
 | `inputModes(): Int` | Packed DEC private-mode snapshot |
-| `resize(rows, cols)`, `reset()` | |
+| `resize(rows, cols)` | Rows reflow bottom-anchored through scrollback; columns rewrap (§4.5). The cursor and the DECSC save slot follow their own character |
+| `reset()` | |
 | `rows`, `cols`, `cursorRow`, `cursorCol`, `isCursorVisible`, `isAlternateScreen` | |
 | `scrollbackSize`, `scrollbackPushed` | See §4.4 |
 | `getCellCodePoint(row, col): Int` | Full Unicode codepoint (the native side decodes UTF-8, so values above `0xFFFF` occur) |
@@ -170,6 +171,32 @@ scrolled-off line, `-scrollbackSize` the oldest.
 growing once the ring is full, which is how a scrolled-back view detects that content shifted
 underneath it.
 
+A resize **re-partitions** history rather than only appending to it, so `scrollbackSize` can grow
+(narrowing splits lines) or shrink (widening rejoins them) across one. `scrollbackPushed` stays
+monotonic regardless: a resize advances it only by the net number of lines added, never by the rows
+it re-emits.
+
+### 4.5 Column rewrap on resize
+
+Changing the width rejoins wrapped lines and re-splits them at the new size instead of truncating or
+padding each row. The two halves are deliberately asymmetric:
+
+- **Join** only across rows carrying `VT_ROW_WRAPPED`, which is set at the two DECAWM autowrap sites
+  in `screen_write_char` and nowhere else. A row ended by CR/LF is never merged with its successor.
+- **Split** any logical line longer than the new width, wrapped or not — output that fit the old
+  width carries no wrapped bit, and refusing to split it would silently truncate it.
+
+A row **shorter than the new width is never touched**, which is the property an application relies
+on: a TUI that lays out its own frame within the width keeps its exact row geometry across a resize.
+A row longer than the new width has already overflowed, and the application repaints it on SIGWINCH.
+
+Wide pairs move atomically and re-pad at a seam (`VT_ROW_WRAP_PAD` records the pad so a later rejoin
+drops it rather than leaving a space). The alternate screen is never rewrapped — full-screen apps
+repaint themselves. A height-only change skips rewrap entirely and takes the cheaper row reflow.
+
+Cost is one pass over scrollback plus the screen, bounded by `VT_SCROLLBACK_CAP`: measured at 2.6 ms
+worst case on an Odin2 with a full ring, against `TerminalView`'s 80 ms resize debounce.
+
 ### 4.5 JNI shape
 
 Hot-path natives are `@JvmStatic` and take the handle directly, so the JNI side never resolves the
@@ -204,6 +231,10 @@ class TerminalSessionManager(
 
 `resize(newCols, newRows)` resizes the parser (under `synchronized(this)`, against the reader's
 feed) and the PTY together, and is safe to call from the UI thread.
+
+**The parser is reflowed BEFORE the `TIOCSWINSZ` ioctl, and that order is required.** The ioctl
+raises SIGWINCH, so an application's repaint must not arrive while the grid is still the old width —
+it would be parsed and wrapped against a size the application has already stopped using.
 
 **`inputModesSnapshot` is the reason the UI never races the parser**: the UI thread reads the
 snapshot instead of calling into a live native parser, so it always sees a mutually consistent
@@ -359,7 +390,12 @@ A custom `View` mirroring `EditorView`'s structure:
 
 1. `onOutput`'s buffer is reused — consume it synchronously.
 2. Read `inputModesSnapshot`, never call the parser from the UI thread.
-3. Resize the PTY and the parser together, under the session lock.
+3. Resize the PTY and the parser together, under the session lock, parser first (§5.1).
+3a. A row's wrapped bit is set only by DECAWM autowrap. Resize joins only runs of wrapped rows, so
+    content an application laid out itself keeps its row geometry.
+3b. `VtScreen.row_flags` and `VtParser.scrollback_flags` are parallel to `cells`/`scrollback` and
+    share their indexing — anything that allocates, frees, copies, shifts or clears one must do the
+    same to the other.
 4. Codepoint `0` in a cell is a wide-character continuation, not a space.
 5. Negative row indices address scrollback.
 6. `awaitReadable` callers must re-check session state on every wakeup.
