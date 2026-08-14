@@ -1,7 +1,10 @@
 name: version bump
 
-# Bumps the patch version on `main` after every merged PR, so nobody has to remember it
+# Bumps the version on `main` after every merged PR, so nobody has to remember it
 # (main has merged a feature batch unbumped more than once — see the #28 and #34 bump PRs).
+#
+# Patch by default. Label a PR `bump-minor` or `bump-major` to raise that part instead, or
+# run this by hand from the Actions tab and pick the level there.
 #
 # **This needs a bypass actor on the `protect-main` ruleset.** That ruleset requires a pull
 # request and, with no bypass actors, binds every actor — admins and GITHUB_TOKEN included —
@@ -16,14 +19,19 @@ name: version bump
 # summary says which path it took.
 #
 # Note: pushes made with GITHUB_TOKEN do not trigger other workflows, so a direct bump will
-# not re-run this workflow (no loop) and will not re-run the no-host-root guard either. A PAT
-# in VERSION_BUMP_TOKEN does trigger them; that is still no loop — a push cannot fire
-# `pull_request`.
+# not re-run this workflow (no loop). A PAT in VERSION_BUMP_TOKEN does trigger them; that is
+# still no loop — a push cannot fire `pull_request`.
 on:
   pull_request:
     types: [closed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      level:
+        description: 'Which part of the version to raise'
+        type: choice
+        options: [patch, minor, major]
+        default: patch
 
 permissions:
   contents: write
@@ -72,11 +80,33 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # patch unless the merged PR asked for more. A manual run picks the level from the
+      # dispatch input instead; anything unrecognised stays patch rather than guessing high.
+      - name: Choose bump level
+        id: level
+        env:
+          DISPATCH_LEVEL: ${{ inputs.level }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: |
+          set -eu
+          if [ -n "${DISPATCH_LEVEL:-}" ]; then
+            level="$DISPATCH_LEVEL"
+          else
+            case " ${LABELS:-} " in
+              *' bump-major '*) level=major ;;
+              *' bump-minor '*) level=minor ;;
+              *) level=patch ;;
+            esac
+          fi
+          echo "level=$level" >> "$GITHUB_OUTPUT"
+          echo "Bump level: $level"
+
       - name: Bump main
         if: steps.guard.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           BRANCH: chore/bump-version
+          LEVEL: ${{ steps.level.outputs.level }}
         run: |
           set -eu
           git config user.name 'github-actions[bot]'
@@ -88,8 +118,8 @@ jobs:
           for attempt in 1 2 3; do
             git fetch --quiet origin main
             git reset --quiet --hard origin/main
-            version="$(sh scripts/bump-patch-version.sh)"
-            git commit --quiet -am "Bump version to $version" -m "Pushed automatically after a merge to main. versionCode derives from the semver in app/build.gradle.kts, so this single line is the whole change; the specifications that state the product version move with it."
+            version="$(sh scripts/bump-version.sh "$LEVEL")"
+            git commit --quiet -am "Bump version to $version" -m "Pushed automatically after a merge to main ($LEVEL bump). versionCode derives from the semver in app/build.gradle.kts, so this single line is the whole change; the specifications that state the product version move with it."
 
             if git push origin HEAD:main 2>push.err; then
               echo "main bumped to $version"
@@ -116,7 +146,7 @@ jobs:
           git push --force origin HEAD:"$BRANCH"
 
           body="$(cat <<EOF
-          Automatic patch bump to $version, pushed after a merge to main.
+          Automatic $LEVEL bump to $version, pushed after a merge to main.
 
           The workflow tried to bump main directly and was refused by the protect-main ruleset.
           Add a bypass actor (Settings > Rules > protect-main > Bypass list) and future merges
@@ -125,8 +155,8 @@ jobs:
           versionCode derives from the semver (MAJOR*10000 + MINOR*100 + PATCH), so this one line
           is the whole change; the specifications that state the product version move with it.
 
-          To skip the bump for a PR, label it skip-bump. A PR that changes jcodeVersion itself is
-          detected and skipped.
+          To skip the bump for a PR, label it skip-bump. To raise more than the patch, label it
+          bump-minor or bump-major. A PR that changes jcodeVersion itself is detected and skipped.
           EOF
           )"
 

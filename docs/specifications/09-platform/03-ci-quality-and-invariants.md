@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented — one enforced guard plus version-bump automation; broader CI is planned |
 | **Modules** | Repository-wide |
-| **Primary sources** | scripts/check-no-host-root.sh, .github/workflows/no-host-root.yml, scripts/bump-patch-version.sh, .github/workflows/version-bump.yml, .githooks/pre-commit, scripts/install-git-hooks.sh, scripts/build-release.ps1, CONTRIBUTING.md, AGENTS.md, app/src/androidTest/, core/buffer/src/test/, core/buffer/src/androidTest/ |
+| **Primary sources** | scripts/check-no-host-root.sh, scripts/bump-version.sh, .github/workflows/version-bump.yml, .githooks/pre-commit, scripts/install-git-hooks.sh, scripts/build-release.ps1, CONTRIBUTING.md, AGENTS.md, app/src/androidTest/, core/buffer/src/test/, core/buffer/src/androidTest/ |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -18,13 +18,17 @@ including these specifications.
 
 ## 2. The no-host-root guard
 
-The one invariant with real teeth. It runs in **three** places from a single script:
+The one invariant with real teeth. It runs in **two** places from a single script:
 
 | Location | Trigger |
 |---|---|
-| `.github/workflows/no-host-root.yml` | Every `push` and `pull_request` |
 | `.githooks/pre-commit` | Every commit, once hooks are enabled |
 | `scripts/build-release.ps1` and the shell release scripts | Pre-flight before every release build |
+
+> There was a third: a `no-host-root.yml` workflow that ran the same script on every push and
+> pull request. It was removed as duplicate of the commit hook. Note what that costs — the hook
+> only runs for people who have enabled it (`scripts/install-git-hooks.sh`), so a contributor
+> without hooks, or a pull request from a fork, is no longer checked before merge.
 
 ### 2.1 What it scans
 
@@ -90,6 +94,7 @@ offering it as a PR, and the run summary says which path it took and what to con
 | Aspect | Behaviour |
 |---|---|
 | Trigger | A pull request **merged** into `main`, plus `workflow_dispatch` |
+| Level | `patch`, unless the PR carries `bump-minor` / `bump-major`, or a manual run picks one |
 | Normal path | Commit straight onto `main` |
 | Fallback | `chore/bump-version` + a PR, when the ruleset refuses the push |
 | Skipped when | The merged PR changed `jcodeVersion` itself, or carries the `skip-bump` label |
@@ -98,7 +103,7 @@ Each push attempt re-reads `main` and recomputes the bump rather than replaying 
 merges landing together cannot reuse a version number; only a ruleset refusal breaks the retry loop
 early, because retrying that cannot help.
 
-The bump itself is `scripts/bump-patch-version.sh` — a script, not YAML, so it can be run and tested
+The bump itself is `scripts/bump-version.sh` — a script, not YAML, so it can be run and tested
 locally. It refuses anything that is not a plain `MAJOR.MINOR.PATCH` (a pre-release label belongs on
 `-PjcodeVersionName` at build time, never in the file), and rewrites both `app/build.gradle.kts` and
 the specifications that state the product version.

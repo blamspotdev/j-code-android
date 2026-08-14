@@ -1,24 +1,41 @@
 #!/usr/bin/env sh
-# Bump JCode's PATCH version by one, and keep the docs that state it in step.
+# Bump JCode's version, and keep the docs that state it in step.
+#
+#   sh scripts/bump-version.sh [patch|minor|major]     (default: patch)
+#
+#     patch   1.4.6 -> 1.4.7
+#     minor   1.4.6 -> 1.5.0     (patch resets)
+#     major   1.4.6 -> 2.0.0     (minor and patch reset)
 #
 # The version has a single source of truth — `val jcodeVersion = "…"` in
 # app/build.gradle.kts — and versionCode derives from it as
-# MAJOR*10000 + MINOR*100 + PATCH, so a patch bump is one line of real change.
+# MAJOR*10000 + MINOR*100 + PATCH, so a bump is one line of real change.
 # docs/specifications states the product version in a few places purely as
 # documentation; they are rewritten here so they cannot drift.
+#
+# Resetting the lower parts keeps versionCode climbing (1.4.6 = 10406 ->
+# 1.5.0 = 10500 -> 2.0.0 = 20000), which Android requires for update-over-install.
 #
 # Pre-release labels (`1.4.3-beta`) are NEVER stored in the file — the release
 # scripts apply them at build time via -PjcodeVersionName — so a suffix found
 # here means something upstream is wrong and this refuses to bump it.
 #
-# Used by .github/workflows/version-bump.yml, which opens the bump PR after a
-# merge to main (main is protected, so nothing can push the bump to it directly).
-# Run manually:  sh scripts/bump-patch-version.sh
+# Used by .github/workflows/version-bump.yml, which bumps main after a merge
+# (patch by default; a bump-minor / bump-major label on the PR picks the level).
 #
 # Prints the NEW version on stdout (so it can be captured); progress goes to stderr.
 set -eu
 
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+
+LEVEL="${1:-patch}"
+case "$LEVEL" in
+    patch | minor | major) : ;;
+    *)
+        echo "bump-version: unknown level '$LEVEL' (expected patch, minor or major)" >&2
+        exit 1
+        ;;
+esac
 
 GRADLE_FILE=app/build.gradle.kts
 
@@ -29,7 +46,7 @@ docs/specifications/00-overview/01-product-overview.md
 docs/specifications/09-platform/02-build-variants-and-release.md"
 
 fail() {
-    echo "bump-patch-version: $1" >&2
+    echo "bump-version: $1" >&2
     exit 1
 }
 
@@ -61,7 +78,12 @@ for part in "$MAJOR" "$MINOR" "$PATCH"; do
     esac
 done
 
-NEXT="$MAJOR.$MINOR.$((PATCH + 1))"
+# Lower parts reset so the result is a real semver step, not 1.5.6 from a minor bump.
+case "$LEVEL" in
+    patch) NEXT="$MAJOR.$MINOR.$((PATCH + 1))" ;;
+    minor) NEXT="$MAJOR.$((MINOR + 1)).0" ;;
+    major) NEXT="$((MAJOR + 1)).0.0" ;;
+esac
 
 # Dots are regex wildcards; escape them so "1.4.3" cannot match "1x4x3".
 ESCAPED="$(printf '%s' "$CURRENT" | sed 's/\./\\./g')"
@@ -84,5 +106,5 @@ AFTER="$(read_version)"
 
 # versionCode must keep climbing or an update-over-install is refused by Android.
 CODE="$(echo "$NEXT" | awk -F. '{ printf "%d", $1*10000 + $2*100 + $3 }')"
-echo "bump-patch-version: $CURRENT -> $NEXT (versionCode $CODE)" >&2
+echo "bump-version: $LEVEL: $CURRENT -> $NEXT (versionCode $CODE)" >&2
 echo "$NEXT"
