@@ -1458,6 +1458,24 @@ static void copy_row_cells(VtCell* dst, int dst_cols, const VtCell* src, int src
     for (int c = 0; c < n; c++) dst[c] = src[c];
 }
 
+// Carry the DECSC/DECRC save slot across a resize. [row_shift] is the same displacement the live
+// cursor took, so the saved position keeps pointing at the content it was saved on. The SGR fields
+// are not positional and copy verbatim. Resize replaces the screen struct wholesale, so without
+// this the slot silently reverts to screen_create's zeroed state.
+static void screen_carry_saved(VtScreen* nw, const VtScreen* old, int row_shift, int rows, int cols) {
+    int r = old->saved_row + row_shift;
+    if (r < 0) r = 0;
+    if (r >= rows) r = rows - 1;
+    int c = old->saved_col;
+    if (c < 0) c = 0;
+    if (c >= cols) c = cols - 1;
+    nw->saved_row = r;
+    nw->saved_col = c;
+    nw->saved_attrs = old->saved_attrs;
+    nw->saved_fg = old->saved_fg;
+    nw->saved_bg = old->saved_bg;
+}
+
 void vt_parser_resize(VtParser* parser, int rows, int cols) {
     if (!parser) return;
     if (rows <= 0 || cols <= 0) return;
@@ -1505,6 +1523,7 @@ void vt_parser_resize(VtParser* parser, int rows, int cols) {
         VtScreen* old = &parser->primary;
         VtScreen* nw = screen_create(rows, cols);
         if (!nw) return;
+        int saved_shift = 0;
 
         if (rows >= old_rows) {
             int delta = rows - old_rows;
@@ -1514,15 +1533,18 @@ void vt_parser_resize(VtParser* parser, int rows, int cols) {
             int from_sb = parser->scrollback_count < delta ? parser->scrollback_count : delta;
             for (int r = 0; r < old_rows; r++) {
                 copy_row_cells(&nw->cells[(r + from_sb) * cols], cols, &old->cells[r * old_cols], old_cols);
+                row_flags_set(nw, r + from_sb, row_flags_get(old, r));
             }
             for (int k = 0; k < from_sb; k++) {
                 int sb_line = parser->scrollback_count - from_sb + k;
                 int src = (parser->scrollback_head + sb_line) % parser->scrollback_cap;
                 copy_row_cells(&nw->cells[k * cols], cols,
                                &parser->scrollback[src * parser->scrollback_cols], parser->scrollback_cols);
+                if (parser->scrollback_flags) row_flags_set(nw, k, parser->scrollback_flags[src]);
             }
             parser->scrollback_count -= from_sb;
             nw->cursor_row = old->cursor_row + from_sb;
+            saved_shift = from_sb;
         } else {
             int delta = old_rows - rows;
             // Cursor-anchored: scroll off only as many TOP rows as needed to keep the cursor on the
@@ -1537,14 +1559,22 @@ void vt_parser_resize(VtParser* parser, int rows, int cols) {
             }
             for (int r = 0; r < rows; r++) {
                 copy_row_cells(&nw->cells[r * cols], cols, &old->cells[(r + scroll) * old_cols], old_cols);
+                row_flags_set(nw, r, row_flags_get(old, r + scroll));
             }
             nw->cursor_row = old->cursor_row - scroll;
+            saved_shift = -scroll;
         }
         nw->cursor_col = old->cursor_col;
         if (nw->cursor_row < 0) nw->cursor_row = 0;
         if (nw->cursor_row >= rows) nw->cursor_row = rows - 1;
         if (nw->cursor_col < 0) nw->cursor_col = 0;
         if (nw->cursor_col >= cols) nw->cursor_col = cols - 1;
+        // The SAVED cursor is a position in the old grid too, so it takes the same row shift the
+        // live cursor just took. Without this it was silently reset to 0,0 by screen_create's calloc
+        // — and since ESC 7 / CSI s / the ?1049 alt-screen switch all restore through it, a resize
+        // while a full-screen app was running sent the shell's prompt back to the top of the screen
+        // on exit, redrawing over existing rows.
+        screen_carry_saved(nw, old, saved_shift, rows, cols);
         nw->cursor_visible = old->cursor_visible;
         nw->scroll_top = 0;
         nw->scroll_bottom = rows - 1;
@@ -1566,6 +1596,8 @@ void vt_parser_resize(VtParser* parser, int rows, int cols) {
         }
         nw->cursor_row = old->cursor_row < rows ? old->cursor_row : rows - 1;
         nw->cursor_col = old->cursor_col < cols ? old->cursor_col : cols - 1;
+        // No row shift here — the alternate screen is clamped in place, not reflowed.
+        screen_carry_saved(nw, old, 0, rows, cols);
         nw->cursor_visible = old->cursor_visible;
         nw->scroll_top = 0;
         nw->scroll_bottom = rows - 1;
