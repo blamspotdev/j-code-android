@@ -174,7 +174,12 @@ private object UiPreferencesStore {
 enum class EditorCloseChoice { SAVE, DISCARD, CLOSE_SAVED, CANCEL }
 
 /** Drives the editor "unsaved changes" dialog: the titles of the dirty tabs about to be closed. */
-data class PendingEditorClose(val dirtyTitles: List<String>)
+/**
+ * [savedCount] is how many tabs in the closing set are already saved. It is zero whenever a single
+ * dirty tab is closed, and that is what hides the prompt's "Close Saved" action — with nothing clean
+ * in the set it would close nothing at all.
+ */
+data class PendingEditorClose(val dirtyTitles: List<String>, val savedCount: Int)
 
 /** Live state of an external-folder import, driving the progress modal. During [ImportPhase.Scanning]
  *  the total is unknown ([total] == 0 → indeterminate); during [ImportPhase.Copying], [done]/[total]
@@ -4729,7 +4734,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         pendingEditorCloseTargets = ids to activate
-        _pendingEditorClose.value = PendingEditorClose(dirtyTitles = dirty.map { it.title })
+        _pendingEditorClose.value = PendingEditorClose(
+            dirtyTitles = dirty.map { it.title },
+            savedCount = targets.count { !it.isDirty },
+        )
     }
 
     /** Resolve the unsaved-changes prompt for the pending tab-close set. */

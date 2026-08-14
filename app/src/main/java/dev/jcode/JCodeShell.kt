@@ -1610,13 +1610,16 @@ fun JCodeApp(
     }
 
     // Closing tabs with unsaved changes: Save / Discard / Close Saved (dismiss = keep everything).
+    // "Close Saved" only appears when the set actually holds saved tabs to close — closing one dirty
+    // tab leaves it nothing to do, so a bulk close is the only place it earns its slot.
     pendingEditorClose?.let { pending ->
+        val canCloseSaved = pending.savedCount > 0
         UnsavedChangesDialog(
             titles = pending.dirtyTitles,
-            thirdLabel = "Close Saved",
+            thirdLabel = "Close Saved".takeIf { canCloseSaved },
             onSave = { viewModel.resolveEditorClose(EditorCloseChoice.SAVE) },
             onDiscard = { viewModel.resolveEditorClose(EditorCloseChoice.DISCARD) },
-            onThird = { viewModel.resolveEditorClose(EditorCloseChoice.CLOSE_SAVED) },
+            onThird = { viewModel.resolveEditorClose(EditorCloseChoice.CLOSE_SAVED) }.takeIf { canCloseSaved },
             onDismiss = { viewModel.resolveEditorClose(EditorCloseChoice.CANCEL) },
             onCancel = { viewModel.resolveEditorClose(EditorCloseChoice.CANCEL) },
         )
@@ -4452,14 +4455,18 @@ private fun WorkbenchRightSidebarBody(
  * and loses the edits; the third action differs by context — "Close Saved" for a tab close (keep the
  * dirty tabs open, close the already-saved ones) or "Cancel" for a workspace/project switch (where the
  * tabs can't be kept). Dismissing keeps everything as-is.
+ *
+ * The third action is omitted entirely when the caller passes no label/handler: "Close Saved" has
+ * nothing to close unless the closing set also holds already-saved tabs, which only a bulk close
+ * (Close others / Close to the right) produces.
  */
 @Composable
 private fun UnsavedChangesDialog(
     titles: List<String>,
-    thirdLabel: String,
+    thirdLabel: String?,
     onSave: () -> Unit,
     onDiscard: () -> Unit,
-    onThird: () -> Unit,
+    onThird: (() -> Unit)?,
     onDismiss: () -> Unit,
     // When set, a visible "Cancel" button that aborts the close (keeping everything). Omitted where the
     // third button already serves as Cancel, so the row never shows two cancels.
@@ -4482,7 +4489,9 @@ private fun UnsavedChangesDialog(
             TextButton(onClick = onDiscard) {
                 Text("Discard", color = MaterialTheme.colorScheme.error)
             }
-            TextButton(onClick = onThird) { Text(thirdLabel) }
+            if (thirdLabel != null && onThird != null) {
+                TextButton(onClick = onThird) { Text(thirdLabel) }
+            }
             TextButton(onClick = onSave) { Text("Save") }
         },
         dismissButton = {
