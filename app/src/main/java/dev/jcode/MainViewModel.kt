@@ -40,6 +40,7 @@ import dev.jcode.core.distro.adb.AdbBridge
 import dev.jcode.core.distro.adb.AdbBridgeLocator
 import dev.jcode.core.distro.adb.AdbBridgeState
 import dev.jcode.core.distro.adb.AdbDaemon
+import dev.jcode.core.distro.adb.AdbHostClient
 import dev.jcode.core.buffer.offsetToUtf16Position
 import dev.jcode.core.buffer.utf16PositionToOffset
 import dev.jcode.core.editor.EditorLanguageAction
@@ -59,6 +60,7 @@ import dev.jcode.core.resource.ResourceManager
 import dev.jcode.core.resource.ResourceManagerLocator
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import dev.jcode.design.AndroidRunTarget
 import dev.jcode.design.BottomBarVisibility
 import dev.jcode.design.ExtraKeysVisibility
 import dev.jcode.core.diag.DiagLevel
@@ -1102,6 +1104,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             delay(VIRTUAL_DEVICE_ATTACH_POLL_MS)
         }
         return false
+    }
+
+    // --- Android run targets -------------------------------------------------
+    // Which device an Android project's Run/Debug goes to. The runtime's adb server is the single
+    // source of truth: JCode's own virtual device and this phone both reach a project only by being
+    // connected to it, so anything it does not list cannot be launched on either.
+
+    private val _androidRunTargets = MutableStateFlow<List<AndroidRunTarget>>(emptyList())
+    val androidRunTargets: StateFlow<List<AndroidRunTarget>> = _androidRunTargets.asStateFlow()
+
+    private val _androidRunTargetsLoading = MutableStateFlow(false)
+    val androidRunTargetsLoading: StateFlow<Boolean> = _androidRunTargetsLoading.asStateFlow()
+
+    /** The serial terminals already carry, so the picker can mark which device a run uses by default. */
+    fun androidDefaultSerial(): String {
+        val manager = TerminalSessionHost.manager(appContext)
+        manager.virtualDeviceAdbSpec.takeIf { it.isNotEmpty() }?.let { return it }
+        return manager.adbRelayPort.takeIf { it > 0 }?.let { "${AdbHostClient.LOOPBACK}:$it" }.orEmpty()
+    }
+
+    /** Re-read `adb devices`. Cheap and loopback-only, so the Run panel can call it on every open. */
+    fun refreshAndroidRunTargets() {
+        if (_androidRunTargetsLoading.value) return
+        viewModelScope.launch {
+            _androidRunTargetsLoading.value = true
+            try {
+                val virtualSpec = TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec
+                val relaySerial = TerminalSessionHost.manager(appContext).adbRelayPort
+                    .takeIf { it > 0 }?.let { "${AdbHostClient.LOOPBACK}:$it" }
+                _androidRunTargets.value = runCatching { adbBridge.devices() }
+                    .getOrDefault(emptyList())
+                    .map { device ->
+                        AndroidRunTarget(
+                            serial = device.serial,
+                            label = when {
+                                device.serial == virtualSpec -> "Virtual device"
+                                device.serial == relaySerial -> "This phone"
+                                else -> device.model?.replace('_', ' ') ?: device.serial
+                            },
+                            state = device.state,
+                            isVirtual = device.serial == virtualSpec,
+                        )
+                    }
+            } finally {
+                _androidRunTargetsLoading.value = false
+            }
+        }
+    }
+
+    private val androidRunTargetProjectsKey = stringPreferencesKey("android_run_target_projects")
+
+    /** Per-project device pick keyed by project id; absent = follow the session's own ANDROID_SERIAL. */
+    val androidRunTargetProjects: StateFlow<Map<String, String>> = uiPreferences.data
+        .map { prefs -> parseStringMap(prefs[androidRunTargetProjectsKey]) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    fun setProjectAndroidRunTarget(projectKey: String, serial: String) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val obj = runCatching { JSONObject(prefs[androidRunTargetProjectsKey] ?: "{}") }.getOrDefault(JSONObject())
+                // Blank is "no pick" — drop the entry rather than storing an empty override.
+                if (serial.isBlank()) obj.remove(projectKey) else obj.put(projectKey, serial)
+                prefs[androidRunTargetProjectsKey] = obj.toString()
+            }
+        }
     }
 
     private val autoCloseIdleKey = booleanPreferencesKey("perf_auto_close_idle_terminals")
@@ -2554,8 +2621,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             availableContributions(exts, acts, sdk) { it.explorerContextActions }
         }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
 
-    /** Run-config presets active extensions contribute (required toolchains met), offered on the
-     *  Configure Run page when the project contains all of a preset's required files. */
+    /** Build/run presets active extensions contribute (required toolchains met), offered in the Run
+     *  panel's Add pickers — each in the segment its `kind` names — when the project contains all of
+     *  a preset's required files. */
     val contributedRunConfigPresets: StateFlow<List<ProjectRunner.ExtensionRunPreset>> =
         combine(installedExtensions, extensionActivations, distroService.sdkCatalogState) { exts, acts, sdk ->
             exts.filter { (acts[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual }

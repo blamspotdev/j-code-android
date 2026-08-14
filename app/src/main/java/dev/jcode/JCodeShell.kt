@@ -306,7 +306,9 @@ import dev.jcode.design.SettingsBackupActions
 import dev.jcode.design.EnvironmentBackupActions
 import dev.jcode.design.LocalEnvironmentBackup
 import dev.jcode.design.AndroidDeviceSetting
+import dev.jcode.design.AndroidRunTargets
 import dev.jcode.design.LocalAndroidDevice
+import dev.jcode.design.LocalAndroidRunTargets
 import dev.jcode.design.LocalVirtualDevice
 import dev.jcode.design.VirtualDeviceSetting
 import dev.jcode.vdevice.AppSandbox
@@ -1324,6 +1326,19 @@ fun JCodeApp(
             onOpenPage = viewModel::openAndroidDevicePage,
         )
     }
+    val androidTargetList by viewModel.androidRunTargets.collectAsStateWithLifecycle()
+    val androidTargetsLoading by viewModel.androidRunTargetsLoading.collectAsStateWithLifecycle()
+    val androidTargetProjects by viewModel.androidRunTargetProjects.collectAsStateWithLifecycle()
+    val androidRunTargets = remember(androidTargetList, androidTargetsLoading, androidTargetProjects, adbBridgeState) {
+        AndroidRunTargets(
+            available = androidTargetList,
+            defaultSerial = viewModel.androidDefaultSerial(),
+            projectChoice = { key -> androidTargetProjects[key] ?: AndroidRunTargets.AUTO },
+            loading = androidTargetsLoading,
+            onSetProject = viewModel::setProjectAndroidRunTarget,
+            onRefresh = viewModel::refreshAndroidRunTargets,
+        )
+    }
     val runInVirtualDevice by viewModel.runInVirtualDevice.collectAsStateWithLifecycle()
     val adbToolInstalled = ADB_CATALOG_ENTRY in sdkCatalogState.installedEntryIds
     val virtualDeviceReconnecting by viewModel.virtualDeviceAdbReconnecting.collectAsStateWithLifecycle()
@@ -1425,6 +1440,7 @@ fun JCodeApp(
         LocalSettingsBackup provides settingsBackupActions,
         LocalEnvironmentBackup provides environmentBackupActions,
         LocalAndroidDevice provides androidDeviceSetting,
+        LocalAndroidRunTargets provides androidRunTargets,
         LocalVirtualDevice provides virtualDeviceSetting,
         LocalCommandPaletteSetting provides commandPaletteSetting,
         LocalMarkdownPreviewSetting provides markdownPreviewSetting,
@@ -1971,6 +1987,8 @@ private fun JCodeShell(
     // Read once here so the run handlers below (defined before the settings block) can resolve the
     // per-project "Open web previews in" choice when opening a dev-server URL.
     val webPreviewBrowsersLocal = LocalWebPreviewBrowsers.current
+    // Likewise for the device an Android run launches on, so the handlers can force ANDROID_SERIAL.
+    val androidRunTargetsLocal = LocalAndroidRunTargets.current
     // Reveal + select the DevTools drawer tab whenever the built-in browser is opened (a preview or a
     // direct open bumps BuiltinBrowser.revealSignal).
     LaunchedEffect(Unit) {
@@ -2342,7 +2360,8 @@ private fun JCodeShell(
             // as the command so it's one prompt entry, not a stray extra line.
             terminalSessionManager.sendInput(
                 session.id,
-                ProjectRunner.runInvocation(project, terminal).trimEnd('\n') + "; printf '\\033]7713;run;%s\\007' \"\$?\"\n",
+                ProjectRunner.runInvocation(project, terminal, androidSerial = androidRunTargetsLocal.serialFor(project.id.toString()))
+                    .trimEnd('\n') + "; printf '\\033]7713;run;%s\\007' \"\$?\"\n",
             )
             startedIds += session.id
             OutputLog.captureSession(session.id)

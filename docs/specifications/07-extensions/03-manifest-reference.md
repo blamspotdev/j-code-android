@@ -245,6 +245,7 @@ into the Explorer through `ExplorerScmUi` — see
 runConfigPresets:
   - id: vite-dev
     label: Vite dev server
+    kind: run                                     # run (default) | build
     requires: ["vite.config.*", "package.json"]   # ALL globs must be present
     # or: match: "package.json"                    (single-glob shorthand)
     terminals:
@@ -265,9 +266,24 @@ Parsing rules:
   terminals is **dropped**.
 - `readyPort` tolerates a YAML integer, a quoted integer, and a float (`5173.0`); anything
   unparseable becomes `0`.
+- `kind` is `run` (the default) or `build`, and decides which of the Run panel's two segments offers
+  the preset. Anything else parses as `run`.
 
-Presets are evaluated **before** built-in probes in `suggestRunTriggers`, so an extension's
-suggestion is not crowded out by generic detection on a large repository. See
+### 6.3.1 `kind: build`
+
+A build task is **one command that produces an artifact and exits**, so a `build` preset is narrowed
+to fit `BuildConfig(name, command)`:
+
+| Field | Under `kind: build` |
+|---|---|
+| `terminals` | Only the **first** is used; the rest are dropped (the validator warns) |
+| `readyPort` | Ignored — nothing is polled (the validator warns) |
+| `requires`, substitutions | Unchanged |
+
+Presets are evaluated **before** built-in probes in both segments, so an extension's suggestion is not
+crowded out by generic detection on a large repository. In the Build segment a built-in probe whose
+Gradle tasks a preset already covers is then dropped, so installing a pack that ships
+`gradlew assembleDebug` does not show that task twice. See
 [Run and build configurations](../05-workspace/03-run-and-build-configurations.md).
 
 ---

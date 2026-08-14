@@ -4,8 +4,8 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:config`, `:app` |
-| **Primary sources** | core/config/src/main/java/dev/jcode/core/config/RunConfig.kt, app/src/main/java/dev/jcode/run/ProjectRunner.kt (848 lines), app/src/main/java/dev/jcode/run/RunConfigPage.kt, app/src/main/java/dev/jcode/run/BuildConfigPage.kt, app/src/main/java/dev/jcode/RunDebugPanel.kt, app/src/main/java/dev/jcode/debug/DebugController.kt |
-| **Verified against** | commit `cea581c`, 2026-08-09 |
+| **Primary sources** | core/config/src/main/java/dev/jcode/core/config/RunConfig.kt, app/src/main/java/dev/jcode/run/ProjectRunner.kt, app/src/main/java/dev/jcode/run/RunConfigPage.kt, app/src/main/java/dev/jcode/run/BuildConfigPage.kt, app/src/main/java/dev/jcode/RunDebugPanel.kt, app/src/main/java/dev/jcode/debug/DebugController.kt, core/design/src/main/java/dev/jcode/design/DesignSystem.kt (`AndroidRunTargets`) |
+| **Verified against** | commit `4d87b40`, 2026-08-14 |
 
 ---
 
@@ -118,32 +118,55 @@ data class RunPlan(val kindLabel: String, val readyPort: Int, val terminals: Lis
 | `detectRunPlan(project)` | Probe a project opened without a JCode template |
 | `runConfigToPlan(config)` | Adapt a stored configuration to a plan |
 | `upsertRun` / `upsertRuns` / `upsertBuild` / `deleteRun` / `deleteBuild` | Editing |
-| `suggestRunTriggers(project, extensionPresets)` | Suggestion list (§5) |
-| `runInvocation(project, terminal)` | The exact bash line executed in a run terminal |
+| `suggestRunTriggers(project, extensionPresets)` | Run suggestion list (§5) |
+| `suggestBuildChoices(project, extensionPresets)` | Build suggestion list (§5) |
+| `runInvocation(project, terminal, androidSerial)` | The exact bash line executed in a run terminal |
+
+Every suggestion pass shares **one** bounded walk of the project (`ProjectScan`), so opening a picker
+on a large monorepo costs a single scan rather than one per kind.
 
 Detection is deliberately **not** persisted: recipes self-heal, so a probe result is recomputed
 rather than frozen into `run.yaml` behind the user's back.
 
 ---
 
-## 5. Run suggestions
+## 5. Suggestions
 
-`suggestRunTriggers` merges two sources into a list of `RunTrigger`s, each labelled with its origin —
-`"Detected"` for a built-in probe, or the contributing extension's name.
+Both segments merge the same two sources, each labelled with its origin — `"Detected"` for a built-in
+probe, or the contributing extension's name.
 
 | Source | Where |
 |---|---|
-| Built-in probes | `ProjectRunner` — file-glob matches such as `package.json` scripts, `*.csproj`, `*.sln` |
+| Built-in probes | `ProjectRunner` — file-glob matches such as `package.json` scripts, `*.csproj`, `gradlew` |
 | Extension presets | `contributes.runConfigPresets` in an installed extension's manifest |
 
 An extension preset declares `id`, `label`, `requires` (globs) or `match`, and either
-`terminals: [{label, command}]` or a single `command` + `terminalLabel`, plus an optional
-`readyPort`. See [Manifest reference](../07-extensions/03-manifest-reference.md).
+`terminals: [{label, command}]` or a single `command` + `terminalLabel`, plus an optional `readyPort`
+and `kind`. See [Manifest reference](../07-extensions/03-manifest-reference.md).
+
+A preset's `kind` decides which segment offers it: `run` (the default) feeds `suggestRunTriggers`,
+`build` feeds `suggestBuildChoices`. A preset is never offered in both.
 
 Probe helpers substitute project-relative and guest paths (`rel(f)`, `guest(f)`,
 `sanitizeStageName`), and a scan cap (`SCAN_TOTAL_CAP`) bounds work on a large monorepo. Extension
 presets are evaluated **first** so a busy repository's generic probes cannot crowd them out of the
-cap.
+cap. In the Build segment, a built-in probe whose Gradle tasks a preset already covers is then
+dropped, so a pack that ships `gradlew assembleDebug` does not produce a duplicate row. Task paths
+are compared **qualified**: `:wear:assembleDebug` is not the same work as a project-wide
+`assembleDebug`, and collapsing them would drop the more precise one.
+
+### 5.1 Android
+
+An Android project's suggestions are per **application module** — every module whose build script
+applies `com.android.application` (a version-catalog alias is resolved through
+`gradle/libs.versions.toml`, and manifests declaring a LAUNCHER activity are the last resort, used
+only when no build script matched). A clone with an app plus a wear module therefore offers each by
+its Gradle path rather than one row that could only have meant the first.
+
+Only what **launches** the app is a run — `Run on a device` and `Run in a virtual device`. Gradle's
+build tasks belong to the Build segment, where the Android Dev Pack contributes the rest
+(`assembleRelease`, `bundleRelease`, `installDebug`, tests, lint, clean) plus a project check and
+fixer for a repository written against a desktop SDK.
 
 ---
 
@@ -169,7 +192,7 @@ sequenceDiagram
 Each terminal's command is written as:
 
 ```
-<runInvocation>; printf '\033]7713;run;%s\007' "$?"
+[ANDROID_SERIAL="<serial>" ]<runInvocation>; printf '\033]7713;run;%s\007' "$?"
 ```
 
 so completion and exit code are reported through
@@ -185,6 +208,32 @@ The **Output** panel is a read-only log teed from the run terminals via
 `readyPort > 0` is polled after launch, then opened in the web preview or the user's chosen browser
 (Settings → Web preview). Guest programs can also request a URL themselves through OSC 7714, and
 both paths honour the same browser choice.
+
+### 6.2 The Android run target
+
+An Android run reaches a device through `adb`, and which device that is comes from `ANDROID_SERIAL`.
+`AndroidRunTargets` (in `:core:design`, provided through `LocalAndroidRunTargets`) holds the choice:
+
+| Member | Purpose |
+|---|---|
+| `available` | Everything the runtime's adb server lists, from `AdbBridge.devices()` |
+| `defaultSerial` | What sessions already carry — the virtual device, else the relay |
+| `projectChoice(key)` / `onSetProject` | The per-project pick, persisted in DataStore under `android_run_target_projects` |
+| `effective(key)` | The device shown in the panel's target row |
+| `serialFor(key)` | The serial to force, or blank |
+
+The runtime's adb server is the **only** source of devices: JCode's own virtual device and this phone
+both become reachable by being connected to it, so anything it does not list cannot be launched on.
+
+`serialFor` returns blank unless there is an explicit pick that is **still connected**, and
+`runInvocation` then prefixes nothing — so a project the user has never chosen a device for behaves
+exactly as it did before there was a picker, and a pick for a device that has since gone away
+degrades to the default instead of sending the run nowhere.
+
+> The virtual device is reachable **both** ways: as an adb target (JCode's own daemon serves
+> `install` and `am start`) and through the container recipe, which only builds and is handed the APK
+> by the workbench afterwards. The container path uses no adb at all, which is why it still works on a
+> phone that was never paired — and why the panel shows it its own row rather than a target picker.
 
 ### 6.1 The `noexec` constraint
 
@@ -225,6 +274,9 @@ For an Android application module, `DebugController` detects the module
 5. A malformed `run.yaml` must degrade to "no configurations", never crash.
 6. Saving always writes v2.
 7. Executables must run from an exec-capable filesystem.
+8. The run target is **not** part of a configuration: `run.yaml` stays portable across devices, and
+   which phone a run lands on is device-local state.
+9. Only a pick that adb still lists forces `ANDROID_SERIAL`.
 
 > **Naming collision:** `dev.jcode.core.config.BuildConfig` shares its simple name with the
 > Gradle-generated `dev.jcode.BuildConfig`. In `:app` sources, importing the config type shadows the
@@ -241,6 +293,8 @@ For an Android application module, `DebugController` detects the module
 | `readyPort` never opens | Web preview never launches; the terminals keep running |
 | Session cap reached mid-run | `createSession` returns `null`; that terminal does not start |
 | Project on a `noexec` mount | Compiled output fails with permission denied |
+| No adb server in the runtime | `available` is empty; the target row becomes the way into the pairing page |
+| Picked device unplugged | `serialFor` returns blank and the run falls back to the session default |
 
 ---
 

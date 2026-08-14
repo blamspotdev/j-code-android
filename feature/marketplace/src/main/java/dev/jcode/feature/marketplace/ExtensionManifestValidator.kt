@@ -75,6 +75,14 @@ object ExtensionManifestValidator {
             val base = "contributes.runConfigPresets[$i]"
             if (preset.requires.isEmpty()) err("Preset `${preset.id}` has no `requires` globs — never offered.", "$base.requires")
             if (preset.terminals.isEmpty()) err("Preset `${preset.id}` has no `terminals`.", "$base.terminals")
+            // A build task is one command with nothing to poll, so both extras are dropped rather than
+            // honoured — worth saying, since the manifest gives no other sign of it.
+            if (preset.kind == RunPresetKind.Build) {
+                if (preset.terminals.size > 1) {
+                    warn("Preset `${preset.id}` is a build task, so only its first terminal runs.", "$base.terminals")
+                }
+                if (preset.readyPort > 0) warn("Preset `${preset.id}` is a build task; `readyPort` is ignored.", "$base.readyPort")
+            }
             preset.requires.forEach { glob ->
                 if (runCatching { globToRegexOrNull(glob) }.getOrNull() == null) {
                     warn("Preset `${preset.id}`: glob `$glob` is invalid.", "$base.requires")
