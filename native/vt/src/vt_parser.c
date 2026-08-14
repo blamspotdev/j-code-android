@@ -150,10 +150,6 @@ static inline void row_flags_clear(VtScreen* s, int row, uint8_t bits) {
     s->row_flags[row] &= (uint8_t)~bits;
 }
 
-static inline bool row_is_wrapped(const VtScreen* s, int row) {
-    return (row_flags_get(s, row) & VT_ROW_WRAPPED) != 0;
-}
-
 // Push a screen line into the scrollback ring buffer (oldest evicted when full). [flags] are the
 // pushed row's VT_ROW_* bits, so a wrapped line stays joinable across the screen/scrollback seam.
 static void scrollback_push(VtParser* parser, const VtCell* line, int line_cols, uint8_t flags) {
@@ -1458,6 +1454,247 @@ static void copy_row_cells(VtCell* dst, int dst_cols, const VtCell* src, int src
     for (int c = 0; c < n; c++) dst[c] = src[c];
 }
 
+// --- column rewrap ----------------------------------------------------------
+//
+// Resize re-splits long lines at the new width instead of truncating or padding them.
+//
+// The two halves are deliberately asymmetric, and that asymmetry is what keeps applications working:
+//
+//   JOIN happens only across VT_ROW_WRAPPED, which is set at the two DECAWM sites and nowhere else.
+//   Rows an application laid out itself, ended by CR/LF, are never merged — merging them would fuse
+//   unrelated lines and smear them on the next split.
+//
+//   SPLIT happens for any logical line longer than the new width, wrapped or not. Restricting it to
+//   previously-wrapped rows was tried and is wrong in the common case: output that fit the old width
+//   was never wrapped, so narrowing would silently truncate every line of it.
+//
+// A row SHORTER than the new width is therefore never touched at all, which is the property a TUI
+// relies on — its frame keeps its exact geometry. A row longer than the new width can only belong to
+// content that has already overflowed, and the application is about to repaint it on SIGWINCH
+// anyway. This is also what xterm.js does, which is what these CLIs already run against elsewhere.
+
+// How many leading cells of a row are content rather than trailing padding. A space counts as
+// padding only when it carries no attributes and no background, so a coloured bar or an underlined
+// run is content; ch == 0 is a wide continuation and stops the scan immediately.
+static int row_content_len(const VtCell* row, int cols) {
+    int n = cols;
+    while (n > 0) {
+        const VtCell* c = &row[n - 1];
+        if (c->ch != ' ' || c->attrs != 0 || c->bg.mode != 0) break;
+        n--;
+    }
+    return n;
+}
+
+// A position being carried through the reflow: the live cursor and the DECSC save slot. Recording
+// where each one's own character lands is what keeps the cursor on its content rather than merely
+// on its row number.
+typedef struct {
+    int src_index;      // index into the source row sequence
+    int src_col;
+    int64_t out_row;    // absolute emitted row
+    int out_col;
+    bool placed;
+} VtTrackPoint;
+
+// Source row [i] of the reflow sequence: scrollback lines oldest-first, then the live screen's rows.
+static void reflow_src(const VtParser* parser, const VtScreen* screen, int sb_count, int i,
+                       const VtCell** cells, int* cols, uint8_t* flags) {
+    if (i < sb_count) {
+        int idx = (parser->scrollback_head + i) % parser->scrollback_cap;
+        *cells = &parser->scrollback[idx * parser->scrollback_cols];
+        *cols = parser->scrollback_cols;
+        *flags = parser->scrollback_flags ? parser->scrollback_flags[idx] : 0;
+    } else {
+        int r = i - sb_count;
+        *cells = &screen->cells[r * screen->cols];
+        *cols = screen->cols;
+        *flags = row_flags_get(screen, r);
+    }
+}
+
+// Rebuild the primary screen and scrollback at [cols], rejoining and re-splitting wrapped runs.
+// Returns false without touching anything if it cannot proceed, so the caller falls back to the
+// clamp/copy path.
+static bool reflow_primary(VtParser* parser, int rows, int cols) {
+    VtScreen* old = &parser->primary;
+    const int old_cols = old->cols;
+    const int cap = parser->scrollback_cap;
+    if (!parser->scrollback || cap <= rows) return false;
+
+    // Rows below the content are blank filler and are regenerated as blanks, so widening frees rows
+    // at the bottom rather than pushing content down.
+    int content_end = 0;
+    for (int r = 0; r < old->rows; r++) {
+        if (row_content_len(&old->cells[r * old_cols], old_cols) > 0) content_end = r + 1;
+    }
+    if (old->cursor_row + 1 > content_end) content_end = old->cursor_row + 1;
+    if (content_end > old->rows) content_end = old->rows;
+
+    const int sb_count = parser->scrollback_count;
+    const int src_count = sb_count + content_end;
+
+    VtCell* ring = (VtCell*)calloc((size_t)cap * (size_t)cols, sizeof(VtCell));
+    uint8_t* ring_flags = (uint8_t*)calloc((size_t)cap, 1);
+    VtScreen* nw = screen_create(rows, cols);
+    if (!ring || !ring_flags || !nw) {
+        free(ring);
+        free(ring_flags);
+        if (nw) screen_destroy(nw);
+        return false;
+    }
+
+    VtTrackPoint pts[2] = {
+        { sb_count + old->cursor_row, old->cursor_col, 0, 0, false },
+        { sb_count + old->saved_row,  old->saved_col,  0, 0, false },
+    };
+
+    int64_t total = 0;
+    int fill = 0;
+    VtCell* dst = &ring[0];
+    clear_cells(dst, cols);
+    ring_flags[0] = 0;
+
+    for (int i = 0; i < src_count; ) {
+        // A run is a row without the wrapped bit plus every consecutive row that has it.
+        int j = i + 1;
+        while (j < src_count) {
+            const VtCell* c; int cc; uint8_t f;
+            reflow_src(parser, old, sb_count, j, &c, &cc, &f);
+            if (!(f & VT_ROW_WRAPPED)) break;
+            j++;
+        }
+
+        // Start this run on a fresh emitted row.
+        int slot = (int)(total % cap);
+        dst = &ring[slot * cols];
+        clear_cells(dst, cols);
+        ring_flags[slot] = 0;
+        fill = 0;
+
+        for (int k = i; k < j; k++) {
+            const VtCell* src; int scols; uint8_t sflags;
+            reflow_src(parser, old, sb_count, k, &src, &scols, &sflags);
+
+            // The final segment is trimmed of trailing padding; an interior segment ran to the edge
+            // by construction, minus the wide-char pad cell the next row records.
+            int len;
+            if (k == j - 1) {
+                len = row_content_len(src, scols);
+            } else {
+                const VtCell* nc; int ncc; uint8_t nf;
+                reflow_src(parser, old, sb_count, k + 1, &nc, &ncc, &nf);
+                len = scols - ((nf & VT_ROW_WRAP_PAD) ? 1 : 0);
+            }
+            if (len > scols) len = scols;
+
+            int c = 0;
+            while (c < len) {
+                if (src[c].ch == 0) { c++; continue; }  // orphaned continuation: drop
+                int span = (vt_wcwidth(src[c].ch) == 2 && c + 1 < scols && src[c + 1].ch == 0) ? 2 : 1;
+                if (fill + span > cols) {
+                    // A wide character that will not fit gets the same pad-and-wrap xterm applies at
+                    // write time, recorded so a later rejoin drops the pad instead of keeping a space.
+                    uint8_t nf = VT_ROW_WRAPPED;
+                    if (span == 2 && fill == cols - 1) { dst[fill] = VT_BLANK; nf |= VT_ROW_WRAP_PAD; }
+                    total++;
+                    slot = (int)(total % cap);
+                    dst = &ring[slot * cols];
+                    clear_cells(dst, cols);
+                    ring_flags[slot] = nf;
+                    fill = 0;
+                }
+                for (int p = 0; p < 2; p++) {
+                    if (!pts[p].placed && pts[p].src_index == k && pts[p].src_col >= c && pts[p].src_col < c + span) {
+                        pts[p].out_row = total;
+                        pts[p].out_col = fill;
+                        pts[p].placed = true;
+                    }
+                }
+                for (int t = 0; t < span; t++) dst[fill + t] = src[c + t];
+                fill += span;
+                c += span;
+            }
+
+            // A point at or past this row's content end — the parked cursor is the common case —
+            // lands where the row finished. Because the row is flushed lazily, a run whose length is
+            // an exact multiple of cols leaves fill == cols, so the cursor stays PARKED rather than
+            // moving to column 0 of a new row.
+            for (int p = 0; p < 2; p++) {
+                if (!pts[p].placed && pts[p].src_index == k) {
+                    int over = pts[p].src_col - len;
+                    if (over < 0) over = 0;
+                    int oc = fill + over;
+                    pts[p].out_row = total;
+                    pts[p].out_col = oc > cols ? cols : oc;
+                    pts[p].placed = true;
+                }
+            }
+        }
+
+        total++;  // flush the run's last row
+        i = j;
+    }
+
+    // Anything that never matched a source row (a saved cursor below the content) keeps its offset
+    // from the end of what was emitted.
+    for (int p = 0; p < 2; p++) {
+        if (!pts[p].placed) {
+            pts[p].out_row = total + (pts[p].src_index - src_count);
+            pts[p].out_col = pts[p].src_col;
+        }
+    }
+
+    // The tail becomes the screen; everything before it is history. With less than a screenful the
+    // content stays top-anchored, which is what keeps a short session free of a blank gap above the
+    // prompt (and free of the duplicate prompt that anchoring the other way used to produce).
+    int64_t visible = total < rows ? total : rows;
+    int64_t top = total - visible;
+    for (int64_t r = 0; r < visible; r++) {
+        int slot = (int)((top + r) % cap);
+        memcpy(&nw->cells[(size_t)r * cols], &ring[(size_t)slot * cols], (size_t)cols * sizeof(VtCell));
+        if (nw->row_flags) nw->row_flags[r] = ring_flags[slot];
+    }
+
+    int64_t avail = cap - visible;                       // ring slots the visible tail did not take
+    int new_count = (int)(top < avail ? top : avail);
+    int old_count = parser->scrollback_count;
+
+    for (int p = 0; p < 2; p++) {
+        int64_t r = pts[p].out_row - top;
+        if (r < 0) r = 0;
+        if (r >= rows) r = rows - 1;
+        int c = pts[p].out_col;
+        if (c < 0) c = 0;
+        // cols (not cols-1) is legal: it is the deferred-wrap parked position.
+        if (c > cols) c = cols;
+        if (p == 0) { nw->cursor_row = (int)r; nw->cursor_col = c; }
+        else        { nw->saved_row  = (int)r; nw->saved_col  = c; }
+    }
+    nw->cursor_visible = old->cursor_visible;
+    nw->saved_attrs = old->saved_attrs;
+    nw->saved_fg = old->saved_fg;
+    nw->saved_bg = old->saved_bg;
+    nw->scroll_top = 0;
+    nw->scroll_bottom = rows - 1;
+
+    free(parser->scrollback);
+    free(parser->scrollback_flags);
+    parser->scrollback = ring;
+    parser->scrollback_flags = ring_flags;
+    parser->scrollback_cols = cols;
+    parser->scrollback_count = new_count;
+    parser->scrollback_head = (int)((top - new_count) % cap);
+    // Monotonic by contract: a resize re-partitions existing lines, so only a net gain counts.
+    if (new_count > old_count) parser->scrollback_pushed += (int64_t)(new_count - old_count);
+
+    free(old->cells);
+    free(old->row_flags);
+    parser->primary = *nw;
+    free(nw);
+    return true;
+}
+
 // Carry the DECSC/DECRC save slot across a resize. [row_shift] is the same displacement the live
 // cursor took, so the saved position keeps pointing at the content it was saved on. The SGR fields
 // are not positional and copy verbatim. Resize replaces the screen struct wholesale, so without
@@ -1485,9 +1722,13 @@ void vt_parser_resize(VtParser* parser, int rows, int cols) {
 
     bool on_primary = (parser->active == &parser->primary);
 
+    // 0) A width change re-splits wrapped lines (see reflow_primary). A height-only change — every
+    //    keyboard open and close — skips all of it and takes the cheap row reflow below, unchanged.
+    bool rewrapped = (cols != old_cols) && reflow_primary(parser, rows, cols);
+
     // 1) Reallocate scrollback to the new column count first (preserve stored lines; no width reflow),
     //    re-basing the ring so logical line L lives at index ((head + L) % cap).
-    if (parser->scrollback && parser->scrollback_cap > 0 && cols != parser->scrollback_cols) {
+    if (!rewrapped && parser->scrollback && parser->scrollback_cap > 0 && cols != parser->scrollback_cols) {
         VtCell* new_sb = (VtCell*)calloc((size_t)parser->scrollback_cap * (size_t)cols, sizeof(VtCell));
         if (new_sb) {
             for (int i = 0; i < parser->scrollback_cap * cols; i++) new_sb[i].ch = ' ';
@@ -1519,7 +1760,7 @@ void vt_parser_resize(VtParser* parser, int rows, int cols) {
     //    nothing is lost or duplicated. Growing pulls recent scrollback lines back into the top; shrinking
     //    pushes the top lines into scrollback. The cursor moves with the content (NOT reset to 0,0 — that
     //    was the bug that let post-resize redraws corrupt existing rows).
-    {
+    if (!rewrapped) {
         VtScreen* old = &parser->primary;
         VtScreen* nw = screen_create(rows, cols);
         if (!nw) return;
