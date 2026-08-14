@@ -198,12 +198,15 @@ private fun ProjectRunBuildDetail(
 
     when (segment) {
         Segment.Run -> {
-            // Two different ways to get an app onto a device, so two different rows — and never both.
-            // The container recipe only builds and is handed to JCode's own sandbox afterwards; every
-            // other Android recipe shells out to adb, and picks which device from the target row.
-            when {
-                runs.any { run -> run.terminals.any { it.command.contains(ProjectRunner.VDEVICE_MARKER) } } -> VirtualDeviceRow()
-                runs.any { run -> run.terminals.any { it.command.contains("adb ") } } -> AndroidTargetRow(project)
+            // Two different ways to get an app onto a device, so a row each, and a project can have
+            // both: the container recipe only builds and is handed to JCode's own sandbox afterwards,
+            // while every other Android recipe shells out to adb and takes its device from the target
+            // row. Each row appears only when a config of its kind is present.
+            if (runs.any { run -> run.terminals.any { it.command.contains(ProjectRunner.VDEVICE_MARKER) } }) {
+                VirtualDeviceRow()
+            }
+            if (runs.any { run -> run.terminals.any { it.command.contains("adb ") } }) {
+                AndroidTargetRow(project)
             }
             if (runs.isEmpty()) HintText("No run config yet — add one.")
             runs.forEachIndexed { index, config ->
@@ -282,7 +285,7 @@ private fun ProjectRunBuildDetail(
                         PickerGroup(
                             name = source,
                             entries = choices.map { choice ->
-                                PickerEntry(choice.config.name, choice.config.command.lineSequence().first { it.isNotBlank() }.take(48)) {
+                                PickerEntry(choice.config.name, ProjectRunner.commandPreview(choice.config.command, max = 48)) {
                                     onAddBuildPreset(project, choice.config)
                                     showAddBuild = false
                                 }
@@ -479,7 +482,7 @@ private fun RunConfigRow(
     val subline = if (config.readyPort > 0) {
         ":${config.readyPort}"
     } else {
-        config.terminals.firstOrNull()?.command?.lineSequence()?.firstOrNull { it.isNotBlank() }?.take(32).orEmpty()
+        config.terminals.firstOrNull()?.command?.let { ProjectRunner.commandPreview(it, max = 32) }.orEmpty()
     }
     val status = when {
         running && runInProgress -> "Building…"
@@ -679,7 +682,9 @@ private fun TargetChoiceRow(target: AndroidRunTarget, chosen: Boolean, onClick: 
     }
 }
 
-/** Opens the device sandbox tab, which is otherwise only reached when a virtual-device build finishes. */
+/** Opens the device sandbox tab, which is otherwise only reached when a virtual-device build finishes.
+ *  Named after the tab rather than the device, since the target row above it can be showing the very
+ *  same virtual device as an adb target and two rows reading "Virtual device" say nothing apart. */
 @Composable
 private fun VirtualDeviceRow() {
     PanelRow(onClick = { AppSandbox.requestOpen(null) }) {
@@ -690,7 +695,7 @@ private fun VirtualDeviceRow() {
             modifier = Modifier.size(18.dp),
         )
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            Text("Virtual device", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1)
+            Text("Device sandbox", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1)
             Text(
                 text = "Run a built APK in a tab — no install, no ADB",
                 style = MaterialTheme.typography.bodySmall,

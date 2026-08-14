@@ -339,7 +339,8 @@ object ProjectRunner {
         // wear or automotive variant) offers each by its Gradle path instead of one lumped "gradlew"
         // row that could only ever have meant the first. Only what actually launches the app is a run;
         // Gradle's build tasks belong to the Build segment ([suggestBuildChoices]).
-        if (File(root, "gradlew").isFile) {
+        if (isGradleProject(root)) {
+            val gradle = gradleInvoker(root)
             val modules = androidAppModules(root, files)
             modules.take(SCAN_PER_KIND_CAP).forEach { module ->
                 val modulePath = module.relativeTo(root).invariantSeparatorsPath
@@ -356,7 +357,7 @@ object ProjectRunner {
                             config = RunConfig(
                                 name = "Android app$qualifier",
                                 readyPort = 0,
-                                terminals = listOf(RunConfigTerminal("Run", androidRunCommand(guestDir, modulePath))),
+                                terminals = listOf(RunConfigTerminal("Run", androidRunCommand(guestDir, modulePath, gradle))),
                             ),
                         ),
                         RunSuggestion(
@@ -365,7 +366,7 @@ object ProjectRunner {
                             config = RunConfig(
                                 name = "Android app$qualifier (virtual device)",
                                 readyPort = 0,
-                                terminals = listOf(RunConfigTerminal("Build", androidVirtualDeviceCommand(guestDir, modulePath))),
+                                terminals = listOf(RunConfigTerminal("Build", androidVirtualDeviceCommand(guestDir, modulePath, gradle))),
                             ),
                         ),
                     ),
@@ -526,10 +527,11 @@ object ProjectRunner {
                 val dir = pkg.parentFile ?: root
                 out += BuildConfig("npm build — ${rel(pkg)}", npmBuildCommand(scan.guest(dir), stage("npm-build")))
             }
-        if (File(root, "gradlew").isFile) {
+        if (isGradleProject(root)) {
+            val gradle = gradleInvoker(root)
             val modules = androidAppModules(root, scan.files)
             fun gradleBuild(name: String, task: String) =
-                BuildConfig(name, "clear\nset -e\ncd \"$guestDir\"\nbash gradlew --console=plain $task")
+                BuildConfig(name, "clear\nset -e\ncd \"$guestDir\"\n$gradle --console=plain $task")
             when {
                 // A single app module's plain `assembleDebug` is the same work as its qualified task,
                 // and staying unqualified lets an extension's project-wide preset de-duplicate it.
@@ -546,6 +548,20 @@ object ProjectRunner {
         }
         return out
     }
+
+    /** Whether [root] is a Gradle build. The **wrapper is not the test**: a repository whose
+     *  `gradle-wrapper.jar` was gitignored still has a settings or build script, and is exactly the
+     *  clone that most needs a build task offering — not the one that should be told it isn't a
+     *  Gradle project at all. */
+    private fun isGradleProject(root: File): Boolean =
+        GRADLE_MARKER_FILES.any { File(root, it).isFile }
+
+    /** How to invoke Gradle for [root]: its own wrapper when it has one (pinning the version the
+     *  project expects), otherwise the runtime's Gradle. `bash gradlew` rather than `./gradlew`
+     *  because a checkout can arrive without the exec bit, and reading the script needs no exec
+     *  permission on a `noexec` mount either. */
+    private fun gradleInvoker(root: File): String =
+        if (File(root, "gradlew").isFile) "bash gradlew" else "gradle"
 
     private val AGP_ALIAS_RE = Regex("""alias\s*\([^)]*[Aa]ndroid[^)]*[Aa]pplication[^)]*\)""")
 
@@ -586,13 +602,13 @@ object ProjectRunner {
      *  package and launcher activity are read back out of the built APK with `aapt dump badging`
      *  instead of parsed from Gradle: flavors, `applicationIdSuffix` and build types all rewrite the
      *  final id, so only the APK knows what it actually is. */
-    private fun androidRunCommand(guestDir: String, modulePath: String): String = buildString {
+    private fun androidRunCommand(guestDir: String, modulePath: String, gradle: String): String = buildString {
         val task = androidAssembleTask(modulePath)
         val apkDir = androidApkDir(modulePath)
         appendLine("clear"); appendLine("set -e")
         appendLine("cd \"$guestDir\"")
         appendLine("echo '== JCode: building =='")
-        appendLine("bash gradlew --console=plain $task")
+        appendLine("$gradle --console=plain $task")
         appendLine("APK=\$(find \"$apkDir\" -name '*.apk' -type f 2>/dev/null | xargs -r ls -t | head -1)")
         appendLine("[ -n \"\$APK\" ] || { echo \"No APK under $apkDir\"; exit 1; }")
         appendLine("BADGE=\$(aapt dump badging \"\$APK\")")
@@ -610,12 +626,12 @@ object ProjectRunner {
      *  this recipe works on a device that was never paired. The APK directory is stamped into the
      *  script as [VDEVICE_MARKER] — that, not the terminal output, is how the workbench finds the
      *  build's APK afterwards ([virtualDeviceApkDir]). */
-    private fun androidVirtualDeviceCommand(guestDir: String, modulePath: String): String = buildString {
+    private fun androidVirtualDeviceCommand(guestDir: String, modulePath: String, gradle: String): String = buildString {
         appendLine("clear"); appendLine("set -e")
         appendLine("# $VDEVICE_MARKER ${androidApkDir(modulePath)}")
         appendLine("cd \"$guestDir\"")
         appendLine("echo '== JCode: building for the virtual device =='")
-        appendLine("bash gradlew --console=plain ${androidAssembleTask(modulePath)}")
+        appendLine("$gradle --console=plain ${androidAssembleTask(modulePath)}")
         appendLine("echo 'Build finished.'")
     }
 
@@ -927,6 +943,35 @@ object ProjectRunner {
     /** Everything after a `gradlew`/`gradle` invocation up to the end of its line — the task list, as
      *  written. Both the built-in recipes and an extension preset spell it this way. */
     private val GRADLE_TASK_RE = Regex("""\bgradlew?\b((?:\s+[^\s;&|]+)*)""")
+
+    /** Any one of these at the project root makes it a Gradle build. */
+    private val GRADLE_MARKER_FILES =
+        listOf("gradlew", "settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts")
+
+    /** Boilerplate every recipe opens with, which says nothing about what the command does. */
+    private val COMMAND_PREAMBLE = setOf("clear", "set -e", "set -eu", "set -euo pipefail", "set -u")
+
+    /** A shell variable assignment opening a line — scaffolding, not the work. */
+    private val ASSIGNMENT_RE = Regex("""^[A-Za-z_][A-Za-z0-9_]*=""")
+
+    /**
+     * A one-line summary of [command] for a config row: the first line that is actually the work.
+     * Recipes are scripts, so the literal first line is never the interesting one — it is `clear`,
+     * then `set -e`, then a `cd`, then an `echo` announcing what is about to happen. Skip all of
+     * that and the answer is the compiler or task invocation, which is what the row should say.
+     */
+    fun commandPreview(command: String, max: Int = 40): String {
+        fun isScaffolding(line: String) = line in COMMAND_PREAMBLE ||
+            line.startsWith("#") ||
+            line.startsWith("cd ") ||
+            line.startsWith("echo ") ||
+            line.startsWith("export ") ||
+            ASSIGNMENT_RE.containsMatchIn(line)
+        val lines = command.lineSequence().map(String::trim).filter(String::isNotEmpty)
+        // Fall back to the first non-empty line: a one-liner that IS an assignment or a `cd` still
+        // has to show something.
+        return (lines.firstOrNull { !isScaffolding(it) } ?: lines.firstOrNull().orEmpty()).take(max)
+    }
 
     private const val ASPNET_PORT = 5080
     private const val VITE_PORT = 5173
