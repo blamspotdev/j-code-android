@@ -9,6 +9,7 @@ import dev.jcode.core.config.RunConfig
 import dev.jcode.core.config.RunConfigStore
 import dev.jcode.core.config.RunConfigTerminal
 import dev.jcode.feature.marketplace.RunConfigPreset
+import dev.jcode.feature.marketplace.RunPresetKind
 import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
 import java.io.File
@@ -155,6 +156,54 @@ object ProjectRunner {
         val preset: RunConfigPreset,
     )
 
+    /**
+     * One bounded walk of [project]'s files, shared by every suggestion pass so a large repository is
+     * scanned once per picker rather than once per kind. Directories that only ever hold dependencies
+     * or build output are skipped, and the walk is capped at [SCAN_FILE_CAP] files.
+     */
+    private class ProjectScan(val root: File, val guestDir: String, val files: List<File>) {
+        fun rel(f: File): String = f.relativeTo(root).invariantSeparatorsPath
+        fun guest(f: File): String = if (f == root) guestDir else "$guestDir/${rel(f)}"
+    }
+
+    private fun scanProject(project: Project): ProjectScan? {
+        val root = (project.fsPath as? FsPath.Local)?.file?.takeIf(File::isDirectory) ?: return null
+        return ProjectScan(
+            root = root,
+            guestDir = project.distroBindTarget.trimEnd('/'),
+            files = root.walkTopDown()
+                .maxDepth(SCAN_DEPTH)
+                .onEnter { dir -> dir == root || (dir.name !in SCAN_SKIP_DIRS && !dir.name.startsWith(".")) }
+                .filter { it.isFile }
+                .take(SCAN_FILE_CAP)
+                .toList(),
+        )
+    }
+
+    /** A preset whose every required glob matched: the first one's file (its anchor, used as the
+     *  trigger's detail line) and the substitution its commands go through. */
+    private class PresetMatch(val anchor: File, val substitute: (String) -> String)
+
+    /** Resolve [preset] against this scan, or null when any required glob matched nothing — which is
+     *  what gates a preset to the projects it applies to. */
+    private fun ProjectScan.matchPreset(preset: RunConfigPreset): PresetMatch? {
+        val matched = preset.requires.map { glob ->
+            val regex = runCatching { globToRegex(glob) }.getOrNull() ?: return null
+            val byName = '/' !in glob
+            files.firstOrNull { f -> regex.matches(if (byName) f.name else rel(f)) } ?: return null
+        }
+        return PresetMatch(anchor = matched.first()) { cmd ->
+            var out = cmd.replace("{{projectDir}}", guestDir)
+            matched.forEachIndexed { i, f ->
+                val g = guest(f)
+                val d = g.substringBeforeLast('/')
+                out = out.replace("{{file${i + 1}}}", g).replace("{{dir${i + 1}}}", d)
+                if (i == 0) out = out.replace("{{file}}", g).replace("{{dir}}", d)
+            }
+            out
+        }
+    }
+
     /** A run config detected from the project's files, offered in the "Add run config" picker (its
      *  [RunTrigger]'s options are all saved when that file is picked). [source] says what detected it
      *  — "Detected" for built-in probes, or the contributing extension's name. */
@@ -183,16 +232,12 @@ object ProjectRunner {
      * work — call from a background dispatcher.
      */
     fun suggestRunTriggers(project: Project, extensionPresets: List<ExtensionRunPreset>): List<RunTrigger> {
-        val root = (project.fsPath as? FsPath.Local)?.file?.takeIf(File::isDirectory) ?: return emptyList()
-        val guestDir = project.distroBindTarget.trimEnd('/')
-        val files = root.walkTopDown()
-            .maxDepth(SCAN_DEPTH)
-            .onEnter { dir -> dir == root || (dir.name !in SCAN_SKIP_DIRS && !dir.name.startsWith(".")) }
-            .filter { it.isFile }
-            .take(SCAN_FILE_CAP)
-            .toList()
-        fun rel(f: File) = f.relativeTo(root).invariantSeparatorsPath
-        fun guest(f: File) = "$guestDir/${rel(f)}"
+        val scan = scanProject(project) ?: return emptyList()
+        val root = scan.root
+        val guestDir = scan.guestDir
+        val files = scan.files
+        fun rel(f: File) = scan.rel(f)
+        fun guest(f: File) = scan.guest(f)
         fun stage(suffix: String) = sanitizeStageName("${project.name}-$suffix")
 
         val csprojs = files.filter { it.extension.equals("csproj", ignoreCase = true) }
@@ -208,30 +253,15 @@ object ProjectRunner {
         val triggers = mutableListOf<RunTrigger>()
 
         // Extension presets are curated — each becomes a trigger with a single "Run" option, and they
-        // go first so a busy monorepo's generic probes can't crowd them past SCAN_TOTAL_CAP.
+        // go first so a busy monorepo's generic probes can't crowd them past SCAN_TOTAL_CAP. Build-kind
+        // presets are the Build segment's ([suggestBuildChoices]) and are skipped here.
         extensionPresets.forEach { (source, preset) ->
-            fun firstMatch(glob: String): File? {
-                val regex = runCatching { globToRegex(glob) }.getOrNull() ?: return null
-                val byName = '/' !in glob
-                return files.firstOrNull { f -> regex.matches(if (byName) f.name else rel(f)) }
-            }
-            val matched = preset.requires.map { firstMatch(it) }
-            if (matched.any { it == null }) return@forEach // a required file is missing → not applicable
-            val anchor = matched.first()!!
-            fun substitute(cmd: String): String {
-                var out = cmd.replace("{{projectDir}}", guestDir)
-                matched.forEachIndexed { i, f ->
-                    val g = guest(f!!)
-                    val d = g.substringBeforeLast('/')
-                    out = out.replace("{{file${i + 1}}}", g).replace("{{dir${i + 1}}}", d)
-                    if (i == 0) out = out.replace("{{file}}", g).replace("{{dir}}", d)
-                }
-                return out
-            }
+            if (preset.kind != RunPresetKind.Run) return@forEach
+            val match = scan.matchPreset(preset) ?: return@forEach
             triggers += RunTrigger(
                 label = preset.label,
                 kind = source,
-                detail = rel(anchor),
+                detail = rel(match.anchor),
                 options = listOf(
                     RunSuggestion(
                         label = "Run",
@@ -239,7 +269,7 @@ object ProjectRunner {
                         config = RunConfig(
                             name = preset.label,
                             readyPort = preset.readyPort,
-                            terminals = preset.terminals.map { RunConfigTerminal(it.label, substitute(it.command)) },
+                            terminals = preset.terminals.map { RunConfigTerminal(it.label, match.substitute(it.command)) },
                         ),
                     ),
                 ),
@@ -305,53 +335,89 @@ object ProjectRunner {
             )
         }
 
+        // Android: one trigger per APPLICATION module, so a clone with several of them (an app plus a
+        // wear or automotive variant) offers each by its Gradle path instead of one lumped "gradlew"
+        // row that could only ever have meant the first. Only what actually launches the app is a run;
+        // Gradle's build tasks belong to the Build segment ([suggestBuildChoices]).
         if (File(root, "gradlew").isFile) {
-            val appModule = androidAppModule(root, files)
-            val options = mutableListOf<RunSuggestion>()
-            if (appModule != null) {
-                val modulePath = appModule.relativeTo(root).invariantSeparatorsPath
-                options += RunSuggestion(
-                    label = "Run on this device",
-                    source = "android",
-                    config = RunConfig(
-                        name = "Android app",
-                        readyPort = 0,
-                        terminals = listOf(
-                            RunConfigTerminal("Run", androidRunCommand(guestDir, modulePath)),
+            val modules = androidAppModules(root, files)
+            modules.take(SCAN_PER_KIND_CAP).forEach { module ->
+                val modulePath = module.relativeTo(root).invariantSeparatorsPath
+                // One module needs no disambiguation, and "Android app" is the name already in use.
+                val qualifier = if (modules.size > 1) " ${androidGradlePath(modulePath)}" else ""
+                triggers += RunTrigger(
+                    label = if (modulePath.isEmpty()) project.name else androidGradlePath(modulePath),
+                    kind = "Android",
+                    detail = "build, install & launch",
+                    options = listOf(
+                        RunSuggestion(
+                            label = "Run on a device",
+                            source = "android",
+                            config = RunConfig(
+                                name = "Android app$qualifier",
+                                readyPort = 0,
+                                terminals = listOf(RunConfigTerminal("Run", androidRunCommand(guestDir, modulePath))),
+                            ),
                         ),
-                    ),
-                )
-                options += RunSuggestion(
-                    label = "Run in a virtual device",
-                    source = "android · no install",
-                    config = RunConfig(
-                        name = "Android app (virtual device)",
-                        readyPort = 0,
-                        terminals = listOf(
-                            RunConfigTerminal("Build", androidVirtualDeviceCommand(guestDir, modulePath)),
+                        RunSuggestion(
+                            label = "Run in a virtual device",
+                            source = "android · no install",
+                            config = RunConfig(
+                                name = "Android app$qualifier (virtual device)",
+                                readyPort = 0,
+                                terminals = listOf(RunConfigTerminal("Build", androidVirtualDeviceCommand(guestDir, modulePath))),
+                            ),
                         ),
                     ),
                 )
             }
-            options += RunSuggestion(
-                label = "assembleDebug",
-                source = "build",
-                config = RunConfig(
-                    name = "Gradle build (assembleDebug)",
-                    readyPort = 0,
-                    terminals = listOf(RunConfigTerminal("Build", "clear\nset -e\ncd \"$guestDir\"\nbash gradlew assembleDebug")),
-                ),
-            )
-            triggers += RunTrigger(
-                label = "gradlew",
-                kind = if (appModule != null) "Android" else "Gradle",
-                detail = if (appModule != null) "build, install & launch" else "assembleDebug",
-                options = options,
-            )
         }
 
         return triggers.filter { it.options.isNotEmpty() }.take(SCAN_TOTAL_CAP)
     }
+
+    /** One selectable entry in the Build segment's Add picker: a build config and what offered it
+     *  ("Detected" for a built-in probe, or the contributing extension's name). */
+    data class BuildSuggestion(
+        val source: String,
+        val config: BuildConfig,
+    )
+
+    /**
+     * Build tasks to offer for [project]: every applicable `kind: build` preset from [extensionPresets]
+     * first (curated beats generic), then the built-in probes from [detectBuildConfigs] minus any whose
+     * Gradle tasks a preset already covers — otherwise installing the Android Dev Pack would show the
+     * same `assembleDebug` twice. Blocking filesystem work — call from a background dispatcher.
+     */
+    fun suggestBuildChoices(project: Project, extensionPresets: List<ExtensionRunPreset>): List<BuildSuggestion> {
+        val scan = scanProject(project) ?: return emptyList()
+        val fromExtensions = extensionPresets.mapNotNull { (source, preset) ->
+            if (preset.kind != RunPresetKind.Build) return@mapNotNull null
+            val match = scan.matchPreset(preset) ?: return@mapNotNull null
+            // A build task is a single command, so a multi-terminal build preset keeps only its first.
+            val command = preset.terminals.firstOrNull()?.command ?: return@mapNotNull null
+            BuildSuggestion(source, BuildConfig(preset.label, match.substitute(command)))
+        }
+        val covered = fromExtensions.flatMapTo(mutableSetOf()) { gradleTasksIn(it.config.command) }
+        val builtIn = detectBuildConfigs(project)
+            .filterNot { built ->
+                val tasks = gradleTasksIn(built.command)
+                tasks.isNotEmpty() && tasks.all { it in covered }
+            }
+            .map { BuildSuggestion("Detected", it) }
+        return (fromExtensions + builtIn).take(SCAN_TOTAL_CAP)
+    }
+
+    /** The Gradle tasks a build command invokes, for the de-duplication in [suggestBuildChoices].
+     *  Module-qualified paths are kept qualified: `:wear:assembleDebug` is not the same work as a
+     *  project-wide `assembleDebug`, and collapsing them would drop the more precise one. Empty for a
+     *  command that is not a Gradle invocation, which then never de-duplicates anything. */
+    private fun gradleTasksIn(command: String): Set<String> =
+        GRADLE_TASK_RE.findAll(command)
+            .flatMap { it.groupValues[1].trim().split(' ') }
+            .map(String::trim)
+            .filter { it.isNotEmpty() && !it.startsWith("-") }
+            .toSet()
 
     /** The http(s) port from the .csproj's `Properties/launchSettings.json` first `applicationUrl`
      *  (so the run serves — and the browser opens — the project's own port); [ASPNET_PORT] as a
@@ -441,66 +507,79 @@ object ProjectRunner {
         return BuildConfig("Build", "")
     }
 
-    /** Detected publish/release build presets: `dotnet publish`, `npm run build`, `gradle assembleRelease`. */
+    /** Detected build presets: `dotnet publish`, `npm run build`, and a Gradle assemble — scoped to the
+     *  app module when a clone has more than one, since building them all is rarely what was meant. */
     fun detectBuildConfigs(project: Project): List<BuildConfig> {
-        val root = (project.fsPath as? FsPath.Local)?.file?.takeIf(File::isDirectory) ?: return emptyList()
-        val guestDir = project.distroBindTarget.trimEnd('/')
-        val files = root.walkTopDown()
-            .maxDepth(SCAN_DEPTH)
-            .onEnter { dir -> dir == root || (dir.name !in SCAN_SKIP_DIRS && !dir.name.startsWith(".")) }
-            .filter { it.isFile }
-            .take(SCAN_FILE_CAP)
-            .toList()
-        fun rel(f: File) = f.relativeTo(root).invariantSeparatorsPath
-        fun guest(f: File) = "$guestDir/${rel(f)}"
+        val scan = scanProject(project) ?: return emptyList()
+        val root = scan.root
+        val guestDir = scan.guestDir
+        fun rel(f: File) = scan.rel(f)
+        fun guest(f: File) = scan.guest(f)
         fun stage(s: String) = sanitizeStageName("${project.name}-$s")
         val out = mutableListOf<BuildConfig>()
 
-        files.firstOrNull { it.extension.equals("csproj", ignoreCase = true) }?.let { csproj ->
+        scan.files.firstOrNull { it.extension.equals("csproj", ignoreCase = true) }?.let { csproj ->
             out += BuildConfig("Publish (Release) — ${rel(csproj)}", dotnetPublishCommand(guest(csproj), stage("publish")))
         }
-        files.firstOrNull { it.name == "package.json" && runCatching { it.readText() }.getOrNull()?.contains("\"build\"") == true }
+        scan.files.firstOrNull { it.name == "package.json" && runCatching { it.readText() }.getOrNull()?.contains("\"build\"") == true }
             ?.let { pkg ->
                 val dir = pkg.parentFile ?: root
-                val dirGuest = if (dir == root) guestDir else guest(dir)
-                out += BuildConfig("npm build — ${rel(pkg)}", npmBuildCommand(dirGuest, stage("npm-build")))
+                out += BuildConfig("npm build — ${rel(pkg)}", npmBuildCommand(scan.guest(dir), stage("npm-build")))
             }
         if (File(root, "gradlew").isFile) {
-            out += BuildConfig("Gradle — assembleRelease", "clear\nset -e\ncd \"$guestDir\"\nbash gradlew assembleRelease")
+            val modules = androidAppModules(root, scan.files)
+            fun gradleBuild(name: String, task: String) =
+                BuildConfig(name, "clear\nset -e\ncd \"$guestDir\"\nbash gradlew --console=plain $task")
+            when {
+                // A single app module's plain `assembleDebug` is the same work as its qualified task,
+                // and staying unqualified lets an extension's project-wide preset de-duplicate it.
+                modules.size == 1 -> out += gradleBuild("Assemble debug APK", "assembleDebug")
+                modules.size > 1 -> modules.take(SCAN_PER_KIND_CAP).forEach { module ->
+                    val modulePath = module.relativeTo(root).invariantSeparatorsPath
+                    out += gradleBuild(
+                        "Assemble debug APK — ${androidGradlePath(modulePath)}",
+                        androidAssembleTask(modulePath),
+                    )
+                }
+                else -> out += gradleBuild("Gradle — build", "build")
+            }
         }
         return out
     }
 
     private val AGP_ALIAS_RE = Regex("""alias\s*\([^)]*[Aa]ndroid[^)]*[Aa]pplication[^)]*\)""")
 
-    /** The module directory of an Android *application* project, or null when this isn't one.
-     *  `com.android.application` in a module's build script is the primary signal; a version-catalog
-     *  alias (`alias(libs.plugins.android.application)`) never names the plugin id, so the catalog is
-     *  consulted for those, and a manifest declaring a LAUNCHER activity is the last resort. */
-    private fun androidAppModule(root: File, files: List<File>): File? {
+    /** Every Android *application* module directory in the project, in scan order (empty when this
+     *  isn't an Android project). `com.android.application` in a module's build script is the primary
+     *  signal; a version-catalog alias (`alias(libs.plugins.android.application)`) never names the
+     *  plugin id, so the catalog is consulted for those, and manifests declaring a LAUNCHER activity
+     *  are the last resort — used only when no build script matched, since a library module can carry
+     *  such a manifest too and would otherwise be offered as something to launch. */
+    private fun androidAppModules(root: File, files: List<File>): List<File> {
         val catalogNamesAgp = File(root, "gradle/libs.versions.toml").takeIf(File::isFile)
             ?.let { runCatching { it.readText() }.getOrNull() }
             ?.contains("com.android.application") == true
 
-        for (buildFile in files) {
-            if (buildFile.name != "build.gradle" && buildFile.name != "build.gradle.kts") continue
-            val text = runCatching { buildFile.readText() }.getOrNull() ?: continue
+        val byBuildScript = files.mapNotNull { buildFile ->
+            if (buildFile.name != "build.gradle" && buildFile.name != "build.gradle.kts") return@mapNotNull null
+            val text = runCatching { buildFile.readText() }.getOrNull() ?: return@mapNotNull null
             // The ROOT build script of a conventional Android project also names the plugin, as
             // `id("com.android.application") version "..." apply false` — declaring the version for
             // subprojects without applying it. Matching the file as a whole would pick the root as
-            // the app module, so the `apply false` suffix has to be excluded line by line.
+            // an app module, so the `apply false` suffix has to be excluded line by line.
             val appliesAgp = text.lineSequence().any { line ->
                 !line.contains("apply false") &&
                     (line.contains("com.android.application") || (catalogNamesAgp && AGP_ALIAS_RE.containsMatchIn(line)))
             }
-            if (appliesAgp) return buildFile.parentFile
+            buildFile.parentFile.takeIf { appliesAgp }
         }
+        if (byBuildScript.isNotEmpty()) return byBuildScript.distinct()
 
         // <module>/src/main/AndroidManifest.xml -> <module>
-        return files.firstOrNull { f ->
+        return files.filter { f ->
             f.name == "AndroidManifest.xml" &&
                 runCatching { f.readText() }.getOrNull()?.contains("android.intent.category.LAUNCHER") == true
-        }?.parentFile?.parentFile?.parentFile
+        }.mapNotNull { it.parentFile?.parentFile?.parentFile }.distinct()
     }
 
     /** Build the debug APK, then install and launch it on the device behind the ADB bridge. The
@@ -541,7 +620,11 @@ object ProjectRunner {
     }
 
     private fun androidAssembleTask(modulePath: String): String =
-        if (modulePath.isEmpty()) "assembleDebug" else ":${modulePath.replace('/', ':')}:assembleDebug"
+        if (modulePath.isEmpty()) "assembleDebug" else "${androidGradlePath(modulePath)}:assembleDebug"
+
+    /** Gradle's own name for a module directory — `app` → `:app`, `features/home` → `:features:home`.
+     *  The root project itself has no path, and is named after the project instead. */
+    private fun androidGradlePath(modulePath: String): String = ":${modulePath.replace('/', ':')}"
 
     private fun androidApkDir(modulePath: String): String =
         if (modulePath.isEmpty()) "build/outputs/apk/debug" else "$modulePath/build/outputs/apk/debug"
@@ -614,8 +697,14 @@ object ProjectRunner {
      * doesn't echo the whole script back with `>` continuation prompts. The script is read, not
      * executed, so the noexec `/workspace` mount is fine. Falls back to an inline heredoc if the
      * script can't be written.
+     *
+     * A non-blank [androidSerial] is exported for this one command, which is how a picked device
+     * overrides the session-wide `ANDROID_SERIAL`. It goes on the invocation rather than into the
+     * script so the saved script stays portable — the device is a property of this launch, not of the
+     * run config.
      */
-    fun runInvocation(project: Project, terminal: RunTerminal): String {
+    fun runInvocation(project: Project, terminal: RunTerminal, androidSerial: String = ""): String {
+        val prefix = if (androidSerial.isBlank()) "" else "ANDROID_SERIAL=\"$androidSerial\" "
         val hostDir = (project.fsPath as? FsPath.Local)?.file
         val scriptName = "run-${sanitizeStageName(terminal.label)}.sh"
         if (hostDir != null) {
@@ -625,10 +714,10 @@ object ProjectRunner {
             }.isSuccess
             if (written) {
                 val guestDir = project.distroBindTarget.trimEnd('/')
-                return "bash \"$guestDir/.jcode/$scriptName\""
+                return "${prefix}bash \"$guestDir/.jcode/$scriptName\""
             }
         }
-        return "bash <<'JCRUN'\n${terminal.command}\nJCRUN"
+        return "${prefix}bash <<'JCRUN'\n${terminal.command}\nJCRUN"
     }
 
     /**
@@ -834,6 +923,10 @@ object ProjectRunner {
 
     const val VDEVICE_MARKER = "jcode-virtual-device:"
     private val VDEVICE_MARKER_RE = Regex("^# $VDEVICE_MARKER (.+)$", RegexOption.MULTILINE)
+
+    /** Everything after a `gradlew`/`gradle` invocation up to the end of its line — the task list, as
+     *  written. Both the built-in recipes and an extension preset spell it this way. */
+    private val GRADLE_TASK_RE = Regex("""\bgradlew?\b((?:\s+[^\s;&|]+)*)""")
 
     private const val ASPNET_PORT = 5080
     private const val VITE_PORT = 5173

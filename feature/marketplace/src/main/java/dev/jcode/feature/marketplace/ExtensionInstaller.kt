@@ -520,6 +520,7 @@ class ExtensionInstaller internal constructor(context: Context) {
                 terminals = terminals,
                 // Tolerate YAML ints, quoted ints, and floats (5173.0) alike.
                 readyPort = p.str("readyPort")?.let { it.toIntOrNull() ?: it.toDoubleOrNull()?.toInt() } ?: 0,
+                kind = RunPresetKind.from(p.str("kind")),
             )
         }
         return ExtensionContributions(
