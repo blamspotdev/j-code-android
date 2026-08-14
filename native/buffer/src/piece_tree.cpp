@@ -3,10 +3,6 @@
 #include <algorithm>
 #include <cstring>
 
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 namespace jcode {
 
 namespace {
@@ -92,23 +88,6 @@ PieceTreeBuffer* PieceTreeBuffer::openFromBytes(const uint8_t* data, size_t leng
         original.data = copy->data();
         original.length = length;
         original.owner = std::move(copy);
-    }
-    auto* buffer = new PieceTreeBuffer();
-    buffer->initFromOriginal(std::move(original));
-    return buffer;
-}
-
-PieceTreeBuffer* PieceTreeBuffer::openFromFd(int fd) {
-    struct stat st;
-    if (fstat(fd, &st) != 0 || st.st_size < 0) return nullptr;
-    OriginalSource original;
-    const size_t length = static_cast<size_t>(st.st_size);
-    if (length > 0) {
-        void* addr = mmap(nullptr, length, PROT_READ, MAP_PRIVATE, fd, 0);
-        if (addr == MAP_FAILED) return nullptr;
-        original.data = static_cast<const uint8_t*>(addr);
-        original.length = length;
-        original.owner = std::shared_ptr<void>(addr, [length](void* p) { munmap(p, length); });
     }
     auto* buffer = new PieceTreeBuffer();
     buffer->initFromOriginal(std::move(original));

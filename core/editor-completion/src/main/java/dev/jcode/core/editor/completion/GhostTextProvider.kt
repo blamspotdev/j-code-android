@@ -1,7 +1,6 @@
 package dev.jcode.core.editor.completion
 
 import dev.jcode.core.editor.decor.GhostTextDecoration
-import dev.jcode.core.editor.decor.Layer
 
 /**
  * Provider for AI ghost text (inline completions).

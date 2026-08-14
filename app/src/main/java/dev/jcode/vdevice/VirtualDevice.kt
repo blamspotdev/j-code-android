@@ -1,9 +1,7 @@
 package dev.jcode.vdevice
 
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
-import android.util.Log
 
 /** What the container could learn about a guest APK without installing or running it. */
 data class VirtualDeviceApp(

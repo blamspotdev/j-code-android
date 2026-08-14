@@ -67,7 +67,7 @@ private:
     size_t count_ = 0;
 };
 
-/** The original content the buffer was opened with (heap copy or mmap), shared with snapshots. */
+/** The original content the buffer was opened with, shared with snapshots. */
 struct OriginalSource {
     std::shared_ptr<void> owner;
     const uint8_t* data = nullptr;
@@ -148,7 +148,6 @@ private:
 class PieceTreeBuffer {
 public:
     static PieceTreeBuffer* openFromBytes(const uint8_t* data, size_t length);
-    static PieceTreeBuffer* openFromFd(int fd);
 
     size_t byteLength() const { return length_; }
     size_t lineCount() const { return newline_total_ + 1; }

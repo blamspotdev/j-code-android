@@ -27,7 +27,6 @@ import dev.jcode.core.distro.DebugEngineCatalogState
 import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.core.distro.LspCatalogState
 import dev.jcode.core.distro.SdkCatalogState
-import androidx.compose.ui.Alignment
 import dev.jcode.design.ManagerItemStatus
 import dev.jcode.design.ManagerListRow
 import dev.jcode.design.ManagerNoticeCard

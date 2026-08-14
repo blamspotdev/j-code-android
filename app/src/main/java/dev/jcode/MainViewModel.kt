@@ -25,7 +25,6 @@ import dev.jcode.core.editor.Caret
 import dev.jcode.core.buffer.EditTx
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.distro.DistroProfile
-import dev.jcode.core.distro.DistroWizardProgress
 import dev.jcode.core.distro.DebugEngineAction
 import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.core.distro.LspCatalogAction
@@ -62,7 +61,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import dev.jcode.design.BottomBarVisibility
 import dev.jcode.design.ExtraKeysVisibility
-import dev.jcode.core.diag.DiagArea
 import dev.jcode.core.diag.DiagLevel
 import dev.jcode.core.diag.DiagnosticLog
 import dev.jcode.design.SettingsDefaults

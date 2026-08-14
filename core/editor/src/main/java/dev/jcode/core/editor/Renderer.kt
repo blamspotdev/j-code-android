@@ -4,7 +4,6 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.text.TextPaint
-import dev.jcode.core.buffer.LineWindow
 import dev.jcode.core.buffer.Snapshot
 import dev.jcode.core.editor.decor.ColoredSpan
 import dev.jcode.core.editor.decor.Decoration

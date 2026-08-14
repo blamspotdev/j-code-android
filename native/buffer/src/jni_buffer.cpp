@@ -76,16 +76,6 @@ Java_dev_jcode_core_buffer_Buffer_nativeOpenFromBytes(JNIEnv* env, jobject thiz,
     return reinterpret_cast<jlong>(buffer);
 }
 
-JNIEXPORT jlong JNICALL
-Java_dev_jcode_core_buffer_Buffer_nativeOpenFromFd(JNIEnv* env, jobject thiz, jint fd) {
-    PieceTreeBuffer* buffer = PieceTreeBuffer::openFromFd(fd);
-    if (!buffer) {
-        LOGE("Failed to open buffer from fd %d", fd);
-        return 0;
-    }
-    return reinterpret_cast<jlong>(buffer);
-}
-
 // Static close-by-handle: invoked by the Kotlin Cleaner with only the primitive handle, so the
 // cleanup never needs (and never retains) the Buffer object. Mirrors PtyProcess.nativeCloseByHandle.
 JNIEXPORT void JNICALL
