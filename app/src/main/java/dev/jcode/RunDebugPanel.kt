@@ -120,7 +120,7 @@ internal fun RunPanel(
                     Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to projects", modifier = Modifier.size(20.dp))
                 }
             }
-            Icon(jcIcon(JCodeIcon.Run), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            // No leading icon: the drawer's own "Run" tab chip already carries one directly above.
             Text(
                 text = activeProject?.name ?: "Run",
                 style = MaterialTheme.typography.titleSmall,
