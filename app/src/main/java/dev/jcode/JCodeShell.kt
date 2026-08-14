@@ -2991,6 +2991,7 @@ private fun JCodeShell(
                         leftSidebarExpanded = isPersistentLeftSidebarVisible,
                         canShowRightSidebar = canShowRightSidebar,
                         rightSidebarVisible = rightSidebarVisible,
+                        rightSidebarDocked = rightSidebarDocked,
                         modifier = Modifier.fillMaxSize(),
                         onToggleLeftSidebar = {
                             if (usesModalWorkspace) {
@@ -3780,6 +3781,7 @@ private fun EditorWorkspace(
     leftSidebarExpanded: Boolean,
     canShowRightSidebar: Boolean,
     rightSidebarVisible: Boolean,
+    rightSidebarDocked: Boolean,
     onToggleLeftSidebar: () -> Unit,
     onToggleRightSidebar: () -> Unit,
     onRun: () -> Unit,
@@ -3825,6 +3827,7 @@ private fun EditorWorkspace(
                         leftSidebarExpanded = leftSidebarExpanded,
                         canShowRightSidebar = canShowRightSidebar,
                         rightSidebarVisible = rightSidebarVisible,
+                        rightSidebarDocked = rightSidebarDocked,
                         onToggleLeftSidebar = onToggleLeftSidebar,
                         onToggleRightSidebar = onToggleRightSidebar,
                         onShowTerminal = onShowTerminal,

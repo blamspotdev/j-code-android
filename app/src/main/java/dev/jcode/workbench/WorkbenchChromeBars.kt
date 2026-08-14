@@ -204,6 +204,7 @@ internal fun WorkbenchTopBar(
     leftSidebarExpanded: Boolean,
     canShowRightSidebar: Boolean,
     rightSidebarVisible: Boolean,
+    rightSidebarDocked: Boolean,
     onToggleLeftSidebar: () -> Unit,
     onToggleRightSidebar: () -> Unit,
     onShowTerminal: () -> Unit,
@@ -344,12 +345,17 @@ internal fun WorkbenchTopBar(
                     },
                 )
             }
-            WorkbenchIconActionButton(
-                icon = jcIcon(JCodeIcon.Logs),
-                contentDescription = "Toggle right sidebar",
-                onClick = onToggleRightSidebar,
-                active = canShowRightSidebar && rightSidebarVisible,
-            )
+            // A docked panel is already on screen beside the editor with its own Close button, so
+            // this toggle would only duplicate it. It returns as soon as the panel is hidden, and
+            // stays put when the panel overlays the workspace instead of splitting it.
+            if (!(rightSidebarDocked && canShowRightSidebar && rightSidebarVisible)) {
+                WorkbenchIconActionButton(
+                    icon = jcIcon(JCodeIcon.Logs),
+                    contentDescription = "Toggle right sidebar",
+                    onClick = onToggleRightSidebar,
+                    active = canShowRightSidebar && rightSidebarVisible,
+                )
+            }
         }
     }
 }
