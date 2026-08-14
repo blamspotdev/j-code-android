@@ -186,6 +186,21 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
     override fun createDisplayContext(display: Display): Context =
         GuestContext(super.createDisplayContext(display), guest)
 
+    /**
+     * API 30+ refuses `getDisplay()` on a context not associated with one, and this wrapper's base
+     * is exactly that: the guest's package context is a background context no matter how visual the
+     * activity wearing it is, so `Activity.display` — which lands here through the wrapper chain —
+     * threw for any guest that asked. The device's screen is the only display a guest can be on;
+     * answer with it rather than letting the platform kill the app. Found by running JCode itself
+     * as a guest: its shell reads `activity.display?.cutout` in its first composition.
+     */
+    override fun getDisplay(): Display = try {
+        super.getDisplay()
+    } catch (refused: UnsupportedOperationException) {
+        getSystemService(android.hardware.display.DisplayManager::class.java)
+            ?.getDisplay(Display.DEFAULT_DISPLAY) ?: throw refused
+    }
+
     override fun createDeviceProtectedStorageContext(): Context =
         GuestContext(super.createDeviceProtectedStorageContext(), guest)
 
