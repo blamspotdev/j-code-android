@@ -61,6 +61,16 @@ typedef struct {
     uint16_t attrs;     // Attribute flags
 } VtCell;
 
+// Per-row wrap bookkeeping, parallel to VtScreen.cells and VtParser.scrollback.
+//
+// VT_ROW_WRAPPED is set ONLY by DECAWM autowrap, at the two sites in screen_write_char. A row ended
+// by CR/LF, or reached by a cursor move, never carries it. That is what lets vt_parser_resize rejoin
+// and re-split long output without disturbing content an application laid out itself: a full-screen
+// or inline TUI that writes lines shorter than the width produces no wrapped rows at all, so resize
+// leaves its geometry exactly as it found it.
+#define VT_ROW_WRAPPED  (1u << 0)  // this row is the continuation of the row above it
+#define VT_ROW_WRAP_PAD (1u << 1)  // ... and the previous row's LAST cell is wide-char wrap padding
+
 // Mouse tracking level (DECSET 9 < 1000 < 1002 < 1003; stored as the ordinal, not the mode number).
 typedef enum {
     VT_MOUSE_OFF = 0,
@@ -111,6 +121,8 @@ typedef enum {
 // Screen buffer
 typedef struct {
     VtCell* cells;      // Array of cells (rows * cols)
+    uint8_t* row_flags; // VT_ROW_* bits, one byte per row. NULL only if its allocation failed, in
+                        // which case every row reads as unwrapped and resize degrades to clamp/pad.
     int rows;
     int cols;
     int cursor_row;
@@ -189,6 +201,10 @@ typedef struct {
 
     // Scrollback ring buffer (lines that scrolled off the top of the primary screen)
     VtCell* scrollback;     // scrollback_cap * scrollback_cols cells
+    uint8_t* scrollback_flags;  // VT_ROW_* bits, scrollback_cap bytes, SAME ring index as scrollback:
+                                // flags[i] describes the line at &scrollback[i * scrollback_cols].
+                                // Anything that allocates, frees, copies or evicts one must do the
+                                // same to the other.
     int scrollback_cols;
     int scrollback_cap;     // capacity in lines
     int scrollback_count;   // number of lines currently stored

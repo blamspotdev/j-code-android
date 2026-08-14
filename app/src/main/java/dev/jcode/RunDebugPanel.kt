@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -20,8 +21,10 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.PhoneAndroid
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Smartphone
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -38,16 +41,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import dev.jcode.core.config.BuildConfig
 import dev.jcode.core.config.RunConfig
 import dev.jcode.core.debug.DebugState
+import dev.jcode.design.AndroidRunTarget
 import dev.jcode.design.CompactOutlinedButton
+import dev.jcode.design.JCodeDialogDefaults
 import dev.jcode.design.LocalAndroidDevice
+import dev.jcode.design.LocalAndroidRunTargets
 import dev.jcode.fs.Project
 import dev.jcode.run.ProjectRunner
 import dev.jcode.vdevice.AppSandbox
@@ -59,9 +68,10 @@ import kotlinx.coroutines.withContext
 /**
  * The "Run" side-panel. In a User Workspace it first lists projects; tapping one opens a Build | Run
  * segmented detail. In the Default Workspace it goes straight to the open project's detail. The Run
- * segment lists run configs (each with Run ▷ / Debug 🐞 / Configure) plus the live debug session; the Build
- * segment lists build tasks (each with Build ▷ / Configure). Multiple configs of each kind are
- * supported. Execution is orchestrated by the workbench shell via the callbacks.
+ * segment lists run configs (each with Run ▷ / Debug 🐞 / Configure), the device those launch on, and
+ * the live debug session; the Build segment lists build tasks (each with Build ▷ / Configure).
+ * Multiple configs of each kind are supported. Execution is orchestrated by the workbench shell via
+ * the callbacks.
  */
 @Composable
 internal fun RunPanel(
@@ -89,12 +99,16 @@ internal fun RunPanel(
     // In a User Workspace, remember which project's detail is open; Default Workspace uses its one project.
     var pickedId by rememberSaveable { mutableStateOf<Long?>(null) }
     val activeProject = if (inUserWorkspace) projects.firstOrNull { it.id == pickedId } else projects.firstOrNull()
+    val targets = LocalAndroidRunTargets.current
+    // Devices come and go while the panel is closed (a phone unpaired, the virtual device toggled), so
+    // re-read `adb devices` whenever it opens rather than trusting whatever the last look found.
+    LaunchedEffect(Unit) { targets.onRefresh() }
 
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
             .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(
             modifier = Modifier.padding(start = 2.dp, top = 2.dp),
@@ -106,7 +120,7 @@ internal fun RunPanel(
                     Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to projects", modifier = Modifier.size(20.dp))
                 }
             }
-            Icon(jcIcon(JCodeIcon.Run), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            // No leading icon: the drawer's own "Run" tab chip already carries one directly above.
             Text(
                 text = activeProject?.name ?: "Run",
                 style = MaterialTheme.typography.titleSmall,
@@ -184,12 +198,15 @@ private fun ProjectRunBuildDetail(
 
     when (segment) {
         Segment.Run -> {
-            // Show the device row only for a project that actually drives adb — an Android app's
-            // "Run on this device" recipe, or any hand-written config that shells out to adb.
-            if (runs.any { run -> run.terminals.any { it.command.contains("adb ") } }) AdbDeviceRow()
-            // The container needs no adb at all, so this row stands on its own next to the adb one.
+            // Two different ways to get an app onto a device, so a row each, and a project can have
+            // both: the container recipe only builds and is handed to JCode's own sandbox afterwards,
+            // while every other Android recipe shells out to adb and takes its device from the target
+            // row. Each row appears only when a config of its kind is present.
             if (runs.any { run -> run.terminals.any { it.command.contains(ProjectRunner.VDEVICE_MARKER) } }) {
                 VirtualDeviceRow()
+            }
+            if (runs.any { run -> run.terminals.any { it.command.contains("adb ") } }) {
+                AndroidTargetRow(project)
             }
             if (runs.isEmpty()) HintText("No run config yet — add one.")
             runs.forEachIndexed { index, config ->
@@ -231,9 +248,26 @@ private fun ProjectRunBuildDetail(
     }
 
     if (showAddRun) {
-        AddRunConfigDialog(
-            load = { withContext(Dispatchers.IO) { ProjectRunner.suggestRunTriggers(project, runPresets) } },
-            onPickAll = { configs -> onAddRunPresets(project, configs); showAddRun = false },
+        AddConfigDialog(
+            title = "Add run config",
+            groupHint = "Pick a framework, then a project file.",
+            entryHint = "Pick a project file — every run config it offers is added.",
+            emptyHint = "No run trigger detected — start from a blank config.",
+            load = {
+                withContext(Dispatchers.IO) { ProjectRunner.suggestRunTriggers(project, runPresets) }
+                    .groupBy { it.kind }
+                    .map { (kind, triggers) ->
+                        PickerGroup(
+                            name = kind,
+                            entries = triggers.map { trigger ->
+                                PickerEntry(trigger.label, trigger.detail) {
+                                    onAddRunPresets(project, trigger.configs)
+                                    showAddRun = false
+                                }
+                            },
+                        )
+                    }
+            },
             onCustom = { showAddRun = false; onConfigureRun(project, null) },
             onDismiss = { showAddRun = false },
         )
@@ -241,10 +275,23 @@ private fun ProjectRunBuildDetail(
     if (showAddBuild) {
         AddConfigDialog(
             title = "Add build task",
+            groupHint = "Pick where the task comes from, then the task.",
+            entryHint = "Pick a task to add it.",
             emptyHint = "No build trigger detected — start from a blank task.",
             load = {
-                withContext(Dispatchers.IO) { ProjectRunner.detectBuildConfigs(project) }
-                    .map { b -> AddChoice(b.name, "Detected") { onAddBuildPreset(project, b); showAddBuild = false } }
+                withContext(Dispatchers.IO) { ProjectRunner.suggestBuildChoices(project, runPresets) }
+                    .groupBy { it.source }
+                    .map { (source, choices) ->
+                        PickerGroup(
+                            name = source,
+                            entries = choices.map { choice ->
+                                PickerEntry(choice.config.name, ProjectRunner.commandPreview(choice.config.command, max = 48)) {
+                                    onAddBuildPreset(project, choice.config)
+                                    showAddBuild = false
+                                }
+                            },
+                        )
+                    }
             },
             onCustom = { showAddBuild = false; onConfigureBuild(project, null) },
             onDismiss = { showAddBuild = false },
@@ -252,55 +299,100 @@ private fun ProjectRunBuildDetail(
     }
 }
 
-/** One selectable trigger in the [AddConfigDialog]: a label, a provenance subtitle, and the action
- *  that adds it (append the detected config, then close the dialog). */
-private class AddChoice(val label: String, val subtitle: String, val onPick: () -> Unit)
+/** One thing the [AddConfigDialog] can add: what it is, where it came from, and the tap that adds it. */
+private class PickerEntry(val label: String, val detail: String, val onPick: () -> Unit)
+
+/** [PickerEntry]s that share an origin — a framework ("Android", "Node") for run configs, or the
+ *  extension that contributed them for build tasks. */
+private class PickerGroup(val name: String, val entries: List<PickerEntry>)
 
 /**
- * Dialog shown when tapping "Add run config" / "Add build task": scans the project ([load], on IO)
- * for detected triggers (e.g. a `.csproj` server, an npm/Vite app, a Gradle build) and lists them so
- * one tap adds that config directly. "Custom (blank)" instead opens the editor on an empty config.
+ * The Add picker for both segments: [load] scans the project on IO and returns its offerings grouped
+ * by origin. Two levels — groups, then that group's entries — collapsing to one when everything came
+ * from the same place, since a list of one group is a tap that tells the user nothing. "Custom
+ * (blank)" opens the editor on an empty config instead.
  */
 @Composable
 private fun AddConfigDialog(
     title: String,
+    groupHint: String,
+    entryHint: String,
     emptyHint: String,
-    load: suspend () -> List<AddChoice>,
+    load: suspend () -> List<PickerGroup>,
     onCustom: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var choices by remember { mutableStateOf<List<AddChoice>?>(null) }
-    LaunchedEffect(Unit) { choices = load() }
+    var groups by remember { mutableStateOf<List<PickerGroup>?>(null) }
+    var openGroup by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) { groups = load() }
     // Cap the scrollable list to ~half the viewport so the header + buttons stay on-screen.
     val listMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.5f).coerceIn(160f, 360f).dp
     Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 6.dp) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                val current = choices
+        Surface(
+            modifier = Modifier.width(JCodeDialogDefaults.width()),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                val list = groups
+                val single = list?.singleOrNull()
+                val shown = single ?: list?.firstOrNull { it.name == openGroup }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    // A collapsed single group has nowhere to go back to, so it keeps the plain title.
+                    if (shown != null && single == null) {
+                        IconButton(onClick = { openGroup = null }, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", modifier = Modifier.size(20.dp))
+                        }
+                    }
+                    Text(
+                        text = if (single == null) shown?.name ?: title else title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 when {
-                    current == null -> HintText("Scanning project…")
-                    current.isEmpty() -> HintText(emptyHint)
+                    list == null -> HintText("Scanning project…")
+                    list.isEmpty() -> {
+                        HintText(emptyHint)
+                        ChoiceRow("Custom (blank)", "Start from an empty config", onClick = onCustom)
+                    }
+                    shown != null -> {
+                        HintText(entryHint)
+                        PickerList(listMaxHeight) {
+                            shown.entries.forEach { ChoiceRow(it.label, it.detail, onClick = it.onPick) }
+                            if (single != null) ChoiceRow("Custom (blank)", "Start from an empty config", onClick = onCustom)
+                        }
+                    }
                     else -> {
-                        HintText("Detected from this project's files. Pick one to add it.")
-                        Column(
-                            modifier = Modifier.heightIn(max = listMaxHeight).verticalScroll(rememberScrollState()),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            current.forEach { choice -> ChoiceRow(choice.label, choice.subtitle, onClick = choice.onPick) }
+                        HintText(groupHint)
+                        PickerList(listMaxHeight) {
+                            list.forEach { group ->
+                                ChoiceRow(
+                                    label = group.name,
+                                    subtitle = "${group.entries.size} available",
+                                    onClick = { openGroup = group.name },
+                                    trailing = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                )
+                            }
+                            ChoiceRow("Custom (blank)", "Start from an empty config", onClick = onCustom)
                         }
                     }
                 }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    CompactOutlinedButton(text = "Custom (blank)", onClick = onCustom, modifier = Modifier.weight(1f))
-                    CompactOutlinedButton(text = "Cancel", onClick = onDismiss, modifier = Modifier.weight(1f))
-                }
+                CompactOutlinedButton(text = "Cancel", onClick = onDismiss, modifier = Modifier.fillMaxWidth())
             }
         }
     }
+}
+
+@Composable
+private fun PickerList(maxHeight: androidx.compose.ui.unit.Dp, content: @Composable () -> Unit) {
+    Column(
+        modifier = Modifier.heightIn(max = maxHeight).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) { content() }
 }
 
 @Composable
@@ -308,85 +400,22 @@ private fun ChoiceRow(
     label: String,
     subtitle: String,
     onClick: () -> Unit,
-    trailing: androidx.compose.ui.graphics.vector.ImageVector = Icons.Rounded.Add,
+    trailing: ImageVector = Icons.Rounded.Add,
 ) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(10.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick)
-                .padding(start = 12.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
+                .padding(horizontal = 10.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (subtitle.isNotBlank()) {
-                    Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
             Icon(trailing, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-        }
-    }
-}
-
-/**
- * Framework-first "Add run config" picker: level 1 groups the detected triggers by framework
- * ([ProjectRunner.RunTrigger.kind] — e.g. "C# · ASP.NET Core", "Node", "Gradle", or a contributing
- * extension) and lists each with its project-file count; level 2 lists that framework's project
- * files. Tapping a file creates ALL of its run configs at once via [onPickAll] (for a `.csproj`
- * that's the debug + release pair). "Custom (blank)" opens the editor on an empty config.
- */
-@Composable
-private fun AddRunConfigDialog(
-    load: suspend () -> List<ProjectRunner.RunTrigger>,
-    onPickAll: (List<RunConfig>) -> Unit,
-    onCustom: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var triggers by remember { mutableStateOf<List<ProjectRunner.RunTrigger>?>(null) }
-    var framework by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) { triggers = load() }
-    val listMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.5f).coerceIn(160f, 360f).dp
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 6.dp) {
-            Column(modifier = Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                val fw = framework
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (fw != null) {
-                        IconButton(onClick = { framework = null }, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to frameworks", modifier = Modifier.size(20.dp))
-                        }
-                    }
-                    Text(fw ?: "Pick a framework", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                val list = triggers
-                val frameworks = remember(list) { list?.groupBy { it.kind } ?: emptyMap() }
-                when {
-                    list == null -> HintText("Scanning project…")
-                    fw != null -> {
-                        HintText("Pick a project file — every run config it offers is added.")
-                        Column(modifier = Modifier.heightIn(max = listMaxHeight).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            frameworks[fw].orEmpty().forEach { t ->
-                                ChoiceRow(t.label, t.detail, onClick = { onPickAll(t.options.map { it.config }) })
-                            }
-                        }
-                    }
-                    frameworks.isEmpty() -> {
-                        HintText("No run trigger detected — start from a blank config.")
-                        ChoiceRow("Custom (blank)", "Start from an empty run config", onClick = onCustom)
-                    }
-                    else -> {
-                        HintText("Pick a framework, then a project file.")
-                        Column(modifier = Modifier.heightIn(max = listMaxHeight).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            frameworks.keys.sorted().forEach { kind ->
-                                val count = frameworks[kind]?.size ?: 0
-                                ChoiceRow(kind, "$count project file(s)", onClick = { framework = kind }, trailing = Icons.AutoMirrored.Rounded.KeyboardArrowRight)
-                            }
-                            ChoiceRow("Custom (blank)", "Start from an empty run config", onClick = onCustom)
-                        }
-                    }
-                }
-                CompactOutlinedButton(text = "Cancel", onClick = onDismiss, modifier = Modifier.fillMaxWidth())
-            }
         }
     }
 }
@@ -408,13 +437,13 @@ private fun SegmentedToggle(selected: Segment, onSelect: (Segment) -> Unit) {
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
                 color = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                textAlign = TextAlign.Center,
                 modifier = Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(6.dp))
-                    .background(if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.20f) else androidx.compose.ui.graphics.Color.Transparent)
+                    .background(if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.20f) else Color.Transparent)
                     .clickable { onSelect(seg) }
-                    .padding(vertical = 6.dp),
+                    .padding(vertical = 5.dp),
             )
         }
     }
@@ -422,24 +451,17 @@ private fun SegmentedToggle(selected: Segment, onSelect: (Segment) -> Unit) {
 
 @Composable
 private fun ProjectPickRow(project: Project, running: Boolean, onClick: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick)
-                .padding(start = 12.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = project.name,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            if (running) RunStatusChip("Running", active = true)
-            Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
-        }
+    PanelRow(onClick = onClick) {
+        Text(
+            text = project.name,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (running) RunStatusChip("Running", active = true)
+        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
     }
 }
 
@@ -460,7 +482,7 @@ private fun RunConfigRow(
     val subline = if (config.readyPort > 0) {
         ":${config.readyPort}"
     } else {
-        config.terminals.firstOrNull()?.command?.lineSequence()?.firstOrNull { it.isNotBlank() }?.take(32).orEmpty()
+        config.terminals.firstOrNull()?.command?.let { ProjectRunner.commandPreview(it, max = 32) }.orEmpty()
     }
     val status = when {
         running && runInProgress -> "Building…"
@@ -472,28 +494,28 @@ private fun RunConfigRow(
             // Row 1: full-width name + compact action icons (the status chip moves to row 2 so the
             // name gets the whole width and stops truncating).
             Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, top = 4.dp, end = 2.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = 10.dp, top = 2.dp, end = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(1.dp),
             ) {
                 Text(config.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 if (running && runUrl != null) {
-                    IconAction(Icons.AutoMirrored.Rounded.OpenInNew, "Open in browser", MaterialTheme.colorScheme.onSurfaceVariant, onOpenInBrowser, size = 20)
+                    IconAction(Icons.AutoMirrored.Rounded.OpenInNew, "Open in browser", MaterialTheme.colorScheme.onSurfaceVariant, onOpenInBrowser)
                 }
                 if (running) {
-                    IconAction(jcIcon(JCodeIcon.Stop), "Stop", MaterialTheme.colorScheme.error, onStop, size = 20)
+                    IconAction(jcIcon(JCodeIcon.Stop), "Stop", MaterialTheme.colorScheme.error, onStop)
                 } else {
-                    IconAction(jcIcon(JCodeIcon.Run), "Run", MaterialTheme.colorScheme.primary, onRun, enabled = config.terminals.any { it.command.isNotBlank() }, size = 20)
+                    IconAction(jcIcon(JCodeIcon.Run), "Run", MaterialTheme.colorScheme.primary, onRun, enabled = config.terminals.any { it.command.isNotBlank() })
                     // Launch under the debugger (VS-style): set gutter breakpoints, tap Debug, pause on hit.
                     // The entry is auto-derived from the command / active file — no manual field to fill in.
-                    IconAction(jcIcon(JCodeIcon.Debug), "Debug", MaterialTheme.colorScheme.tertiary, onDebug, size = 20)
+                    IconAction(jcIcon(JCodeIcon.Debug), "Debug", MaterialTheme.colorScheme.tertiary, onDebug)
                 }
-                IconAction(jcIcon(JCodeIcon.Settings), "Configure", MaterialTheme.colorScheme.onSurfaceVariant, onConfigure, size = 18)
-                if (!running && deletable) IconAction(Icons.Rounded.DeleteOutline, "Delete", MaterialTheme.colorScheme.onSurfaceVariant, onDelete, size = 18)
+                IconAction(jcIcon(JCodeIcon.Settings), "Configure", MaterialTheme.colorScheme.onSurfaceVariant, onConfigure, size = 17)
+                if (!running && deletable) IconAction(Icons.Rounded.DeleteOutline, "Delete", MaterialTheme.colorScheme.onSurfaceVariant, onDelete, size = 17)
             }
             // Row 2: thin status + port line.
             Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = if (config.readyPort > 0) 2.dp else 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -508,90 +530,201 @@ private fun RunConfigRow(
 private fun BuildConfigRow(config: BuildConfig, deletable: Boolean, onBuild: () -> Unit, onConfigure: () -> Unit, onDelete: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 10.dp, top = 4.dp, bottom = 4.dp, end = 2.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = 10.dp, top = 2.dp, bottom = 2.dp, end = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            horizontalArrangement = Arrangement.spacedBy(1.dp),
         ) {
             Text(config.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             IconAction(jcIcon(JCodeIcon.Run), "Build", MaterialTheme.colorScheme.primary, onBuild, enabled = config.command.isNotBlank())
-            IconAction(jcIcon(JCodeIcon.Settings), "Configure", MaterialTheme.colorScheme.onSurfaceVariant, onConfigure, size = 18)
-            if (deletable) IconAction(Icons.Rounded.DeleteOutline, "Delete", MaterialTheme.colorScheme.onSurfaceVariant, onDelete, size = 18)
+            IconAction(jcIcon(JCodeIcon.Settings), "Configure", MaterialTheme.colorScheme.onSurfaceVariant, onConfigure, size = 17)
+            if (deletable) IconAction(Icons.Rounded.DeleteOutline, "Delete", MaterialTheme.colorScheme.onSurfaceVariant, onDelete, size = 17)
         }
     }
 }
 
-/** Live ADB bridge status for a project that runs on this device, with a link into the pairing page. */
+/**
+ * Which device this project's adb-driven runs launch on, and the picker that changes it.
+ *
+ * The runtime's adb server is the only source of devices: JCode's own virtual device and this phone
+ * both reach a run by being connected to it, so anything adb does not list cannot be launched on. With
+ * nothing listed the row becomes the way into the pairing page instead.
+ */
 @Composable
-private fun AdbDeviceRow() {
+private fun AndroidTargetRow(project: Project) {
+    val targets = LocalAndroidRunTargets.current
     val device = LocalAndroidDevice.current
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
+    val key = project.id.toString()
+    val current = targets.effective(key)
+    var showPicker by remember { mutableStateOf(false) }
+
+    PanelRow(onClick = { if (current == null) device.onOpenPage() else showPicker = true }) {
+        Icon(
+            imageVector = if (current?.isVirtual == true) Icons.Rounded.Smartphone else Icons.Rounded.PhoneAndroid,
+            contentDescription = null,
+            tint = if (current?.isOnline == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                text = current?.label ?: "No device",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = when {
+                    current == null && targets.loading -> "Looking for devices…"
+                    current == null -> device.status
+                    else -> current.serial
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        when {
+            current == null -> Text("Set up", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            // Only say how many when there is in fact a choice to make.
+            targets.available.size > 1 -> RunStatusChip("${targets.available.size} devices", active = current.isOnline)
+            else -> RunStatusChip(current.state, active = current.isOnline)
+        }
+        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+    }
+
+    if (showPicker) {
+        AndroidTargetDialog(
+            targets = targets.available,
+            selected = current,
+            loading = targets.loading,
+            onRefresh = targets.onRefresh,
+            onPick = { serial -> targets.onSetProject(key, serial); showPicker = false },
+            onDismiss = { showPicker = false },
+        )
+    }
+}
+
+@Composable
+private fun AndroidTargetDialog(
+    targets: List<AndroidRunTarget>,
+    selected: AndroidRunTarget?,
+    loading: Boolean,
+    onRefresh: () -> Unit,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val listMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.5f).coerceIn(160f, 360f).dp
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.width(JCodeDialogDefaults.width()),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Run on",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconAction(Icons.Rounded.Refresh, "Refresh devices", MaterialTheme.colorScheme.onSurfaceVariant, onRefresh, enabled = !loading, size = 17)
+                }
+                if (targets.isEmpty()) {
+                    HintText(if (loading) "Looking for devices…" else "The runtime's adb server lists no device.")
+                } else {
+                    HintText("This project's runs and debugs go to the device picked here.")
+                    PickerList(listMaxHeight) {
+                        targets.forEach { target ->
+                            TargetChoiceRow(target, chosen = target.serial == selected?.serial, onClick = { onPick(target.serial) })
+                        }
+                    }
+                }
+                CompactOutlinedButton(text = "Cancel", onClick = onDismiss, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    }
+}
+
+@Composable
+private fun TargetChoiceRow(target: AndroidRunTarget, chosen: Boolean, onClick: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(10.dp)) {
         Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = device.onOpenPage)
-                .padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick)
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Icon(
-                Icons.Rounded.PhoneAndroid,
+                imageVector = if (target.isVirtual) Icons.Rounded.Smartphone else Icons.Rounded.PhoneAndroid,
                 contentDescription = null,
-                tint = if (device.ready) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = if (target.isOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(18.dp),
             )
-            Column(modifier = Modifier.weight(1f)) {
-                Text("This device", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1)
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text(target.label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    text = if (device.ready) device.serial ?: "Connected" else device.status,
-                    style = MaterialTheme.typography.labelSmall,
+                    // adb's own word for the state, so an offline or unauthorized device says so in the
+                    // vocabulary the terminal would have used.
+                    text = if (target.isOnline) target.serial else "${target.state} · ${target.serial}",
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (device.ready) {
-                RunStatusChip("Connected", active = true)
-            } else {
-                Text("Set up ADB", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            if (chosen) {
+                Icon(Icons.Rounded.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
             }
         }
     }
 }
 
-/** Opens the device sandbox tab, which is otherwise only reached when a virtual-device build finishes. */
+/** Opens the device sandbox tab, which is otherwise only reached when a virtual-device build finishes.
+ *  Named after the tab rather than the device, since the target row above it can be showing the very
+ *  same virtual device as an adb target and two rows reading "Virtual device" say nothing apart. */
 @Composable
 private fun VirtualDeviceRow() {
+    PanelRow(onClick = { AppSandbox.requestOpen(null) }) {
+        Icon(
+            Icons.Rounded.Smartphone,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp),
+        )
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text("Device sandbox", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1)
+            Text(
+                text = "Run a built APK in a tab — no install, no ADB",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text("Open", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+    }
+}
+
+/** The panel's standard tappable row: same surface, radius and density as the manager list rows. */
+@Composable
+private fun PanelRow(onClick: () -> Unit, content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
         Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                .clickable { AppSandbox.requestOpen(null) }
-                .padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick)
+                .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Icon(
-                Icons.Rounded.Smartphone,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp),
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Virtual device", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1)
-                Text(
-                    text = "Run a built APK in a tab — no install, no ADB",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Text("Open", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-        }
+        ) { content() }
     }
 }
 
 @Composable
 private fun AddRow(label: String, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(vertical = 8.dp, horizontal = 8.dp),
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(vertical = 6.dp, horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -602,15 +735,15 @@ private fun AddRow(label: String, onClick: () -> Unit) {
 
 @Composable
 private fun IconAction(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     label: String,
-    tint: androidx.compose.ui.graphics.Color,
+    tint: Color,
     onClick: () -> Unit,
     enabled: Boolean = true,
-    size: Int = 22,
+    size: Int = 19,
 ) {
     JcTooltip(label) {
-        IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size((size + 14).dp)) {
+        IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size((size + 13).dp)) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,

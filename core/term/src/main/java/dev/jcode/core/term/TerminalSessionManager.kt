@@ -84,6 +84,9 @@ class TerminalSessionManager(
             if (cols == newCols && rows == newRows) return
             cols = newCols
             rows = newRows
+            // Parser first, ioctl second, and the order is load-bearing: the ioctl raises SIGWINCH,
+            // so an application's repaint must not arrive while the grid is still the old width — it
+            // would be wrapped against a size the application has already stopped using.
             synchronized(this) { parser.resize(newRows, newCols) }
             runCatching { pty.resize(newCols, newRows) }
         }
@@ -628,13 +631,6 @@ class TerminalSessionManager(
         if (synchronized(sessionsLock) { _sessions.containsKey(id) }) {
             activeSessionId = id
         }
-    }
-
-    /**
-     * Resize a terminal session.
-     */
-    fun resizeSession(id: String, cols: Int, rows: Int) {
-        getSession(id)?.resize(cols, rows)
     }
 
     /**

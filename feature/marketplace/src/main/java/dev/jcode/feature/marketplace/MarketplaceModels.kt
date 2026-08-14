@@ -91,18 +91,35 @@ data class RunPresetTerminal(
     val command: String,
 )
 
-/** An extension-contributed build/run **preset**, offered on the Configure Run page when the project
- *  contains ALL of [requires] (each a glob; with a slash it matches the file's project-relative path,
- *  without one just the file name — e.g. `*.csproj`, or a package.json anywhere via a globstar path).
- *  Applying it prefills the run form with [readyPort] + [terminals] (never auto-saved). A preset may
- *  drive several terminals (e.g. an ASP.NET server + a Vite client), which is why it needs its own
- *  required-file list rather than a single match. */
+/** Which of the Run panel's two lists a [RunConfigPreset] belongs in. A preset that starts something
+ *  the user then interacts with is a [Run]; one that produces an artifact and exits is a [Build]. */
+enum class RunPresetKind {
+    Run,
+    Build;
+
+    companion object {
+        val Default = Run
+
+        fun from(raw: String?): RunPresetKind = when (raw?.lowercase()) {
+            "build", "buildtask", "build-task" -> Build
+            else -> Default
+        }
+    }
+}
+
+/** An extension-contributed build/run **preset**, offered in the Run panel's Add picker when the
+ *  project contains ALL of [requires] (each a glob; with a slash it matches the file's project-relative
+ *  path, without one just the file name — e.g. `*.csproj`, or a package.json anywhere via a globstar
+ *  path). [kind] chooses which list it is offered in. A run preset may drive several terminals (e.g. an
+ *  ASP.NET server + a Vite client), which is why it needs its own required-file list rather than a
+ *  single match; a build task is one command, so a [Build] preset keeps only its first terminal. */
 data class RunConfigPreset(
     val id: String,
     val label: String,
     val requires: List<String>,
     val terminals: List<RunPresetTerminal>,
     val readyPort: Int = 0,
+    val kind: RunPresetKind = RunPresetKind.Default,
 )
 
 /** Actions an extension contributes to host surfaces. Rendered when the extension is active and its
