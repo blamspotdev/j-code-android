@@ -261,7 +261,7 @@ private fun ProjectRunBuildDetail(
                             name = kind,
                             entries = triggers.map { trigger ->
                                 PickerEntry(trigger.label, trigger.detail) {
-                                    onAddRunPresets(project, trigger.options.map { it.config })
+                                    onAddRunPresets(project, trigger.configs)
                                     showAddRun = false
                                 }
                             },

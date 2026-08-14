@@ -204,23 +204,15 @@ object ProjectRunner {
         }
     }
 
-    /** A run config detected from the project's files, offered in the "Add run config" picker (its
-     *  [RunTrigger]'s options are all saved when that file is picked). [source] says what detected it
-     *  — "Detected" for built-in probes, or the contributing extension's name. */
-    data class RunSuggestion(
-        val label: String,
-        val source: String,
-        val config: RunConfig,
-    )
-
-    /** A runnable trigger file — a `.csproj`, a `package.json`, `gradlew`, or an extension preset's
-     *  anchor — and the run options it offers. The "Add run config" picker groups these by [kind]
-     *  into frameworks; picking a file then creates all of its [options] at once. */
+    /** A runnable trigger file — a `.csproj`, a `package.json`, a Gradle module, or an extension
+     *  preset's anchor — and the run configs it offers. The "Add run config" picker groups these by
+     *  [kind] into frameworks; picking a file then creates all of its [configs] at once, which is why
+     *  they need no per-config label of their own. */
     data class RunTrigger(
         val label: String,
         val kind: String,
         val detail: String,
-        val options: List<RunSuggestion>,
+        val configs: List<RunConfig>,
     )
 
     /**
@@ -262,15 +254,11 @@ object ProjectRunner {
                 label = preset.label,
                 kind = source,
                 detail = rel(match.anchor),
-                options = listOf(
-                    RunSuggestion(
-                        label = "Run",
-                        source = if (preset.readyPort > 0) ":${preset.readyPort}" else "${preset.terminals.size} terminal(s)",
-                        config = RunConfig(
-                            name = preset.label,
-                            readyPort = preset.readyPort,
-                            terminals = preset.terminals.map { RunConfigTerminal(it.label, match.substitute(it.command)) },
-                        ),
+                configs = listOf(
+                    RunConfig(
+                        name = preset.label,
+                        readyPort = preset.readyPort,
+                        terminals = preset.terminals.map { RunConfigTerminal(it.label, match.substitute(it.command)) },
                     ),
                 ),
             )
@@ -296,14 +284,13 @@ object ProjectRunner {
                 readyPort = port,
                 terminals = listOf(RunConfigTerminal("Server", serverCmd(config, suffix))),
             )
-            val detail = if (port > 0) ":$port" else "console"
             triggers += RunTrigger(
                 label = csproj.name,
                 kind = if (web) "C# · ASP.NET Core" else "C# · .NET",
                 detail = rel(csproj),
-                options = listOf(
-                    RunSuggestion("Debug build", "dotnet · $detail", cfg("$name (debug)", "Debug", "debug")),
-                    RunSuggestion("Release build", "dotnet · $detail", cfg(name, "Release", "release")),
+                configs = listOf(
+                    cfg("$name (debug)", "Debug", "debug"),
+                    cfg(name, "Release", "release"),
                 ),
             )
         }
@@ -316,22 +303,18 @@ object ProjectRunner {
             val dir = json.parentFile ?: return@forEach
             val dirGuest = if (dir == root) guestDir else guest(dir)
             val isVite = viteJsons.any { it.first == json }
-            val options = scripts.map { s ->
+            val scriptConfigs = scripts.map { s ->
                 val serveDev = isVite && s == "dev"
                 val port = if (serveDev) VITE_PORT else 0
                 val cmd = if (serveDev) viteClientCommand(guestDir, stage(s), VITE_PORT, dirGuest)
                     else npmScriptCommand(dirGuest, stage("npm-$s"), s)
-                RunSuggestion(
-                    label = "npm run $s",
-                    source = if (port > 0) ":$port" else "script",
-                    config = RunConfig(name = "npm run $s", readyPort = port, terminals = listOf(RunConfigTerminal("Run", cmd))),
-                )
+                RunConfig(name = "npm run $s", readyPort = port, terminals = listOf(RunConfigTerminal("Run", cmd)))
             }
             triggers += RunTrigger(
                 label = if (dir == root) "package.json" else "${dir.name}/package.json",
                 kind = "Node",
                 detail = rel(json),
-                options = options,
+                configs = scriptConfigs,
             )
         }
 
@@ -350,31 +333,23 @@ object ProjectRunner {
                     label = if (modulePath.isEmpty()) project.name else androidGradlePath(modulePath),
                     kind = "Android",
                     detail = "build, install & launch",
-                    options = listOf(
-                        RunSuggestion(
-                            label = "Run on a device",
-                            source = "android",
-                            config = RunConfig(
-                                name = "Android app$qualifier",
-                                readyPort = 0,
-                                terminals = listOf(RunConfigTerminal("Run", androidRunCommand(guestDir, modulePath, gradle))),
-                            ),
+                    configs = listOf(
+                        RunConfig(
+                            name = "Android app$qualifier",
+                            readyPort = 0,
+                            terminals = listOf(RunConfigTerminal("Run", androidRunCommand(guestDir, modulePath, gradle))),
                         ),
-                        RunSuggestion(
-                            label = "Run in a virtual device",
-                            source = "android · no install",
-                            config = RunConfig(
-                                name = "Android app$qualifier (virtual device)",
-                                readyPort = 0,
-                                terminals = listOf(RunConfigTerminal("Build", androidVirtualDeviceCommand(guestDir, modulePath, gradle))),
-                            ),
+                        RunConfig(
+                            name = "Android app$qualifier (virtual device)",
+                            readyPort = 0,
+                            terminals = listOf(RunConfigTerminal("Build", androidVirtualDeviceCommand(guestDir, modulePath, gradle))),
                         ),
                     ),
                 )
             }
         }
 
-        return triggers.filter { it.options.isNotEmpty() }.take(SCAN_TOTAL_CAP)
+        return triggers.filter { it.configs.isNotEmpty() }.take(SCAN_TOTAL_CAP)
     }
 
     /** One selectable entry in the Build segment's Add picker: a build config and what offered it

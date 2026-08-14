@@ -634,13 +634,6 @@ class TerminalSessionManager(
     }
 
     /**
-     * Resize a terminal session.
-     */
-    fun resizeSession(id: String, cols: Int, rows: Int) {
-        getSession(id)?.resize(cols, rows)
-    }
-
-    /**
      * Send input to a specific session.
      */
     fun sendInput(id: String, text: String) {
