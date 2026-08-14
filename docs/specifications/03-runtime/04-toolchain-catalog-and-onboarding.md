@@ -150,55 +150,65 @@ on this device does not run at all — and the error it produces says nothing ab
 `A problem occurred starting process 'command …/aidl'`, or `Exec failed, error: 2 (No such file or
 directory)` for a file that plainly exists. Every constraint below is a consequence of that one fact.
 
-The `android-sdk` entry works around it in three places:
+The `android-sdk` entry answers it with one idempotent script, `/usr/local/bin/jcode-arm-sdk-patch`,
+applied at install time and then **re-applied around every Gradle build** by an init script written
+into both Gradle homes (`init.d/jcode-arm-sdk.init.gradle`, hooked at `projectsLoaded` and
+`taskGraph.whenReady`). The re-apply is the load-bearing half: AGP downloads a pinned build-tools, an
+NDK or a platform — all x86_64 — long after the catalog entry has finished, and `whenReady` runs
+after configuration (when AGP does those downloads) but before any task executes what arrived.
 
-1. **Copy the distro's native aarch64 build-tools over the downloaded ones** — `aapt2`, `aapt`,
-   `zipalign`, `aidl`, `aidl-cpp`, `split-select` — into **every** `build-tools/` directory present,
-   because a project that pins `buildToolsVersion` picks its own.
-2. **Point AGP at the native `aapt2`** with `android.aapt2FromMavenOverride`, written into both
-   Gradle homes. AGP resolves its own `aapt2` as a Maven artifact, so replacing the one in
-   `build-tools/` is not enough on its own.
-3. **Copy the native `adb` over platform-tools'**, because AGP invokes it by absolute path — a native
-   `adb` earlier on `PATH` does not save `installDebug`.
+What the patch does:
 
-Two ceilings remain. Both were measured by exporting this repo onto a phone and building it inside
-JCode's own distro:
+1. **build-tools**: copy the best available ARM tools — `aapt2`, `aapt`, `zipalign`, `aidl`,
+   `dexdump`, `split-select`, `aidl-cpp` — into **every** `build-tools/` directory present, because
+   a project that pins `buildToolsVersion` picks its own. "Best available" means a static arm64
+   build of the real **35.0.2** tools (fetched at install, pinned by URL **and sha256**, from
+   `lzhiyong/android-sdk-tools` — Google publishes no arm64 Linux SDK tools at all); when that fetch
+   failed, Debian's 29.0.3 set is the fallback, with two consequences below.
+2. **`aidl` sanitize wrapper** (fallback only): Debian's 2019 `aidl` cannot parse the annotations
+   android-34+ `framework.aidl` files carry (`malformed preprocessed file line:
+   '@JavaOnlyStableParcelable parcelable …'`). The wrapper rewrites any `-p<file>` to a cached copy
+   with the annotations stripped — they feed aidl's own stability bookkeeping, not the Java it
+   generates — which was verified to make the 29.0.3 binary compile this repo's `.aidl` against
+   `android-36`. The modern static `aidl` needs none of this and replaces the wrapper when present.
+3. **`adb`**: the distro's native adb copied over platform-tools', because AGP invokes it by
+   absolute path — a native `adb` earlier on `PATH` does not save `installDebug`.
+4. **`cmake`**: an SDK `cmake/<version>/bin` entry **symlinked** to `/usr/bin/cmake` and `ninja`
+   (symlinks, so cmake's own `share/cmake-*` modules keep resolving). The root build script picks
+   the SDK cmake dir matching a version that actually exists, so the symlinked entry is chosen.
+5. **NDK**: the NDK ships no ARM Linux host toolchain, but the distro's **LLVM 18** is the same
+   major version NDK 27 carries and cross-compiles to Android when handed the NDK's sysroot (the
+   CMake toolchain file passes that) and resource dir. `bin/clang`/`clang++` become two-line
+   wrappers; `ld.lld` and the `llvm-*` tools become symlinks:
 
-- **AIDL stops at `compileSdk 33`.** The only aarch64 `aidl` in Ubuntu 24.04 is
-  `android-sdk-build-tools 29.0.3`, from 2019. It compiles an `.aidl` file against `android-33`'s
-  `framework.aidl` correctly, and fails on `android-34+`, whose preprocessed file uses syntax it
-  never learned: `malformed preprocessed file line: '@JavaOnlyStableParcelable parcelable …'`. JCode's
-  own `compileSdk` is 36, so JCode cannot build itself on-device today.
-- **The NDK has no ARM Linux host toolchain**, so `cmake` and `clang` under `$ANDROID_HOME` cannot
-  execute here either, and unlike build-tools there is nothing in the archive to copy over them.
+   ```sh
+   exec /usr/bin/clang -resource-dir $NDK/…/lib/clang/18 -rtlib=compiler-rt -unwindlib=libunwind "$@"
+   ```
 
-The second one is crossable and the way is known — it is only unbuilt. The distro carries a full
-native **LLVM 18**, the same major version NDK 27 ships, and it cross-compiles to Android when it is
-given the NDK's sysroot and resource directory:
+   Without `-resource-dir`/`-rtlib` the Ubuntu driver reaches for `-lgcc`, which Android does not
+   have, and the link dies with `unable to find library -lgcc`.
 
-```sh
-clang --target=aarch64-linux-android33 \
-      --sysroot=$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot \
-      -resource-dir=$NDK/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18 \
-      -rtlib=compiler-rt -unwindlib=libunwind -fPIC -shared t.c -o libt.so
-```
+AGP's own Maven `aapt2` is separately overridden with `android.aapt2FromMavenOverride` in both
+Gradle homes — AGP resolves that artifact itself, so fixing `build-tools/` alone is not enough.
 
-> Verified: produces `Machine: AArch64`, `NEEDED libc.so`, `NEEDED libdl.so` — a real Android object.
-> Both extra flags are needed. Without `-resource-dir` and `-rtlib` the Ubuntu driver reaches for
-> `-lgcc`, which Android does not have, and the link fails with `unable to find library -lgcc`.
+With the fetched tools there is **no compileSdk ceiling**: the platform probe decides, and
+android-36 links. Under the Debian fallback aapt2 2.19 still cannot read resource tables newer than
+API 34, so the ceiling logic (§ install script) stays for that path.
 
-Turning that into a shipped feature means a `bin/clang` wrapper carrying those flags inside each NDK,
-symlinks for `ld.lld` and the `llvm-*` tools, and the same swap for `cmake`/`ninja` — plus somewhere
-to run it, since AGP downloads whichever NDK a project pins long after this entry has finished.
-
-**What does build on-device today**, measured on an Odin2 (Android 13, aarch64):
+**Measured on an Odin2** (Android 13, aarch64), building this repo inside JCode's own distro:
 
 | Path | Result |
 |---|---|
-| `javac` + `d8` + `aapt2` + `zipalign` + `apksigner`, no Gradle | **Works.** `tools/hardware-fixture` builds here and runs on the virtual device |
-| Gradle 8.14.3 + AGP 8.13 + Kotlin 2.2 + Compose, library module | **Works.** `:core:design:assembleDebug` produces a 329 KB AAR |
-| A module with `.aidl` and `compileSdk` ≥ 34 | Fails — `aidl` is 29.0.3 |
-| A module with `externalNativeBuild` | Fails — `cmake` and `clang` are x86_64 |
+| `javac` + `d8` + `aapt2` + `zipalign` + `apksigner`, no Gradle | **Works** — `tools/hardware-fixture` builds here and runs on the virtual device |
+| Gradle 8.14.3 + AGP 8.13 + Kotlin 2.2 + Compose, library module | **Works** — `:core:design:assembleDebug`, 329 KB AAR |
+| `.aidl` at `compileSdk` 36 | **Works** — modern static `aidl`, and the sanitize wrapper proves the same for the fallback |
+| `externalNativeBuild` (CMake + NDK 27.2) | **Works** — distro clang through the NDK wrappers, both `arm64-v8a` and `x86_64` ABIs |
+| `:app:assembleDebug` — JCode building JCode | See the note in the commit that landed this section |
+
+Two boundaries this does not move: the Rust FFI modules fall back to their CMake stubs unless a
+`cargo` with Android targets is installed (the app builds and runs; ripgrep/wasm degrade), and the
+resulting APK is signed with whatever keystore the on-device build has, so it cannot be installed
+over a differently-signed JCode without an uninstall.
 
 ---
 
