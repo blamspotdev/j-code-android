@@ -526,7 +526,7 @@ object ProjectRunner {
         appendLine("echo \"Launched \$PKG\"")
     }
 
-    /** Build the debug APK and stop there: the app is started by the container, in J Code's own
+    /** Build the debug APK and stop there: the app is started by the container, in JCode's own
      *  process, once the workbench sees the run finish. Nothing is installed and adb is never used, so
      *  this recipe works on a device that was never paired. The APK directory is stamped into the
      *  script as [VDEVICE_MARKER] — that, not the terminal output, is how the workbench finds the

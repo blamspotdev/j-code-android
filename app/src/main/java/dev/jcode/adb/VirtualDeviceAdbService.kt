@@ -20,6 +20,8 @@ import dev.jcode.vdevice.VirtualInput
 import dev.jcode.vdevice.VirtualLauncher
 import dev.jcode.vdevice.VirtualScreen
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The adb services JCode's virtual device answers: everything an adb client asks of a device is
@@ -37,11 +39,15 @@ import java.io.File
  *
  * "Installing" here means staging the APK under the container's own storage; there is no system
  * package database involved, so a guest is still invisible to the real `pm` — and
- * [VirtualDeviceApps] empties the whole tree on every J Code start.
+ * [VirtualDeviceApps] empties the whole tree on every JCode start.
  */
 class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
 
     private val appContext = context.applicationContext
+
+    /** Open `install-multiple` sessions by id, each a staging directory of APKs not yet committed. */
+    private val sessions = ConcurrentHashMap<Int, File>()
+    private val nextSession = AtomicInteger(1)
 
     /** What `getprop` answers with — the subset ddmlib and AGP actually read off a device. */
     private val properties: Map<String, String> by lazy {
@@ -199,7 +205,7 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
      * `logcat`, answering the **virtual device's** log rather than the phone's.
      *
      * The phone's is not on offer and could not be: reading it needs `READ_LOGS`, and an app cannot
-     * read back even its own entries — measured on Android 13, where `logcat` run as J Code's uid
+     * read back even its own entries — measured on Android 13, where `logcat` run as JCode's uid
      * returns nothing whatever. What this answers instead is written by the container itself, and is
      * the more useful log for a driver anyway: it contains this device's business and nothing else —
      * what was loaded and started, what the container refused and why, anything the guest printed,
@@ -230,19 +236,93 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
         }
     }
 
+    /**
+     * `cmd package …` — the single-stream `install`, and the four-verb session `adb install-multiple`
+     * uses for an app bundle's base plus its config splits.
+     *
+     * The session form exists because a split APK is not optional packaging: an app bundle keeps no
+     * native libraries in its base at all, so installing the base alone produces an app whose
+     * `System.loadLibrary` finds nothing. `install-create` opens a staging directory,
+     * `install-write` streams one APK into it under the split name adb gives, and `install-commit`
+     * hands the whole set to [VirtualDeviceApps.installSession].
+     */
     private suspend fun install(args: List<String>, stream: AdbStream) {
-        if (args.getOrNull(1) != "package" || args.getOrNull(2) != "install") {
+        if (args.getOrNull(1) != "package") {
             stream.write(unsupportedService(stream.service))
             return
         }
-        val size = args.zipWithNext().firstOrNull { it.first == "-S" }?.second?.toLongOrNull()
-        if (size == null) {
-            // Without -S the client would stream until it closed the stream, which is the sync:
-            // style install this daemon does not implement.
-            stream.write("Failure [INSTALL_FAILED_INVALID_ARGS: '${stream.service}' has no -S size]\n")
-            return
+        when (args.getOrNull(2)) {
+            "install" -> {
+                val size = sizeArg(args)
+                if (size == null) {
+                    // Without -S the client would stream until it closed the stream, which is the
+                    // sync: style install this daemon does not implement.
+                    stream.write("Failure [INSTALL_FAILED_INVALID_ARGS: '${stream.service}' has no -S size]\n")
+                    return
+                }
+                stream.write(receiveApk(size, stream))
+            }
+
+            "install-create" -> {
+                val id = nextSession.getAndIncrement()
+                val dir = File(VirtualDeviceApps.apksDir(appContext), "session-$id")
+                dir.deleteRecursively()
+                dir.mkdirs()
+                sessions[id] = dir
+                stream.write("Success: created install session [$id]\n")
+            }
+
+            "install-write" -> stream.write(receiveSplit(args, stream))
+            "install-commit" -> stream.write(commitSession(args))
+            "install-abandon" -> {
+                val id = args.firstNotNullOfOrNull { it.toIntOrNull() }
+                sessions.remove(id)?.deleteRecursively()
+                stream.write("Success\n")
+            }
+
+            else -> stream.write(unsupportedService(stream.service))
         }
-        stream.write(receiveApk(size, stream))
+    }
+
+    private fun sizeArg(args: List<String>): Long? =
+        args.zipWithNext().firstOrNull { it.first == "-S" }?.second?.toLongOrNull()
+
+    /**
+     * `install-write -S <size> <session> <name>`. The trailing `-` adb appends means "from stdin",
+     * which is this stream, so the split's name is the last argument that is not it.
+     */
+    private suspend fun receiveSplit(args: List<String>, stream: AdbStream): String {
+        val size = sizeArg(args)
+            ?: return "Failure [INSTALL_FAILED_INVALID_ARGS: install-write has no -S size]\n"
+        val tail = args.drop(3).filter { it != "-" && it != "-S" && it != size.toString() }
+        val id = tail.firstNotNullOfOrNull { it.toIntOrNull() }
+        val dir = sessions[id] ?: return "Failure [INSTALL_FAILED_INVALID_ARGS: no session $id]\n"
+        val name = tail.lastOrNull { it.toIntOrNull() == null } ?: "split-${dir.list()?.size ?: 0}"
+
+        val staged = File(dir, if (name.endsWith(".apk")) name else "$name.apk")
+        var received = 0L
+        staged.outputStream().use { out ->
+            while (received < size) {
+                val chunk = stream.read() ?: break
+                out.write(chunk)
+                received += chunk.size
+            }
+        }
+        if (received != size) {
+            staged.delete()
+            return "Failure [INSTALL_FAILED_INVALID_APK: got $received of $size bytes]\n"
+        }
+        return "Success: streamed $received bytes\n"
+    }
+
+    private fun commitSession(args: List<String>): String {
+        val id = args.drop(3).firstNotNullOfOrNull { it.toIntOrNull() }
+        val dir = sessions.remove(id) ?: return "Failure [INSTALL_FAILED_INVALID_ARGS: no session $id]\n"
+        val staged = dir.listFiles().orEmpty().filter { it.isFile }.sortedBy(File::getName)
+        return VirtualDeviceApps.installSession(appContext, staged).fold(
+            onSuccess = { "Success\n" },
+            onFailure = { "Failure [INSTALL_PARSE_FAILED_NOT_APK: ${it.message}]\n" },
+        ).also { dir.deleteRecursively() }
     }
 
     private suspend fun receiveApk(size: Long, stream: AdbStream): String {
@@ -320,16 +400,10 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
         val apk = VirtualDeviceApps.apk(appContext, packageName)
             ?: return "Error: Package $packageName is not installed on the virtual device\n"
         val className = activity.takeIf { it.isNotEmpty() }?.let { qualify(it, packageName) }
-        val fullScreen =
-            args.zipWithNext().firstOrNull { it.first == "--windowingMode" }?.second == FULLSCREEN_MODE
-        val started = if (fullScreen) {
-            VirtualDevice.launch(appContext, apk.absolutePath, className)
-        } else {
-            // inspect() is the same parse launch() would do, so a broken APK still fails here rather
-            // than silently opening an empty tab.
-            VirtualDevice.inspect(appContext, apk.absolutePath)
-                .onSuccess { AppSandbox.requestOpen(apk.absolutePath, className, run = true) }
-        }
+        // inspect() parses the APK the same way the load will, so a broken one fails here rather
+        // than silently opening an empty tab.
+        val started = VirtualDevice.inspect(appContext, apk.absolutePath)
+            .onSuccess { AppSandbox.requestOpen(apk.absolutePath, className, run = true) }
         return started.fold(
             onSuccess = { "Starting: Intent { cmp=$component }\n" },
             onFailure = { "Error: ${it.message}\n" },
@@ -411,7 +485,7 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
 
         private const val EMPTY_LOG =
             "--------- beginning of jcode virtual device\n" +
-                "(nothing logged yet — the device's log covers this J Code session only, and holds " +
+                "(nothing logged yet — the device's log covers this JCode session only, and holds " +
                 "what the container did plus anything the guest printed or crashed with)\n"
 
         private const val NOTHING_RUNNING =

@@ -1,9 +1,7 @@
 package dev.jcode.vdevice
 
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
-import android.util.Log
 
 /** What the container could learn about a guest APK without installing or running it. */
 data class VirtualDeviceApp(
@@ -17,15 +15,15 @@ data class VirtualDeviceApp(
 )
 
 /**
- * Runs a built APK inside J Code — no install, no ADB, no root.
+ * Runs a built APK inside JCode — no install, no ADB, no root.
  *
  * The guest is loaded into a **separate process of this app** (`:guest`, declared on the stub
  * activities in `AndroidManifest.xml`) so it gets its own ART heap and its own framework hooks and
  * cannot corrupt the IDE. Inside that process the container loads the APK's dex, resources and
  * native libraries by hand and persuades `ActivityThread` to instantiate the guest's activities in
- * place of J Code's stubs, so the *system* still drives attach and the whole activity lifecycle.
+ * place of JCode's stubs, so the *system* still drives attach and the whole activity lifecycle.
  *
- * The guest therefore shares J Code's uid, its permissions and its process — this is a **sandboxed
+ * The guest therefore shares JCode's uid, its permissions and its process — this is a **sandboxed
  * preview, not a security boundary**.
  *
  * [launch] is the full-screen path: a real activity, in its own task, with everything a real window
@@ -79,32 +77,6 @@ object VirtualDevice {
         pm.getApplicationIcon(appInfo)
     }.getOrNull()
 
-    /**
-     * Starts [apkPath] in the guest process and returns the guest's identity.
-     *
-     * [activityClassName] picks a specific activity; when null the container resolves the
-     * MAIN/LAUNCHER one from the APK's manifest, falling back to the first declared activity.
-     *
-     * Returns as soon as the launch intent is dispatched — the guest process starts asynchronously,
-     * and failures past this point surface in logcat under the `VDEVICE` tag.
-     */
-    fun launch(
-        context: Context,
-        apkPath: String,
-        activityClassName: String? = null,
-    ): Result<VirtualDeviceApp> = inspect(context, apkPath).mapCatching { app ->
-        if (app.activities.isEmpty()) {
-            throw VirtualDeviceException("${app.packageName} declares no activities")
-        }
-        val intent = Intent(context, GuestBootstrapActivity::class.java)
-            .putExtra(GuestRuntime.EXTRA_APK, apkPath)
-            .putExtra(GuestRuntime.EXTRA_ACTIVITY, activityClassName)
-            .addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
-        if (context !is android.app.Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
-        Log.i(TAG, "launch ${app.packageName} (${activityClassName ?: "launcher"}) from $apkPath")
-        app
-    }
 }
 
 class VirtualDeviceException(message: String, cause: Throwable? = null) : Exception(message, cause)

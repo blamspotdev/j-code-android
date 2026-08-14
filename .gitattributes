@@ -1,2 +1,5 @@
 *.sh text eol=lf
 .githooks/* text eol=lf
+# No extension, so the *.sh rule misses it: checked out or exported from Windows it picks up CRLF
+# and every POSIX shell — including the one inside JCode's own distro — reads it as ": not found".
+gradlew text eol=lf

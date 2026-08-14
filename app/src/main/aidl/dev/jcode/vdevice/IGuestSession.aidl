@@ -42,4 +42,20 @@ interface IGuestSession {
 
     /** Pops the embedded back stack, or sends Back to the only activity. */
     oneway void back();
+
+    /** The answer to one onPermissionRequest, in the order it asked. */
+    oneway void permissionResult(int requestId, in boolean[] granted);
+
+    /** Force-stop: ends everything the named guest is hosting and drops it from the loader. */
+    oneway void forceStop(String packageName);
+
+    /**
+     * Ends the device: tears the guest down and takes the :guest process with it.
+     *
+     * Unbinding alone does not. Android keeps an emptied process around and rebinds into it, so
+     * everything the container accumulated — loaded dex and class loaders, hosted services, the
+     * swapped Instrumentation, the WebView data directory it claimed — outlives the tab that asked
+     * for it. Closing the tab has to mean the device is off, not hidden.
+     */
+    oneway void shutdown();
 }

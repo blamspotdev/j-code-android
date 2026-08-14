@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Status** | Implemented — verified on Android 13 with `targetSdk = 33` |
-| **Modules** | `:app` (`dev.jcode.vdevice`) |
-| **Primary sources** | app/src/main/java/dev/jcode/vdevice/HiddenApi.kt, GuestLoader.kt, GuestContext.kt, GuestRuntime.kt, GuestHooks.kt, GuestInstrumentation.kt, GuestOverlay.kt, VirtualIdentity.kt, EmbeddedWindows.kt |
-| **Verified against** | device-verified on Android 13, 2026-08-11 (`tools/appcompat-fixture`) |
+| **Modules** | `:app` (`dev.jcode.vdevice`, plus `android.hardware.GuestSensorManager`) |
+| **Primary sources** | app/src/main/java/dev/jcode/vdevice/HiddenApi.kt, GuestLoader.kt, GuestContext.kt, GuestRuntime.kt, GuestHooks.kt, GuestInstrumentation.kt, GuestOverlay.kt, GuestPermissions.kt, GuestLocation.kt, GuestSensors.kt, VirtualIdentity.kt, EmbeddedWindows.kt, app/src/main/java/android/hardware/GuestSensorManager.kt |
+| **Verified against** | device-verified on Android 13, 2026-08-13 (`tools/appcompat-fixture`, `tools/hardware-fixture`) |
 
 ---
 
@@ -37,11 +37,40 @@ internal class LoadedGuest(
 
 | Step | Mechanism |
 |---|---|
-| Code | `DexClassLoader` over the raw APK, parented to the **boot** class loader |
-| Resources | A hand-built `AssetManager` via the hidden `addAssetPath` |
-| Manifest | Parsed with `XmlResourceParser` to find activities and the MAIN/LAUNCHER entry |
-| Native libraries | Extracted from `lib/<abi>/*.so` (regex `lib/([^/]+)/[^/]+\.so`) |
+| Code | `DexClassLoader` over the base APK **and its splits**, parented to the **boot** class loader |
+| Resources | A hand-built `AssetManager` via the hidden `addAssetPath`, base first then each split |
+| Manifest | Parsed with `XmlResourceParser` for the MAIN/LAUNCHER entry and for service/receiver actions |
+| Native libraries | Extracted from `lib/<abi>/*.so` across **every** APK (regex `lib/([^/]+)/[^/]+\.so`) |
 | Data directory | Redirected to `filesDir/vdevice/<packageName>/` |
+
+### 2.0 Split APKs
+
+An app bundle is not optional packaging — it is what `./gradlew bundle` and every Play install
+produce, and its base APK contains **no native libraries at all**: they are the whole content of
+`split_config.<abi>.apk`. Loading the base alone therefore yields an app whose `System.loadLibrary`
+finds nothing, which is the quietest possible way to fail.
+
+Splits are discovered from the store rather than passed in — `<package>.apk` beside
+`<package>.splits/` — so `IGuestSession.start` still takes a single path and every caller that names
+an APK is untouched. The cache fingerprint covers the splits too, so replacing one reloads the guest.
+
+### 2.3 The default theme
+
+An app that declares no `android:theme` is not asking for an empty theme; `ContextThemeWrapper` runs
+the declared id through the hidden `Resources.selectSystemTheme` first, which picks a platform
+default by `targetSdkVersion`. `selectDefaultTheme` reproduces that with the four **public**
+`android.R.style` constants:
+
+| `targetSdkVersion` | Theme |
+|---|---|
+| < 11 | `Theme` |
+| < 14 | `Theme_Holo` |
+| < 24 | `Theme_DeviceDefault` |
+| ≥ 24 | `Theme_DeviceDefault_Light_DarkActionBar` |
+
+> Skipping this leaves a guest with `theme={InheritanceMap=[], Themes=[]}` and the first framework
+> layout that resolves a `?attr/…` against it dies. Measured: RetroArch (`targetSdk` 28, no
+> `android:theme` anywhere in its manifest) failing to inflate `android:layout/screen_title`.
 
 ### 2.1 Why the class loader's parent is the boot loader
 
@@ -172,6 +201,11 @@ Accessing these logs a warning and nothing more:
 | **Every** non-SDK member of `SurfaceControlViewHost`, including `SurfacePackage` | The class carries no `@UnsupportedAppUsage` at all | `EmbeddedWindows` reaches the host's view root through the container's public `getParent()`, and the root layer through `SurfacePackage`'s own public `Parcelable` contract |
 | `Activity.performStart` / `performResume` | Denied | Driven through the public lifecycle path |
 | `Activity.mActivityLifecycleCallbacks` | Denied — the list those two dispatch to, and the one AndroidX's `ReportFragment` registers on | `GuestRuntime.resumeEmbedded` dispatches `Application.mActivityLifecycleCallbacks` (greylisted) and drives the guest's own `LifecycleRegistry` reflectively for what the other would have reached |
+| **Every instance member of `LocationManager`**, `mService` included | Denied. Measured from inside a guest: `LocationManager.class.getDeclaredFields()` answers with the public `String` constants and *nothing else* | The binder is replaced one step earlier, in `ServiceManager.sCache` (greylisted), before any `LocationManager` exists — see §5c |
+| **Every method of `ILocationListener` and `ILocationCallback`** | Denied. `ILocationListener.class.getMethods()` offers exactly one member, `asBinder`, inherited from the public `IInterface` — the interface cannot be invoked through, and the transport's own hidden class has its members filtered out of the same list | `IBinder.transact` with a hand-written `Parcel`. Public API, and it is what the generated stub reads anyway |
+| `SensorManager()` — the constructor | Package-private **in the SDK stub only**; the class the runtime loads has the ordinary public default constructor of a public class | `GuestSensorManager` is declared in package `android.hardware`, which satisfies the compiler. Nothing hidden is reached |
+| `PermissionManager.disablePermissionCache` and `disablePackageNamePermissionCache` | Denied. The permission cache therefore cannot be turned off, and it sits *above* the binder — so an answer given once is repeated for the life of the process | Get in front of it instead: `GuestContext` overrides the public `checkPermission` / `checkSelfPermission` / `checkCallingOrSelfPermission`, which is where a guest's question starts |
+| `Activity.mHasCurrentPermissionsRequest`, and both `dispatchRequestPermissionsResult` and `dispatchActivityResult` | All three denied — absent from `Activity`'s declared members | Nothing to design around: the flag stays set, so an activity gets **one** runtime permission request. The consequence is logged and documented rather than hidden — see [App sandbox architecture §7e](01-app-sandbox-architecture.md#7e-two-settings-not-one--virtualdevicepolicy) |
 
 ### 5.3 No escape hatch
 
@@ -182,6 +216,415 @@ So if a future platform demotes any greylisted member above, the fix is a real o
 point), not a bypass.
 
 ---
+
+## 4a. Two things `:guest` must claim before the guest runs
+
+Both were found the same way — by hosting providers, which made guests run enough of themselves to
+reach code the container had never exercised.
+
+| Claim | Why |
+|---|---|
+| `WebView.setDataDirectorySuffix("jcode-guest")` | WebView takes an **exclusive lock** on its data directory and refuses to load in a second process of the same app without a suffix. JCode's own process always gets there first, so a guest that touched a WebView at all died with `Using WebView from more than one process at once with the same data directory is not supported`. Not a niche case: ad SDKs, sign-in flows, Cordova/Ionic apps and any in-app browser reach for one. Public API from API 28, and it must run before WebView is used — which is why it is the first thing `install` does |
+| `GuestContext.getDatabasePath` accepting an **absolute** name | `ContextImpl` returns an absolute name as-is, and libraries rely on it: WorkManager hands Room a full path under `no_backup/`, and Room passes it straight back. Joining it onto `databases/` produced `…/databases/data/user/0/…/no_backup/androidx.work.workdb`, and the `SQLiteCantOpenDatabaseException` came back on a WorkManager thread where nothing catches it |
+
+> Both crashes killed `:guest`, and where a **full-screen** guest was in JCode's task the activity
+> manager's crash cleanup finished `MainActivity` along with it — so a guest's bug took the IDE off
+> the screen. Embedded guests share no task and are unaffected.
+
+## 4b. The embedded activity's token — `GuestActivityClient`
+
+An embedded activity is built by hand, so its token is a bare `Binder` rather than something the
+window manager minted, and the server rejects it before doing anything:
+
+```
+Bad activity token: android.os.BinderProxy@5fb1255
+java.lang.ClassCastException: android.os.BinderProxy cannot be cast to
+    com.android.server.wm.ActivityRecord$Token
+    at com.android.server.wm.ActivityRecord.getTaskForActivityLocked
+```
+
+Everything the framework routes through `ActivityClient` carries that token, so the whole surface —
+`getTaskForActivity`, `setTaskDescription`, `finishActivity`, `getDisplayId` — failed. Measured on
+CPU-Z, whose Mobile Ads SDK asks for its task from inside a WebView and took the guest down with a
+native `SIGTRAP` when no answer came.
+
+`IActivityClientController` is an interface, so one `Proxy` covers every entry point. Calls carrying
+a token this container minted are answered locally; everything else — including a full-screen
+guest's, whose token *is* real — passes through.
+
+**Where the proxy gets in matters.** Not through `ActivityClient.INTERFACE_SINGLETON`, which is
+**blocked** at `targetSdk` 33 (measured: `blocked, reflection, denied`). One level up instead: that
+singleton builds its controller by calling `IActivityTaskManager.getActivityClientController()`, and
+the `IActivityTaskManager` binder is already proxied through a greylisted member. The container
+answers that call with a wrapper and the singleton caches it as though the server had handed it over
+— no new hidden member, and the one it leans on was already load-bearing. It follows that the hook
+must be installed before anything in `:guest` touches an activity: the singleton asks once.
+
+A method the proxy does not model returns a type-appropriate nothing rather than being forwarded,
+because the alternative is not a correct answer but the exception above. That policy has one cost,
+and it is the reason unmodelled calls are now **logged by name**: a feature that quietly did nothing
+looks exactly like one that was never used. `onBackPressed` hid there for as long as it did — and
+cost a build cycle to find — because nothing said it had been swallowed.
+
+Separately, an embedded token is blanked out of any outgoing `startActivity` — `resultTo` naming an
+activity the server has never heard of is rejected outright, and null is both accepted and accurate.
+
+### 4b.1 Leaving a screen
+
+Three separate things have to be true before Back can leave a screen an app pushed, and each was
+found broken by walking into NewPipe's settings and being unable to walk out.
+
+**The activity decides first.** `EmbeddedGuest.back` used to pop its own stack whenever it held more
+than one activity, which skipped the activity entirely. A preference sub-screen is a *fragment*, so
+Back left the sub-screen, the settings list and the settings activity in one step and landed back on
+the app's main screen. Every other back stack an activity keeps — an open drawer, a WebView's
+history, a multi-step form — was skipped the same way. The top activity now gets `onBackPressed`, and
+an activity with nothing of its own to pop finishes itself, which is what the container acts on.
+
+**`onBackPressed` is a question for the server.** Since Android 12 an activity does not act on Back:
+`Activity.onBackPressed` hands the decision to the system, because only the system knows whether this
+is the last activity in the task — in which case the task goes to the back rather than the app
+closing. Swallowed by the proxy, Back did nothing on any pushed screen. AppCompat pops its own
+fragment back stack before delegating, which is why exactly *one* level of Back appeared to work and
+disguised the rest. A guest's tab is its own task, so the container always answers "finish".
+
+**A finish has to be noticed.** `Activity.finish()` reaches a task manager that has never heard of
+the activity, so it does nothing but set `isFinishing`, and the container was checking for that after
+each touch. A click does not run inline with the touch that produced it — `View` posts
+`performClick` — so the check ran a message *earlier* than the `finish()` it was meant to catch, and
+nothing reaped it. The proxy now says so from `finishActivity` itself, posted to the main thread
+because `finish()` sets `mFinished` after the call returns. Being told beats looking: it also covers
+a `finish()` from a timer, a callback or an async result, none of which the touch-driven check could
+ever have seen.
+
+`adb shell input keyevent BACK` routes to the same place the tab's Back button does rather than
+dispatching a key. Dispatching KEYCODE_BACK to a view does nothing — `View.dispatchKeyEvent` on a
+decor view never reaches `onBackPressed` — so the key was silently inert, and there was no way to
+leave a second screen from a terminal.
+
+**Measured, and not implemented: `Activity.recreate()` never reaches the container.** Tracing every
+call carrying an embedded token across a full theme change shows `onBackPressed`,
+`getTaskForActivity` and `finishActivity` and no relaunch of any kind, so a hook for one would be
+speculation rather than a measurement. An app that recreates itself to apply a setting therefore
+keeps the old appearance until it is started again; the tab's restart control is the working
+equivalent. The setting itself is applied — verified by setting NewPipe's theme to light, restarting,
+and getting a light app.
+
+## 4c. The notification service — `GuestNotificationHook`
+
+Every binder call a guest makes goes out under **JCode's** uid and package, so a guest that posts a
+notification puts it in the *phone's* real shade, attributed to JCode, where it outlives the device
+being emptied. The virtual device exists so an app can be tried without leaving anything on the
+phone, and the notification shade is part of the phone.
+
+`INotificationManager` is an interface, so the same `Proxy` shape as the other hooks works, taken
+from `NotificationManager.sService`. Posting and cancelling are answered into `VirtualNotifications`
+and never reach the system; what a guest merely *asks* — whether notifications are enabled, what
+importance it has — is answered as a permissive yes, because a "no" is a guest that never posts at
+all and so never proves anything. Channel bookkeeping is accepted and dropped: the device keeps no
+channels, and accepting them silently is what lets an O+ guest reach the `notify()` that matters.
+
+Anything unmodelled still goes through to the real service — most of it is harmless reads, and a
+notification manager that throws is worse than one that over-answers.
+
+The store lives in `:guest` and dies with it, which is the same lifetime the device's screen has:
+stopping an app takes its process, and a stopped app's notifications with it.
+
+### Full screen — `HostNotificationMirror`
+
+The device's status bar is a view inside the embedded guest's container, so it exists only while the
+guest is in the tab. A **full-screen** guest has taken the whole screen and left the tab behind, and
+with it the only surface the device had to show a notification on. Posting nowhere would mean an app
+that behaves correctly appears not to, which is the failure this whole section exists to remove.
+
+So while a guest is full screen its notifications are mirrored onto the phone's own shade, and
+**taken back down when it exits**. That bound is what keeps the mirror from being the thing the hook
+above prevents: notifications are never *left* on the user's phone, only borrowed while there is
+nowhere else to put them. Each carries the guest's label as its sub-text, so it is clear which app
+inside the device is talking.
+
+| | |
+|---|---|
+| On | `GuestRuntime.created` for a full-screen guest activity |
+| Off | `callActivityOnDestroy` of the last one — public SDK, and the counterpart to the create hook |
+| Rebuilt, not forwarded | The guest's notification names a package the phone has never heard of, and its small icon is a resource id in the guest's table. Only the text is the guest's |
+| Tapping one dismisses it | Its content intent belongs to a package the system cannot start, so there is nowhere honest to send anyone |
+
+A thread-local guard makes the mirror's own calls pass through the hook; without it they would be
+caught and fed straight back into the device they came from.
+
+> Verified on the Odin2: host shade 0 before launch, 2 while full screen, 4 after posting two more,
+> and **0 again** the moment the guest exits.
+
+> Verified on `tools/notification-fixture`: two notifications posted from `onCreate` appear in the
+> device's own bar and shade, and `dumpsys notification` on the host counts **zero** of them.
+
+## 4c-bis. The Application comes first
+
+`ActivityThread` builds an app's `Application` in `handleBindApplication`, long before it instantiates
+any activity, and apps depend on that ordering far more than they ever say so. A field initialiser or
+a static `<clinit>` reached from an activity's **constructor** routinely reads a context some holder
+captured in `Application.onCreate`.
+
+The container used to create the guest's `Application` inside `bind()`, which the framework only
+reaches on the way into `onCreate` — one step too late. Measured on MiXplorer:
+
+```
+ExceptionInInitializerError at libs.v04.<clinit>
+Caused by: NullPointerException: Context.getResources() on a null object reference
+```
+
+Its static holder was still null because the constructor had beaten the `Application` to it, and the
+activity could not even be built. `ensureApplication` now runs before `Instrumentation.newActivity`.
+
+## 4d. Two reasons a guest drew nothing
+
+Both looked identical from outside — an app that loaded, started, stayed alive and showed an empty
+screen — and neither was what it appeared to be. Measured on AI Edge Gallery, which now renders in
+full.
+
+**The lifecycle never advanced.** `ReportFragment` registers on the *activity's* callback list, which
+is blocked here, so `GuestRuntime.resumeEmbedded` drives the guest's `LifecycleRegistry` by hand
+instead. That fallback resolved its event constants with `Enum.valueOf` — and **R8 removes `valueOf`
+from an enum nothing looks up by name**, so against any release build it threw
+`NoSuchMethodException: androidx.lifecycle.Lifecycle$Event.valueOf`. The registry stayed at
+INITIALIZED, Compose never started a composition, and the app drew nothing. The static field survives
+where the method does not, because the enum's own code reads it. The sequence also has to begin at
+`ON_CREATE`: sending `ON_START` to a registry that has never been created is an illegal transition
+and `LifecycleRegistry` refuses it.
+
+**A dialog was placed off the screen.** `EmbeddedWindows.place` sized a child window from the child
+*view's* own measured width, and a view that measured itself before there was a real frame keeps that
+size — Gallery's Compose `Dialog` came back **8190px wide on a 1080px device**, so gravity centred it
+at `left = -3555`. The app had opened its welcome dialog correctly and it was simply nowhere anyone
+could see it. Oversized children are now re-measured `AT_MOST` the tab, which is what a window
+manager would have asked for; a window cannot be wider than the screen it is on, so a number saying
+otherwise is wrong wherever it came from.
+
+## 4e. What a game engine waits for
+
+Three things an embedded guest is never given, each of which a rendering framework treats as a
+reason not to start.
+
+**Window focus.** `onWindowFocusChanged` is delivered by the window manager to a *real* window, and
+an embedded guest's token is one no `ActivityRecord` answers to — so the system has no window here to
+give focus to. `GuestRuntime.focus` says it anyway, on both routes a framework might listen on (the
+activity's callback and the view tree's), because in the tab the guest genuinely is the only thing on
+the screen. SDL will not start its render thread without focus *and* a surface; most game engines
+pause on the same signal.
+
+**A believable orientation.** `getRequestedOrientation` goes through `ActivityClient`, and the
+container's generic integer default was `0` — which is `SCREEN_ORIENTATION_LANDSCAPE`, not
+`UNSPECIFIED`. Every embedded guest was claiming it had asked for landscape while sitting in a
+portrait tab, and SDL refuses on exactly that mismatch:
+
+```
+V SDL: Window size: 1080x1510
+V SDL: Skip .. Surface is not ready.
+```
+
+Answering `SCREEN_ORIENTATION_UNSPECIFIED` is both the fix and the honest answer — the tab has one
+shape and the guest does not choose it, which is what `GuestWindow.makeResizable` already says about
+the manifest.
+
+**A visible surface.** A `SurfaceView` does not paint; its pixels are a separate `SurfaceControl`
+below the window, shown through a transparent hole the window punches. A windowless host does not
+honour that hole, so the guest's own opaque background covers it. `GuestSurfaces` raises a
+**full-bleed** surface above the window instead — only full-bleed, because a video player putting one
+behind its controls means it, and raising that would trade a black screen for an unusable one.
+
+Measured with `tools/gl-fixture`, an APK that clears to magenta and does nothing else, written
+because every real GL app has a setup flow in the way and so a black tab could always mean either
+*the container cannot composite* or *the app has not drawn yet*:
+
+```
+I GLFIXTURE: onSurfaceCreated: GL is up, renderer=Adreno (TM) 740
+I VDEVICE  : raised android.opengl.GLSurfaceView above the window so it can be seen
+```
+
+The tab is magenta. The renderer string is the device's real GPU driver, which is the point: nothing
+about rendering is emulated or proxied for a guest. Its `SurfaceControl` comes from the real
+`SurfaceFlinger`, its EGL/GLES calls reach the vendor driver directly, and a `.so` shipped inside the
+guest APK is loaded into JCode's own process and links against the platform's `libEGL`/`libGLESv2`
+like any other library. Only the **binder metadata** layer is proxied (§4); the pixel path is the
+host's, used first-hand. PPSSPP — native C++ on GL — renders its full UI embedded on that basis.
+
+## 5a. Non-activity components — `GuestComponents`
+
+Providers, services and receivers cannot be registered with the system: they belong to a package the
+real `PackageManager` has never heard of, and every registration path ends at a binder call that
+checks exactly that. What the container does instead is what `ActivityThread` does inside an app
+process — build the objects, attach them to a `GuestContext`, drive their lifecycle by hand.
+
+| Component | Hosting |
+|---|---|
+| `<provider>` | Instantiated and `attachInfo(context, info)` — public API, and it calls `onCreate` itself. Ordered by descending `initOrder`, **between** `Application.attachBaseContext` and `Application.onCreate`, exactly where `ActivityThread.handleBindApplication` runs `installContentProviders` |
+| `<service>` | `Service.attach` (greylisted) when available, else a `ContextWrapper.mBase` swap; then `onCreate`, and `onStartCommand`/`onBind` per call. `bindService` calls back on the main thread, never inline |
+| `<receiver>` | Instantiated per broadcast and given `onReceive`. Resolved by explicit component, or by action from the manifest scan |
+
+`Context.startService`/`bindService`/`sendBroadcast` on a `GuestContext` offer the intent to the
+guest first and fall through to the host when the target is not the guest's — so a guest can still
+fire an intent at the phone while talking to itself in-process.
+
+### 5a.1 Foreground services
+
+The last argument of `Service.attach` is the process's `IActivityManager`, and passing null there is
+what decides whether a hosted service can ever be a *foreground* one. `Service.startForeground`
+reaches straight through that field with nothing in between:
+
+```
+NullPointerException: Attempt to invoke interface method
+    'void android.app.IActivityManager.setServiceForeground(…)' on a null object reference
+  at android.app.Service.startForeground(Service.java:797)
+  at org.schabi.newpipe.player.PlayerService.onStartCommand
+```
+
+A media player is a foreground service by construction, so this was the difference between a guest
+that can play something and one that cannot — NewPipe's player died there the moment a video was
+opened. What is passed now is the process-wide `IActivityManager`, which `GuestActivityManagerHook`
+has already replaced with its proxy, so the call lands somewhere that knows what a guest is.
+
+The proxy then answers `setServiceForeground` itself for a guest's component rather than forwarding
+it, because the server would be asked to promote a service in a package it has never heard of. The
+notification goes to the device's own status bar and shade instead — the same place
+`GuestNotificationHook` posts, which is where a phone would have put it. Verified by playing a live
+stream: video renders in the tab and the player's notification appears in the device shade.
+
+**The real system is therefore never told the service is foreground**, so it confers no protection
+from being killed. That is not a gap to close: the guest runs inside JCode's own `:guest` process,
+and what keeps it alive is JCode's foreground state, not a claim made on the guest's behalf about a
+package that does not exist.
+
+> **In-process only, and that is the boundary.** Another app cannot query a hosted provider, no
+> system broadcast arrives on its own, and a service gets no process to be restarted in. What it buys
+> is an app talking to itself, which is where the frameworks live: `androidx.startup` — and so
+> WorkManager, Firebase, `emoji2`, ProfileInstaller and Coil — boots from a `<provider>`. Measured
+> before this existed: NewPipe dying on "WorkManager is not initialized properly" before its first
+> frame.
+
+## 5b. The guest's own package — `GuestPackageHook`
+
+Hosting a provider is not enough on its own. `androidx.startup` reads its `InitializationProvider`'s
+`<meta-data>` back through `getProviderInfo`; AppCompat looks its own activity up through
+`getActivityInfo`; analytics libraries read `getPackageInfo(…).versionName`. All of those go out to a
+package manager that has never heard of the guest:
+
+```
+androidx.startup.StartupException: PackageManager$NameNotFoundException:
+    ComponentInfo{org.newpipex/androidx.startup.InitializationProvider}
+    at androidx.startup.AppInitializer.discoverAndInitialize(AppInitializer.java:208)
+```
+
+`PackageManager` is an abstract class with a couple of hundred abstract members, so a delegating
+wrapper is not writable by hand. `IPackageManager` is an *interface*, which is what `Proxy` needs,
+and it sits underneath every `ApplicationPackageManager` method — so one proxy on
+`ActivityThread.sPackageManager` (plus the `mPM` the existing instance already cached) covers every
+entry point. Same shape as the `IActivityTaskManager` hook, for the same reason.
+
+Answered for a loaded guest: `getActivityInfo`, `getServiceInfo`, `getReceiverInfo`,
+`getProviderInfo`, `getPackageInfo`, `getApplicationInfo`, `resolveContentProvider`, and the two
+enabled-setting queries. Everything else passes straight through. Arguments are matched **by type**,
+never by position, because these signatures gained a `userId` and widened `flags` to `long` across
+releases.
+
+The `PackageInfo` handed back is the one parsed at load, so **what the load asks for is what a guest
+can ever learn about itself**. Signing certificates are asked for on that basis: an app is entitled
+to ask who signed it, and null is not an answer any of them are written to survive. NewPipe reads
+`PackageInfoCompat.hasSignatures` in `MainActivity.onCreate` to decide whether it is an official
+release build, and threw straight out of `onCreate`:
+
+```
+java.lang.NullPointerException: Attempt to invoke virtual method
+    'boolean android.content.pm.SigningInfo.hasMultipleSigners()' on a null object reference
+  at androidx.core.content.pm.PackageInfoCompat$Api28Impl.hasMultipleSigners
+  at org.schabi.newpipe.util.ReleaseVersionUtil$isReleaseApk$2.invoke
+  at org.schabi.newpipe.MainActivity.onCreate(MainActivity.java:174)
+```
+
+Collecting them costs one pass over the APK signing block per load, and the honest answer — signed,
+but not by whoever built the original — is what a sideloaded copy reports anyway.
+
+## 5c. The device's own hardware
+
+What the user chose in **Manage permissions** has to be true from inside the guest, not merely
+displayed. The policy itself is in
+[App sandbox architecture §7e](01-app-sandbox-architecture.md#7e-two-settings-not-one--virtualdevicepolicy);
+this is how each answer is delivered.
+
+### Sensors — `GuestSensorManager`
+
+Handed to the guest from `GuestContext.getSystemService(SENSOR_SERVICE)`, one per loaded guest.
+
+- **Off** drops the family from `getFullSensorList`, so `getDefaultSensor` answers null and a
+  registration is refused. An app that checks finds the device has no such hardware.
+- **Real** registers a forwarder of our own with the host manager instead of the guest's listener,
+  and drops events once the mode is no longer Real — otherwise revoking a sensor would do nothing
+  until the app happened to unregister, because the stream lives in the sensor service from the
+  moment it is set up.
+
+**One registration object owns both routes, and that is what makes rewiring seamless.** They were
+two, and the seam showed: a simulated stream stopped itself the moment the sensor was switched to
+Real and nothing took over, while a Real one went on being forwarded and never became simulated.
+Either way the app was left holding a registration that had quietly stopped reporting, with no error
+and nothing to re-register in response to. A registration now owns a ticker and decides on every
+tick — simulated, it ticks at the rate the app asked for and delivers; real, it holds a forwarder and
+ticks slowly, only watching for the mode to move; off, it holds nothing and waits, because the device
+may be given the hardware back. Device-verified both ways: an app reading the accelerometer went from
+`+0.00000, +0.00000, +9.80665` to the phone's own `+0.12450, +4.83150, +8.62870` and back again,
+without re-registering.
+
+A registration is still *refused* when the sensor is Off at the time — the same answer a phone gives
+for hardware it does not have, and consistent with the sensor not being in the list the app read.
+- **Simulated** delivers on a ticker at the rate the app asked for, clamped to 20–200 ms, reading
+  whatever the hardware bench says the device is doing — an attitude, a loop, or with nothing set a
+  device lying flat, face up, pointing north and not moving. Every type comes out of one
+  `SimulatedHardware.sample`, so the accelerometer, the compass and the rotation vector are three
+  views of the same attitude rather than three unrelated constants, and `TYPE_LINEAR_ACCELERATION`
+  is what is left when gravity is subtracted from the shaking. Derived types go with the sensor they
+  are computed from, or turning the accelerometer off would leave the motion readable through
+  `TYPE_GRAVITY` anyway.
+
+Two things make this possible at all, and both are recorded in §5.2. The class lives in package
+`android.hardware` because `SensorManager`'s constructor is package-private *in the SDK stub*; and
+its overrides carry no `override` keyword, because every abstract member of `SensorManager` is
+`@hide` and so is absent from the stub the container compiles against — they are ordinary methods
+with the same name and descriptor, which is what the runtime matches on when it links the vtable.
+A member this misses stays abstract, so `GuestSensors.forGuest` calls once through the finished
+object and falls back to the phone's manager if anything at all goes wrong.
+
+`SensorEvent`'s constructor is package-private in the **runtime** class, not only in the stub, so it
+is reached by reflection. Where that fails, simulated sensors are dropped from the guest's list
+rather than offered as hardware that never reports.
+
+### Location — `GuestLocation`
+
+There is no passthrough mode and there never will be: a guest is somebody else's APK running under
+JCode's uid, and the single most valuable thing it could take is where the user is standing. What
+it *is* given — a fixed point, or a position walked between two of them — comes from the hardware
+bench, and every fix is worked out at the moment of asking rather than stored, so a route reports
+where it has got to along with the bearing and speed a receiver would have measured.
+
+The seam is `ServiceManager.sCache`. `SystemServiceRegistry` builds the one `LocationManager` each
+`ContextImpl` gets by asking `ServiceManager.getService("location")` and wrapping the result with
+`ILocationManager.Stub.asInterface` — and `getService` consults that cache first. A local `Binder`
+carrying our own `ILocationManager` put there by `GuestRuntime.install`, before any guest exists,
+means every location manager built afterwards is a genuine, complete client object that happens to
+be talking to us; `asInterface` hands back the local object, so not one call leaves the process.
+
+A feed asks about **the app that registered it**, not the app on the screen, and keeps ticking while
+the answer is no. Both are the same rule the sensors follow: a registration outlives being in the
+foreground — that is the point of letting an app run in the background — so resolving it against the
+active guest would answer one app with another's permissions, and stopping it when location is
+switched off would leave an app holding a registration that never resumed.
+
+The handler **never delegates**. An unmodelled method answers with nothing rather than falling
+through to the real location service, because falling through is the failure this guards against:
+one forgotten method is one route to the user's coordinates.
+
+Updates are pushed back to the guest with `IBinder.transact` and a hand-written `Parcel`, because
+there is no method to call — see §5.2. The transaction code is `IBinder.FIRST_CALL_TRANSACTION`,
+both interfaces declaring the relevant method first; a platform that reorders them says so, since
+`onTransact` answers false for a code it does not know and that is logged.
 
 ## 6. Child windows — `EmbeddedWindows`
 
@@ -250,9 +693,30 @@ JCode draws nothing over it.
 ## 10. Known gaps
 
 - Validated on **Android 13 / targetSdk 33** only. Other platform versions are untested.
-- Content providers, services and broadcast receivers declared by the guest are not hosted — only
-  activities.
+- Hosted components are reachable only from inside `:guest` — see §5a. A `ContentResolver` query
+  from another process, a system broadcast, and a service restarted after death all remain out of
+  scope.
+- Only **config** splits are merged. A *feature* split that declares components of its own has its
+  code and resources loaded, but its manifest is not scanned.
 - The guest's own permissions are not honoured; it inherits JCode's.
+- Compose guests can start with an empty view tree where the app gates its first composition on
+  something the container does not provide — measured on AI Edge Gallery, which loads and starts
+  clean but dumps a bare `FrameLayout`.
+- The token answers of §4b are *plausible*, not real. `getTaskForActivity` hands back a synthetic id
+  and unmodelled calls become no-ops, so a guest leaning hard on its own task — recents entries,
+  picture-in-picture, task descriptions — sees those features inert rather than working. CPU-Z runs
+  and stays up under this, but its tab content never populates.
+- A Compose guest's content is in its composition, not its view tree, so `uiautomator dump` shows
+  the `AndroidComposeView` and nothing inside it. Semantics are not walked. A driver can screenshot
+  a Compose guest and tap by coordinate, but cannot find a node by text the way it can in a View app.
+- **`screencap` cannot see a `SurfaceView`.** `EmbeddedGuest.capture` re-draws the container's view
+  hierarchy into a bitmap, and a `SurfaceView`'s pixels are not in that hierarchy — they are in its
+  own `SurfaceControl`. So an SDL, Unity or video guest captures as black whether or not it is
+  rendering, and the tab on the phone is the only place to tell. Worth knowing before concluding a
+  GL app is broken from a capture.
+- A guest's `startActivity` can still escape to the phone's own copy of the same package where one
+  is installed: measured on ES-DE, whose `ConfiguratorActivity` opened the *installed* app rather
+  than the guest's. Same family as the `PendingIntent` escape.
 
 ---
 

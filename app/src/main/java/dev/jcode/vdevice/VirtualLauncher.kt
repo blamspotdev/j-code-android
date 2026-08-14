@@ -32,7 +32,7 @@ internal class LauncherTile(val app: VirtualDeviceApp, val bounds: Rect)
  * [VirtualScreen]'s capture go through them. What the agent screenshots is, by construction, where
  * `input tap` lands — [hit] resolves a touch against the same rectangles.
  *
- * The consequence worth stating: only what belongs to the *device* is drawn here. J Code's own
+ * The consequence worth stating: only what belongs to the *device* is drawn here. JCode's own
  * "Install an app" button floats over the screen as IDE chrome and is deliberately absent from a
  * capture, the same way the tab's control bar is.
  *
@@ -61,6 +61,7 @@ internal object VirtualLauncher {
     private const val LAUNCHER_PACKAGE = "dev.jcode.vdevice.launcher"
     private const val LAUNCHER_CLASS = "dev.jcode.vdevice.Launcher"
     private const val ICON_CLASS = "dev.jcode.vdevice.LauncherIcon"
+    private const val STATUS_BAR_CLASS = "dev.jcode.vdevice.StatusBar"
 
     /** Reads what is installed, with each app's own icon. Parses APKs — never call it on the UI thread. */
     fun load(context: Context): List<LauncherApp> = VirtualDeviceApps.list(context)
@@ -80,7 +81,7 @@ internal object VirtualLauncher {
         val columns = max(1, floor((available + gap) / (CELL_MIN_DP * density + gap)).toInt())
         val cell = (available - gap * (columns - 1)) / columns
         val tileHeight = ICON_DP * density + ICON_LABEL_GAP_DP * density + labelHeight(density)
-        val top = TOP_DP * density + textHeight(HEADER_TEXT_DP * density) + HEADER_GAP_DP * density
+        val top = barHeight(density) + TOP_DP * density + HEADER_GAP_DP * density
 
         return apps.mapIndexed { index, entry ->
             val left = padding + (index % columns) * (cell + gap)
@@ -127,8 +128,22 @@ internal object VirtualLauncher {
             bounds = "[0,0][$width,$height]",
             className = LAUNCHER_CLASS,
             packageName = LAUNCHER_PACKAGE,
-            selfClosing = apps.isEmpty(),
+            selfClosing = false,
             text = if (apps.isEmpty()) PLACEHOLDER else "",
+        )
+        // The bar is on the screen whether or not anything is installed, so it is in the dump the
+        // same way — a driver reading the device's state should not have to infer it from pixels.
+        // It carries no text on the home screen: the bar reports the *app*, and with nothing running
+        // there is no app to report. Naming the device there only repeated what the tab's own title
+        // already says.
+        UiXml.node(
+            out = out,
+            depth = 2,
+            index = 0,
+            bounds = "[0,0][$width,${barHeight(density).toInt()}]",
+            className = STATUS_BAR_CLASS,
+            packageName = LAUNCHER_PACKAGE,
+            selfClosing = true,
         )
         if (apps.isNotEmpty()) {
             tiles(width, height, density, apps).forEachIndexed { index, tile ->
@@ -146,8 +161,8 @@ internal object VirtualLauncher {
                     longClickable = true,
                 )
             }
-            UiXml.close(out, 1)
         }
+        UiXml.close(out, 1)
         out.append(UiXml.CLOSE)
         return out.toString()
     }
@@ -156,14 +171,7 @@ internal object VirtualLauncher {
     fun draw(canvas: Canvas, width: Int, height: Int, density: Float, apps: List<LauncherApp>) {
         VirtualWallpaper.draw(canvas, width, height)
         if (width <= 0 || height <= 0) return
-
-        val header = textPaint(HEADER_TEXT_DP * density, 0xD9FFFFFF.toInt())
-        canvas.drawText(
-            VirtualIdentity.MODEL,
-            width / 2f,
-            TOP_DP * density - header.ascent(),
-            header,
-        )
+        drawStatusBar(canvas, width, density)
 
         if (apps.isEmpty()) {
             // Said on the device's own screen, so a capture of an empty device reads as empty rather
@@ -188,6 +196,30 @@ internal object VirtualLauncher {
             drawTile(canvas, tile, icons[tile.app.packageName], label, density)
         }
     }
+
+    /**
+     * The device's status bar, on the home screen.
+     *
+     * Same strip, same height, same palette as the one [VirtualStatusBar] puts over a running guest
+     * — drawn with a canvas here because the home screen is drawn, not composed. That is what makes
+     * the bar *persistent*: it is a property of the device rather than of whatever app happens to be
+     * on it, so it does not appear when something starts and vanish when it stops.
+     *
+     * It carries the device's name and nothing else. There is no app to report the state of, and no
+     * notifications to count: the guest process is what holds them, and with nothing running there
+     * is no guest process.
+     */
+    private fun drawStatusBar(canvas: Canvas, width: Int, density: Float) {
+        canvas.drawRect(
+            0f,
+            0f,
+            width.toFloat(),
+            barHeight(density),
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = VirtualStatusBar.BAR_BACKGROUND },
+        )
+    }
+
+    private fun barHeight(density: Float): Float = VirtualStatusBar.BAR_DP * density
 
     private fun drawTile(
         canvas: Canvas,

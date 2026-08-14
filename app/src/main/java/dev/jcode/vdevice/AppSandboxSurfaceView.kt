@@ -20,7 +20,7 @@ import android.view.inputmethod.InputMethodManager
  *
  * A SurfaceView, never a TextureView: the guest's views are composited by SurfaceFlinger from a
  * `SurfaceControl` the `:guest` process owns, and only a SurfaceView can adopt one
- * ([SurfaceView.setChildSurfacePackage]). It also has to be hardware accelerated, which J Code's
+ * ([SurfaceView.setChildSurfacePackage]). It also has to be hardware accelerated, which JCode's
  * window is not by default — the page checks that before offering to run anything in the tab.
  *
  * It lives as long as the tab does, with or without a guest: it is what gives the device its
@@ -159,8 +159,8 @@ internal class AppSandboxSurfaceView(
      * The token the window manager parents the guest's input channel to.
      *
      * Non-SDK, and there is no public equivalent before `getInputTransferToken` in API 35. Without
-     * it the guest cannot be embedded at all, so a null here is what turns the tab into its
-     * full-screen fallback.
+     * it the guest cannot be embedded at all, and there is no other way to run one — a null here is
+     * the device reporting that it cannot start the app.
      */
     fun hostToken(): IBinder? = runCatching {
         SurfaceView::class.java.getDeclaredMethod("getHostToken")
@@ -221,7 +221,7 @@ internal class AppSandboxSurfaceView(
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
         forward(keyCode, event) || super.onKeyUp(keyCode, event)
 
-    /** BACK deliberately stays with J Code — the toolbar sends the guest its own Back. */
+    /** BACK deliberately stays with JCode — the toolbar sends the guest its own Back. */
     private fun forward(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) return false
         session.key(event)

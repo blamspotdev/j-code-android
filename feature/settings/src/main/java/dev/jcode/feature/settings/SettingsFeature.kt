@@ -32,7 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ScrollableTabRow
-import androidx.compose.material3.AlertDialog
+import dev.jcode.design.AlertDialog
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
@@ -350,7 +350,7 @@ object SettingsFeature {
             SettingsCard(
                 title = "Icon bundle",
                 description = "Icon set used across the app.",
-                keywords = "icon bundle icons set material rounded j code line appearance",
+                keywords = "icon bundle icons set material rounded jcode line appearance",
             ) {
                 val activeIcons = iconBundleId.ifEmpty { IconBundleRegistry.default.id }
                 IconBundleRegistry.builtIns.forEach { bundle ->
@@ -912,8 +912,9 @@ object SettingsFeature {
                     supporting = "An Android run config built for the virtual device starts its APK inside " +
                         "JCode — no install and no ADB setup — under a virtual device identity, with its " +
                         "storage kept under JCode. The app still inherits JCode's permissions, and the " +
-                        "services and providers it declares are not registered, so use this for quick " +
-                        "iteration and install the app for real before trusting what you see.",
+                        "providers, services and receivers it declares run inside the device only, so " +
+                        "nothing outside can reach them. Use this for quick iteration and install the app " +
+                        "for real before trusting what you see.",
                     checked = virtualDevice.enabled,
                     onCheckedChange = virtualDevice.onChange,
                     modified = virtualDevice.enabled != SettingsDefaults.RUN_IN_VIRTUAL_DEVICE,
@@ -926,7 +927,10 @@ object SettingsFeature {
                         label = "Reconnect adb",
                         supporting = "Attach the virtual device to the runtime's adb server again, for " +
                             "when `adb devices` no longer lists it — after `adb kill-server`, or a " +
-                            "runtime restart.",
+                            "runtime restart. The device is reachable only from JCode's own terminals: " +
+                            "it listens on a socket inside JCode's storage rather than a port, so " +
+                            "nothing else on the phone can see it and there is nothing to connect to " +
+                            "from a computer.",
                         buttonLabel = "Reconnect",
                         enabled = virtualDevice.enabled,
                         busy = virtualDevice.reconnecting,

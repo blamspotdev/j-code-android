@@ -6,10 +6,7 @@ import android.app.Instrumentation
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
-import android.content.pm.ActivityInfo
-import android.os.Handler
 import android.os.IBinder
-import android.os.Message
 import android.util.Log
 import android.view.ContextThemeWrapper
 import java.lang.reflect.Field
@@ -18,8 +15,6 @@ import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 
-private const val CLIENT_TRANSACTION = "android.app.servertransaction.ClientTransaction"
-private const val LAUNCH_ACTIVITY_ITEM = "android.app.servertransaction.LaunchActivityItem"
 private const val CALLBACKS_FIELD = "mActivityLifecycleCallbacks"
 private const val PRE_PREFIX = "onActivityPre"
 
@@ -71,48 +66,6 @@ internal object GuestHooks {
     }
 
     /**
-     * Intercepts activity launches on `ActivityThread.mH` before the system acts on them.
-     *
-     * A `Handler` consults its `mCallback` first, so installing one there gives a look at every
-     * `ClientTransaction` on its way in — including the `LaunchActivityItem` carrying the stub's
-     * `Intent` and `ActivityInfo`, which [onLaunch] rewrites into the guest's. The callback always
-     * reports "unhandled" so `ActivityThread.H.handleMessage` still runs as usual.
-     */
-    fun installLaunchHook(activityThread: Any, onLaunch: (Intent, ActivityInfo?) -> Unit): Boolean {
-        val handler = HiddenApi.field(activityThread.javaClass, "mH")
-            ?.let { runCatching { it.get(activityThread) }.getOrNull() } as? Handler ?: return false
-        val callbackField = HiddenApi.field(Handler::class.java, "mCallback") ?: return false
-        val previous = runCatching { callbackField.get(handler) }.getOrNull() as? Handler.Callback
-        if (previous is LaunchCallback) return true
-        return runCatching {
-            callbackField.set(handler, LaunchCallback(previous, onLaunch))
-            true
-        }.onFailure { Log.e(TAG, "cannot install launch hook", it) }.getOrDefault(false)
-    }
-
-    private class LaunchCallback(
-        private val previous: Handler.Callback?,
-        private val onLaunch: (Intent, ActivityInfo?) -> Unit,
-    ) : Handler.Callback {
-        override fun handleMessage(msg: Message): Boolean {
-            runCatching { inspect(msg) }.onFailure { Log.w(TAG, "launch hook", it) }
-            return previous?.handleMessage(msg) ?: false
-        }
-
-        private fun inspect(msg: Message) {
-            val transaction = msg.obj ?: return
-            if (transaction.javaClass.name != CLIENT_TRANSACTION) return
-            val items = HiddenApi.method(transaction.javaClass, "getCallbacks")
-                ?.let { runCatching { it.invoke(transaction) }.getOrNull() } as? List<*> ?: return
-            for (item in items) {
-                if (item == null || item.javaClass.name != LAUNCH_ACTIVITY_ITEM) continue
-                val intent = HiddenApi.field(item.javaClass, "mIntent")?.get(item) as? Intent ?: continue
-                onLaunch(intent, HiddenApi.field(item.javaClass, "mInfo")?.get(item) as? ActivityInfo)
-            }
-        }
-    }
-
-    /**
      * Replaces the process-wide `IActivityTaskManager` binder proxy so intents the guest starts can
      * be redirected onto a stub, or answered outright, before they leave the process.
      *
@@ -141,14 +94,45 @@ internal object GuestHooks {
 
             val handler = object : InvocationHandler {
                 override fun invoke(proxy: Any?, method: Method, args: Array<Any?>?): Any? {
+                    // The one place an embedded activity's controller can be substituted: this call
+                    // is how ActivityClient's singleton obtains it, and the singleton's own field is
+                    // blocked at targetSdk 33. See GuestActivityClient.
+                    if (method.name == GuestActivityClient.CONTROLLER_GETTER && args.isNullOrEmpty()) {
+                        val controller = try {
+                            method.invoke(real)
+                        } catch (e: InvocationTargetException) {
+                            throw e.targetException
+                        }
+                        return controller?.let(GuestActivityClient::wrap)
+                    }
                     if (args != null && method.name.startsWith("startActivity")) {
+                        GuestActivityClient.detachEmbeddedTokens(args)
+                        // A runtime permission request is a launch like any other from here, and the
+                        // one launch the system cannot usefully answer — the device answers it
+                        // itself. See GuestPermissions.
+                        if (GuestPermissions.consume(args)) return consumed(method.returnType)
+                        // Logged because "the app opened, but the phone's copy of it" is otherwise
+                        // indistinguishable from "the container hosted it", and the difference is
+                        // which binder call carried the intent.
+                        args.filterIsInstance<Intent>().firstOrNull()?.let { outgoing ->
+                            Log.i(TAG, "outgoing ${method.name}: ${outgoing.component}")
+                        }
                         val slot = args.indexOfFirst { it is Intent }
                         if (slot >= 0) {
                             when (val action = decide(args[slot] as Intent)) {
                                 is StartAction.Proceed -> Unit
                                 is StartAction.Redirect -> args[slot] = action.intent
-                                is StartAction.Consumed ->
-                                    if (method.returnType == Int::class.javaPrimitiveType) return START_SUCCESS
+                                // Consumed means the tab has already hosted this activity, so the
+                                // binder call must not happen at all — whatever it returns.
+                                //
+                                // Guarding on an int return let every other overload fall through
+                                // and go out **with the original intent**, and where the phone has
+                                // its own copy of the package installed the system then resolved the
+                                // component against that copy: the app opened twice, once in the
+                                // device and once outside it, and the one the user saw was the
+                                // wrong one. Measured on ES-DE, whose ConfiguratorActivity was
+                                // hosted correctly and still launched the installed app over JCode.
+                                is StartAction.Consumed -> return consumed(method.returnType)
                             }
                         }
                     }
@@ -166,6 +150,17 @@ internal object GuestHooks {
             Log.e(TAG, "cannot install start-activity hook", t)
             return false
         }
+    }
+
+    /**
+     * What a launch the container answered itself reports back — a success, whatever shape the
+     * overload declares. Every `startActivity*` on this interface returns an int, a boolean or
+     * nothing, and a caller reading any of them must not conclude the launch failed.
+     */
+    private fun consumed(returnType: Class<*>): Any? = when (returnType) {
+        Int::class.javaPrimitiveType -> START_SUCCESS
+        Boolean::class.javaPrimitiveType -> true
+        else -> null
     }
 
     /**
@@ -276,7 +271,7 @@ internal object GuestHooks {
     /**
      * Points an already-attached guest activity at its own [GuestContext].
      *
-     * `ActivityThread` attaches every activity to a `ContextImpl` belonging to J Code, and
+     * `ActivityThread` attaches every activity to a `ContextImpl` belonging to JCode, and
      * `ContextThemeWrapper` caches resources and inflater off it during `attach()`. Swapping `mBase`
      * and dropping those caches — after `attach`, before `onCreate` — is what makes
      * `getPackageName()`, `getFilesDir()`, `getResources()` and layout inflation report the guest.

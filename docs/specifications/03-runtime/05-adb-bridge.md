@@ -197,8 +197,27 @@ the UI reports exactly what adb reported.
 
 A device-side adb daemon so the guest's `adb` can drive JCode's app sandbox.
 
-- Loopback-only listener, ports `PREFERRED_PORT = 5620` … `LAST_PORT = 5639`.
+- A **Unix socket**, not a port: `<rootfs>/run/jcode-vdevice-adb.sock`, which the distro sees as
+  `/run/jcode-vdevice-adb.sock`. Clients reach it with `adb connect localfilesystem:<path>`.
 - Authenticated by `AdbAuth` against the distro's enrolled key.
+
+> **Why not a port.** This daemon exposes `exec:cmd package install` — "run this APK inside JCode" —
+> which is arbitrary code execution with JCode's uid and permissions. On Android every app shares one
+> loopback interface, so `127.0.0.1:<port>` is reachable by *every other app on the phone*, and adb's
+> AUTH exchange was the only thing between them and that service. A socket bound in JCode's own
+> storage (`srwx------`, JCode's uid) cannot be opened by another uid at all, so the proot distro
+> reaches it and nothing else does. Authentication is unchanged; it is now the second line rather
+> than the only one.
+>
+> Two consequences worth stating. The transport's **serial is the socket spec**, so `adb devices`
+> reads `localfilesystem:/run/jcode-vdevice-adb.sock` rather than an address — there is no port to
+> scan for and none to type. And the device is **unreachable from a computer**: a Unix socket cannot
+> be `adb forward`ed, so driving the virtual device from a desktop is no longer possible. That is the
+> point rather than a regression, but it does mean the device is a JCode-terminal-only target.
+>
+> `adb connect localfilesystem:` is supported by adb on Linux and refused on Windows
+> (`socket type localfilesystem is unavailable on this platform`), which is why the client end only
+> ever runs inside the distro.
 - `AdbStream` is one open stream from the answering service's point of view, carrying the requested
   service string (for example `shell:getprop ro.build.version.sdk`).
 
@@ -218,6 +237,7 @@ A device-side adb daemon so the guest's `adb` can drive JCode's app sandbox.
 | `shell:logcat [-d] [-t n] [-c]` | The **virtual device's** log — see §10.1 |
 | `shell:screencap` | PNG via `VirtualScreen` |
 | `exec:cmd package 'install' -S <n>` | Single-stream `adb install` |
+| `exec:cmd package install-create\|install-write\|install-commit\|install-abandon` | Session-based `adb install-multiple`, for an app bundle's base plus its config splits — see [App sandbox architecture §7a](../08-virtual-device/01-app-sandbox-architecture.md#virtualdeviceapps--the-package-store) |
 
 Between `install`, `am start`, `input`, `uiautomator dump` and `screencap`, an agent with nothing but
 a terminal can put an app on the device, drive it, read what is on screen, and take it off again.

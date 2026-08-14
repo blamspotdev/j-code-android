@@ -176,7 +176,6 @@ class Buffer internal constructor(
 
     // Native methods
     private external fun nativeOpenFromBytes(data: ByteArray): Long
-    private external fun nativeOpenFromFd(fd: Int): Long
     private external fun nativeByteLength(): Long
     private external fun nativeLineCount(): Long
     private external fun nativeSnapshot(): Long

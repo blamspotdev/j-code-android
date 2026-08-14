@@ -186,10 +186,6 @@ typedef struct {
     VtScreen primary;
     VtScreen alternate;
     VtScreen* active;
-    
-    // Dirty region tracking
-    bool* dirty_rows;
-    bool full_refresh;
 
     // Scrollback ring buffer (lines that scrolled off the top of the primary screen)
     VtCell* scrollback;     // scrollback_cap * scrollback_cols cells
@@ -236,9 +232,6 @@ int vt_parser_row_cols(const VtParser* parser, int row);
 
 // Check if screen is using alternate buffer
 bool vt_parser_is_alternate_screen(const VtParser* parser);
-
-// Clear dirty flags after rendering
-void vt_parser_clear_dirty(VtParser* parser);
 
 // Number of queued shell-integration OSC events (7711-7713).
 int vt_parser_osc_event_count(const VtParser* parser);

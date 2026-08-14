@@ -1,5 +1,6 @@
 package dev.jcode.vdevice
 
+import android.content.pm.PackageManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -23,12 +24,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Warning
-import androidx.compose.material3.AlertDialog
+import dev.jcode.design.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -62,8 +63,10 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jcode.core.distro.WorkspaceHostPaths
+import dev.jcode.humanSize
 import dev.jcode.design.CompactFilledButton
 import dev.jcode.design.CompactOutlinedButton
 import dev.jcode.design.ContextAction
@@ -91,7 +94,7 @@ private val HANDLE_THICKNESS = 4.dp
 private val HANDLE_TOUCH_HEIGHT = 24.dp
 
 /**
- * Editor tab holding J Code's virtual device — a screen the IDE owns, that an app can be put on and
+ * Editor tab holding JCode's virtual device — a screen the IDE owns, that an app can be put on and
  * taken off again.
  *
  * The device is the tab, not the app: with nothing running it is a live blank screen that `adb` can
@@ -100,13 +103,12 @@ private val HANDLE_TOUCH_HEIGHT = 24.dp
  * ([EmbeddedGuest]) and shown here through a `SurfaceControlViewHost` surface package.
  *
  * Embedding can fail for reasons this tab cannot fix — the window may not be hardware accelerated,
- * and the out-of-band activity creation the container depends on rests on non-SDK members — so every
- * failure lands on the same visible fallback: run the app full screen, the way the container has
- * always been able to.
+ * and the out-of-band activity creation the container depends on rests on non-SDK members — so a
+ * failure is reported on the device's own screen rather than worked around. There is nowhere else to
+ * run an app: a guest is the tab, and full screen means full screen *within* it.
  *
- * One-off results — a full-screen launch, an app that closed itself — go to [onSnackbar] rather than
- * to a band along the bottom: they are over once they have been read, and the device's screen is the
- * scarce thing here. What a running guest could not do is not one-off, so it stays reachable from the
+ * One-off results — an app that closed itself — go to [onSnackbar] rather than to a band along the
+ * bottom: they are over once they have been read, and the device's screen is the scarce thing here. What a running guest could not do is not one-off, so it stays reachable from the
  * control bar for as long as that guest is up.
  */
 @Composable
@@ -123,8 +125,6 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
         withFrameNanos { }
         hardwareAccelerated = view.isHardwareAccelerated
     }
-    val tier = if (hardwareAccelerated) AppSandboxTier.Embedded else AppSandboxTier.FullScreen
-
     var apkPath by AppSandbox.apkPath
     val activityClass by AppSandbox.activityClass
     var running by AppSandbox.running
@@ -132,14 +132,17 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
     var surfaceView by remember { mutableStateOf<AppSandboxSurfaceView?>(null) }
     var installOpen by remember { mutableStateOf(false) }
     val surface by session.surface.collectAsStateWithLifecycle()
+    val permissionRequest by session.permissionRequest.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     // The device's launcher lives on the surface, not in this composition — see VirtualLauncher. All
     // that is left here is reading what is installed and handing it over, and hosting the one menu
-    // that is J Code's rather than the device's.
+    // that is JCode's rather than the device's.
     val revision = VirtualDeviceApps.revision.intValue
     var home by remember { mutableStateOf<List<LauncherApp>?>(null) }
     var menuFor by remember { mutableStateOf<Pair<VirtualDeviceApp, Offset>?>(null) }
+    var detailsFor by remember { mutableStateOf<VirtualDeviceApp?>(null) }
+    var permissionsFor by remember { mutableStateOf<VirtualDeviceApp?>(null) }
     LaunchedEffect(revision, running) {
         home = if (running) null else withContext(Dispatchers.IO) { VirtualLauncher.load(context) }
     }
@@ -168,21 +171,15 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
         }
     }
 
-    fun runFullScreen(path: String = apkPath, activity: String? = activityClass) {
-        installOpen = false
-        VirtualDevice.launch(context, path.trim(), activity)
-            .onSuccess { onSnackbar("Started ${it.label} full screen.") }
-            .onFailure { onSnackbar(it.message ?: "Could not start the app.") }
-    }
-
     /** Puts an app from the device's own launcher on its screen — a tap on an icon. */
     fun open(app: VirtualDeviceApp) {
         installOpen = false
+        permissionsFor = null
         // The launcher runs an app as the device would: its own MAIN/LAUNCHER activity, whatever
         // the last run happened to name.
         AppSandbox.activityClass.value = null
         apkPath = app.apkPath
-        if (tier == AppSandboxTier.Embedded) running = true else runFullScreen(app.apkPath, null)
+        running = true
     }
 
     // Clearing `running` is the whole teardown: the home effect below reloads what is installed and
@@ -200,7 +197,7 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
     }
 
     // Re-set rather than captured once: the surface outlives every composition that reads these.
-    LaunchedEffect(surfaceView, tier) {
+    LaunchedEffect(surfaceView) {
         surfaceView?.onLaunchApp = { open(it) }
         surfaceView?.onAppMenu = { app, x, y -> menuFor = app to Offset(x, y) }
     }
@@ -215,13 +212,12 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
             onRetry = {
                 session.restart(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
             },
-            onFullScreen = { runFullScreen() },
             onDismiss = { stop() },
             onInstall = { installOpen = true },
             modifier = Modifier.fillMaxSize(),
         )
 
-        // Held over the icon that was long-pressed. A menu is J Code's, not the device's, so it is
+        // Held over the icon that was long-pressed. A menu is JCode's, not the device's, so it is
         // composed here rather than drawn onto the screen a capture reads.
         menuFor?.let { (app, at) ->
             val density = LocalDensity.current
@@ -231,12 +227,17 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
                 offset = with(density) { DpOffset(at.x.toDp(), at.y.toDp()) },
                 listActions = buildList {
                     add(ContextAction(JCodeIcon.Run, "Open") { menuFor = null; open(app) })
-                    if (tier == AppSandboxTier.Embedded) {
-                        add(ContextAction(JCodeIcon.Fullscreen, "Open full screen") {
-                            menuFor = null
-                            runFullScreen(app.apkPath, null)
-                        })
-                    }
+                    add(ContextAction(JCodeIcon.Settings, "Manage permissions") {
+                        menuFor = null
+                        permissionsFor = app
+                    })
+                    add(ContextAction(JCodeIcon.Stop, "Force stop") {
+                        menuFor = null
+                        if (app.apkPath == apkPath) stop()
+                        AppSandbox.forceStop(app.packageName)
+                        onSnackbar("Force-stopped ${'$'}{app.label}.")
+                    })
+                    add(ContextAction(JCodeIcon.Help, "Details") { menuFor = null; detailsFor = app })
                     add(ContextAction(JCodeIcon.Clear, "Clear data") {
                         menuFor = null
                         scope.launch(Dispatchers.IO) { VirtualDeviceApps.clearData(context, app.packageName) }
@@ -250,9 +251,24 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
             )
         }
 
+        detailsFor?.let { app ->
+            AppDetailsDialog(app = app, onDismiss = { detailsFor = null })
+        }
+
+        // The device's own permission prompt. It belongs to JCode rather than to the guest — a
+        // dialog the app could draw itself would be a dialog the app could answer itself.
+        permissionRequest?.let { request ->
+            GuestPermissionDialog(
+                request = request,
+                onAnswer = { allow ->
+                    session.answerPermissions(request.requestId, BooleanArray(request.permissions.size) { allow })
+                },
+            )
+        }
+
         if (installOpen) {
             InstallSheet(
-                tier = tier,
+                hardwareAccelerated = hardwareAccelerated,
                 apkPath = apkPath,
                 onApkPathChange = {
                     apkPath = it
@@ -273,10 +289,18 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
                     installOpen = false
                     running = true
                 },
-                onRunFullScreen = { runFullScreen() },
                 onClose = { installOpen = false },
                 modifier = Modifier.fillMaxSize(),
             )
+        } else if (permissionsFor != null) {
+            permissionsFor?.let { app ->
+                AppPermissionsSheet(
+                    app = app,
+                    onSnackbar = onSnackbar,
+                    onClose = { permissionsFor = null },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         } else if (running) {
             // Every control on the bar acts on a running guest, and the home screen already names
             // the device — so with nothing running there is nothing for it to say.
@@ -284,10 +308,10 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
                 caveat = (status as? SandboxStatus.Running)?.warning,
                 onBack = { session.back() },
                 onKeyboard = { surfaceView?.showKeyboard() },
+                onHardware = { SimulatedHardware.requestOpen() },
                 onRestart = {
                     session.restart(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
                 },
-                onFullScreen = { runFullScreen() },
                 onStop = { stop() },
             )
         }
@@ -307,7 +331,6 @@ private fun DeviceScreen(
     onSurface: (AppSandboxSurfaceView?) -> Unit,
     onSized: (Int, Int) -> Unit,
     onRetry: () -> Unit,
-    onFullScreen: () -> Unit,
     onDismiss: () -> Unit,
     onInstall: () -> Unit,
     modifier: Modifier = Modifier,
@@ -332,7 +355,11 @@ private fun DeviceScreen(
         when {
             // The home screen itself is on the surface, drawn by VirtualLauncher — only the chrome
             // that does not belong to the device is composed over it.
-            !running -> HomeChrome(onInstall, modifier = Modifier.fillMaxSize())
+            !running -> HomeChrome(
+                onInstall = onInstall,
+                onHardware = { SimulatedHardware.requestOpen() },
+                modifier = Modifier.fillMaxSize(),
+            )
 
             status is SandboxStatus.Starting || status is SandboxStatus.Idle ->
                 ScreenMessage("Starting the app…")
@@ -340,7 +367,6 @@ private fun DeviceScreen(
             status is SandboxStatus.Failed -> ScreenFallback(
                 message = status.message,
                 onRetry = onRetry,
-                onFullScreen = onFullScreen,
                 onDismiss = onDismiss,
             )
 
@@ -350,22 +376,31 @@ private fun DeviceScreen(
 }
 
 /**
- * The only part of the home screen that is *not* the device: J Code's own affordance for putting an
- * app on it.
+ * The only part of the home screen that is *not* the device: JCode's own affordances for putting an
+ * app on it, and for the bench the device's hardware is set from.
  *
  * Everything the device itself shows — wallpaper, its name, the app icons, the "No app installed"
  * placeholder — is drawn onto the surface by [VirtualLauncher], so `adb shell screencap` answers
- * with it. This button is deliberately outside that: it is the IDE reaching onto the device, the
- * same as the control bar, and a capture must not show it as though it were part of the app grid.
+ * with it. These buttons are deliberately outside that: they are the IDE reaching onto the device,
+ * the same as the control bar, and a capture must not show them as though they were part of the app
+ * grid.
  */
 @Composable
-private fun HomeChrome(onInstall: () -> Unit, modifier: Modifier = Modifier) {
+private fun HomeChrome(
+    onInstall: () -> Unit,
+    onHardware: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Box(modifier = modifier) {
-        CompactOutlinedButton(
-            text = "Install an app",
-            onClick = onInstall,
+        Row(
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp),
-        )
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            CompactOutlinedButton(text = "Install an app", onClick = onInstall)
+            // Reachable with nothing running, because a route or an attitude is usually set up
+            // *before* the app that is meant to react to it is opened.
+            CompactOutlinedButton(text = "Hardware", onClick = onHardware)
+        }
     }
 }
 
@@ -385,7 +420,6 @@ private fun ScreenMessage(text: String) {
 private fun ScreenFallback(
     message: String,
     onRetry: () -> Unit,
-    onFullScreen: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     Surface(
@@ -407,11 +441,6 @@ private fun ScreenFallback(
                 text = message,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            CompactFilledButton(
-                text = "Run full screen instead",
-                onClick = onFullScreen,
-                modifier = Modifier.fillMaxWidth(),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 CompactOutlinedButton(text = "Try again", onClick = onRetry, modifier = Modifier.weight(1f))
@@ -437,8 +466,8 @@ private fun BoxScope.DeviceControls(
     caveat: String?,
     onBack: () -> Unit,
     onKeyboard: () -> Unit,
+    onHardware: () -> Unit,
     onRestart: () -> Unit,
-    onFullScreen: () -> Unit,
     onStop: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(true) }
@@ -484,8 +513,8 @@ private fun BoxScope.DeviceControls(
                     onBack = onBack,
                     onKeyboard = onKeyboard,
                     onCaveat = { caveatOpen = true },
+                    onHardware = onHardware,
                     onRestart = onRestart,
-                    onFullScreen = onFullScreen,
                     onStop = onStop,
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
@@ -531,6 +560,71 @@ private fun GuestCaveatDialog(message: String, onDismiss: () -> Unit) {
 }
 
 /**
+ * The device asking on an app's behalf — what a phone puts up when an app calls
+ * `requestPermissions`, for the same reason and at the same moment.
+ *
+ * There is no dismiss: the guest is blocked on the answer, and a dialog that could be swiped away
+ * would leave an app waiting on a callback that never comes. Back and a tap outside are both
+ * refused, so the only ways out are the two answers.
+ *
+ * One dialog for the whole request rather than one per permission. The platform asks in sequence;
+ * this asks once, because an app that wants the camera and the microphone together is asking one
+ * question — "may I do the thing I am for" — and answering it three times is the part of the phone
+ * experience nobody was hoping to reproduce.
+ */
+@Composable
+private fun GuestPermissionDialog(request: PermissionRequest, onAnswer: (Boolean) -> Unit) {
+    val context = LocalContext.current
+    val label = remember(request.packageName) {
+        VirtualDeviceApps.apk(context, request.packageName)
+            ?.let { VirtualDevice.inspect(context, it.absolutePath).getOrNull()?.label }
+            ?: request.packageName
+    }
+    val wanted = remember(request.permissions) {
+        request.permissions.map { permissionLabel(context, it) }
+    }
+    AlertDialog(
+        onDismissRequest = {},
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+        title = {
+            Text(
+                if (wanted.size == 1) "Allow $label to use the ${wanted.first().lowercase()}?"
+                else "Allow $label to use these?",
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (wanted.size > 1) {
+                    wanted.forEach { Text("• $it", style = MaterialTheme.typography.bodyMedium) }
+                }
+                Text(
+                    text = "This is ${VirtualIdentity.MODEL}'s hardware, not the phone's — see the " +
+                        "hardware tab for what it is wired to.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onAnswer(true) }) { Text("Allow") } },
+        dismissButton = { TextButton(onClick = { onAnswer(false) }) { Text("Deny") } },
+    )
+}
+
+/**
+ * A permission as a person would name it.
+ *
+ * The platform's own label where there is one — "Camera", "approximate location" — because the
+ * phone's package manager is the authority on its own permissions and has already translated them.
+ * A permission a guest declares itself has no label there, so the last segment of its name is the
+ * best that can be done.
+ */
+private fun permissionLabel(context: android.content.Context, permission: String): String =
+    runCatching {
+        val info = context.packageManager.getPermissionInfo(permission, 0)
+        info.loadLabel(context.packageManager).toString()
+    }.getOrDefault(permission.substringAfterLast('.').replace('_', ' ').lowercase())
+
+/**
  * The collapsed controls: a grabber line, not a button. It sits over whatever the guest is drawing,
  * so it stays deliberately small — the touch target is taller than the line it shows, which is why
  * the clickable box and the bar have separate sizes.
@@ -560,8 +654,8 @@ private fun DeviceToolbar(
     onBack: () -> Unit,
     onKeyboard: () -> Unit,
     onCaveat: () -> Unit,
+    onHardware: () -> Unit,
     onRestart: () -> Unit,
-    onFullScreen: () -> Unit,
     onStop: () -> Unit,
 ) {
     Row(
@@ -571,6 +665,9 @@ private fun DeviceToolbar(
     ) {
         ToolbarAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onBack)
         ToolbarAction(Icons.Rounded.Keyboard, "Keyboard", onKeyboard)
+        // The bench opens beside the device rather than over it, so the app being moved stays on
+        // screen while it is being moved.
+        ToolbarAction(Icons.Rounded.Tune, "Device hardware", onHardware)
         // Only lit when this guest actually lost something: a warning that is always on is a warning
         // nobody reads. Carries the same colour ManagerNoticeCard gives the launcher's version of it.
         if (caveat != null) {
@@ -582,7 +679,6 @@ private fun DeviceToolbar(
             )
         }
         Box(modifier = Modifier.weight(1f))
-        ToolbarAction(Icons.Rounded.Fullscreen, "Run full screen", onFullScreen)
         ToolbarAction(Icons.Rounded.RestartAlt, "Restart app", onRestart)
         ToolbarAction(Icons.Rounded.Stop, "Stop", onStop, tint = MaterialTheme.colorScheme.error)
     }
@@ -606,12 +702,11 @@ private fun ToolbarAction(
  */
 @Composable
 private fun InstallSheet(
-    tier: AppSandboxTier,
+    hardwareAccelerated: Boolean,
     apkPath: String,
     onApkPathChange: (String) -> Unit,
     onInstall: (String) -> Unit,
     onRunHere: () -> Unit,
-    onRunFullScreen: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -630,8 +725,8 @@ private fun InstallSheet(
                     Text("Install an app", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(
                         text = "Put a freshly built APK on ${VirtualIdentity.MODEL} — no install on " +
-                            "this phone, no ADB. It runs in J Code's own process under a virtual " +
-                            "device identity, and everything it stores is cleared when J Code starts.",
+                            "this phone, no ADB. It runs in JCode's own process under a virtual " +
+                            "device identity, and everything it stores is cleared when JCode starts.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -646,12 +741,12 @@ private fun InstallSheet(
                 }
             }
 
-            if (tier == AppSandboxTier.FullScreen) {
+            if (!hardwareAccelerated) {
                 ManagerNoticeCard(
                     title = "Hardware acceleration is off",
-                    message = "The guest is composited onto a surface, which needs the GPU. Turn " +
-                        "Settings → Performance → Rendering → Hardware acceleration back on and restart " +
-                        "J Code; until then the app can only take over the whole screen.",
+                    message = "The device is composited onto a surface, which needs the GPU. Turn " +
+                        "Settings → Performance → Rendering → Hardware acceleration back on and " +
+                        "restart JCode; until then the device cannot draw.",
                 )
             }
 
@@ -682,30 +777,21 @@ private fun InstallSheet(
                     onClick = { onInstall(apkPath.trim()) },
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (tier == AppSandboxTier.Embedded) {
-                    CompactOutlinedButton(
-                        text = "Run once, without installing",
-                        enabled = readable,
-                        onClick = onRunHere,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
                 CompactOutlinedButton(
-                    text = "Run full screen",
+                    text = "Run once, without installing",
                     enabled = readable,
-                    onClick = onRunFullScreen,
+                    onClick = onRunHere,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
 
             ManagerNoticeCard(
-                title = "What an embedded guest gives up",
+                title = "What a guest gives up",
                 message = "The app runs without an activity of its own, so it cannot raise the soft " +
-                    "keyboard itself — use the keyboard button — and it lays itself out against this " +
-                    "phone's screen rather than the tab, which can leave content past the edges. Its " +
-                    "own Lifecycle is driven directly, but callbacks it registers on the activity " +
-                    "with registerActivityLifecycleCallbacks miss the pre/post start, resume and stop " +
-                    "steps. Run it full screen, or install it, before trusting what you see.",
+                    "keyboard itself — use the keyboard button. Its own Lifecycle is driven directly, " +
+                    "but callbacks it registers on the activity with registerActivityLifecycleCallbacks " +
+                    "miss the pre/post start, resume and stop steps, because Android 13 puts that list " +
+                    "out of reach.",
             )
         }
     }
@@ -720,7 +806,112 @@ private fun apkProblem(path: String): String? {
         file.isDirectory -> "That is a folder — point this at the .apk file inside it."
         !file.exists() -> "Nothing is at that path. A debug build leaves its APK under " +
             "app/build/outputs/apk/debug/ inside the project."
-        !file.canRead() -> "J Code cannot read that file."
+        !file.canRead() -> "JCode cannot read that file."
         else -> null
+    }
+}
+
+/**
+ * What the device knows about an installed app, read back out of its APK.
+ *
+ * A modal rather than another screen on the device: this is JCode talking about the app, not the
+ * app talking, and putting it on the device's own screen would put it in `screencap` where it would
+ * read as something the guest drew.
+ *
+ * Everything here comes from the archive rather than from a running guest, so it answers the same
+ * whether the app has ever been opened.
+ */
+@Composable
+private fun AppDetailsDialog(
+    app: VirtualDeviceApp,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    // Measuring what an app has stored means walking its tree, so the dialog opens with everything
+    // the archive can answer straight away and fills this in when it knows.
+    var stored by remember(app.apkPath) { mutableStateOf<Long?>(null) }
+    LaunchedEffect(app.apkPath) {
+        stored = withContext(Dispatchers.IO) { VirtualDeviceApps.dataSize(context, app.packageName) }
+    }
+    val facts = remember(app.apkPath, stored) { appFacts(context, app, stored) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        title = { Text(app.label) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                facts.forEach { (name, value) ->
+                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        Text(
+                            text = name,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(text = value, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        },
+    )
+}
+
+/**
+ * Reads the archive once and flattens it into label/value pairs the dialog just prints. [stored] is
+ * null while the app's data is still being measured.
+ */
+private fun appFacts(
+    context: android.content.Context,
+    app: VirtualDeviceApp,
+    stored: Long?,
+): List<Pair<String, String>> {
+    val flags = PackageManager.GET_ACTIVITIES or PackageManager.GET_SERVICES or
+        PackageManager.GET_RECEIVERS or PackageManager.GET_PROVIDERS or
+        PackageManager.GET_PERMISSIONS
+    val info = runCatching { context.packageManager.getPackageArchiveInfo(app.apkPath, flags) }
+        .getOrNull()
+    val apk = File(app.apkPath)
+    return buildList {
+        add("Package" to app.packageName)
+        add("Version" to (app.versionName ?: "unknown"))
+        info?.applicationInfo?.let { application ->
+            add("Target SDK" to application.targetSdkVersion.toString())
+            add("Minimum SDK" to application.minSdkVersion.toString())
+        }
+        add(
+            "Components" to listOf(
+                "${info?.activities?.size ?: app.activities.size} activities",
+                "${info?.services?.size ?: 0} services",
+                "${info?.receivers?.size ?: 0} receivers",
+                "${info?.providers?.size ?: 0} providers",
+            ).joinToString(", "),
+        )
+        info?.requestedPermissions?.takeIf { it.isNotEmpty() }?.let { permissions ->
+            // The guest inherits JCode's permissions wholesale, so this is what the app *asked* for
+            // rather than what it has — worth saying, and worth not implying otherwise.
+            add(
+                "Requests (not granted separately)" to
+                    permissions.joinToString(separator = "\n") {
+                        it.removePrefix("android.permission.")
+                    },
+            )
+        }
+        add(
+            "Runs in background" to
+                if (VirtualDevicePolicy.backgroundAllowed(context, app.packageName)) "Allowed"
+                else "Stops when you leave it",
+        )
+        add("APK" to "${apk.name} (${humanSize(apk.length())})")
+        // Everything the app has written into its private tree — what "Clear data" would remove,
+        // and what the next restart takes with the rest of the device.
+        add(
+            "Data" to when {
+                stored == null -> "Measuring…"
+                stored == 0L -> "Nothing stored yet"
+                else -> humanSize(stored)
+            },
+        )
     }
 }

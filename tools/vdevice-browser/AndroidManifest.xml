@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The virtual device's built-in browser.
+
+     Shipped in JCode's assets and installed onto the device on every start, so the device always
+     has one app on it. It is an ordinary guest — no container privileges, no special casing — which
+     is the point: it exercises the same load, embed, window and WebView paths every other app takes,
+     and its browsing data is wiped with the device like any other guest's.
+
+     The icon is a framework drawable rather than one of its own, so this stays a single-dex,
+     resource-free APK that plain javac + d8 + aapt2 can build. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.jcode.vdevice.browser">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- NoActionBar on purpose: the address bar is this app's chrome, and the platform default for
+         targetSdk 33 would put an empty dark action bar above it — a second, useless header between
+         the device's status bar and the only control the browser has. -->
+    <application
+        android:label="Browser"
+        android:icon="@android:drawable/ic_menu_search"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+        android:usesCleartextTraffic="true">
+        <activity
+            android:name=".BrowserActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|density|smallestScreenSize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

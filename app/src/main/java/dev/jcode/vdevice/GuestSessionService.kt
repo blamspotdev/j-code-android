@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.Process
 import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -42,8 +43,14 @@ class GuestSessionService : Service() {
     override fun onUnbind(intent: Intent?): Boolean {
         onMain { guest.stop() }
         callback = null
+        // Nothing left to ask, so a request that arrives after this is denied rather than left
+        // waiting for an answer that cannot come.
+        GuestPermissions.setPrompt(null)
         return false
     }
+
+    /** Which app the question is about — the one on the device's screen. */
+    private fun guestPackage(): String = GuestRuntime.activePackage().orEmpty()
 
     private val binder = object : IGuestSession.Stub() {
 
@@ -56,6 +63,13 @@ class GuestSessionService : Service() {
             callback: IGuestSessionCallback?,
         ): Bundle = Bundle().also { result ->
             this@GuestSessionService.callback = callback
+            // The device's own permission prompt lives in the IDE, so the container can only ask
+            // while a tab is bound to it. Wired here rather than at install, because this is the
+            // moment there is somebody to ask.
+            GuestPermissions.setPrompt { requestId, permissions ->
+                runCatching { callback?.onPermissionRequest(requestId, permissions, guestPackage()) }
+                    .onFailure { throw VirtualDeviceException("the tab is not listening") }
+            }
             if (!GuestRuntime.isInstalled) {
                 result.putString(KEY_ERROR, "The container's framework hooks are not installed.")
                 return@also
@@ -76,7 +90,7 @@ class GuestSessionService : Service() {
             }.onFailure { error ->
                 Log.e(TAG, "cannot embed $apkPath", error)
                 onMain { guest.stop() }
-                result.putString(KEY_ERROR, error.message ?: error.toString())
+                result.putString(KEY_ERROR, error.describe())
             }
         }
 
@@ -119,6 +133,34 @@ class GuestSessionService : Service() {
         }
 
         override fun back() = post { guest.back() }
+
+        override fun permissionResult(requestId: Int, granted: BooleanArray?) {
+            GuestPermissions.answered(requestId, granted ?: BooleanArray(0))
+        }
+
+        override fun forceStop(packageName: String?) {
+            packageName?.let { name -> post { GuestRuntime.forceStop(name) } }
+        }
+
+        /**
+         * Ends the device, process and all.
+         *
+         * Killing our own pid is allowed — same uid, same app — and it is the only thing that
+         * actually clears what this process has accumulated: the loaded guests and their class
+         * loaders, anything `GuestComponents` is still hosting, the `Instrumentation` swapped into
+         * `ActivityThread`, the rewritten `Build`, and the WebView data directory claimed for the
+         * guest. None of that has an undo, which is why the container is in a process of its own.
+         *
+         * Posted rather than immediate so this transaction can return first; the caller is one-way,
+         * but the unbind that follows it is not.
+         */
+        override fun shutdown() {
+            post { guest.stop() }
+            main.postDelayed({
+                Log.i(TAG, "virtual device off; ending the guest process")
+                Process.killProcess(Process.myPid())
+            }, SHUTDOWN_DELAY_MS)
+        }
     }
 
     private fun post(block: () -> Unit) {
@@ -150,6 +192,9 @@ class GuestSessionService : Service() {
     companion object {
         const val KEY_SURFACE = "surface"
         const val KEY_ERROR = "error"
+
+        /** Long enough for the shutdown transaction and the unbind behind it to finish. */
+        private const val SHUTDOWN_DELAY_MS = 150L
 
         /** False when the container could not reach the activity's `ActivityLifecycleCallbacks` and
          *  had to nudge the guest's own `LifecycleRegistry` — see [GuestRuntime.resumeEmbedded]. */

@@ -96,9 +96,39 @@ internal class EmbeddedWindows private constructor(
             val view = views[index] as? View ?: continue
             val attrs = params[index] as? WindowManager.LayoutParams ?: continue
             if (attrs.token !== token) continue
+            constrain(view)
             children += EmbeddedWindow(view, place(attrs, view.width, view.height))
         }
         return children
+    }
+
+    /**
+     * Lays an over-measured child window back down inside the tab.
+     *
+     * The windowless session hands `ViewRootImpl` a frame but does not make it stick, and a view
+     * that measured itself before there was a real frame to measure against keeps that size. A
+     * Compose `Dialog` came back 8190px wide on a 1080px device — its content then laid out for a
+     * screen seven times too wide, so the parts of it that were on screen at all were the left edge
+     * of something much larger.
+     *
+     * Re-measuring `AT_MOST` the tab is what the window manager would have asked for in the first
+     * place. Only oversized windows are touched, so a dialog that measured correctly is left exactly
+     * as its own layout left it.
+     */
+    private fun constrain(view: View) {
+        if (view.width <= width && view.height <= height) return
+        runCatching {
+            view.measure(
+                View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.AT_MOST),
+            )
+            view.layout(
+                0,
+                0,
+                view.measuredWidth.coerceIn(1, width),
+                view.measuredHeight.coerceIn(1, height),
+            )
+        }.onFailure { Log.w(TAG, "cannot fit ${view.javaClass.name} into the tab", it) }
     }
 
     private fun list(field: Field?): List<*>? {
@@ -106,13 +136,25 @@ internal class EmbeddedWindows private constructor(
         return field?.let { runCatching { it.get(global) }.getOrNull() } as? List<*>
     }
 
-    /** Where a [width] x [height] window with these attributes belongs inside the tab. */
+    /**
+     * Where a [width] x [height] window with these attributes belongs inside the tab.
+     *
+     * The size is clamped to the tab before it is placed, because it arrives as the child view's
+     * *own* measured width and a view can measure itself larger than any window it will ever get.
+     * Measured on AI Edge Gallery, whose Compose `Dialog` came back 8190px wide against a 1080px
+     * device: gravity then centred it at `left = -3555`, so a dialog the app had correctly opened
+     * sat entirely off the screen and the app looked like it had drawn nothing at all.
+     *
+     * Clamping is the right repair rather than a cosmetic one. A window cannot be wider than the
+     * screen it is on, so a number that says otherwise is wrong wherever it came from, and honouring
+     * it can only ever put the window where nobody can see it.
+     */
     private fun place(attrs: WindowManager.LayoutParams, width: Int, height: Int): Rect {
         val frame = Rect()
         Gravity.apply(
             attrs.gravity,
-            width,
-            height,
+            width.coerceIn(1, this.width),
+            height.coerceIn(1, this.height),
             Rect(0, 0, this.width, this.height),
             attrs.x,
             attrs.y,

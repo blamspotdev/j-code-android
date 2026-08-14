@@ -113,11 +113,13 @@ downgrades**.
 
 Pre-release suffixes (`1.4.7-beta`) are ignored by the code derivation, and are never stored in
 `app/build.gradle.kts` — the release scripts apply them at build time via `-PjcodeVersionName`.
-`scripts/bump-patch-version.sh` refuses to bump a version that has one, on the grounds that a
+`scripts/bump-version.sh` refuses to bump a version that has one, on the grounds that a
 suffix in the file means something upstream is wrong.
 
-The patch number is bumped for you: `.github/workflows/version-bump.yml` opens a standing bump
-PR after each merge to `main`. See
+The version is bumped for you: `.github/workflows/version-bump.yml` opens a standing bump PR
+after each merge to `main`. It raises the patch by default; label the PR `bump-minor` or
+`bump-major` to raise that part instead (lower parts reset, so `1.4.6` becomes `1.5.0` or
+`2.0.0`), or run the workflow by hand and pick the level. See
 [CI, quality and invariants](03-ci-quality-and-invariants.md).
 
 > **The formula is duplicated in three places** and they must agree: `app/build.gradle.kts`

@@ -23,21 +23,36 @@ tasks.register("detekt") {
 
 private val duplicateManifestResource = "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
 private val desiredCmakeVersion = "3.28.3"
+// native/CMakeLists.txt uses $<LINK_LIBRARY:WHOLE_ARCHIVE,…> (CMake 3.24+), so anything older
+// cannot configure it — 3.22.1, the version the SDK installs by default, is below the floor.
+// Numeric ordering, not lexical — "3.9" sorts after "3.28" as a string. Prefer 3.x over 4.x only
+// because 4.x additionally needs the CMAKE_POLICY_VERSION_MINIMUM argument passed below for the
+// FetchContent'd deps; both ranges are known to work.
+private fun cmakeOrdinal(version: String): Long = version.split(".", "-")
+    .take(3)
+    .fold(0L) { acc, part -> acc * 100_000 + (part.takeWhile(Char::isDigit).toLongOrNull() ?: 0L) }
 private val configuredCmakeVersion = System.getenv("ANDROID_HOME")
     ?.let(::File)
     ?.resolve("cmake")
     ?.takeIf(File::exists)
     ?.listFiles()
     ?.map(File::getName)
-    ?.sorted()
     ?.let { versions ->
         when {
             desiredCmakeVersion in versions -> desiredCmakeVersion
-            versions.isNotEmpty() -> versions.last()
-            else -> desiredCmakeVersion
+            else -> {
+                val usable = versions.filter { cmakeOrdinal(it) >= cmakeOrdinal("3.24.0") }
+                usable.filter { it.startsWith("3.") }.maxByOrNull(::cmakeOrdinal)
+                    ?: usable.maxByOrNull(::cmakeOrdinal)
+                    ?: desiredCmakeVersion
+            }
         }
     }
     ?: desiredCmakeVersion
+// :native:core configures itself (its JNI output feeds merged_native_libs directly, not the
+// generated/jniLibs convention) but must agree with everyone else on the cmake to run.
+extra["jcodeCmakeVersion"] = configuredCmakeVersion
+
 private val nativeModuleIds = mapOf(
     ":native:buffer" to "buffer",
     ":native:editor-render" to "editor-render",
@@ -95,7 +110,11 @@ subprojects {
                                 listOf(
                                     "-DANDROID_STL=c++_static",
                                     "-DJCODE_NATIVE_MODULE=$nativeModuleId",
-                                    "-DJCODE_JNI_OUTPUT_DIR=$jniOutputRoot"
+                                    "-DJCODE_JNI_OUTPUT_DIR=$jniOutputRoot",
+                                    // CMake 4 removed compatibility with the < 3.5 minimums some
+                                    // FetchContent'd deps still declare (yaml-cpp); this raises
+                                    // their floor instead of failing configure. 3.x ignores it.
+                                    "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
                                 )
                             )
                         }

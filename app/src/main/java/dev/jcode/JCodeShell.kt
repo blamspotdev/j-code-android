@@ -5,7 +5,6 @@ import dev.jcode.core.editor.decor.Layer
 import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
 import dev.jcode.design.EditorSaveActions
-import dev.jcode.design.IconBundleRegistry
 import dev.jcode.core.editor.completion.CompletionSource
 import dev.jcode.core.editor.completion.LocalCompletionSource
 import dev.jcode.editor.languagePackCompletionItems
@@ -39,7 +38,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
-import dev.jcode.design.ThemeBundleRegistry
 import dev.jcode.design.jcIcon
 
 import android.app.Activity
@@ -57,10 +55,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -69,11 +63,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -90,10 +81,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -109,20 +98,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
+import dev.jcode.design.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHostState
@@ -130,7 +115,6 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -157,8 +141,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
@@ -167,9 +149,6 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.input.pointer.PointerInputChange
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -178,13 +157,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -207,9 +184,6 @@ import dev.jcode.core.distro.DistroBind
 import dev.jcode.core.distro.DistroEnvironmentState
 import dev.jcode.core.distro.DistroProfile
 import dev.jcode.core.distro.DistroWizardProgress
-import dev.jcode.core.distro.ProotManager
-import dev.jcode.core.distro.RootfsDownloader
-import dev.jcode.core.distro.RootfsManager
 import dev.jcode.core.distro.LspCatalogState
 import dev.jcode.core.distro.SdkCatalogState
 import dev.jcode.core.distro.adb.AdbBridgeState
@@ -255,9 +229,6 @@ import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.languageFor
 import dev.jcode.feature.marketplace.MarketplaceEntry
-import dev.jcode.feature.marketplace.isUpdateAvailable
-import dev.jcode.feature.marketplace.ProjectTemplate
-import dev.jcode.feature.marketplace.ScaffoldState
 import dev.jcode.feature.onboarding.EnvironmentManagerActions
 import dev.jcode.feature.onboarding.LocalEnvironmentManager
 import dev.jcode.feature.onboarding.OnboardingFeature
@@ -341,6 +312,8 @@ import dev.jcode.design.VirtualDeviceSetting
 import dev.jcode.vdevice.AppSandbox
 import dev.jcode.vdevice.AppSandboxPage
 import dev.jcode.vdevice.VirtualDevice
+import dev.jcode.vdevice.SimulatedHardware
+import dev.jcode.vdevice.VirtualHardwarePage
 import dev.jcode.design.LocalCutoutSetting
 import dev.jcode.design.LocalExplorerHiddenSetting
 import dev.jcode.design.LocalVolumeKeysSetting
@@ -357,7 +330,6 @@ import dev.jcode.workbench.WorkspaceHeader
 import dev.jcode.workbench.ProjectRoster
 import dev.jcode.workbench.WelcomeCard
 import dev.jcode.workbench.WorkspaceEmptyState
-import dev.jcode.workbench.SidebarToolButton
 import dev.jcode.workbench.WorkbenchActionButton
 import dev.jcode.workbench.WorkbenchIconActionButton
 import dev.jcode.workbench.ExtensionDrawerActions
@@ -400,15 +372,12 @@ import dev.jcode.run.RunConfigPage
 import dev.jcode.fs.Workspace
 import dev.jcode.fs.WorkspaceCrumb
 import dev.jcode.fs.WorkspaceManager
-import dev.jcode.fs.WorkspaceNodeType
 import dev.jcode.fs.rememberOpenFolderLauncher
 import java.io.File
-import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
 
 @Composable
@@ -913,6 +882,11 @@ fun JCodeApp(
     LaunchedEffect(Unit) {
         snapshotFlow { AppSandbox.revealSignal.value }.collect { if (it > 0) viewModel.openAppSandboxTab() }
     }
+    // And for the hardware bench, which the device's own control bar asks for.
+    LaunchedEffect(Unit) {
+        snapshotFlow { SimulatedHardware.revealSignal.intValue }
+            .collect { if (it > 0) viewModel.openVirtualHardwareTab() }
+    }
     // A page tab has no close callback, so the guest is reaped by watching the tab list.
     LaunchedEffect(editorGroup.tabs) { viewModel.pruneAppSandbox() }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -1353,7 +1327,11 @@ fun JCodeApp(
     val runInVirtualDevice by viewModel.runInVirtualDevice.collectAsStateWithLifecycle()
     val adbToolInstalled = ADB_CATALOG_ENTRY in sdkCatalogState.installedEntryIds
     val virtualDeviceReconnecting by viewModel.virtualDeviceAdbReconnecting.collectAsStateWithLifecycle()
-    val virtualDeviceSetting = remember(runInVirtualDevice, adbToolInstalled, virtualDeviceReconnecting) {
+    val virtualDeviceSetting = remember(
+        runInVirtualDevice,
+        adbToolInstalled,
+        virtualDeviceReconnecting,
+    ) {
         VirtualDeviceSetting(
             enabled = runInVirtualDevice,
             onChange = viewModel::setRunInVirtualDevice,
@@ -1632,13 +1610,16 @@ fun JCodeApp(
     }
 
     // Closing tabs with unsaved changes: Save / Discard / Close Saved (dismiss = keep everything).
+    // "Close Saved" only appears when the set actually holds saved tabs to close — closing one dirty
+    // tab leaves it nothing to do, so a bulk close is the only place it earns its slot.
     pendingEditorClose?.let { pending ->
+        val canCloseSaved = pending.savedCount > 0
         UnsavedChangesDialog(
             titles = pending.dirtyTitles,
-            thirdLabel = "Close Saved",
+            thirdLabel = "Close Saved".takeIf { canCloseSaved },
             onSave = { viewModel.resolveEditorClose(EditorCloseChoice.SAVE) },
             onDiscard = { viewModel.resolveEditorClose(EditorCloseChoice.DISCARD) },
-            onThird = { viewModel.resolveEditorClose(EditorCloseChoice.CLOSE_SAVED) },
+            onThird = { viewModel.resolveEditorClose(EditorCloseChoice.CLOSE_SAVED) }.takeIf { canCloseSaved },
             onDismiss = { viewModel.resolveEditorClose(EditorCloseChoice.CANCEL) },
             onCancel = { viewModel.resolveEditorClose(EditorCloseChoice.CANCEL) },
         )
@@ -1789,7 +1770,7 @@ private fun JCodeShell(
     // the editor-page dispatch is invoked in a subcomposition where the local would fall back to default.
     val vcs = LocalVcsActions.current
     val appContext = LocalContext.current.applicationContext
-    // The guest runs in J Code's task, so the container is handed the hosting activity when there is
+    // The guest runs in JCode's task, so the container is handed the hosting activity when there is
     // one (the application context would push it into a task of its own).
     val hostActivity = LocalContext.current.findActivity()
     val virtualDevice = LocalVirtualDevice.current
@@ -3013,6 +2994,7 @@ private fun JCodeShell(
                         leftSidebarExpanded = isPersistentLeftSidebarVisible,
                         canShowRightSidebar = canShowRightSidebar,
                         rightSidebarVisible = rightSidebarVisible,
+                        rightSidebarDocked = rightSidebarDocked,
                         modifier = Modifier.fillMaxSize(),
                         onToggleLeftSidebar = {
                             if (usesModalWorkspace) {
@@ -3246,6 +3228,8 @@ private fun JCodeShell(
                                     },
                                     modifier = Modifier.fillMaxSize(),
                                 )
+                                EditorPageKind.VirtualHardware ->
+                                    VirtualHardwarePage(modifier = Modifier.fillMaxSize())
                                 EditorPageKind.Browser -> BrowserPage(modifier = Modifier.fillMaxSize())
                                 EditorPageKind.ImageViewer -> key(tab.id) {
                                     // Key by tab id so switching between image tabs (same call site)
@@ -3800,6 +3784,7 @@ private fun EditorWorkspace(
     leftSidebarExpanded: Boolean,
     canShowRightSidebar: Boolean,
     rightSidebarVisible: Boolean,
+    rightSidebarDocked: Boolean,
     onToggleLeftSidebar: () -> Unit,
     onToggleRightSidebar: () -> Unit,
     onRun: () -> Unit,
@@ -3845,6 +3830,7 @@ private fun EditorWorkspace(
                         leftSidebarExpanded = leftSidebarExpanded,
                         canShowRightSidebar = canShowRightSidebar,
                         rightSidebarVisible = rightSidebarVisible,
+                        rightSidebarDocked = rightSidebarDocked,
                         onToggleLeftSidebar = onToggleLeftSidebar,
                         onToggleRightSidebar = onToggleRightSidebar,
                         onShowTerminal = onShowTerminal,
@@ -4469,14 +4455,18 @@ private fun WorkbenchRightSidebarBody(
  * and loses the edits; the third action differs by context — "Close Saved" for a tab close (keep the
  * dirty tabs open, close the already-saved ones) or "Cancel" for a workspace/project switch (where the
  * tabs can't be kept). Dismissing keeps everything as-is.
+ *
+ * The third action is omitted entirely when the caller passes no label/handler: "Close Saved" has
+ * nothing to close unless the closing set also holds already-saved tabs, which only a bulk close
+ * (Close others / Close to the right) produces.
  */
 @Composable
 private fun UnsavedChangesDialog(
     titles: List<String>,
-    thirdLabel: String,
+    thirdLabel: String?,
     onSave: () -> Unit,
     onDiscard: () -> Unit,
-    onThird: () -> Unit,
+    onThird: (() -> Unit)?,
     onDismiss: () -> Unit,
     // When set, a visible "Cancel" button that aborts the close (keeping everything). Omitted where the
     // third button already serves as Cancel, so the row never shows two cancels.
@@ -4499,7 +4489,9 @@ private fun UnsavedChangesDialog(
             TextButton(onClick = onDiscard) {
                 Text("Discard", color = MaterialTheme.colorScheme.error)
             }
-            TextButton(onClick = onThird) { Text(thirdLabel) }
+            if (thirdLabel != null && onThird != null) {
+                TextButton(onClick = onThird) { Text(thirdLabel) }
+            }
             TextButton(onClick = onSave) { Text("Save") }
         },
         dismissButton = {

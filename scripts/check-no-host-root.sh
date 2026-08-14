@@ -12,8 +12,9 @@
 #   - proot's `-0` flag (fake UID 0 INSIDE the guest only)
 #   - `rootfs` / `distroRoot` naming
 #
-# Single source of truth: invoked by CI (.github/workflows/no-host-root.yml),
-# the pre-commit hook (.githooks/pre-commit), and the release build scripts.
+# Single source of truth: invoked by the pre-commit hook (.githooks/pre-commit)
+# and the release build scripts. There is no CI job running this — the hook only
+# covers people who ran scripts/install-git-hooks.sh.
 # Run manually:  sh scripts/check-no-host-root.sh
 set -eu
 

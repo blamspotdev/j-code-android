@@ -7,16 +7,35 @@ import java.lang.reflect.Method
 internal const val TAG = "VDEVICE"
 
 /**
+ * What a binder call the container answered itself hands back when it has nothing to say.
+ *
+ * Every proxy in here has the same problem: a method it does not model still has to return
+ * *something* of the right shape, and a null where an `int` was declared is an
+ * `IllegalArgumentException` out of the reflection layer rather than a value the caller can read.
+ */
+internal fun emptyValue(type: Class<*>): Any? = when (type) {
+    Void.TYPE -> null
+    Boolean::class.javaPrimitiveType -> false
+    Int::class.javaPrimitiveType -> 0
+    Long::class.javaPrimitiveType -> 0L
+    Float::class.javaPrimitiveType -> 0f
+    Double::class.javaPrimitiveType -> 0.0
+    else -> null
+}
+
+/**
  * Reflection helpers for the framework internals the container is built on.
  *
  * Everything the virtual device does — swapping `ActivityThread.mInstrumentation`, reading
  * `ActivityThread.mH`, building a bare `AssetManager`, replacing the `IActivityTaskManager` binder
  * proxy — lives on non-SDK ("hidden") members, so **this is coupled to `targetSdk`.**
  *
- * Verified on Android 13 with J Code's `targetSdk = 33`: the members the full-screen path touches
+ * Verified on Android 13 with JCode's `targetSdk = 33`: the members the full-screen path touches
  * are all on the `unsupported` greylist, which carries no `maxTargetSdk`, so they are *allowed* (the
- * runtime logs a warning per access and nothing more). The following are not, and each is designed
- * around rather than bypassed:
+ * runtime logs a warning per access and nothing more). Measured on this device, and added to that
+ * list: `ActivityThread.sPackageManager` and `ApplicationPackageManager.mPM` are both readable and
+ * writable at `targetSdk` 33, which is what lets [GuestPackageHook] answer a guest's questions about
+ * its own package. The following are not allowed, and each is designed around rather than bypassed:
  *
  *  - `ContextThemeWrapper.mTheme` is `max-target-p`, so it cannot be cleared — see
  *    [GuestRuntime.onLaunchActivity], which keeps it from ever being created.

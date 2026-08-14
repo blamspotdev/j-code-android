@@ -17,7 +17,7 @@ import androidx.appcompat.widget.AppCompatTextView
  * activity's *own* theme — the check behind "You need to use a Theme.AppCompat theme (or
  * descendant) with this activity." That attribute is defined in the guest's resource table, so the
  * check passes only if the container has the activity themed against the guest's resources rather
- * than J Code's, and it fails for a theme that merely *looks* applied.
+ * than JCode's, and it fails for a theme that merely *looks* applied.
  *
  * Everything on screen is a plain view with an id and a label, which is also what makes this the
  * fixture to point `uiautomator dump` at: every node here has a resource-id to find it by.

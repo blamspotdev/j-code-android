@@ -261,7 +261,6 @@ static void screen_write_char(VtParser* parser, uint32_t ch) {
         } else {
             blank_split_pairs(screen, screen->cursor_row, screen->cursor_col, screen->cursor_col + 1);
             screen->cells[screen->cursor_row * screen->cols + screen->cursor_col] = VT_BLANK;
-            if (parser->dirty_rows) parser->dirty_rows[screen->cursor_row] = true;
             screen->cursor_col = 0;
             screen->cursor_row++;
             if (screen->cursor_row > screen->scroll_bottom) {
@@ -289,10 +288,6 @@ static void screen_write_char(VtParser* parser, uint32_t ch) {
             cont->attrs = parser->attrs;
         }
 
-        // Mark row as dirty
-        if (parser->dirty_rows) {
-            parser->dirty_rows[screen->cursor_row] = true;
-        }
     }
 
     screen->cursor_col += width;
@@ -306,10 +301,6 @@ static void screen_newline(VtParser* parser) {
     if (screen->cursor_row > screen->scroll_bottom) {
         screen_scroll_up(parser, 1);
         screen->cursor_row = screen->scroll_bottom;
-    }
-    
-    if (parser->dirty_rows) {
-        parser->dirty_rows[screen->cursor_row] = true;
     }
 }
 
@@ -513,7 +504,6 @@ static void apply_dec_mode(VtParser* parser, int mode, bool set) {
                 parser->active = &parser->primary;
                 if (mode == 1049) cursor_restore(parser, &parser->primary);
             }
-            parser->full_refresh = true;
             break;
         // xterm turns tracking OFF on DECRST of ANY tracking mode (apps commonly clean up with
         // just ?1000l even if they enabled ?1003) — a matching-only reset left tracking latched,
@@ -642,25 +632,17 @@ static void handle_csi(VtParser* parser, char final_char) {
                     clear_cells(&screen->cells[(screen->cursor_row + 1) * screen->cols],
                                 (screen->rows - screen->cursor_row - 1) * screen->cols);
                 }
-                if (parser->dirty_rows) {
-                    for (int row = screen->cursor_row; row < screen->rows; row++) parser->dirty_rows[row] = true;
-                }
             } else if (mode == 1) {
                 // Clear from beginning to cursor: the contiguous rows above, then the row head.
                 clear_cells(screen->cells, screen->cursor_row * screen->cols);
                 clear_row_range(screen, screen->cursor_row, 0, screen->cursor_col);
-                if (parser->dirty_rows) {
-                    for (int row = 0; row <= screen->cursor_row; row++) parser->dirty_rows[row] = true;
-                }
             } else if (mode == 2) {
                 // Clear entire screen
                 screen_clear(screen);
-                parser->full_refresh = true;
             } else if (mode == 3) {
                 // xterm: clear scrollback (used by `clear` and Claude Code's /clear).
                 parser->scrollback_count = 0;
                 parser->scrollback_head = 0;
-                parser->full_refresh = true;
             }
             break;
         }
@@ -673,19 +655,16 @@ static void handle_csi(VtParser* parser, char final_char) {
             } else if (mode == 2) {
                 clear_row_range(screen, screen->cursor_row, 0, screen->cols - 1);
             }
-            if (parser->dirty_rows) parser->dirty_rows[screen->cursor_row] = true;
             break;
         }
         case 'S': { // Scroll Up
             int n = parser->param_count > 0 && parser->params[0] > 0 ? parser->params[0] : 1;
             screen_scroll_up(parser, n);
-            parser->full_refresh = true;
             break;
         }
         case 'T': { // Scroll Down
             int n = parser->param_count > 0 && parser->params[0] > 0 ? parser->params[0] : 1;
             screen_scroll_down(parser, n);
-            parser->full_refresh = true;
             break;
         }
         case '@': { // ICH — insert n blank cells at the cursor, shifting the rest of the row right
@@ -698,7 +677,6 @@ static void handle_csi(VtParser* parser, char final_char) {
             memmove(&line[col + n], &line[col], (size_t)(screen->cols - col - n) * sizeof(VtCell));
             clear_cells(&line[col], n);
             repair_row_pairs(screen, row);
-            if (parser->dirty_rows) parser->dirty_rows[row] = true;
             break;
         }
         case 'P': { // DCH — delete n cells at the cursor, shifting the rest of the row left
@@ -711,7 +689,6 @@ static void handle_csi(VtParser* parser, char final_char) {
             memmove(&line[col], &line[col + n], (size_t)(screen->cols - col - n) * sizeof(VtCell));
             clear_cells(&line[screen->cols - n], n);
             repair_row_pairs(screen, row);
-            if (parser->dirty_rows) parser->dirty_rows[row] = true;
             break;
         }
         case 'X': { // ECH — erase n cells from the cursor (no shift)
@@ -720,7 +697,6 @@ static void handle_csi(VtParser* parser, char final_char) {
             if (col >= screen->cols) col = screen->cols - 1;
             if (n > screen->cols - col) n = screen->cols - col;
             clear_row_range(screen, screen->cursor_row, col, col + n - 1);
-            if (parser->dirty_rows) parser->dirty_rows[screen->cursor_row] = true;
             break;
         }
         case 'L': { // IL — insert n blank lines at the cursor row (within the scroll region)
@@ -730,7 +706,6 @@ static void handle_csi(VtParser* parser, char final_char) {
                 if (n > span) n = span;
                 region_shift_down(screen, screen->cursor_row, screen->scroll_bottom, n);
                 screen->cursor_col = 0;
-                parser->full_refresh = true;
             }
             break;
         }
@@ -741,7 +716,6 @@ static void handle_csi(VtParser* parser, char final_char) {
                 if (n > span) n = span;
                 region_shift_up(screen, screen->cursor_row, screen->scroll_bottom, n);
                 screen->cursor_col = 0;
-                parser->full_refresh = true;
             }
             break;
         }
@@ -1198,21 +1172,12 @@ VtParser* vt_parser_create(int rows, int cols) {
     
     parser->active = &parser->primary;
 
-    // Allocate dirty row tracking. Failure paths free the embedded screens' cells directly —
-    // screen_destroy would free() the embedded structs themselves, which are not heap pointers.
-    parser->dirty_rows = (bool*)calloc(rows, sizeof(bool));
-    if (!parser->dirty_rows) {
-        free(parser->primary.cells);
-        free(parser->alternate.cells);
-        free(parser);
-        return NULL;
-    }
-
-    // OSC accumulator (grows on demand — see osc_grow)
+    // OSC accumulator (grows on demand — see osc_grow). Failure paths free the embedded screens'
+    // cells directly — screen_destroy would free() the embedded structs themselves, which are not
+    // heap pointers.
     parser->osc_cap = VT_OSC_BUFFER_CAP;
     parser->osc_buffer = (char*)malloc((size_t)parser->osc_cap);
     if (!parser->osc_buffer) {
-        free(parser->dirty_rows);
         free(parser->primary.cells);
         free(parser->alternate.cells);
         free(parser);
@@ -1249,7 +1214,6 @@ void vt_parser_destroy(VtParser* parser) {
     free(parser->osc_buffer);
     free(parser->primary.cells);
     free(parser->alternate.cells);
-    free(parser->dirty_rows);
     free(parser->scrollback);
     free(parser);
 }
@@ -1342,8 +1306,8 @@ void vt_parser_feed(VtParser* parser, const uint8_t* data, size_t len) {
 
     for (size_t i = 0; i < len; i++) {
         // Fast path: in GROUND state, a run of printable ASCII (the dominant byte class in
-        // streamed output) is written directly into the row — one bounds check and one dirty
-        // mark per run instead of per-byte state dispatch + per-cell checks. The run stops at
+        // streamed output) is written directly into the row — one bounds check per run instead
+        // of per-byte state dispatch + per-cell checks. The run stops at
         // the row edge, leaving the same parked-cursor state the slow path's deferred wrap
         // produces; 0x7F is included because the slow path prints every byte in [0x20, 0x7F].
         if (parser->state == VT_STATE_GROUND && parser->utf8_left == 0 &&
@@ -1368,7 +1332,6 @@ void vt_parser_feed(VtParser* parser, const uint8_t* data, size_t len) {
                     if (start_was_cont && s->cursor_col > 0) cell[-1] = VT_BLANK;
                     if (s->cursor_col + (int)run < s->cols && cell[run].ch == 0) cell[run] = VT_BLANK;
                     s->cursor_col += (int)run;
-                    if (parser->dirty_rows) parser->dirty_rows[s->cursor_row] = true;
                     i += run - 1;
                     continue;
                 }
@@ -1488,11 +1451,6 @@ void vt_parser_resize(VtParser* parser, int rows, int cols) {
     }
 
     parser->active = on_primary ? &parser->primary : &parser->alternate;
-
-    free(parser->dirty_rows);
-    parser->dirty_rows = (bool*)calloc(rows, sizeof(bool));
-
-    parser->full_refresh = true;
 }
 
 const VtScreen* vt_parser_get_screen(const VtParser* parser) {
@@ -1501,12 +1459,6 @@ const VtScreen* vt_parser_get_screen(const VtParser* parser) {
 
 bool vt_parser_is_alternate_screen(const VtParser* parser) {
     return parser && parser->active == &parser->alternate;
-}
-
-void vt_parser_clear_dirty(VtParser* parser) {
-    if (!parser || !parser->dirty_rows) return;
-    memset(parser->dirty_rows, 0, parser->active->rows * sizeof(bool));
-    parser->full_refresh = false;
 }
 
 void vt_parser_reset(VtParser* parser) {
@@ -1548,5 +1500,4 @@ void vt_parser_reset(VtParser* parser) {
     parser->alternate.cursor_row = 0;
     parser->alternate.cursor_col = 0;
     
-    parser->full_refresh = true;
 }

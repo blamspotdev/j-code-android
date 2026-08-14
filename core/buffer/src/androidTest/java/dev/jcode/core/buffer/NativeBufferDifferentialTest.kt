@@ -168,6 +168,77 @@ class NativeBufferDifferentialTest {
         }
     }
 
+    /**
+     * Deletes that span many pieces at once — the case the main fuzz never reaches, since its
+     * deletes cap at 24 bytes. Whole-buffer replaces and large range deletes are the paths where
+     * erase() has to retire a whole run of pieces in one splice, so they need their own coverage.
+     */
+    @Test
+    fun largeRangeDeletesAcrossManyPieces() {
+        for (seed in longArrayOf(3L, 2026L)) {
+            val rng = Random(seed)
+            val initial = buildString { repeat(600) { append("line $it with some text\n") } }
+                .toByteArray(Charsets.UTF_8)
+            val ref = ReferenceModel(initial)
+            nativeBuffer(initial).use { nat ->
+                kotlinBuffer(initial).use { ktl ->
+                    // Fragment the piece list first: scattered inserts break the append fast path,
+                    // so a later delete has to cross hundreds of pieces rather than one.
+                    repeat(400) {
+                        val tx = EditTx.insert(rng.nextInt(0, ref.content.size + 1), randomText(rng, 5))
+                        ref.apply(tx)
+                        nat.applyEdit(tx).close()
+                        ktl.applyEdit(tx).close()
+                    }
+                    assertBuffersAgree(nat, ktl, ref, rng, step = 0)
+
+                    // Progressively larger deletes, ending with one that clears what remains.
+                    var step = 1
+                    for (fraction in listOf(4, 3, 2, 1)) {
+                        val len = ref.content.size
+                        if (len == 0) break
+                        val span = (len / fraction).coerceAtLeast(1)
+                        val start = rng.nextInt(0, len - span + 1)
+                        val tx = EditTx.delete(start, start + span)
+                        ref.apply(tx)
+                        nat.applyEdit(tx).close()
+                        ktl.applyEdit(tx).close()
+                        assertBuffersAgree(nat, ktl, ref, rng, step++)
+                    }
+
+                    // Whole-buffer replace: delete everything, then insert fresh content.
+                    val replace = EditTx.replace(0, ref.content.size, "replaced\ncontent\nhere\n")
+                    ref.apply(replace)
+                    nat.applyEdit(replace).close()
+                    ktl.applyEdit(replace).close()
+                    assertBuffersAgree(nat, ktl, ref, rng, step)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun benchmarkWholeBufferReplace() {
+        val initial = buildString { repeat(4_000) { append("val line$it = compute($it)\n") } }
+            .toByteArray(Charsets.UTF_8)
+
+        fun bench(label: String, useNative: Boolean): Long {
+            val b = Buffer(initial, useNative = useNative)
+            val rng = Random(11L)
+            // Fragment into ~6k pieces so the replace has a long run to retire in one go.
+            repeat(6_000) {
+                b.applyEdit(EditTx.insert(rng.nextInt(0, b.byteLength + 1), "x")).close()
+            }
+            val ns = measureNanoTime { b.applyEdit(EditTx.replace(0, b.byteLength, "fresh\n")).close() }
+            b.close()
+            return ns / 1_000_000
+        }
+
+        val nativeMs = bench("native", useNative = true)
+        val kotlinMs = bench("kotlin", useNative = false)
+        Log.i("NativeBufferBench", "wholeBufferReplace(6k pieces): native=${nativeMs}ms kotlin=${kotlinMs}ms")
+    }
+
     @Test
     fun benchmarkNativeVsKotlin() {
         val bigText = buildString {

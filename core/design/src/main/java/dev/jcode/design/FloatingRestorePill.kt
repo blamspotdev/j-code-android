@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.dp
  * through one of these.
  *
  * 44dp (≥ the 48dp minimum once the touch slop around it is counted) keeps the only exit comfortably
- * tappable. The container is translucent, which suits a pill floating over J Code's own background.
+ * tappable. The container is translucent, which suits a pill floating over JCode's own background.
  */
 @Composable
 fun FloatingRestorePill(

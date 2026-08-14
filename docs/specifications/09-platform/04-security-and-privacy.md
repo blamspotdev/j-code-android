@@ -4,8 +4,8 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | Repository-wide |
-| **Primary sources** | scripts/check-no-host-root.sh, app/src/main/AndroidManifest.xml, feature/marketplace/src/main/java/dev/jcode/feature/marketplace/JextCrypto.kt, core/distro/src/main/java/dev/jcode/core/distro/adb/AdbAuth.kt, core/distro/src/main/java/dev/jcode/core/distro/ProotManager.kt, app/src/main/java/dev/jcode/vdevice/GuestContext.kt, app/src/main/java/dev/jcode/AppUpdateInstaller.kt, app/src/main/res/xml/network_security_config.xml, app/src/main/res/xml/backup_rules.xml, app/src/main/res/xml/data_extraction_rules.xml |
-| **Verified against** | commit `cea581c`, 2026-08-09 |
+| **Primary sources** | scripts/check-no-host-root.sh, app/src/main/AndroidManifest.xml, feature/marketplace/src/main/java/dev/jcode/feature/marketplace/JextCrypto.kt, core/distro/src/main/java/dev/jcode/core/distro/adb/AdbAuth.kt, core/distro/src/main/java/dev/jcode/core/distro/ProotManager.kt, app/src/main/java/dev/jcode/vdevice/GuestContext.kt, app/src/main/java/dev/jcode/vdevice/VirtualDevicePolicy.kt, app/src/main/java/dev/jcode/vdevice/GuestPermissions.kt, app/src/main/java/dev/jcode/vdevice/GuestLocation.kt, app/src/main/java/android/hardware/GuestSensorManager.kt, app/src/main/java/dev/jcode/AppUpdateInstaller.kt, app/src/main/res/xml/network_security_config.xml, app/src/main/res/xml/backup_rules.xml, app/src/main/res/xml/data_extraction_rules.xml |
+| **Verified against** | device-verified on Android 13, 2026-08-13 |
 
 ---
 
@@ -46,6 +46,7 @@ A practical consequence: JCode **cannot** enable wireless debugging for the user
 | App ↔ guest Linux processes | **Partly** | proot is a ptrace-based *convenience* sandbox, not a security boundary. Guest processes run as the app's uid and can reach anything the app can |
 | App ↔ `:guest` (virtual device) | **No** | Separate process, **same uid, same permissions, same data access**. A memory and lifecycle boundary, not a security one |
 | Guest APK ↔ JCode's data | **Partly** | `GuestContext` redirects the guest's `dataDir` to `filesDir/vdevice/<package>/`, which "keeps a guest from ever seeing (or writing into) JCode's own data directory" — but the guest runs arbitrary code as JCode's uid and can bypass the wrapper |
+| Guest APK ↔ the phone's hardware | **Partly** | Two settings, both required: what the device has, and what the app may do with it — see [App sandbox architecture §7e](../08-virtual-device/01-app-sandbox-architecture.md#7e-two-settings-not-one--virtualdevicepolicy). The outer lock is real and is the platform's: JCode holds no camera or location permission, so those cannot be reached whatever the container says. The motion sensors have no outer lock — Android does not gate them — so for those the policy **is** the boundary, and a guest that bypasses `GuestContext` reaches the phone's |
 
 **Do not run untrusted APKs in the app sandbox, and do not treat proot as a jail.** Both exist for
 developer convenience.
@@ -64,6 +65,14 @@ Every permission JCode requests and why:
 | `WAKE_LOCK` | Long builds and installs | — |
 | `MANAGE_EXTERNAL_STORAGE` | Raw file-path access to the legacy `/storage/emulated/0/JCode` root | System settings toggle; checked with `Environment.isExternalStorageManager()` |
 | `REQUEST_INSTALL_PACKAGES` | The in-app updater | `canRequestPackageInstalls()` at runtime |
+| `RECORD_AUDIO` | **Held for the virtual device, never for JCode itself** — the only hardware a guest can be given for real | Requested at the moment an app on the device is switched to a real microphone in Manage permissions. Until then it is declared and not granted, and neither JCode nor any guest can record |
+
+The virtual device also holds a set of protection-level-*normal* permissions on its guests' behalf
+(`ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `VIBRATE`, …): a guest runs under JCode's uid and holds
+JCode's permissions, so an app that merely asks whether it is online died before drawing a frame
+without them. Camera, location and contacts remain deliberately absent — the device offers a
+simulated camera and a simulated GPS in their place, and there is no mode in which either reaches
+the phone's.
 
 **Request permissions only when first needed.** Do not front-load RUN_COMMAND, notification or SAF
 prompts.
@@ -161,6 +170,20 @@ present for the framework's requirements.
   own tooling makes.
 - `VirtualIdentity` reports a synthetic device identity to a guest APK (`JCode vDevice`,
   `JCODEVD00000000`) while leaving hardware-derived values truthful.
+- **The built-in location trails are deliberately not survey data.** Each of the three is hand-drawn,
+  simplified, displaced a few hundred metres from the real place, and reported through a compass
+  skewed a few degrees off the true bearing — see
+  [App sandbox architecture §7f](../08-virtual-device/01-app-sandbox-architecture.md#7f-the-hardware-bench--virtualhardwarepage).
+  A faithful replay of a real street at a realistic speed with a matching compass is worth nothing to
+  somebody testing a maps app and a great deal to somebody fabricating a journey, so the repository
+  holds no faithful trace to replay. The offsets are documented rather than hidden: the protection is
+  the absence of accurate data, not the secrecy of a constant. The outer guarantee is the device's —
+  a simulated fix is answered only to guests inside the virtual device, never to the phone.
+- **A guest is not given the phone's camera, microphone or location by default, and the first two of
+  those are the only ones it can ever be given** — the microphone on an explicit per-app choice that
+  prompts the user, the camera never. Location is simulated or nothing. The motion sensors default
+  to simulated, which is a change: before `VirtualDevicePolicy` a guest read the phone's real
+  accelerometer, magnetometer and gyroscope and there was no way to refuse it.
 
 ---
 
@@ -171,6 +194,17 @@ present for the framework's requirements.
   A network-position attacker could substitute a rootfs.
 - Imported `.vsix` extensions are unverified code.
 - The `:guest` process is not a security boundary despite looking like one.
+- **A guest's hardware policy is enforced at the container, not by the platform.** For the camera,
+  the microphone and location the platform is underneath it and refuses independently; for the three
+  motion sensors nothing is underneath it, because Android puts no permission on them. A guest that
+  reaches around `GuestContext` for a `SensorManager` gets the phone's.
+- A simulated camera **declares** a camera and permits it, and no frame ever arrives. That is a true
+  statement about a device with a camera that produces nothing, and an app written to assume
+  otherwise will hang or fail rather than fall back.
+- **An activity gets one runtime permission request.** Every route to clearing the platform's
+  `mHasCurrentPermissionsRequest` is blocked at `targetSdk` 33, so a second `requestPermissions` from
+  the same activity instance is cancelled by the platform before the container sees it. The app is
+  answered with two empty arrays — a documented cancellation — and reopening it clears the flag.
 - No signing-key revocation path for extensions.
 - The `exec` capability is effectively full control of the guest environment; the permission UI
   cannot express anything finer.

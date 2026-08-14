@@ -148,6 +148,8 @@ if(JCODE_NATIVE_MODULE STREQUAL "buffer")
         "${CMAKE_CURRENT_LIST_DIR}/buffer/src/jni_buffer.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/buffer/src/highlight.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/buffer/src/jni_highlight.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/buffer/src/wrap_map.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/buffer/src/jni_wrap.cpp"
         "${JCODE_STUB_SOURCE}"
     )
     target_include_directories(jcode_native_buffer PRIVATE

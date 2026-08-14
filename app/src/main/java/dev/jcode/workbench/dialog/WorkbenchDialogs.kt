@@ -16,7 +16,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material3.AlertDialog
+import dev.jcode.design.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -286,8 +286,6 @@ internal fun NewItemDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        modifier = if (isLandscape && step == 0) Modifier.fillMaxWidth(0.82f).widthIn(max = 760.dp) else Modifier,
-        properties = DialogProperties(usePlatformDefaultWidth = !(isLandscape && step == 0)),
         title = {
             Text(
                 when {

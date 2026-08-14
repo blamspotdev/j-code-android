@@ -25,14 +25,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** How a guest app can be shown, given what this window supports. */
-internal enum class AppSandboxTier {
-    /** Composited into the editor tab out of the `:guest` process. */
-    Embedded,
-
-    /** No embedding possible; the app can still take over the screen as its own task. */
-    FullScreen,
-}
+/** A guest asking the person at the keyboard for permissions the device has not decided about. */
+internal class PermissionRequest(
+    val requestId: Int,
+    val permissions: List<String>,
+    val packageName: String,
+)
 
 internal sealed interface SandboxStatus {
     data object Idle : SandboxStatus
@@ -45,7 +43,7 @@ internal sealed interface SandboxStatus {
 }
 
 /**
- * Shared state for J Code's single device-sandbox tab: the run flow only asks for one, the shell
+ * Shared state for JCode's single device-sandbox tab: the run flow only asks for one, the shell
  * opens the tab, and the page reads the APK back out.
  *
  * The device outlives every app that runs on it — its screen is blank rather than absent when
@@ -131,14 +129,29 @@ internal object AppSandbox {
         session = null
         running.value = false
     }
+
+    /** Force-stops one app on the device, running or merely still loaded. */
+    fun forceStop(packageName: String) {
+        session?.forceStop(packageName)
+    }
+
+    /** Turns the device off, process and all — see [AppSandboxSession.shutdown]. */
+    @Synchronized
+    fun shutdown() {
+        session?.shutdown()
+        session = null
+        running.value = false
+    }
 }
 
 /**
  * The IDE's half of an embedded guest: binds [GuestSessionService], holds the resulting
  * `SurfacePackage`, and forwards input.
  *
- * Unbinding is the teardown: nothing else in the app keeps `:guest` alive, so dropping the binding
- * takes the guest's heap, its framework hooks and its faked `Build` identity with it.
+ * Unbinding takes the *guest* down, and for a tab switch or a Stop that is the whole teardown. It
+ * does **not** take the process: Android keeps an emptied `:guest` around and rebinds into it, so the
+ * loaded dex, the swapped `Instrumentation` and the faked `Build` all survive a close. [shutdown] is
+ * what ends the process, and closing the tab is the one thing that means it.
  */
 internal class AppSandboxSession(context: Context) {
 
@@ -177,9 +190,43 @@ internal class AppSandboxSession(context: Context) {
         }
     }
 
+    /**
+     * The question the guest is waiting on, if any.
+     *
+     * One at a time, because `Activity.requestPermissions` is one at a time: the platform refuses a
+     * second request while one is outstanding, so there is never a second to queue.
+     */
+    private val _permissionRequest = MutableStateFlow<PermissionRequest?>(null)
+    val permissionRequest: StateFlow<PermissionRequest?> = _permissionRequest.asStateFlow()
+
     private val callback = object : IGuestSessionCallback.Stub() {
         override fun onGuestFinished(reason: String?) {
             _status.value = SandboxStatus.Stopped(reason ?: "The app closed.")
+        }
+
+        override fun onPermissionRequest(
+            requestId: Int,
+            permissions: Array<out String>?,
+            packageName: String?,
+        ) {
+            val asked = permissions?.filterNotNull().orEmpty()
+            if (asked.isEmpty()) return answerPermissions(requestId, BooleanArray(0))
+            _permissionRequest.value = PermissionRequest(requestId, asked, packageName.orEmpty())
+        }
+    }
+
+    /**
+     * Hands the person's answer back to the guest, which has an app waiting on it.
+     *
+     * Sent even when the tab is being torn down: a guest left waiting on a callback that never
+     * arrives is an app frozen on its first screen, which is the failure this whole path exists to
+     * end.
+     */
+    fun answerPermissions(requestId: Int, granted: BooleanArray) {
+        _permissionRequest.value = null
+        scope.launch(Dispatchers.IO) {
+            runCatching { service?.permissionResult(requestId, granted) }
+                .onFailure { Log.w(TAG, "cannot answer the guest's permission request", it) }
         }
     }
 
@@ -296,6 +343,8 @@ internal class AppSandboxSession(context: Context) {
 
     fun back() = ignoringDeath { it.back() }
 
+    fun forceStop(packageName: String) = ignoringDeath { it.forceStop(packageName) }
+
     fun close() {
         startup?.cancel()
         startup = null
@@ -305,6 +354,20 @@ internal class AppSandboxSession(context: Context) {
         connected.value = false
         _surface.value = null
         _status.value = SandboxStatus.Idle
+    }
+
+    /**
+     * Turns the device off, rather than putting its screen away.
+     *
+     * [close] unbinds, which is what a tab switch or a Stop wants: the guest goes, the device stays,
+     * and the launcher is drawn by the IDE without needing `:guest` at all. Closing the *tab* is a
+     * different statement — there is no device any more — and unbinding does not make it true, since
+     * Android keeps the emptied process and rebinds into it with everything the container had
+     * accumulated still in place.
+     */
+    fun shutdown() {
+        runCatching { service?.shutdown() }
+        close()
     }
 
     private fun bind(): Boolean {

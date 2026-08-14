@@ -522,22 +522,158 @@ entries:
         exit 1
       fi
 
-      jcode_progress 46 "Swapping in this device's native ARM binaries"
-      # Replace the x86_64 aapt2/aapt/zipalign with the distro's native aarch64 builds — in EVERY
-      # build-tools directory present, not just the newest: a project that pins buildToolsVersion
-      # picks its own, and an unswapped one fails with a bare "not found" (a wrong-arch ELF).
+      jcode_progress 46 "Fetching ARM builds of the SDK tools"
+      # Google publishes no arm64 Linux SDK tools at all. Debian's are the only packaged aarch64
+      # build and they are frozen at 29.0.3 (2019): that aapt2 cannot read the resource tables
+      # platforms newer than API 34 carry, and that aidl predates the annotations in their
+      # framework.aidl — so with Debian tools alone this device is capped at compileSdk 34. A
+      # maintained static arm64 build of the real 35.0.2 tools removes both ceilings. It is pinned
+      # by URL and hash; when unreachable the install continues on the Debian set and the cap.
+      ARM_TOOLS=/opt/jcode-arm-tools
+      ARM_ZIP_URL="https://github.com/lzhiyong/android-sdk-tools/releases/download/35.0.2/android-sdk-tools-static-aarch64.zip"
+      ARM_ZIP_SHA256=db1cea2c4454d5f9c5a802646b2d1cf560b4ee7badbe23e51ab8e1881bb50fc2
+      if [ ! -x "$ARM_TOOLS/aapt2" ]; then
+        if jcode_fetch "$ARM_ZIP_URL" /tmp/jcode-arm-tools.zip 46 48 "Downloading ARM SDK tools (35.0.2)"; then
+          if [ "$(sha256sum /tmp/jcode-arm-tools.zip | awk '{print $1}')" = "$ARM_ZIP_SHA256" ]; then
+            sudo mkdir -p "$ARM_TOOLS"
+            sudo unzip -q -j -o /tmp/jcode-arm-tools.zip 'build-tools/*' -d "$ARM_TOOLS"
+            sudo chmod 755 "$ARM_TOOLS"/*
+          else
+            echo "ARM SDK tools download did not match its pinned hash — ignoring it."
+            sudo rm -rf "$ARM_TOOLS"
+          fi
+          rm -f /tmp/jcode-arm-tools.zip
+        else
+          echo "ARM SDK tools unreachable — continuing with Debian's 29.0.3 set (compileSdk caps at 34)."
+        fi
+      fi
+
+      jcode_progress 49 "Swapping in ARM-runnable SDK binaries"
+      # One idempotent script owns every x86_64→ARM repair, because the SDK keeps growing after this
+      # install finishes: AGP downloads a pinned build-tools, an NDK, a platform — all x86_64 — long
+      # after this entry has run. The script is applied here once, and then re-applied around every
+      # Gradle invocation by the init script below, so whatever arrived since the last build is fixed
+      # before any task tries to execute it. The failures it prevents never name the architecture:
+      # "A problem occurred starting process 'command .../aidl'" and "Exec failed, error: 2 (No such
+      # file or directory)" — for a file that exists — are both really "wrong ELF for this CPU".
+      sudo tee /usr/local/bin/jcode-arm-sdk-patch >/dev/null <<'PATCH'
+      #!/bin/sh
+      # Written by JCode's android-sdk catalog entry. Everything sdkmanager serves for "linux" is an
+      # x86_64 ELF; this device is aarch64. Idempotent and cheap — safe to run before every build.
+      [ "$1" = "-q" ] && exec >/dev/null 2>&1
+      ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
+      [ -d "$ANDROID_HOME" ] || ANDROID_HOME=/home/jcode/android-sdk
+      ARM=/opt/jcode-arm-tools
+      DEB=/usr/lib/android-sdk/build-tools/debian
+
+      fresh() {
+        [ -e "$2" ] || return 0
+        [ "$1" -nt "$2" ]
+      }
+
+      # build-tools: prefer the fetched modern static tools; fall back to Debian's.
       for BTDIR in "$ANDROID_HOME"/build-tools/*/; do
         [ -d "$BTDIR" ] || continue
-        for b in aapt2 aapt zipalign; do
-          if [ -e "$DEB/$b" ]; then cp -f "$DEB/$b" "$BTDIR$b"; fi
+        for t in aapt2 aapt zipalign aidl dexdump split-select aidl-cpp; do
+          if [ -x "$ARM/$t" ]; then
+            if fresh "$ARM/$t" "$BTDIR$t"; then cp -f "$ARM/$t" "$BTDIR$t" && chmod 755 "$BTDIR$t"; fi
+          elif [ -e "$DEB/$t" ]; then
+            if fresh "$DEB/$t" "$BTDIR$t"; then cp -f "$DEB/$t" "$BTDIR$t"; fi
+          fi
         done
+        # Debian's aidl 29.0.3 cannot parse the annotations android-34+ framework.aidl files carry
+        # (@JavaOnlyStableParcelable ...). Those lines only feed aidl's own stability bookkeeping —
+        # stripping them changes nothing about the Java generated for a project's files — so when the
+        # old aidl is all we have, wrap it to sanitize any -p<file> into a cached copy first.
+        if [ ! -x "$ARM/aidl" ] && [ -e "$DEB/aidl" ]; then
+          cat > "${BTDIR}aidl" <<'WRAP'
+      #!/bin/sh
+      REAL=/usr/lib/android-sdk/build-tools/debian/aidl
+      i=0; n=$#
+      while [ $i -lt $n ]; do
+        a="$1"; shift
+        case "$a" in
+          -p*)
+            f="${a#-p}"
+            c="/tmp/jcode-aidl-$(printf %s "$f" | cksum | awk '{print $1}').p.aidl"
+            if [ ! -f "$c" ] || [ "$f" -nt "$c" ]; then
+              sed -E 's/^(@[A-Za-z0-9_]+(\([^)]*\))?[[:space:]]+)+//' "$f" > "$c" 2>/dev/null || c="$f"
+            fi
+            a="-p$c"
+            ;;
+        esac
+        set -- "$@" "$a"
+        i=$((i+1))
       done
-      # Same treatment for adb, which platform-tools also ships x86_64-only. AGP invokes it by
-      # ABSOLUTE path ($ANDROID_HOME/platform-tools/adb) rather than through PATH, so a native adb
-      # earlier in PATH does not save it: installDebug dies with "Exec format error" without this.
+      exec "$REAL" "$@"
+      WRAP
+          chmod 755 "${BTDIR}aidl"
+        fi
+      done
+
+      # adb: AGP invokes $ANDROID_HOME/platform-tools/adb by ABSOLUTE path, so a native adb earlier
+      # on PATH does not save installDebug from "Exec format error".
       if [ -x /usr/bin/adb ] && [ -d "$ANDROID_HOME/platform-tools" ]; then
-        cp -f /usr/bin/adb "$ANDROID_HOME/platform-tools/adb"
+        if fresh /usr/bin/adb "$ANDROID_HOME/platform-tools/adb"; then
+          cp -f /usr/bin/adb "$ANDROID_HOME/platform-tools/adb"
+        fi
       fi
+
+      # cmake: give the SDK an entry whose binary can run. Symlinks rather than copies so cmake's
+      # own module tree (share/cmake-*) keeps resolving through /usr.
+      if command -v cmake >/dev/null 2>&1; then
+        V=$(cmake --version | awk 'NR==1{print $3}')
+        mkdir -p "$ANDROID_HOME/cmake/$V/bin" 2>/dev/null && {
+          ln -sf /usr/bin/cmake "$ANDROID_HOME/cmake/$V/bin/cmake"
+          [ -x /usr/bin/ninja ] && ln -sf /usr/bin/ninja "$ANDROID_HOME/cmake/$V/bin/ninja"
+        }
+      fi
+
+      # NDK: it ships no ARM Linux host toolchain, but the distro's clang is the same major LLVM
+      # and cross-compiles to Android when handed the NDK's sysroot (the CMake toolchain file passes
+      # that) and its resource dir, which carries the Android compiler-rt, libunwind and builtin
+      # headers. Without -rtlib/-unwindlib Ubuntu's driver defaults reach for -lgcc, which Android
+      # does not have, and the link dies with "unable to find library -lgcc".
+      command -v clang >/dev/null 2>&1 && for NDK in "$ANDROID_HOME"/ndk/*/; do
+        PRE="${NDK}toolchains/llvm/prebuilt/linux-x86_64"
+        [ -d "$PRE/bin" ] || continue
+        RES=$(ls -d "$PRE"/lib/clang/* 2>/dev/null | head -1)
+        [ -n "$RES" ] || continue
+        for t in clang clang++; do
+          head -c 200 "$PRE/bin/$t" 2>/dev/null | grep -q jcode-arm && continue
+          rm -f "$PRE/bin/$t"
+          printf '#!/bin/sh\n# jcode-arm\nexec /usr/bin/%s -resource-dir %s -rtlib=compiler-rt -unwindlib=libunwind "$@"\n' "$t" "$RES" > "$PRE/bin/$t"
+          chmod 755 "$PRE/bin/$t"
+        done
+        for t in ld.lld lld llvm-ar llvm-ranlib llvm-strip llvm-nm llvm-objcopy \
+                 llvm-objdump llvm-readelf llvm-readobj llvm-strings llvm-symbolizer; do
+          [ -x "/usr/bin/$t" ] && ln -sf "/usr/bin/$t" "$PRE/bin/$t"
+        done
+        echo "patched ${NDK}"
+      done
+      echo "ARM SDK patch complete"
+      PATCH
+      sudo chmod 755 /usr/local/bin/jcode-arm-sdk-patch
+      ANDROID_HOME="$ANDROID_HOME" /usr/local/bin/jcode-arm-sdk-patch || true
+
+      # The re-apply hook, in both Gradle homes: the SDK installs as the runtime user while run
+      # terminals build as root, and Gradle reads init scripts from whichever home is in effect.
+      for GH in "$HOME/.gradle" /root/.gradle; do
+        sudo mkdir -p "$GH/init.d"
+        sudo tee "$GH/init.d/jcode-arm-sdk.init.gradle" >/dev/null <<'INIT'
+      // Written by JCode's android-sdk entry: sdkmanager only publishes x86_64 Linux binaries, so
+      // anything AGP downloads mid-build (an NDK, a pinned build-tools) arrives unrunnable on this
+      // aarch64 device. Re-apply the ARM patch around configuration so those pieces are fixed
+      // before any task executes them. projectsLoaded catches what earlier builds left; whenReady
+      // catches what THIS build's configuration phase just downloaded.
+      def patch = {
+          try { ["/bin/sh", "/usr/local/bin/jcode-arm-sdk-patch", "-q"].execute().waitFor() }
+          catch (Throwable ignored) { }
+      }
+      gradle.projectsLoaded { patch() }
+      gradle.taskGraph.whenReady { patch() }
+      INIT
+      done
       # AGP 8+ resolves its OWN aapt2 as a Maven artifact (aapt2-<ver>-linux), which is x86_64 only,
       # so replacing the copy in build-tools above is not enough — the Maven one wins and the build
       # dies with "AAPT2 ... Daemon startup failed". Point AGP at the native binary instead. Written
@@ -573,10 +709,16 @@ entries:
       # present and only ever walk DOWN from there. An aapt2 this table doesn't know about — a newer
       # Debian build — is given the benefit of the doubt and starts from the newest platform.
       AAPT2_VER=$("$NATIVE_AAPT2" version 2>&1 | sed -n 's/.*(aapt) \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1)
-      case "$AAPT2_VER" in
-        2.19) CEILING=34 ;;
-        *) CEILING=9999 ;;
-      esac
+      # The version string cannot tell the two apart — the modern static build reports "2.19-eng"
+      # too — so the flag is whether the fetched tools are actually installed.
+      if [ -x /opt/jcode-arm-tools/aapt2 ]; then
+        CEILING=9999
+      else
+        case "$AAPT2_VER" in
+          2.19) CEILING=34 ;;
+          *) CEILING=9999 ;;
+        esac
+      fi
       echo "aapt2 $AAPT2_VER — trying Android platforms from API $CEILING downwards"
 
       jcode_progress 50 "Choosing an Android platform"
@@ -694,8 +836,13 @@ entries:
       echo "================================================================"
       echo " Android SDK ready. Use compileSdk $COMPILE_SDK in your build.gradle."
       echo " Platforms installed: $(ls -1 "$ANDROID_HOME/platforms" 2>/dev/null | sort -Vr | sed 's/^android-//' | tr '\n' ' ')"
-      echo " Newer platforms exist, but the only arm64 aapt2 available cannot"
-      echo " read their resources, so a higher compileSdk will fail to link."
+      if [ -x /opt/jcode-arm-tools/aapt2 ]; then
+        echo " Tools: static ARM build-tools 35.0.2; NDK C/C++ builds run on the"
+        echo " distro's own clang. AIDL, resources and native code all work here."
+      else
+        echo " Newer platforms exist, but the only arm64 aapt2 available cannot"
+        echo " read their resources, so a higher compileSdk will fail to link."
+      fi
       echo "================================================================"
     verifyScript: |
       ls "$HOME"/android-sdk/platforms/*/android.jar >/dev/null 2>&1 && [ -x /opt/gradle/current/bin/gradle ] && BT=$(ls -d "$HOME"/android-sdk/build-tools/*/ 2>/dev/null | sort -V | tail -1) && "${BT}aapt2" version >/dev/null 2>&1 && echo ready
@@ -746,7 +893,8 @@ entries:
     versionsScript: |
       A=/usr/lib/android-sdk/build-tools/debian/aapt2
       CEILING=9999
-      if [ -x "$A" ]; then
+      # With the fetched modern ARM tools there is no ceiling; only the Debian-tools fallback has one.
+      if [ ! -x /opt/jcode-arm-tools/aapt2 ] && [ -x "$A" ]; then
         case "$("$A" version 2>&1 | sed -n 's/.*(aapt) \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1)" in
           2.19) CEILING=34 ;;
         esac

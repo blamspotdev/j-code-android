@@ -8,21 +8,23 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.ApplicationInfo
 import android.os.Binder
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
+import android.webkit.WebView
 
 /**
  * The container itself, living in the `:guest` process: it installs the hooks in [GuestHooks] and
  * then decides what each of them should do.
  *
- * The launch path is a relay. J Code cannot ask the system to start an activity that is not
- * installed, so it starts one of its own stubs ([GuestActivity0]…[GuestActivity3]) carrying the
- * guest's identity in extras. On the way back in, [onLaunchActivity] rewrites the transaction to
- * name the guest activity, [newActivity] instantiates that class out of the guest's class loader,
- * and [bind] hands the instance a [GuestContext] — all before `onCreate` runs, and all while the
- * system remains the one performing `attach` and driving the lifecycle.
+ * A guest activity belongs to a package the system has never heard of, so there is no `ActivityInfo`
+ * to build one from. [GuestActivity] is that template and nothing more: an intent naming it carries
+ * the real guest's identity in extras, [onLaunchActivity] rewrites it to name the guest activity,
+ * [newActivity] instantiates that class out of the guest's class loader, and [bind] hands the
+ * instance a [GuestContext] — all before `onCreate` runs.
  *
- * [embed] is the same thing without the system: it builds the activity here so the device-sandbox
+ * [embed] does that without the system: it builds the activity here so the device-sandbox
  * editor tab can host its decor view, and takes over driving the lifecycle in exchange.
  */
 internal object GuestRuntime {
@@ -30,10 +32,11 @@ internal object GuestRuntime {
     const val EXTRA_APK = "dev.jcode.vdevice.apk"
     const val EXTRA_ACTIVITY = "dev.jcode.vdevice.activity"
 
-    private const val STUB_COUNT = 4
-
     /** Embedded-activity id, the `Activity.getId()` a system launch would never produce. */
     private const val EMBEDDED_ID = "jcode-embedded"
+
+    /** Keeps the guest's WebView data out of JCode's, which already holds the lock on its own. */
+    internal const val GUEST_WEBVIEW_SUFFIX = "jcode-guest"
 
     private class Target(val guest: LoadedGuest, val activityClass: String)
 
@@ -45,14 +48,18 @@ internal object GuestRuntime {
     private var instrumentation: GuestInstrumentation? = null
     private var activityThread: Any? = null
 
-    /** Set while a device-sandbox tab is showing this process, so intra-guest navigation is hosted in
-     *  the tab instead of being bounced onto a full-screen stub. Returns true when it took the
-     *  launch. */
+    /** Set while a device-sandbox tab is showing this process, so intra-guest navigation is hosted
+     *  in the tab. Returns true when it took the launch. */
     @Volatile
     private var embeddedLauncher: ((Intent) -> Boolean)? = null
 
-    /** Guest activity class -> stub slot, so a given guest activity always lands on the same stub. */
-    private val stubSlots = LinkedHashMap<String, Int>()
+    /** Set alongside [embeddedLauncher]: told when an embedded activity has called `finish()`. */
+    @Volatile
+    private var embeddedFinisher: (() -> Unit)? = null
+
+    /** Set alongside [embeddedLauncher]: told when Back on an embedded activity reached the server. */
+    @Volatile
+    private var embeddedBackHandler: (() -> Unit)? = null
 
     /** The guest whose intents outgoing `startActivity` calls should be redirected for. */
     @Volatile
@@ -61,11 +68,26 @@ internal object GuestRuntime {
     /** Set while [embed] is building an activity, which is what tells [created] the two apart. */
     private var embedding = false
 
+    /**
+     * The embedded activity currently on the device's screen.
+     *
+     * Tracked here rather than asked of the tab because the two calls that decide it already come
+     * through this object — [resumeEmbedded] for whatever has just come to the front, and
+     * [destroyEmbedded] for whatever has just gone. [GuestPermissions] needs it: a permission result
+     * is delivered to an activity, and the container has to know which one asked.
+     */
+    @Volatile
+    private var foreground: Activity? = null
+
+    /** The activity a result the container answered itself should be handed to, if there is one. */
+    fun foregroundActivity(): Activity? = foreground
+
     @Synchronized
     fun install(context: Context) {
         if (isInstalled) return
         host = context.applicationContext
         VirtualIdentity.apply(Application.getProcessName())
+        claimWebViewDirectory()
 
         val activityThread = GuestHooks.currentActivityThread()
             ?: throw VirtualDeviceException("no ActivityThread in this process")
@@ -73,13 +95,51 @@ internal object GuestRuntime {
         instrumentation = GuestHooks.installInstrumentation(activityThread)
             ?: throw VirtualDeviceException("cannot replace ActivityThread.mInstrumentation")
 
-        val launch = GuestHooks.installLaunchHook(activityThread, ::onLaunchActivity)
+        GuestPermissions.install(host)
+        // Before any guest exists, which is the whole requirement: the framework builds one
+        // LocationManager per context and caches it, so the service has to be in place before the
+        // first one is asked for.
+        val location = GuestLocation.install(host)
         val navigation = GuestHooks.installStartActivityHook(::rewriteOutgoing)
+        val packages = GuestPackageHook.install(host.packageManager)
+        val notifications = GuestNotificationHook.install()
+        val intents = GuestActivityManagerHook.install(host.packageName)
         installCrashHandler()
         VirtualDeviceLog.captureStandardStreams(host)
         isInstalled = true
-        Log.i(TAG, "hooks installed: instrumentation=true launch=$launch navigation=$navigation")
+        Log.i(
+            TAG,
+            "hooks installed: instrumentation=true navigation=$navigation " +
+                "packages=$packages notifications=$notifications intents=$intents " +
+                "location=$location",
+        )
         VirtualDeviceLog.append(host, 'I', TAG, "container ready in ${Application.getProcessName()}")
+    }
+
+    /**
+     * Gives `:guest` a WebView data directory of its own.
+     *
+     * WebView takes an exclusive lock on its data directory and refuses to load in a second process
+     * of the same app without one — and JCode's own process, which is full of WebViews, always gets
+     * there first. So a guest that touches a WebView **at all** died on:
+     *
+     * ```
+     * java.lang.RuntimeException: Using WebView from more than one process at once with the same
+     * data directory is not supported. … Current process dev.jcode.debug:guest, lock owner
+     * dev.jcode.debug
+     * ```
+     *
+     * That is not a niche case: ad SDKs, sign-in flows, Cordova and Ionic apps, and anything with an
+     * in-app browser all reach for one. Measured on CPU-Z, whose Mobile Ads provider loads WebView
+     * from `Application.onCreate` — the crash killed `:guest`, and with it the activity JCode was
+     * showing.
+     *
+     * `setDataDirectorySuffix` is public API from API 28 and must run before WebView is used in the
+     * process, which is what makes this the first thing [install] does.
+     */
+    private fun claimWebViewDirectory() {
+        runCatching { WebView.setDataDirectorySuffix(GUEST_WEBVIEW_SUFFIX) }
+            .onFailure { Log.w(TAG, "guest WebViews may not work: $it") }
     }
 
     /**
@@ -105,14 +165,6 @@ internal object GuestRuntime {
             }
             previous?.uncaughtException(thread, error)
         }
-    }
-
-    /** Starts [activityClass] (or the guest's launcher activity) on one of the stubs. */
-    fun startGuest(from: Activity, apkPath: String, activityClass: String?) {
-        val guest = GuestLoader.load(from, apkPath)
-        active = guest
-        val target = activityClass?.takeIf { guest.activities.containsKey(it) } ?: guest.launchActivity
-        from.startActivity(stubIntent(guest, target).addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION))
     }
 
     /**
@@ -148,14 +200,35 @@ internal object GuestRuntime {
         val component = stub.component ?: throw VirtualDeviceException("no stub component")
         val info = host.packageManager.getActivityInfo(component, 0)
         // The same rewrite the LAUNCH_ACTIVITY hook applies: guest component, guest resource ids, and
-        // above all theme 0, so no theme is built against J Code's resources before bind() runs.
+        // above all theme 0, so no theme is built against JCode's resources before bind() runs.
         onLaunchActivity(stub, info)
         val target = resolve(stub) ?: throw VirtualDeviceException("$stub carries no guest identity")
+        // The tab is the only window shape on offer, so an activity that declares itself
+        // unresizeable or pins an orientation has to give that up here — see GuestWindow.
+        target.guest.activities[target.activityClass]?.let(GuestWindow::makeResizable)
+        GuestWindow.makeResizable(info)
 
+        // Before newActivity, not after. `ActivityThread` builds an app's Application in
+        // handleBindApplication, long before it instantiates any activity, and apps rely on that
+        // ordering far more than they say: a field initialiser or a static <clinit> reached from the
+        // activity's *constructor* routinely reads a context some holder captured in
+        // Application.onCreate. Creating it inside bind() — which the framework only reaches on the
+        // way into onCreate — is one step too late. Measured on MiXplorer:
+        //
+        //   ExceptionInInitializerError at libs.v04.<clinit>
+        //   Caused by: NullPointerException: Context.getResources() on a null object reference
+        //
+        // — its static holder was still null because the constructor had beaten the Application to
+        // it, and the activity could not even be built.
+        ensureApplication(target.guest)
+
+        // Registered before the activity is built: the guest can reach ActivityClient from its own
+        // onCreate, and a token the hook has not heard of yet is one the server rejects.
+        val token = Binder().also(GuestActivityClient::register)
         val activity = instrumentation.newActivity(
             target.guest.classLoader.loadClass(target.activityClass),
             host,
-            Binder(),
+            token,
             null,
             stub,
             info,
@@ -176,70 +249,101 @@ internal object GuestRuntime {
         return activity
     }
 
+    /** Whether the device lets [packageName] keep running once it is not the app on the screen. */
+    fun mayRunInBackground(packageName: String): Boolean =
+        runCatching { VirtualDevicePolicy.backgroundAllowed(host, packageName) }.getOrDefault(false)
+
     /**
-     * Called once a guest activity's `onCreate` has returned — the first moment its content view
-     * exists, and the last before `setContentView` could clear anything added to it.
-     *
-     * Only a full-screen guest is given the overlay: one in the tab already has the tab's controls
-     * floating over it.
+     * Ends what the active guest is still hosting: its services, its bound connections, its
+     * providers. Its code stays loaded, so reopening it is a start rather than a reload.
      */
+    fun releaseComponents() {
+        active?.let { guest -> runCatching { guest.components.shutdown() } }
+    }
+
     /**
-     * Relaunches the guest a full-screen activity belongs to, from scratch.
+     * Force-stop: the app is gone, whatever it was allowed to do.
      *
-     * `CLEAR_TASK` is what makes it a restart rather than a second copy: the guest's whole back
-     * stack goes and the launch activity comes back as the new root, which is what "restart the app"
-     * means to someone iterating on it. The APK and activity come off the launch intent, so this
-     * needs nothing the container did not already put there.
+     * Everything [releaseComponents] ends, plus its notifications and its place in the loader's
+     * cache — so the next launch re-reads the APK rather than reusing a heap the user just asked to
+     * be rid of.
      */
-    fun restartGuest(from: Activity) {
-        val apkPath = from.intent?.getStringExtra(EXTRA_APK) ?: return
-        val guest = runCatching { GuestLoader.load(from, apkPath) }.getOrElse {
-            Log.e(TAG, "cannot reload $apkPath", it)
-            return
+    fun forceStop(packageName: String) {
+        GuestLoader.forPackage(packageName)?.let { guest ->
+            runCatching { guest.components.shutdown() }
+                .onFailure { Log.w(TAG, "cannot stop $packageName's components", it) }
         }
-        active = guest
-        from.startActivity(
-            stubIntent(guest, guest.launchActivity)
-                .addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_CLEAR_TASK or
-                        Intent.FLAG_ACTIVITY_NO_ANIMATION,
-                ),
-        )
+        VirtualNotifications.cancelAll(packageName)
+        GuestLoader.forget(packageName)
+        if (active?.packageName == packageName) active = null
+        Log.i(TAG, "force-stopped $packageName")
     }
+
+    /** The package a hook should attribute the current call to, or null outside a guest. */
+    fun activePackage(): String? = active?.packageName
+
+    /** The loaded guest a hook should attribute the current call to — its manifest included. */
+    fun activeGuest(): LoadedGuest? = active
 
     /**
-     * Takes the guest off the device and hands the user back to J Code.
+     * Tells the loaded guest how big its window is, before anything of it is built.
      *
-     * A full-screen guest is a task of its own, so finishing it alone reveals whatever happened to
-     * be behind — usually the phone's launcher, which is not where someone who left the IDE to try
-     * an app expects to land. The workbench is brought forward first, by its *host* package: by this
-     * point `activity.packageName` is the guest's.
+     * Called by [EmbeddedGuest] on start and on every resize, so a guest that is laid out for the
+     * tab stays laid out for it when the tab changes shape — a rotation, or the drawer opening.
      */
-    fun leaveGuest(from: Activity) {
-        // Finish first, start second. The other order loses a race: tearing the task down before the
-        // queued launch resolves leaves the start looking like it came from the background, which
-        // the platform drops — measured, the workbench's MainActivity was accepted by the activity
-        // manager and the phone still went to its launcher. Finishing only marks the activities, so
-        // this is still a foreground app when the intent goes out.
-        from.finishAffinity()
-        runCatching {
-            host.packageManager.getLaunchIntentForPackage(host.packageName)
-                ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-                ?.let(from::startActivity)
-        }.onFailure { Log.w(TAG, "cannot bring the workbench back", it) }
+    fun sizeEmbeddedWindow(apkPath: String, widthPx: Int, heightPx: Int) {
+        val guest = runCatching { GuestLoader.load(host, apkPath) }.getOrNull() ?: return
+        GuestWindow.applySize(guest, widthPx, heightPx)
     }
 
-    fun created(activity: Activity) {
-        if (embedding || activity is GuestActivity || activity is GuestBootstrapActivity) return
-        if (resolve(activity.intent) == null) return
-        GuestOverlay.install(activity)
+    /** The resize path, once a guest is already loaded and running. */
+    fun sizeEmbeddedWindow(widthPx: Int, heightPx: Int) {
+        active?.let { GuestWindow.applySize(it, widthPx, heightPx) }
     }
+
+    /** The label the device's status bar names the running app by. */
+    fun activeLabel(): String? = active?.let { guest -> guest.labelOf(guest.launchActivity).toString() }
 
     /** Hosts intra-guest `startActivity` calls in the tab while [launcher] is set. */
     fun setEmbeddedLauncher(launcher: ((Intent) -> Boolean)?) {
         embeddedLauncher = launcher
     }
+
+    /** Tells the tab an embedded activity finished itself, while [finisher] is set. */
+    fun setEmbeddedFinisher(finisher: (() -> Unit)?) {
+        embeddedFinisher = finisher
+    }
+
+    /**
+     * [GuestActivityClient] calls this when a guest finishes an embedded activity.
+     *
+     * Posted rather than run inline for two reasons. `Activity.finish()` sets `mFinished` *after*
+     * this returns, so a container that reaped immediately would look at the activity before it
+     * admitted to finishing; and `finishActivity` can arrive on any thread, while the stack is the
+     * main thread's alone.
+     *
+     * Being told beats looking. The reap used to be attempted after each touch, which missed every
+     * `finish()` that did not happen inline with input — and a click is one of those: `View` posts
+     * `performClick`, so the handler ran a message *later* than the reap that was supposed to catch
+     * it. NewPipe's error screen therefore could not be dismissed by its own back arrow, and neither
+     * could anything else on a second screen.
+     */
+    fun onEmbeddedFinish() {
+        val finisher = embeddedFinisher ?: return
+        Handler(Looper.getMainLooper()).post(finisher)
+    }
+
+    /** Tells the tab an embedded activity's Back was handed to the system, while [handler] is set. */
+    fun setEmbeddedBackHandler(handler: (() -> Unit)?) {
+        embeddedBackHandler = handler
+    }
+
+    /** [GuestActivityClient] calls this for the `onBackPressed` the platform routes to the server. */
+    fun onEmbeddedBackPressed() {
+        val handler = embeddedBackHandler ?: return
+        Handler(Looper.getMainLooper()).post(handler)
+    }
+
 
     /**
      * Drives one embedded activity to RESUMED, the way `ActivityThread` would.
@@ -254,6 +358,7 @@ internal object GuestRuntime {
      */
     fun resumeEmbedded(activity: Activity): Boolean {
         val instrumentation = instrumentation ?: return false
+        foreground = activity
         GuestHooks.dispatchLifecycleCallback(activity, "onActivityPreStarted")
         instrumentation.callActivityOnStart(activity)
         val started = GuestHooks.dispatchLifecycleCallback(activity, "onActivityPostStarted")
@@ -264,10 +369,49 @@ internal object GuestRuntime {
         val resumed = GuestHooks.dispatchLifecycleCallback(activity, "onActivityPostResumed")
 
         if (!started || !resumed) {
+            // ON_CREATE first, and that is not belt-and-braces. `ReportFragment` is what would
+            // normally dispatch it, and on API 29+ it registers on the activity's own callback list
+            // — the one that is blocked here — so the registry is still at INITIALIZED. Sending
+            // ON_START to a registry that has never been created is an illegal transition, and
+            // LifecycleRegistry refuses it: the guest would stay INITIALIZED, Compose would never
+            // start a composition, and the app would draw nothing.
+            advanceLifecycle(activity, "ON_CREATE")
             advanceLifecycle(activity, "ON_START")
             advanceLifecycle(activity, "ON_RESUME")
         }
+        focus(activity, true)
         return started && resumed
+    }
+
+    /**
+     * Tells an embedded guest whether it has the window's focus.
+     *
+     * Nothing else will. `onWindowFocusChanged` is delivered by the window manager to a *real*
+     * window, and an embedded guest has a token no `ActivityRecord` answers to — so as far as the
+     * system is concerned there is no window here to give focus to. The activity is nonetheless the
+     * only thing on the device's screen, so the honest answer is the one the system cannot give.
+     *
+     * This is not a detail. Frameworks gate their **render thread** on it: SDL will not start until
+     * it has a surface *and* focus, and says so —
+     *
+     * ```
+     * V SDL: surfaceCreated()
+     * V SDL: Window size: 1080x1420
+     * V SDL: Skip .. Surface is not ready.
+     * ```
+     *
+     * — which is why ES-DE ran perfectly, initialised SDL, read the device's identity, created its
+     * surface, and drew nothing at all. Unity and most game engines pause on the same signal, so
+     * this is the difference between a black rectangle and a running app for that whole family.
+     *
+     * Both routes are dispatched because frameworks listen on either: the activity's own callback,
+     * and the view tree's, which is what a `ViewRootImpl` would have driven.
+     */
+    fun focus(activity: Activity, hasFocus: Boolean) {
+        runCatching { activity.onWindowFocusChanged(hasFocus) }
+            .onFailure { Log.w(TAG, "cannot tell ${activity.javaClass.name} it has focus", it) }
+        runCatching { activity.window?.decorView?.dispatchWindowFocusChanged(hasFocus) }
+            .onFailure { Log.w(TAG, "cannot dispatch window focus into the guest's views", it) }
     }
 
     /**
@@ -300,9 +444,31 @@ internal object GuestRuntime {
             val registry = loader.loadClass("androidx.lifecycle.LifecycleRegistry")
             if (!registry.isInstance(lifecycle)) return
             val events = loader.loadClass("androidx.lifecycle.Lifecycle\$Event")
-            val value = events.getMethod("valueOf", String::class.java).invoke(null, event)
+            val value = eventConstant(events, event) ?: return
             registry.getMethod("handleLifecycleEvent", events).invoke(lifecycle, value)
         }.onFailure { Log.w(TAG, "cannot advance the guest's lifecycle to $event", it) }
+    }
+
+    /**
+     * One `Lifecycle.Event` constant, out of a guest that has been through R8.
+     *
+     * Not `Enum.valueOf`: R8 **removes** it from an enum nothing looks up by name, and a release
+     * build of an app that only ever writes `Lifecycle.Event.ON_START` gives
+     * `NoSuchMethodException: androidx.lifecycle.Lifecycle$Event.valueOf`. Measured on AI Edge
+     * Gallery — and because that was the only route to the registry, the guest's lifecycle stayed at
+     * INITIALIZED, so Compose never started a composition and the app drew nothing at all.
+     *
+     * The static field survives where the method does not, since the enum's own code reads it. The
+     * other two are fallbacks for a shape neither assumption fits.
+     */
+    private fun eventConstant(events: Class<*>, name: String): Any? {
+        runCatching { return events.getField(name).get(null) }
+        runCatching {
+            return events.enumConstants?.firstOrNull { (it as? Enum<*>)?.name == name }
+        }
+        runCatching { return events.getMethod("valueOf", String::class.java).invoke(null, name) }
+        Log.w(TAG, "no Lifecycle.Event.$name in this guest")
+        return null
     }
 
     /**
@@ -314,6 +480,11 @@ internal object GuestRuntime {
      */
     fun destroyEmbedded(activity: Activity) {
         val instrumentation = instrumentation ?: return
+        if (foreground === activity) foreground = null
+        // Focus goes before the lifecycle does, the way it would on a real window: an engine that
+        // started its render thread on gaining focus stops it on losing focus, and one told it still
+        // had focus while being destroyed would keep drawing into a surface that is going away.
+        focus(activity, false)
         instrumentation.callActivityOnPause(activity)
         GuestHooks.dispatchLifecycleCallback(activity, "onActivityPreStopped")
         instrumentation.callActivityOnStop(activity)
@@ -328,8 +499,8 @@ internal object GuestRuntime {
 
         // Whatever the client resolves out of this ActivityInfo, it resolves against the *activity's*
         // resources — which bind() is about to make the guest's. So every resource id here has to be
-        // one of the guest's, or the framework looks a J Code id up in the guest's table and throws.
-        // `applicationInfo` still keeps J Code's identity otherwise: swapping it wholesale sends
+        // one of the guest's, or the framework looks a JCode id up in the guest's table and throws.
+        // `applicationInfo` still keeps JCode's identity otherwise: swapping it wholesale sends
         // ActivityThread looking for a LoadedApk — and an installed package record — for a package
         // the system has never heard of.
         target.guest.activities[target.activityClass]?.let { guestInfo ->
@@ -342,8 +513,8 @@ internal object GuestRuntime {
         info.labelRes = 0
 
         // The theme is the one id that must be zeroed rather than translated. performLaunchActivity
-        // applies it while the activity is still on J Code's context, which builds
-        // ContextThemeWrapper.mTheme out of J Code's resource table — and mTheme is the only member
+        // applies it while the activity is still on JCode's context, which builds
+        // ContextThemeWrapper.mTheme out of JCode's resource table — and mTheme is the only member
         // the container needs but cannot reach to undo that, being max-target-p and so denied at
         // targetSdk 33. With getThemeResource() forced to 0 no theme is created at all, and bind()
         // applies the guest's own against the right resources a moment later.
@@ -368,7 +539,7 @@ internal object GuestRuntime {
 
     /** Called from [GuestInstrumentation.callActivityOnCreate], after `attach` and before `onCreate`. */
     fun bind(activity: Activity) {
-        if (activity is GuestActivity || activity is GuestBootstrapActivity) return
+        if (activity is GuestActivity) return
         val target = resolve(activity.intent) ?: return
         ensureApplication(target.guest)
         if (!GuestHooks.rebase(activity, target.guest)) return
@@ -378,7 +549,7 @@ internal object GuestRuntime {
         // The int form is the one the activity's Window watches, so it still has to happen. What it
         // cannot do on its own is guarantee *which* resource table the theme is built from:
         // ContextThemeWrapper.initializeTheme only creates mTheme the first time, so a guest that
-        // had mTheme created before bind() — against J Code's resources, since that is the context
+        // had mTheme created before bind() — against JCode's resources, since that is the context
         // the activity was attached to — would have its style id applied to the wrong table, and
         // mTheme is max-target-p and cannot be cleared.
         //
@@ -404,7 +575,7 @@ internal object GuestRuntime {
     /**
      * The guest's own [Application], so `getApplication()` casts and
      * `registerActivityLifecycleCallbacks` work. `Instrumentation.newApplication` is public API and
-     * attaches the context for us; only the `LoadedApk` behind it stays J Code's.
+     * attaches the context for us; only the `LoadedApk` behind it stays JCode's.
      */
     private fun ensureApplication(guest: LoadedGuest) {
         if (guest.application != null) return
@@ -413,6 +584,12 @@ internal object GuestRuntime {
         runCatching {
             val app = instrumentation.newApplication(guest.classLoader, className, guest.appContext)
             guest.application = app
+            // Between the Application being attached and its onCreate, exactly where
+            // ActivityThread.handleBindApplication runs installContentProviders. Libraries that boot
+            // from a provider — androidx.startup, and so WorkManager, Firebase and emoji2 — are
+            // written to be up by the time application code runs, and putting this either side of
+            // that line is the difference between them working and not.
+            guest.components.installProviders(guest.appContext)
             instrumentation.callApplicationOnCreate(app)
             Log.i(TAG, "guest Application $className created")
         }.onFailure { Log.e(TAG, "guest Application $className failed", it) }
@@ -420,12 +597,17 @@ internal object GuestRuntime {
 
     /**
      * Decides what to do with an intent the guest started: nothing, if it is not one of its own
-     * activities; host it in the device-sandbox tab, if one is showing this guest; otherwise redirect it
-     * onto a free stub and let the system launch it full screen.
+     * activities; otherwise host it in the device-sandbox tab. A guest's own activity must never
+     * reach the real system, which would resolve it against the phone's copy of the package.
      */
     private fun rewriteOutgoing(intent: Intent): StartAction {
-        val guest = active ?: return StartAction.Proceed
         val component = intent.component
+        // Resolved against *every* loaded guest rather than only the active one. A guest naming its
+        // own package must never reach the real system, and `active` is a moving target — the
+        // component is the reliable statement of whose activity this is.
+        val guest = component?.let { GuestLoader.forPackage(it.packageName) }
+            ?: active
+            ?: return StartAction.Proceed
         if (component == null) {
             if (intent.`package` == guest.packageName || intent.selector != null) {
                 Log.w(TAG, "implicit intents inside ${guest.packageName} are not supported: $intent")
@@ -433,9 +615,18 @@ internal object GuestRuntime {
             return StartAction.Proceed
         }
         if (component.packageName != guest.packageName) return StartAction.Proceed
+        // Deliberately not Proceed. The phone may have its **own copy** of this package installed —
+        // the guest is a sideloaded build of something the user already has — and letting the intent
+        // out means the system resolves it to that copy and runs the wrong app, outside the device,
+        // with the user's own data. Measured on ES-DE, whose ConfiguratorActivity opened the
+        // installed app over the top of JCode. A stub that fails inside the device is a far better
+        // outcome than the right screen from the wrong application.
         if (!guest.activities.containsKey(component.className)) {
-            Log.w(TAG, "${guest.packageName} has no activity ${component.className}")
-            return StartAction.Proceed
+            Log.w(
+                TAG,
+                "${guest.packageName} has no activity ${component.className}; " +
+                    "keeping it on the device rather than letting the phone answer it",
+            )
         }
         val stub = stubIntent(guest, component.className, Intent(intent))
         val launcher = embeddedLauncher ?: return StartAction.Redirect(stub)
@@ -445,15 +636,34 @@ internal object GuestRuntime {
         return if (hosted) StartAction.Consumed else StartAction.Redirect(stub)
     }
 
-    private fun stubIntent(guest: LoadedGuest, activityClass: String, from: Intent? = null): Intent {
-        val slot = synchronized(stubSlots) {
-            stubSlots.getOrPut(activityClass) { stubSlots.size % STUB_COUNT }
-        }
-        return (from ?: Intent())
-            .setComponent(ComponentName(host, GuestActivity.stub(slot)))
+    /**
+     * The stub an intent aimed at a loaded guest should be launched as, or null when it is not one.
+     *
+     * Exposed for [GuestActivityManagerHook]: a `PendingIntent` is sent through the activity
+     * *manager*, not the activity task manager, so it never passes the hook that redirects a guest's
+     * own `startActivity` and would otherwise be resolved by the system against the phone's copy of
+     * the package.
+     */
+    fun redirectForGuest(intent: Intent): Intent? {
+        val component = intent.component ?: return null
+        val guest = GuestLoader.forPackage(component.packageName) ?: return null
+        return stubIntent(guest, component.className, Intent(intent))
+    }
+
+    /**
+     * The shape an embedded launch is carried in: which guest, which of its activities.
+     *
+     * The component is [GuestActivity] every time. It is never started — it is there so that
+     * `getActivityInfo` has something to answer with, since the activity actually being built
+     * belongs to a package the system has never heard of. One stub is enough for that; there used to
+     * be four, so several guest activities could hold separate places in a real task, and with the
+     * full-screen path gone there is no task to hold a place in.
+     */
+    private fun stubIntent(guest: LoadedGuest, activityClass: String, from: Intent? = null): Intent =
+        (from ?: Intent())
+            .setComponent(ComponentName(host, GuestActivity::class.java))
             .putExtra(EXTRA_APK, guest.apkPath)
             .putExtra(EXTRA_ACTIVITY, activityClass)
-    }
 
     private fun resolve(intent: Intent?): Target? {
         val apkPath = intent?.getStringExtra(EXTRA_APK) ?: return null

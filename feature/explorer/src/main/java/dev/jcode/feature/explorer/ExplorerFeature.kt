@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import dev.jcode.fs.Fs
-import dev.jcode.fs.FsPath
 import dev.jcode.fs.Project
 import dev.jcode.fs.Workspace
 

@@ -3,10 +3,6 @@
 #include <algorithm>
 #include <cstring>
 
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 namespace jcode {
 
 namespace {
@@ -98,23 +94,6 @@ PieceTreeBuffer* PieceTreeBuffer::openFromBytes(const uint8_t* data, size_t leng
     return buffer;
 }
 
-PieceTreeBuffer* PieceTreeBuffer::openFromFd(int fd) {
-    struct stat st;
-    if (fstat(fd, &st) != 0 || st.st_size < 0) return nullptr;
-    OriginalSource original;
-    const size_t length = static_cast<size_t>(st.st_size);
-    if (length > 0) {
-        void* addr = mmap(nullptr, length, PROT_READ, MAP_PRIVATE, fd, 0);
-        if (addr == MAP_FAILED) return nullptr;
-        original.data = static_cast<const uint8_t*>(addr);
-        original.length = length;
-        original.owner = std::shared_ptr<void>(addr, [length](void* p) { munmap(p, length); });
-    }
-    auto* buffer = new PieceTreeBuffer();
-    buffer->initFromOriginal(std::move(original));
-    return buffer;
-}
-
 void PieceTreeBuffer::initFromOriginal(OriginalSource original) {
     original_ = std::move(original);
     original_newlines_ = original_.length > 0
@@ -185,10 +164,14 @@ void PieceTreeBuffer::insert(int64_t offset, const uint8_t* data, size_t n) {
         } else if (local == 0) {
             pieces_.insert(pieces_.begin() + static_cast<long>(idx), makePiece(true, add_start, n));
         } else {
+            // Split: the two new pieces go in with a single insert, so the tail of the vector
+            // shifts once rather than once per piece.
+            const Piece split[2] = {
+                makePiece(true, add_start, n),
+                makePiece(p.from_add, p.start + local, p.length - local),
+            };
             pieces_[idx] = makePiece(p.from_add, p.start, local);
-            pieces_.insert(pieces_.begin() + static_cast<long>(idx) + 1, makePiece(true, add_start, n));
-            pieces_.insert(pieces_.begin() + static_cast<long>(idx) + 2,
-                           makePiece(p.from_add, p.start + local, p.length - local));
+            pieces_.insert(pieces_.begin() + static_cast<long>(idx) + 1, split, split + 2);
         }
     }
 
@@ -208,31 +191,56 @@ void PieceTreeBuffer::erase(int64_t start_offset, int64_t end_offset) {
         idx++;
     }
 
+    const size_t first = idx;
+    if (first >= pieces_.size()) return;
+    // Bytes of the first touched piece that survive ahead of the range.
+    const size_t head_len = s - acc;
+
+    // Walk the covered pieces to account newlines and find where the surviving tail begins.
+    // Nothing is removed here: erasing each fully-covered piece as it was found shifted the whole
+    // vector tail per piece, so deleting across N pieces (a whole-buffer replace) was O(pieces^2).
     size_t remaining = e - s;
-    size_t local_start = s - acc;
+    size_t local_start = head_len;
     size_t removed_newlines = 0;
+    size_t last = first;
+    size_t tail_start = 0;
+    size_t tail_len = 0;
     while (idx < pieces_.size() && remaining > 0) {
-        const Piece p = pieces_[idx];
+        const Piece& p = pieces_[idx];
         const size_t del_len = std::min(p.length - local_start, remaining);
         removed_newlines += newlinesInPieceRange(p, local_start, local_start + del_len);
-        const size_t left_len = local_start;
-        const size_t right_len = p.length - local_start - del_len;
-        if (left_len == 0 && right_len == 0) {
-            pieces_.erase(pieces_.begin() + static_cast<long>(idx));
-        } else if (left_len == 0) {
-            pieces_[idx] = makePiece(p.from_add, p.start + del_len, right_len);
-            idx++;
-        } else if (right_len == 0) {
-            pieces_[idx] = makePiece(p.from_add, p.start, left_len);
-            idx++;
-        } else {
-            pieces_[idx] = makePiece(p.from_add, p.start, left_len);
-            pieces_.insert(pieces_.begin() + static_cast<long>(idx) + 1,
-                           makePiece(p.from_add, p.start + left_len + del_len, right_len));
-            idx += 2;
-        }
+        last = idx;
+        tail_start = local_start + del_len;
+        tail_len = p.length - tail_start;
         remaining -= del_len;
         local_start = 0;
+        idx++;
+    }
+
+    // Rebuild the touched span [first, last] as its 0-2 surviving fragments, then splice once.
+    const bool has_head = head_len > 0;
+    const bool has_tail = tail_len > 0;
+    Piece head{};
+    Piece tail{};
+    if (has_head) head = makePiece(pieces_[first].from_add, pieces_[first].start, head_len);
+    if (has_tail) {
+        tail = makePiece(pieces_[last].from_add, pieces_[last].start + tail_start, tail_len);
+    }
+
+    const size_t touched = last + 1 - first;
+    const size_t survivors = (has_head ? 1u : 0u) + (has_tail ? 1u : 0u);
+    if (survivors > touched) {
+        // The only way to outgrow the span: a delete strictly inside one piece splits it in two.
+        pieces_[first] = head;
+        pieces_.insert(pieces_.begin() + static_cast<long>(first) + 1, tail);
+    } else {
+        size_t w = first;
+        if (has_head) pieces_[w++] = head;
+        if (has_tail) pieces_[w++] = tail;
+        if (w < last + 1) {
+            pieces_.erase(pieces_.begin() + static_cast<long>(w),
+                          pieces_.begin() + static_cast<long>(last) + 1);
+        }
     }
 
     length_ -= (e - s);

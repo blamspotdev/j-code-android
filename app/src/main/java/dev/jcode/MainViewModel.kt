@@ -25,7 +25,6 @@ import dev.jcode.core.editor.Caret
 import dev.jcode.core.buffer.EditTx
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.distro.DistroProfile
-import dev.jcode.core.distro.DistroWizardProgress
 import dev.jcode.core.distro.DebugEngineAction
 import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.core.distro.LspCatalogAction
@@ -62,7 +61,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import dev.jcode.design.BottomBarVisibility
 import dev.jcode.design.ExtraKeysVisibility
-import dev.jcode.core.diag.DiagArea
 import dev.jcode.core.diag.DiagLevel
 import dev.jcode.core.diag.DiagnosticLog
 import dev.jcode.design.SettingsDefaults
@@ -176,7 +174,12 @@ private object UiPreferencesStore {
 enum class EditorCloseChoice { SAVE, DISCARD, CLOSE_SAVED, CANCEL }
 
 /** Drives the editor "unsaved changes" dialog: the titles of the dirty tabs about to be closed. */
-data class PendingEditorClose(val dirtyTitles: List<String>)
+/**
+ * [savedCount] is how many tabs in the closing set are already saved. It is zero whenever a single
+ * dirty tab is closed, and that is what hides the prompt's "Close Saved" action — with nothing clean
+ * in the set it would close nothing at all.
+ */
+data class PendingEditorClose(val dirtyTitles: List<String>, val savedCount: Int)
 
 /** Live state of an external-folder import, driving the progress modal. During [ImportPhase.Scanning]
  *  the total is unknown ([total] == 0 → indeterminate); during [ImportPhase.Copying], [done]/[total]
@@ -956,7 +959,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         sessionFlushBlocking = { runCatching { runBlocking { persistSession() } } }
         viewModelScope.launch { exitOnSwipeAway.collect { exitOnSwipeAwayEnabled = it } }
-        // The virtual device is a clean room, not a second phone: every J Code start hands it back
+        // The virtual device is a clean room, not a second phone: every JCode start hands it back
         // with no apps installed and nothing any of them stored. Off the main thread because it is a
         // recursive delete, and before anything can install to it — see VirtualDeviceApps.
         viewModelScope.launch(Dispatchers.IO) { VirtualDeviceApps.resetOnStart(appContext) }
@@ -982,17 +985,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Holds the guest's adb server open; see [startVirtualDeviceAdb]. */
     private var virtualDeviceAdbServer: Process? = null
 
+    /**
+     * Where the daemon's socket goes: inside the selected distro's own rootfs.
+     *
+     * That is what makes it reachable from the distro without a new proot bind — `<rootfs>/run/x` on
+     * this side is `/run/x` on that one — and unreachable from anywhere else, since the whole rootfs
+     * lives in JCode's private storage where no other uid may open a file.
+     */
+    private fun virtualDeviceSocket(): Pair<File, String>? {
+        val distro = distroService.selectedEnvironment().id.takeIf { it.isNotBlank() } ?: return null
+        val rootfs = File(appContext.filesDir, "distros/$distro/rootfs")
+        if (!rootfs.isDirectory) return null
+        return File(rootfs, "run/${AdbDaemon.SOCKET_NAME}") to "/run/${AdbDaemon.SOCKET_NAME}"
+    }
+
     private suspend fun startVirtualDeviceAdb() {
-        val port = runCatching { virtualDeviceAdb.start() }.getOrElse { error ->
+        val (socket, guestPath) = virtualDeviceSocket() ?: run {
+            OutputLog.append(
+                "Virtual device adb not started: no installed Linux runtime to host its socket\n",
+                OutputKind.Error,
+            )
+            return
+        }
+        runCatching { virtualDeviceAdb.start(socket) }.getOrElse { error ->
             OutputLog.append("Virtual device adb failed to start: ${error.message}\n", OutputKind.Error)
             return
         }
-        TerminalSessionHost.manager(appContext).virtualDeviceAdbPort = port
+        val spec = AdbDaemon.connectSpec(guestPath)
+        TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec = spec
         // The daemon only trusts the distro's own adbkey.pub, and adb does not create one until it
         // has run once — so mint it before connecting, or the first connection is refused for want
         // of a key rather than because anything is wrong.
         //
-        attachVirtualDeviceAdb(port)
+        attachVirtualDeviceAdb(spec)
     }
 
     /**
@@ -1004,12 +1029,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * empty, and `adb install` had no device to install to. Keeping this session alive keeps that
      * server alive, and every terminal shares it.
      */
-    private fun attachVirtualDeviceAdb(port: Int) {
+    private fun attachVirtualDeviceAdb(spec: String) {
         runCatching { virtualDeviceAdbServer?.destroy() }
         virtualDeviceAdbServer = distroService.spawnStdioProcess(
             command = "mkdir -p \"\$HOME/.android\" && " +
                 "{ [ -f \"\$HOME/.android/adbkey.pub\" ] || adb keygen \"\$HOME/.android/adbkey\"; } && " +
-                "adb start-server && adb connect 127.0.0.1:$port && exec sleep infinity",
+                "adb start-server && adb connect $spec && exec sleep infinity",
         )
         if (virtualDeviceAdbServer == null) {
             OutputLog.append("Virtual device adb connect failed: the Linux runtime is not ready\n", OutputKind.Error)
@@ -1020,7 +1045,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runCatching { virtualDeviceAdbServer?.destroy() }
         virtualDeviceAdbServer = null
         runCatching { virtualDeviceAdb.stop() }
-        TerminalSessionHost.manager(appContext).virtualDeviceAdbPort = 0
+        TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec = ""
     }
 
     /**
@@ -1044,17 +1069,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             _virtualDeviceAdbReconnecting.value = true
             try {
-                // Reattach to the port already in use where there is one, rather than restarting the
-                // daemon onto a fresh one: terminals are told the device's address through
-                // ANDROID_SERIAL when they start, and a new port would leave every open terminal
-                // pointing at a dead one.
-                val port = TerminalSessionHost.manager(appContext).virtualDeviceAdbPort
-                if (port > 0) attachVirtualDeviceAdb(port) else startVirtualDeviceAdb()
+                // Reattach to the socket already bound where there is one, rather than restarting the
+                // daemon: terminals are told the device's address through ANDROID_SERIAL when they
+                // start, and rebinding would leave every open terminal pointing at a dead one.
+                val spec = TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec
+                if (spec.isNotEmpty()) attachVirtualDeviceAdb(spec) else startVirtualDeviceAdb()
                 // Spawning the client only starts the connect; wait for the device to actually be
                 // listed before saying so, or the action reports success the moment it is asked and
                 // the user finds out otherwise from `adb devices`.
-                val target = "127.0.0.1:${TerminalSessionHost.manager(appContext).virtualDeviceAdbPort}"
-                val attached = awaitVirtualDeviceAttached(target)
+                val target = TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec
+                val attached = target.isNotEmpty() && awaitVirtualDeviceAttached(target)
                 OutputLog.append(
                     if (attached) "Virtual device attached at $target.\n"
                     else "Virtual device did not attach at $target.\n",
@@ -1148,7 +1172,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val runInVirtualDeviceKey = booleanPreferencesKey("run_in_virtual_device")
 
-    /** When true, an Android run config built for the container starts its APK inside J Code's own
+    /** When true, an Android run config built for the container starts its APK inside JCode's own
      *  process (no install, no adb) once the build finishes — see [dev.jcode.vdevice.VirtualDevice]. */
     val runInVirtualDevice: StateFlow<Boolean> = uiPreferences.data
         .map { prefs -> prefs[runInVirtualDeviceKey] ?: SettingsDefaults.RUN_IN_VIRTUAL_DEVICE }
@@ -1157,6 +1181,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setRunInVirtualDevice(enabled: Boolean) {
         viewModelScope.launch { uiPreferences.edit { it[runInVirtualDeviceKey] = enabled } }
     }
+
 
     // A second init block, deliberately: it collects [runInVirtualDevice], which is declared above
     // but well below the main init block — referencing it from there reads an uninitialised field
@@ -4427,10 +4452,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ?.let { _editorGroup.value = _editorGroup.value.withTabUpdated(it.copy(title = title)) }
     }
 
-    /** Stop the guest once its editor tab is gone. Page tabs get no close callback, so the shell
-     *  calls this whenever the tab list changes. */
+    /**
+     * Open (or focus) the virtual device's hardware bench.
+     *
+     * A tab beside the device rather than a panel over it: the tools are watched *while* an app runs
+     * on the device, and anything drawn over the device's screen would be in `screencap` where it
+     * would read as something the guest put there.
+     */
+    fun openVirtualHardwareTab() {
+        openDetailPage(VIRTUAL_HARDWARE_TAB_ID, EditorPageKind.VirtualHardware) { "Device hardware" }
+    }
+
+    /** Turn the device off once its editor tab is gone — process and all, not merely unbound. Page
+     *  tabs get no close callback, so the shell calls this whenever the tab list changes. */
     fun pruneAppSandbox() {
-        if (_editorGroup.value.tabs.none { it.pageKind == EditorPageKind.AppSandbox }) AppSandbox.close()
+        if (_editorGroup.value.tabs.none { it.pageKind == EditorPageKind.AppSandbox }) AppSandbox.shutdown()
     }
 
     /**
@@ -4698,7 +4734,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         pendingEditorCloseTargets = ids to activate
-        _pendingEditorClose.value = PendingEditorClose(dirtyTitles = dirty.map { it.title })
+        _pendingEditorClose.value = PendingEditorClose(
+            dirtyTitles = dirty.map { it.title },
+            savedCount = targets.count { !it.isDirty },
+        )
     }
 
     /** Resolve the unsaved-changes prompt for the pending tab-close set. */
@@ -5356,6 +5395,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val ANDROID_DEVICE_TAB_ID = "jcode://android-device"
         /** Stable id of the single device sandbox editor tab — the container owns one `:guest` process. */
         const val APP_SANDBOX_TAB_ID = "jcode://app-sandbox"
+        /** Stable id of the virtual device's hardware bench, which the device shares with its tab. */
+        const val VIRTUAL_HARDWARE_TAB_ID = "jcode://virtual-hardware"
         /** `adb pair` is one round trip to adbd; anything past this is a wrong port or a closed dialog. */
         private const val ADB_PAIR_TIMEOUT_MS = 60_000L
         /** host:port, with nothing a shell could read as anything but a literal. */
