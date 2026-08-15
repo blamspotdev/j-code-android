@@ -9,9 +9,9 @@ import java.io.File
  * What is installed on JCode's virtual device — the one place the launcher, `adb` and the start-up
  * reset all read and write it.
  *
- * "Installed" means staged under `filesDir/vdevice/apps/<package>.apk`, with the app's private
- * storage beside it at `filesDir/vdevice/<package>/` (which is what [GuestLoader] hands a running
- * guest as its data directory). There is no system package database involved: the real `pm` has
+ * "Installed" means staged under `<cache>/vdevice/apps/<package>.apk`, with the app's private
+ * storage beside it at `<cache>/vdevice/<package>/` (which is what [GuestLoader] hands a running
+ * guest as its data directory) — see [VirtualDeviceFiles] for why the device lives in the cache. There is no system package database involved: the real `pm` has
  * never heard of any of these, which is the whole point — an app can be put on this device and taken
  * off again without touching the phone.
  *
@@ -22,12 +22,14 @@ import java.io.File
  */
 internal object VirtualDeviceApps {
 
-    private const val ROOT = "vdevice"
     private const val APPS = "apps"
     private const val APK = ".apk"
 
     /** Assets directory holding the APKs the device is born with — see [installBuiltIns]. */
     private const val BUILT_INS = "vdevice"
+
+    /** The built-in browser, which is also where a guest's `ACTION_VIEW` on a URL is sent. */
+    const val BROWSER_PACKAGE = "dev.jcode.vdevice.browser"
 
     /**
      * Bumped whenever the installed set changes, so the launcher redraws for an `adb install` it did
@@ -50,7 +52,8 @@ internal object VirtualDeviceApps {
         if (reset) return
         reset = true
         val app = context.applicationContext
-        val root = File(app.filesDir, ROOT)
+        VirtualDeviceFiles.forgetLegacyLocation(app)
+        val root = VirtualDeviceFiles.root(app)
         val removed = root.listFiles().orEmpty().count { it.deleteRecursively() }
         if (removed > 0) Log.i(TAG, "virtual device reset: $removed entries cleared from $root")
         // The policy file was under that tree and has just gone with it; the copy this process is
@@ -58,6 +61,10 @@ internal object VirtualDeviceApps {
         // grants — see VirtualDevicePolicy.
         VirtualDevicePolicy.reset()
         clearGuestWebViewData(app)
+        // The device's shared storage went with the tree, which is the intended behaviour — but an
+        // empty directory is not a formatted phone, and `adb push … /sdcard/Download/` has to work
+        // on a device nothing has run on yet.
+        VirtualStorage.seed(app)
         installBuiltIns(app)
         revision.intValue++
     }
@@ -70,16 +77,20 @@ internal object VirtualDeviceApps {
      * through [install] like any other APK: no container privileges, no special casing, and they
      * exercise the same load, embed, window and WebView paths every other guest takes.
      *
-     * There are two. The **browser** is the one that makes the device usable: without it the only way
+     * The **browser** is the one that makes the device usable: without it the only way
      * to open a URL from here was the phone's browser, which takes the user out of JCode and loads
      * the page under their own profile — their cookies, their signed-in accounts. Inside the device
      * it is wiped with everything else.
      *
+     * **Camera**, **Files** and **Settings** are what make the device answer the intents an app sends
+     * when it wants a photo, a document, or somewhere to change a setting — and what give
+     * `resolveActivity` something to find when an app asks before it reaches.
+     *
      * The **hardware fixture** is the one that makes the device *checkable*. It prints what a guest
-     * can actually see of the device's camera, microphone, location and three motion sensors, so the
-     * hardware bench and Manage permissions can be watched having an effect on a real app rather than
-     * being taken on trust — and it is on every device by default because the moment you want it is
-     * the moment something looks wrong, which is not the moment to go and build an APK.
+     * can actually see of the device's hardware, network and resolution, so the bench and Manage
+     * permissions can be watched having an effect on a real app rather than being taken on trust —
+     * and it is on every device by default because the moment you want it is the moment something
+     * looks wrong, which is not the moment to go and build an APK.
      */
     private fun installBuiltIns(context: Context) {
         val assets = runCatching { context.assets.list(BUILT_INS).orEmpty() }.getOrDefault(emptyArray())
@@ -98,7 +109,7 @@ internal object VirtualDeviceApps {
     /**
      * Empties the WebView profile a guest browsed into.
      *
-     * It is the one thing a guest leaves outside `filesDir/vdevice/`: WebView keeps its data beside
+     * It is the one thing a guest leaves outside the device's own tree: WebView keeps its data beside
      * JCode's own, under the suffix [GuestRuntime.GUEST_WEBVIEW_SUFFIX] gives it, and nothing under
      * this object's tree ever touched it. So cookies, local storage and any session an app signed
      * into survived a restart on a device whose whole premise is that nothing does — and would have
@@ -117,8 +128,31 @@ internal object VirtualDeviceApps {
         }
     }
 
+    /**
+     * Puts the built-ins back if the device's tree has been taken out from under it.
+     *
+     * The tree is a cache (see [VirtualDeviceFiles]), so the platform may delete it while JCode is
+     * running — under storage pressure, or because somebody tapped Clear cache. Left alone that
+     * leaves a device with **no apps at all**, which is not a state any start-up path would ever
+     * produce and reads as a broken device rather than an emptied one.
+     *
+     * The test is "nothing is installed", not "a built-in is missing", because those are different
+     * facts and only the first one can only mean the tree went away. Somebody who uninstalls the
+     * hardware fixture wants it gone, and having it reappear on the next glance at the launcher
+     * would be the app arguing with them.
+     */
+    private fun healIfEmptied(context: Context) {
+        val app = context.applicationContext
+        if (apksDir(app).listFiles().orEmpty().any { it.name.endsWith(APK) }) return
+        Log.i(TAG, "the device's tree was cleared while JCode ran; putting the built-ins back")
+        VirtualStorage.seed(app)
+        installBuiltIns(app)
+    }
+
     /** Every app staged on the device, by label. Unreadable APKs are skipped, not reported. */
-    fun list(context: Context): List<VirtualDeviceApp> = apksDir(context).listFiles().orEmpty()
+    fun list(context: Context): List<VirtualDeviceApp> = apksDir(context)
+        .also { healIfEmptied(context) }
+        .listFiles().orEmpty()
         .filter { it.isFile && it.name.endsWith(APK) }
         .mapNotNull { VirtualDevice.inspect(context, it.absolutePath).getOrNull() }
         .sortedBy { it.label.lowercase() }
@@ -127,14 +161,29 @@ internal object VirtualDeviceApps {
      * Just the installed package names — what `pm list packages` needs. Read off the file names
      * rather than through [list], which parses every APK to answer questions this does not ask.
      */
-    fun packages(context: Context): List<String> = apksDir(context).listFiles().orEmpty()
+    fun packages(context: Context): List<String> = apksDir(context)
+        .also { healIfEmptied(context) }
+        .listFiles().orEmpty()
         .filter { it.isFile && it.name.endsWith(APK) }
         .map { it.name.removeSuffix(APK) }
         .sorted()
 
-    /** The staged APK for [packageName], or null when it is not installed. */
-    fun apk(context: Context, packageName: String): File? =
-        File(apksDir(context), packageName + APK).takeIf { it.isFile }
+    /**
+     * The staged APK for [packageName], or null when it is not installed.
+     *
+     * A **system app** that is missing is put back rather than reported absent. The device's tree is
+     * a cache now (see [VirtualDeviceFiles]), which means the platform is entitled to delete it
+     * while JCode is running — under storage pressure, or because somebody tapped Clear cache. That
+     * is a device that has been emptied, which is a state it is in every morning; it is not a device
+     * that has lost its camera. Reinstalling here rather than only at start-up is what makes the
+     * difference between the two.
+     */
+    fun apk(context: Context, packageName: String): File? {
+        val file = File(apksDir(context), packageName + APK)
+        if (file.isFile) return file
+        healIfEmptied(context)
+        return file.takeIf { it.isFile }
+    }
 
     /**
      * Takes over [staged] — an APK already written into the apps directory — as the install of
@@ -223,6 +272,9 @@ internal object VirtualDeviceApps {
         val removed = apk.delete()
         splitsDir(context, packageName).deleteRecursively()
         dataDir(context, packageName).deleteRecursively()
+        // Its corner of shared storage too. A phone leaves `Android/data/<pkg>` behind on uninstall
+        // and is criticised for it; a device that empties itself every start has no reason to.
+        VirtualStorage.forget(context, packageName)
         VirtualDevicePolicy.forget(context, packageName)
         if (removed) revision.intValue++
         return removed
@@ -246,12 +298,15 @@ internal object VirtualDeviceApps {
         // "cleared" meaning cleared rather than "cleared except the bits we were unsure about".
         data.deleteRecursively()
         data.mkdirs()
+        // `pm clear` takes an app's external directories with it on a phone, and those are as much
+        // its data as the private ones — an app that keeps its library under getExternalFilesDir()
+        // would otherwise come back "cleared" with everything still there.
+        VirtualStorage.forget(context, packageName)
         return true
     }
 
-    fun apksDir(context: Context): File =
-        File(context.applicationContext.filesDir, "$ROOT/$APPS").apply { mkdirs() }
+    fun apksDir(context: Context): File = VirtualDeviceFiles.directory(context, APPS)
 
     private fun dataDir(context: Context, packageName: String): File =
-        File(context.applicationContext.filesDir, "$ROOT/$packageName")
+        VirtualDeviceFiles.file(context, packageName)
 }

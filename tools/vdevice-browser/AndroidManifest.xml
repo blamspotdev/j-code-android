@@ -19,7 +19,7 @@
          the device's status bar and the only control the browser has. -->
     <application
         android:label="Browser"
-        android:icon="@android:drawable/ic_menu_search"
+        android:icon="@drawable/ic_launcher"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
         android:usesCleartextTraffic="true">
         <activity

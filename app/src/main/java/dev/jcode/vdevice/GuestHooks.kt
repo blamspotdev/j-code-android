@@ -119,6 +119,15 @@ internal object GuestHooks {
                         }
                         val slot = args.indexOfFirst { it is Intent }
                         if (slot >= 0) {
+                            // Noted before the launch, not after: the container pushes the new
+                            // activity inside `decide`, and that is where it has to be able to see
+                            // who is waiting for it. `startActivity` arrives here as
+                            // startActivityForResult(intent, -1), which records nothing.
+                            GuestResults.expect(
+                                GuestRuntime.foregroundActivity(),
+                                args.drop(slot + 1).filterIsInstance<Int>().firstOrNull() ?: -1,
+                                args[slot] as Intent,
+                            )
                             when (val action = decide(args[slot] as Intent)) {
                                 is StartAction.Proceed -> Unit
                                 is StartAction.Redirect -> args[slot] = action.intent
@@ -134,6 +143,7 @@ internal object GuestHooks {
                                 // hosted correctly and still launched the installed app over JCode.
                                 is StartAction.Consumed -> return consumed(method.returnType)
                             }
+                            GuestResults.forget()
                         }
                     }
                     return try {

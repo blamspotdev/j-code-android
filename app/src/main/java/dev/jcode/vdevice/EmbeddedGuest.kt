@@ -56,11 +56,15 @@ internal class EmbeddedGuest(
     /** The device's own status bar, over whatever activity is on the screen — see [VirtualStatusBar]. */
     private var statusBar: VirtualStatusBar? = null
 
+
     /** Layout listener that catches `SurfaceView`s a guest adds after it has started. */
     private var surfaceWatcher: ViewTreeObserver.OnGlobalLayoutListener? = null
 
     /** Embedded back stack, bottom first. Only the top activity's decor is visible. */
     private val stack = ArrayList<Activity>()
+
+    /** Whether the device's screen is being looked at — see [setVisible]. */
+    private var shown = true
 
     /** The tab's size, kept because the bar appearing or going away re-divides it — see [followForegroundApp]. */
     private var width = 0
@@ -194,12 +198,21 @@ internal class EmbeddedGuest(
 
     fun touch(event: MotionEvent) {
         val child = topWindow()
-        if (child == null) {
-            container?.dispatchTouchEvent(event)
-        } else {
-            // The tab's coordinates are the host's; a child window's are its own.
-            event.offsetLocation(-child.frame.left.toFloat(), -child.frame.top.toFloat())
-            child.view.dispatchTouchEvent(event)
+        // Re-anchored first, so the guest's raw coordinates are the device's screen rather than the
+        // phone's — see VirtualInput.inDeviceSpace, without which a native app hit-tests against an
+        // origin that is wherever the tab happens to sit in JCode's window.
+        val anchored = VirtualInput.inDeviceSpace(event)
+        try {
+            if (child == null) {
+                container?.dispatchTouchEvent(anchored)
+            } else {
+                // The tab's coordinates are the host's; a child window's are its own. The raw ones
+                // stay the device's, which is what a dialog on a phone also sees.
+                anchored.offsetLocation(-child.frame.left.toFloat(), -child.frame.top.toFloat())
+                child.view.dispatchTouchEvent(anchored)
+            }
+        } finally {
+            if (anchored !== event) anchored.recycle()
         }
         reapFinished()
     }
@@ -213,6 +226,20 @@ internal class EmbeddedGuest(
     /** The dialog, popup or drop-down the guest currently has open, if any. */
     private fun topWindow(): EmbeddedWindow? = windows?.children()?.lastOrNull()
 
+    /**
+     * Tells the device whether anybody is looking at it.
+     *
+     * False when its tab is not on screen or JCode is in the background; true when it comes back.
+     * Without this a guest ran at full tilt behind whatever the person was actually doing — see
+     * [GuestRuntime.pauseEmbedded] for what a pause is worth.
+     */
+    fun setVisible(visible: Boolean) {
+        val activity = stack.lastOrNull() ?: return
+        if (visible == shown) return
+        shown = visible
+        if (visible) GuestRuntime.resumeEmbedded(activity) else GuestRuntime.pauseEmbedded(activity)
+    }
+
     /** Types [text] as key events: with no window, the guest's fields cannot bind an IME. */
     fun text(text: String) {
         val map = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD)
@@ -220,7 +247,7 @@ internal class EmbeddedGuest(
     }
 
     fun back() {
-        // The device's own shade is above everything, so it takes Back first — the same order a
+        // The device's own shade is above everything else, so it takes Back first — the same order a
         // phone answers in, and the guest never sees a key that was not meant for it.
         statusBar?.takeIf { it.isOpen }?.let {
             it.collapse()
@@ -268,6 +295,7 @@ internal class EmbeddedGuest(
             runCatching { GuestRuntime.destroyEmbedded(activity) }
         }
         stack.clear()
+        GuestResults.clear()
         statusBar = null
         surfaceWatcher?.let { watcher ->
             runCatching { container?.viewTreeObserver?.removeOnGlobalLayoutListener(watcher) }
@@ -322,10 +350,19 @@ internal class EmbeddedGuest(
     private fun push(stub: Intent): Boolean {
         val container = container ?: return false
         val activity = GuestRuntime.embed(stub, windows?.token)
-        stack.lastOrNull()?.window?.decorView?.visibility = View.GONE
+        // The one going behind is paused, not just hidden. A hidden activity that was never paused
+        // keeps its sensors registered and its animations running, which is what a phone's
+        // lifecycle exists to stop — and what the device's own Camera relies on to switch its
+        // viewfinder off when something opens over it.
+        stack.lastOrNull()?.let {
+            it.window.decorView.visibility = View.GONE
+            GuestRuntime.pauseEmbedded(it)
+        }
         container.addView(activity.window.decorView, contentParams())
         addStatusBar(container)
         stack += activity
+        // Whoever started this one is owed an answer when it finishes — see GuestResults.
+        GuestResults.attach(activity)
         if (!GuestRuntime.resumeEmbedded(activity)) fullLifecycle = false
         followForegroundApp()
         return true
@@ -346,6 +383,9 @@ internal class EmbeddedGuest(
     private fun pop() {
         val activity = stack.removeLastOrNull() ?: return
         (activity.window.decorView.parent as? ViewGroup)?.removeView(activity.window.decorView)
+        // Before it is destroyed: the answer is read off the activity itself, and onDestroy is
+        // entitled to clear it.
+        GuestResults.harvest(activity)
         runCatching { GuestRuntime.destroyEmbedded(activity) }
         val below = stack.lastOrNull()
         if (below == null) {

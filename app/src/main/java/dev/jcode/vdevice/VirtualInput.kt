@@ -95,6 +95,82 @@ internal object VirtualInput {
     }
 
     /**
+     * The same gesture, measured from the **device's** screen instead of the phone's.
+     *
+     * A `MotionEvent` carries two positions: `getX`/`getY`, which every `ViewGroup` shifts on the way
+     * down the tree, and `getRawX`/`getRawY`, which nothing shifts because they are where the finger
+     * landed on the *display*. Relaying an event into the tab leaves the second one alone — so a guest
+     * that reads it is told the tab's offset down JCode's window, and the device's screen appears to
+     * start a couple of hundred pixels above the top of itself.
+     *
+     * That is not a corner case. It is what GameActivity hands native code
+     * (`GameActivityPointerAxes.rawX`), what SDL reads, and what any app doing its own hit-testing
+     * against a full-bleed surface uses — all of them correct on a phone, where a full-screen window
+     * starts at the origin and the two positions are the same number. Measured on WaveRepo: every tap
+     * arrived 258 px below the control it was aimed at, so the app rendered perfectly and answered
+     * nothing. Nothing in the log said so, because from the app's side nothing went wrong.
+     *
+     * So the event is rebuilt from its **local** coordinates, which makes them its raw ones too: the
+     * device's screen is the guest's window, exactly as a phone's screen is a full-screen app's. The
+     * batched samples come with it — a velocity tracker with one sample per event fits no curve, and
+     * flings would die.
+     *
+     * Returns the event itself when the two already agree, which is every event
+     * [VirtualInput] synthesises and every one a full-screen guest gets.
+     */
+    fun inDeviceSpace(event: MotionEvent): MotionEvent {
+        if (event.rawX == event.x && event.rawY == event.y) return event
+        val count = event.pointerCount
+        val properties = Array(count) { index ->
+            MotionEvent.PointerProperties().also { event.getPointerProperties(index, it) }
+        }
+        val history = event.historySize
+        val rebuilt = MotionEvent.obtain(
+            event.downTime,
+            if (history > 0) event.getHistoricalEventTime(0) else event.eventTime,
+            event.action,
+            count,
+            properties,
+            coordsOf(event, if (history > 0) 0 else CURRENT, count),
+            event.metaState,
+            event.buttonState,
+            event.xPrecision,
+            event.yPrecision,
+            event.deviceId,
+            event.edgeFlags,
+            event.source,
+            event.flags,
+        )
+        for (sample in 1 until history) {
+            rebuilt.addBatch(
+                event.getHistoricalEventTime(sample),
+                coordsOf(event, sample, count),
+                event.metaState,
+            )
+        }
+        if (history > 0) rebuilt.addBatch(event.eventTime, coordsOf(event, CURRENT, count), event.metaState)
+        return rebuilt
+    }
+
+    /**
+     * One sample's coordinates for every pointer, already in the event's *local* space —
+     * `getPointerCoords` reports what `getX`/`getY` do, which is the whole point of reading them
+     * here. [sample] is [CURRENT] for the event's own position, or an index into its history.
+     */
+    private fun coordsOf(event: MotionEvent, sample: Int, count: Int): Array<MotionEvent.PointerCoords> =
+        Array(count) { index ->
+            MotionEvent.PointerCoords().also {
+                if (sample == CURRENT) {
+                    event.getPointerCoords(index, it)
+                } else {
+                    event.getHistoricalPointerCoords(index, sample, it)
+                }
+            }
+        }
+
+    private const val CURRENT = -1
+
+    /**
      * `touch` is `oneway` but writes its parcel inside the call, so the event can be returned to the
      * pool as soon as it returns — which a swipe, at one event per frame, needs it to be.
      */

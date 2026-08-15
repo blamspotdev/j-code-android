@@ -41,6 +41,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -62,6 +64,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -151,6 +156,23 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
         if (home != null) menuFor = null
     }
 
+    // A guest hands its screen over as a child `SurfacePackage`, and a `SurfaceView` has no way to
+    // give one back: the only thing that releases it is the view detaching. That is invisible while
+    // the guest is alive to take its own layer down, and very visible when it is not — a process
+    // that ends outright (the Tasks panel's Stop, a crash) leaves its last frame on a layer sitting
+    // over everything the container draws, so the device looked like it was still showing the app it
+    // had just been stopped from. Measured. So the view is rebuilt as the screen goes.
+    var generation by remember { mutableIntStateOf(0) }
+    var adopted by remember { mutableStateOf(false) }
+    LaunchedEffect(surface) {
+        if (surface != null) {
+            adopted = true
+        } else if (adopted) {
+            adopted = false
+            generation++
+        }
+    }
+
     // The guest display is the tab, so the surface's own pixel size is what the container is asked
     // for — which keeps forwarded touches in the guest's coordinates with no mapping at all.
     LaunchedEffect(size, running, apkPath, surfaceView) {
@@ -207,7 +229,9 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
             session = session,
             status = status,
             running = running,
+            generation = generation,
             onSurface = { surfaceView = it },
+            onSurfaceGone = { gone -> if (surfaceView === gone) surfaceView = null },
             onSized = { width, height -> size = IntSize(width, height) },
             onRetry = {
                 session.restart(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
@@ -243,10 +267,16 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
                         scope.launch(Dispatchers.IO) { VirtualDeviceApps.clearData(context, app.packageName) }
                         onSnackbar("Cleared ${app.label}'s data.")
                     })
-                    add(ContextAction(JCodeIcon.Delete, "Uninstall", destructive = true) {
-                        menuFor = null
-                        uninstall(app)
-                    })
+                    // The device's own apps have no Uninstall, the way a phone's stock camera and
+                    // files have none: an app asking for a photo expects the device to have a
+                    // camera, and a device you can leave in a state where it does not is a device
+                    // that fails in a way nothing explains. See DeviceIntents.SYSTEM_PACKAGES.
+                    if (!DeviceIntents.isSystem(app.packageName)) {
+                        add(ContextAction(JCodeIcon.Delete, "Uninstall", destructive = true) {
+                            menuFor = null
+                            uninstall(app)
+                        })
+                    }
                 },
             )
         }
@@ -328,7 +358,10 @@ private fun DeviceScreen(
     session: AppSandboxSession,
     status: SandboxStatus,
     running: Boolean,
-    onSurface: (AppSandboxSurfaceView?) -> Unit,
+    /** Bumped when a guest's screen goes, to rebuild the view holding it — see the call site. */
+    generation: Int,
+    onSurface: (AppSandboxSurfaceView) -> Unit,
+    onSurfaceGone: (AppSandboxSurfaceView) -> Unit,
     onSized: (Int, Int) -> Unit,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
@@ -341,16 +374,48 @@ private fun DeviceScreen(
         modifier = modifier.background(Color(VirtualWallpaper.BACKGROUND)),
         contentAlignment = Alignment.Center,
     ) {
-        AndroidView(
-            factory = { context ->
-                AppSandboxSurfaceView(context, session) { width, height ->
-                    onSized(width, height)
-                    VirtualScreen.sized(width, height)
-                }.also(onSurface)
-            },
-            modifier = Modifier.fillMaxSize(),
-        )
-        DisposableEffect(Unit) { onDispose { onSurface(null) } }
+        key(generation) {
+            // The view that is going announces *itself*, because a replacement is composed before
+            // its predecessor is disposed: a plain `onSurface(null)` on the way out would arrive
+            // after the new view had registered and leave the tab holding no screen at all — the
+            // launcher then had nothing to paint on and the device came back empty. Measured, the
+            // first time a rebuild happened here.
+            val created = remember { mutableStateOf<AppSandboxSurfaceView?>(null) }
+            AndroidView(
+                factory = { context ->
+                    AppSandboxSurfaceView(context, session) { width, height ->
+                        onSized(width, height)
+                        VirtualScreen.sized(width, height)
+                    }.also {
+                        created.value = it
+                        onSurface(it)
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+            DisposableEffect(Unit) { onDispose { created.value?.let(onSurfaceGone) } }
+        }
+
+        // Nobody is looking at the device unless this is composed *and* JCode is in the foreground.
+        // Both halves matter: switching editor tabs takes the composition away, and pressing Home
+        // does not. Without either the guest ran at full tilt behind whatever the person had moved
+        // on to — see GuestRuntime.pauseEmbedded.
+        val lifecycle = LocalLifecycleOwner.current.lifecycle
+        DisposableEffect(lifecycle, session) {
+            val observer = LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_START -> session.setVisible(true)
+                    Lifecycle.Event.ON_STOP -> session.setVisible(false)
+                    else -> Unit
+                }
+            }
+            lifecycle.addObserver(observer)
+            session.setVisible(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+            onDispose {
+                lifecycle.removeObserver(observer)
+                session.setVisible(false)
+            }
+        }
 
         when {
             // The home screen itself is on the surface, drawn by VirtualLauncher — only the chrome
@@ -588,8 +653,15 @@ private fun GuestPermissionDialog(request: PermissionRequest, onAnswer: (Boolean
         properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
         title = {
             Text(
-                if (wanted.size == 1) "Allow $label to use the ${wanted.first().lowercase()}?"
-                else "Allow $label to use these?",
+                // "to <label>?", not "to use the <label>?". The platform's labels are verb phrases
+                // — CAMERA's is "take pictures and videos" — so the old wording asked whether to
+                // allow an app "to use the take pictures and videos". [permissionLabel] supplies a
+                // verb for the ones that have none.
+                if (wanted.size == 1) {
+                    "Allow $label to ${wanted.first().replaceFirstChar { it.lowercase() }}?"
+                } else {
+                    "Allow $label to use these?"
+                },
             )
         },
         text = {
@@ -613,16 +685,20 @@ private fun GuestPermissionDialog(request: PermissionRequest, onAnswer: (Boolean
 /**
  * A permission as a person would name it.
  *
- * The platform's own label where there is one — "Camera", "approximate location" — because the
- * phone's package manager is the authority on its own permissions and has already translated them.
+ * The platform's own label where there is one — "take pictures and videos", "access precise
+ * location" — because the phone's package manager is the authority on its own permissions and has
+ * already translated them. Those labels are **verb phrases**, which is what the dialog's wording is
+ * built around.
+ *
  * A permission a guest declares itself has no label there, so the last segment of its name is the
- * best that can be done.
+ * best that can be done — and it is a noun, so it is given the verb the platform's would have
+ * carried. That keeps one sentence template correct for both.
  */
 private fun permissionLabel(context: android.content.Context, permission: String): String =
     runCatching {
         val info = context.packageManager.getPermissionInfo(permission, 0)
         info.loadLabel(context.packageManager).toString()
-    }.getOrDefault(permission.substringAfterLast('.').replace('_', ' ').lowercase())
+    }.getOrDefault("use " + permission.substringAfterLast('.').replace('_', ' ').lowercase())
 
 /**
  * The collapsed controls: a grabber line, not a button. It sits over whatever the guest is drawing,

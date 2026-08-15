@@ -12,6 +12,34 @@ import androidx.compose.runtime.mutableIntStateOf
 import java.io.File
 import java.util.Properties
 
+/**
+ * What the virtual device's camera has in front of it.
+ *
+ * Deliberately a short list of *cheap* things rather than a scene description language. The camera
+ * exists so an app that asks for a picture gets one it can decode; what is in the picture only has
+ * to be recognisable, obviously synthetic, and inexpensive to produce.
+ */
+internal enum class CameraScene(val id: String, val label: String, val summary: String) {
+    PixelArt(
+        "pixelart",
+        "Pixel art",
+        "Five frames on a one-second loop. The default: enough movement to prove the picture is " +
+            "live, at five frames a second rather than sixty.",
+    ),
+    Slideshow(
+        "slideshow",
+        "Three photos",
+        "Three colour-bar stills, one a second — a camera pointed at something that changes " +
+            "slowly.",
+    ),
+    Still(
+        "still",
+        "One photo",
+        "A single still. Nothing ever redraws it, so the viewfinder costs nothing at all once it " +
+            "is on screen.",
+    ),
+}
+
 /** What one piece of the virtual device's hardware is wired to. A property of the *device*. */
 internal enum class HardwareMode(val label: String) {
     /** The device does not have it: not declared, and no data. */
@@ -71,12 +99,18 @@ internal enum class VirtualHardware(
     val permissions: List<String> = emptyList(),
     val features: List<String> = emptyList(),
     val sensorTypes: List<Int> = emptyList(),
+    /**
+     * For a radio, whether a device that has it starts with it switched on — see
+     * [VirtualDevicePolicy.switchedOn]. A phone ships with Wi-Fi and mobile data on and Bluetooth
+     * off, and starting anywhere else would be a device nobody recognises.
+     */
+    val switchedOnByDefault: Boolean = true,
 ) {
     Camera(
         id = "camera",
         label = "Camera",
-        summary = "Simulated gives the device a camera that no frame ever arrives from, because the " +
-            "phone's is never lent to a guest.",
+        summary = "Simulated gives the device a camera of its own, showing whichever scene is " +
+            "chosen below. The phone's camera is never lent to a guest.",
         modes = listOf(HardwareMode.Off, HardwareMode.Simulated),
         fallback = HardwareMode.Off,
         permissions = listOf(Manifest.permission.CAMERA),
@@ -115,6 +149,82 @@ internal enum class VirtualHardware(
             PackageManager.FEATURE_LOCATION_GPS,
             PackageManager.FEATURE_LOCATION_NETWORK,
         ),
+    ),
+
+    /**
+     * Whether the device has Wi-Fi hardware.
+     *
+     * **This is the outer of two switches, and the distinction is the point.** Here is where a
+     * device is given a radio or built without one — the same question this bench asks about a
+     * camera. Whether that radio is *switched on* is a thing the device decides about itself, in its
+     * own Settings app, exactly as a person switches Wi-Fi off on a phone that certainly still has
+     * Wi-Fi. Collapsing the two would mean a device that loses its hardware when somebody toggles a
+     * setting, which is not what either control means.
+     *
+     * There is no Real. The bytes an app moves are genuinely the phone's — this container has never
+     * pretended otherwise — but the *answers* about the network are the device's, and handing over
+     * the phone's Wi-Fi state would put a guest back in the position this exists to get it out of.
+     */
+    WiFi(
+        id = "wifi",
+        label = "Wi-Fi",
+        summary = "Whether the device has Wi-Fi at all. Switching it on and off is done on the " +
+            "device, in Settings — which is how to see what an app does offline without " +
+            "disconnecting the phone you are working on.",
+        modes = listOf(HardwareMode.Off, HardwareMode.Simulated),
+        fallback = HardwareMode.Simulated,
+        // The feature follows the bench, because the bench now means "does the device have Wi-Fi"
+        // — and a device built without it should say so, as it does for a camera. That has a sharp
+        // consequence worth knowing: withdrawing FEATURE_WIFI makes getSystemService(WIFI_SERVICE)
+        // return **null**. That is the platform's own behaviour on a phone with no Wi-Fi rather
+        // than something this container invents, so it is faithful — but an app that assumes the
+        // manager is non-null will fall over, and the honest place to say so is here.
+        //
+        // No permissions, though. ACCESS_NETWORK_STATE and INTERNET are not about Wi-Fi: a device
+        // with no Wi-Fi and a mobile radio is still on the network, and withdrawing them would deny
+        // install-time permissions to every app because one radio is missing.
+        features = listOf(PackageManager.FEATURE_WIFI),
+    ),
+
+    Bluetooth(
+        id = "bluetooth",
+        label = "Bluetooth",
+        summary = "Whether the device has a Bluetooth adapter at all. Switching it on and off is " +
+            "done on the device, in Settings. The phone's own radio is never handed to a guest.",
+        modes = listOf(HardwareMode.Off, HardwareMode.Simulated),
+        fallback = HardwareMode.Simulated,
+        permissions = listOf(
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_SCAN,
+        ),
+        features = listOf(
+            PackageManager.FEATURE_BLUETOOTH,
+            PackageManager.FEATURE_BLUETOOTH_LE,
+        ),
+        // A phone ships with Bluetooth off, and a device that starts with it on is one nobody
+        // recognises — and one whose "is Bluetooth on" path never gets exercised.
+        switchedOnByDefault = false,
+    ),
+
+    /**
+     * A mobile radio, which is the third thing an app asks the network about and the one the device
+     * had no answer for at all.
+     *
+     * It earns its place by being *different from Wi-Fi in a way apps behave differently about*: a
+     * cellular connection is metered, and an app that defers a large download, drops to a lower
+     * bitrate, or asks before syncing is doing it because of that bit. With Wi-Fi switched off and
+     * this switched on, the device is online **and metered**, which is a state that otherwise takes
+     * a second phone and a SIM to reproduce.
+     */
+    Cellular(
+        id = "cellular",
+        label = "Cellular",
+        summary = "Whether the device has a mobile radio. Switched on in the device's Settings, " +
+            "where it reports a metered connection — which is the state an app treats differently " +
+            "from Wi-Fi, and the hard one to get a real phone into on purpose.",
+        modes = listOf(HardwareMode.Off, HardwareMode.Simulated),
+        fallback = HardwareMode.Simulated,
+        features = listOf(PackageManager.FEATURE_TELEPHONY),
     ),
 
     Accelerometer(
@@ -244,6 +354,7 @@ internal object VirtualDevicePolicy {
 
     private const val FILE = "policy"
     private const val BACKGROUND = "background"
+    private const val CAMERA_SCENE = "camera.scene"
 
     private const val LOCATION_MODE = "location.mode"
     private const val LATITUDE = "location.latitude"
@@ -311,7 +422,14 @@ internal object VirtualDevicePolicy {
     }
 
     fun setMode(context: Context, hardware: VirtualHardware, mode: HardwareMode) {
+        val had = mode(context, hardware) != HardwareMode.Off
         edit(context) { it.setProperty("hardware/${hardware.id}", mode.name) }
+        // Whether the device *has* the hardware is the one half an app is told once and can never be
+        // told again — see AppSandbox.restartForHardware. Simulated against Real is not that: it
+        // changes what the readings are, and every seam that reports one answers live.
+        if (hardware.features.isNotEmpty() && had != (mode != HardwareMode.Off)) {
+            AppSandbox.restartForHardware()
+        }
     }
 
     /**
@@ -330,6 +448,61 @@ internal object VirtualDevicePolicy {
 
     fun setRule(context: Context, packageName: String, permission: String, rule: PermissionRule) {
         edit(context) { it.setProperty(key(packageName, "perm/$permission"), rule.name) }
+    }
+
+    /**
+     * Whether a radio the device **has** is currently **switched on** — the inner of the two
+     * switches, and the one that belongs to the device rather than to the bench.
+     *
+     * A phone with Wi-Fi switched off still has Wi-Fi. The bench answers "does this device have the
+     * hardware", which is a thing you decide when you build a device; this answers "is it on", which
+     * is a thing the device's own Settings decides afterwards, and which an app can watch change
+     * while it runs. Two switches because they are two questions, and because collapsing them would
+     * mean a device that loses its radio every time somebody turns it off.
+     *
+     * False whenever the bench says the device has no such hardware, so a caller only ever has to
+     * ask this one thing.
+     */
+    fun switchedOn(context: Context, hardware: VirtualHardware): Boolean {
+        if (mode(context, hardware) == HardwareMode.Off) return false
+        val stored = read(context).getProperty("switch/${hardware.id}")
+        return stored?.toBooleanStrictOrNull() ?: hardware.switchedOnByDefault
+    }
+
+    fun setSwitchedOn(context: Context, hardware: VirtualHardware, on: Boolean) {
+        edit(context) { it.setProperty("switch/${hardware.id}", on.toString()) }
+    }
+
+    /**
+     * What a radio has around it — the networks in range, the Bluetooth things nearby.
+     *
+     * Stored as text this file does not interpret, because the shape of it belongs to
+     * [VirtualRadios] and a properties file is not where a list of records wants to be described.
+     * It lives here for the one reason everything else does: this is the file that is wiped when the
+     * device is, so a device gets new neighbours when it gets everything else new.
+     */
+    fun radioState(context: Context, key: String): String? = read(context).getProperty("radio/$key")
+
+    fun setRadioState(context: Context, key: String, value: String) {
+        edit(context) { it.setProperty("radio/$key", value) }
+    }
+
+    /**
+     * What the device's camera shows — a property of the device, set here and read by its Camera app.
+     *
+     * The choice is a **cost** as much as a picture. A still is drawn once and never again, so a
+     * viewfinder showing one runs at nothing; an animated scene redraws at its own few frames a
+     * second rather than the display's sixty. The first version of this camera drew the whole
+     * picture procedurally on every frame, which made it the most expensive thing on an otherwise
+     * idle device.
+     */
+    fun cameraScene(context: Context): CameraScene {
+        val stored = read(context).getProperty(CAMERA_SCENE) ?: return CameraScene.PixelArt
+        return runCatching { CameraScene.valueOf(stored) }.getOrDefault(CameraScene.PixelArt)
+    }
+
+    fun setCameraScene(context: Context, scene: CameraScene) {
+        edit(context) { it.setProperty(CAMERA_SCENE, scene.name) }
     }
 
     /**
@@ -548,5 +721,5 @@ internal object VirtualDevicePolicy {
     }
 
     private fun file(context: Context): File =
-        File(context.applicationContext.filesDir, "vdevice/$FILE")
+        VirtualDeviceFiles.file(context, FILE)
 }

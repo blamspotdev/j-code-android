@@ -1,6 +1,7 @@
 package dev.jcode.vdevice
 
 import android.Manifest
+import android.content.Context
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -114,11 +115,16 @@ internal fun VirtualHardwarePage(modifier: Modifier = Modifier) {
     // The readout is computed, not received: the same function of the same clock the guest's own
     // sensors are running, so what this shows is what the app is being told — see SimulatedHardware.
     var now by remember { mutableStateOf(SimulatedHardware.sample(context)) }
-    LaunchedEffect(Unit) {
-        while (true) {
+    // Keyed on the revision, and it stops as soon as the device stops moving: a bench showing a
+    // device that is sitting still is showing a constant, and re-deriving a constant several times a
+    // second for as long as the tab is open is the shape of "hardware that never sleeps". Any edit
+    // bumps the revision and starts it again, which is also how a shake or a route gets its ticks.
+    LaunchedEffect(revision) {
+        while (SimulatedHardware.changing(settings, SystemClock.elapsedRealtime())) {
             delay(READOUT_MS)
             now = SimulatedHardware.sample(context)
         }
+        now = SimulatedHardware.sample(context)
     }
 
     Surface(modifier = modifier, color = MaterialTheme.colorScheme.surface) {
@@ -202,10 +208,16 @@ private fun HardwareGrid(revision: Int, now: HardwareSample, onOpen: (VirtualHar
     ) {
         VirtualHardware.entries.forEach { hardware ->
             val mode = remember(revision, hardware) { VirtualDevicePolicy.mode(context, hardware) }
+            // A radio's reading is what it is *on*, and it changes when somebody changes it rather
+            // than fifty times a second — so it is read against the revision, not against the sample
+            // the sensors are redrawn from.
+            val radio = remember(revision, hardware, mode) {
+                if (mode == HardwareMode.Off) null else radioDetail(context, hardware)
+            }
             Tile(
                 hardware = hardware,
                 mode = mode,
-                detail = detail(hardware, mode, now),
+                detail = radio ?: detail(hardware, mode, now),
                 modifier = Modifier.weight(1f),
                 onClick = { onOpen(hardware) },
             )
@@ -261,6 +273,40 @@ private fun Tile(
     }
 }
 
+/**
+ * What a radio's tile says: the network it is on, or what is paired to it, or that it is switched
+ * off — the three answers somebody opens one of these screens to get.
+ */
+private fun radioDetail(context: Context, hardware: VirtualHardware): String? = when (hardware) {
+    VirtualHardware.WiFi ->
+        if (!VirtualDevicePolicy.switchedOn(context, hardware)) {
+            "switched off"
+        } else {
+            VirtualRadios.connected(context)?.ssid
+        }
+
+    VirtualHardware.Bluetooth ->
+        if (!VirtualDevicePolicy.switchedOn(context, hardware)) {
+            "switched off"
+        } else {
+            VirtualRadios.bluetooth(context).count { it.paired }
+                .let { if (it == 0) "nothing paired" else "$it paired" }
+        }
+
+    // Metered is the bit an app behaves differently about, and the reason this radio exists — see
+    // GuestNetwork, which reports it when Wi-Fi is the one that is off.
+    VirtualHardware.Cellular ->
+        if (!VirtualDevicePolicy.switchedOn(context, hardware)) {
+            "switched off"
+        } else if (VirtualDevicePolicy.switchedOn(context, VirtualHardware.WiFi)) {
+            "on standby"
+        } else {
+            "metered"
+        }
+
+    else -> null
+}
+
 /** What a tile can say about itself beyond its mode — the reading, where there is one worth having. */
 private fun detail(hardware: VirtualHardware, mode: HardwareMode, now: HardwareSample): String? =
     when {
@@ -299,7 +345,8 @@ private fun Mode(hardware: VirtualHardware) {
     ManagerSectionCard(
         title = "Wired to",
         description = "Off means the device does not have it at all: not declared, and refused to " +
-            "every app whatever its permissions say.",
+            "every app whatever its permissions say. An app is told what hardware a device has when " +
+            "it starts and never again, so switching this on or off restarts the device.",
     ) {
         SettingsDropdownRow(
             // No supporting text: the header above has just said what this is, and saying it twice
@@ -321,6 +368,173 @@ private fun Mode(hardware: VirtualHardware) {
                     VirtualDevicePolicy.setMode(context, hardware, next)
                 }
             },
+        )
+    }
+
+    if (hardware == VirtualHardware.Camera && mode != HardwareMode.Off) {
+        CameraSceneCard(revision = revision)
+    }
+    if (hardware == VirtualHardware.WiFi && mode != HardwareMode.Off) {
+        WifiNetworksCard(revision = revision)
+    }
+    if (hardware == VirtualHardware.Bluetooth && mode != HardwareMode.Off) {
+        BluetoothDevicesCard(revision = revision)
+    }
+}
+
+/**
+ * What the device's Wi-Fi can see.
+ *
+ * A radio with nothing around it is a switch and a label — the screen said the device had Wi-Fi and
+ * could not say what it was on, which is the one thing a Wi-Fi screen is for. The neighbours are
+ * generated once per device and kept ([VirtualRadios]), so the list holds still while it is read and
+ * `Scan again` is what changes it.
+ *
+ * They do not reach a guest, and the note says so rather than leaving somebody to find out: an app's
+ * scan goes to the phone's `WifiManager`, which this container could not stand in for, and which
+ * answers an app under JCode's uid with an empty list because JCode holds no location permission.
+ */
+@Composable
+private fun WifiNetworksCard(revision: Int) {
+    val context = LocalContext.current
+    val networks = remember(revision) { VirtualRadios.wifi(context) }
+    val connected = remember(revision) { VirtualRadios.connected(context) }
+    val on = remember(revision) { VirtualDevicePolicy.switchedOn(context, VirtualHardware.WiFi) }
+    ManagerSectionCard(
+        title = "Networks in range",
+        description = if (on) {
+            "The device's own surroundings, drawn when it started. Tap one to join it; an app on " +
+                "the device is told none of this — its scan goes to the phone's Wi-Fi manager, " +
+                "which answers an app under JCode's uid with nothing at all."
+        } else {
+            "Wi-Fi is switched off on the device, in its Settings app — this is what it would see."
+        },
+    ) {
+        networks.forEach { network ->
+            RadioRow(
+                name = network.ssid,
+                detail = signalLabel(network.level) +
+                    if (network.secured) " · secured" else " · open",
+                marked = on && network.ssid == connected?.ssid,
+                markLabel = "Connected",
+                onClick = { VirtualRadios.connect(context, network.ssid) },
+            )
+        }
+        RadioRow(
+            name = "Scan again",
+            detail = "Draw a new set of neighbours, as though the device had been carried elsewhere",
+            marked = false,
+            markLabel = "",
+            onClick = { VirtualRadios.rescanWifi(context) },
+        )
+    }
+}
+
+/**
+ * What the device's Bluetooth can see — the same idea as the networks above, and the same caveat.
+ *
+ * Pairing is remembered across a rescan, because a pairing outlives being out of range; joining a
+ * network is not, because being carried somewhere else is exactly how a device leaves one.
+ */
+@Composable
+private fun BluetoothDevicesCard(revision: Int) {
+    val context = LocalContext.current
+    val devices = remember(revision) { VirtualRadios.bluetooth(context) }
+    val on = remember(revision) { VirtualDevicePolicy.switchedOn(context, VirtualHardware.Bluetooth) }
+    ManagerSectionCard(
+        title = "Devices nearby",
+        description = if (on) {
+            "The device's own surroundings. Tap one to pair it — a pairing is kept across a scan. " +
+                "None of it reaches a guest: the adapter an app reaches is the phone's, and its " +
+                "state does not travel through anything this container can replace."
+        } else {
+            "Bluetooth is switched off on the device, in its Settings app — this is what it would see."
+        },
+    ) {
+        devices.forEach { device ->
+            RadioRow(
+                name = device.name,
+                detail = device.kind,
+                marked = device.paired,
+                markLabel = "Paired",
+                onClick = { VirtualRadios.setPaired(context, device.name, !device.paired) },
+            )
+        }
+        RadioRow(
+            name = "Scan again",
+            detail = "Look for new devices, keeping whatever is paired",
+            marked = false,
+            markLabel = "",
+            onClick = { VirtualRadios.rescanBluetooth(context) },
+        )
+    }
+}
+
+/** One thing a radio can see: what it is called, what it is, and whether the device is on it. */
+@Composable
+private fun RadioRow(
+    name: String,
+    detail: String,
+    marked: Boolean,
+    markLabel: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                text = name,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (marked) {
+            Text(
+                text = markLabel,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+/**
+ * What the device's camera is pointed at.
+ *
+ * A choice about cost as much as about the picture. The first version of the camera drew its whole
+ * scene procedurally on every frame — colour bars, a horizon computed from the attitude, a compass
+ * rose and a line of readouts — which made it the most expensive thing on an otherwise idle device,
+ * to show numbers nobody reads off a viewfinder. A scene is a handful of frames now, and a still one
+ * is drawn once and never again.
+ */
+@Composable
+private fun CameraSceneCard(revision: Int) {
+    val context = LocalContext.current
+    val scene = remember(revision) { VirtualDevicePolicy.cameraScene(context) }
+    ManagerSectionCard(
+        title = "What it sees",
+        description = scene.summary,
+    ) {
+        SettingsDropdownRow(
+            label = "Scene",
+            options = CameraScene.entries.map { it.name },
+            selected = scene.name,
+            optionLabel = { CameraScene.valueOf(it).label },
+            onSelect = { VirtualDevicePolicy.setCameraScene(context, CameraScene.valueOf(it)) },
         )
     }
 }

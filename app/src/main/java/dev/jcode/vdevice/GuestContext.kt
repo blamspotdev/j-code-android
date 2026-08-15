@@ -89,6 +89,18 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
         SENSOR_SERVICE -> (super.getSystemService(name) as? SensorManager)
             ?.let { GuestSensors.forGuest(baseContext, guest, it) }
 
+        // Not substituted — `CameraManager` is final and its frames are written into the app's
+        // Surface by the camera HAL, so there is nothing here to stand in front of. Noted in the
+        // device's log instead, once, because a preview that stays black with nothing anywhere
+        // saying why is the failure this container spends most of its effort not producing. The
+        // device answers ACTION_IMAGE_CAPTURE properly, with its own Camera app — see DeviceIntents.
+        CAMERA_SERVICE -> super.getSystemService(name).also { noteCamera2Use() }
+
+        // Surveyed the first time a guest asks, for the same reason the camera is — what the device
+        // could stand in for here is a question about this platform, not about this code.
+        CONNECTIVITY_SERVICE, WIFI_SERVICE ->
+            super.getSystemService(name).also { HiddenSeams.reportNetwork(baseContext) }
+
         else -> super.getSystemService(name)
     }
 
@@ -111,6 +123,48 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
 
     override fun checkCallingOrSelfPermission(permission: String): Int =
         GuestPermissions.answer(permission) ?: super.checkCallingOrSelfPermission(permission)
+
+    // ------------------------------------------------------------------------- shared storage
+    //
+    // The device's own, never the phone's. Left alone, every one of these answers with a directory
+    // under `/storage/emulated/0/Android/…` belonging to **JCode** — so a guest's exports, caches and
+    // unpacked assets landed in the user's real shared storage, and JCode holds
+    // MANAGE_EXTERNAL_STORAGE, so nothing anywhere stopped it. See [VirtualStorage], including what
+    // it cannot reach: `Environment.getExternalStorageDirectory()` is computed rather than cached and
+    // still reports the phone.
+
+    // The plural forms answer with **both** volumes, internal first, which is the order and the
+    // shape a phone with an SD card uses — so an app that already handles two volumes handles this
+    // device's without knowing anything about it, and one that only reads [0] gets the internal one,
+    // which is the same thing it would get on a phone.
+
+    override fun getExternalFilesDir(type: String?): File =
+        VirtualStorage.externalFilesDir(baseContext, guest.packageName, type)
+
+    override fun getExternalFilesDirs(type: String?): Array<File> =
+        VirtualStorage.Volume.entries
+            .map { VirtualStorage.externalFilesDir(baseContext, guest.packageName, type, it) }
+            .toTypedArray()
+
+    override fun getExternalCacheDir(): File =
+        VirtualStorage.externalCacheDir(baseContext, guest.packageName)
+
+    override fun getExternalCacheDirs(): Array<File> =
+        VirtualStorage.Volume.entries
+            .map { VirtualStorage.externalCacheDir(baseContext, guest.packageName, it) }
+            .toTypedArray()
+
+    override fun getExternalMediaDirs(): Array<File> =
+        VirtualStorage.Volume.entries
+            .map { VirtualStorage.externalMediaDir(baseContext, guest.packageName, it) }
+            .toTypedArray()
+
+    override fun getObbDir(): File = VirtualStorage.obbDir(baseContext, guest.packageName)
+
+    override fun getObbDirs(): Array<File> =
+        VirtualStorage.Volume.entries
+            .map { VirtualStorage.obbDir(baseContext, guest.packageName, it) }
+            .toTypedArray()
 
     override fun getDataDir(): File = guest.dataDir.ensure()
     override fun getFilesDir(): File = guest.filesDir.ensure()
@@ -248,4 +302,32 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
     }
 
     private fun File.ensure(): File = also { if (!it.isDirectory) it.mkdirs() }
+
+    /**
+     * Says, once, that a guest reaching for Camera2 will not get frames.
+     *
+     * It changes nothing about what the app receives — there is nothing the container can do about
+     * it — but "the preview is black" and "this device does not do previews" are very different
+     * things to be holding while you debug, and only one of them was previously available.
+     */
+    private fun noteCamera2Use() {
+        if (warnedAboutCamera2) return
+        warnedAboutCamera2 = true
+        HiddenSeams.reportCamera2(baseContext)
+        VirtualDeviceLog.append(
+            baseContext,
+            'W',
+            "VDEVICE",
+            "${guest.packageName} asked for the camera service. This device answers " +
+                "ACTION_IMAGE_CAPTURE with its own Camera app, but it cannot stand in for Camera2 " +
+                "— CameraManager is final and its frames are written by the camera HAL — so a " +
+                "CameraDevice preview will stay black.",
+        )
+    }
+
+    private companion object {
+        /** Process-wide: the point is one line in the log, not one per guest context. */
+        @Volatile
+        var warnedAboutCamera2 = false
+    }
 }

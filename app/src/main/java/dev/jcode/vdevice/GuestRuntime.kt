@@ -13,6 +13,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import android.webkit.WebView
+import dev.jcode.core.distro.WorkspaceHostPaths
 
 /**
  * The container itself, living in the `:guest` process: it installs the hooks in [GuestHooks] and
@@ -86,6 +87,13 @@ internal object GuestRuntime {
     fun install(context: Context) {
         if (isInstalled) return
         host = context.applicationContext
+        // Where the workspace is, is a process-wide latch the IDE sets at startup — and `:guest` is
+        // a different process that never ran that code, so it fell back to the *legacy* shared path.
+        // The device's external volume is under the workspace root, so the guest created it at
+        // /storage/emulated/0/JCode/projects/vDevice_ExtStorage: in the **user's own storage**,
+        // which is the exact leak this container exists to prevent. Measured, and the reason this
+        // line comes before anything that can touch storage.
+        WorkspaceHostPaths.init(host.filesDir)
         VirtualIdentity.apply(Application.getProcessName())
         claimWebViewDirectory()
 
@@ -96,22 +104,30 @@ internal object GuestRuntime {
             ?: throw VirtualDeviceException("cannot replace ActivityThread.mInstrumentation")
 
         GuestPermissions.install(host)
+        GuestDocuments.install(host)
+        DeviceIntents.install(host)
         // Before any guest exists, which is the whole requirement: the framework builds one
         // LocationManager per context and caches it, so the service has to be in place before the
         // first one is asked for.
         val location = GuestLocation.install(host)
+        // Same requirement and the same seam: a ConnectivityManager is built once per context and
+        // caches its binder, so the replacement has to be in place before the first guest context.
+        val network = GuestNetwork.install(host)
         val navigation = GuestHooks.installStartActivityHook(::rewriteOutgoing)
         val packages = GuestPackageHook.install(host.packageManager)
         val notifications = GuestNotificationHook.install()
         val intents = GuestActivityManagerHook.install(host.packageName)
         installCrashHandler()
         VirtualDeviceLog.captureStandardStreams(host)
+        // Before anything a guest does, so the device's log holds the whole of a session rather than
+        // starting once something has already gone wrong.
+        VirtualDeviceLog.captureProcessLog(host)
         isInstalled = true
         Log.i(
             TAG,
             "hooks installed: instrumentation=true navigation=$navigation " +
                 "packages=$packages notifications=$notifications intents=$intents " +
-                "location=$location",
+                "location=$location network=$network",
         )
         VirtualDeviceLog.append(host, 'I', TAG, "container ready in ${Application.getProcessName()}")
     }
@@ -196,6 +212,10 @@ internal object GuestRuntime {
 
     /** Builds an embedded activity from a stub intent — the shape [rewriteOutgoing] hands its host. */
     fun embed(stub: Intent, windowToken: IBinder?): Activity {
+        // Read *before* anything below can move it. `resolve` sets `active` to the activity being
+        // built, so asking afterwards answers with the app that is starting rather than the app that
+        // started it — which is null-filtered out and leaves getCallingPackage() with nothing.
+        val startedBy = active?.packageName
         val instrumentation = instrumentation ?: throw VirtualDeviceException("the container is not installed")
         val component = stub.component ?: throw VirtualDeviceException("no stub component")
         val info = host.packageManager.getActivityInfo(component, 0)
@@ -224,7 +244,12 @@ internal object GuestRuntime {
 
         // Registered before the activity is built: the guest can reach ActivityClient from its own
         // onCreate, and a token the hook has not heard of yet is one the server rejects.
-        val token = Binder().also(GuestActivityClient::register)
+        // Recorded here because this is the only place that knows it — see GuestActivityClient for
+        // why getCallingPackage() has nothing else to go on. An app that started *itself* is not a
+        // caller, which is what the comparison drops.
+        val token = Binder().also {
+            GuestActivityClient.register(it, startedBy?.takeIf { name -> name != target.guest.packageName })
+        }
         val activity = instrumentation.newActivity(
             target.guest.classLoader.loadClass(target.activityClass),
             host,
@@ -338,6 +363,23 @@ internal object GuestRuntime {
         embeddedBackHandler = handler
     }
 
+    /**
+     * The device's own app for an implicit intent, as a stub ready to host — or null for one the
+     * device has no app for, which goes out as it did before rather than doing nothing.
+     *
+     * This is what a phone's package manager does for an app that asks for a photo or a link: it
+     * finds the app the *device* has. Before, the intent left the device, and the phone answered it
+     * with the user's camera over their own storage and their own browser under their own profile —
+     * and then no result could come back, because an embedded activity's token is one no
+     * `ActivityRecord` answers to. Both halves are fixed by answering it here.
+     */
+    private fun deviceAppFor(intent: Intent): Intent? {
+        val component = DeviceIntents.resolve(intent) ?: return null
+        val apk = VirtualDeviceApps.apk(host, component.packageName) ?: return null
+        val guest = runCatching { GuestLoader.load(host, apk.absolutePath) }.getOrNull() ?: return null
+        return stubIntent(guest, component.className, Intent(intent))
+    }
+
     /** [GuestActivityClient] calls this for the `onBackPressed` the platform routes to the server. */
     fun onEmbeddedBackPressed() {
         val handler = embeddedBackHandler ?: return
@@ -359,6 +401,13 @@ internal object GuestRuntime {
     fun resumeEmbedded(activity: Activity): Boolean {
         val instrumentation = instrumentation ?: return false
         foreground = activity
+        // `active` is what every hook attributes a call to — which permissions apply, whose manifest
+        // to read — and it used to be set when an activity was *started* and never put back. That
+        // was harmless while the only cross-app launch was fire-and-forget; now that an app can
+        // start the device's Camera and be returned to, it is a leak: measured, the hardware fixture
+        // read CAMERA=GRANTED after the Camera app was allowed it, because `active` was still the
+        // Camera. Whatever is in front is what a call belongs to.
+        GuestLoader.forPackage(activity.packageName)?.let { active = it }
         GuestHooks.dispatchLifecycleCallback(activity, "onActivityPreStarted")
         instrumentation.callActivityOnStart(activity)
         val started = GuestHooks.dispatchLifecycleCallback(activity, "onActivityPostStarted")
@@ -478,6 +527,39 @@ internal object GuestRuntime {
      * `performPause`/`performDestroy`, which dispatch their own `Pre`/`Post` callbacks, while
      * `callActivityOnStop` calls `onStop()` straight.
      */
+    /**
+     * Pauses an embedded activity — the mirror of [resumeEmbedded], and the thing the container
+     * spent a long time not having.
+     *
+     * A guest used to be RESUMED from the moment it started until it was destroyed. Nothing ever
+     * paused one: not another activity opening over it, not the tab being switched away, not JCode
+     * going to the background. That is not a lifecycle nicety, it is what stops the device's
+     * hardware. An app releases its sensors in `onPause`, an engine stops its render thread on
+     * losing focus, Compose stops its frame clock when the lifecycle drops below STARTED — **all of
+     * it hangs off a callback that was never sent**, so a guest kept the accelerometer ticking and
+     * kept drawing frames into a surface nobody was looking at, for as long as the session lived.
+     *
+     * Focus goes first, for the reason [destroyEmbedded] gives: an engine that started its render
+     * thread on gaining focus stops it on losing focus, and one told it still had focus would keep
+     * drawing.
+     *
+     * `foreground` is deliberately left alone. It is what a permission answer is delivered to, and a
+     * paused activity is still the one that asked.
+     */
+    fun pauseEmbedded(activity: Activity): Boolean {
+        val instrumentation = instrumentation ?: return false
+        focus(activity, false)
+        GuestHooks.dispatchLifecycleCallback(activity, "onActivityPrePaused")
+        instrumentation.callActivityOnPause(activity)
+        val paused = GuestHooks.dispatchLifecycleCallback(activity, "onActivityPostPaused")
+        // Same reasoning as the resume path: an AndroidX guest's LifecycleRegistry is advanced by
+        // ReportFragment, which registers on the activity's own callback list — the one that is
+        // blocked here — so when the dispatch does not land the registry has to be told directly or
+        // Compose keeps its frame clock running through a pause it never heard about.
+        if (!paused) advanceLifecycle(activity, "ON_PAUSE")
+        return paused
+    }
+
     fun destroyEmbedded(activity: Activity) {
         val instrumentation = instrumentation ?: return
         if (foreground === activity) foreground = null
@@ -609,9 +691,30 @@ internal object GuestRuntime {
             ?: active
             ?: return StartAction.Proceed
         if (component == null) {
-            if (intent.`package` == guest.packageName || intent.selector != null) {
-                Log.w(TAG, "implicit intents inside ${guest.packageName} are not supported: $intent")
+            // An implicit intent is a question about what the *device* has — a camera, a picker, a
+            // browser — and the device answers it with its own apps rather than letting the phone
+            // answer it with the user's. See DeviceIntents.
+            deviceAppFor(intent)?.let { stub ->
+                val launcher = embeddedLauncher ?: return StartAction.Redirect(stub)
+                return if (runCatching { launcher(stub) }.getOrDefault(false)) {
+                    StartAction.Consumed
+                } else {
+                    StartAction.Redirect(stub)
+                }
             }
+            // Said in the *device's* log, not only the system one. An intent leaving the device is
+            // the single most consequential thing that can happen without anybody being told: the
+            // phone answers it, with the user's own apps and the user's own data, and from inside
+            // the guest nothing went wrong at all. It cost a whole investigation to find that a
+            // document picker was doing exactly this — see GuestDocuments.
+            VirtualDeviceLog.append(
+                host,
+                'W',
+                TAG,
+                "${guest.packageName} started ${intent.action ?: "an intent"} with no component; " +
+                    "the device has no app for it, so the PHONE will answer it and no result can " +
+                    "come back",
+            )
             return StartAction.Proceed
         }
         if (component.packageName != guest.packageName) return StartAction.Proceed

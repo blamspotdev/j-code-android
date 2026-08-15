@@ -31,6 +31,16 @@ the interesting case is running with the hardware switched off and reporting tha
   | `+0.00000, +0.00000, +9.80665` | Simulated — a device lying flat, face up, not moving |
   | anything that twitches | Real — the phone's own, and it is never exactly on those numbers |
 
+- **`ACTION_IMAGE_CAPTURE`**, behind a button, reporting the size of the thumbnail that comes back.
+  Deliberately sent with no `EXTRA_OUTPUT`, so the answer is the contract's thumbnail — which
+  exercises the whole round trip: the intent resolving to the device's **Camera app**, that app
+  running as an ordinary guest, and its result reaching an embedded activity at all. With the camera
+  Simulated this reads `got a 512x384 thumbnail` and the full-size JPEG is in the device's
+  `DCIM/Camera`; with it Off, the Camera app says the device has none.
+- **`ACTION_OPEN_DOCUMENT`**, behind a button, answered by the device's **Files app**. It reports the
+  first bytes it could read back through the returned `content://` URI — `read 30 bytes` — because a
+  URI that resolves to nothing looks identical to one that works until something tries it, and "the
+  picker returned a URI" was never the interesting claim.
 - **Location**: the providers the device offers, whether GPS is enabled, the last known fix, and the
   live `requestLocationUpdates` stream. Simulated reports whatever the hardware bench says — a fixed
   point, or a position walked along a route; Off reports no providers at all.

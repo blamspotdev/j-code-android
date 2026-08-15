@@ -58,4 +58,15 @@ interface IGuestSession {
      * for it. Closing the tab has to mean the device is off, not hidden.
      */
     oneway void shutdown();
+
+    /**
+     * Whether anybody is looking at the device's screen.
+     *
+     * False when its tab is not on top or JCode has gone to the background, true when it comes back.
+     * This is what pauses the guest, and pausing the guest is what stops its hardware: an app
+     * releases its sensors in onPause, an engine stops its render thread on losing focus, and
+     * Compose stops its frame clock below STARTED. Without it a guest ran at full tilt behind
+     * whatever the person was actually doing, for as long as the session lived.
+     */
+    oneway void setVisible(boolean visible);
 }

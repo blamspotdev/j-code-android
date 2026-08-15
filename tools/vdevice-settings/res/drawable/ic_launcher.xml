@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The device's Settings. Sliders rather than a cog: a cog is machinery, and what this app is for
+     is choices — which is what a row of switches looks like. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp" android:height="48dp"
+    android:viewportWidth="48" android:viewportHeight="48">
+    <path android:pathData="M11,3h26a8,8 0 0 1 8,8v26a8,8 0 0 1 -8,8h-26a8,8 0 0 1 -8,-8v-26a8,8 0 0 1 8,-8z"
+        android:fillColor="#475569"/>
+    <path android:pathData="M11,3h26a8,8 0 0 1 8,8v10h-42v-10a8,8 0 0 1 8,-8z"
+        android:fillColor="#64748B"/>
+    <path android:pathData="M12,15h24v3h-24zM12,24h24v3h-24zM12,33h24v3h-24z"
+        android:fillColor="#0F172A" android:fillAlpha="0.35"/>
+    <path android:pathData="M30,16.5m-4.5,0a4.5,4.5 0 1 0 9,0a4.5,4.5 0 1 0 -9,0"
+        android:fillColor="#FFFFFF"/>
+    <path android:pathData="M18,25.5m-4.5,0a4.5,4.5 0 1 0 9,0a4.5,4.5 0 1 0 -9,0"
+        android:fillColor="#FFFFFF"/>
+    <path android:pathData="M27,34.5m-4.5,0a4.5,4.5 0 1 0 9,0a4.5,4.5 0 1 0 -9,0"
+        android:fillColor="#8AB4F8"/>
+</vector>

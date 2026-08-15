@@ -28,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,6 +42,7 @@ import dev.jcode.core.term.TerminalSessionManager
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.JcTooltip
 import dev.jcode.design.jcIcon
+import dev.jcode.vdevice.AppSandbox
 import dev.jcode.workbench.LocalDebugSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -83,6 +85,8 @@ internal fun TaskManagerSidebarContent(
 ) {
     val debug = LocalDebugSession.current
     val backgroundActions = LocalTaskManagerBackgroundActions.current
+    // The virtual device's process, named the way /proc reports it — see the kill below.
+    val guestProcess = "${LocalContext.current.packageName}:guest"
     var processes by remember { mutableStateOf<List<AppProcesses.Process>>(emptyList()) }
     var backgroundExtensions by remember { mutableStateOf<List<MainViewModel.BackgroundExtensionInfo>>(emptyList()) }
     var hostMemory by remember { mutableStateOf<HostMemory?>(null) }
@@ -191,7 +195,16 @@ internal fun TaskManagerSidebarContent(
                         proc = proc,
                         isSelf = proc.pid == android.os.Process.myPid(),
                         onKill = {
-                            runCatching { Os.kill(proc.pid, OsConstants.SIGTERM) }
+                            // Stopping `:guest` from here is turning the virtual device off, and the
+                            // device has a door. A bare SIGTERM reaches a bound session as a death:
+                            // the sandbox tab reports "Could not run the app on this device" for
+                            // something that was done on purpose, and the container writes an exit
+                            // reason for a process nobody lost. Measured, on this row.
+                            if (proc.name == guestProcess) {
+                                AppSandbox.shutdown()
+                            } else {
+                                runCatching { Os.kill(proc.pid, OsConstants.SIGTERM) }
+                            }
                             processes = processes.filterNot { it.pid == proc.pid }
                         },
                     )

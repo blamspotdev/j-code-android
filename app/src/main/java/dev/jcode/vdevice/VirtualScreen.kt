@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.view.WindowManager
 import java.io.ByteArrayOutputStream
-import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -30,7 +29,7 @@ import kotlinx.coroutines.withContext
  */
 internal object VirtualScreen {
 
-    private const val CAPTURE_FILE = "vdevice/screen.png"
+    private const val CAPTURE_FILE = "screen.png"
 
     @Volatile
     private var size: Pair<Int, Int>? = null
@@ -45,7 +44,7 @@ internal object VirtualScreen {
 
     /** The current screen as PNG bytes. Never fails: with nothing running the screen is black. */
     suspend fun png(context: Context): ByteArray {
-        val capture = File(context.filesDir, CAPTURE_FILE)
+        val capture = VirtualDeviceFiles.file(context, CAPTURE_FILE)
         if (AppSandbox.sessionOrNull()?.capture(capture) == true) {
             return withContext(Dispatchers.IO) { capture.readBytes() }
         }

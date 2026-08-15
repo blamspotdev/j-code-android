@@ -50,7 +50,6 @@ internal object VirtualLauncher {
     private const val ROW_GAP_DP = 10f
     private const val ICON_DP = 46f
     private const val ICON_LABEL_GAP_DP = 6f
-    private const val HEADER_TEXT_DP = 14f
     private const val LABEL_TEXT_DP = 12f
     private const val PLACEHOLDER_TEXT_DP = 15f
     private const val LABEL_LINES = 2
@@ -167,7 +166,7 @@ internal object VirtualLauncher {
         return out.toString()
     }
 
-    /** The device's screen with nothing running on it: wallpaper, identity, and what is installed. */
+    /** The device's screen with nothing running on it: wallpaper, its bar, and what is installed. */
     fun draw(canvas: Canvas, width: Int, height: Int, density: Float, apps: List<LauncherApp>) {
         VirtualWallpaper.draw(canvas, width, height)
         if (width <= 0 || height <= 0) return
@@ -205,9 +204,10 @@ internal object VirtualLauncher {
      * the bar *persistent*: it is a property of the device rather than of whatever app happens to be
      * on it, so it does not appear when something starts and vanish when it stops.
      *
-     * It carries the device's name and nothing else. There is no app to report the state of, and no
-     * notifications to count: the guest process is what holds them, and with nothing running there
-     * is no guest process.
+     * It carries nothing at all. There is no app to report the state of and no notifications to
+     * count — the guest process is what holds them, and with nothing running there is no guest
+     * process — so what is left is the strip itself, which is the part that has to be there whether
+     * or not anything is running on the device.
      */
     private fun drawStatusBar(canvas: Canvas, width: Int, density: Float) {
         canvas.drawRect(

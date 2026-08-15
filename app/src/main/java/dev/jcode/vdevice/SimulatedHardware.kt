@@ -191,6 +191,23 @@ internal object SimulatedHardware {
      * where the error is metres, and a great circle would make "half way" mean something a person
      * reading two coordinates off the screen would not recognise.
      */
+    /**
+     * Whether [sample] would answer differently a moment from now.
+     *
+     * False for a device that is sitting still: a fixed position, no motion loop, no impulse left to
+     * decay. Everything the device reports is then a constant, and re-deriving it several times a
+     * second is work with no output — which is what a readout that polls unconditionally does for as
+     * long as the tab is open, on a device whose whole hardware is switched off.
+     *
+     * A one-shot route that has arrived counts as still, which is the case worth having: it is a
+     * device that *was* moving, so nothing about the settings says it has stopped.
+     */
+    fun changing(settings: HardwareSettings, nowElapsed: Long): Boolean {
+        if (settings.loop != MotionLoop.None) return true
+        if (settings.impulseUntil > nowElapsed) return true
+        return sample(settings, nowElapsed).moving
+    }
+
     private fun place(settings: HardwareSettings, nowElapsed: Long): Place {
         if (settings.locationMode == LocationMode.Fixed || settings.routeStartedAt <= 0L) {
             return Place(settings.latitude, settings.longitude, 0f, 0f)
@@ -368,9 +385,19 @@ internal object SimulatedHardware {
         val a = Math.toRadians(azimuthDeg.toDouble())
         val p = Math.toRadians(pitchDeg.toDouble())
         val r = Math.toRadians(rollDeg.toDouble())
+        // The sign here is the whole compass, and it was wrong: a device set to face north-east read
+        // back as north-west. `SensorManager.getOrientation` — which is how every app reads a
+        // heading — takes azimuth as `atan2(R[1], R[4])`, and R is this matrix transposed, so those
+        // two entries are this matrix's [3] and [4]. They have to be (sin a, cos a) for a heading of
+        // `a` to come back as `a`; built the other way round they come back as −a. Nothing caught it
+        // for a while because gravity is unaffected — the third column is (0, 0, 1) either way, so
+        // the accelerometer readings that were checked exactly stayed correct — and the device's own
+        // readout reports `motion.azimuth` directly rather than deriving it, so the bench and the
+        // sensors quietly disagreed. The device's Camera app draws its compass from the derived
+        // heading, which is what finally showed the two apart.
         val heading = floatArrayOf(
-            cos(a).toFloat(), sin(a).toFloat(), 0f,
-            -sin(a).toFloat(), cos(a).toFloat(), 0f,
+            cos(a).toFloat(), -sin(a).toFloat(), 0f,
+            sin(a).toFloat(), cos(a).toFloat(), 0f,
             0f, 0f, 1f,
         )
         val tilt = floatArrayOf(

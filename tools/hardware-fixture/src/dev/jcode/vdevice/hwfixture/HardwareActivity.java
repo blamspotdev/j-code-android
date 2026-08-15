@@ -1,19 +1,30 @@
 package dev.jcode.vdevice.hwfixture;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.bluetooth.BluetoothAdapter;
+import android.hardware.camera2.CameraManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.wifi.WifiManager;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.MediaStore;
 import android.util.Log;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -21,6 +32,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -44,6 +56,9 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
 
     private static final String TAG = "HWFIXTURE";
     private static final int REQUEST_CODE = 4321;
+    private static final int PHOTO_CODE = 4322;
+    private static final int PICK_CODE = 4323;
+    private static final int VIDEO_CODE = 4324;
 
     private static final String[] DANGEROUS = {
         "android.permission.CAMERA",
@@ -71,6 +86,9 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
 
     private TextView out;
     private String lastRequest = "not asked yet";
+    private String lastPhoto = "not asked yet";
+    private String lastPick = "not asked yet";
+    private String lastVideo = "not asked yet";
     private String lastFix = "no update yet";
 
     @Override
@@ -88,6 +106,58 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
             requestPermissions(DANGEROUS, REQUEST_CODE);
         });
         column.addView(ask, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // ACTION_IMAGE_CAPTURE is how an app asks for a picture rather than for a camera pipeline,
+        // and it is the form the device can answer completely — its own Camera app opens and hands
+        // back an image. Deliberately with no EXTRA_OUTPUT, so what comes back is the contract's
+        // thumbnail: that exercises the whole round trip, including the result arriving at an
+        // embedded activity at all, which is the part that used to be impossible.
+        Button photo = new Button(this);
+        photo.setText("Take a photo (ACTION_IMAGE_CAPTURE)");
+        photo.setOnClickListener(v -> {
+            lastPhoto = "asked, waiting for the answer…";
+            startActivityForResult(new Intent(MediaStore.ACTION_IMAGE_CAPTURE), PHOTO_CODE);
+        });
+        column.addView(photo, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // The other half of "does this device have the apps a device has". OPEN_DOCUMENT is
+        // answered by the device's Files app, and what comes back is a content:// URI into the
+        // device's own storage — so this reads the first bytes of whatever was picked, which is the
+        // only way to tell a URI that resolves from one that merely looks right.
+        Button pick = new Button(this);
+        pick.setText("Pick a file (ACTION_OPEN_DOCUMENT)");
+        pick.setOnClickListener(v -> {
+            lastPick = "asked, waiting for the answer…";
+            Intent open = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            open.addCategory(Intent.CATEGORY_OPENABLE);
+            open.setType("*/*");
+            startActivityForResult(open, PICK_CODE);
+        });
+        column.addView(pick, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // The device draws frames, so it can encode them: ACTION_VIDEO_CAPTURE comes back as a
+        // content:// URI, and reading its first bytes is the only way to tell a URI that resolves
+        // from one that merely looks right.
+        Button video = new Button(this);
+        video.setText("Record a video (ACTION_VIDEO_CAPTURE)");
+        video.setOnClickListener(v -> {
+            lastVideo = "asked, waiting for the answer…";
+            startActivityForResult(new Intent(MediaStore.ACTION_VIDEO_CAPTURE), VIDEO_CODE);
+        });
+        column.addView(video, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // "Is there a browser?" gets asked three ways and answered here two of them: the report
+        // below says what `resolveActivity` finds, and this opens the link. Both matter — an app
+        // that resolves nothing hides its button and never gets as far as opening anything.
+        Button link = new Button(this);
+        link.setText("Open a link (ACTION_VIEW)");
+        link.setOnClickListener(v ->
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://example.org/"))));
+        column.addView(link, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         out = new TextView(this);
@@ -162,13 +232,65 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
                     ? "GRANTED" : "denied")
                 .append('\n');
         }
-        text.append("  last requestPermissions: ").append(lastRequest).append("\n\n");
+        text.append("  last requestPermissions: ").append(lastRequest).append('\n');
+        text.append("  last photo: ").append(lastPhoto).append('\n');
+        text.append("  last pick:  ").append(lastPick).append('\n');
+        text.append("  last video: ").append(lastVideo).append("\n\n");
 
         text.append("FEATURES (hasSystemFeature)\n");
         for (String feature : FEATURES) {
             text.append("  ").append(feature).append(" = ")
                 .append(getPackageManager().hasSystemFeature(feature)).append('\n');
         }
+
+        // What the device answers when an app asks whether it can do a thing, rather than asking it
+        // to. This is the question that used to be answered from the *phone's* installed apps.
+        text.append("\nRESOLVES TO (PackageManager)\n");
+        resolves(text, "a link", new Intent(Intent.ACTION_VIEW, Uri.parse("https://example.org/")));
+        resolves(text, "a browser", new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_BROWSER));
+        resolves(text, "a web search", new Intent(Intent.ACTION_WEB_SEARCH));
+        resolves(text, "a photo", new Intent(MediaStore.ACTION_IMAGE_CAPTURE));
+        resolves(text, "a document", new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*"));
+        resolves(text, "a video", new Intent(MediaStore.ACTION_VIDEO_CAPTURE));
+        resolves(text, "settings", new Intent("android.settings.SETTINGS"));
+
+        // What the device says about the network. An app's first question is almost always "am I
+        // online?", and until the device answers it the answer is the phone's.
+        text.append("\nNETWORK\n");
+        ConnectivityManager connectivity =
+            (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (connectivity == null) {
+            text.append("  no ConnectivityManager\n");
+        } else {
+            Network active = connectivity.getActiveNetwork();
+            NetworkCapabilities caps =
+                active == null ? null : connectivity.getNetworkCapabilities(active);
+            text.append("  active = ").append(active == null ? "none" : active.toString()).append('\n');
+            text.append("  wifi = ").append(caps != null
+                && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)).append('\n');
+            text.append("  validated = ").append(caps != null
+                && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)).append('\n');
+        }
+        WifiManager wifi = (WifiManager) getSystemService(WIFI_SERVICE);
+        text.append("  wifi enabled = ")
+            .append(wifi == null ? "no manager" : String.valueOf(wifi.isWifiEnabled())).append('\n');
+        BluetoothAdapter bluetooth = BluetoothAdapter.getDefaultAdapter();
+        text.append("  bluetooth = ").append(bluetooth == null ? "no adapter"
+            : (bluetooth.isEnabled() ? "on" : "off")).append('\n');
+
+        // What Camera2 offers a guest, which is a different question from whether the device has a
+        // camera: ACTION_IMAGE_CAPTURE is answered by the device's Camera app, and this is the
+        // pipeline underneath it. An empty id list is the honest answer; one naming the *phone's*
+        // cameras would be a leak worth seeing.
+        text.append("\nCAMERA2 (CameraManager)\n  ");
+        try {
+            CameraManager cameras = (CameraManager) getSystemService(CAMERA_SERVICE);
+            text.append(cameras == null ? "no manager"
+                : "ids = " + Arrays.toString(cameras.getCameraIdList()));
+        } catch (Throwable t) {
+            text.append("getCameraIdList threw ").append(t.getClass().getSimpleName());
+        }
+        text.append('\n');
 
         SensorManager sensors = (SensorManager) getSystemService(SENSOR_SERVICE);
         text.append("\nSENSORS (").append(sensors == null ? "no manager"
@@ -256,6 +378,80 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
     @Override
     public void onLocationChanged(Location fix) {
         lastFix = format(fix);
+    }
+
+    /**
+     * The other half of the camera: an app that asks for a picture has to be told it got one.
+     *
+     * The size is reported rather than the bitmap shown, because the number is the check — a
+     * thumbnail with pixels in it means the device rendered a frame, wrote a JPEG, decoded it and
+     * carried it back across a result path an embedded activity has no business having.
+     */
+    @Override
+    protected void onActivityResult(int code, int result, Intent data) {
+        super.onActivityResult(code, result, data);
+        if (code == VIDEO_CODE) {
+            lastVideo = describePick(result, data);
+            Log.i(TAG, "onActivityResult " + code + ": " + lastVideo);
+            return;
+        }
+        if (code == PICK_CODE) {
+            lastPick = describePick(result, data);
+            Log.i(TAG, "onActivityResult " + code + ": " + lastPick);
+            return;
+        }
+        if (code != PHOTO_CODE) {
+            return;
+        }
+        if (result != RESULT_OK) {
+            lastPhoto = "cancelled (result " + result + ")";
+        } else {
+            Object thumbnail = data == null ? null : data.getExtras().get("data");
+            lastPhoto = thumbnail instanceof Bitmap
+                ? "got a " + ((Bitmap) thumbnail).getWidth() + "x"
+                    + ((Bitmap) thumbnail).getHeight() + " thumbnail"
+                : "RESULT_OK with no bitmap";
+        }
+        Log.i(TAG, "onActivityResult " + code + ": " + lastPhoto);
+    }
+
+    /**
+     * What came back from the picker, and whether it can actually be opened.
+     *
+     * The read is the check. A `content://` URI that resolves to nothing looks identical to one that
+     * works until something tries it, and "the picker returned a URI" was never the interesting
+     * claim — "the app can read the file the person chose" is.
+     */
+    /**
+     * What the package manager says handles {@code intent} — the device's app, or nothing.
+     *
+     * The package name is what makes it readable: `dev.jcode.vdevice.browser` is the device
+     * answering, anything else is the phone answering, and "none" is an app that would hide its
+     * button.
+     */
+    private void resolves(StringBuilder text, String what, Intent intent) {
+        ResolveInfo info = getPackageManager().resolveActivity(intent, 0);
+        text.append("  ").append(what).append(" = ")
+            .append(info == null || info.activityInfo == null
+                ? "none" : info.activityInfo.packageName)
+            .append('\n');
+    }
+
+    private String describePick(int result, Intent data) {
+        if (result != RESULT_OK || data == null || data.getData() == null) {
+            return "cancelled (result " + result + ")";
+        }
+        Uri uri = data.getData();
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) {
+                return uri + " — could not be opened";
+            }
+            byte[] head = new byte[64];
+            int read = Math.max(in.read(head), 0);
+            return uri.getLastPathSegment() + " — read " + read + " bytes";
+        } catch (Exception e) {
+            return uri + " — " + e.getClass().getSimpleName();
+        }
     }
 
     @Override

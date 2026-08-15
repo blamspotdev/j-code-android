@@ -1,5 +1,6 @@
 package dev.jcode.vdevice
 
+import android.app.ActivityManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -141,6 +142,30 @@ internal object AppSandbox {
         session?.shutdown()
         session = null
         running.value = false
+    }
+
+    /**
+     * Restarts the device, because what it is *made of* changed.
+     *
+     * An app is told what hardware a device has once, and the platform holds it to that: every
+     * `hasSystemFeature` goes through an `android.app.PropertyInvalidatedCache` that sits in front of
+     * the container, is shared by the whole process, and is invalidated by a system property only the
+     * system server may write. At `targetSdk` 33 that class exposes **no member at all** to reflection
+     * — not the cache, not a way to clear it — so there is nothing here to reach for.
+     *
+     * Measured: with a guest running and the camera switched on at the bench, this container answered
+     * the feature query true and the app was still handed the frozen false in front of it. The
+     * device's own Camera app said "This device has no camera" for as long as the process lived, and
+     * one app asking early settled it for every other app on the device.
+     *
+     * Restarting is the truthful version of the same event rather than a way around it: no phone
+     * grows a camera while it is running. The apps close, the launcher comes back, and the next app
+     * to start is told what the device is now. Nothing happens when no device is up — including in
+     * `:guest`, whose copy of this object never holds a session.
+     */
+    fun restartForHardware() {
+        val restart = Runnable { if (sessionOrNull() != null) shutdown() }
+        if (Looper.myLooper() == main.looper) restart.run() else main.post(restart)
     }
 }
 
@@ -345,6 +370,9 @@ internal class AppSandboxSession(context: Context) {
 
     fun forceStop(packageName: String) = ignoringDeath { it.forceStop(packageName) }
 
+    /** Tells the device whether anybody is looking at it — see IGuestSession.setVisible. */
+    fun setVisible(visible: Boolean) = ignoringDeath { it.setVisible(visible) }
+
     fun close() {
         startup?.cancel()
         startup = null
@@ -368,6 +396,24 @@ internal class AppSandboxSession(context: Context) {
     fun shutdown() {
         runCatching { service?.shutdown() }
         close()
+        // The guest kills itself when it is bound and can be told to. When it is *not* — after a Stop,
+        // or a tab switch, both of which unbind — there is nobody to tell, and the emptied process
+        // stays: measured, `:guest` still listed after a shutdown, still holding everything the
+        // container had accumulated. It is this app's own process under this app's own uid, so this
+        // is the same kill by another route rather than a privilege the container does not have.
+        endGuestProcess()
+    }
+
+    private fun endGuestProcess() {
+        val name = "${appContext.packageName}:guest"
+        val manager = appContext.getSystemService(ActivityManager::class.java) ?: return
+        // Own processes only — which is all this asks for, and all the platform will answer with.
+        manager.runningAppProcesses.orEmpty()
+            .filter { it.processName == name }
+            .forEach {
+                Log.i(TAG, "virtual device off; ending pid ${it.pid}")
+                android.os.Process.killProcess(it.pid)
+            }
     }
 
     private fun bind(): Boolean {

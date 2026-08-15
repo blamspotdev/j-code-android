@@ -1,0 +1,112 @@
+# vdevice-camera
+
+The virtual device's camera app. Built into every device, like the browser and Files.
+
+An app that wants a photo starts `ACTION_IMAGE_CAPTURE` and waits, and the careful ones call
+`resolveActivity` first and hide their camera button when nothing answers. The container used to draw
+a viewfinder itself, which worked and was still the wrong shape: a drawn screen is not something
+`PackageManager` can find, so an app that asks before it reaches never got as far as reaching.
+
+This is an **ordinary guest**. No container privileges and no Camera2 — the picture is drawn from the
+device's own motion sensors, which is something any app may read, and saved with ordinary file IO.
+That is deliberate: the app that proves the device has a camera should not be the one app that needs
+special help to run. It is also a live check on the simulated sensors, and it earned its keep on the
+first run — see below.
+
+## What it does
+
+| Started by | What happens |
+|---|---|
+| The launcher | Viewfinder and a shutter; photos go to the device's `DCIM/Camera` |
+| `ACTION_IMAGE_CAPTURE` | The same, and answers the caller |
+| `ACTION_VIDEO_CAPTURE` | Records three seconds to an MP4 and answers with its URI |
+
+The capture contract is honoured as written: with `EXTRA_OUTPUT` the full-size JPEG is written to
+that URI and the result carries no data; without it the result carries a thumbnail under the `"data"`
+extra. Either way the full-size file is kept in `DCIM/Camera`, because the picture somebody just took
+should be somewhere they can find it — and here that is a path `adb pull` takes.
+
+## What it sees
+
+Chosen on JCode's hardware bench and read through the container's settings provider. **Pixel art by
+default** — five frames on a one-second loop — with a three-still slideshow and a single still as the
+other options.
+
+It used to draw its scene procedurally on every frame: colour bars, a horizon computed from the
+attitude, a compass rose and a line of readouts. That made the camera the most expensive thing on an
+otherwise idle device, to show numbers nobody reads off a viewfinder. Frames are rendered once into
+48x36 bitmaps and blitted with filtering off, which is what makes them pixel art rather than blurred
+small pictures.
+
+Measured with the viewfinder open, over 20 seconds: **3.6%** of a core for the pixel art, **0.2%**
+for a still, against **11.5-18.5%** for the procedural scene.
+
+Still drawn to look drawn: nothing here could be mistaken for a photograph of a room, which is what a
+camera quietly handing over *something* would invite.
+
+## What it looks like
+
+A camera is mostly viewfinder, so the chrome is four tones and a shape: a near-black bar, a leave
+button as a pill on the left, and a **round shutter** in the middle — a white ring with a filled
+centre, or a red square when the caller asked for video. It was a text button reading "Take photo",
+which is the one control on a camera nobody needs told about being the one thing that was spelled
+out. Everything is a `GradientDrawable` built in code and sized from `dp`, so it needs no resources
+beyond the launcher icon.
+
+The screen for *no camera* or *permission refused* is a card on a surface rather than text on black:
+a message should read as a message, and black-with-text reads as a camera that has broken.
+
+## Four things it found
+
+- **The simulated compass was mirrored.** With the bench at 45° the viewfinder read 315°.
+  `SimulatedHardware.rotation` built its heading matrix with the sign that makes
+  `getRotationMatrix` + `getOrientation` — the way every app reads a heading — return −a. Nothing had
+  caught it: gravity is unaffected by that sign, so the accelerometer values that were checked
+  exactly stayed correct, and the bench's own readout reports the azimuth it was given rather than
+  deriving it. The two had quietly disagreed since the bench was written.
+- **A permission request from `onCreate` goes nowhere.** The device's dialog is raised on behalf of
+  whichever activity is in front, and an embedded activity is not in front until it has been resumed
+  — so the request could not be addressed to anybody and vanished, leaving this app on "Waiting for
+  permission" with nothing in the device's log. It asks from `onResume` instead.
+- **Hardware answers were frozen for the life of the guest process.** Switch the camera on at the
+  bench with a device already running and this app still said *This device has no camera* — not
+  because the container answered wrongly (it answered `true`) but because
+  `ApplicationPackageManager` caches `hasSystemFeature` in a `PropertyInvalidatedCache` in front of
+  it, shared by the whole process and invalidated only by a system property the system server owns.
+  At `targetSdk` 33 that class exposes **no member at all** to reflection, so there is nothing to
+  clear. The device restarts on a bench change now, which is the truthful version of the same event.
+  This is what "the camera won't work or won't ask for permission" turned out to be.
+- **`active` was never put back.** The container attributes permission checks to the guest in front,
+  and that was set when an activity *started* and never restored when it finished. Harmless while
+  the only cross-app launch was fire-and-forget; once an app could start this one and be returned to,
+  the caller's own checks were answered from **this app's** grants — measured: the hardware fixture
+  read `CAMERA = GRANTED` right after the Camera was allowed it.
+
+## Build
+
+Plain `javac` + `d8` + `aapt2`, like the other fixtures — no Gradle project. There **is** a `res/`
+directory now, for the launcher icon: `aapt2` compiles one on its own, which is worth knowing,
+because "these apps have no resources" had quietly turned from a packaging constraint into a reason
+they looked unfinished.
+
+```powershell
+& "$btapt2.exe" compile --dir res -o res.zip
+```
+
+then pass `res.zip --java gen` to `aapt2 link` and compile `gen\**\R.java` alongside `src`.
+
+```powershell
+$sdk = "$env:LOCALAPPDATA\Android\Sdk"; $jar = "$sdk\platforms\android-33\android.jar"; $bt = "$sdk\build-tools\37.0.0"
+javac -source 11 -target 11 -encoding UTF-8 -nowarn -cp $jar -d out (Get-ChildItem src -Recurse -Filter *.java | % FullName)
+& "$bt\d8.bat" --min-api 24 --lib $jar --output out (Get-ChildItem out -Recurse -Filter *.class | % FullName)
+& "$bt\aapt2.exe" link -o base.apk --manifest AndroidManifest.xml -I $jar --min-sdk-version 24 --target-sdk-version 33
+Push-Location out; jar uf ..\base.apk classes.dex; Pop-Location
+& "$bt\zipalign.exe" -f 4 base.apk aligned.apk
+& "$bt\apksigner.bat" sign --ks "$env:USERPROFILE\.android\debug.keystore" --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out camera.apk aligned.apk
+```
+
+Then copy it over the bundled copy, which is what every device is built from:
+
+```powershell
+Copy-Item camera.apk ..\..\app\src\main\assets\vdevice\camera.apk
+```
