@@ -189,10 +189,16 @@ public class CameraActivity extends Activity {
         column.setOrientation(LinearLayout.VERTICAL);
         column.setBackgroundColor(Color.BLACK);
 
-        column.addView(header(answering ? callerLabel() : "Camera",
-                "This camera is simulated — the picture is a test image, not the phone's camera."),
-            new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT));
+        // No caption. It used to say that the camera is simulated and the picture is a test image,
+        // which the picture says for itself — a pixel-art robot is not going to be mistaken for a
+        // photograph of a room, and a viewfinder that explains itself is a viewfinder with less room
+        // for the thing it is showing. The one line kept is the one carrying information rather than
+        // a disclaimer: which app is waiting, and only when one is.
+        if (answering) {
+            column.addView(header(callerLabel(), null),
+                new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
 
         viewfinder = new Viewfinder(this);
         viewfinder.awake(true);
@@ -226,12 +232,15 @@ public class CameraActivity extends Activity {
         heading.setText(title);
         heading.setTextColor(0xFFE6E8EF);
         heading.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        TextView note = new TextView(this);
-        note.setText(detail);
-        note.setTextColor(0xFF9AA0B0);
-        note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         column.addView(heading);
-        column.addView(note);
+        // A null detail is a header with nothing to add, not a header with an empty line under it.
+        if (detail != null) {
+            TextView note = new TextView(this);
+            note.setText(detail);
+            note.setTextColor(0xFF9AA0B0);
+            note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            column.addView(note);
+        }
         return column;
     }
 

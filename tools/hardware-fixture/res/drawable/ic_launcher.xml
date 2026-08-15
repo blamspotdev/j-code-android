@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The hardware fixture. A chip, because what it reports on is what the device is made of. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp" android:height="48dp"
+    android:viewportWidth="48" android:viewportHeight="48">
+    <path android:pathData="M11,3h26a8,8 0 0 1 8,8v26a8,8 0 0 1 -8,8h-26a8,8 0 0 1 -8,-8v-26a8,8 0 0 1 8,-8z"
+        android:fillColor="#7C3AED"/>
+    <path android:pathData="M11,3h26a8,8 0 0 1 8,8v10h-42v-10a8,8 0 0 1 8,-8z"
+        android:fillColor="#9F67FF"/>
+    <path android:pathData="M18,9h3v6h-3zM27,9h3v6h-3zM18,33h3v6h-3zM27,33h3v6h-3zM9,18h6v3h-6zM9,27h6v3h-6zM33,18h6v3h-6zM33,27h6v3h-6z"
+        android:fillColor="#FFFFFF"/>
+    <path android:pathData="M16,14h16a2,2 0 0 1 2,2v16a2,2 0 0 1 -2,2h-16a2,2 0 0 1 -2,-2v-16a2,2 0 0 1 2,-2z"
+        android:fillColor="#FFFFFF"/>
+    <path android:pathData="M20,20h8v8h-8z" android:fillColor="#7C3AED"/>
+</vector>

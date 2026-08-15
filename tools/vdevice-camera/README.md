@@ -64,7 +64,16 @@ camera quietly handing over *something* would invite.
 
 ## Build
 
-Plain `javac` + `d8` + `aapt2`, like the other fixtures — no Gradle project, no resources.
+Plain `javac` + `d8` + `aapt2`, like the other fixtures — no Gradle project. There **is** a `res/`
+directory now, for the launcher icon: `aapt2` compiles one on its own, which is worth knowing,
+because "these apps have no resources" had quietly turned from a packaging constraint into a reason
+they looked unfinished.
+
+```powershell
+& "$btapt2.exe" compile --dir res -o res.zip
+```
+
+then pass `res.zip --java gen` to `aapt2 link` and compile `gen\**\R.java` alongside `src`.
 
 ```powershell
 $sdk = "$env:LOCALAPPDATA\Android\Sdk"; $jar = "$sdk\platforms\android-33\android.jar"; $bt = "$sdk\build-tools\37.0.0"

@@ -23,7 +23,7 @@
 
     <application
         android:label="Camera"
-        android:icon="@android:drawable/ic_menu_camera"
+        android:icon="@drawable/ic_launcher"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity
             android:name=".CameraActivity"

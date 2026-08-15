@@ -14,7 +14,7 @@
 
     <application
         android:label="Settings"
-        android:icon="@android:drawable/ic_menu_preferences"
+        android:icon="@drawable/ic_launcher"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity
             android:name=".SettingsActivity"

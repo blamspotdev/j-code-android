@@ -1,9 +1,7 @@
 package dev.jcode.vdevice.settings;
 
 import android.app.Activity;
-import android.graphics.Color;
 import android.os.Bundle;
-import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -52,11 +50,10 @@ import java.util.Locale;
  */
 public class SettingsActivity extends Activity {
 
-    private static final int FOREGROUND = 0xFFE6E8EF;
-    private static final int MUTED = 0xFF9AA0B0;
-    private static final int ACCENT = 0xFF8AB4F8;
-    private static final int WARNING = 0xFFE6A23C;
-    private static final int BACKGROUND = 0xFF101418;
+    private static final int FOREGROUND = Ui.TEXT;
+    private static final int MUTED = Ui.MUTED;
+    private static final int ACCENT = Ui.ACCENT;
+    private static final int WARNING = Ui.WARNING;
 
     /** Hardware the screens group by, so a person looks for a thing where a phone puts it. */
     private static final String[] NETWORK = {"wifi", "cellular", "bluetooth"};
@@ -123,37 +120,61 @@ public class SettingsActivity extends Activity {
     }
 
     private View screen() {
-        LinearLayout column = new LinearLayout(this);
-        column.setOrientation(LinearLayout.VERTICAL);
-        column.setBackgroundColor(BACKGROUND);
+        LinearLayout column = Ui.page(this);
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.VERTICAL);
-        header.setPadding(36, 32, 36, 20);
-        heading = text(20f, FOREGROUND);
-        subheading = text(11f, MUTED);
+        header.setPadding(Ui.dp(this, 22), Ui.dp(this, 26), Ui.dp(this, 22), Ui.dp(this, 6));
+        heading = Ui.text(this, "", 24f, FOREGROUND);
+        subheading = Ui.text(this, "", 12f, MUTED);
+        subheading.setPadding(0, Ui.dp(this, 4), 0, 0);
         header.addView(heading);
         header.addView(subheading);
-        column.addView(header, wrap());
+        column.addView(header, Ui.wrap());
 
         content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(0, 0, 0, Ui.dp(this, 16));
         ScrollView scroll = new ScrollView(this);
         scroll.addView(content);
         column.addView(scroll, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
+        // A bar rather than a floating button: this app is one column deep and the way out of a
+        // screen should sit where the thumb already is.
         LinearLayout actions = new LinearLayout(this);
+        actions.setBackgroundColor(Ui.SURFACE);
         actions.setGravity(Gravity.CENTER_VERTICAL);
-        actions.setPadding(16, 12, 16, 20);
-        actions.addView(button("Back", MUTED, new Runnable() {
+        actions.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 16), Ui.dp(this, 10));
+        actions.addView(button("Back", ACCENT, new Runnable() {
             @Override
             public void run() {
                 onBackPressed();
             }
         }));
-        column.addView(actions, wrap());
+        column.addView(actions, Ui.wrap());
         return column;
+    }
+
+    /** Which glyph and tint a piece of hardware carries wherever it appears. */
+    private int iconFor(String id) {
+        switch (id) {
+            case "wifi": return R.drawable.ic_wifi;
+            case "cellular": return R.drawable.ic_cellular;
+            case "bluetooth": return R.drawable.ic_bluetooth;
+            case "camera": return R.drawable.ic_camera;
+            case "microphone": return R.drawable.ic_mic;
+            case "location": return R.drawable.ic_location;
+            default: return R.drawable.ic_motion;
+        }
+    }
+
+    private int tintFor(String id) {
+        switch (id) {
+            case "wifi": case "cellular": case "bluetooth": return Ui.TINT_NETWORK;
+            case "camera": case "microphone": case "location": return Ui.TINT_PRIVACY;
+            default: return Ui.TINT_MOTION;
+        }
     }
 
     // ------------------------------------------------------------------------------------ screens
@@ -166,104 +187,117 @@ public class SettingsActivity extends Activity {
             : name("about/model") + " · Android " + name("about/android"));
         content.removeAllViews();
         if (device == null) {
-            content.addView(note("This app could not reach the container that runs the device, so "
-                + "there is nothing here it could honestly show.", WARNING));
+            content.addView(Ui.note(this, "This app could not reach the container that runs the "
+                + "device, so there is nothing here it could honestly show.", WARNING));
             return;
         }
-        add("Network", "Wi-Fi and Bluetooth", new Runnable() {
-            @Override
-            public void run() {
-                showHardware("Network", NETWORK);
-            }
-        });
-        add("Privacy", "Camera, microphone and location", new Runnable() {
-            @Override
-            public void run() {
-                showHardware("Privacy", PRIVACY);
-            }
-        });
-        add("Motion sensors", "Accelerometer, compass and gyroscope", new Runnable() {
-            @Override
-            public void run() {
-                showHardware("Motion sensors", MOTION);
-            }
-        });
-        add("Apps", "What is installed, and what each one may use", new Runnable() {
-            @Override
-            public void run() {
-                showApps();
-            }
-        });
-        add("Sound", "What this device does and does not control", new Runnable() {
-            @Override
-            public void run() {
-                showSound();
-            }
-        });
-        add("Storage", "Two volumes, and which one keeps things", new Runnable() {
-            @Override
-            public void run() {
-                showStorage();
-            }
-        });
-        add("About", "What this device says it is", new Runnable() {
-            @Override
-            public void run() {
-                showAbout();
-            }
-        });
+
+        LinearLayout hardware = Ui.card(this, content, "Hardware");
+        hardware.addView(Ui.row(this, R.drawable.ic_wifi, Ui.TINT_NETWORK, "Network",
+            summaryOfNetwork(), "Wi-Fi, cellular and Bluetooth",
+            () -> showHardware("Network", NETWORK)));
+        Ui.divider(this, hardware);
+        hardware.addView(Ui.row(this, R.drawable.ic_camera, Ui.TINT_PRIVACY, "Privacy", null,
+            "Camera, microphone and location", () -> showHardware("Privacy", PRIVACY)));
+        Ui.divider(this, hardware);
+        hardware.addView(Ui.row(this, R.drawable.ic_motion, Ui.TINT_MOTION, "Motion sensors", null,
+            "Accelerometer, compass and gyroscope", () -> showHardware("Motion sensors", MOTION)));
+
+        LinearLayout system = Ui.card(this, content, "This device");
+        system.addView(Ui.row(this, R.drawable.ic_apps, Ui.TINT_APPS, "Apps", null,
+            "What is installed, and what each one may use", this::showApps));
+        Ui.divider(this, system);
+        system.addView(Ui.row(this, R.drawable.ic_sound, Ui.TINT_PRIVACY, "Sound", null,
+            "What this device does and does not control", this::showSound));
+        Ui.divider(this, system);
+        system.addView(Ui.row(this, R.drawable.ic_storage, Ui.TINT_STORAGE, "Storage", null,
+            "Two volumes, and which one keeps things", this::showStorage));
+        Ui.divider(this, system);
+        system.addView(Ui.row(this, R.drawable.ic_info, Ui.TINT_STORAGE, "About", null,
+            "What this device says it is", this::showAbout));
+    }
+
+    /** A one-line answer to "what is the network doing", for the row that leads to it. */
+    private String summaryOfNetwork() {
+        boolean wifi = device.getBoolean("hw/wifi/on");
+        boolean cellular = device.getBoolean("hw/cellular/on");
+        if (wifi) {
+            return "Wi-Fi";
+        }
+        return cellular ? "Cellular" : "Offline";
     }
 
     /** One group of hardware, each with the modes the container says it has. */
     private void showHardware(final String label, final String[] ids) {
-        push(new Runnable() {
-            @Override
-            public void run() {
-                showHardware(label, ids);
-            }
-        });
-        title(label, "These are the device's own, not the phone's");
+        push(() -> showHardware(label, ids));
+        title(label, "The device's own, not the phone's");
         content.removeAllViews();
+        LinearLayout card = Ui.card(this, content, null);
+        boolean first = true;
         for (final String id : ids) {
             String name = name("hw/" + id + "/label");
             if (name == null) {
                 continue;
             }
-            // A radio the device has gets the switch a phone's Settings gives it — on or off, one
-            // tap, no submenu. Whether the device has it at all is the bench's question, and the
-            // row says so instead of offering a switch that could not do anything.
+            if (!first) {
+                Ui.divider(this, card);
+            }
+            first = false;
             boolean radio = device.getBoolean("hw/" + id + "/radio");
             boolean present = !"Off".equals(name("hw/" + id + "/mode"));
             if (radio && present) {
                 final boolean on = device.getBoolean("hw/" + id + "/on");
-                content.addView(row(name, on ? "On" : "Off", describeRadio(id, on), new Runnable() {
-                    @Override
-                    public void run() {
+                card.addView(Ui.row(this, iconFor(id), on ? tintFor(id) : Ui.CHIP, name,
+                    on ? "On" : "Off", describeRadio(id, on), () -> {
                         apply("switch/" + id, String.valueOf(!on),
                             name("hw/" + id + "/label") + (on ? " off" : " on"));
-                        showHardware(label, ids);
                         trail.remove(trail.size() - 1);
-                    }
-                }));
-                continue;
+                        showHardware(label, ids);
+                    }));
+            } else if (radio) {
+                card.addView(Ui.row(this, iconFor(id), Ui.CHIP, name, "Not fitted",
+                    "Add it on JCode's hardware bench", null));
+            } else {
+                card.addView(Ui.row(this, iconFor(id), tintFor(id), name,
+                    name("hw/" + id + "/mode"), name("hw/" + id + "/summary"),
+                    () -> showModes(id)));
             }
-            if (radio) {
-                content.addView(row(name, "Not fitted",
-                    "This device was built without it — add it on JCode's hardware bench", null));
-                continue;
-            }
-            content.addView(row(name, name("hw/" + id + "/mode"), name("hw/" + id + "/summary"),
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        showModes(id);
-                    }
-                }));
         }
         if (Arrays.equals(ids, NETWORK)) {
-            content.addView(note("Bluetooth here governs whether the device declares it and whether "
-                + "apps may use it. Whether the adapter reports itself switched on is the phone's — "
-                + "that state does not travel through anything this device can reach.", WARNING));
+            content.addView(Ui.note(this, "Bluetooth here governs whether the device declares it "
+                + "and whether apps may use it. Whether the adapter reports itself switched on is "
+                + "the phone's — that state does not travel through anything this device can "
+                + "reach.", WARNING));
+        }
+    }
+
+    /** The modes one piece of hardware has, and which is set. */
+    private void showModes(final String id) {
+        push(() -> showModes(id));
+        final String label = name("hw/" + id + "/label");
+        title(label, name("hw/" + id + "/summary"));
+        content.removeAllViews();
+        String current = name("hw/" + id + "/mode");
+        String[] modes = device.getStringArray("hw/" + id + "/modes");
+        LinearLayout card = Ui.card(this, content, "Wired to");
+        boolean first = true;
+        for (final String mode : modes == null ? new String[0] : modes) {
+            if (!first) {
+                Ui.divider(this, card);
+            }
+            first = false;
+            boolean chosen = mode.equals(current);
+            card.addView(Ui.row(this, iconFor(id), chosen ? tintFor(id) : Ui.CHIP, mode,
+                chosen ? "✓" : null, describeMode(id, mode), () -> {
+                    apply("hw/" + id, mode, label + " is now " + mode);
+                    trail.remove(trail.size() - 1);
+                    showModes(id);
+                }));
+        }
+        if ("bluetooth".equals(id)) {
+            content.addView(Ui.note(this, "This switch governs whether the device declares "
+                + "Bluetooth and whether apps may use it. Whether the adapter reports itself "
+                + "switched on is the phone's.", WARNING));
         }
     }
 
@@ -280,36 +314,6 @@ public class SettingsActivity extends Activity {
         return on ? "The adapter is declared to apps" : "No Bluetooth offered to apps";
     }
 
-    /** The modes one piece of hardware has, and which is set. */
-    private void showModes(final String id) {
-        push(new Runnable() {
-            @Override
-            public void run() {
-                showModes(id);
-            }
-        });
-        final String label = name("hw/" + id + "/label");
-        title(label, name("hw/" + id + "/summary"));
-        content.removeAllViews();
-        String current = name("hw/" + id + "/mode");
-        String[] modes = device.getStringArray("hw/" + id + "/modes");
-        for (final String mode : modes == null ? new String[0] : modes) {
-            content.addView(row(mode.equals(current) ? mode + "  ✓" : mode,
-                null, describeMode(id, mode), new Runnable() {
-                    @Override
-                    public void run() {
-                        apply("hw/" + id, mode, label + " is now " + mode);
-                        showModes(id);
-                    }
-                }));
-        }
-        if ("bluetooth".equals(id)) {
-            content.addView(note("This switch governs whether the device declares Bluetooth and "
-                + "whether apps may use it. Whether the adapter reports itself switched on is the "
-                + "phone's — the adapter's state does not travel through anything this device can "
-                + "reach.", WARNING));
-        }
-    }
 
     private String describeMode(String id, String mode) {
         if ("Off".equals(mode)) {
@@ -326,36 +330,29 @@ public class SettingsActivity extends Activity {
     }
 
     private void showApps() {
-        push(new Runnable() {
-            @Override
-            public void run() {
-                showApps();
-            }
-        });
+        push(this::showApps);
         Bundle apps = settings.apps();
         String[] packages = apps == null ? null : apps.getStringArray("packages");
         title("Apps", packages == null ? "None installed" : packages.length + " installed");
         content.removeAllViews();
+        LinearLayout card = Ui.card(this, content, null);
+        boolean first = true;
         for (final String packageName : packages == null ? new String[0] : packages) {
+            if (!first) {
+                Ui.divider(this, card);
+            }
+            first = false;
             String label = apps.getString("app/" + packageName + "/label", packageName);
             boolean system = apps.getBoolean("app/" + packageName + "/system");
-            content.addView(row(label, system ? "System" : null, packageName, new Runnable() {
-                @Override
-                public void run() {
-                    showApp(packageName);
-                }
-            }));
+            card.addView(Ui.row(this, R.drawable.ic_apps,
+                system ? Ui.TINT_STORAGE : Ui.TINT_APPS, label,
+                system ? "System" : null, packageName, () -> showApp(packageName)));
         }
     }
 
     /** One app's permissions, each with the rule the device applies to it. */
     private void showApp(final String packageName) {
-        push(new Runnable() {
-            @Override
-            public void run() {
-                showApp(packageName);
-            }
-        });
+        push(() -> showApp(packageName));
         final Bundle app = settings.app(packageName);
         String[] permissions = app == null ? null : app.getStringArray("permissions");
         title(packageName, permissions == null || permissions.length == 0
@@ -365,22 +362,35 @@ public class SettingsActivity extends Activity {
         if (permissions == null) {
             return;
         }
+        LinearLayout card = Ui.card(this, content, "Permissions");
+        boolean first = true;
         for (final String permission : permissions) {
+            if (!first) {
+                Ui.divider(this, card);
+            }
+            first = false;
             final String rule = app.getString("perm/" + permission + "/rule", "Allow");
             String label = app.getString("perm/" + permission + "/label", permission);
             boolean runtime = app.getBoolean("perm/" + permission + "/runtime");
-            content.addView(row(label, rule, runtime ? "Asked for at run time" : "Granted at install",
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        apply("perm/" + packageName + "/" + permission, next(rule),
-                            permission.substring(permission.lastIndexOf('.') + 1) + " → " + next(rule));
-                        showApp(packageName);
-                    }
+            card.addView(Ui.row(this, R.drawable.ic_info, tintForRule(rule), label, rule,
+                runtime ? "Asked for at run time" : "Granted at install", () -> {
+                    apply("perm/" + packageName + "/" + permission, next(rule),
+                        permission.substring(permission.lastIndexOf('.') + 1) + " → " + next(rule));
+                    trail.remove(trail.size() - 1);
+                    showApp(packageName);
                 }));
         }
-        content.addView(note("Tap a permission to cycle Allow → Ask → Deny. Undeclared permissions "
-            + "are refused whatever the rule says, exactly as the platform refuses them.", MUTED));
+        content.addView(Ui.note(this, "Tap a permission to cycle Allow → Ask → Deny. Undeclared "
+            + "permissions are refused whatever the rule says, exactly as the platform refuses "
+            + "them.", MUTED));
+    }
+
+    /** Green for allowed, amber for undecided, grey for refused — readable before the word is. */
+    private int tintForRule(String rule) {
+        if ("Allow".equals(rule)) {
+            return 0xFF15803D;
+        }
+        return "Ask".equals(rule) ? 0xFFB45309 : Ui.CHIP;
     }
 
     /** Allow → Ask → Deny → Allow, which is one tap per change rather than a dialog per change. */
@@ -392,70 +402,61 @@ public class SettingsActivity extends Activity {
     }
 
     private void showSound() {
-        push(new Runnable() {
-            @Override
-            public void run() {
-                showSound();
-            }
-        });
+        push(this::showSound);
         title("Sound", "What this device controls, and what it does not");
         content.removeAllViews();
+        LinearLayout card = Ui.card(this, content, null);
         String mode = name("hw/microphone/mode");
-        content.addView(row("Microphone", mode, name("hw/microphone/summary"), new Runnable() {
-            @Override
-            public void run() {
-                showModes("microphone");
-            }
-        }));
-        content.addView(note("Output volume is the phone's. This device has no audio stand-in, so "
-            + "there is nothing here that could change what an app hears — and a slider that moved "
-            + "nothing would be worse than saying so.", MUTED));
+        card.addView(Ui.row(this, R.drawable.ic_mic, Ui.TINT_PRIVACY, "Microphone", mode,
+            name("hw/microphone/summary"), () -> showModes("microphone")));
+        content.addView(Ui.note(this, "Output volume is the phone's. This device has no audio "
+            + "stand-in, so there is nothing here that could change what an app hears — and a "
+            + "slider that moved nothing would be worse than saying so.", MUTED));
     }
 
     private void showStorage() {
-        push(new Runnable() {
-            @Override
-            public void run() {
-                showStorage();
-            }
-        });
+        push(this::showStorage);
         title("Storage", "Two volumes, with different lifetimes");
         content.removeAllViews();
+        LinearLayout card = Ui.card(this, content, null);
         String[] volumes = device.getStringArray("volumes");
+        boolean first = true;
         for (String volume : volumes == null ? new String[0] : volumes) {
+            if (!first) {
+                Ui.divider(this, card);
+            }
+            first = false;
             String path = name("vol/" + volume + "/path");
             long used = device.getLong("vol/" + volume + "/used");
             long free = device.getLong("vol/" + volume + "/free");
             boolean keeps = device.getBoolean("vol/" + volume + "/keeps");
-            content.addView(row(
-                name("vol/" + volume + "/label"),
-                bytes(used) + " used",
+            card.addView(Ui.row(this, R.drawable.ic_storage,
+                keeps ? Ui.TINT_MOTION : Ui.TINT_STORAGE,
+                name("vol/" + volume + "/label"), bytes(used),
                 path + " · " + bytes(free) + " free · "
-                    + (keeps ? "kept in your workspace" : "emptied when JCode starts"),
-                null));
+                    + (keeps ? "kept in your workspace" : "emptied when JCode starts"), null));
         }
-        content.addView(note("Anything an app should still have tomorrow belongs on the external "
-            + "volume — it is a folder in your workspace, so it is also visible in the editor and "
-            + "in the Linux environment at /workspace/vDevice_ExtStorage.", MUTED));
+        content.addView(Ui.note(this, "Anything an app should still have tomorrow belongs on the "
+            + "external volume — it is a folder in your workspace, so it is also visible in the "
+            + "editor and in the Linux environment at /workspace/vDevice_ExtStorage.", MUTED));
     }
 
     private void showAbout() {
-        push(new Runnable() {
-            @Override
-            public void run() {
-                showAbout();
-            }
-        });
+        push(this::showAbout);
         title("About", name("about/model"));
         content.removeAllViews();
-        content.addView(row("Model", name("about/model"), "What this device reports itself as", null));
-        content.addView(row("Android version", name("about/android"),
-            "API " + device.getInt("about/sdk"), null));
-        content.addView(row("Running on", name("about/host"),
-            "The phone this device is a guest of", null));
-        content.addView(note("This device shares the phone's Android version because it shares its "
-            + "runtime — it is a container, not an emulator. What it does not share is its storage, "
-            + "its apps, its permissions or its sensors.", MUTED));
+        LinearLayout card = Ui.card(this, content, null);
+        card.addView(Ui.row(this, R.drawable.ic_info, Ui.TINT_STORAGE, "Model",
+            name("about/model"), "What this device reports itself as", null));
+        Ui.divider(this, card);
+        card.addView(Ui.row(this, R.drawable.ic_info, Ui.TINT_STORAGE, "Android version",
+            name("about/android"), "API " + device.getInt("about/sdk"), null));
+        Ui.divider(this, card);
+        card.addView(Ui.row(this, R.drawable.ic_info, Ui.TINT_STORAGE, "Running on",
+            null, name("about/host"), null));
+        content.addView(Ui.note(this, "This device shares the phone's Android version because it "
+            + "shares its runtime — it is a container, not an emulator. What it does not share is "
+            + "its storage, its apps, its permissions or its sensors.", MUTED));
     }
 
     // ------------------------------------------------------------------------------------ plumbing
@@ -476,6 +477,7 @@ public class SettingsActivity extends Activity {
     private void title(String title, String detail) {
         heading.setText(title);
         subheading.setText(detail == null ? "" : detail);
+        subheading.setVisibility(detail == null || detail.isEmpty() ? View.GONE : View.VISIBLE);
     }
 
     private void push(Runnable screen) {
@@ -497,68 +499,12 @@ public class SettingsActivity extends Activity {
         }
     }
 
-    private void add(String label, String detail, Runnable onClick) {
-        content.addView(row(label, null, detail, onClick));
-    }
-
-    /** One line of a settings list: what it is, what it is set to, and what that means. */
-    private View row(String label, String value, String detail, final Runnable onClick) {
-        LinearLayout column = new LinearLayout(this);
-        column.setOrientation(LinearLayout.VERTICAL);
-        column.setPadding(36, 18, 36, 18);
-        column.setContentDescription(label);
-        if (onClick != null) {
-            column.setClickable(true);
-            column.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View view) {
-                    onClick.run();
-                }
-            });
-        }
-
-        LinearLayout line = new LinearLayout(this);
-        line.setOrientation(LinearLayout.HORIZONTAL);
-        TextView name = text(15f, FOREGROUND);
-        name.setText(label);
-        line.addView(name, new LinearLayout.LayoutParams(0,
-            ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        if (value != null) {
-            TextView setting = text(13f, ACCENT);
-            setting.setText(value);
-            line.addView(setting);
-        }
-        column.addView(line, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        if (detail != null) {
-            TextView note = text(11f, MUTED);
-            note.setText(detail);
-            column.addView(note);
-        }
-        return column;
-    }
-
-    private View note(String message, int colour) {
-        TextView view = text(11f, colour);
-        view.setText(message);
-        view.setPadding(36, 20, 36, 24);
-        return view;
-    }
-
-    private TextView text(float size, int colour) {
-        TextView view = new TextView(this);
-        view.setTextColor(colour);
-        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, size);
-        return view;
-    }
-
     private Button button(String label, int colour, final Runnable onClick) {
         Button button = new Button(this);
         button.setText(label);
         button.setAllCaps(false);
         button.setTextColor(colour);
-        button.setBackgroundColor(Color.TRANSPARENT);
+        button.setBackground(Ui.ripple());
         button.setContentDescription(label);
         button.setOnClickListener(new View.OnClickListener() {
             @Override

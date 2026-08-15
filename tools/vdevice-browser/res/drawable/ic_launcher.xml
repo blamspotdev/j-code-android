@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The device's Browser. A globe drawn with strokes rather than stacked fills: filled shapes on top
+     of filled shapes made a theta, which is a letter and not a planet. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp" android:height="48dp"
+    android:viewportWidth="48" android:viewportHeight="48">
+    <path android:pathData="M11,3h26a8,8 0 0 1 8,8v26a8,8 0 0 1 -8,8h-26a8,8 0 0 1 -8,-8v-26a8,8 0 0 1 8,-8z"
+        android:fillColor="#0E7490"/>
+    <path android:pathData="M11,3h26a8,8 0 0 1 8,8v10h-42v-10a8,8 0 0 1 8,-8z"
+        android:fillColor="#14A3B8"/>
+    <path android:pathData="M24,11a13,13 0 1 0 0,26a13,13 0 1 0 0,-26z"
+        android:strokeColor="#FFFFFF" android:strokeWidth="3" android:fillColor="#00000000"/>
+    <path android:pathData="M11.5,24h25"
+        android:strokeColor="#FFFFFF" android:strokeWidth="3"/>
+    <path android:pathData="M24,11a7,13 0 1 0 0,26a7,13 0 1 0 0,-26z"
+        android:strokeColor="#FFFFFF" android:strokeWidth="3" android:fillColor="#00000000"/>
+</vector>

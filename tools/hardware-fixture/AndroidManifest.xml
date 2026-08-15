@@ -23,7 +23,7 @@
 
     <application
         android:label="Hardware Fixture"
-        android:icon="@android:drawable/ic_menu_compass"
+        android:icon="@drawable/ic_launcher"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity
             android:name=".HardwareActivity"
