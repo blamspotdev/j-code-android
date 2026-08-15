@@ -56,8 +56,11 @@ internal class EmbeddedGuest(
     /** The device's own status bar, over whatever activity is on the screen — see [VirtualStatusBar]. */
     private var statusBar: VirtualStatusBar? = null
 
-    /** The device's file picker while a guest is waiting on one — see [showPicker]. */
-    private var picker: VirtualFilePicker? = null
+    /** A screen of the device's own over the guest — its picker, its camera. See [showOverGuest]. */
+    private var overlay: View? = null
+
+    /** How Back says no to [overlay]; the app behind it is blocked on an answer either way. */
+    private var cancelOverlay: (() -> Unit)? = null
 
     /** Layout listener that catches `SurfaceView`s a guest adds after it has started. */
     private var surfaceWatcher: ViewTreeObserver.OnGlobalLayoutListener? = null
@@ -119,6 +122,7 @@ internal class EmbeddedGuest(
             GuestRuntime.setEmbeddedFinisher(::reapFinished)
             GuestRuntime.setEmbeddedBackHandler(::finishTop)
             GuestDocuments.setPicker(::showPicker)
+            GuestCamera.setCamera(::showCamera)
             // Added last, so it is the topmost child: the device's own status bar has to sit over
             // the app the way a phone's does, and a FrameLayout hands the front child the touch
             // first — which is what lets the shade be pulled down over a guest that is drawing
@@ -227,38 +231,57 @@ internal class EmbeddedGuest(
     private fun topWindow(): EmbeddedWindow? = windows?.children()?.lastOrNull()
 
     /**
-     * Puts the device's file picker over the app that asked for one — [GuestDocuments]'s way onto
-     * the screen. False when there is no container to put it in, which the caller answers as a
-     * cancel rather than leaving the app waiting.
+     * Puts one of the device's own screens over the app that asked for it — the file picker, the
+     * camera. False when there is no container to put it in, which every caller answers as a cancel
+     * rather than leaving the app waiting.
      *
      * A child of the container, added last, exactly like the status bar: that is what makes it show
-     * in a `screencap`, list in a `uiautomator dump` and answer an `input tap`, so an agent can
-     * drive a file open the same way a person does.
+     * in a `screencap`, list in a `uiautomator dump` and answer an `input tap`, so an agent can open
+     * a file or take a photo the same way a person does.
+     *
+     * [cancel] is how Back reaches it. Held here rather than typed per screen, because the container
+     * only ever needs to know that *something* modal is up and how to say no to it.
      */
+    private fun showOverGuest(view: View, cancel: () -> Unit): Boolean {
+        val container = container ?: return false
+        dismissOverlay()
+        overlay = view
+        cancelOverlay = cancel
+        container.addView(view, matchParent())
+        // A guest that had its surface raised above the window would otherwise draw straight over
+        // the screen we just added — see GuestSurfaces.setCovered.
+        GuestSurfaces.setCovered(true)
+        return true
+    }
+
+    private fun dismissOverlay() {
+        overlay?.let { view -> (view.parent as? ViewGroup)?.removeView(view) }
+        overlay = null
+        cancelOverlay = null
+        GuestSurfaces.setCovered(false)
+    }
+
+    /** [GuestDocuments]'s way onto the screen. */
     private fun showPicker(
         mode: PickerMode,
         title: String,
         suggestedName: String,
         onDone: (String?) -> Unit,
     ): Boolean {
-        val container = container ?: return false
-        dismissPicker()
         val view = VirtualFilePicker(context, mode, title, suggestedName) { chosen ->
-            dismissPicker()
+            dismissOverlay()
             onDone(chosen)
         }
-        picker = view
-        container.addView(view, VirtualFilePicker.coverParams())
-        // A guest that had its surface raised above the window would otherwise draw straight over
-        // the picker — see GuestSurfaces.setCovered.
-        GuestSurfaces.setCovered(true)
-        return true
+        return showOverGuest(view, view::cancel)
     }
 
-    private fun dismissPicker() {
-        picker?.let { view -> (view.parent as? ViewGroup)?.removeView(view) }
-        picker = null
-        GuestSurfaces.setCovered(false)
+    /** [GuestCamera]'s way onto the screen. */
+    private fun showCamera(title: String, onDone: (File?) -> Unit): Boolean {
+        val view = VirtualCamera(context, title) { photo ->
+            dismissOverlay()
+            onDone(photo)
+        }
+        return showOverGuest(view, view::cancel)
     }
 
     /** Types [text] as key events: with no window, the guest's fields cannot bind an IME. */
@@ -268,11 +291,11 @@ internal class EmbeddedGuest(
     }
 
     fun back() {
-        // The picker is modal and the app behind it is blocked on its answer, so Back is a cancel —
-        // which is a real result the app already handles, and the only way out that does not leave
-        // it waiting for ever.
-        picker?.let {
-            it.cancel()
+        // A screen of the device's own is modal and the app behind it is blocked on its answer, so
+        // Back is a cancel — which is a real result the app already handles, and the only way out
+        // that does not leave it waiting for ever.
+        cancelOverlay?.let {
+            it()
             return
         }
         // The device's own shade is above everything else, so it takes Back next — the same order a
@@ -319,7 +342,9 @@ internal class EmbeddedGuest(
         GuestRuntime.setEmbeddedFinisher(null)
         GuestRuntime.setEmbeddedBackHandler(null)
         GuestDocuments.setPicker(null)
-        picker = null
+        GuestCamera.setCamera(null)
+        overlay = null
+        cancelOverlay = null
         stack.asReversed().forEach { activity ->
             (activity.window.decorView.parent as? ViewGroup)?.removeView(activity.window.decorView)
             runCatching { GuestRuntime.destroyEmbedded(activity) }

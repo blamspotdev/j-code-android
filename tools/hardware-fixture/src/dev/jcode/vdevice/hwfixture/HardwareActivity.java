@@ -1,7 +1,9 @@
 package dev.jcode.vdevice.hwfixture;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.hardware.Sensor;
@@ -14,6 +16,7 @@ import android.location.LocationManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.MediaStore;
 import android.util.Log;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -44,6 +47,7 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
 
     private static final String TAG = "HWFIXTURE";
     private static final int REQUEST_CODE = 4321;
+    private static final int PHOTO_CODE = 4322;
 
     private static final String[] DANGEROUS = {
         "android.permission.CAMERA",
@@ -71,6 +75,7 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
 
     private TextView out;
     private String lastRequest = "not asked yet";
+    private String lastPhoto = "not asked yet";
     private String lastFix = "no update yet";
 
     @Override
@@ -88,6 +93,20 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
             requestPermissions(DANGEROUS, REQUEST_CODE);
         });
         column.addView(ask, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // ACTION_IMAGE_CAPTURE is how an app asks for a picture rather than for a camera pipeline,
+        // and it is the form the device can answer completely — the container shows its own
+        // viewfinder and hands back an image. Deliberately with no EXTRA_OUTPUT, so what comes back
+        // is the contract's thumbnail: that exercises the whole round trip, including the result
+        // arriving at an embedded activity at all, which is the part that used to be impossible.
+        Button photo = new Button(this);
+        photo.setText("Take a photo (ACTION_IMAGE_CAPTURE)");
+        photo.setOnClickListener(v -> {
+            lastPhoto = "asked, waiting for the answer…";
+            startActivityForResult(new Intent(MediaStore.ACTION_IMAGE_CAPTURE), PHOTO_CODE);
+        });
+        column.addView(photo, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         out = new TextView(this);
@@ -162,7 +181,8 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
                     ? "GRANTED" : "denied")
                 .append('\n');
         }
-        text.append("  last requestPermissions: ").append(lastRequest).append("\n\n");
+        text.append("  last requestPermissions: ").append(lastRequest).append('\n');
+        text.append("  last photo: ").append(lastPhoto).append("\n\n");
 
         text.append("FEATURES (hasSystemFeature)\n");
         for (String feature : FEATURES) {
@@ -256,6 +276,31 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
     @Override
     public void onLocationChanged(Location fix) {
         lastFix = format(fix);
+    }
+
+    /**
+     * The other half of the camera: an app that asks for a picture has to be told it got one.
+     *
+     * The size is reported rather than the bitmap shown, because the number is the check — a
+     * thumbnail with pixels in it means the device rendered a frame, wrote a JPEG, decoded it and
+     * carried it back across a result path an embedded activity has no business having.
+     */
+    @Override
+    protected void onActivityResult(int code, int result, Intent data) {
+        super.onActivityResult(code, result, data);
+        if (code != PHOTO_CODE) {
+            return;
+        }
+        if (result != RESULT_OK) {
+            lastPhoto = "cancelled (result " + result + ")";
+        } else {
+            Object thumbnail = data == null ? null : data.getExtras().get("data");
+            lastPhoto = thumbnail instanceof Bitmap
+                ? "got a " + ((Bitmap) thumbnail).getWidth() + "x"
+                    + ((Bitmap) thumbnail).getHeight() + " thumbnail"
+                : "RESULT_OK with no bitmap";
+        }
+        Log.i(TAG, "onActivityResult " + code + ": " + lastPhoto);
     }
 
     @Override

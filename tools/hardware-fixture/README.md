@@ -31,6 +31,11 @@ the interesting case is running with the hardware switched off and reporting tha
   | `+0.00000, +0.00000, +9.80665` | Simulated — a device lying flat, face up, not moving |
   | anything that twitches | Real — the phone's own, and it is never exactly on those numbers |
 
+- **`ACTION_IMAGE_CAPTURE`**, behind a button, reporting the size of the thumbnail that comes back.
+  Deliberately sent with no `EXTRA_OUTPUT`, so the answer is the contract's thumbnail — which
+  exercises the whole round trip including the result reaching an embedded activity at all. With the
+  camera Simulated this reads `got a 512x384 thumbnail` and the full-size JPEG is in the device's
+  `DCIM/Camera`; with it Off, `cancelled (result 0)` and a line in the device's log saying why.
 - **Location**: the providers the device offers, whether GPS is enabled, the last known fix, and the
   live `requestLocationUpdates` stream. Simulated reports whatever the hardware bench says — a fixed
   point, or a position walked along a route; Off reports no providers at all.

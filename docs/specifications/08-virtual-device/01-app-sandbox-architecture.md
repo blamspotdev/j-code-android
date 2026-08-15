@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented — device-verified on Android 13 |
 | **Modules** | `:app` (`dev.jcode.vdevice`) |
-| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualStorage.kt, VirtualStorageProvider.kt, VirtualFilePicker.kt, GuestDocuments.kt, GuestSurfaces.kt, SimulatedHardware.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
+| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualStorage.kt, VirtualStorageProvider.kt, VirtualFilePicker.kt, VirtualCamera.kt, GuestDocuments.kt, GuestCamera.kt, GuestSurfaces.kt, SimulatedHardware.kt, SimulatedCamera.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
 | **Verified against** | device-verified on Android 13, 2026-08-15 |
 
 ---
@@ -411,7 +411,7 @@ however many apps read it:
 
 | Hardware | Modes | Default | What each mode is |
 |---|---|---|---|
-| Camera | Off, Simulated | Off | Simulated gives the device a camera; **no frame ever arrives** — Camera2 is a native binder pipeline the container cannot stand in for, and the phone's is deliberately not on offer |
+| Camera | Off, Simulated | Off | Simulated gives the device a camera of its own that takes pictures — see §7i. The phone's is deliberately not on offer |
 | Microphone | Off, Simulated, Real | Off | Real is the phone's, and is the one setting here that asks the user for something: `RECORD_AUDIO` is requested at the moment it is chosen |
 | Location | Off, Simulated | Off | A fix the user sets, and a route it can walk. The phone's own location is never offered |
 | Accelerometer | Off, Simulated, Real | **Simulated** | Simulated reports the attitude and motion set on the bench |
@@ -655,6 +655,55 @@ Anything else implicit still goes to the phone — and now says so in the device
 the action and warning that no result can come back. An intent leaving the device is the single most
 consequential thing that can happen without anybody being told.
 
+### 7i. The device's camera
+
+`Simulated` used to mean the device declared a camera and produced nothing from it, which is enough
+for an app to decide it has one and not enough for it to do anything with it. The device now has a
+camera that takes pictures.
+
+**What it sees** is drawn, and drawn to look drawn: `SimulatedCamera` renders colour bars an app can
+check it decoded, a horizon that rolls and pitches with the attitude on the hardware bench, a compass
+rose on the heading the sensors are reporting, and a frame counter. Two properties come out of that
+and both are the point — nothing here could be mistaken for a photograph of a room, which is what a
+camera quietly handing over *something* would invite; and it **agrees with the rest of the
+hardware**, because it is drawn from the same `SimulatedHardware.sample` the sensors are answered
+from. Turn the device on the bench and the picture turns.
+
+> Device-verified: with the bench at heading 135°, pitch −10° and roll +25°, the frame reads
+> `hdg 135.0 pitch -10.0 roll +25.0` with the horizon tilted to match and the needle pointing
+> south-east.
+
+**How an app gets one** is `MediaStore.ACTION_IMAGE_CAPTURE`, consumed by `GuestCamera` in the
+start-activity hook alongside the document requests. That intent is how an app asks for *a picture*
+rather than for *a camera pipeline*, and on a phone it is answered by the camera app rather than by
+the requester — which is exactly the shape this device can honour completely. `VirtualCamera` is the
+viewfinder, device content over the guest like the file picker, so `screencap` shows it and
+`input tap` presses the shutter.
+
+| The app passed | It gets back |
+|---|---|
+| `EXTRA_OUTPUT` | The full-size JPEG written to that URI, and `RESULT_OK` with no data |
+| nothing | A thumbnail `Bitmap` under the `"data"` extra, the contract's fallback |
+
+Either way the full-size image is kept in the device's own `DCIM/Camera`, because the picture
+somebody just took should be somewhere they can find it — and here that is a path `adb pull` takes.
+A failure to write the app's `EXTRA_OUTPUT` is answered as a **cancel** rather than an OK with
+nothing behind it, since an app told the capture succeeded and then reading an empty file is the
+harder thing to debug.
+
+`tools/hardware-fixture` is the regression test, with a button that fires the intent and reports the
+thumbnail it got back.
+
+> **Camera2 is not stood in for, and cannot be from here.** `CameraManager` is `final`, so it cannot
+> be substituted at `getSystemService`; and the frames an app would receive are written into its
+> `Surface` by the camera HAL rather than by anything this process could intercept. Standing in
+> would mean implementing `ICameraService` and `ICameraDeviceUser` and constructing
+> `CameraMetadataNative` characteristics — a camera HAL in Java, against members that are `@hide`
+> and marshalled natively. So a guest that opens a `CameraDevice` gets a black preview, and
+> `GuestContext.getSystemService(CAMERA_SERVICE)` writes one line into the device's log saying so
+> the first time it is asked. A preview that stays black with nothing anywhere saying why is the
+> failure this whole subsystem exists to stop producing.
+
 ---
 
 ## 8. Session states
@@ -712,6 +761,9 @@ internal sealed interface SandboxStatus {
 - Four concurrent guest activities maximum (`GuestActivity0`–`GuestActivity3`).
 - The guest shares JCode's uid and permissions — no isolation, by design.
 - `Environment.getExternalStorageDirectory()` reports the phone's path, not the device's — §7g.
+- Camera2 gets no frames; only `ACTION_IMAGE_CAPTURE` is answered — §7i.
+- No `ACTION_VIDEO_CAPTURE`: the device can draw a frame and cannot encode a film, and an app handed
+  a one-frame video would be worse off than one told there is no camera app for it.
 - An implicit intent the device has no answer for still goes to the phone. It is logged loudly, but
   a result cannot come back from one.
 - The picker's "save as" name field needs the tab's keyboard button, like every other guest text

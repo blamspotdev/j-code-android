@@ -75,8 +75,8 @@ internal enum class VirtualHardware(
     Camera(
         id = "camera",
         label = "Camera",
-        summary = "Simulated gives the device a camera that no frame ever arrives from, because the " +
-            "phone's is never lent to a guest.",
+        summary = "Simulated gives the device a camera of its own that takes test pictures, tilting " +
+            "with the attitude set here. The phone's camera is never lent to a guest.",
         modes = listOf(HardwareMode.Off, HardwareMode.Simulated),
         fallback = HardwareMode.Off,
         permissions = listOf(Manifest.permission.CAMERA),

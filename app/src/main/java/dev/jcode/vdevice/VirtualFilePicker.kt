@@ -10,7 +10,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
-import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -227,10 +226,6 @@ internal class VirtualFilePicker(
         private val FOREGROUND = Color.argb(0xFF, 0xE6, 0xE8, 0xEF)
         private val MUTED = Color.argb(0xFF, 0x9A, 0xA0, 0xB0)
         private val ACCENT = Color.argb(0xFF, 0x8A, 0xB4, 0xF8)
-
-        /** The layout params the container adds a picker with: over everything, edge to edge. */
-        fun coverParams(): FrameLayout.LayoutParams =
-            FrameLayout.LayoutParams(MATCH, MATCH)
 
         private fun formatBytes(bytes: Long): String = when {
             bytes < 1024 -> "$bytes B"

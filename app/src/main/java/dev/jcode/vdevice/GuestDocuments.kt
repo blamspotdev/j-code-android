@@ -143,7 +143,9 @@ internal object GuestDocuments {
             "${GuestRuntime.activePackage()} ${request.action?.substringAfterLast('.')}: " +
                 (devicePath ?: "cancelled"),
         )
-        Handler(Looper.getMainLooper()).post { deliver(activity, requestCode, resultCode, data) }
+        Handler(Looper.getMainLooper()).post {
+            deliverResult(activity, requestCode, resultCode, data)
+        }
     }
 
     /**
@@ -180,8 +182,12 @@ internal object GuestDocuments {
      * virtually — so an app's own override runs, and AndroidX's `ComponentActivity` override
      * forwards it into `ActivityResultRegistry`, which is where a `registerForActivityResult`
      * launcher is waiting. Both the old callback and the modern contract are answered by it.
+     *
+     * Shared with [GuestCamera] rather than copied: there is one way back into an embedded activity
+     * and it is subtle enough that a second copy would be a second thing to keep correct. Callers
+     * post it to the main looper themselves.
      */
-    private fun deliver(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
+    fun deliverResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode < 0) return
         val dispatch = Activity::class.java.declaredMethods
             .firstOrNull { it.name == "dispatchActivityResult" && it.parameterTypes.size >= 4 }

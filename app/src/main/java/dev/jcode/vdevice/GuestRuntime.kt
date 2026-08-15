@@ -97,6 +97,7 @@ internal object GuestRuntime {
 
         GuestPermissions.install(host)
         GuestDocuments.install(host)
+        GuestCamera.install(host)
         // Before any guest exists, which is the whole requirement: the framework builds one
         // LocationManager per context and caches it, so the service has to be in place before the
         // first one is asked for.

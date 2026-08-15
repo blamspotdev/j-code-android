@@ -116,6 +116,10 @@ internal object GuestHooks {
                         // files, and the result could not be delivered back to a token no
                         // ActivityRecord answers to. See GuestDocuments.
                         if (GuestDocuments.consume(args)) return consumed(method.returnType)
+                        // And a photo is the third: the phone's camera app would otherwise open over
+                        // the IDE and point the user's real camera at the world on a sandboxed app's
+                        // behalf, then fail to hand the picture back. See GuestCamera.
+                        if (GuestCamera.consume(args)) return consumed(method.returnType)
                         // Logged because "the app opened, but the phone's copy of it" is otherwise
                         // indistinguishable from "the container hosted it", and the difference is
                         // which binder call carried the intent.

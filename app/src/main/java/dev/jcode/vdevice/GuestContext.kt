@@ -89,6 +89,13 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
         SENSOR_SERVICE -> (super.getSystemService(name) as? SensorManager)
             ?.let { GuestSensors.forGuest(baseContext, guest, it) }
 
+        // Not substituted — `CameraManager` is final and its frames are written into the app's
+        // Surface by the camera HAL, so there is nothing here to stand in front of. Noted in the
+        // device's log instead, once, because a preview that stays black with nothing anywhere
+        // saying why is the failure this container spends most of its effort not producing. The
+        // device answers ACTION_IMAGE_CAPTURE properly — see [GuestCamera].
+        CAMERA_SERVICE -> super.getSystemService(name).also { GuestCamera.noteCamera2Use() }
+
         else -> super.getSystemService(name)
     }
 
