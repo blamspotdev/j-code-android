@@ -422,7 +422,14 @@ internal object VirtualDevicePolicy {
     }
 
     fun setMode(context: Context, hardware: VirtualHardware, mode: HardwareMode) {
+        val had = mode(context, hardware) != HardwareMode.Off
         edit(context) { it.setProperty("hardware/${hardware.id}", mode.name) }
+        // Whether the device *has* the hardware is the one half an app is told once and can never be
+        // told again — see AppSandbox.restartForHardware. Simulated against Real is not that: it
+        // changes what the readings are, and every seam that reports one answers live.
+        if (hardware.features.isNotEmpty() && had != (mode != HardwareMode.Off)) {
+            AppSandbox.restartForHardware()
+        }
     }
 
     /**

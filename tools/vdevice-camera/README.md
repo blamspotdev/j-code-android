@@ -44,7 +44,19 @@ for a still, against **11.5-18.5%** for the procedural scene.
 Still drawn to look drawn: nothing here could be mistaken for a photograph of a room, which is what a
 camera quietly handing over *something* would invite.
 
-## Three things it found
+## What it looks like
+
+A camera is mostly viewfinder, so the chrome is four tones and a shape: a near-black bar, a leave
+button as a pill on the left, and a **round shutter** in the middle — a white ring with a filled
+centre, or a red square when the caller asked for video. It was a text button reading "Take photo",
+which is the one control on a camera nobody needs told about being the one thing that was spelled
+out. Everything is a `GradientDrawable` built in code and sized from `dp`, so it needs no resources
+beyond the launcher icon.
+
+The screen for *no camera* or *permission refused* is a card on a surface rather than text on black:
+a message should read as a message, and black-with-text reads as a camera that has broken.
+
+## Four things it found
 
 - **The simulated compass was mirrored.** With the bench at 45° the viewfinder read 315°.
   `SimulatedHardware.rotation` built its heading matrix with the sign that makes
@@ -56,6 +68,14 @@ camera quietly handing over *something* would invite.
   whichever activity is in front, and an embedded activity is not in front until it has been resumed
   — so the request could not be addressed to anybody and vanished, leaving this app on "Waiting for
   permission" with nothing in the device's log. It asks from `onResume` instead.
+- **Hardware answers were frozen for the life of the guest process.** Switch the camera on at the
+  bench with a device already running and this app still said *This device has no camera* — not
+  because the container answered wrongly (it answered `true`) but because
+  `ApplicationPackageManager` caches `hasSystemFeature` in a `PropertyInvalidatedCache` in front of
+  it, shared by the whole process and invalidated only by a system property the system server owns.
+  At `targetSdk` 33 that class exposes **no member at all** to reflection, so there is nothing to
+  clear. The device restarts on a bench change now, which is the truthful version of the same event.
+  This is what "the camera won't work or won't ask for permission" turned out to be.
 - **`active` was never put back.** The container attributes permission checks to the guest in front,
   and that was set when an activity *started* and never restored when it finished. Harmless while
   the only cross-app launch was fire-and-forget; once an app could start this one and be returned to,

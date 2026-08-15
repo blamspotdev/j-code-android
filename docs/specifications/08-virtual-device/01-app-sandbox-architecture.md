@@ -982,9 +982,9 @@ could catch by fetching something.
   `IBluetooth`'s visible method set (`asBinder, fetchRemoteUuids, getAddress, getConnectionState,
   getDeviceType, getRemoteAlias, getSocketOpt, …`) so `Proxy` does not implement it. What the device
   *can* govern is what goes through the package manager, so `VirtualHardware.Bluetooth` is
-  **Off / Real**: Off withdraws `FEATURE_BLUETOOTH` and refuses `BLUETOOTH_CONNECT`/`BLUETOOTH_SCAN`
-  to every app, and Real hands over the phone's adapter. Whether that adapter is switched on is the
-  phone's business, and the label says so.
+  **Off / Simulated**: Off withdraws `FEATURE_BLUETOOTH` and refuses `BLUETOOTH_CONNECT`/
+  `BLUETOOTH_SCAN` to every app. Whether the adapter reports itself switched on is the phone's
+  business, and the Settings screen says so in as many words.
 
 > Device-verified on Android 13, with the phone online and its Bluetooth on throughout:
 > Wi-Fi Off → `active = none, wifi = false, validated = false`; Wi-Fi Simulated →
@@ -1018,6 +1018,44 @@ state it actually cares about — a radio that is present and off.
 
 `VirtualDevicePolicy.switchedOn` is the inner switch, and it is false whenever the outer one says the
 device has no such hardware, so a caller only ever asks one thing.
+
+#### Changing the outer layer restarts the device
+
+The two layers differ in one more way, and it is forced by the platform rather than chosen: **the
+inner switch is live and the outer one is not.**
+
+An app is told what hardware a device has *once*. `ApplicationPackageManager.hasSystemFeature` goes
+through an `android.app.PropertyInvalidatedCache` that sits in front of this container, is shared by
+the whole `:guest` process, and is invalidated by a system property only the system server may write.
+At `targetSdk` 33 that class exposes **no declared method and no declared field at all** to
+reflection — measured, the same fingerprint as `SurfaceControlViewHost` (§2 of
+`02-guest-runtime-and-hidden-api.md`) — so there is nothing here to disable or clear, and
+`ApplicationPackageManager.mHasSystemFeatureCache` is itself `blocked, reflection, denied`.
+
+What that cost, before it was understood: switching the camera on at the bench reached
+`GuestPackageHook`, which answered the feature query **true**, and the app was still handed the
+frozen **false** in front of it. The device's Camera app read "This device has no camera" for as long
+as the process lived, and because every guest shares one process, one app asking early settled it for
+all of them. Restarting JCode was the only way through — and it looked exactly like a broken camera.
+
+So `VirtualDevicePolicy.setMode` ends the `:guest` process when a change crosses the `Off` boundary
+for hardware that declares features, and the tab returns to its launcher. The next app to start is
+told what the device is now. That is the truthful version of the event rather than a way around it:
+no phone grows a camera while it is running, and the bench says so above the control —
+
+> An app is told what hardware a device has when it starts and never again, so switching this on or
+> off restarts the device.
+
+`Simulated` ↔ `Real` does **not** restart anything: it changes what the readings are, and every seam
+that reports one answers live. Neither does the inner switch — a radio going on and off is exactly
+the kind of change apps are written to watch, and `GuestNetwork` answers it from the policy file on
+each call.
+
+> `AppSandboxSession.shutdown` also had to learn to finish the job. It told the guest to kill itself
+> over the binder, which does nothing when nothing is bound — after a Stop, or a tab switch, both of
+> which unbind — and the emptied process stayed with everything the container had accumulated in it.
+> Measured: `:guest` still listed after a shutdown. It now also ends the process by pid, which is this
+> app's own process under this app's own uid.
 
 #### Three radios, none of them Real
 

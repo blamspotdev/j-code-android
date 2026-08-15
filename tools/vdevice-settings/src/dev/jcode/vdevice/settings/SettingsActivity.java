@@ -271,11 +271,18 @@ public class SettingsActivity extends Activity {
         }
     }
 
-    /** The modes one piece of hardware has, and which is set. */
+    /**
+     * What one piece of hardware is wired to — reported, not chosen.
+     *
+     * The two switches are not both this app's to throw. Whether the device *has* a camera is what it
+     * was built with, and an app is told that once: the platform caches the answer for the life of a
+     * process and gives nobody a way to invalidate it, so changing it restarts the device — which is
+     * not something to do from a screen running on that device. It is set on JCode's hardware bench.
+     * Whether hardware the device has is switched *on* is this app's, and stays a live switch.
+     */
     private void showModes(final String id) {
         push(() -> showModes(id));
-        final String label = name("hw/" + id + "/label");
-        title(label, name("hw/" + id + "/summary"));
+        title(name("hw/" + id + "/label"), name("hw/" + id + "/summary"));
         content.removeAllViews();
         String current = name("hw/" + id + "/mode");
         String[] modes = device.getStringArray("hw/" + id + "/modes");
@@ -288,17 +295,11 @@ public class SettingsActivity extends Activity {
             first = false;
             boolean chosen = mode.equals(current);
             card.addView(Ui.row(this, iconFor(id), chosen ? tintFor(id) : Ui.CHIP, mode,
-                chosen ? "✓" : null, describeMode(id, mode), () -> {
-                    apply("hw/" + id, mode, label + " is now " + mode);
-                    trail.remove(trail.size() - 1);
-                    showModes(id);
-                }));
+                chosen ? "✓" : null, describeMode(id, mode), null));
         }
-        if ("bluetooth".equals(id)) {
-            content.addView(Ui.note(this, "This switch governs whether the device declares "
-                + "Bluetooth and whether apps may use it. Whether the adapter reports itself "
-                + "switched on is the phone's.", WARNING));
-        }
+        content.addView(Ui.note(this, "What the device is made of is set in JCode, on the Device "
+            + "hardware tab. Changing it restarts the device, because an app is told what hardware "
+            + "there is when it starts and never again.", MUTED));
     }
 
     /** What being on or off actually means for each radio, which differs enough to be worth saying. */

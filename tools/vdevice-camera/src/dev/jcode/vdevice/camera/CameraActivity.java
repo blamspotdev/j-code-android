@@ -8,6 +8,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.SystemClock;
@@ -17,7 +18,7 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -91,6 +92,16 @@ public class CameraActivity extends Activity {
      */
     private static final String EXTRA_DEVICE_PATH = "dev.jcode.vdevice.DEVICE_PATH";
 
+    // The same tones the device's other apps are built from — see the Files and Settings apps' Ui.
+    // A camera is mostly viewfinder, so it takes four of them rather than the whole set: the bar is
+    // nearly black on purpose, because anything lighter under a picture reads as part of the picture.
+    private static final int BACKGROUND = 0xFF0B0F14;
+    private static final int SURFACE = 0xFF1E2733;
+    private static final int BAR = 0xF00B0F14;
+    private static final int TEXT = 0xFFE8ECF4;
+    private static final int MUTED = 0xFF97A2B6;
+    private static final int ACCENT = 0xFF8AB4F8;
+
     private final Scene scene = new Scene();
 
     /** An activity gets one runtime permission request in this container; this is that one. */
@@ -114,55 +125,77 @@ public class CameraActivity extends Activity {
             || MediaStore.ACTION_IMAGE_CAPTURE.equals(action)
             || MediaStore.ACTION_IMAGE_CAPTURE_SECURE.equals(action);
         output = getIntent() == null ? null : getIntent().getParcelableExtra(MediaStore.EXTRA_OUTPUT);
-        scene.prepare(DeviceScene.chosen(this));
-
-        // The device's own switch decides whether there is a camera at all, and this app is told
-        // about it exactly as any other app would be. Saying so beats a viewfinder that cannot
-        // produce anything.
-        setContentView(getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA)
-            ? camera()
-            : refusal("This device has no camera", "Switch the camera on in Device hardware."));
+        // Not allowed to ask yet — see refresh(mayAsk).
+        refresh(false);
     }
 
     /**
-     * Asks for the camera, once, from `onResume` rather than `onCreate`.
+     * Works out what this app should be showing, from scratch.
      *
-     * <p>Asking at all is what a camera app does: the device's default rule for a dangerous
-     * permission is Ask, so an app that only ever *checks* is refused for ever and looks broken.
+     * <p><b>Called on every resume, not once at startup</b>, and that is the whole point on this
+     * device. A phone's camera does not appear and disappear while an app is open; this one does —
+     * switching it on is a control the person has, two taps away on the hardware bench, and the
+     * scene it shows is another. An app that sampled either at `onCreate` would sit on "This device
+     * has no camera" after the camera had been switched on, which is exactly what it did: the
+     * refusal screen was correct when it was drawn and wrong within seconds, with nothing to
+     * redraw it.
      *
-     * <p>Asking <em>here</em> is what makes it work inside the container. A request is answered by
-     * the device's own dialog, raised on behalf of whichever activity is in front, and an embedded
-     * activity is not in front until it has been resumed — so a request made from `onCreate` is one
-     * the device cannot address to anybody, and it vanishes. Measured: the screen sat on "Waiting
-     * for permission" with nothing in the device's log at all.
+     * <p>Coming back to an app now *resumes* it rather than rebuilding it — the container learned to
+     * pause guests — so there is no longer an `onCreate` to rely on at all.
      */
-    @Override
-    protected void onResume() {
-        super.onResume();
-        if (viewfinder != null) {
-            viewfinder.awake(true);
-        }
+    private void refresh(boolean mayAsk) {
+        scene.prepare(DeviceScene.chosen(this));
         if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA)) {
+            viewfinder = null;
+            setContentView(refusal("This device has no camera",
+                "Switch the camera on in Device hardware, then come back."));
             return;
         }
-        if (hasPermission() || asked) {
+        if (hasPermission()) {
+            setContentView(camera());
+            return;
+        }
+        if (asked) {
+            setContentView(refusal("Camera access was denied",
+                "Allow the camera for this app in Manage permissions, then come back."));
+            return;
+        }
+        if (!mayAsk) {
+            // onCreate. The device's dialog is raised on behalf of whichever activity is in front,
+            // and an embedded activity is not in front until it has been resumed — so a request
+            // made here is one the device cannot address to anybody, and it vanishes. Measured: the
+            // screen sat on "Waiting for permission" with nothing in the device's log at all.
+            setContentView(refusal("Camera", "Starting…"));
             return;
         }
         asked = true;
+        viewfinder = null;
         setContentView(refusal("Waiting for permission",
             "This app asked the device for camera access."));
         requestPermissions(new String[] {CAMERA}, PERMISSION_CODE);
     }
 
+    /**
+     * Re-reads the device on every resume — see {@link #refresh}, and the permission note in it.
+     *
+     * <p>Asking for the camera at all is what a camera app does: the device's default rule for a
+     * dangerous permission is Ask, so an app that only ever *checks* is refused for ever and looks
+     * broken.
+     */
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refresh(true);
+        if (viewfinder != null) {
+            viewfinder.awake(true);
+        }
+    }
+
     @Override
     public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
-        if (code != PERMISSION_CODE) {
-            return;
+        if (code == PERMISSION_CODE) {
+            refresh(true);
         }
-        setContentView(hasPermission()
-            ? camera()
-            : refusal("Camera access was denied",
-                "Allow the camera for this app in Manage permissions, then open it again."));
     }
 
     private boolean hasPermission() {
@@ -195,7 +228,7 @@ public class CameraActivity extends Activity {
         // for the thing it is showing. The one line kept is the one carrying information rather than
         // a disclaimer: which app is waiting, and only when one is.
         if (answering) {
-            column.addView(header(callerLabel(), null),
+            column.addView(header(callerLabel()),
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT));
         }
@@ -210,73 +243,124 @@ public class CameraActivity extends Activity {
         return column;
     }
 
+    /**
+     * What the app says when it cannot show a viewfinder.
+     *
+     * On a surface of its own rather than on the black the viewfinder would have filled: a screen
+     * that is *about* something reads as a message, and one that is black with text on it reads as a
+     * camera that has broken.
+     */
     private View refusal(String title, String detail) {
         LinearLayout column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL);
-        column.setBackgroundColor(Color.BLACK);
-        column.addView(header(title, detail));
-        column.addView(button("Close", 0xFF8AB4F8, new Runnable() {
+        column.setGravity(Gravity.CENTER);
+        column.setBackgroundColor(BACKGROUND);
+        column.setPadding(dp(28), dp(28), dp(28), dp(28));
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(rounded(SURFACE, dp(20)));
+        card.setPadding(dp(22), dp(22), dp(22), dp(18));
+        card.addView(text(title, 17f, TEXT));
+        if (detail != null) {
+            TextView note = text(detail, 13f, MUTED);
+            note.setPadding(0, dp(8), 0, 0);
+            note.setLineSpacing(dp(3), 1f);
+            card.addView(note);
+        }
+        card.addView(pill("Close", ACCENT, new Runnable() {
             @Override
             public void run() {
                 cancel();
             }
-        }));
+        }), spacedTop(dp(18)));
+        column.addView(card, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         return column;
     }
 
-    private View header(String title, String detail) {
-        LinearLayout column = new LinearLayout(this);
-        column.setOrientation(LinearLayout.VERTICAL);
-        column.setPadding(36, 32, 36, 24);
-        TextView heading = new TextView(this);
-        heading.setText(title);
-        heading.setTextColor(0xFFE6E8EF);
-        heading.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        column.addView(heading);
-        // A null detail is a header with nothing to add, not a header with an empty line under it.
-        if (detail != null) {
-            TextView note = new TextView(this);
-            note.setText(detail);
-            note.setTextColor(0xFF9AA0B0);
-            note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-            column.addView(note);
-        }
-        return column;
+    /** Who is waiting, as a line over the viewfinder rather than a bar taking room from it. */
+    private View header(String title) {
+        TextView label = text(title, 12f, TEXT);
+        label.setBackground(rounded(0xCC1E2733, dp(999)));
+        label.setPadding(dp(14), dp(7), dp(14), dp(7));
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_HORIZONTAL);
+        row.setPadding(dp(16), dp(12), dp(16), dp(4));
+        row.addView(label);
+        return row;
     }
 
+    /**
+     * The bar under the viewfinder: leave on the left, a round shutter in the middle.
+     *
+     * The shutter is the one control on a camera that nobody has to be told about, and it was a text
+     * button reading "Take photo". A ring with a filled centre is the same tap with the shape people
+     * already know — red and square for a recording, which is the other shape they know.
+     */
     private View shutterRow() {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(16, 12, 16, 20);
-        row.addView(button(answering ? "Cancel" : "Close", 0xFF9AA0B0, new Runnable() {
+        row.setBackgroundColor(BAR);
+        row.setPadding(dp(18), dp(14), dp(18), dp(18));
+
+        View leave = pill(answering ? "Cancel" : "Close", MUTED, new Runnable() {
             @Override
             public void run() {
                 cancel();
             }
-        }));
+        });
+        row.addView(leave);
         row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
-        row.addView(button(recording ? "Record " + VIDEO_SECONDS + "s" : "Take photo", 0xFF8AB4F8,
-            new Runnable() {
-                @Override
-                public void run() {
-                    if (recording) {
-                        record();
-                    } else {
-                        capture();
-                    }
-                }
-            }));
+        row.addView(shutter());
+        // The same width as the button on the left, so the shutter sits in the middle of the bar
+        // rather than in the middle of what is left over.
+        row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        View balance = new View(this);
+        balance.setVisibility(View.INVISIBLE);
+        row.addView(balance, new LinearLayout.LayoutParams(dp(72), dp(1)));
         return row;
     }
 
-    private Button button(String label, int colour, final Runnable onClick) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setAllCaps(false);
-        button.setTextColor(colour);
-        button.setBackgroundColor(Color.TRANSPARENT);
+    /** The ring, and what is inside it: a white circle for a photo, a red square for a recording. */
+    private View shutter() {
+        FrameLayout button = new FrameLayout(this);
+        button.setBackground(ring());
+        int size = dp(66);
+        button.setLayoutParams(new LinearLayout.LayoutParams(size, size));
+        button.setContentDescription(recording ? "Record " + VIDEO_SECONDS + " seconds" : "Take photo");
+        button.setClickable(true);
+        button.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                if (recording) {
+                    record();
+                } else {
+                    capture();
+                }
+            }
+        });
+
+        View core = new View(this);
+        core.setBackground(recording
+            ? rounded(0xFFE5484D, dp(7))
+            : rounded(Color.WHITE, dp(999)));
+        int inner = recording ? dp(26) : dp(50);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(inner, inner);
+        params.gravity = Gravity.CENTER;
+        button.addView(core, params);
+        return button;
+    }
+
+    /** A text button with a shape, so a tap target looks like one before it is tapped. */
+    private View pill(String label, int colour, final Runnable onClick) {
+        TextView button = text(label, 14f, colour);
+        button.setGravity(Gravity.CENTER);
+        button.setPadding(dp(18), dp(11), dp(18), dp(11));
+        button.setBackground(rounded(SURFACE, dp(999)));
         button.setContentDescription(label);
+        button.setClickable(true);
         button.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -284,6 +368,41 @@ public class CameraActivity extends Activity {
             }
         });
         return button;
+    }
+
+    private TextView text(String value, float size, int colour) {
+        TextView view = new TextView(this);
+        view.setText(value);
+        view.setTextColor(colour);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, size);
+        return view;
+    }
+
+    private GradientDrawable rounded(int colour, int radius) {
+        GradientDrawable shape = new GradientDrawable();
+        shape.setColor(colour);
+        shape.setCornerRadius(radius);
+        return shape;
+    }
+
+    private GradientDrawable ring() {
+        GradientDrawable shape = new GradientDrawable();
+        shape.setShape(GradientDrawable.OVAL);
+        shape.setColor(0x33FFFFFF);
+        shape.setStroke(dp(3), Color.WHITE);
+        return shape;
+    }
+
+    private LinearLayout.LayoutParams spacedTop(int margin) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.topMargin = margin;
+        return params;
+    }
+
+    /** Sized against the screen's density, so the bar is the same size on a tablet as on a phone. */
+    private int dp(float value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
     /** Whoever is waiting, named the way a person would recognise them. */

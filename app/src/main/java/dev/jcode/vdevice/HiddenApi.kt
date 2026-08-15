@@ -46,6 +46,11 @@ internal fun emptyValue(type: Class<*>): Any? = when (type) {
  *    the class carries no `@UnsupportedAppUsage` at all. [EmbeddedWindows] therefore reaches the
  *    host's view root through the container's `getParent()` and its root layer through the
  *    `SurfacePackage`'s own `Parcelable` contract, both public.
+ *  - **Every** member of `android.app.PropertyInvalidatedCache` is denied: the class reports no
+ *    declared method and no declared field at all. That is the cache `ApplicationPackageManager`
+ *    keeps in front of `hasSystemFeature`, so a guest's answer about what hardware the device has is
+ *    frozen for the life of the process and there is nothing here that can clear it — see
+ *    [AppSandbox.restartForHardware], which restarts the device instead.
  *  - `Activity.performStart`/`performResume` are denied the same way, and so is
  *    `Activity.mActivityLifecycleCallbacks` — the list those two dispatch to, and the one AndroidX's
  *    `ReportFragment` registers on. `Application.mActivityLifecycleCallbacks` *is* greylisted, so

@@ -304,7 +304,8 @@ private fun Mode(hardware: VirtualHardware) {
     ManagerSectionCard(
         title = "Wired to",
         description = "Off means the device does not have it at all: not declared, and refused to " +
-            "every app whatever its permissions say.",
+            "every app whatever its permissions say. An app is told what hardware a device has when " +
+            "it starts and never again, so switching this on or off restarts the device.",
     ) {
         SettingsDropdownRow(
             // No supporting text: the header above has just said what this is, and saying it twice

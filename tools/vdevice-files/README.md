@@ -24,6 +24,19 @@ which no `PackageManager` query could ever have found.
 
 Back walks up the tree before it leaves, which is what a file explorer's Back does.
 
+## What it can do to what it finds
+
+An explorer that can only look is a listing. There is a **New folder** action and a **Sort** chip in
+the bar above the list — name, newest, largest — and a long press on any row opens **Rename**,
+**Delete** and **Details**. Deleting a folder takes what is in it, and says how much that is before
+it does.
+
+The list itself carries what somebody scans for rather than only names: a tinted icon by kind, item
+counts and dates on folders, sizes on files, and the two volumes on the first screen with what each
+one means underneath — `/sdcard` *emptied when JCode starts*, `/storage/external` *kept in your
+workspace*. That is the same design the device's Settings app is built from; both are rounded
+surfaces, tinted icon chips and section labels, made from `GradientDrawable` in code.
+
 ## How an answer gets back
 
 The device path goes back under `dev.jcode.vdevice.DEVICE_PATH`, and the **container** turns it into
@@ -44,13 +57,18 @@ redirected, by walking up the four names of the documented `Android/data/<pkg>/f
 
 ## Build
 
-Plain `javac` + `d8` + `aapt2`, like the other fixtures — no Gradle project, no resources.
+Plain `javac` + `d8` + `aapt2`, like the other fixtures — no Gradle project. There **is** a `res/`
+directory, for the launcher icon and the glyphs in the list; `aapt2` compiles one on its own, so
+compile it first and pass `res.zip --java gen` to `link`, then compile `gen\**\R.java` alongside
+`src`.
 
 ```powershell
 $sdk = "$env:LOCALAPPDATA\Android\Sdk"; $jar = "$sdk\platforms\android-33\android.jar"; $bt = "$sdk\build-tools\37.0.0"
-javac -source 11 -target 11 -encoding UTF-8 -nowarn -cp $jar -d out (Get-ChildItem src -Recurse -Filter *.java | % FullName)
+& "$bt\aapt2.exe" compile --dir res -o res.zip
+New-Item -ItemType Directory gen -Force | Out-Null
+& "$bt\aapt2.exe" link -o base.apk --manifest AndroidManifest.xml -I $jar --min-sdk-version 24 --target-sdk-version 33 res.zip --java gen
+javac -source 11 -target 11 -encoding UTF-8 -nowarn -cp $jar -d out (Get-ChildItem src, gen -Recurse -Filter *.java | % FullName)
 & "$bt\d8.bat" --min-api 24 --lib $jar --output out (Get-ChildItem out -Recurse -Filter *.class | % FullName)
-& "$bt\aapt2.exe" link -o base.apk --manifest AndroidManifest.xml -I $jar --min-sdk-version 24 --target-sdk-version 33
 Push-Location out; jar uf ..\base.apk classes.dex; Pop-Location
 & "$bt\zipalign.exe" -f 4 base.apk aligned.apk
 & "$bt\apksigner.bat" sign --ks "$env:USERPROFILE\.android\debug.keystore" --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out files.apk aligned.apk
