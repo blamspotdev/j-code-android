@@ -1074,6 +1074,34 @@ Cellular earns its place by being different from Wi-Fi *in a way apps behave dif
 app that defers a large download, drops a bitrate, or asks before syncing is reading the metered bit,
 and getting a real phone into that state on purpose means a SIM and turning its Wi-Fi off.
 
+#### What the radios have around them
+
+A simulated radio with nothing in range is a switch and a label. Turning Wi-Fi on gave a device that
+was *on the network* and could not say what it was on — no list, no name, and nothing that changed
+when the switch did, which reads as a screen somebody stopped halfway through.
+
+`VirtualRadios` gives the device surroundings: five or six networks with names, signal levels and
+locks (one of them open, because a captive-portal path needs one), and three or four Bluetooth things
+in range. They are **generated once and kept**, in the policy file — which is in the volatile tree, so
+a device gets new neighbours whenever it gets everything else new, and holds still while somebody is
+reading them. `Scan again` draws a fresh set on purpose.
+
+| | Wi-Fi | Bluetooth |
+|---|---|---|
+| What a tap does | Joins that network | Pairs or unpairs that device |
+| What a rescan keeps | Nothing — being carried somewhere else is how a device leaves a network | Whatever is paired, because a pairing outlives being out of range |
+
+Both layers read the same store, so the bench and the device's own Settings app agree: joining
+`Upstairs` from inside the device puts `Upstairs` on the bench's Wi-Fi tile, and pairing a speaker
+there makes the Bluetooth tile say `1 paired`.
+
+> **No app on the device sees any of this, and none of it is a leak either way.** A guest's scan goes
+> to the phone's `WifiManager`, which could not be stood in for (below). That manager answers a
+> caller holding no location permission with an empty list and `<unknown ssid>`, and JCode's manifest
+> declares no location permission at all — checked, not assumed. So a guest learns neither these
+> names nor the phone's real ones. They exist for the device's own screens, the way the camera's
+> scene does.
+
 > Two things the transport cannot do, both measured. `NetworkCapabilities.Builder` is `@SystemApi`
 > and its mutators are `@hide`, so `hasTransport(TRANSPORT_WIFI)` still reports the phone's radio —
 > only the metered bit is corrected. And **Bluetooth's on/off state is not visible to a guest at
@@ -1109,11 +1137,17 @@ there is more than one.
 
 #### What each screen can honestly claim
 
-Network is above. **Privacy** and **Motion sensors** are the bench's entries with the bench's modes.
-**Apps** lists what is installed and cycles each declared permission Allow → Ask → Deny. **Storage**
-shows both volumes with what each is holding and which one keeps things. **Sound** governs the
-microphone and says plainly that output volume is the phone's — there is no audio stand-in, and a
-slider that moved nothing would be worse than saying so.
+**Network** is the three radios with their switches, and under them what each one can see: the
+networks in range with the joined one marked, and the Bluetooth devices nearby with the paired ones
+marked, each tappable and each with a `Scan again`. The row that leads to the screen carries the
+network's **name** rather than the word "Wi-Fi", which is what a phone's own settings answer with and
+what the row was leaving out.
+
+**Privacy** and **Motion sensors** are the bench's entries with the bench's modes. **Apps** lists what
+is installed and cycles each declared permission Allow → Ask → Deny. **Storage** shows both volumes
+with what each is holding and which one keeps things. **Sound** governs the microphone and says
+plainly that output volume is the phone's — there is no audio stand-in, and a slider that moved
+nothing would be worse than saying so.
 
 > Device-verified on Android 13: Settings *on the device* switched Wi-Fi and Cellular off, and the
 > hardware fixture — a different app on the same device — then read `active = none, wifi = false,

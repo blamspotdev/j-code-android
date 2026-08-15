@@ -474,6 +474,20 @@ internal object VirtualDevicePolicy {
     }
 
     /**
+     * What a radio has around it — the networks in range, the Bluetooth things nearby.
+     *
+     * Stored as text this file does not interpret, because the shape of it belongs to
+     * [VirtualRadios] and a properties file is not where a list of records wants to be described.
+     * It lives here for the one reason everything else does: this is the file that is wiped when the
+     * device is, so a device gets new neighbours when it gets everything else new.
+     */
+    fun radioState(context: Context, key: String): String? = read(context).getProperty("radio/$key")
+
+    fun setRadioState(context: Context, key: String, value: String) {
+        edit(context) { it.setProperty("radio/$key", value) }
+    }
+
+    /**
      * What the device's camera shows — a property of the device, set here and read by its Camera app.
      *
      * The choice is a **cost** as much as a picture. A still is drawn once and never again, so a

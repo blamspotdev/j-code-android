@@ -222,7 +222,10 @@ public class SettingsActivity extends Activity {
         boolean wifi = device.getBoolean("hw/wifi/on");
         boolean cellular = device.getBoolean("hw/cellular/on");
         if (wifi) {
-            return "Wi-Fi";
+            // The network's name, the way a phone's own settings answer this — a row that said
+            // "Wi-Fi" when it could say which one is a row with the answer left out.
+            String ssid = name("wifi/ssid");
+            return ssid == null || ssid.isEmpty() ? "Wi-Fi" : ssid;
         }
         return cellular ? "Cellular" : "Offline";
     }
@@ -264,10 +267,109 @@ public class SettingsActivity extends Activity {
             }
         }
         if (Arrays.equals(ids, NETWORK)) {
+            showWifiNetworks(label, ids);
+            showBluetoothDevices(label, ids);
             content.addView(Ui.note(this, "Bluetooth here governs whether the device declares it "
                 + "and whether apps may use it. Whether the adapter reports itself switched on is "
                 + "the phone's — that state does not travel through anything this device can "
                 + "reach.", WARNING));
+        }
+    }
+
+    /**
+     * The networks this device can see, and which one it is on.
+     *
+     * A Wi-Fi screen whose only content is a switch is a screen that cannot answer the question it
+     * exists for. These come from the container, which draws the device a set of neighbours when it
+     * starts — so they are the device's own rather than the phone's, and nothing here is a name off
+     * a real network the phone happens to be near.
+     */
+    private void showWifiNetworks(final String label, final String[] ids) {
+        if (!device.getBoolean("hw/wifi/on") || "Off".equals(name("hw/wifi/mode"))) {
+            return;
+        }
+        String[] networks = device.getStringArray("wifi/networks");
+        if (networks == null || networks.length == 0) {
+            return;
+        }
+        String current = name("wifi/ssid");
+        LinearLayout card = Ui.card(this, content, "Networks in range");
+        boolean first = true;
+        for (String encoded : networks) {
+            String[] parts = encoded.split("\\|");
+            if (parts.length != 3) {
+                continue;
+            }
+            final String ssid = parts[0];
+            boolean secured = Boolean.parseBoolean(parts[2]);
+            boolean joined = ssid.equals(current);
+            if (!first) {
+                Ui.divider(this, card);
+            }
+            first = false;
+            card.addView(Ui.row(this, R.drawable.ic_wifi, joined ? Ui.TINT_NETWORK : Ui.CHIP, ssid,
+                joined ? "Connected" : null,
+                signal(parts[1]) + (secured ? " · secured" : " · open"), () -> {
+                    apply("wifi/ssid", ssid, "Joined " + ssid);
+                    trail.remove(trail.size() - 1);
+                    showHardware(label, ids);
+                }));
+        }
+        Ui.divider(this, card);
+        card.addView(Ui.row(this, R.drawable.ic_wifi, Ui.CHIP, "Scan again", null,
+            "Look for networks in range", () -> {
+                apply("wifi/scan", "true", "Scanning");
+                trail.remove(trail.size() - 1);
+                showHardware(label, ids);
+            }));
+    }
+
+    /** The same for Bluetooth, where the thing to change is what is paired rather than what is joined. */
+    private void showBluetoothDevices(final String label, final String[] ids) {
+        if (!device.getBoolean("hw/bluetooth/on") || "Off".equals(name("hw/bluetooth/mode"))) {
+            return;
+        }
+        String[] devices = device.getStringArray("bluetooth/devices");
+        if (devices == null || devices.length == 0) {
+            return;
+        }
+        LinearLayout card = Ui.card(this, content, "Devices nearby");
+        boolean first = true;
+        for (String encoded : devices) {
+            String[] parts = encoded.split("\\|");
+            if (parts.length != 3) {
+                continue;
+            }
+            final String name = parts[0];
+            boolean paired = Boolean.parseBoolean(parts[2]);
+            if (!first) {
+                Ui.divider(this, card);
+            }
+            first = false;
+            card.addView(Ui.row(this, R.drawable.ic_bluetooth, paired ? Ui.TINT_NETWORK : Ui.CHIP,
+                name, paired ? "Paired" : null, parts[1], () -> {
+                    apply("bluetooth/pair", name, paired ? "Unpaired " + name : "Paired " + name);
+                    trail.remove(trail.size() - 1);
+                    showHardware(label, ids);
+                }));
+        }
+        Ui.divider(this, card);
+        card.addView(Ui.row(this, R.drawable.ic_bluetooth, Ui.CHIP, "Scan again", null,
+            "Look for devices nearby, keeping what is paired", () -> {
+                apply("bluetooth/scan", "true", "Scanning");
+                trail.remove(trail.size() - 1);
+                showHardware(label, ids);
+            }));
+    }
+
+    /** A signal level as a phone words it, rather than as the 0–4 the platform counts in. */
+    private String signal(String level) {
+        switch (level) {
+            case "4": return "Excellent";
+            case "3": return "Good";
+            case "2": return "Fair";
+            case "1": return "Weak";
+            default: return "Very weak";
         }
     }
 

@@ -93,6 +93,23 @@ class VirtualSettingsProvider : ContentProvider() {
         // ordinary guest and so has no other way to learn a device setting.
         putString("camera/scene", VirtualDevicePolicy.cameraScene(context).id)
 
+        // What the radios have around them. The Settings app cannot ask the platform for any of
+        // this: a scan there reaches the phone's WifiManager, which answers a caller holding no
+        // location permission with an empty list. See VirtualRadios.
+        putStringArray(
+            "wifi/networks",
+            VirtualRadios.wifi(context)
+                .map { "${it.ssid}|${it.level}|${it.secured}" }
+                .toTypedArray(),
+        )
+        putString("wifi/ssid", VirtualRadios.connected(context)?.ssid.orEmpty())
+        putStringArray(
+            "bluetooth/devices",
+            VirtualRadios.bluetooth(context)
+                .map { "${it.name}|${it.kind}|${it.paired}" }
+                .toTypedArray(),
+        )
+
         putString("about/model", VirtualIdentity.MODEL)
         putString("about/android", android.os.Build.VERSION.RELEASE)
         putInt("about/sdk", android.os.Build.VERSION.SDK_INT)
@@ -177,6 +194,33 @@ class VirtualSettingsProvider : ContentProvider() {
                 } else {
                     false
                 }
+            }
+
+            // What the device is on and what it has paired — the device's business rather than the
+            // bench's, and the one part of the radios a screen on the device gets to change.
+            key == "wifi/ssid" -> {
+                VirtualRadios.connect(context, value)
+                true
+            }
+
+            key == "wifi/scan" -> {
+                VirtualRadios.rescanWifi(context)
+                true
+            }
+
+            key == "bluetooth/pair" -> {
+                val paired = VirtualRadios.bluetooth(context).firstOrNull { it.name == value }
+                if (paired != null) {
+                    VirtualRadios.setPaired(context, value, !paired.paired)
+                    true
+                } else {
+                    false
+                }
+            }
+
+            key == "bluetooth/scan" -> {
+                VirtualRadios.rescanBluetooth(context)
+                true
             }
 
             key.startsWith("perm/") -> {
