@@ -368,9 +368,19 @@ internal object SimulatedHardware {
         val a = Math.toRadians(azimuthDeg.toDouble())
         val p = Math.toRadians(pitchDeg.toDouble())
         val r = Math.toRadians(rollDeg.toDouble())
+        // The sign here is the whole compass, and it was wrong: a device set to face north-east read
+        // back as north-west. `SensorManager.getOrientation` — which is how every app reads a
+        // heading — takes azimuth as `atan2(R[1], R[4])`, and R is this matrix transposed, so those
+        // two entries are this matrix's [3] and [4]. They have to be (sin a, cos a) for a heading of
+        // `a` to come back as `a`; built the other way round they come back as −a. Nothing caught it
+        // for a while because gravity is unaffected — the third column is (0, 0, 1) either way, so
+        // the accelerometer readings that were checked exactly stayed correct — and the device's own
+        // readout reports `motion.azimuth` directly rather than deriving it, so the bench and the
+        // sensors quietly disagreed. The device's Camera app draws its compass from the derived
+        // heading, which is what finally showed the two apart.
         val heading = floatArrayOf(
-            cos(a).toFloat(), sin(a).toFloat(), 0f,
-            -sin(a).toFloat(), cos(a).toFloat(), 0f,
+            cos(a).toFloat(), -sin(a).toFloat(), 0f,
+            sin(a).toFloat(), cos(a).toFloat(), 0f,
             0f, 0f, 1f,
         )
         val tilt = floatArrayOf(

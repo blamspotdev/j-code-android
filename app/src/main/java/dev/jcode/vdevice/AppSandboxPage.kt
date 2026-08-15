@@ -243,10 +243,16 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
                         scope.launch(Dispatchers.IO) { VirtualDeviceApps.clearData(context, app.packageName) }
                         onSnackbar("Cleared ${app.label}'s data.")
                     })
-                    add(ContextAction(JCodeIcon.Delete, "Uninstall", destructive = true) {
-                        menuFor = null
-                        uninstall(app)
-                    })
+                    // The device's own apps have no Uninstall, the way a phone's stock camera and
+                    // files have none: an app asking for a photo expects the device to have a
+                    // camera, and a device you can leave in a state where it does not is a device
+                    // that fails in a way nothing explains. See DeviceIntents.SYSTEM_PACKAGES.
+                    if (!DeviceIntents.isSystem(app.packageName)) {
+                        add(ContextAction(JCodeIcon.Delete, "Uninstall", destructive = true) {
+                            menuFor = null
+                            uninstall(app)
+                        })
+                    }
                 },
             )
         }
@@ -588,8 +594,15 @@ private fun GuestPermissionDialog(request: PermissionRequest, onAnswer: (Boolean
         properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
         title = {
             Text(
-                if (wanted.size == 1) "Allow $label to use the ${wanted.first().lowercase()}?"
-                else "Allow $label to use these?",
+                // "to <label>?", not "to use the <label>?". The platform's labels are verb phrases
+                // — CAMERA's is "take pictures and videos" — so the old wording asked whether to
+                // allow an app "to use the take pictures and videos". [permissionLabel] supplies a
+                // verb for the ones that have none.
+                if (wanted.size == 1) {
+                    "Allow $label to ${wanted.first().replaceFirstChar { it.lowercase() }}?"
+                } else {
+                    "Allow $label to use these?"
+                },
             )
         },
         text = {
@@ -613,16 +626,20 @@ private fun GuestPermissionDialog(request: PermissionRequest, onAnswer: (Boolean
 /**
  * A permission as a person would name it.
  *
- * The platform's own label where there is one — "Camera", "approximate location" — because the
- * phone's package manager is the authority on its own permissions and has already translated them.
+ * The platform's own label where there is one — "take pictures and videos", "access precise
+ * location" — because the phone's package manager is the authority on its own permissions and has
+ * already translated them. Those labels are **verb phrases**, which is what the dialog's wording is
+ * built around.
+ *
  * A permission a guest declares itself has no label there, so the last segment of its name is the
- * best that can be done.
+ * best that can be done — and it is a noun, so it is given the verb the platform's would have
+ * carried. That keeps one sentence template correct for both.
  */
 private fun permissionLabel(context: android.content.Context, permission: String): String =
     runCatching {
         val info = context.packageManager.getPermissionInfo(permission, 0)
         info.loadLabel(context.packageManager).toString()
-    }.getOrDefault(permission.substringAfterLast('.').replace('_', ' ').lowercase())
+    }.getOrDefault("use " + permission.substringAfterLast('.').replace('_', ' ').lowercase())
 
 /**
  * The collapsed controls: a grabber line, not a button. It sits over whatever the guest is drawing,

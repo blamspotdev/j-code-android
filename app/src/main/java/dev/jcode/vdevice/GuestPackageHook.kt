@@ -1,7 +1,9 @@
 package dev.jcode.vdevice
 
 import android.content.ComponentName
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ResolveInfo
 import android.os.Process
 import android.util.Log
 import java.lang.reflect.InvocationHandler
@@ -129,6 +131,12 @@ internal object GuestPackageHook {
                     .firstNotNullOfOrNull { GuestPermissions.feature(it) }
                     ?.let { return Box(it) }
             }
+            // "Is there an app that can do this?" is also a question about the device, and it is
+            // the one a careful app asks before it offers a camera or an attach button. Left to the
+            // system it is answered from the *phone's* installed apps — so an app either hid a
+            // button the device could have answered, or offered one that opened the user's own
+            // camera over their own storage. See DeviceIntents.
+            resolution(method, args)?.let { return it }
             val component = args.filterIsInstance<ComponentName>().firstOrNull()
             val guest = component?.let { GuestLoader.forPackage(it.packageName) }
                 ?: args.filterIsInstance<String>().firstNotNullOfOrNull { GuestLoader.forPackage(it) }
@@ -182,6 +190,39 @@ internal object GuestPackageHook {
             val found = GuestLoader.providerFor(authority) ?: return null
             return Box(found)
         }
+
+        /**
+         * Answers "which app handles this intent?" from the **device's** apps.
+         *
+         * Only intents the device has an app for are answered; everything else falls through to the
+         * system, which is right — an app asking whether the device can dial a phone number should
+         * be told no by something that knows, and this device has no dialler.
+         *
+         * `resolveIntent` answers a single [ResolveInfo]; `queryIntentActivities` answers a list,
+         * and at this API level that list crosses the binder wrapped in `ParceledListSlice`. The
+         * wrapper is built by reflection because it is `@hide`, and a failure to build it answers
+         * null rather than throwing — the caller then gets the system's answer, which is the
+         * behaviour that existed before this hook and is survivable.
+         */
+        private fun resolution(method: Method, args: Array<Any?>): Box? {
+            val single = method.name == "resolveIntent"
+            if (!single && method.name != "queryIntentActivities") return null
+            val intent = args.filterIsInstance<Intent>().firstOrNull() ?: return null
+            val component = DeviceIntents.resolve(intent) ?: return null
+            val guest = GuestLoader.forPackage(component.packageName) ?: return null
+            val info = ResolveInfo().apply {
+                activityInfo = guest.activities[component.className] ?: return null
+            }
+            return if (single) Box(info) else sliceOf(info)?.let { Box(it) }
+        }
+
+        /** `new ParceledListSlice<>(List)` — the shape `queryIntentActivities` returns over binder. */
+        private fun sliceOf(info: ResolveInfo): Any? = runCatching {
+            Class.forName("android.content.pm.ParceledListSlice")
+                .getConstructor(List::class.java)
+                .newInstance(listOf(info))
+        }.onFailure { Log.w(TAG, "cannot answer queryIntentActivities for the device's apps", it) }
+            .getOrNull()
     }
 
     /** Distinguishes "the guest's answer is null" from "not the guest's question". */

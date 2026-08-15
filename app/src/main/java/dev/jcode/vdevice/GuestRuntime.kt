@@ -97,7 +97,7 @@ internal object GuestRuntime {
 
         GuestPermissions.install(host)
         GuestDocuments.install(host)
-        GuestCamera.install(host)
+        DeviceIntents.install(host)
         // Before any guest exists, which is the whole requirement: the framework builds one
         // LocationManager per context and caches it, so the service has to be in place before the
         // first one is asked for.
@@ -344,24 +344,20 @@ internal object GuestRuntime {
     }
 
     /**
-     * The URL an app asked the device to open, routed to the device's own browser.
+     * The device's own app for an implicit intent, as a stub ready to host — or null for one the
+     * device has no app for, which goes out as it did before rather than doing nothing.
      *
-     * A guest's `ACTION_VIEW` on an `http(s)` URI used to leave the device: the phone's browser
-     * opened over JCode and loaded the page under the **user's** profile, with their cookies and
-     * their signed-in accounts. That is the exact leak the built-in browser exists to close — it was
-     * simply never wired to the intent that reaches for one. Now the device answers with the app it
-     * already has, whose profile is wiped with the device.
-     *
-     * Null when the device has no browser installed, which is a device someone has uninstalled it
-     * from; then the intent goes out as it did before rather than the link doing nothing.
+     * This is what a phone's package manager does for an app that asks for a photo or a link: it
+     * finds the app the *device* has. Before, the intent left the device, and the phone answered it
+     * with the user's camera over their own storage and their own browser under their own profile —
+     * and then no result could come back, because an embedded activity's token is one no
+     * `ActivityRecord` answers to. Both halves are fixed by answering it here.
      */
-    private fun browserFor(intent: Intent): Intent? {
-        if (intent.action != Intent.ACTION_VIEW) return null
-        val scheme = intent.data?.scheme?.lowercase() ?: return null
-        if (scheme != "http" && scheme != "https") return null
-        val apk = VirtualDeviceApps.apk(host, VirtualDeviceApps.BROWSER_PACKAGE) ?: return null
+    private fun deviceAppFor(intent: Intent): Intent? {
+        val component = DeviceIntents.resolve(intent) ?: return null
+        val apk = VirtualDeviceApps.apk(host, component.packageName) ?: return null
         val guest = runCatching { GuestLoader.load(host, apk.absolutePath) }.getOrNull() ?: return null
-        return stubIntent(guest, guest.launchActivity, Intent(intent))
+        return stubIntent(guest, component.className, Intent(intent))
     }
 
     /** [GuestActivityClient] calls this for the `onBackPressed` the platform routes to the server. */
@@ -385,6 +381,13 @@ internal object GuestRuntime {
     fun resumeEmbedded(activity: Activity): Boolean {
         val instrumentation = instrumentation ?: return false
         foreground = activity
+        // `active` is what every hook attributes a call to — which permissions apply, whose manifest
+        // to read — and it used to be set when an activity was *started* and never put back. That
+        // was harmless while the only cross-app launch was fire-and-forget; now that an app can
+        // start the device's Camera and be returned to, it is a leak: measured, the hardware fixture
+        // read CAMERA=GRANTED after the Camera app was allowed it, because `active` was still the
+        // Camera. Whatever is in front is what a call belongs to.
+        GuestLoader.forPackage(activity.packageName)?.let { active = it }
         GuestHooks.dispatchLifecycleCallback(activity, "onActivityPreStarted")
         instrumentation.callActivityOnStart(activity)
         val started = GuestHooks.dispatchLifecycleCallback(activity, "onActivityPostStarted")
@@ -635,12 +638,15 @@ internal object GuestRuntime {
             ?: active
             ?: return StartAction.Proceed
         if (component == null) {
-            browserFor(intent)?.let { browser ->
-                val launcher = embeddedLauncher ?: return StartAction.Redirect(browser)
-                return if (runCatching { launcher(browser) }.getOrDefault(false)) {
+            // An implicit intent is a question about what the *device* has — a camera, a picker, a
+            // browser — and the device answers it with its own apps rather than letting the phone
+            // answer it with the user's. See DeviceIntents.
+            deviceAppFor(intent)?.let { stub ->
+                val launcher = embeddedLauncher ?: return StartAction.Redirect(stub)
+                return if (runCatching { launcher(stub) }.getOrDefault(false)) {
                     StartAction.Consumed
                 } else {
-                    StartAction.Redirect(browser)
+                    StartAction.Redirect(stub)
                 }
             }
             // Said in the *device's* log, not only the system one. An intent leaving the device is

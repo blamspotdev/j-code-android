@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The virtual device's camera app.
+
+     A stock app rather than a screen the container draws: an app that wants a photo asks for one by
+     starting somebody else's activity, and the careful ones call `resolveActivity` first and hide
+     their camera button when nothing answers. Something has to be installed for that question to
+     have an answer, and this is it.
+
+     It declares CAMERA and the camera features because a camera app does, and because the device's
+     own hardware policy is what decides whether they are granted — with the camera Off, this app is
+     told there is no camera exactly like any other app would be, and says so instead of pretending.
+
+     No Camera2 anywhere in it. The frames are drawn from the device's motion sensors, which is a
+     thing an ordinary app can do with ordinary permissions, and is why this needs no help from the
+     container to run. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.jcode.vdevice.camera">
+
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+
+    <application
+        android:label="Camera"
+        android:icon="@android:drawable/ic_menu_camera"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        <activity
+            android:name=".CameraActivity"
+            android:exported="true"
+            android:label="Camera"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|density|smallestScreenSize">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- The contract an app uses to ask for a picture. IMAGE_CAPTURE is the one that
+                 matters; the SECURE variant is what a lockscreen shortcut sends, and answering it
+                 with the same screen is what a phone does. -->
+            <intent-filter>
+                <action android:name="android.media.action.IMAGE_CAPTURE" />
+                <action android:name="android.media.action.IMAGE_CAPTURE_SECURE" />
+                <action android:name="android.media.action.STILL_IMAGE_CAMERA" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

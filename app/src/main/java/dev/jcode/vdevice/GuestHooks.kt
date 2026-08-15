@@ -111,15 +111,6 @@ internal object GuestHooks {
                         // one launch the system cannot usefully answer — the device answers it
                         // itself. See GuestPermissions.
                         if (GuestPermissions.consume(args)) return consumed(method.returnType)
-                        // A document request is the other one, and for the same two reasons: the
-                        // system would answer it with the *phone's* picker over the user's own
-                        // files, and the result could not be delivered back to a token no
-                        // ActivityRecord answers to. See GuestDocuments.
-                        if (GuestDocuments.consume(args)) return consumed(method.returnType)
-                        // And a photo is the third: the phone's camera app would otherwise open over
-                        // the IDE and point the user's real camera at the world on a sandboxed app's
-                        // behalf, then fail to hand the picture back. See GuestCamera.
-                        if (GuestCamera.consume(args)) return consumed(method.returnType)
                         // Logged because "the app opened, but the phone's copy of it" is otherwise
                         // indistinguishable from "the container hosted it", and the difference is
                         // which binder call carried the intent.
@@ -128,6 +119,15 @@ internal object GuestHooks {
                         }
                         val slot = args.indexOfFirst { it is Intent }
                         if (slot >= 0) {
+                            // Noted before the launch, not after: the container pushes the new
+                            // activity inside `decide`, and that is where it has to be able to see
+                            // who is waiting for it. `startActivity` arrives here as
+                            // startActivityForResult(intent, -1), which records nothing.
+                            GuestResults.expect(
+                                GuestRuntime.foregroundActivity(),
+                                args.drop(slot + 1).filterIsInstance<Int>().firstOrNull() ?: -1,
+                                args[slot] as Intent,
+                            )
                             when (val action = decide(args[slot] as Intent)) {
                                 is StartAction.Proceed -> Unit
                                 is StartAction.Redirect -> args[slot] = action.intent
@@ -143,6 +143,7 @@ internal object GuestHooks {
                                 // hosted correctly and still launched the installed app over JCode.
                                 is StartAction.Consumed -> return consumed(method.returnType)
                             }
+                            GuestResults.forget()
                         }
                     }
                     return try {

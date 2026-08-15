@@ -93,8 +93,8 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
         // Surface by the camera HAL, so there is nothing here to stand in front of. Noted in the
         // device's log instead, once, because a preview that stays black with nothing anywhere
         // saying why is the failure this container spends most of its effort not producing. The
-        // device answers ACTION_IMAGE_CAPTURE properly — see [GuestCamera].
-        CAMERA_SERVICE -> super.getSystemService(name).also { GuestCamera.noteCamera2Use() }
+        // device answers ACTION_IMAGE_CAPTURE properly, with its own Camera app — see DeviceIntents.
+        CAMERA_SERVICE -> super.getSystemService(name).also { noteCamera2Use() }
 
         else -> super.getSystemService(name)
     }
@@ -281,4 +281,31 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
     }
 
     private fun File.ensure(): File = also { if (!it.isDirectory) it.mkdirs() }
+
+    /**
+     * Says, once, that a guest reaching for Camera2 will not get frames.
+     *
+     * It changes nothing about what the app receives — there is nothing the container can do about
+     * it — but "the preview is black" and "this device does not do previews" are very different
+     * things to be holding while you debug, and only one of them was previously available.
+     */
+    private fun noteCamera2Use() {
+        if (warnedAboutCamera2) return
+        warnedAboutCamera2 = true
+        VirtualDeviceLog.append(
+            baseContext,
+            'W',
+            "VDEVICE",
+            "${guest.packageName} asked for the camera service. This device answers " +
+                "ACTION_IMAGE_CAPTURE with its own Camera app, but it cannot stand in for Camera2 " +
+                "— CameraManager is final and its frames are written by the camera HAL — so a " +
+                "CameraDevice preview will stay black.",
+        )
+    }
+
+    private companion object {
+        /** Process-wide: the point is one line in the log, not one per guest context. */
+        @Volatile
+        var warnedAboutCamera2 = false
+    }
 }

@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented — device-verified on Android 13 |
 | **Modules** | `:app` (`dev.jcode.vdevice`) |
-| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualStorage.kt, VirtualStorageProvider.kt, VirtualFilePicker.kt, VirtualCamera.kt, GuestDocuments.kt, GuestCamera.kt, GuestSurfaces.kt, SimulatedHardware.kt, SimulatedCamera.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
+| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualStorage.kt, VirtualStorageProvider.kt, GuestDocuments.kt, GuestResults.kt, DeviceIntents.kt, GuestSurfaces.kt, SimulatedHardware.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
 | **Verified against** | device-verified on Android 13, 2026-08-15 |
 
 ---
@@ -346,7 +346,8 @@ be put back — a built-in is not exempt from the clean room, it is reinstalled 
 `installBuiltIns` does that from `assets/vdevice/*.apk` immediately after the wipe, through the same
 `install` path any other APK takes.
 
-Today that is two apps.
+Today that is four apps, and the first three are the device's **system apps** — the launcher offers
+no Uninstall for them (§7h).
 
 **The browser** (`tools/vdevice-browser`) is the one that makes the device usable: it opens a URL
 without reaching for the phone's browser, which would take the user out of JCode and load the page
@@ -359,14 +360,21 @@ raised bar, and its own offline page rather than the platform's white one, which
 a surface this dark. The address shows the **host** while a page is loaded and the whole URL while it
 is being edited.
 
+**The camera** (`tools/vdevice-camera`) and **Files** (`tools/vdevice-files`) are what make the
+device answer the intents an app sends when it wants a photo or a document — and what make
+`resolveActivity` have something to find when an app asks before it reaches. Both are described in
+§7j.
+
 **The hardware fixture** (`tools/hardware-fixture`) is the one that makes the device *checkable*. It
-prints what a guest can actually see of the camera, microphone, location and three motion sensors, so
-the bench (§7f) and Manage permissions (§7e) can be watched having an effect on a real app rather
-than taken on trust. It is on every device by default because the moment you want it is the moment
+prints what a guest can actually see of the camera, microphone, location and three motion sensors,
+and has buttons that fire `ACTION_IMAGE_CAPTURE` and `ACTION_OPEN_DOCUMENT` and report what came
+back, so the bench (§7f), Manage permissions (§7e) and the device's own apps (§7j) can be watched
+having an effect on a real app rather than taken on trust. It is on every device by default because the moment you want it is the moment
 something looks wrong, which is not the moment to go and build an APK.
 
-Both are ordinary guests with no container privileges, which makes them a live test of the load,
-embed, window and WebView paths as much as a feature.
+All four are ordinary guests with no container privileges, which makes them a live test of the load,
+embed, window, result and WebView paths as much as a feature — the Camera app found three real bugs
+on its first run (§7i, §7j).
 
 ### 7d. What a guest leaves behind
 
@@ -411,7 +419,7 @@ however many apps read it:
 
 | Hardware | Modes | Default | What each mode is |
 |---|---|---|---|
-| Camera | Off, Simulated | Off | Simulated gives the device a camera of its own that takes pictures — see §7i. The phone's is deliberately not on offer |
+| Camera | Off, Simulated | Off | Simulated gives the device a camera its own Camera app takes pictures with — see §7j. The phone's is deliberately not on offer |
 | Microphone | Off, Simulated, Real | Off | Real is the phone's, and is the one setting here that asks the user for something: `RECORD_AUDIO` is requested at the moment it is chosen |
 | Location | Off, Simulated | Off | A fix the user sets, and a route it can walk. The phone's own location is never offered |
 | Accelerometer | Off, Simulated, Real | **Simulated** | Simulated reports the attitude and motion set on the bench |
@@ -592,119 +600,149 @@ permission-checks its **own uid**. Its document ids are *device* paths, so an ap
 `DocumentsContract.getDocumentId` gets a sensible display name and JCode's data directory never
 travels inside a URI a guest can read.
 
-### 7h. The device's own file picker
+### 7h. Resolving an intent against the device's own apps
 
-`ACTION_OPEN_DOCUMENT` and its three siblings are the one kind of intent an app cannot be talked out
-of. Before this they went out to the real system and two things went wrong at once:
+`ACTION_OPEN_DOCUMENT`, `ACTION_IMAGE_CAPTURE` and `ACTION_VIEW` are the intents an app cannot be
+talked out of, and before this they went out to the real system, where two things went wrong at once:
 
-1. **The phone's picker opened over JCode**, offering a sandboxed app the user's own downloads,
-   photos and cloud accounts — the exact leak the device exists to prevent, as the default path.
+1. **The phone answered them** — its picker over the user's own downloads and photos, its camera app
+   pointing the user's real camera at the world on a sandboxed app's behalf, its browser loading a
+   page under the user's profile. The exact leak the device exists to prevent, as the default path.
 2. **The answer went nowhere.** An embedded activity's token is one no `ActivityRecord` answers to,
    so `startActivityForResult` has its `resultTo` blanked on the way out; there was no route back
    even in principle.
 
-`GuestDocuments.consume` takes the launch off the wire in the start-activity hook — the same shape as
-`GuestPermissions.consume`, and for the same reason: these are the two launches the system cannot
-usefully answer on a guest's behalf. `VirtualFilePicker` then shows the device's own storage, and the
-result is delivered as a `content://` URI.
+The first fix was for the container to take those launches off the wire and draw the screens itself.
+That worked and was still the wrong shape, because it left a third failure untouched: **a drawn
+screen is not something `PackageManager` can find.** An app that calls `resolveActivity` before
+offering a camera button — which the careful ones do — was answered from the *phone's* installed
+apps, so it either hid a button the device could have answered or offered one that opened the user's
+own camera. There was nothing installed for the question to be about.
 
-| | |
+So the device has apps. `DeviceIntents` is the table of what its own apps answer, `GuestPackageHook`
+answers `resolveIntent`/`queryIntentActivities` from it, and `GuestRuntime.rewriteOutgoing` starts
+the named app rather than letting the intent out.
+
+| Intent | The device's app |
 |---|---|
-| `ACTION_OPEN_DOCUMENT`, `ACTION_GET_CONTENT` | Pick a file |
-| `ACTION_CREATE_DOCUMENT` | Pick a folder and a name (`EXTRA_TITLE` pre-fills it) |
-| `ACTION_OPEN_DOCUMENT_TREE` | Pick a folder, answered with a tree URI |
+| `ACTION_IMAGE_CAPTURE`, `…_SECURE`, `STILL_IMAGE_CAMERA` | Camera (§7j) |
+| `ACTION_OPEN_DOCUMENT`, `GET_CONTENT`, `CREATE_DOCUMENT`, `OPEN_DOCUMENT_TREE` | Files (§7j) |
+| `ACTION_VIEW` on `http(s)` | Browser |
 
-**It is device content, not IDE chrome** — a real `View`, added to `EmbeddedGuest`'s container as its
-topmost child, exactly like the status bar. That is what makes it usable by something that is not a
-pair of eyes: `screencap` shows it, `uiautomator dump` lists every row with its text, and `input tap`
-opens a folder and picks a file, all through the paths that already existed. Composing it in the IDE
-over the tab — the way the permission prompt is done — would have put a modal an agent can see and
-cannot read or answer.
+Anything else implicit still goes to the phone — and says so in the device's log, loudly, naming the
+action and warning that no result can come back.
 
-Three things had to be true, and each was found by it not being:
+**Why a table and not intent-filter matching.** `PackageManager` does not report the filters in an
+APK it has not installed: `getPackageArchiveInfo` gives activities, permissions and features, and
+nothing else. Matching properly would mean parsing binary `AndroidManifest.xml` in the container.
+What is actually needed is narrower — the apps that have to answer implicit intents are the device's
+*own*, because they are the ones an app expects a device to have, and they ship in the container's
+assets, so what they answer is known here rather than discovered. A guest answering *another
+guest's* implicit intent is deliberately not supported; nothing has wanted it.
 
-- **The picker is posted to the main looper.** A guest may ask for a document from any thread;
-  WaveRepo's GameActivity does it from its game thread, and adding the view inline threw
-  `CalledFromWrongThreadException`.
-- **A raised surface is lowered while the picker is up.** `GuestSurfaces` puts a full-bleed
-  `SurfaceView` above the window so it can be seen at all (§ ES-DE), and above the window means above
-  *everything* in the host's layer — so the picker was added, laid out, and drew a complete screen
-  underneath the game, which still had the touches. `setCovered` puts it back below for the duration,
-  which is also what a phone shows when a picker opens over a game.
-- **The result is delivered by hand.** `Activity.dispatchActivityResult` is blocked at `targetSdk`
-  33, so it is tried and not relied on; the fallback is `Activity.onActivityResult`, which is
-  `protected` SDK API that no hidden-API policy applies to, invoked reflectively so it dispatches
-  *virtually*. An app's own override runs, and AndroidX's `ComponentActivity` override forwards it
-  into `ActivityResultRegistry` — so the old callback and a `registerForActivityResult` launcher are
-  both answered by the same call.
+**They are system apps.** Camera, Files and Browser have no Uninstall in the launcher's long-press
+menu, the way a phone's stock camera and files have none. A device you can leave in a state where an
+app asking for a photo gets nothing is a device that fails in a way nothing explains.
 
-A cancel is a real answer, and every failure path takes it: an app told `RESULT_CANCELED` carries on,
-and an app told nothing hangs.
+### 7i. Results between the device's own activities
 
-> Device-verified end to end on WaveRepo: tap → the device's picker listing `/sdcard` → `Download` →
-> `piano.sf2` → Open → `dev.waverepo OPEN_DOCUMENT: /sdcard/Download/piano.sf2`, the app read the
-> descriptor and reported the file's contents back. Driven a second time entirely through
-> `adb shell uiautomator dump` and `input tap`.
+`startActivityForResult` is half of a contract, and the device only had the half that goes out. An
+embedded activity could start another one — that has worked since the container grew a back stack —
+but nothing ever came back, so every result the device produced was produced by the *container*, for
+the two intents it answered itself. That is what stopped the device having a camera *app* rather
+than a camera *screen*.
 
-**A guest's `ACTION_VIEW` on an `http(s)` URI now opens the device's own browser** for the same
-reason: it used to leave the device, and the phone's browser loaded the page under the user's
-profile, with their cookies and their signed-in accounts. That is the leak the built-in browser
-exists to close; it was simply never wired to the intent that reaches for one.
+`GuestResults` is the other half:
 
-Anything else implicit still goes to the phone — and now says so in the device's log, loudly, naming
-the action and warning that no result can come back. An intent leaving the device is the single most
-consequential thing that can happen without anybody being told.
+1. The start-activity hook notes who is asking and under what code, just before the launch.
+2. `EmbeddedGuest.push` attaches that to the activity it pushes.
+3. `EmbeddedGuest.pop` harvests the finished activity's answer and delivers it.
 
-### 7i. The device's camera
+Two reflective steps, and only the first is delicate. **Reading** the answer is `mResultCode` /
+`mResultData`, private fields of `Activity` with no SDK equivalent since `setResult` has no getter;
+they are reachable at `targetSdk` 33, and if they ever stop being, every answer reads as
+`RESULT_CANCELED` — a real result an app handles — rather than the device hanging. **Delivering** it
+is `Activity.onActivityResult`, which is `protected` SDK API that no hidden-API policy applies to,
+invoked reflectively so it dispatches *virtually*: an app's own override runs, and AndroidX's
+`ComponentActivity` override forwards into `ActivityResultRegistry`, so the old callback and a
+`registerForActivityResult` launcher are both answered by the same call.
 
-`Simulated` used to mean the device declared a camera and produced nothing from it, which is enough
-for an app to decide it has one and not enough for it to do anything with it. The device now has a
-camera that takes pictures.
+A screen that finishes without ever calling `setResult` answers `RESULT_CANCELED` with no data,
+exactly as the platform does — so a Back out of the camera reaches the app as a cancelled capture
+rather than as silence.
 
-**What it sees** is drawn, and drawn to look drawn: `SimulatedCamera` renders colour bars an app can
-check it decoded, a horizon that rolls and pitches with the attitude on the hardware bench, a compass
-rose on the heading the sensors are reporting, and a frame counter. Two properties come out of that
-and both are the point — nothing here could be mistaken for a photograph of a room, which is what a
-camera quietly handing over *something* would invite; and it **agrees with the rest of the
-hardware**, because it is drawn from the same `SimulatedHardware.sample` the sensors are answered
-from. Turn the device on the bench and the picture turns.
+> **`active` must follow whatever is in front.** The container attributes permission checks and
+> manifest lookups to `active`, which was set when an activity *started* and never restored when it
+> finished. Harmless while the only cross-app launch was fire-and-forget; once an app could start the
+> device's Camera and be returned to, the caller's own checks were answered from the **Camera's**
+> grants. Measured: the hardware fixture read `CAMERA = GRANTED` immediately after the Camera app was
+> allowed it. `resumeEmbedded` now sets it.
 
-> Device-verified: with the bench at heading 135°, pitch −10° and roll +25°, the frame reads
-> `hdg 135.0 pitch -10.0 roll +25.0` with the horizon tilted to match and the needle pointing
-> south-east.
+### 7j. The device's Camera and Files apps
 
-**How an app gets one** is `MediaStore.ACTION_IMAGE_CAPTURE`, consumed by `GuestCamera` in the
-start-activity hook alongside the document requests. That intent is how an app asks for *a picture*
-rather than for *a camera pipeline*, and on a phone it is answered by the camera app rather than by
-the requester — which is exactly the shape this device can honour completely. `VirtualCamera` is the
-viewfinder, device content over the guest like the file picker, so `screencap` shows it and
-`input tap` presses the shutter.
+Both are ordinary guests — no container privileges, started by ordinary intent resolution, answering
+through the ordinary result path. Sources in `tools/vdevice-camera` and `tools/vdevice-files`,
+bundled in `app/src/main/assets/vdevice/` and reinstalled into every device on every start.
 
-| The app passed | It gets back |
-|---|---|
-| `EXTRA_OUTPUT` | The full-size JPEG written to that URI, and `RESULT_OK` with no data |
-| nothing | A thumbnail `Bitmap` under the `"data"` extra, the contract's fallback |
+**Camera** draws what it sees from the device's own motion sensors, which is something any app may
+read: colour bars an app can check it decoded, a horizon that rolls and pitches with the attitude on
+the hardware bench, a compass rose on its heading, a frame counter. Drawn, and drawn to look drawn —
+nothing there could be mistaken for a photograph of a room, which is what a camera quietly handing
+over *something* would invite. The capture contract is honoured as written: `EXTRA_OUTPUT` gets the
+full-size JPEG and a bare `RESULT_OK`; without it the result carries a thumbnail under the `"data"`
+extra. Either way the full-size file is kept in the device's `DCIM/Camera`, where `adb pull` reaches
+it.
 
-Either way the full-size image is kept in the device's own `DCIM/Camera`, because the picture
-somebody just took should be somewhere they can find it — and here that is a path `adb pull` takes.
-A failure to write the app's `EXTRA_OUTPUT` is answered as a **cancel** rather than an OK with
-nothing behind it, since an app told the capture succeeded and then reading an empty file is the
-harder thing to debug.
+**Files** browses the device's storage and is also its picker — on a phone those are the same app,
+and making them the same app here means the screen that answers `ACTION_OPEN_DOCUMENT` is one
+somebody has actually used. It answers with a **device path** under `dev.jcode.vdevice.DEVICE_PATH`,
+and `GuestDocuments.addressed` turns that into the `content://` URI the requester receives — a tree
+URI for a folder request, a document URI otherwise. The URI belongs to JCode's documents provider,
+whose authority and document-id encoding are the container's business; an app that guessed at them
+would be coupled to a format it cannot see change.
 
-`tools/hardware-fixture` is the regression test, with a button that fires the intent and reports the
-thumbnail it got back.
+> **`/sdcard` is a presentation path, and this is where that bites.** The bytes live in JCode's
+> app-private tree and the container redirects the `Context` storage APIs onto it;
+> `Environment.getExternalStorageDirectory()` is not among them (§7g) and still answers the phone's
+> path. So `new File("/sdcard/…")` in a guest reads the **user's real storage** — and a file explorer
+> doing that would show somebody their own photos and call them the device's. Both apps derive the
+> root from `getExternalFilesDir(null)`, which is redirected, by walking up the four names of the
+> documented `Android/data/<pkg>/files` layout.
 
-> **Camera2 is not stood in for, and cannot be from here.** `CameraManager` is `final`, so it cannot
-> be substituted at `getSystemService`; and the frames an app would receive are written into its
-> `Surface` by the camera HAL rather than by anything this process could intercept. Standing in
-> would mean implementing `ICameraService` and `ICameraDeviceUser` and constructing
-> `CameraMetadataNative` characteristics — a camera HAL in Java, against members that are `@hide`
-> and marshalled natively. So a guest that opens a `CameraDevice` gets a black preview, and
-> `GuestContext.getSystemService(CAMERA_SERVICE)` writes one line into the device's log saying so
-> the first time it is asked. A preview that stays black with nothing anywhere saying why is the
-> failure this whole subsystem exists to stop producing.
+Two findings the Camera app produced on its first run, both of which had been true for a while:
 
----
+- **The simulated compass was mirrored.** With the bench at 45° the viewfinder read 315°.
+  `SimulatedHardware.rotation` built its heading matrix with the sign that makes
+  `getRotationMatrix` + `getOrientation` — how every app reads a heading — return −a. Gravity is
+  unaffected by that sign, so the accelerometer values that were checked exactly stayed correct, and
+  the bench reports the azimuth it was given rather than deriving it, so the two had quietly
+  disagreed since the bench was written.
+- **A runtime permission request from `onCreate` vanishes.** The device's dialog is raised on behalf
+  of whichever activity is in front, and an embedded activity is not in front until it has been
+  resumed, so the request could not be addressed to anybody. Ask from `onResume`.
+
+Also fixed while it was visible: the permission dialog asked whether to allow an app "to use the take
+pictures and videos". The platform's permission labels are verb phrases, so the wording is now
+"Allow *app* to *label*?", and the fallback for a guest's own permission supplies the verb.
+
+> Device-verified end to end on Android 13. `ACTION_OPEN_DOCUMENT` → the Files app listing `/sdcard`
+> → `Download` → `notes.txt` → the fixture reports `read 30 bytes` from the `content://` URI.
+> `ACTION_IMAGE_CAPTURE` → the Camera app → shutter → the fixture reports `got a 512x384 thumbnail`,
+> with the JPEG in `DCIM/Camera`. With the bench at heading 45° and roll 15°, the viewfinder reads
+> `hdg 045.0 roll +15.0` with the needle north-east.
+
+### 7k. Camera2
+
+Not stood in for, and cannot be from here. `CameraManager` is `final`, so it cannot be substituted at
+`getSystemService`; and the frames an app would receive are written into its `Surface` by the camera
+HAL rather than by anything this process could intercept. Standing in would mean implementing
+`ICameraService` and `ICameraDeviceUser` and constructing `CameraMetadataNative` characteristics — a
+camera HAL in Java, against members that are `@hide` and marshalled natively.
+
+So a guest that opens a `CameraDevice` gets a black preview, and `GuestContext.getSystemService`
+writes one line into the device's log saying so the first time the camera service is asked for. A
+preview that stays black with nothing anywhere saying why is the failure this whole subsystem exists
+to stop producing.
 
 ## 8. Session states
 
@@ -761,7 +799,7 @@ internal sealed interface SandboxStatus {
 - Four concurrent guest activities maximum (`GuestActivity0`–`GuestActivity3`).
 - The guest shares JCode's uid and permissions — no isolation, by design.
 - `Environment.getExternalStorageDirectory()` reports the phone's path, not the device's — §7g.
-- Camera2 gets no frames; only `ACTION_IMAGE_CAPTURE` is answered — §7i.
+- Camera2 gets no frames; only `ACTION_IMAGE_CAPTURE` is answered — §7k.
 - No `ACTION_VIDEO_CAPTURE`: the device can draw a frame and cannot encode a film, and an app handed
   a one-frame video would be worse off than one told there is no camera app for it.
 - An implicit intent the device has no answer for still goes to the phone. It is logged loudly, but

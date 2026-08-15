@@ -13,6 +13,7 @@ import android.hardware.SensorManager;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -24,6 +25,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -48,6 +50,7 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
     private static final String TAG = "HWFIXTURE";
     private static final int REQUEST_CODE = 4321;
     private static final int PHOTO_CODE = 4322;
+    private static final int PICK_CODE = 4323;
 
     private static final String[] DANGEROUS = {
         "android.permission.CAMERA",
@@ -76,6 +79,7 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
     private TextView out;
     private String lastRequest = "not asked yet";
     private String lastPhoto = "not asked yet";
+    private String lastPick = "not asked yet";
     private String lastFix = "no update yet";
 
     @Override
@@ -96,10 +100,10 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         // ACTION_IMAGE_CAPTURE is how an app asks for a picture rather than for a camera pipeline,
-        // and it is the form the device can answer completely — the container shows its own
-        // viewfinder and hands back an image. Deliberately with no EXTRA_OUTPUT, so what comes back
-        // is the contract's thumbnail: that exercises the whole round trip, including the result
-        // arriving at an embedded activity at all, which is the part that used to be impossible.
+        // and it is the form the device can answer completely — its own Camera app opens and hands
+        // back an image. Deliberately with no EXTRA_OUTPUT, so what comes back is the contract's
+        // thumbnail: that exercises the whole round trip, including the result arriving at an
+        // embedded activity at all, which is the part that used to be impossible.
         Button photo = new Button(this);
         photo.setText("Take a photo (ACTION_IMAGE_CAPTURE)");
         photo.setOnClickListener(v -> {
@@ -107,6 +111,22 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
             startActivityForResult(new Intent(MediaStore.ACTION_IMAGE_CAPTURE), PHOTO_CODE);
         });
         column.addView(photo, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // The other half of "does this device have the apps a device has". OPEN_DOCUMENT is
+        // answered by the device's Files app, and what comes back is a content:// URI into the
+        // device's own storage — so this reads the first bytes of whatever was picked, which is the
+        // only way to tell a URI that resolves from one that merely looks right.
+        Button pick = new Button(this);
+        pick.setText("Pick a file (ACTION_OPEN_DOCUMENT)");
+        pick.setOnClickListener(v -> {
+            lastPick = "asked, waiting for the answer…";
+            Intent open = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            open.addCategory(Intent.CATEGORY_OPENABLE);
+            open.setType("*/*");
+            startActivityForResult(open, PICK_CODE);
+        });
+        column.addView(pick, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         out = new TextView(this);
@@ -182,7 +202,8 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
                 .append('\n');
         }
         text.append("  last requestPermissions: ").append(lastRequest).append('\n');
-        text.append("  last photo: ").append(lastPhoto).append("\n\n");
+        text.append("  last photo: ").append(lastPhoto).append('\n');
+        text.append("  last pick:  ").append(lastPick).append("\n\n");
 
         text.append("FEATURES (hasSystemFeature)\n");
         for (String feature : FEATURES) {
@@ -288,6 +309,11 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
     @Override
     protected void onActivityResult(int code, int result, Intent data) {
         super.onActivityResult(code, result, data);
+        if (code == PICK_CODE) {
+            lastPick = describePick(result, data);
+            Log.i(TAG, "onActivityResult " + code + ": " + lastPick);
+            return;
+        }
         if (code != PHOTO_CODE) {
             return;
         }
@@ -301,6 +327,30 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
                 : "RESULT_OK with no bitmap";
         }
         Log.i(TAG, "onActivityResult " + code + ": " + lastPhoto);
+    }
+
+    /**
+     * What came back from the picker, and whether it can actually be opened.
+     *
+     * The read is the check. A `content://` URI that resolves to nothing looks identical to one that
+     * works until something tries it, and "the picker returned a URI" was never the interesting
+     * claim — "the app can read the file the person chose" is.
+     */
+    private String describePick(int result, Intent data) {
+        if (result != RESULT_OK || data == null || data.getData() == null) {
+            return "cancelled (result " + result + ")";
+        }
+        Uri uri = data.getData();
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) {
+                return uri + " — could not be opened";
+            }
+            byte[] head = new byte[64];
+            int read = Math.max(in.read(head), 0);
+            return uri.getLastPathSegment() + " — read " + read + " bytes";
+        } catch (Exception e) {
+            return uri + " — " + e.getClass().getSimpleName();
+        }
     }
 
     @Override
