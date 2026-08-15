@@ -102,6 +102,9 @@ internal object GuestRuntime {
         // LocationManager per context and caches it, so the service has to be in place before the
         // first one is asked for.
         val location = GuestLocation.install(host)
+        // Same requirement and the same seam: a ConnectivityManager is built once per context and
+        // caches its binder, so the replacement has to be in place before the first guest context.
+        val network = GuestNetwork.install(host)
         val navigation = GuestHooks.installStartActivityHook(::rewriteOutgoing)
         val packages = GuestPackageHook.install(host.packageManager)
         val notifications = GuestNotificationHook.install()
@@ -116,7 +119,7 @@ internal object GuestRuntime {
             TAG,
             "hooks installed: instrumentation=true navigation=$navigation " +
                 "packages=$packages notifications=$notifications intents=$intents " +
-                "location=$location",
+                "location=$location network=$network",
         )
         VirtualDeviceLog.append(host, 'I', TAG, "container ready in ${Application.getProcessName()}")
     }

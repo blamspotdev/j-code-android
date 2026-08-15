@@ -96,6 +96,11 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
         // device answers ACTION_IMAGE_CAPTURE properly, with its own Camera app — see DeviceIntents.
         CAMERA_SERVICE -> super.getSystemService(name).also { noteCamera2Use() }
 
+        // Surveyed the first time a guest asks, for the same reason the camera is — what the device
+        // could stand in for here is a question about this platform, not about this code.
+        CONNECTIVITY_SERVICE, WIFI_SERVICE ->
+            super.getSystemService(name).also { HiddenSeams.reportNetwork(baseContext) }
+
         else -> super.getSystemService(name)
     }
 
@@ -292,7 +297,7 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
     private fun noteCamera2Use() {
         if (warnedAboutCamera2) return
         warnedAboutCamera2 = true
-        Camera2Probe.report(baseContext)
+        HiddenSeams.reportCamera2(baseContext)
         VirtualDeviceLog.append(
             baseContext,
             'W',

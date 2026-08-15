@@ -117,6 +117,55 @@ internal enum class VirtualHardware(
         ),
     ),
 
+    /**
+     * Whether the device is on a network at all.
+     *
+     * Simulated means **the phone's connection, reported as the device's Wi-Fi**. The bytes are
+     * genuinely the phone's — this container has never pretended otherwise, and an app that fetches
+     * a URL is really fetching it — so what is simulated is the *answer to the question*, which is
+     * the part a developer wants to control. Off is the case worth having: an app that has never
+     * been run without a network is an app whose offline path has never been run.
+     */
+    WiFi(
+        id = "wifi",
+        label = "Wi-Fi",
+        summary = "Simulated puts the device on the network, carried by the phone's own " +
+            "connection. Off takes the device off it entirely — which is how to see what an app " +
+            "does offline without disconnecting the phone you are working on.",
+        modes = listOf(HardwareMode.Off, HardwareMode.Simulated),
+        fallback = HardwareMode.Simulated,
+        // Deliberately no permissions and no features. Every other entry here governs both, and for
+        // this one both are wrong:
+        //
+        //  - Withdrawing FEATURE_WIFI makes `getSystemService(WIFI_SERVICE)` return **null**, which
+        //    is real platform behaviour and a crash in nearly every app that asks — measured, the
+        //    fixture went from "wifi enabled = false" to "no manager". A phone with Wi-Fi switched
+        //    off still has Wi-Fi hardware, and this switch is about the connection, not the radio.
+        //  - Withdrawing ACCESS_NETWORK_STATE and INTERNET would deny install-time permissions to
+        //    every app on the device because a connection is down, which is not what either
+        //    permission means.
+        //
+        // What this switch does is answered where the question is actually asked: GuestNetwork.
+    ),
+
+    Bluetooth(
+        id = "bluetooth",
+        label = "Bluetooth",
+        summary = "Off means the device does not declare Bluetooth and refuses it to every app. " +
+            "Real declares it and hands the app the phone's own adapter — whether that adapter is " +
+            "switched on is the phone's business, not this device's.",
+        modes = listOf(HardwareMode.Off, HardwareMode.Real),
+        fallback = HardwareMode.Off,
+        permissions = listOf(
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_SCAN,
+        ),
+        features = listOf(
+            PackageManager.FEATURE_BLUETOOTH,
+            PackageManager.FEATURE_BLUETOOTH_LE,
+        ),
+    ),
+
     Accelerometer(
         id = "accelerometer",
         label = "Accelerometer",

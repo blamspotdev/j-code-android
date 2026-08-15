@@ -11,7 +11,12 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.bluetooth.BluetoothAdapter;
 import android.hardware.camera2.CameraManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.wifi.WifiManager;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
@@ -231,6 +236,30 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
         resolves(text, "a web search", new Intent(Intent.ACTION_WEB_SEARCH));
         resolves(text, "a photo", new Intent(MediaStore.ACTION_IMAGE_CAPTURE));
         resolves(text, "a document", new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*"));
+
+        // What the device says about the network. An app's first question is almost always "am I
+        // online?", and until the device answers it the answer is the phone's.
+        text.append("\nNETWORK\n");
+        ConnectivityManager connectivity =
+            (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (connectivity == null) {
+            text.append("  no ConnectivityManager\n");
+        } else {
+            Network active = connectivity.getActiveNetwork();
+            NetworkCapabilities caps =
+                active == null ? null : connectivity.getNetworkCapabilities(active);
+            text.append("  active = ").append(active == null ? "none" : active.toString()).append('\n');
+            text.append("  wifi = ").append(caps != null
+                && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)).append('\n');
+            text.append("  validated = ").append(caps != null
+                && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)).append('\n');
+        }
+        WifiManager wifi = (WifiManager) getSystemService(WIFI_SERVICE);
+        text.append("  wifi enabled = ")
+            .append(wifi == null ? "no manager" : String.valueOf(wifi.isWifiEnabled())).append('\n');
+        BluetoothAdapter bluetooth = BluetoothAdapter.getDefaultAdapter();
+        text.append("  bluetooth = ").append(bluetooth == null ? "no adapter"
+            : (bluetooth.isEnabled() ? "on" : "off")).append('\n');
 
         // What Camera2 offers a guest, which is a different question from whether the device has a
         // camera: ACTION_IMAGE_CAPTURE is answered by the device's Camera app, and this is the

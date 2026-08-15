@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented — device-verified on Android 13 |
 | **Modules** | `:app` (`dev.jcode.vdevice`) |
-| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualStorage.kt, VirtualStorageProvider.kt, GuestDocuments.kt, GuestResults.kt, DeviceIntents.kt, Camera2Probe.kt, GuestSurfaces.kt, SimulatedHardware.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
+| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualStorage.kt, VirtualStorageProvider.kt, GuestDocuments.kt, GuestResults.kt, DeviceIntents.kt, GuestNetwork.kt, HiddenSeams.kt, GuestSurfaces.kt, SimulatedHardware.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
 | **Verified against** | device-verified on Android 13, 2026-08-15 |
 
 ---
@@ -735,7 +735,7 @@ pictures and videos". The platform's permission labels are verb phrases, so the 
 
 An app that wants a *picture* is answered by the Camera app. An app that wants a *camera pipeline* —
 `openCamera`, a capture session, frames in its own `Surface` — is not, and that used to be a
-conclusion from reading rather than from trying. `Camera2Probe` now measures it, once per guest
+conclusion from reading rather than from trying. `HiddenSeams` now measures it, once per guest
 process, into the device's log the first time anything asks for the camera service.
 
 Measured on Android 13 at `targetSdk` 33:
@@ -778,6 +778,60 @@ enumerable from inside the sandbox either.
 
 > This is a refusal with evidence rather than an intention. If a future platform unblocks those
 > interfaces the survey will say so, in the log, the next time an app opens a camera.
+
+### 7l. The network
+
+An app's first question is almost always *am I online*, and until now the answer was the **phone's**.
+That is wrong in the ordinary way, and it costs something concrete: an app that has never been run
+without a network is an app whose offline path has never been run, and there was no way to get the
+device into that state from here — turning the phone's Wi-Fi off also disconnects the IDE you are
+working in.
+
+`VirtualHardware.WiFi` is the switch, `GuestNetwork` is what makes it mean something.
+
+| Mode | What a guest sees |
+|---|---|
+| Simulated (default) | The phone's connection, reported as it is. An app really does fetch the URL |
+| Off | No active network, no default network, no capabilities — the device is offline |
+
+The seam is `ServiceManager.sCache["connectivity"]`, replaced before the first guest context exists,
+exactly as `location` is: a manager is built once per context and caches its binder, so a
+replacement made later is one nothing is looking at. The proxy is **delegating** — the "is there a
+network" family is answered, and every other one of `IConnectivityManager`'s hundred-odd methods
+goes to the real binder untouched. Answering only in the negative is deliberate: with the device
+online the connection genuinely is the phone's, and reporting anything else would be a lie an app
+could catch by fetching something.
+
+> **`VirtualHardware.WiFi` deliberately declares no features and no permissions**, which is unique
+> among the hardware entries. Withdrawing `FEATURE_WIFI` makes `getSystemService(WIFI_SERVICE)`
+> return **null** — real platform behaviour, and a crash in nearly every app that asks; measured, the
+> fixture went from `wifi enabled = false` to `no manager`. And withdrawing `ACCESS_NETWORK_STATE`
+> or `INTERNET` would deny install-time permissions to every app on the device because a connection
+> is down. A phone with Wi-Fi switched off still has Wi-Fi hardware. This switch is about the
+> connection.
+
+**Two things that could not be stood in for**, both built and measured before being removed:
+
+- **`WifiManager`.** Replacing `IWifiManager` worked and then did not: `WifiManager`'s construction
+  calls more of that interface than a proxy built from the three methods reflection exposes can
+  answer, so the manager sometimes failed to build and `getSystemService` returned null. A wrong
+  answer to "is Wi-Fi on" is a far smaller failure than no manager, so the question is left to the
+  phone.
+- **Bluetooth.** `BluetoothAdapter` is `final`, but its `mService` field is reachable and
+  `IBluetooth.Stub.asInterface` is not blocked — the shape that works for connectivity. Neither
+  direction worked. Clearing `mService` left `isEnabled()` answering **true** with the phone's radio
+  on; wrapping it in a proxy answering `getState` never saw the call, because `getState` is not in
+  `IBluetooth`'s visible method set (`asBinder, fetchRemoteUuids, getAddress, getConnectionState,
+  getDeviceType, getRemoteAlias, getSocketOpt, …`) so `Proxy` does not implement it. What the device
+  *can* govern is what goes through the package manager, so `VirtualHardware.Bluetooth` is
+  **Off / Real**: Off withdraws `FEATURE_BLUETOOTH` and refuses `BLUETOOTH_CONNECT`/`BLUETOOTH_SCAN`
+  to every app, and Real hands over the phone's adapter. Whether that adapter is switched on is the
+  phone's business, and the label says so.
+
+> Device-verified on Android 13, with the phone online and its Bluetooth on throughout:
+> Wi-Fi Off → `active = none, wifi = false, validated = false`; Wi-Fi Simulated →
+> `active = 101, wifi = true, validated = true`. `wifi enabled` and `bluetooth` report the phone's,
+> which is the documented behaviour rather than a gap.
 
 ## 8. Session states
 
