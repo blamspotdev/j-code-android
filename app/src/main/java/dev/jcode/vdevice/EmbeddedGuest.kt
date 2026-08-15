@@ -63,6 +63,9 @@ internal class EmbeddedGuest(
     /** Embedded back stack, bottom first. Only the top activity's decor is visible. */
     private val stack = ArrayList<Activity>()
 
+    /** Whether the device's screen is being looked at — see [setVisible]. */
+    private var shown = true
+
     /** The tab's size, kept because the bar appearing or going away re-divides it — see [followForegroundApp]. */
     private var width = 0
     private var height = 0
@@ -223,6 +226,20 @@ internal class EmbeddedGuest(
     /** The dialog, popup or drop-down the guest currently has open, if any. */
     private fun topWindow(): EmbeddedWindow? = windows?.children()?.lastOrNull()
 
+    /**
+     * Tells the device whether anybody is looking at it.
+     *
+     * False when its tab is not on screen or JCode is in the background; true when it comes back.
+     * Without this a guest ran at full tilt behind whatever the person was actually doing — see
+     * [GuestRuntime.pauseEmbedded] for what a pause is worth.
+     */
+    fun setVisible(visible: Boolean) {
+        val activity = stack.lastOrNull() ?: return
+        if (visible == shown) return
+        shown = visible
+        if (visible) GuestRuntime.resumeEmbedded(activity) else GuestRuntime.pauseEmbedded(activity)
+    }
+
     /** Types [text] as key events: with no window, the guest's fields cannot bind an IME. */
     fun text(text: String) {
         val map = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD)
@@ -333,7 +350,14 @@ internal class EmbeddedGuest(
     private fun push(stub: Intent): Boolean {
         val container = container ?: return false
         val activity = GuestRuntime.embed(stub, windows?.token)
-        stack.lastOrNull()?.window?.decorView?.visibility = View.GONE
+        // The one going behind is paused, not just hidden. A hidden activity that was never paused
+        // keeps its sensors registered and its animations running, which is what a phone's
+        // lifecycle exists to stop — and what the device's own Camera relies on to switch its
+        // viewfinder off when something opens over it.
+        stack.lastOrNull()?.let {
+            it.window.decorView.visibility = View.GONE
+            GuestRuntime.pauseEmbedded(it)
+        }
         container.addView(activity.window.decorView, contentParams())
         addStatusBar(container)
         stack += activity

@@ -1063,6 +1063,51 @@ slider that moved nothing would be worse than saying so.
 > hardware fixture — a different app on the same device — then read `active = none, wifi = false,
 > validated = false`, with the phone still online throughout.
 
+### 7n. Sleeping
+
+A guest used to be RESUMED from the moment it started until it was destroyed. Nothing paused one:
+not another activity opening over it, not the tab being switched away, not JCode going to the
+background. `destroyEmbedded` was the only code in the container that ever called `onPause`, and it
+called it on the way to `onDestroy`.
+
+That is not a lifecycle nicety. **Every mechanism that stops a device doing work hangs off that
+callback**: an app releases its sensors in `onPause`, an engine stops its render thread on losing
+focus, Compose stops its frame clock below `STARTED`, and the device's own Camera switches its
+viewfinder off. All of it was waiting for a call that never came, so a guest kept the accelerometer
+ticking and kept drawing frames into a surface nobody was looking at, for as long as the session
+lived.
+
+`GuestRuntime.pauseEmbedded` is the mirror of `resumeEmbedded`, and three things call it:
+
+| When | What happens |
+|---|---|
+| An activity opens over another | The one going behind is paused, not merely hidden |
+| The device's tab leaves the composition | `IGuestSession.setVisible(false)` |
+| JCode goes to the background | The same, from a `Lifecycle` observer on the tab |
+
+Both halves of the last two matter and neither implies the other: switching editor tabs takes the
+composition away without stopping the activity, and pressing Home stops the activity without taking
+the composition away.
+
+Focus is dropped before the lifecycle, for the reason `destroyEmbedded` gives — an engine that
+started its render thread on gaining focus stops it on losing focus. And when the lifecycle dispatch
+does not land, the registry is advanced by hand, for the same reason the resume path does it:
+`ReportFragment` registers on the activity's own callback list, which is blocked at `targetSdk` 33,
+so an AndroidX guest would otherwise keep its frame clock running through a pause it never heard
+about.
+
+**Two polls also stopped running flat out.** A sensor registration whose hardware is Off — or Real,
+and being fed by the phone — still has to tick, because that is what lets a mode change reach an app
+that is already registered rather than leaving it holding a registration that quietly stopped. But it
+was polling four times a second, delivering nothing, for as long as the app lived; it is a second
+now. The location feed backs off from one second to five on the same reasoning.
+
+> Device-verified on Android 13, with the Camera app open and its viewfinder running:
+> **11.5–18.5%** CPU in the `:guest` process with JCode in front, **0.0%** with JCode in the
+> background — and the *cumulative* CPU time identical across samples four seconds apart, so the
+> process did no work at all rather than a little. Bringing JCode back resumed it at 11.5% with the
+> viewfinder live and no lifecycle damage.
+
 ## 8. Session states
 
 ```kotlin

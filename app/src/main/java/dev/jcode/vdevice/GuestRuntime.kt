@@ -527,6 +527,39 @@ internal object GuestRuntime {
      * `performPause`/`performDestroy`, which dispatch their own `Pre`/`Post` callbacks, while
      * `callActivityOnStop` calls `onStop()` straight.
      */
+    /**
+     * Pauses an embedded activity — the mirror of [resumeEmbedded], and the thing the container
+     * spent a long time not having.
+     *
+     * A guest used to be RESUMED from the moment it started until it was destroyed. Nothing ever
+     * paused one: not another activity opening over it, not the tab being switched away, not JCode
+     * going to the background. That is not a lifecycle nicety, it is what stops the device's
+     * hardware. An app releases its sensors in `onPause`, an engine stops its render thread on
+     * losing focus, Compose stops its frame clock when the lifecycle drops below STARTED — **all of
+     * it hangs off a callback that was never sent**, so a guest kept the accelerometer ticking and
+     * kept drawing frames into a surface nobody was looking at, for as long as the session lived.
+     *
+     * Focus goes first, for the reason [destroyEmbedded] gives: an engine that started its render
+     * thread on gaining focus stops it on losing focus, and one told it still had focus would keep
+     * drawing.
+     *
+     * `foreground` is deliberately left alone. It is what a permission answer is delivered to, and a
+     * paused activity is still the one that asked.
+     */
+    fun pauseEmbedded(activity: Activity): Boolean {
+        val instrumentation = instrumentation ?: return false
+        focus(activity, false)
+        GuestHooks.dispatchLifecycleCallback(activity, "onActivityPrePaused")
+        instrumentation.callActivityOnPause(activity)
+        val paused = GuestHooks.dispatchLifecycleCallback(activity, "onActivityPostPaused")
+        // Same reasoning as the resume path: an AndroidX guest's LifecycleRegistry is advanced by
+        // ReportFragment, which registers on the activity's own callback list — the one that is
+        // blocked here — so when the dispatch does not land the registry has to be told directly or
+        // Compose keeps its frame clock running through a pause it never heard about.
+        if (!paused) advanceLifecycle(activity, "ON_PAUSE")
+        return paused
+    }
+
     fun destroyEmbedded(activity: Activity) {
         val instrumentation = instrumentation ?: return
         if (foreground === activity) foreground = null

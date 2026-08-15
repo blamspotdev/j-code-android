@@ -62,6 +62,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -357,6 +360,27 @@ private fun DeviceScreen(
             modifier = Modifier.fillMaxSize(),
         )
         DisposableEffect(Unit) { onDispose { onSurface(null) } }
+
+        // Nobody is looking at the device unless this is composed *and* JCode is in the foreground.
+        // Both halves matter: switching editor tabs takes the composition away, and pressing Home
+        // does not. Without either the guest ran at full tilt behind whatever the person had moved
+        // on to — see GuestRuntime.pauseEmbedded.
+        val lifecycle = LocalLifecycleOwner.current.lifecycle
+        DisposableEffect(lifecycle, session) {
+            val observer = LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_START -> session.setVisible(true)
+                    Lifecycle.Event.ON_STOP -> session.setVisible(false)
+                    else -> Unit
+                }
+            }
+            lifecycle.addObserver(observer)
+            session.setVisible(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+            onDispose {
+                lifecycle.removeObserver(observer)
+                session.setVisible(false)
+            }
+        }
 
         when {
             // The home screen itself is on the surface, drawn by VirtualLauncher — only the chrome

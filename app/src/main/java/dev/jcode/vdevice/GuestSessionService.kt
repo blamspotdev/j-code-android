@@ -154,6 +154,10 @@ class GuestSessionService : Service() {
          * Posted rather than immediate so this transaction can return first; the caller is one-way,
          * but the unbind that follows it is not.
          */
+        override fun setVisible(visible: Boolean) {
+            post { guest.setVisible(visible) }
+        }
+
         override fun shutdown() {
             post { guest.stop() }
             main.postDelayed({

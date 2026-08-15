@@ -20,7 +20,16 @@ private const val MAX_PERIOD_MS = 200L
  * How often a registration looks up while the phone's own sensor is doing the reporting. It is only
  * watching for the device to be rewired, and a quarter-second of lag on that is below noticing.
  */
-private const val WATCH_MS = 250L
+/**
+ * How often a registration that is delivering nothing looks up to see whether that has changed.
+ *
+ * A registration whose sensor is Off, or Real and being fed by the phone, still has to tick — that
+ * is what lets a mode change reach an app that is already registered, rather than leaving it holding
+ * one that quietly stopped. But it is a *poll*, and it was running four times a second for as long as
+ * the app lived, delivering nothing. A second is well inside the time it takes somebody to move a
+ * switch and look back at the screen, and it is a quarter of the work.
+ */
+private const val WATCH_MS = 1_000L
 
 /**
  * The `SensorManager` a guest on JCode's virtual device is handed instead of the phone's.

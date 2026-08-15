@@ -22,6 +22,9 @@ private const val SIMULATED_ACCURACY = 5f
 /** How often a registered listener is told where the device is. */
 private const val UPDATE_MS = 1_000L
 
+/** How often a feed that is allowed to report nothing looks up to see whether that has changed. */
+private const val IDLE_MS = 5_000L
+
 /** The providers a simulated device offers. `passive` is included: apps ask for it by name. */
 private val PROVIDERS = listOf(
     LocationManager.GPS_PROVIDER,
@@ -234,8 +237,13 @@ internal object GuestLocation {
                             synchronized(feeds) { feeds.remove(listener) }
                             return
                         }
-                        if (allows(owner)) deliver(listener)
-                        handler.postDelayed(this, UPDATE_MS)
+                        val allowed = allows(owner)
+                        if (allowed) deliver(listener)
+                        // Backed off while the answer is no. The tick still has to happen — that is
+                        // what lets location switched on again reach an app already registered —
+                        // but a registration delivering nothing every second, for as long as the app
+                        // lives, is a poll rather than a location feed.
+                        handler.postDelayed(this, if (allowed) UPDATE_MS else IDLE_MS)
                     }
                 }
                 feeds[listener] = tick

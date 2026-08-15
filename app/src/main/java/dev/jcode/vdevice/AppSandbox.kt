@@ -345,6 +345,9 @@ internal class AppSandboxSession(context: Context) {
 
     fun forceStop(packageName: String) = ignoringDeath { it.forceStop(packageName) }
 
+    /** Tells the device whether anybody is looking at it — see IGuestSession.setVisible. */
+    fun setVisible(visible: Boolean) = ignoringDeath { it.setVisible(visible) }
+
     fun close() {
         startup?.cancel()
         startup = null
