@@ -132,6 +132,9 @@ public class CameraActivity extends Activity implements SensorEventListener {
         super.onResume();
         listen(Sensor.TYPE_ACCELEROMETER);
         listen(Sensor.TYPE_MAGNETIC_FIELD);
+        if (viewfinder != null) {
+            viewfinder.awake(true);
+        }
         if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA)) {
             return;
         }
@@ -159,11 +162,21 @@ public class CameraActivity extends Activity implements SensorEventListener {
         return checkSelfPermission(CAMERA) == PackageManager.PERMISSION_GRANTED;
     }
 
+    /**
+     * Puts the camera to sleep.
+     *
+     * <p>Both halves matter and neither is automatic: an unregistered listener is what stops the
+     * device's simulated sensors ticking for this app, and a viewfinder told to stop is what stops
+     * a frame being computed thirty times a second for a screen nobody is looking at.
+     */
     @Override
     protected void onPause() {
         super.onPause();
         if (sensors != null) {
             sensors.unregisterListener(this);
+        }
+        if (viewfinder != null) {
+            viewfinder.awake(false);
         }
     }
 
@@ -188,6 +201,7 @@ public class CameraActivity extends Activity implements SensorEventListener {
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
         viewfinder = new Viewfinder(this);
+        viewfinder.awake(true);
         column.addView(viewfinder, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
@@ -433,17 +447,44 @@ public class CameraActivity extends Activity implements SensorEventListener {
     /**
      * The live picture. Invalidated from its own draw, which is what a viewfinder is: there is no
      * frame to wait for, only the next evaluation of the scene.
+     *
+     * <p><b>It stops when the camera is not open.</b> A loop that re-posts itself from `onDraw` has
+     * no natural end — it ran for as long as the activity existed, which for a camera app is "until
+     * something else needs the screen", and a device whose camera never switches off is a device
+     * doing work nobody asked for. {@link #awake} is set from `onResume` and cleared from `onPause`,
+     * so the last frame drawn is the last frame computed.
+     *
+     * <p>The rate is 30 fps rather than the display's, which is what the frame counter has always
+     * claimed and is more than a test pattern needs; `postInvalidateOnAnimation` would run it at
+     * 60 or 120.
      */
     private class Viewfinder extends View {
+
+        private static final long FRAME_MS = 33L;
+
+        private boolean awake;
+
         Viewfinder(Context context) {
             super(context);
+        }
+
+        void awake(boolean value) {
+            if (awake == value) {
+                return;
+            }
+            awake = value;
+            if (value) {
+                invalidate();
+            }
         }
 
         @Override
         protected void onDraw(Canvas canvas) {
             scene.draw(canvas, getWidth(), getHeight(),
                 degrees(0), degrees(1), degrees(2), SystemClock.elapsedRealtime());
-            postInvalidateOnAnimation();
+            if (awake) {
+                postInvalidateDelayed(FRAME_MS);
+            }
         }
     }
 }

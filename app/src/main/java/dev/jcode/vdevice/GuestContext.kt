@@ -292,6 +292,7 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
     private fun noteCamera2Use() {
         if (warnedAboutCamera2) return
         warnedAboutCamera2 = true
+        Camera2Probe.report(baseContext)
         VirtualDeviceLog.append(
             baseContext,
             'W',

@@ -114,11 +114,16 @@ internal fun VirtualHardwarePage(modifier: Modifier = Modifier) {
     // The readout is computed, not received: the same function of the same clock the guest's own
     // sensors are running, so what this shows is what the app is being told — see SimulatedHardware.
     var now by remember { mutableStateOf(SimulatedHardware.sample(context)) }
-    LaunchedEffect(Unit) {
-        while (true) {
+    // Keyed on the revision, and it stops as soon as the device stops moving: a bench showing a
+    // device that is sitting still is showing a constant, and re-deriving a constant several times a
+    // second for as long as the tab is open is the shape of "hardware that never sleeps". Any edit
+    // bumps the revision and starts it again, which is also how a shake or a route gets its ticks.
+    LaunchedEffect(revision) {
+        while (SimulatedHardware.changing(settings, SystemClock.elapsedRealtime())) {
             delay(READOUT_MS)
             now = SimulatedHardware.sample(context)
         }
+        now = SimulatedHardware.sample(context)
     }
 
     Surface(modifier = modifier, color = MaterialTheme.colorScheme.surface) {

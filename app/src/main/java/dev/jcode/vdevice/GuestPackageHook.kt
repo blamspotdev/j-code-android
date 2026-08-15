@@ -205,6 +205,14 @@ internal object GuestPackageHook {
          * behaviour that existed before this hook and is survivable.
          */
         private fun resolution(method: Method, args: Array<Any?>): Box? {
+            // A service the device answers with nothing, so an app falls back to something the
+            // device *does* have rather than binding the phone's — see DeviceIntents.
+            if (method.name == "queryIntentServices" || method.name == "resolveService") {
+                val action = args.filterIsInstance<Intent>().firstOrNull()?.action
+                if (action in DeviceIntents.UNANSWERED_SERVICES) {
+                    return if (method.name == "resolveService") Box(null) else sliceOfNothing()
+                }
+            }
             val single = method.name == "resolveIntent"
             if (!single && method.name != "queryIntentActivities") return null
             val intent = args.filterIsInstance<Intent>().firstOrNull() ?: return null
@@ -217,11 +225,15 @@ internal object GuestPackageHook {
         }
 
         /** `new ParceledListSlice<>(List)` — the shape `queryIntentActivities` returns over binder. */
-        private fun sliceOf(info: ResolveInfo): Any? = runCatching {
+        private fun sliceOf(info: ResolveInfo): Any? = slice(listOf(info))
+
+        private fun sliceOfNothing(): Box? = slice(emptyList<ResolveInfo>())?.let { Box(it) }
+
+        private fun slice(items: List<ResolveInfo>): Any? = runCatching {
             Class.forName("android.content.pm.ParceledListSlice")
                 .getConstructor(List::class.java)
-                .newInstance(listOf(info))
-        }.onFailure { Log.w(TAG, "cannot answer queryIntentActivities for the device's apps", it) }
+                .newInstance(items)
+        }.onFailure { Log.w(TAG, "cannot answer an intent query for the device's apps", it) }
             .getOrNull()
     }
 

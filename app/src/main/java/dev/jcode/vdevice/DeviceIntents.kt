@@ -57,10 +57,15 @@ internal object DeviceIntents {
         val packageName: String,
         val actions: Set<String>,
         val schemes: Set<String> = emptySet(),
+        /** Any one of these is enough, and an intent carrying none of them still matches. */
+        val categories: Set<String> = emptySet(),
     ) {
         fun matches(intent: Intent): Boolean {
             if (intent.action !in actions) return false
-            if (schemes.isEmpty()) return true
+            if (categories.isNotEmpty() && intent.categories.orEmpty().any { it in categories }) {
+                return true
+            }
+            if (schemes.isEmpty()) return categories.isEmpty()
             return intent.data?.scheme?.lowercase() in schemes
         }
     }
@@ -85,11 +90,40 @@ internal object DeviceIntents {
         ),
         // The browser was already the device's answer to a link; it is here rather than in its own
         // branch of the launch path so that there is one place that says what this device answers.
+        //
+        // Three shapes, because "is there a browser?" is asked three ways and only the first was
+        // answered. `ACTION_VIEW` on a URL is the link itself; `ACTION_WEB_SEARCH` is what a search
+        // box sends; and `ACTION_MAIN` + `CATEGORY_APP_BROWSER` is how an app opens "the browser"
+        // with nothing in particular to show — the form `PackageManager` is asked to resolve when
+        // somebody wants to know whether the device has one at all.
         Handler(
             packageName = VirtualDeviceApps.BROWSER_PACKAGE,
             actions = setOf(Intent.ACTION_VIEW),
             schemes = setOf("http", "https"),
         ),
+        Handler(
+            packageName = VirtualDeviceApps.BROWSER_PACKAGE,
+            actions = setOf(Intent.ACTION_WEB_SEARCH),
+        ),
+        Handler(
+            packageName = VirtualDeviceApps.BROWSER_PACKAGE,
+            actions = setOf(Intent.ACTION_MAIN),
+            categories = setOf(Intent.CATEGORY_APP_BROWSER),
+        ),
+    )
+
+    /**
+     * Services the device deliberately answers with **nothing**.
+     *
+     * Custom Tabs is the case this exists for. `androidx.browser` looks for a browser that also
+     * publishes a `CustomTabsService`, binds it, and shows the page inside the requesting app; with
+     * no answer from the device the phone's browsers were the only candidates, so an app reaching
+     * for a custom tab would have bound **Chrome** — the user's own, with their profile — from
+     * inside the sandbox. Saying the device has no such service is both true and what makes the
+     * library fall back to a plain `ACTION_VIEW`, which the device's own browser then answers.
+     */
+    val UNANSWERED_SERVICES: Set<String> = setOf(
+        "android.support.customtabs.action.CustomTabsService",
     )
 
     /**

@@ -3,6 +3,7 @@ package dev.jcode.vdevice.hwfixture;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -10,6 +11,7 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.hardware.camera2.CameraManager;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
@@ -129,6 +131,16 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
         column.addView(pick, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        // "Is there a browser?" gets asked three ways and answered here two of them: the report
+        // below says what `resolveActivity` finds, and this opens the link. Both matter — an app
+        // that resolves nothing hides its button and never gets as far as opening anything.
+        Button link = new Button(this);
+        link.setText("Open a link (ACTION_VIEW)");
+        link.setOnClickListener(v ->
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://example.org/"))));
+        column.addView(link, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         out = new TextView(this);
         out.setTypeface(Typeface.MONOSPACE);
         out.setTextColor(Color.parseColor("#D7E3EC"));
@@ -210,6 +222,29 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
             text.append("  ").append(feature).append(" = ")
                 .append(getPackageManager().hasSystemFeature(feature)).append('\n');
         }
+
+        // What the device answers when an app asks whether it can do a thing, rather than asking it
+        // to. This is the question that used to be answered from the *phone's* installed apps.
+        text.append("\nRESOLVES TO (PackageManager)\n");
+        resolves(text, "a link", new Intent(Intent.ACTION_VIEW, Uri.parse("https://example.org/")));
+        resolves(text, "a browser", new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_BROWSER));
+        resolves(text, "a web search", new Intent(Intent.ACTION_WEB_SEARCH));
+        resolves(text, "a photo", new Intent(MediaStore.ACTION_IMAGE_CAPTURE));
+        resolves(text, "a document", new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*"));
+
+        // What Camera2 offers a guest, which is a different question from whether the device has a
+        // camera: ACTION_IMAGE_CAPTURE is answered by the device's Camera app, and this is the
+        // pipeline underneath it. An empty id list is the honest answer; one naming the *phone's*
+        // cameras would be a leak worth seeing.
+        text.append("\nCAMERA2 (CameraManager)\n  ");
+        try {
+            CameraManager cameras = (CameraManager) getSystemService(CAMERA_SERVICE);
+            text.append(cameras == null ? "no manager"
+                : "ids = " + Arrays.toString(cameras.getCameraIdList()));
+        } catch (Throwable t) {
+            text.append("getCameraIdList threw ").append(t.getClass().getSimpleName());
+        }
+        text.append('\n');
 
         SensorManager sensors = (SensorManager) getSystemService(SENSOR_SERVICE);
         text.append("\nSENSORS (").append(sensors == null ? "no manager"
@@ -336,6 +371,21 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
      * works until something tries it, and "the picker returned a URI" was never the interesting
      * claim — "the app can read the file the person chose" is.
      */
+    /**
+     * What the package manager says handles {@code intent} — the device's app, or nothing.
+     *
+     * The package name is what makes it readable: `dev.jcode.vdevice.browser` is the device
+     * answering, anything else is the phone answering, and "none" is an app that would hide its
+     * button.
+     */
+    private void resolves(StringBuilder text, String what, Intent intent) {
+        ResolveInfo info = getPackageManager().resolveActivity(intent, 0);
+        text.append("  ").append(what).append(" = ")
+            .append(info == null || info.activityInfo == null
+                ? "none" : info.activityInfo.packageName)
+            .append('\n');
+    }
+
     private String describePick(int result, Intent data) {
         if (result != RESULT_OK || data == null || data.getData() == null) {
             return "cancelled (result " + result + ")";

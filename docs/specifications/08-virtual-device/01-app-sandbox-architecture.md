@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented — device-verified on Android 13 |
 | **Modules** | `:app` (`dev.jcode.vdevice`) |
-| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualStorage.kt, VirtualStorageProvider.kt, GuestDocuments.kt, GuestResults.kt, DeviceIntents.kt, GuestSurfaces.kt, SimulatedHardware.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
+| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualStorage.kt, VirtualStorageProvider.kt, GuestDocuments.kt, GuestResults.kt, DeviceIntents.kt, Camera2Probe.kt, GuestSurfaces.kt, SimulatedHardware.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
 | **Verified against** | device-verified on Android 13, 2026-08-15 |
 
 ---
@@ -627,7 +627,7 @@ the named app rather than letting the intent out.
 |---|---|
 | `ACTION_IMAGE_CAPTURE`, `…_SECURE`, `STILL_IMAGE_CAMERA` | Camera (§7j) |
 | `ACTION_OPEN_DOCUMENT`, `GET_CONTENT`, `CREATE_DOCUMENT`, `OPEN_DOCUMENT_TREE` | Files (§7j) |
-| `ACTION_VIEW` on `http(s)` | Browser |
+| `ACTION_VIEW` on `http(s)`, `ACTION_WEB_SEARCH`, `ACTION_MAIN` + `CATEGORY_APP_BROWSER` | Browser |
 
 Anything else implicit still goes to the phone — and says so in the device's log, loudly, naming the
 action and warning that no result can come back.
@@ -731,18 +731,53 @@ pictures and videos". The platform's permission labels are verb phrases, so the 
 > with the JPEG in `DCIM/Camera`. With the bench at heading 45° and roll 15°, the viewfinder reads
 > `hdg 045.0 roll +15.0` with the needle north-east.
 
-### 7k. Camera2
+### 7k. Camera2 — measured, and refused
 
-Not stood in for, and cannot be from here. `CameraManager` is `final`, so it cannot be substituted at
-`getSystemService`; and the frames an app would receive are written into its `Surface` by the camera
-HAL rather than by anything this process could intercept. Standing in would mean implementing
-`ICameraService` and `ICameraDeviceUser` and constructing `CameraMetadataNative` characteristics — a
-camera HAL in Java, against members that are `@hide` and marshalled natively.
+An app that wants a *picture* is answered by the Camera app. An app that wants a *camera pipeline* —
+`openCamera`, a capture session, frames in its own `Surface` — is not, and that used to be a
+conclusion from reading rather than from trying. `Camera2Probe` now measures it, once per guest
+process, into the device's log the first time anything asks for the camera service.
 
-So a guest that opens a `CameraDevice` gets a black preview, and `GuestContext.getSystemService`
-writes one line into the device's log saying so the first time the camera service is asked for. A
-preview that stays black with nothing anywhere saying why is the failure this whole subsystem exists
-to stop producing.
+Measured on Android 13 at `targetSdk` 33:
+
+```
+ServiceManager.sCache                       reachable, 21 services cached
+media.camera binder                         present
+ICameraService                              methods=1 declared=0 Stub=true asInterface=false
+ICameraDeviceUser                           methods=1 declared=0 Stub=true asInterface=false
+ICameraDeviceCallbacks                      methods=1 declared=0 Stub=true asInterface=false
+CameraMetadataNative                        class ok, no-arg ctor=false, set()=false
+CameraCharacteristics(CameraMetadataNative) ctor is blocked
+StreamConfigurationMap                      methods=27 declared=21
+SubmitInfo                                  methods=11 declared=2
+CaptureResultExtras                         methods=11 declared=2
+```
+
+The **seam exists** — `ServiceManager.sCache` is reachable, so `media.camera` could be replaced the
+way `location` is (§ hardware). Everything that would have to go through it is blocked:
+
+- **The three interfaces report `methods=1`.** That one method is `asBinder`. This is the same
+  fingerprint `ILocationListener` had — a blocked interface still has a `Class`, and what marks it
+  unusable is `getMethods()` coming back empty. A `Proxy` cannot implement an interface whose methods
+  it cannot see.
+- **`CameraMetadataNative` cannot be built or written**, and `CameraCharacteristics` cannot be built
+  from one. So even the *first* call an app makes — `getCameraCharacteristics` — has no answer to
+  construct.
+
+The location stand-in got round blocked interface methods with hand-written `Parcel`s and
+`IBinder.transact`. That does not transfer: location's arguments are `double`s and `String`s, while
+camera metadata is a **natively marshalled blob** of tag/type/count entries whose layout is the
+framework's private business. Hand-writing it would mean reimplementing that serialisation against a
+format that has no compatibility promise, to produce a `CameraCharacteristics` the framework then
+parses natively. That is not a hard piece of work so much as an unbounded one.
+
+So `CameraManager` is left alone — it is `final` and could not be substituted anyway — and the device
+says so. `getCameraIdList()` from a guest returns `[]`, which is both the honest answer and, checked
+deliberately, **not a leak**: JCode holds no `CAMERA` permission, so the phone's own cameras are not
+enumerable from inside the sandbox either.
+
+> This is a refusal with evidence rather than an intention. If a future platform unblocks those
+> interfaces the survey will say so, in the log, the next time an app opens a camera.
 
 ## 8. Session states
 

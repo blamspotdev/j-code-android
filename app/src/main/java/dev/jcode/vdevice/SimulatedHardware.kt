@@ -191,6 +191,23 @@ internal object SimulatedHardware {
      * where the error is metres, and a great circle would make "half way" mean something a person
      * reading two coordinates off the screen would not recognise.
      */
+    /**
+     * Whether [sample] would answer differently a moment from now.
+     *
+     * False for a device that is sitting still: a fixed position, no motion loop, no impulse left to
+     * decay. Everything the device reports is then a constant, and re-deriving it several times a
+     * second is work with no output — which is what a readout that polls unconditionally does for as
+     * long as the tab is open, on a device whose whole hardware is switched off.
+     *
+     * A one-shot route that has arrived counts as still, which is the case worth having: it is a
+     * device that *was* moving, so nothing about the settings says it has stopped.
+     */
+    fun changing(settings: HardwareSettings, nowElapsed: Long): Boolean {
+        if (settings.loop != MotionLoop.None) return true
+        if (settings.impulseUntil > nowElapsed) return true
+        return sample(settings, nowElapsed).moving
+    }
+
     private fun place(settings: HardwareSettings, nowElapsed: Long): Place {
         if (settings.locationMode == LocationMode.Fixed || settings.routeStartedAt <= 0L) {
             return Place(settings.latitude, settings.longitude, 0f, 0f)
