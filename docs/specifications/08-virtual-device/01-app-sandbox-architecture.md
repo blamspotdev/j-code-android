@@ -823,15 +823,33 @@ device already knows how to draw as many frames as it is asked for. `Recorder` e
 at 15 fps into an MP4 — byte buffers rather than a codec input surface, because a codec's surface is
 a hardware buffer that `lockCanvas` refuses and OpenGL is a great deal of machinery to avoid a colour
 conversion that costs milliseconds; `COLOR_FormatYUV420Flexible` and `getInputImage` let the planes
-say where they are rather than guessing NV12 from I420. It draws what it sees from the device's own
-motion sensors, which is something any app may
-read: colour bars an app can check it decoded, a horizon that rolls and pitches with the attitude on
-the hardware bench, a compass rose on its heading, a frame counter. Drawn, and drawn to look drawn —
-nothing there could be mistaken for a photograph of a room, which is what a camera quietly handing
-over *something* would invite. The capture contract is honoured as written: `EXTRA_OUTPUT` gets the
-full-size JPEG and a bare `RESULT_OK`; without it the result carries a thumbnail under the `"data"`
-extra. Either way the full-size file is kept in the device's `DCIM/Camera`, where `adb pull` reaches
-it.
+say where they are rather than guessing NV12 from I420.
+
+**What the camera sees is a choice, and it is a choice about cost.** The first version drew its
+scene procedurally on every frame — colour bars, a horizon computed from the device's attitude, a
+compass rose, and a line of text carrying the frame number and three angles — which made the camera
+the most expensive thing on an otherwise idle device, in order to show numbers nobody reads off a
+viewfinder. A scene is now a handful of small frames, each rendered once into a bitmap and cached,
+and the viewfinder blits whichever is current.
+
+| `CameraScene` | What it is | Cost while open |
+|---|---|---|
+| **Pixel art** (default) | Five frames on a one-second loop | **3.6%** |
+| Three photos | Three colour-bar stills, one a second | about the same |
+| One photo | A single still, never redrawn | **0.2%** |
+
+The frames are 48×36 and scaled up with filtering off, which is what makes it pixel art rather than
+a blurred small picture — and is why five of them cost nothing to hold. A still scene draws once and
+then asks for nothing, so the viewfinder genuinely stops; an animated one redraws five times a
+second rather than sixty, and each redraw is a scaled blit instead of a page of drawing commands.
+
+The scene is set on the hardware bench and read by the Camera app through
+`VirtualSettingsProvider` — it is a property of the *device*, next to whether the device has a camera
+at all, and an app that chose for itself would be disagreeing with the switch somebody just moved.
+
+> Measured on Android 13 with the viewfinder open, over a 20-second window: **3.6%** of a core for
+> the pixel art, **0.2%** for a still, against **11.5–18.5%** for the procedural scene it replaced.
+> The captured JPEG also fell from 59 KB to 16 KB, because flat colours compress.
 
 **Files** browses the device's storage and is also its picker — on a phone those are the same app,
 and making them the same app here means the screen that answers `ACTION_OPEN_DOCUMENT` is one

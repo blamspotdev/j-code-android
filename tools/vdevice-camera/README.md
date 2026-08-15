@@ -26,9 +26,23 @@ that URI and the result carries no data; without it the result carries a thumbna
 extra. Either way the full-size file is kept in `DCIM/Camera`, because the picture somebody just took
 should be somewhere they can find it — and here that is a path `adb pull` takes.
 
-The scene is colour bars, a horizon that rolls and pitches with the device's attitude, a compass rose
-on its heading, and a frame counter. Drawn, and drawn to look drawn: nothing here could be mistaken
-for a photograph of a room, which is what a camera quietly handing over *something* would invite.
+## What it sees
+
+Chosen on JCode's hardware bench and read through the container's settings provider. **Pixel art by
+default** — five frames on a one-second loop — with a three-still slideshow and a single still as the
+other options.
+
+It used to draw its scene procedurally on every frame: colour bars, a horizon computed from the
+attitude, a compass rose and a line of readouts. That made the camera the most expensive thing on an
+otherwise idle device, to show numbers nobody reads off a viewfinder. Frames are rendered once into
+48x36 bitmaps and blitted with filtering off, which is what makes them pixel art rather than blurred
+small pictures.
+
+Measured with the viewfinder open, over 20 seconds: **3.6%** of a core for the pixel art, **0.2%**
+for a still, against **11.5-18.5%** for the procedural scene.
+
+Still drawn to look drawn: nothing here could be mistaken for a photograph of a room, which is what a
+camera quietly handing over *something* would invite.
 
 ## Three things it found
 

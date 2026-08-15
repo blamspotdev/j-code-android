@@ -8,10 +8,6 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.hardware.Sensor;
-import android.hardware.SensorEvent;
-import android.hardware.SensorEventListener;
-import android.hardware.SensorManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.SystemClock;
@@ -41,10 +37,14 @@ import java.io.OutputStream;
  * is not something `PackageManager` can find, and an app that asks before it reaches never got as
  * far as reaching.
  *
- * <p>It is an ordinary guest. No container privileges, no Camera2: the picture is drawn from the
- * device's own motion sensors, which is something any app may read, and saved with ordinary file
- * IO. That is deliberate — the app that proves the device has a camera should not be the one app
- * that needs special help to run.
+ * <p>It is an ordinary guest. No container privileges and no Camera2: the picture is a handful of
+ * small frames the app draws once and then shows, and it is saved with ordinary file IO. That is
+ * deliberate — the app that proves the device has a camera should not be the one app that needs
+ * special help to run.
+ *
+ * <p>What it shows is chosen on JCode's hardware bench and read through the container's settings
+ * provider — pixel art by default. See {@link Scene} for why frames beat drawing the picture again
+ * thirty times a second.
  *
  * <h2>Two ways in</h2>
  *
@@ -60,7 +60,7 @@ import java.io.OutputStream;
  * picture somebody just took should be somewhere they can find it — and here that is a path
  * `adb pull` takes.
  */
-public class CameraActivity extends Activity implements SensorEventListener {
+public class CameraActivity extends Activity {
 
     private static final String TAG = "VCAMERA";
 
@@ -92,18 +92,10 @@ public class CameraActivity extends Activity implements SensorEventListener {
     private static final String EXTRA_DEVICE_PATH = "dev.jcode.vdevice.DEVICE_PATH";
 
     private final Scene scene = new Scene();
-    private final float[] gravity = new float[3];
-    private final float[] geomagnetic = new float[3];
-    private final float[] rotation = new float[9];
-    private final float[] orientation = new float[3];
-
-    private boolean haveGravity;
-    private boolean haveGeomagnetic;
 
     /** An activity gets one runtime permission request in this container; this is that one. */
     private boolean asked;
 
-    private SensorManager sensors;
     private Viewfinder viewfinder;
 
     /** Non-null when another app is waiting for a picture. */
@@ -122,7 +114,7 @@ public class CameraActivity extends Activity implements SensorEventListener {
             || MediaStore.ACTION_IMAGE_CAPTURE.equals(action)
             || MediaStore.ACTION_IMAGE_CAPTURE_SECURE.equals(action);
         output = getIntent() == null ? null : getIntent().getParcelableExtra(MediaStore.EXTRA_OUTPUT);
-        sensors = (SensorManager) getSystemService(SENSOR_SERVICE);
+        scene.prepare(DeviceScene.chosen(this));
 
         // The device's own switch decides whether there is a camera at all, and this app is told
         // about it exactly as any other app would be. Saying so beats a viewfinder that cannot
@@ -147,8 +139,6 @@ public class CameraActivity extends Activity implements SensorEventListener {
     @Override
     protected void onResume() {
         super.onResume();
-        listen(Sensor.TYPE_ACCELEROMETER);
-        listen(Sensor.TYPE_MAGNETIC_FIELD);
         if (viewfinder != null) {
             viewfinder.awake(true);
         }
@@ -182,28 +172,15 @@ public class CameraActivity extends Activity implements SensorEventListener {
     /**
      * Puts the camera to sleep.
      *
-     * <p>Both halves matter and neither is automatic: an unregistered listener is what stops the
-     * device's simulated sensors ticking for this app, and a viewfinder told to stop is what stops
-     * a frame being computed thirty times a second for a screen nobody is looking at.
+     * <p>A viewfinder told to stop is what stops a frame being drawn for a screen nobody is looking
+     * at. A still scene has already stopped on its own — it draws once and never asks for another —
+     * so this only has anything to do for an animated one.
      */
     @Override
     protected void onPause() {
         super.onPause();
-        if (sensors != null) {
-            sensors.unregisterListener(this);
-        }
         if (viewfinder != null) {
             viewfinder.awake(false);
-        }
-    }
-
-    private void listen(int type) {
-        if (sensors == null) {
-            return;
-        }
-        Sensor sensor = sensors.getDefaultSensor(type);
-        if (sensor != null) {
-            sensors.registerListener(this, sensor, SensorManager.SENSOR_DELAY_UI);
         }
     }
 
@@ -374,7 +351,7 @@ public class CameraActivity extends Activity implements SensorEventListener {
         boolean recorded = Recorder.record(file, VIDEO_SECONDS, new Recorder.Renderer() {
             @Override
             public void draw(Canvas canvas, int width, int height, long elapsedMs) {
-                scene.draw(canvas, width, height, degrees(0), degrees(1), degrees(2), elapsedMs);
+                scene.draw(canvas, width, height, elapsedMs);
             }
         });
         if (!recorded) {
@@ -402,8 +379,7 @@ public class CameraActivity extends Activity implements SensorEventListener {
 
     private Bitmap render(int width, int height) {
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        scene.draw(new Canvas(bitmap), width, height,
-            degrees(0), degrees(1), degrees(2), SystemClock.elapsedRealtime());
+        scene.draw(new Canvas(bitmap), width, height, SystemClock.elapsedRealtime());
         return bitmap;
     }
 
@@ -481,42 +457,6 @@ public class CameraActivity extends Activity implements SensorEventListener {
     }
 
     /**
-     * The device's attitude in degrees: azimuth, pitch, roll.
-     *
-     * <p>`getRotationMatrix` + `getOrientation` from the accelerometer and the magnetometer, which
-     * is the ordinary way an app reads its own attitude — and so is also a live check that the
-     * container's simulated sensors are consistent with each other, since a wrong sign in either
-     * feed shows up here as a horizon that tilts the wrong way.
-     */
-    private float degrees(int index) {
-        if (!haveGravity || !haveGeomagnetic) {
-            return 0f;
-        }
-        if (!SensorManager.getRotationMatrix(rotation, null, gravity, geomagnetic)) {
-            return 0f;
-        }
-        SensorManager.getOrientation(rotation, orientation);
-        float value = (float) Math.toDegrees(orientation[index]);
-        return index == 0 && value < 0f ? value + 360f : value;
-    }
-
-    @Override
-    public void onSensorChanged(SensorEvent event) {
-        if (event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
-            System.arraycopy(event.values, 0, gravity, 0, 3);
-            haveGravity = true;
-        } else if (event.sensor.getType() == Sensor.TYPE_MAGNETIC_FIELD) {
-            System.arraycopy(event.values, 0, geomagnetic, 0, 3);
-            haveGeomagnetic = true;
-        }
-    }
-
-    @Override
-    public void onAccuracyChanged(Sensor sensor, int accuracy) {
-        // Nothing here depends on reported accuracy.
-    }
-
-    /**
      * The live picture. Invalidated from its own draw, which is what a viewfinder is: there is no
      * frame to wait for, only the next evaluation of the scene.
      *
@@ -531,8 +471,6 @@ public class CameraActivity extends Activity implements SensorEventListener {
      * 60 or 120.
      */
     private class Viewfinder extends View {
-
-        private static final long FRAME_MS = 33L;
 
         private boolean awake;
 
@@ -552,10 +490,12 @@ public class CameraActivity extends Activity implements SensorEventListener {
 
         @Override
         protected void onDraw(Canvas canvas) {
-            scene.draw(canvas, getWidth(), getHeight(),
-                degrees(0), degrees(1), degrees(2), SystemClock.elapsedRealtime());
-            if (awake) {
-                postInvalidateDelayed(FRAME_MS);
+            scene.draw(canvas, getWidth(), getHeight(), SystemClock.elapsedRealtime());
+            // A still scene is drawn once and then left alone — no timer, no invalidation, nothing
+            // running at all. Only an animated one asks for another frame, and it asks at the
+            // scene's own rate rather than the display's.
+            if (awake && scene.animated()) {
+                postInvalidateDelayed(scene.frameMs());
             }
         }
     }

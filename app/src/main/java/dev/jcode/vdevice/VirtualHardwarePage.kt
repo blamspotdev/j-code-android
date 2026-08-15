@@ -328,6 +328,37 @@ private fun Mode(hardware: VirtualHardware) {
             },
         )
     }
+
+    if (hardware == VirtualHardware.Camera && mode != HardwareMode.Off) {
+        CameraSceneCard(revision = revision)
+    }
+}
+
+/**
+ * What the device's camera is pointed at.
+ *
+ * A choice about cost as much as about the picture. The first version of the camera drew its whole
+ * scene procedurally on every frame — colour bars, a horizon computed from the attitude, a compass
+ * rose and a line of readouts — which made it the most expensive thing on an otherwise idle device,
+ * to show numbers nobody reads off a viewfinder. A scene is a handful of frames now, and a still one
+ * is drawn once and never again.
+ */
+@Composable
+private fun CameraSceneCard(revision: Int) {
+    val context = LocalContext.current
+    val scene = remember(revision) { VirtualDevicePolicy.cameraScene(context) }
+    ManagerSectionCard(
+        title = "What it sees",
+        description = scene.summary,
+    ) {
+        SettingsDropdownRow(
+            label = "Scene",
+            options = CameraScene.entries.map { it.name },
+            selected = scene.name,
+            optionLabel = { CameraScene.valueOf(it).label },
+            onSelect = { VirtualDevicePolicy.setCameraScene(context, CameraScene.valueOf(it)) },
+        )
+    }
 }
 
 /**

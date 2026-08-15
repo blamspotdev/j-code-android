@@ -12,6 +12,34 @@ import androidx.compose.runtime.mutableIntStateOf
 import java.io.File
 import java.util.Properties
 
+/**
+ * What the virtual device's camera has in front of it.
+ *
+ * Deliberately a short list of *cheap* things rather than a scene description language. The camera
+ * exists so an app that asks for a picture gets one it can decode; what is in the picture only has
+ * to be recognisable, obviously synthetic, and inexpensive to produce.
+ */
+internal enum class CameraScene(val id: String, val label: String, val summary: String) {
+    PixelArt(
+        "pixelart",
+        "Pixel art",
+        "Five frames on a one-second loop. The default: enough movement to prove the picture is " +
+            "live, at five frames a second rather than sixty.",
+    ),
+    Slideshow(
+        "slideshow",
+        "Three photos",
+        "Three colour-bar stills, one a second — a camera pointed at something that changes " +
+            "slowly.",
+    ),
+    Still(
+        "still",
+        "One photo",
+        "A single still. Nothing ever redraws it, so the viewfinder costs nothing at all once it " +
+            "is on screen.",
+    ),
+}
+
 /** What one piece of the virtual device's hardware is wired to. A property of the *device*. */
 internal enum class HardwareMode(val label: String) {
     /** The device does not have it: not declared, and no data. */
@@ -81,8 +109,8 @@ internal enum class VirtualHardware(
     Camera(
         id = "camera",
         label = "Camera",
-        summary = "Simulated gives the device a camera of its own that takes test pictures, tilting " +
-            "with the attitude set here. The phone's camera is never lent to a guest.",
+        summary = "Simulated gives the device a camera of its own, showing whichever scene is " +
+            "chosen below. The phone's camera is never lent to a guest.",
         modes = listOf(HardwareMode.Off, HardwareMode.Simulated),
         fallback = HardwareMode.Off,
         permissions = listOf(Manifest.permission.CAMERA),
@@ -326,6 +354,7 @@ internal object VirtualDevicePolicy {
 
     private const val FILE = "policy"
     private const val BACKGROUND = "background"
+    private const val CAMERA_SCENE = "camera.scene"
 
     private const val LOCATION_MODE = "location.mode"
     private const val LATITUDE = "location.latitude"
@@ -435,6 +464,24 @@ internal object VirtualDevicePolicy {
 
     fun setSwitchedOn(context: Context, hardware: VirtualHardware, on: Boolean) {
         edit(context) { it.setProperty("switch/${hardware.id}", on.toString()) }
+    }
+
+    /**
+     * What the device's camera shows — a property of the device, set here and read by its Camera app.
+     *
+     * The choice is a **cost** as much as a picture. A still is drawn once and never again, so a
+     * viewfinder showing one runs at nothing; an animated scene redraws at its own few frames a
+     * second rather than the display's sixty. The first version of this camera drew the whole
+     * picture procedurally on every frame, which made it the most expensive thing on an otherwise
+     * idle device.
+     */
+    fun cameraScene(context: Context): CameraScene {
+        val stored = read(context).getProperty(CAMERA_SCENE) ?: return CameraScene.PixelArt
+        return runCatching { CameraScene.valueOf(stored) }.getOrDefault(CameraScene.PixelArt)
+    }
+
+    fun setCameraScene(context: Context, scene: CameraScene) {
+        edit(context) { it.setProperty(CAMERA_SCENE, scene.name) }
     }
 
     /**

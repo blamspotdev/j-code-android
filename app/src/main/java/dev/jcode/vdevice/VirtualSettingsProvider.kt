@@ -89,6 +89,10 @@ class VirtualSettingsProvider : ContentProvider() {
         }
         putStringArray("volumes", volumes.toTypedArray())
 
+        // What the camera has in front of it — read by the device's own Camera app, which is an
+        // ordinary guest and so has no other way to learn a device setting.
+        putString("camera/scene", VirtualDevicePolicy.cameraScene(context).id)
+
         putString("about/model", VirtualIdentity.MODEL)
         putString("about/android", android.os.Build.VERSION.RELEASE)
         putInt("about/sdk", android.os.Build.VERSION.SDK_INT)
