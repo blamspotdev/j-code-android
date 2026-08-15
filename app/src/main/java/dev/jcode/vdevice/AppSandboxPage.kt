@@ -41,6 +41,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -154,6 +156,23 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
         if (home != null) menuFor = null
     }
 
+    // A guest hands its screen over as a child `SurfacePackage`, and a `SurfaceView` has no way to
+    // give one back: the only thing that releases it is the view detaching. That is invisible while
+    // the guest is alive to take its own layer down, and very visible when it is not — a process
+    // that ends outright (the Tasks panel's Stop, a crash) leaves its last frame on a layer sitting
+    // over everything the container draws, so the device looked like it was still showing the app it
+    // had just been stopped from. Measured. So the view is rebuilt as the screen goes.
+    var generation by remember { mutableIntStateOf(0) }
+    var adopted by remember { mutableStateOf(false) }
+    LaunchedEffect(surface) {
+        if (surface != null) {
+            adopted = true
+        } else if (adopted) {
+            adopted = false
+            generation++
+        }
+    }
+
     // The guest display is the tab, so the surface's own pixel size is what the container is asked
     // for — which keeps forwarded touches in the guest's coordinates with no mapping at all.
     LaunchedEffect(size, running, apkPath, surfaceView) {
@@ -210,7 +229,9 @@ internal fun AppSandboxPage(onSnackbar: (String) -> Unit, modifier: Modifier = M
             session = session,
             status = status,
             running = running,
+            generation = generation,
             onSurface = { surfaceView = it },
+            onSurfaceGone = { gone -> if (surfaceView === gone) surfaceView = null },
             onSized = { width, height -> size = IntSize(width, height) },
             onRetry = {
                 session.restart(apkPath, activityClass, size.width, size.height, surfaceView?.hostToken())
@@ -337,7 +358,10 @@ private fun DeviceScreen(
     session: AppSandboxSession,
     status: SandboxStatus,
     running: Boolean,
-    onSurface: (AppSandboxSurfaceView?) -> Unit,
+    /** Bumped when a guest's screen goes, to rebuild the view holding it — see the call site. */
+    generation: Int,
+    onSurface: (AppSandboxSurfaceView) -> Unit,
+    onSurfaceGone: (AppSandboxSurfaceView) -> Unit,
     onSized: (Int, Int) -> Unit,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
@@ -350,16 +374,27 @@ private fun DeviceScreen(
         modifier = modifier.background(Color(VirtualWallpaper.BACKGROUND)),
         contentAlignment = Alignment.Center,
     ) {
-        AndroidView(
-            factory = { context ->
-                AppSandboxSurfaceView(context, session) { width, height ->
-                    onSized(width, height)
-                    VirtualScreen.sized(width, height)
-                }.also(onSurface)
-            },
-            modifier = Modifier.fillMaxSize(),
-        )
-        DisposableEffect(Unit) { onDispose { onSurface(null) } }
+        key(generation) {
+            // The view that is going announces *itself*, because a replacement is composed before
+            // its predecessor is disposed: a plain `onSurface(null)` on the way out would arrive
+            // after the new view had registered and leave the tab holding no screen at all — the
+            // launcher then had nothing to paint on and the device came back empty. Measured, the
+            // first time a rebuild happened here.
+            val created = remember { mutableStateOf<AppSandboxSurfaceView?>(null) }
+            AndroidView(
+                factory = { context ->
+                    AppSandboxSurfaceView(context, session) { width, height ->
+                        onSized(width, height)
+                        VirtualScreen.sized(width, height)
+                    }.also {
+                        created.value = it
+                        onSurface(it)
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+            DisposableEffect(Unit) { onDispose { created.value?.let(onSurfaceGone) } }
+        }
 
         // Nobody is looking at the device unless this is composed *and* JCode is in the foreground.
         // Both halves matter: switching editor tabs takes the composition away, and pressing Home

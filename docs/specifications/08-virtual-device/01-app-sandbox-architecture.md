@@ -1177,6 +1177,31 @@ internal sealed interface SandboxStatus {
 `AppSandbox` holds the `ServiceConnection`, exposes status as a `StateFlow`, and provides
 `requestOpen(...)` — which is also the target of `adb shell am start -n` against the virtual device.
 
+### 8.1 The device is on demand, and can be switched off from outside the tab
+
+Nothing starts `:guest` except putting an app on the device: opening the tab draws the launcher from
+the IDE, and only a launch — a tap on an icon, a run configuration, or an `adb install` / `am start`
+arriving at `requestOpen` — brings the process up. An idle device costs one drawn wallpaper.
+
+It is also **stoppable from the Tasks panel**, which lists `:guest` alongside every other process the
+app owns, and that is the path the two fixes below came out of:
+
+- **A bare `SIGTERM` is not how a device is switched off.** Signalling a *bound* session arrives as a
+  death: the tab reported "Could not run the app on this device" for something the user had just done
+  on purpose, and the container wrote an exit reason for a process nobody lost. The row now routes
+  `:guest` through `AppSandbox.shutdown()` — unbind first, so nothing discovers a corpse.
+- **A `SurfaceView` cannot give a child `SurfacePackage` back.** There is no clearing call; the only
+  thing that releases one is the view detaching. While the guest is alive to take its own layer down
+  that never shows, and when it is not, the dead process's last frame stays on a layer above
+  everything the container draws — the device went on showing the app it had just been stopped from.
+  So the view is rebuilt (`key(generation)`) as the screen goes.
+
+> The rebuild found a second bug the moment it existed: `AndroidView`'s replacement is composed
+> **before** its predecessor is disposed, so an `onDispose { onSurface(null) }` landed *after* the new
+> view had registered and left the tab holding no screen. The launcher then had nothing to paint on
+> and the device came back empty. The view that is going now announces itself, and the tab clears
+> only if it is still the one being held.
+
 ---
 
 ## 9. Invariants and constraints
