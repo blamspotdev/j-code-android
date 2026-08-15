@@ -71,6 +71,12 @@ internal enum class VirtualHardware(
     val permissions: List<String> = emptyList(),
     val features: List<String> = emptyList(),
     val sensorTypes: List<Int> = emptyList(),
+    /**
+     * For a radio, whether a device that has it starts with it switched on — see
+     * [VirtualDevicePolicy.switchedOn]. A phone ships with Wi-Fi and mobile data on and Bluetooth
+     * off, and starting anywhere else would be a device nobody recognises.
+     */
+    val switchedOnByDefault: Boolean = true,
 ) {
     Camera(
         id = "camera",
@@ -118,44 +124,47 @@ internal enum class VirtualHardware(
     ),
 
     /**
-     * Whether the device is on a network at all.
+     * Whether the device has Wi-Fi hardware.
      *
-     * Simulated means **the phone's connection, reported as the device's Wi-Fi**. The bytes are
-     * genuinely the phone's — this container has never pretended otherwise, and an app that fetches
-     * a URL is really fetching it — so what is simulated is the *answer to the question*, which is
-     * the part a developer wants to control. Off is the case worth having: an app that has never
-     * been run without a network is an app whose offline path has never been run.
+     * **This is the outer of two switches, and the distinction is the point.** Here is where a
+     * device is given a radio or built without one — the same question this bench asks about a
+     * camera. Whether that radio is *switched on* is a thing the device decides about itself, in its
+     * own Settings app, exactly as a person switches Wi-Fi off on a phone that certainly still has
+     * Wi-Fi. Collapsing the two would mean a device that loses its hardware when somebody toggles a
+     * setting, which is not what either control means.
+     *
+     * There is no Real. The bytes an app moves are genuinely the phone's — this container has never
+     * pretended otherwise — but the *answers* about the network are the device's, and handing over
+     * the phone's Wi-Fi state would put a guest back in the position this exists to get it out of.
      */
     WiFi(
         id = "wifi",
         label = "Wi-Fi",
-        summary = "Simulated puts the device on the network, carried by the phone's own " +
-            "connection. Off takes the device off it entirely — which is how to see what an app " +
-            "does offline without disconnecting the phone you are working on.",
+        summary = "Whether the device has Wi-Fi at all. Switching it on and off is done on the " +
+            "device, in Settings — which is how to see what an app does offline without " +
+            "disconnecting the phone you are working on.",
         modes = listOf(HardwareMode.Off, HardwareMode.Simulated),
         fallback = HardwareMode.Simulated,
-        // Deliberately no permissions and no features. Every other entry here governs both, and for
-        // this one both are wrong:
+        // The feature follows the bench, because the bench now means "does the device have Wi-Fi"
+        // — and a device built without it should say so, as it does for a camera. That has a sharp
+        // consequence worth knowing: withdrawing FEATURE_WIFI makes getSystemService(WIFI_SERVICE)
+        // return **null**. That is the platform's own behaviour on a phone with no Wi-Fi rather
+        // than something this container invents, so it is faithful — but an app that assumes the
+        // manager is non-null will fall over, and the honest place to say so is here.
         //
-        //  - Withdrawing FEATURE_WIFI makes `getSystemService(WIFI_SERVICE)` return **null**, which
-        //    is real platform behaviour and a crash in nearly every app that asks — measured, the
-        //    fixture went from "wifi enabled = false" to "no manager". A phone with Wi-Fi switched
-        //    off still has Wi-Fi hardware, and this switch is about the connection, not the radio.
-        //  - Withdrawing ACCESS_NETWORK_STATE and INTERNET would deny install-time permissions to
-        //    every app on the device because a connection is down, which is not what either
-        //    permission means.
-        //
-        // What this switch does is answered where the question is actually asked: GuestNetwork.
+        // No permissions, though. ACCESS_NETWORK_STATE and INTERNET are not about Wi-Fi: a device
+        // with no Wi-Fi and a mobile radio is still on the network, and withdrawing them would deny
+        // install-time permissions to every app because one radio is missing.
+        features = listOf(PackageManager.FEATURE_WIFI),
     ),
 
     Bluetooth(
         id = "bluetooth",
         label = "Bluetooth",
-        summary = "Off means the device does not declare Bluetooth and refuses it to every app. " +
-            "Real declares it and hands the app the phone's own adapter — whether that adapter is " +
-            "switched on is the phone's business, not this device's.",
-        modes = listOf(HardwareMode.Off, HardwareMode.Real),
-        fallback = HardwareMode.Off,
+        summary = "Whether the device has a Bluetooth adapter at all. Switching it on and off is " +
+            "done on the device, in Settings. The phone's own radio is never handed to a guest.",
+        modes = listOf(HardwareMode.Off, HardwareMode.Simulated),
+        fallback = HardwareMode.Simulated,
         permissions = listOf(
             Manifest.permission.BLUETOOTH_CONNECT,
             Manifest.permission.BLUETOOTH_SCAN,
@@ -164,6 +173,30 @@ internal enum class VirtualHardware(
             PackageManager.FEATURE_BLUETOOTH,
             PackageManager.FEATURE_BLUETOOTH_LE,
         ),
+        // A phone ships with Bluetooth off, and a device that starts with it on is one nobody
+        // recognises — and one whose "is Bluetooth on" path never gets exercised.
+        switchedOnByDefault = false,
+    ),
+
+    /**
+     * A mobile radio, which is the third thing an app asks the network about and the one the device
+     * had no answer for at all.
+     *
+     * It earns its place by being *different from Wi-Fi in a way apps behave differently about*: a
+     * cellular connection is metered, and an app that defers a large download, drops to a lower
+     * bitrate, or asks before syncing is doing it because of that bit. With Wi-Fi switched off and
+     * this switched on, the device is online **and metered**, which is a state that otherwise takes
+     * a second phone and a SIM to reproduce.
+     */
+    Cellular(
+        id = "cellular",
+        label = "Cellular",
+        summary = "Whether the device has a mobile radio. Switched on in the device's Settings, " +
+            "where it reports a metered connection — which is the state an app treats differently " +
+            "from Wi-Fi, and the hard one to get a real phone into on purpose.",
+        modes = listOf(HardwareMode.Off, HardwareMode.Simulated),
+        fallback = HardwareMode.Simulated,
+        features = listOf(PackageManager.FEATURE_TELEPHONY),
     ),
 
     Accelerometer(
@@ -379,6 +412,29 @@ internal object VirtualDevicePolicy {
 
     fun setRule(context: Context, packageName: String, permission: String, rule: PermissionRule) {
         edit(context) { it.setProperty(key(packageName, "perm/$permission"), rule.name) }
+    }
+
+    /**
+     * Whether a radio the device **has** is currently **switched on** — the inner of the two
+     * switches, and the one that belongs to the device rather than to the bench.
+     *
+     * A phone with Wi-Fi switched off still has Wi-Fi. The bench answers "does this device have the
+     * hardware", which is a thing you decide when you build a device; this answers "is it on", which
+     * is a thing the device's own Settings decides afterwards, and which an app can watch change
+     * while it runs. Two switches because they are two questions, and because collapsing them would
+     * mean a device that loses its radio every time somebody turns it off.
+     *
+     * False whenever the bench says the device has no such hardware, so a caller only ever has to
+     * ask this one thing.
+     */
+    fun switchedOn(context: Context, hardware: VirtualHardware): Boolean {
+        if (mode(context, hardware) == HardwareMode.Off) return false
+        val stored = read(context).getProperty("switch/${hardware.id}")
+        return stored?.toBooleanStrictOrNull() ?: hardware.switchedOnByDefault
+    }
+
+    fun setSwitchedOn(context: Context, hardware: VirtualHardware, on: Boolean) {
+        edit(context) { it.setProperty("switch/${hardware.id}", on.toString()) }
     }
 
     /**

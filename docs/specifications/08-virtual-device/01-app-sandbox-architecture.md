@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented — device-verified on Android 13 |
 | **Modules** | `:app` (`dev.jcode.vdevice`) |
-| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualStorage.kt, VirtualStorageProvider.kt, GuestDocuments.kt, GuestResults.kt, DeviceIntents.kt, GuestNetwork.kt, HiddenSeams.kt, GuestSurfaces.kt, SimulatedHardware.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
+| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualStorage.kt, VirtualStorageProvider.kt, GuestDocuments.kt, GuestResults.kt, DeviceIntents.kt, GuestNetwork.kt, HiddenSeams.kt, VirtualSettingsProvider.kt, GuestSurfaces.kt, SimulatedHardware.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
 | **Verified against** | device-verified on Android 13, 2026-08-15 |
 
 ---
@@ -417,7 +417,7 @@ be put back — a built-in is not exempt from the clean room, it is reinstalled 
 `installBuiltIns` does that from `assets/vdevice/*.apk` immediately after the wipe, through the same
 `install` path any other APK takes.
 
-Today that is four apps, and the first three are the device's **system apps** — the launcher offers
+Today that is five apps, and the first three are the device's **system apps** — the launcher offers
 no Uninstall for them (§7h).
 
 **The browser** (`tools/vdevice-browser`) is the one that makes the device usable: it opens a URL
@@ -721,6 +721,7 @@ the named app rather than letting the intent out.
 | `ACTION_IMAGE_CAPTURE`, `…_SECURE`, `STILL_IMAGE_CAMERA` | Camera (§7j) |
 | `ACTION_OPEN_DOCUMENT`, `GET_CONTENT`, `CREATE_DOCUMENT`, `OPEN_DOCUMENT_TREE` | Files (§7j) |
 | `ACTION_VIEW` on `http(s)`, `ACTION_WEB_SEARCH`, `ACTION_MAIN` + `CATEGORY_APP_BROWSER` | Browser |
+| The `android.settings.*` intents | Settings (§7m) |
 
 Anything else implicit still goes to the phone — and says so in the device's log, loudly, naming the
 action and warning that no result can come back.
@@ -925,6 +926,86 @@ could catch by fetching something.
 > Wi-Fi Off → `active = none, wifi = false, validated = false`; Wi-Fi Simulated →
 > `active = 101, wifi = true, validated = true`. `wifi enabled` and `bluetooth` report the phone's,
 > which is the documented behaviour rather than a gap.
+
+### 7m. The device's Settings app, and the two layers of control
+
+A device you can only configure from outside itself is a device with a piece missing. The hardware
+bench and Manage permissions are **JCode's** screens, in JCode's window, reached by the person
+driving the IDE — right for JCode, and no use to somebody looking at the device, to an agent driving
+it through `input tap`, or to an app that sends `ACTION_MANAGE_APPLICATIONS` and expects something to
+answer.
+
+`tools/vdevice-settings` is an ordinary guest like Camera and Files, and it changes **real** settings:
+the same ones the bench writes, in the same file, with the same effect on a running guest.
+
+#### The two layers
+
+This is the distinction the whole design turns on, and collapsing it was the first version's mistake.
+
+| | The bench (JCode) | Settings (on the device) |
+|---|---|---|
+| Asks | *Does this device have the hardware?* | *Is it switched on?* |
+| Answers | Off / Simulated / Real | On / Off |
+| Belongs to | whoever is building the device | the device, and anything running on it |
+
+A phone with Wi-Fi switched off still **has** Wi-Fi. Making one control do both would mean a device
+that loses its hardware whenever somebody toggles a setting, and an app that could never see the
+state it actually cares about — a radio that is present and off.
+
+`VirtualDevicePolicy.switchedOn` is the inner switch, and it is false whenever the outer one says the
+device has no such hardware, so a caller only ever asks one thing.
+
+#### Three radios, none of them Real
+
+Wi-Fi, Cellular and Bluetooth are `Off`/`Simulated` on the bench, with **no `Real`**. The bytes an app
+moves are genuinely the phone's — this container has never pretended otherwise — but the *answers*
+about the network belong to the device, and handing over the phone's radio state would put a guest
+back where this exists to get it out of.
+
+| Switched on | What a guest sees |
+|---|---|
+| Wi-Fi | An active network, carried by the phone's connection |
+| Cellular | The same, reported as **metered** when Wi-Fi is off |
+| Neither | No active network, no capabilities — the device is offline while the phone is not |
+
+Cellular earns its place by being different from Wi-Fi *in a way apps behave differently about*: an
+app that defers a large download, drops a bitrate, or asks before syncing is reading the metered bit,
+and getting a real phone into that state on purpose means a SIM and turning its Wi-Fi off.
+
+> Two things the transport cannot do, both measured. `NetworkCapabilities.Builder` is `@SystemApi`
+> and its mutators are `@hide`, so `hasTransport(TRANSPORT_WIFI)` still reports the phone's radio —
+> only the metered bit is corrected. And **Bluetooth's on/off state is not visible to a guest at
+> all**: the adapter is `final`, and its state does not travel through the `mService` field this
+> container can reach (§7l). Bluetooth's switch governs what goes through the package manager —
+> `FEATURE_BLUETOOTH` and the two permissions — and the Settings screen says so in as many words
+> rather than showing a toggle that appears to turn a radio on.
+
+#### The provider
+
+`VirtualSettingsProvider` is how the app reaches any of it: `call()` rather than rows, because "tell
+me everything on this screen" and "change this one thing" are not tables. It does **not** claim to
+tell one guest from another — every guest runs under JCode's uid, so `getCallingPackage()` is JCode
+for all of them and a check would be reading a claim the caller makes about itself. Any app on the
+device can read and change these settings, which is the same trade the container makes everywhere;
+what the provider does instead is **write down who asked**, so a setting that changed on its own has
+a name against it in the device's log.
+
+The Settings app finds the provider by asking the package manager who owns its own uid — not
+`getPackageName()`, which inside a guest answers with the *guest's* package. That is also what makes
+one build of the app work against `dev.jcode`, `dev.jcode.debug` and `dev.jcode.beta` without knowing
+there is more than one.
+
+#### What each screen can honestly claim
+
+Network is above. **Privacy** and **Motion sensors** are the bench's entries with the bench's modes.
+**Apps** lists what is installed and cycles each declared permission Allow → Ask → Deny. **Storage**
+shows both volumes with what each is holding and which one keeps things. **Sound** governs the
+microphone and says plainly that output volume is the phone's — there is no audio stand-in, and a
+slider that moved nothing would be worse than saying so.
+
+> Device-verified on Android 13: Settings *on the device* switched Wi-Fi and Cellular off, and the
+> hardware fixture — a different app on the same device — then read `active = none, wifi = false,
+> validated = false`, with the phone still online throughout.
 
 ## 8. Session states
 

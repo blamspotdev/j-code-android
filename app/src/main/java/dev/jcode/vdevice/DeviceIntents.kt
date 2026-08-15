@@ -41,6 +41,7 @@ internal object DeviceIntents {
         VirtualDeviceApps.BROWSER_PACKAGE,
         CAMERA_PACKAGE,
         FILES_PACKAGE,
+        SETTINGS_PACKAGE,
     )
 
     /**
@@ -110,6 +111,23 @@ internal object DeviceIntents {
             actions = setOf(Intent.ACTION_MAIN),
             categories = setOf(Intent.CATEGORY_APP_BROWSER),
         ),
+        // The settings intents an app sends when it wants to send somebody somewhere rather than
+        // explain what to go and change. Left to the phone they open the *phone's* Settings, which
+        // is both a leak and useless advice: nothing there governs this device.
+        Handler(
+            packageName = SETTINGS_PACKAGE,
+            actions = setOf(
+                "android.settings.SETTINGS",
+                "android.settings.WIFI_SETTINGS",
+                "android.settings.WIRELESS_SETTINGS",
+                "android.settings.BLUETOOTH_SETTINGS",
+                "android.settings.SOUND_SETTINGS",
+                "android.settings.INTERNAL_STORAGE_SETTINGS",
+                "android.settings.MANAGE_APPLICATIONS_SETTINGS",
+                "android.settings.APPLICATION_DETAILS_SETTINGS",
+                "android.settings.DEVICE_INFO_SETTINGS",
+            ),
+        ),
     )
 
     /**
@@ -148,6 +166,7 @@ internal object DeviceIntents {
     fun isSystem(packageName: String): Boolean = packageName in SYSTEM_PACKAGES
 
     const val CAMERA_PACKAGE = "dev.jcode.vdevice.camera"
+    const val SETTINGS_PACKAGE = "dev.jcode.vdevice.settings"
     const val FILES_PACKAGE = "dev.jcode.vdevice.files"
 
     /**

@@ -88,10 +88,24 @@ internal object GuestNetwork {
         return if (done.isEmpty()) "none" else done.joinToString("+")
     }
 
-    /** True while the device says it is on a network — see [VirtualHardware.WiFi]. */
-    private fun online(): Boolean =
-        runCatching { VirtualDevicePolicy.mode(host, VirtualHardware.WiFi) != HardwareMode.Off }
-            .getOrDefault(true)
+    /**
+     * True while a radio the device **has** is also **switched on** — see
+     * [VirtualDevicePolicy.switchedOn] for why those are two questions.
+     */
+    private fun on(hardware: VirtualHardware): Boolean =
+        runCatching { VirtualDevicePolicy.switchedOn(host, hardware) }.getOrDefault(false)
+
+    private fun online(): Boolean = on(VirtualHardware.WiFi) || on(VirtualHardware.Cellular)
+
+    /**
+     * Whether the connection the device is reporting is a metered one.
+     *
+     * True when the only radio on is cellular, which is the whole reason this device has a cellular
+     * switch: an app that defers a large download, drops a bitrate, or asks before syncing is
+     * reading exactly this bit, and getting a real phone into that state on purpose means finding
+     * one with a SIM and turning its Wi-Fi off.
+     */
+    private fun metered(): Boolean = !on(VirtualHardware.WiFi) && on(VirtualHardware.Cellular)
 
     /**
      * Answers the questions `ConnectivityManager` asks on an app's behalf.
@@ -103,24 +117,36 @@ internal object GuestNetwork {
      * capabilities to describe, which is exactly what an app checks before it decides it is offline.
      */
     private fun connectivity(real: Any, method: Method, args: Array<Any?>?): Any? {
-        if (online()) return Skip
-        return when (method.name) {
-            "getActiveNetwork",
-            "getActiveNetworkForUid",
-            "getActiveNetworkInfo",
-            "getActiveNetworkInfoForUid",
-            "getActiveLinkProperties",
-            "getNetworkCapabilities",
-            "getLinkProperties",
-            -> null
+        if (!online()) {
+            return when (method.name) {
+                "getActiveNetwork",
+                "getActiveNetworkForUid",
+                "getActiveNetworkInfo",
+                "getActiveNetworkInfoForUid",
+                "getActiveLinkProperties",
+                "getNetworkCapabilities",
+                "getLinkProperties",
+                -> null
 
-            "getAllNetworks" -> emptyNetworks()
-            "getAllNetworkInfo" -> arrayOfNulls<android.net.NetworkInfo>(0)
-            "getNetworkInfo", "getNetworkInfoForUid" -> null
-            "isActiveNetworkMetered" -> false
-            "isDefaultNetworkActive" -> false
-            else -> Skip
+                "getAllNetworks" -> emptyNetworks()
+                "getAllNetworkInfo" -> arrayOfNulls<android.net.NetworkInfo>(0)
+                "getNetworkInfo", "getNetworkInfoForUid" -> null
+                "isActiveNetworkMetered" -> false
+                "isDefaultNetworkActive" -> false
+                else -> Skip
+            }
         }
+        // Online, so the connection is passed through — with one thing corrected. The phone is on
+        // Wi-Fi; the *device* may be on cellular, and "is this metered" is the bit an app changes
+        // its behaviour over: deferring a large download, dropping a bitrate, asking before syncing.
+        // Getting a real phone into that state on purpose means a SIM and turning its Wi-Fi off.
+        //
+        // Only that bit. Rewriting the transport in the `NetworkCapabilities` an app reads would be
+        // the fuller answer and is not available: `NetworkCapabilities.Builder` is `@SystemApi`, not
+        // public, and its mutators are `@hide`, so there is no supported way to hand back a modified
+        // one. `hasTransport(TRANSPORT_WIFI)` therefore still reports the phone's radio, which is a
+        // smaller inaccuracy than a reflective rebuild of a class the framework hands out by value.
+        return if (method.name == "isActiveNetworkMetered") metered() else Skip
     }
 
     private fun emptyNetworks(): Any = java.lang.reflect.Array.newInstance(android.net.Network::class.java, 0)

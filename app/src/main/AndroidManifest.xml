@@ -122,6 +122,14 @@
             </intent-filter>
         </provider>
 
+        <!-- How the device's own Settings app reads and changes the device's settings. Not exported:
+             the only caller is a guest, and a guest runs in this app's own process under this app's
+             own uid, so it reaches the provider without the provider being open to the phone. -->
+        <provider
+            android:name=".vdevice.VirtualSettingsProvider"
+            android:authorities="${applicationId}.vdevice.settings"
+            android:exported="false" />
+
         <!-- Receives PackageInstaller session status for the in-app updater (see AppUpdateInstaller).
              Not exported: it only handles the PendingIntent this app hands to its own commit(). -->
         <receiver
