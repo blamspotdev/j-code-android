@@ -19,32 +19,64 @@ try an Android app on the same device, in an editor tab.
 
 ---
 
-## 2. Two presentation modes
+## 2. One presentation: the device is a tab
 
-| Mode | Entry | Window | Used when |
-|---|---|---|---|
-| **Embedded** | `AppSandboxPage` → `GuestSessionService` → `EmbeddedGuest` | Window-less, composited into a `SurfaceView` in an editor tab | The window supports embedding |
-| **Full-screen** | `VirtualDevice.launch` → `GuestBootstrapActivity` → `GuestActivity0..3` | A real activity in its own task | Otherwise, or by choice |
+An app runs one way here — embedded, window-less, composited into the device's editor tab.
 
-```kotlin
-internal enum class AppSandboxTier { Embedded, FullScreen }
-```
+| | |
+|---|---|
+| **Entry** | `AppSandboxPage` → `AppSandbox.session` → `GuestSessionService` → `EmbeddedGuest` |
+| **Window** | None of the guest's own. Its decor view is a child of the container's `FrameLayout`, and the tab shows that hierarchy through a `SurfaceControlViewHost` surface package |
+| **Asked for by** | The tab, a finished virtual-device build, the `tools.virtualDevice` palette command, or the adb daemon's `am start` — all through `AppSandbox.requestOpen`, so they cannot disagree about what running an app means |
 
-The tier is chosen by two things: embedding is impossible without hardware acceleration, and
-**Settings → Virtual device → "Always run in full screen"** lets the user insist on a real window.
+**There used to be a second one**, and it is worth recording what it was because the shape of the
+container still carries its marks. A guest could be launched into a real activity of its own, outside
+the tab: `VirtualDevice.launch` → a translucent `GuestBootstrapActivity` → one of four
+`GuestActivity0`–`GuestActivity3` stubs, picked by an `AppSandboxTier` enum and forced by a
+**Settings → Virtual device → "Always run in full screen"** switch. All of it is gone.
 
-That switch exists because embedding is a trade, not a strict improvement. It buys the IDE around the
-app and a screen an agent can read, and it costs the guest a real window: its activity token is one
-no `ActivityRecord` answers to, so anything asking the activity manager about itself is answered by
-the container rather than the system (see
+It went because it was a *second way to run an app*, with its own settings, its own fallbacks and its
+own bugs — and everything that makes this a device rather than a viewport is built inside the
+container's own view tree, which a guest in its own activity is not in:
+
+| The device has | Which is |
+|---|---|
+| A status bar and a notification shade (§7b) | Views added last to `EmbeddedGuest`'s container |
+| A home screen (§7a) | Drawn onto the tab's surface, with no guest process involved at all |
+| `screencap` and `uiautomator dump` (§7, §7a) | `EmbeddedGuest.capture` / `.dump`, over that same container |
+| Taps, from a finger and from `input tap` (§5) | `EmbeddedGuest.touch`, dispatched into that same container |
+| A permission prompt somebody can answer (§7e) | The IDE's, raised over the tab across the session AIDL |
+
+A full-screen guest was in none of that, so each line had to be given up for it or built a second
+time — and a second implementation is a second set of answers, which is the divergence §7a exists to
+prevent. The shade is the clearest case: because the device's bar is a view *inside* the container, a
+full-screen guest had left the only surface the device had to show a notification on, and its
+notifications had to be mirrored onto the **phone's** shade to appear anywhere. A device that borrows
+the user's phone in order to say something has stopped being a device.
+
+It was not free in the other direction either. A full-screen guest shared JCode's task, and measured
+on the Odin2 the activity manager's crash cleanup for one finished `MainActivity` along with it — a
+guest's bug took the IDE off the screen.
+
+**Full screen now means what it means on a phone.** An app that asks for the whole screen gets the
+*device's*: `GuestWindow.statusBarStyleOf` reads `FLAG_FULLSCREEN`, the bar goes away and the guest's
+window grows into the space (§7b). There is no other screen for it to take, and `am start
+--windowingMode 1` no longer means anything special — every launch lands on the device.
+
+**What that costs, recorded rather than worked around.** Embedding is a trade. It buys the IDE around
+the app and a screen an agent can read, and it costs the guest a real window: its activity token is
+one no `ActivityRecord` answers to, so anything asking the activity manager about itself is answered
+by the container rather than the system (see
 [Guest runtime §4b](02-guest-runtime-and-hidden-api.md#4b-the-embedded-activitys-token--guestactivityclient)).
 An app that wants a real task — its own recents entry, a `PendingIntent` the system will act on, an
-SDK that interrogates its own activity — is better served by the full-screen path, and for those the
-switch is the answer rather than a workaround for a bug.
+SDK that interrogates its own activity — used to have the switch as an answer and now has none. What
+the container can answer itself, it does (§7h, §7i); what it cannot, it says so in the device's log
+rather than failing quietly.
 
-`AppSandbox.alwaysFullScreen` holds it rather than the DataStore being read at each call site,
-because the tab and the adb daemon's `am start` both have to give the same answer and the daemon is
-not a composable. `am start --windowingMode 1` still asks for full screen explicitly.
+**Hardware acceleration is a requirement, not a fork in the road.** The device is composited onto a
+surface, so a window without the GPU cannot draw one. With nowhere else to put an app, the install
+sheet says exactly that and names *Settings → Performance → Rendering*, instead of offering a tier
+that no longer exists.
 
 ### 2.1 Why not a virtual display
 
@@ -65,7 +97,8 @@ flowchart LR
     subgraph ide["dev.jcode (main)"]
         page["AppSandboxPage"]
         sv["AppSandboxSurfaceView"]
-        sandbox["AppSandbox (bind/unbind)"]
+        sandbox["AppSandboxSession (bind/unbind)"]
+        adb["VirtualDeviceAdbService"]
     end
     subgraph guest["dev.jcode:guest"]
         svc["GuestSessionService (IGuestSession)"]
@@ -73,30 +106,64 @@ flowchart LR
         gr["GuestRuntime + hooks"]
         apk["the guest APK's activity"]
     end
+    adb -- "AppSandbox.requestOpen" --> page
     sandbox -- "bindService" --> svc
     svc --> eg --> gr --> apk
     eg -- "SurfacePackage" --> sv
     sv -- "MotionEvent / KeyEvent / text" --> svc
+    svc -- "IGuestSessionCallback: finished, permission request" --> sandbox
 ```
 
-Declared in `AndroidManifest.xml` with `android:process=":guest"`:
-`GuestBootstrapActivity` (translucent, `excludeFromRecents`), `GuestActivity0`–`GuestActivity3`
-(`launchMode="standard"`, `Theme.DeviceDefault.NoActionBar`, a deliberately broad `configChanges`
-set), and `GuestSessionService`.
+`AndroidManifest.xml` declares **two** components in `android:process=":guest"`, one activity and one
+service:
 
-The manifest comment explains why the stubs exist at all:
+| | |
+|---|---|
+| `.vdevice.GuestActivity` | `exported="false"`, `launchMode="standard"`, `windowSoftInputMode="adjustResize"`, `Theme.DeviceDefault.NoActionBar`, and a deliberately broad `configChanges` set |
+| `.vdevice.GuestSessionService` | `exported="false"` |
 
-> …the stubs the app-virtualization container launches in place of a guest APK's own activities,
-> since the system cannot be asked to start an activity of a package it has never heard of.
-> …they are never used as themselves — `GuestRuntime` swaps in the guest's class before the system
-> instantiates them. `launchMode` is standard so one stub can back several guest instances, and
-> `configChanges` is deliberately broad so the guest handles rotation itself instead of being
-> relaunched through the stub.
+(The third `vdevice` component, `VirtualStorageProvider`, carries no `android:process` and so runs in
+the IDE process — see §7g.)
 
-Four stubs means up to four concurrent guest activities.
+The manifest comment says what the one activity is for:
 
-**Unbinding `GuestSessionService` is what tears a session down** — nothing else keeps the `:guest`
-process alive.
+> …a declared activity the container never launches. A guest activity belongs to a package the system
+> has never heard of, so there is no `ActivityInfo` to build one from; this stub is that template, and
+> nothing else. It is declared in the `:guest` process so the guest gets its own ART heap and
+> framework hooks and cannot corrupt the IDE, and `configChanges` is deliberately broad so a guest
+> handles configuration changes itself rather than being relaunched.
+
+**One stub is enough, and that is a consequence of §2.** `GuestRuntime.stubIntent` names
+`GuestActivity` every time, and it is never started — it is there so that `getActivityInfo` has
+something to answer with, since `Instrumentation.newActivity` needs one and the activity actually
+being built belongs to a package the system has never heard of. There used to be four so that several
+guest activities could hold separate places in a real task; with the full-screen path gone there is
+no task to hold a place in. Reaching `GuestActivity.onCreate` means something started it as itself,
+which the container never asks for, so it logs that it is a template rather than a screen and
+finishes.
+
+**How many guest activities can be up at once is no longer a manifest question.**
+`EmbeddedGuest.stack` is an ordinary list, bottom first, with only the top activity's decor visible;
+`push` adds one and hides the one below, `pop` and `reapFinished` take them off again. Nothing counts
+stubs, because the stub is a template rather than a place.
+
+**Teardown is two different statements**, and treating them as one was a bug this container shipped
+with:
+
+| | |
+|---|---|
+| **Unbind** (`AppSandboxSession.close`) — a tab switch, Stop, or a guest that closed itself | `GuestSessionService.onUnbind` stops the guest and clears the permission prompt. The *device* stays: its home screen is drawn by the IDE and needs no `:guest` process at all |
+| **`shutdown()`** — closing the tab | The service ends its own process (`Process.killProcess(myPid())`, posted after a short delay so this transaction and the unbind behind it finish first) |
+
+Unbinding alone is **not** the teardown, which is what it was taken for. Android keeps an emptied
+`:guest` around and rebinds into it, so everything the container accumulated outlives the tab that
+asked for it: the loaded dex and class loaders, anything `GuestComponents` is still hosting, the
+`Instrumentation` swapped into `ActivityThread`, the rewritten `Build`, and the WebView data
+directory claimed for the guest. None of that has an undo — which is the whole reason the container
+runs in a process of its own — so closing the tab has to mean the device is off rather than hidden.
+`MainViewModel` calls `AppSandbox.shutdown()` when the last sandbox tab goes.
+
+> Verified: `:guest` at pid 31222 with a guest running; tab closed, process gone.
 
 ---
 
@@ -179,19 +246,23 @@ worked on apps a finger could not drive.
 data class VirtualDeviceApp(
     val packageName: String, val label: String,
     val versionName: String?, val activities: List<String>,   // fully-qualified, manifest order
+    val apkPath: String,                                      // where the launcher and `am start` run it from
 )
 
 fun inspect(context: Context, apkPath: String): Result<VirtualDeviceApp>
-fun launch(...)
+fun icon(context: Context, apkPath: String): Drawable?
 ```
 
 `inspect` uses `PackageManager.getPackageArchiveInfo` with `GET_ACTIVITIES or GET_META_DATA` —
 **public API only**, so it is safe to call from the IDE process. It fails with
 `VirtualDeviceException` for an unreadable APK or one with no `<application>`.
 
-`launch` is the full-screen path: a real activity, in its own task, with everything a real window
-brings. `GuestOverlay.install()` adds a floating pill and a back/close bar, because JCode draws
-nothing over a full-screen guest.
+`icon` resolves the APK's own launcher drawable by the same trick — an archive's resources resolve as
+long as `sourceDir` points back at it — which is what keeps the device's launcher on public API in
+the IDE process.
+
+There is no `launch`. It was the full-screen path's entry point and went with it (§2); putting an app
+on the device is `AppSandbox.requestOpen`, wherever the request came from.
 
 ---
 
@@ -276,7 +347,7 @@ running app's label on the left, and what it has posted on the right.
 | Drag down from the top strip | Opens the shade: one row per notification, title and text, with **Clear all** |
 | Drag up, or tap below an open shade | Closes it |
 | `back` | Closes the shade first, the way a phone answers, before the guest ever sees the key |
-| Tap the pill in the middle | JCode's own control bar — back, keyboard, restart, full screen, stop. IDE chrome, not the device's |
+| Tap the pill in the middle | JCode's own control bar — back, keyboard, the hardware bench, restart, stop, and a warning only when this guest actually lost something. IDE chrome, not the device's |
 
 It is a child of `EmbeddedGuest`'s container, added **last** so it is the topmost view, rather than
 composed over the tab by the IDE. That one decision is what makes it part of the device:
@@ -877,7 +948,8 @@ internal sealed interface SandboxStatus {
 3. Re-acquire the surface package after a detach; do not restart the session.
 4. All `oneway` methods are called from the IDE UI thread and must not block.
 5. Capture and hierarchy dumps go through a file path, not a `Bundle`.
-6. Unbinding the service is the teardown; there is no separate stop call.
+6. Unbinding takes the *guest* down and leaves the device on; only `shutdown()` ends the `:guest`
+   process, and only closing the tab means it — see §3.
 7. Treat every guest as trusted code — it shares JCode's uid.
 8. The device is emptied on every JCode start. Nothing may assume an app installed in a previous
    session is still there, or a file written to its storage.
@@ -897,17 +969,20 @@ internal sealed interface SandboxStatus {
 |---|---|
 | `hostToken` null | `start` returns an error message rather than embedding |
 | `input`/`uiautomator dump` with nothing running | Answered with one line naming `am start`, not a hang |
-| Embedding unsupported on the window | Falls back to `AppSandboxTier.FullScreen` |
+| The tab's window is not hardware accelerated | Said plainly on the install sheet, naming *Settings → Performance → Rendering*. There is nothing to fall back to — see §2 |
 | Guest activity finishes | `onGuestFinished(reason)`; the tab reports the session ended |
 | `:guest` process killed | Same callback path; the IDE process is unaffected |
-| More than four concurrent guests | No stub available |
+| Something starts `GuestActivity` as itself | It logs that it is a template rather than a screen, and finishes immediately |
 | Unreadable APK | `VirtualDeviceException` from `inspect` |
 
 ---
 
 ## 11. Known gaps
 
-- Four concurrent guest activities maximum (`GuestActivity0`–`GuestActivity3`).
+- There is no full-screen path. An app that needs a real task — its own recents entry, a
+  `PendingIntent` the system will act on, an SDK that interrogates its own activity — cannot have one
+  here, and the container answers what it can itself instead — §2.
+- The device cannot draw at all without a hardware-accelerated window — §2.
 - The guest shares JCode's uid and permissions — no isolation, by design.
 - `Environment.getExternalStorageDirectory()` reports the phone's path, not the device's — §7g.
 - Camera2 gets no frames; only `ACTION_IMAGE_CAPTURE` is answered — §7k.
