@@ -104,6 +104,24 @@
             </intent-filter>
         </provider>
 
+        <!-- The virtual device's own storage, as content:// URIs. A picker hands an app a URI rather
+             than a path, so without this the device's filesystem would be one a guest could be told
+             about and not read. DocumentsProvider refuses to start unless it is exported, grants URI
+             permissions and is guarded by MANAGE_DOCUMENTS — which only DocumentsUI holds, so the
+             audience is the person (through the Files app, the one way onto the device that is not
+             `adb push`) and the guest, which reaches it because a provider never permission-checks
+             its own uid. -->
+        <provider
+            android:name=".vdevice.VirtualStorageProvider"
+            android:authorities="${applicationId}.vdevice.files"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+
         <!-- Receives PackageInstaller session status for the in-app updater (see AppUpdateInstaller).
              Not exported: it only handles the PendingIntent this app hands to its own commit(). -->
         <receiver

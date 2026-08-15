@@ -235,7 +235,9 @@ A device-side adb daemon so the guest's `adb` can drive JCode's app sandbox.
 | `shell:uiautomator dump` | The guest's view tree as uiautomator-shaped XML, on the stream — or the launcher's icons when nothing is running |
 | `shell:wm size` / `shell:wm density` | The device's resolution and density |
 | `shell:logcat [-d] [-t n] [-c]` | The **virtual device's** log — see §10.1 |
-| `shell:screencap` | PNG via `VirtualScreen` |
+| `shell:screencap [-p] [<path>]` | PNG via `VirtualScreen`, on the stream or written to the device |
+| `shell:ls [-l]`, `cat`, `rm [-r]`, `mkdir`, `mv`, `df` | The device's storage — see §10.2 |
+| `sync:` | `adb pull` and `adb push` — see §10.2 |
 | `exec:cmd package 'install' -S <n>` | Single-stream `adb install` |
 | `exec:cmd package install-create\|install-write\|install-commit\|install-abandon` | Session-based `adb install-multiple`, for an app bundle's base plus its config splits — see [App sandbox architecture §7a](../08-virtual-device/01-app-sandbox-architecture.md#virtualdeviceapps--the-package-store) |
 
@@ -244,9 +246,10 @@ a terminal can put an app on the device, drive it, read what is on screen, and t
 `input` events are built as a touchscreen's would be — real down/move/up streams sharing one down
 time — and go through the same calls a finger does, so the guest cannot tell them apart.
 
-`uiautomator dump` and `screencap` **write to the stream, not a file**: this device has no
-filesystem to write one to, and a path argument is answered with the `exec-out` redirect to use
-instead.
+`uiautomator dump` and `screencap` answer **on the stream** when given no path, so
+`adb exec-out screencap -p > shot.png` returns a PNG intact. Given a path they write it to the
+device's storage and print where it went, which is the form every script written against a phone
+uses — `dump /sdcard/w.xml` and then `pull` it.
 
 An **idle device is not a dead one** — it is showing its launcher, so all three answer it rather than
 refusing: `screencap` returns the wallpaper with the app icons on it, `uiautomator dump` lists those
@@ -254,9 +257,6 @@ icons (`content-desc` is the package, which is what `am start` and `pm uninstall
 `input tap` on one starts it. All three read the same layout, so the coordinates agree. `swipe`,
 `text` and `keyevent` still need a guest and say so in one line — the home screen has nothing else to
 act on.
-
-**`sync:` is not implemented**, so `adb push`/`pull` do not work against the virtual device; only
-the single-stream install form is supported.
 
 > The device is emptied on every JCode start (see
 > [App sandbox architecture §7a](../08-virtual-device/01-app-sandbox-architecture.md#7a-the-device-with-nothing-on-it)),
@@ -269,28 +269,55 @@ are dropped and what remains is the command.
 
 ### 10.1 `logcat` — the device's own log, not the phone's
 
-**The phone's log is not on offer and could not be.** Reading it needs `READ_LOGS`
-(`signature|privileged`), and an app cannot read back even its own entries — measured on Android 13,
-where `logcat` run as JCode's uid returns nothing whatever. A driver that wanted the stack trace
-behind a crash therefore had no way to get one.
+**Another app's log is not on offer and could not be** — reading it needs `READ_LOGS`, which is
+`signature|privileged`. But the log daemon **scopes an unprivileged reader to its own uid** rather
+than refusing it, and that distinction is the whole of this section: a reader started inside `:guest`
+gets `:guest`'s entries, with no permission at all.
 
-JCode does not need to read the system log, though: it *is* the process running the guest. So
-`VirtualDeviceLog` is written by the container itself, into `filesDir/vdevice/device.log`:
+`VirtualDeviceLog` writes `filesDir/vdevice/device.log` from four sources:
 
 | Source | Written by |
 |---|---|
-| Container events (loaded, started, refused) | `GuestLoader`, `GuestRuntime`, `AppSandboxSession.fail` |
+| **The `:guest` process's own system log** | `captureProcessLog` — `logcat -v threadtime --pid=<self>`, teed in. This is where the guest's `android.util.Log` **and its native `__android_log_print`** live, and where the container's own ~60 `Log` calls go |
+| Container events (loaded, started, refused) | `GuestLoader`, `GuestRuntime`, `GuestDocuments`, `AppSandboxSession.fail` |
 | Anything the guest **printed** | `System.out`/`System.err` tee'd in `:guest` — catches `println` and `printStackTrace()` |
-| The guest's **uncaught exceptions**, full trace | `Thread.setDefaultUncaughtExceptionHandler` in `:guest`, which still chains to the previous handler so the process dies exactly as it would have |
-| Why the guest process **died** | `ActivityManager.getHistoricalProcessExitReasons` — public API for one's own package, reachable where `logcat` is not |
+| Why the guest process **died** | `ActivityManager.getHistoricalProcessExitReasons` — public API for one's own package |
 
-A file, deliberately: `:guest` and the IDE both write it, a full-screen guest has no session bound to
-carry lines over, and the two processes share a uid and a data directory. `resetOnStart` wipes it
-with everything else, so the log covers exactly one JCode session.
+Filtered by **pid**, not uid: JCode's own process shares the uid, and the device's log is the
+device's business.
 
-> **Known gap.** A guest's own `android.util.Log` calls go to the system log through a native call
-> there is no reaching, so they are absent. There is no follow mode either — there is no `logcat`
-> process here to hold open — so `-d` is implied.
+> This used to be missing, on the belief that an app can read nothing back from `logcat` at all, and
+> the cost was measured: a session in which the phone's document picker had opened over the IDE and
+> an app had been left waiting for a result for ever produced a device log of **three lines**, while
+> the system log for the same pid carried the app's own "asking for the document picker" and the
+> container's `outgoing startActivity: null`, which names the bug outright.
+
+A file, deliberately: `:guest` and the IDE both write it, and the two processes share a uid and a
+data directory. `resetOnStart` wipes it with everything else, so the log covers exactly one JCode
+session. There is no follow mode — the reader that fills the file is already running and there is no
+second one to hold open — so `-d` is implied.
+
+---
+
+### 10.2 The device's filesystem — `sync:` and the shell commands
+
+The virtual device has storage now (see
+[App sandbox architecture §7g](../08-virtual-device/01-app-sandbox-architecture.md#7g-the-devices-internal-storage)),
+presented as `/sdcard`, so the services that need one are answerable.
+
+**`sync:`** is `adb pull` and `adb push`. It is the one service that is a *session* rather than a
+command: the client opens a single stream and sends framed requests down it until `QUIT`, so
+`AdbSync` is a loop rather than another `when` branch. Version 1 only — `STAT`, `LIST`, `RECV`,
+`SEND` — and the banner deliberately **stops advertising `stat_v2` and `ls_v2`**, because those
+switch the client to a second parallel encoding to gain a 64-bit size and an errno on a filesystem
+that has neither large files nor interesting failures.
+
+`ls`, `cat`, `rm`, `mkdir`, `mv` and `df` are the rest of it: enough of a shell to check that a push
+arrived and tidy up after it, and no more.
+
+**Every path is resolved through `VirtualStorage.resolve`**, which compares *canonical* paths against
+the device's root — so neither `../` nor a symlink a guest planted can walk out of the device's
+storage into JCode's own data directory. A path outside it is refused by name rather than clamped.
 
 ---
 
@@ -329,7 +356,8 @@ coroutine.
 
 ## 14. Known gaps
 
-- No `sync:` service on the virtual-device daemon.
+- The virtual device's `sync:` is version 1 only; `stat_v2`/`ls_v2` are not advertised, so a client
+  reports a 32-bit size and no errno for a failed stat.
 - Wireless debugging must be enabled manually by the user; the app cannot toggle it without
   `WRITE_SECURE_SETTINGS`, which is deliberately never requested.
 - Pairing is out of scope — the user pairs through the system UI.

@@ -4,8 +4,8 @@
 |---|---|
 | **Status** | Implemented — device-verified on Android 13 |
 | **Modules** | `:app` (`dev.jcode.vdevice`) |
-| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, SimulatedHardware.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestBootstrapActivity.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
-| **Verified against** | device-verified on Android 13, 2026-08-13 |
+| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualStorage.kt, VirtualStorageProvider.kt, VirtualFilePicker.kt, GuestDocuments.kt, GuestSurfaces.kt, SimulatedHardware.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
+| **Verified against** | device-verified on Android 13, 2026-08-15 |
 
 ---
 
@@ -146,6 +146,30 @@ whichever guest window is topmost.
 
 Child windows (dialogs, popups, spinners) need extra work — see
 [Guest runtime and hidden API](02-guest-runtime-and-hidden-api.md).
+
+### 5.1 An event must carry the **device's** coordinates, not the phone's
+
+A `MotionEvent` holds two positions. `getX`/`getY` are shifted by every `ViewGroup` on the way down
+the tree; `getRawX`/`getRawY` are not, because they are where the finger landed on the *display*.
+Relaying an event into the tab shifts the first and leaves the second, so a guest reading the second
+is told the tab's offset down JCode's window — and the device's screen appears to start a couple of
+hundred pixels above the top of itself.
+
+That is not a corner case. `getRawX`/`getRawY` are what GameActivity hands native code as
+`GameActivityPointerAxes.rawX`, what SDL reads, and what anything hit-testing against a full-bleed
+surface uses. All of them are correct on a phone, where a full-screen window starts at the origin and
+the two positions are the same number.
+
+> Measured on WaveRepo — a GameActivity app with a C++ UI: it rendered perfectly, and every tap
+> arrived **258 px below** the control it was aimed at, so the app answered nothing. Nothing in any
+> log said so, because from the app's side nothing had gone wrong. Tapping 258 px above the button
+> triggered it.
+
+`VirtualInput.inDeviceSpace` rebuilds the event from its local coordinates, which makes them its raw
+ones too, and `EmbeddedGuest.touch` does that before dispatching. The batched samples come with it —
+a velocity tracker given one sample per event fits no curve, and flings would die. Events
+`VirtualInput` synthesises for `adb shell input` are already built this way, which is why `input tap`
+worked on apps a finger could not drive.
 
 ---
 
@@ -530,6 +554,107 @@ Device-verified: with the spin loop at a 4 s period the guest reads a gyroscope 
 −1.57080 rad/s (−2π/4 s) and a rotating magnetic field, while gravity stays at (0, 0, 9.80665) —
 a device turning about its vertical does not tip.
 
+### 7g. The device's internal storage
+
+A device with no filesystem is a device most apps cannot finish a sentence on. An app opens a
+document, saves an export, unpacks its assets, writes a log — and before this the container had
+nowhere for any of that to go, so those calls either failed or, worse, landed in the **phone's**
+shared storage among the user's own files, under JCode's `MANAGE_EXTERNAL_STORAGE`.
+
+`VirtualStorage` is `filesDir/vdevice/storage`, presented as `/sdcard`:
+
+| | |
+|---|---|
+| `/sdcard/Download`, `Documents`, `Music`, `Pictures`, `Movies`, `DCIM` | Seeded empty on every start, so `adb push … /sdcard/Download/` works on a device nothing has run on |
+| `/sdcard/Android/data/<pkg>/files` and `/cache` | What `getExternalFilesDir` and `getExternalCacheDir` answer |
+| `/sdcard/Android/media/<pkg>`, `/sdcard/Android/obb/<pkg>` | `getExternalMediaDirs`, `getObbDir` |
+
+It is under `filesDir/vdevice/`, so **`resetOnStart` empties it with everything else** — the same
+clean-room rule the installed apps follow, and for the same reason. `pm uninstall` and `pm clear`
+take an app's corner of it too, which a phone does not do for uninstall and is criticised for.
+
+Reachable three ways: through the guest's `Context`; over adb (`pull`, `push`, `ls`, `cat` — see
+[ADB bridge §10.2](../03-runtime/05-adb-bridge.md#102-the-devices-filesystem--sync-and-the-shell-commands));
+and as `content://` URIs through `VirtualStorageProvider`, which is what a picker hands an app.
+
+> **Known gap.** `Environment.getExternalStorageDirectory()` still answers the **phone's** path. It
+> is computed fresh inside `Environment.UserEnvironment.getExternalDirs()` on every call, out of
+> `StorageManager.getVolumeList`, so there is no cached field to redirect and no method to override
+> without standing in front of the storage service for the whole process. Everything reached through
+> a `Context` — which is what an app targeting API 30 or later has to use — is redirected.
+
+`VirtualStorageProvider` is a `DocumentsProvider`, and it cannot be a private one:
+`DocumentsProvider.attachInfo` refuses to start unless it is exported, grants URI permissions and is
+guarded by `MANAGE_DOCUMENTS`. That permission is held by DocumentsUI alone, so the practical
+audience is exactly two — the person, through the phone's Files app, which is the only way onto the
+device that is not `adb push`; and the guest, which reaches it because a provider never
+permission-checks its **own uid**. Its document ids are *device* paths, so an app falling back to
+`DocumentsContract.getDocumentId` gets a sensible display name and JCode's data directory never
+travels inside a URI a guest can read.
+
+### 7h. The device's own file picker
+
+`ACTION_OPEN_DOCUMENT` and its three siblings are the one kind of intent an app cannot be talked out
+of. Before this they went out to the real system and two things went wrong at once:
+
+1. **The phone's picker opened over JCode**, offering a sandboxed app the user's own downloads,
+   photos and cloud accounts — the exact leak the device exists to prevent, as the default path.
+2. **The answer went nowhere.** An embedded activity's token is one no `ActivityRecord` answers to,
+   so `startActivityForResult` has its `resultTo` blanked on the way out; there was no route back
+   even in principle.
+
+`GuestDocuments.consume` takes the launch off the wire in the start-activity hook — the same shape as
+`GuestPermissions.consume`, and for the same reason: these are the two launches the system cannot
+usefully answer on a guest's behalf. `VirtualFilePicker` then shows the device's own storage, and the
+result is delivered as a `content://` URI.
+
+| | |
+|---|---|
+| `ACTION_OPEN_DOCUMENT`, `ACTION_GET_CONTENT` | Pick a file |
+| `ACTION_CREATE_DOCUMENT` | Pick a folder and a name (`EXTRA_TITLE` pre-fills it) |
+| `ACTION_OPEN_DOCUMENT_TREE` | Pick a folder, answered with a tree URI |
+
+**It is device content, not IDE chrome** — a real `View`, added to `EmbeddedGuest`'s container as its
+topmost child, exactly like the status bar. That is what makes it usable by something that is not a
+pair of eyes: `screencap` shows it, `uiautomator dump` lists every row with its text, and `input tap`
+opens a folder and picks a file, all through the paths that already existed. Composing it in the IDE
+over the tab — the way the permission prompt is done — would have put a modal an agent can see and
+cannot read or answer.
+
+Three things had to be true, and each was found by it not being:
+
+- **The picker is posted to the main looper.** A guest may ask for a document from any thread;
+  WaveRepo's GameActivity does it from its game thread, and adding the view inline threw
+  `CalledFromWrongThreadException`.
+- **A raised surface is lowered while the picker is up.** `GuestSurfaces` puts a full-bleed
+  `SurfaceView` above the window so it can be seen at all (§ ES-DE), and above the window means above
+  *everything* in the host's layer — so the picker was added, laid out, and drew a complete screen
+  underneath the game, which still had the touches. `setCovered` puts it back below for the duration,
+  which is also what a phone shows when a picker opens over a game.
+- **The result is delivered by hand.** `Activity.dispatchActivityResult` is blocked at `targetSdk`
+  33, so it is tried and not relied on; the fallback is `Activity.onActivityResult`, which is
+  `protected` SDK API that no hidden-API policy applies to, invoked reflectively so it dispatches
+  *virtually*. An app's own override runs, and AndroidX's `ComponentActivity` override forwards it
+  into `ActivityResultRegistry` — so the old callback and a `registerForActivityResult` launcher are
+  both answered by the same call.
+
+A cancel is a real answer, and every failure path takes it: an app told `RESULT_CANCELED` carries on,
+and an app told nothing hangs.
+
+> Device-verified end to end on WaveRepo: tap → the device's picker listing `/sdcard` → `Download` →
+> `piano.sf2` → Open → `dev.waverepo OPEN_DOCUMENT: /sdcard/Download/piano.sf2`, the app read the
+> descriptor and reported the file's contents back. Driven a second time entirely through
+> `adb shell uiautomator dump` and `input tap`.
+
+**A guest's `ACTION_VIEW` on an `http(s)` URI now opens the device's own browser** for the same
+reason: it used to leave the device, and the phone's browser loaded the page under the user's
+profile, with their cookies and their signed-in accounts. That is the leak the built-in browser
+exists to close; it was simply never wired to the intent that reaches for one.
+
+Anything else implicit still goes to the phone — and now says so in the device's log, loudly, naming
+the action and warning that no result can come back. An intent leaving the device is the single most
+consequential thing that can happen without anybody being told.
+
 ---
 
 ## 8. Session states
@@ -557,8 +682,14 @@ internal sealed interface SandboxStatus {
 6. Unbinding the service is the teardown; there is no separate stop call.
 7. Treat every guest as trusted code — it shares JCode's uid.
 8. The device is emptied on every JCode start. Nothing may assume an app installed in a previous
-   session is still there.
+   session is still there, or a file written to its storage.
 9. Everything installed goes through `VirtualDeviceApps`; nothing else writes `filesDir/vdevice/`.
+10. An event handed to a guest carries the **device's** coordinates in both its local and its raw
+    positions — see §5.1.
+11. A path that arrives from outside — adb, a document id — is resolved by `VirtualStorage.resolve`,
+    which compares canonical paths, and never by joining onto the root.
+12. A guest asking for something the device answers itself must be answered *something*: a cancelled
+    result is a real answer and silence is not.
 
 ---
 
@@ -580,6 +711,11 @@ internal sealed interface SandboxStatus {
 
 - Four concurrent guest activities maximum (`GuestActivity0`–`GuestActivity3`).
 - The guest shares JCode's uid and permissions — no isolation, by design.
+- `Environment.getExternalStorageDirectory()` reports the phone's path, not the device's — §7g.
+- An implicit intent the device has no answer for still goes to the phone. It is logged loudly, but
+  a result cannot come back from one.
+- The picker's "save as" name field needs the tab's keyboard button, like every other guest text
+  field: an embedded hierarchy has no window for an IME to bind to.
 - Hidden-API coupling means this is validated against **Android 13 / targetSdk 33** specifically; see
   [Guest runtime and hidden API](02-guest-runtime-and-hidden-api.md).
 

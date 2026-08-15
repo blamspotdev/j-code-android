@@ -29,6 +29,9 @@ internal object VirtualDeviceApps {
     /** Assets directory holding the APKs the device is born with — see [installBuiltIns]. */
     private const val BUILT_INS = "vdevice"
 
+    /** The built-in browser, which is also where a guest's `ACTION_VIEW` on a URL is sent. */
+    const val BROWSER_PACKAGE = "dev.jcode.vdevice.browser"
+
     /**
      * Bumped whenever the installed set changes, so the launcher redraws for an `adb install` it did
      * not initiate. Snapshot state rather than a flow: the only reader is a composable.
@@ -58,6 +61,10 @@ internal object VirtualDeviceApps {
         // grants — see VirtualDevicePolicy.
         VirtualDevicePolicy.reset()
         clearGuestWebViewData(app)
+        // The device's shared storage went with the tree, which is the intended behaviour — but an
+        // empty directory is not a formatted phone, and `adb push … /sdcard/Download/` has to work
+        // on a device nothing has run on yet.
+        VirtualStorage.seed(app)
         installBuiltIns(app)
         revision.intValue++
     }
@@ -223,6 +230,9 @@ internal object VirtualDeviceApps {
         val removed = apk.delete()
         splitsDir(context, packageName).deleteRecursively()
         dataDir(context, packageName).deleteRecursively()
+        // Its corner of shared storage too. A phone leaves `Android/data/<pkg>` behind on uninstall
+        // and is criticised for it; a device that empties itself every start has no reason to.
+        VirtualStorage.forget(context, packageName)
         VirtualDevicePolicy.forget(context, packageName)
         if (removed) revision.intValue++
         return removed
@@ -246,6 +256,10 @@ internal object VirtualDeviceApps {
         // "cleared" meaning cleared rather than "cleared except the bits we were unsure about".
         data.deleteRecursively()
         data.mkdirs()
+        // `pm clear` takes an app's external directories with it on a phone, and those are as much
+        // its data as the private ones — an app that keeps its library under getExternalFilesDir()
+        // would otherwise come back "cleared" with everything still there.
+        VirtualStorage.forget(context, packageName)
         return true
     }
 

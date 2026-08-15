@@ -96,6 +96,7 @@ internal object GuestRuntime {
             ?: throw VirtualDeviceException("cannot replace ActivityThread.mInstrumentation")
 
         GuestPermissions.install(host)
+        GuestDocuments.install(host)
         // Before any guest exists, which is the whole requirement: the framework builds one
         // LocationManager per context and caches it, so the service has to be in place before the
         // first one is asked for.
@@ -106,6 +107,9 @@ internal object GuestRuntime {
         val intents = GuestActivityManagerHook.install(host.packageName)
         installCrashHandler()
         VirtualDeviceLog.captureStandardStreams(host)
+        // Before anything a guest does, so the device's log holds the whole of a session rather than
+        // starting once something has already gone wrong.
+        VirtualDeviceLog.captureProcessLog(host)
         isInstalled = true
         Log.i(
             TAG,
@@ -336,6 +340,27 @@ internal object GuestRuntime {
     /** Tells the tab an embedded activity's Back was handed to the system, while [handler] is set. */
     fun setEmbeddedBackHandler(handler: (() -> Unit)?) {
         embeddedBackHandler = handler
+    }
+
+    /**
+     * The URL an app asked the device to open, routed to the device's own browser.
+     *
+     * A guest's `ACTION_VIEW` on an `http(s)` URI used to leave the device: the phone's browser
+     * opened over JCode and loaded the page under the **user's** profile, with their cookies and
+     * their signed-in accounts. That is the exact leak the built-in browser exists to close — it was
+     * simply never wired to the intent that reaches for one. Now the device answers with the app it
+     * already has, whose profile is wiped with the device.
+     *
+     * Null when the device has no browser installed, which is a device someone has uninstalled it
+     * from; then the intent goes out as it did before rather than the link doing nothing.
+     */
+    private fun browserFor(intent: Intent): Intent? {
+        if (intent.action != Intent.ACTION_VIEW) return null
+        val scheme = intent.data?.scheme?.lowercase() ?: return null
+        if (scheme != "http" && scheme != "https") return null
+        val apk = VirtualDeviceApps.apk(host, VirtualDeviceApps.BROWSER_PACKAGE) ?: return null
+        val guest = runCatching { GuestLoader.load(host, apk.absolutePath) }.getOrNull() ?: return null
+        return stubIntent(guest, guest.launchActivity, Intent(intent))
     }
 
     /** [GuestActivityClient] calls this for the `onBackPressed` the platform routes to the server. */
@@ -609,9 +634,27 @@ internal object GuestRuntime {
             ?: active
             ?: return StartAction.Proceed
         if (component == null) {
-            if (intent.`package` == guest.packageName || intent.selector != null) {
-                Log.w(TAG, "implicit intents inside ${guest.packageName} are not supported: $intent")
+            browserFor(intent)?.let { browser ->
+                val launcher = embeddedLauncher ?: return StartAction.Redirect(browser)
+                return if (runCatching { launcher(browser) }.getOrDefault(false)) {
+                    StartAction.Consumed
+                } else {
+                    StartAction.Redirect(browser)
+                }
             }
+            // Said in the *device's* log, not only the system one. An intent leaving the device is
+            // the single most consequential thing that can happen without anybody being told: the
+            // phone answers it, with the user's own apps and the user's own data, and from inside
+            // the guest nothing went wrong at all. It cost a whole investigation to find that a
+            // document picker was doing exactly this — see GuestDocuments.
+            VirtualDeviceLog.append(
+                host,
+                'W',
+                TAG,
+                "${guest.packageName} started ${intent.action ?: "an intent"} with no component; " +
+                    "the device has no app for it, so the PHONE will answer it and no result can " +
+                    "come back",
+            )
             return StartAction.Proceed
         }
         if (component.packageName != guest.packageName) return StartAction.Proceed

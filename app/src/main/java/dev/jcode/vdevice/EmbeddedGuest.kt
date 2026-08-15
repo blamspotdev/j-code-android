@@ -56,6 +56,9 @@ internal class EmbeddedGuest(
     /** The device's own status bar, over whatever activity is on the screen — see [VirtualStatusBar]. */
     private var statusBar: VirtualStatusBar? = null
 
+    /** The device's file picker while a guest is waiting on one — see [showPicker]. */
+    private var picker: VirtualFilePicker? = null
+
     /** Layout listener that catches `SurfaceView`s a guest adds after it has started. */
     private var surfaceWatcher: ViewTreeObserver.OnGlobalLayoutListener? = null
 
@@ -115,6 +118,7 @@ internal class EmbeddedGuest(
             GuestRuntime.setEmbeddedLauncher(::push)
             GuestRuntime.setEmbeddedFinisher(::reapFinished)
             GuestRuntime.setEmbeddedBackHandler(::finishTop)
+            GuestDocuments.setPicker(::showPicker)
             // Added last, so it is the topmost child: the device's own status bar has to sit over
             // the app the way a phone's does, and a FrameLayout hands the front child the touch
             // first — which is what lets the shade be pulled down over a guest that is drawing
@@ -194,12 +198,21 @@ internal class EmbeddedGuest(
 
     fun touch(event: MotionEvent) {
         val child = topWindow()
-        if (child == null) {
-            container?.dispatchTouchEvent(event)
-        } else {
-            // The tab's coordinates are the host's; a child window's are its own.
-            event.offsetLocation(-child.frame.left.toFloat(), -child.frame.top.toFloat())
-            child.view.dispatchTouchEvent(event)
+        // Re-anchored first, so the guest's raw coordinates are the device's screen rather than the
+        // phone's — see VirtualInput.inDeviceSpace, without which a native app hit-tests against an
+        // origin that is wherever the tab happens to sit in JCode's window.
+        val anchored = VirtualInput.inDeviceSpace(event)
+        try {
+            if (child == null) {
+                container?.dispatchTouchEvent(anchored)
+            } else {
+                // The tab's coordinates are the host's; a child window's are its own. The raw ones
+                // stay the device's, which is what a dialog on a phone also sees.
+                anchored.offsetLocation(-child.frame.left.toFloat(), -child.frame.top.toFloat())
+                child.view.dispatchTouchEvent(anchored)
+            }
+        } finally {
+            if (anchored !== event) anchored.recycle()
         }
         reapFinished()
     }
@@ -213,6 +226,41 @@ internal class EmbeddedGuest(
     /** The dialog, popup or drop-down the guest currently has open, if any. */
     private fun topWindow(): EmbeddedWindow? = windows?.children()?.lastOrNull()
 
+    /**
+     * Puts the device's file picker over the app that asked for one — [GuestDocuments]'s way onto
+     * the screen. False when there is no container to put it in, which the caller answers as a
+     * cancel rather than leaving the app waiting.
+     *
+     * A child of the container, added last, exactly like the status bar: that is what makes it show
+     * in a `screencap`, list in a `uiautomator dump` and answer an `input tap`, so an agent can
+     * drive a file open the same way a person does.
+     */
+    private fun showPicker(
+        mode: PickerMode,
+        title: String,
+        suggestedName: String,
+        onDone: (String?) -> Unit,
+    ): Boolean {
+        val container = container ?: return false
+        dismissPicker()
+        val view = VirtualFilePicker(context, mode, title, suggestedName) { chosen ->
+            dismissPicker()
+            onDone(chosen)
+        }
+        picker = view
+        container.addView(view, VirtualFilePicker.coverParams())
+        // A guest that had its surface raised above the window would otherwise draw straight over
+        // the picker — see GuestSurfaces.setCovered.
+        GuestSurfaces.setCovered(true)
+        return true
+    }
+
+    private fun dismissPicker() {
+        picker?.let { view -> (view.parent as? ViewGroup)?.removeView(view) }
+        picker = null
+        GuestSurfaces.setCovered(false)
+    }
+
     /** Types [text] as key events: with no window, the guest's fields cannot bind an IME. */
     fun text(text: String) {
         val map = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD)
@@ -220,7 +268,14 @@ internal class EmbeddedGuest(
     }
 
     fun back() {
-        // The device's own shade is above everything, so it takes Back first — the same order a
+        // The picker is modal and the app behind it is blocked on its answer, so Back is a cancel —
+        // which is a real result the app already handles, and the only way out that does not leave
+        // it waiting for ever.
+        picker?.let {
+            it.cancel()
+            return
+        }
+        // The device's own shade is above everything else, so it takes Back next — the same order a
         // phone answers in, and the guest never sees a key that was not meant for it.
         statusBar?.takeIf { it.isOpen }?.let {
             it.collapse()
@@ -263,6 +318,8 @@ internal class EmbeddedGuest(
         GuestRuntime.setEmbeddedLauncher(null)
         GuestRuntime.setEmbeddedFinisher(null)
         GuestRuntime.setEmbeddedBackHandler(null)
+        GuestDocuments.setPicker(null)
+        picker = null
         stack.asReversed().forEach { activity ->
             (activity.window.decorView.parent as? ViewGroup)?.removeView(activity.window.decorView)
             runCatching { GuestRuntime.destroyEmbedded(activity) }

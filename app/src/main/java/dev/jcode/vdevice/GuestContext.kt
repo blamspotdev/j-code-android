@@ -112,6 +112,32 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
     override fun checkCallingOrSelfPermission(permission: String): Int =
         GuestPermissions.answer(permission) ?: super.checkCallingOrSelfPermission(permission)
 
+    // ------------------------------------------------------------------------- shared storage
+    //
+    // The device's own, never the phone's. Left alone, every one of these answers with a directory
+    // under `/storage/emulated/0/Android/…` belonging to **JCode** — so a guest's exports, caches and
+    // unpacked assets landed in the user's real shared storage, and JCode holds
+    // MANAGE_EXTERNAL_STORAGE, so nothing anywhere stopped it. See [VirtualStorage], including what
+    // it cannot reach: `Environment.getExternalStorageDirectory()` is computed rather than cached and
+    // still reports the phone.
+
+    override fun getExternalFilesDir(type: String?): File =
+        VirtualStorage.externalFilesDir(baseContext, guest.packageName, type)
+
+    override fun getExternalFilesDirs(type: String?): Array<File> = arrayOf(getExternalFilesDir(type))
+
+    override fun getExternalCacheDir(): File =
+        VirtualStorage.externalCacheDir(baseContext, guest.packageName)
+
+    override fun getExternalCacheDirs(): Array<File> = arrayOf(getExternalCacheDir())
+
+    override fun getExternalMediaDirs(): Array<File> =
+        arrayOf(VirtualStorage.externalMediaDir(baseContext, guest.packageName))
+
+    override fun getObbDir(): File = VirtualStorage.obbDir(baseContext, guest.packageName)
+
+    override fun getObbDirs(): Array<File> = arrayOf(getObbDir())
+
     override fun getDataDir(): File = guest.dataDir.ensure()
     override fun getFilesDir(): File = guest.filesDir.ensure()
     override fun getCacheDir(): File = guest.cacheDir.ensure()

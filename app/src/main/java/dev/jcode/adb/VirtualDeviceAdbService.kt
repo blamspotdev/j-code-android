@@ -19,6 +19,7 @@ import dev.jcode.vdevice.VirtualIdentity
 import dev.jcode.vdevice.VirtualInput
 import dev.jcode.vdevice.VirtualLauncher
 import dev.jcode.vdevice.VirtualScreen
+import dev.jcode.vdevice.VirtualStorage
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -73,6 +74,11 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
     override suspend fun handle(stream: AdbStream) {
         val service = stream.service
         val command = when {
+            // `adb pull`/`push` open this one and then speak their own framed protocol down it, so
+            // it is a session rather than a command — see AdbSync.
+            service == SYNC || service.startsWith("$SYNC:") ->
+                return AdbSync { path -> VirtualStorage.resolve(appContext, path) }.serve(stream)
+
             service.startsWith(SHELL) -> service.removePrefix(SHELL)
             service.startsWith(EXEC) -> service.removePrefix(EXEC)
             else -> return stream.write(unsupportedService(service))
@@ -110,9 +116,102 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
             "uiautomator" -> uiautomator(args.drop(1), stream)
             "screencap" -> screencap(args.drop(1), stream)
             "cmd" -> install(args, stream)
+            "ls" -> stream.write(ls(args.drop(1)))
+            "cat" -> cat(args.drop(1), stream)
+            "rm" -> stream.write(rm(args.drop(1)))
+            "mkdir" -> stream.write(mkdir(args.drop(1)))
+            "mv" -> stream.write(mv(args.drop(1)))
+            "df" -> stream.write(df())
             else -> stream.write(unsupportedService(stream.service))
         }
     }
+
+    // ------------------------------------------------------------------------------ filesystem
+    //
+    // The device has storage now, so these are answerable — and they are what somebody who has just
+    // pushed a file reaches for to check it arrived. Enough of `toybox` to look around and tidy up,
+    // and no more: this is a device's shell, not a distribution.
+
+    private fun ls(args: List<String>): String {
+        val long = args.any { it.startsWith("-") && it.contains('l') }
+        val path = args.firstOrNull { !it.startsWith("-") } ?: VirtualStorage.DEVICE_ROOT
+        val file = resolve(path) ?: return notOnDevice(path)
+        // Said rather than answered with nothing: an empty directory and a path that is not there
+        // are different facts, and `ls` printing neither is how a typo reads as an empty device.
+        if (!file.exists()) return "ls: $path: No such file or directory\n"
+        if (file.isFile) return if (long) longRow(file) else file.name + "\n"
+        val children = file.listFiles().orEmpty()
+            .sortedWith(compareByDescending<File> { it.isDirectory }.thenBy { it.name.lowercase() })
+        return children.joinToString("") { if (long) longRow(it) else it.name + "\n" }
+    }
+
+    private fun longRow(file: File): String {
+        val mode = if (file.isDirectory) "drwxr-xr-x" else "-rw-r--r--"
+        val size = if (file.isFile) file.length() else 0L
+        return "%s %10d %s\n".format(mode, size, file.name)
+    }
+
+    /** Bytes, not text: `adb exec-out cat /sdcard/…` has to give back the file intact. */
+    private suspend fun cat(args: List<String>, stream: AdbStream) {
+        val path = args.firstOrNull { !it.startsWith("-") } ?: return stream.write("cat: no path\n")
+        val file = resolve(path) ?: return stream.write(notOnDevice(path))
+        if (!file.isFile) return stream.write("cat: $path is not a file\n")
+        stream.write(file.readBytes())
+    }
+
+    private fun rm(args: List<String>): String {
+        val recursive = args.any { it.startsWith("-") && (it.contains('r') || it.contains('R')) }
+        val paths = args.filterNot { it.startsWith("-") }
+        if (paths.isEmpty()) return "rm: no path\n"
+        return paths.joinToString("") { path ->
+            val file = resolve(path) ?: return@joinToString notOnDevice(path)
+            when {
+                !file.exists() -> "rm: $path: No such file or directory\n"
+                file.isDirectory && !recursive -> "rm: $path: Is a directory\n"
+                file.deleteRecursively() -> ""
+                else -> "rm: $path: cannot remove\n"
+            }
+        }
+    }
+
+    private fun mkdir(args: List<String>): String {
+        val paths = args.filterNot { it.startsWith("-") }
+        if (paths.isEmpty()) return "mkdir: no path\n"
+        // -p is how everything scripts a mkdir, and there is nothing here for the strict form to
+        // protect, so every mkdir makes parents.
+        return paths.joinToString("") { path ->
+            val file = resolve(path) ?: return@joinToString notOnDevice(path)
+            if (file.isDirectory || file.mkdirs()) "" else "mkdir: $path: cannot create\n"
+        }
+    }
+
+    private fun mv(args: List<String>): String {
+        val paths = args.filterNot { it.startsWith("-") }
+        if (paths.size < 2) return "mv: needs a source and a destination\n"
+        val from = resolve(paths[0]) ?: return notOnDevice(paths[0])
+        val to = resolve(paths[1]) ?: return notOnDevice(paths[1])
+        val target = if (to.isDirectory) File(to, from.name) else to
+        return if (from.renameTo(target)) "" else "mv: cannot move ${paths[0]}\n"
+    }
+
+    private fun df(): String {
+        val root = VirtualStorage.root(appContext)
+        val total = root.totalSpace / 1024
+        val free = root.freeSpace / 1024
+        return "Filesystem     1K-blocks      Used Available Mounted on\n" +
+            "%-14s %9d %9d %9d %s\n".format(
+                "jcode-vdevice",
+                total,
+                total - free,
+                free,
+                VirtualStorage.DEVICE_ROOT,
+            )
+    }
+
+    private fun resolve(path: String): File? = VirtualStorage.resolve(appContext, path)
+
+    private fun notOnDevice(path: String): String =
+        "$path is not on the virtual device — its storage is ${VirtualStorage.DEVICE_ROOT}\n"
 
     /**
      * `screencap [-p] [-d <display>]`, answering the device sandbox's screen as a PNG.
@@ -123,10 +222,9 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
      * not have.
      */
     private suspend fun screencap(args: List<String>, stream: AdbStream) {
-        pathArgument(args)?.let { path ->
-            return stream.write(noFilesystem("screencap", path, "screencap -p > shot.png"))
-        }
-        stream.write(VirtualScreen.png(appContext))
+        val png = VirtualScreen.png(appContext)
+        val path = pathArgument(args) ?: return stream.write(png)
+        stream.write(writeToDevice(path, png, "screencap"))
     }
 
     /**
@@ -138,19 +236,41 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
      */
     private suspend fun uiautomator(args: List<String>, stream: AdbStream) {
         if (args.firstOrNull() != "dump") return stream.write(unsupportedService(stream.service))
-        pathArgument(args.drop(1))?.let { path ->
-            return stream.write(noFilesystem("uiautomator", path, "uiautomator dump > window.xml"))
-        }
+        val path = pathArgument(args.drop(1))
         // An idle device is showing its launcher, and the launcher is tappable — so it is what the
         // dump answers with, rather than claiming there is nothing on the screen.
-        val session = running() ?: return stream.write(
-            home { width, height, density, apps -> VirtualLauncher.dump(width, height, density, apps) },
-        )
-        val xml = File(appContext.filesDir, DUMP_FILE)
-        if (!session.dump(xml)) {
-            return stream.write("uiautomator: could not read the guest's view tree\n")
+        val session = running()
+        val bytes = if (session == null) {
+            home { width, height, density, apps -> VirtualLauncher.dump(width, height, density, apps) }
+                .toByteArray(Charsets.UTF_8)
+        } else {
+            val xml = File(appContext.filesDir, DUMP_FILE)
+            if (!session.dump(xml)) {
+                return stream.write("uiautomator: could not read the guest's view tree\n")
+            }
+            xml.readBytes()
         }
-        stream.write(xml.readBytes())
+        if (path == null) return stream.write(bytes)
+        stream.write(writeToDevice(path, bytes, "uiautomator"))
+    }
+
+    /**
+     * Writes a capture or a dump where the caller asked for it.
+     *
+     * Real `screencap` and `uiautomator dump` take a path and print where they put it, and every
+     * script written against a phone does it that way — `dump /sdcard/w.xml` then `pull` it. The
+     * device used to have nowhere to put one and answered with an explanation instead; now it has
+     * [VirtualStorage], so the familiar form works and the file is there to pull.
+     */
+    private fun writeToDevice(path: String, bytes: ByteArray, command: String): String {
+        val file = VirtualStorage.resolve(appContext, path)
+            ?: return "$command: $path is not on the virtual device — its storage is " +
+                "${VirtualStorage.DEVICE_ROOT}\n"
+        return runCatching {
+            file.parentFile?.mkdirs()
+            file.writeBytes(bytes)
+            "$command: written to ${VirtualStorage.devicePath(appContext, file)}\n"
+        }.getOrElse { "$command: cannot write $path: ${it.message}\n" }
     }
 
     /**
@@ -204,18 +324,16 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
     /**
      * `logcat`, answering the **virtual device's** log rather than the phone's.
      *
-     * The phone's is not on offer and could not be: reading it needs `READ_LOGS`, and an app cannot
-     * read back even its own entries — measured on Android 13, where `logcat` run as JCode's uid
-     * returns nothing whatever. What this answers instead is written by the container itself, and is
-     * the more useful log for a driver anyway: it contains this device's business and nothing else —
-     * what was loaded and started, what the container refused and why, anything the guest printed,
-     * the full stack trace of an uncaught exception in it, and the system's reason when the guest
-     * process was killed outright rather than crashing.
+     * The phone's is not on offer and could not be: reading another app's entries needs `READ_LOGS`,
+     * which is `signature|privileged`. What this answers with is this device's business and nothing
+     * else — what was loaded and started, what the container refused and why, anything the guest
+     * printed, its own `android.util.Log` and native output, the full stack trace of an uncaught
+     * exception in it, and the system's reason when the guest process was killed outright rather
+     * than crashing. See [dev.jcode.vdevice.VirtualDeviceLog].
      *
      * `-d` is implied and `-t <n>`, `-c` and `-b <buffer>` are honoured; there is no follow mode,
-     * because there is no `logcat` process here to keep open. A guest's own `android.util.Log` calls
-     * go to the system log through a native call there is no reaching, so they are absent — said
-     * plainly rather than quietly missing.
+     * because the reader that fills this log is already running and there is no second one to keep
+     * open.
      */
     private fun logcat(args: List<String>): String {
         if (args.contains("-c") || args.contains("--clear")) {
@@ -456,10 +574,6 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
         return null
     }
 
-    private fun noFilesystem(command: String, path: String, redirect: String): String =
-        "$command: the virtual device has no filesystem to write '$path' to — read it off the " +
-            "stream with `adb -s ${VirtualIdentity.SERIAL} exec-out $redirect`\n"
-
     private fun qualify(activity: String, packageName: String): String = when {
         activity.startsWith(".") -> packageName + activity
         !activity.contains('.') -> "$packageName.$activity"
@@ -470,10 +584,16 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
         /**
          * `cmd` is the load-bearing feature: with it `adb install` opens exactly one
          * `exec:cmd package 'install' -S <n>` stream, and without it the client falls back to
-         * `push` + `pm install`, which would need the whole `sync:` service. `shell_v2` is
-         * deliberately absent — the client falls back to the simpler legacy `shell:` happily.
+         * `push` + `pm install`. `shell_v2` is deliberately absent — the client falls back to the
+         * simpler legacy `shell:` happily.
+         *
+         * `stat_v2` and `ls_v2` are absent for the same kind of reason and it is not an oversight:
+         * advertising them switches the client to the `STA2`/`LST2` encodings, so the device would
+         * have to implement two parallel versions of the same four requests to gain a 64-bit size
+         * and an errno on a filesystem that has neither large files nor interesting failures. See
+         * [AdbSync].
          */
-        private const val FEATURES = "cmd,stat_v2,ls_v2,fixed_push_mkdir,apex,fixed_push_symlink_timestamp"
+        private const val FEATURES = "cmd,fixed_push_mkdir,apex,fixed_push_symlink_timestamp"
 
         private const val BRAND = "JCode"
 
@@ -494,6 +614,7 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
         private const val DUMP_FILE = "vdevice/window_dump.xml"
         private const val SHELL = "shell:"
         private const val EXEC = "exec:"
+        private const val SYNC = "sync"
         private const val TAG = "VirtualDeviceAdb"
 
         /**

@@ -41,6 +41,12 @@ internal object GuestSurfaces {
     private val raised = WeakHashMap<SurfaceView, Boolean>()
 
     /**
+     * True while the device is showing something of its own over the guest, so the raised surfaces
+     * belong back under the window — see [setCovered].
+     */
+    private var covered = false
+
+    /**
      * Raises any full-bleed `SurfaceView` under [root]. Idempotent, and cheap enough to call on
      * every layout pass: a view is looked at once and then remembered.
      */
@@ -49,13 +55,36 @@ internal object GuestSurfaces {
         if (area <= 0L) return
         forEachSurface(root) { surface ->
             if (raised.containsKey(surface)) return@forEachSurface
-            val covered = surface.width.toLong() * surface.height
-            if (covered < area * FULL_BLEED) return@forEachSurface
+            val painted = surface.width.toLong() * surface.height
+            if (painted < area * FULL_BLEED) return@forEachSurface
             raised[surface] = true
             runCatching {
-                surface.setZOrderOnTop(true)
+                surface.setZOrderOnTop(!covered)
                 Log.i(TAG, "raised ${surface.javaClass.name} above the window so it can be seen")
             }.onFailure { Log.w(TAG, "cannot raise ${surface.javaClass.name}", it) }
+        }
+    }
+
+    /**
+     * Puts the raised surfaces back **below** the window while the device has something of its own
+     * to show over the guest, and above it again afterwards.
+     *
+     * This is the cost of raising them, arriving: a surface above the window is above *everything*
+     * in the host's layer, so the device's own file picker was added, laid out, and drew a complete
+     * screen underneath the game — which still had the touches, since Z-order decides what is seen
+     * and the view tree decides what is touched. Measured on WaveRepo: the picker was there and
+     * invisible, which is the worst of the three possible outcomes.
+     *
+     * Lowering rather than trying to out-rank it is the honest fix. The guest's own window
+     * background then covers the surface, which is what a phone shows too when a picker opens over
+     * a game: the game is not on the screen any more.
+     */
+    fun setCovered(value: Boolean) {
+        if (covered == value) return
+        covered = value
+        raised.keys.toList().forEach { surface ->
+            runCatching { surface.setZOrderOnTop(!value) }
+                .onFailure { Log.w(TAG, "cannot re-order ${surface.javaClass.name}", it) }
         }
     }
 

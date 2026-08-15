@@ -111,6 +111,11 @@ internal object GuestHooks {
                         // one launch the system cannot usefully answer — the device answers it
                         // itself. See GuestPermissions.
                         if (GuestPermissions.consume(args)) return consumed(method.returnType)
+                        // A document request is the other one, and for the same two reasons: the
+                        // system would answer it with the *phone's* picker over the user's own
+                        // files, and the result could not be delivered back to a token no
+                        // ActivityRecord answers to. See GuestDocuments.
+                        if (GuestDocuments.consume(args)) return consumed(method.returnType)
                         // Logged because "the app opened, but the phone's copy of it" is otherwise
                         // indistinguishable from "the container hosted it", and the difference is
                         // which binder call carried the intent.
