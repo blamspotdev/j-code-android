@@ -36,7 +36,7 @@ import kotlin.concurrent.thread
  */
 internal object VirtualDeviceLog {
 
-    private const val FILE = "vdevice/device.log"
+    private const val FILE = "device.log"
 
     /** Trimmed to the newest half when it passes this, so a chatty guest cannot fill the disk. */
     private const val MAX_BYTES = 512L * 1024L
@@ -197,7 +197,7 @@ internal object VirtualDeviceLog {
         )
     }
 
-    private fun file(context: Context) = File(context.applicationContext.filesDir, FILE)
+    private fun file(context: Context) = VirtualDeviceFiles.file(context, FILE)
 
     private const val CONTINUATION = "        "
     private const val MAX_LINE = 4096

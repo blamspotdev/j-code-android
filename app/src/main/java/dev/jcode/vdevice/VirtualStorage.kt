@@ -70,7 +70,7 @@ internal object VirtualStorage {
     /** The other spelling a phone answers to for its internal volume. */
     private const val EMULATED_ROOT = "/storage/emulated/0"
 
-    private const val ROOT = "vdevice/storage"
+    private const val ROOT = "storage"
     private const val ANDROID = "Android"
 
     /** The workspace folder [Volume.External] is, named so it is obvious what put it there. */
@@ -100,7 +100,7 @@ internal object VirtualStorage {
      * where the work is rather than somewhere a person has to be told about.
      */
     fun root(context: Context, volume: Volume): File = when (volume) {
-        Volume.Internal -> File(context.applicationContext.filesDir, ROOT).ensure()
+        Volume.Internal -> VirtualDeviceFiles.directory(context, ROOT)
         Volume.External -> File(WorkspaceHostPaths.projectsRoot, EXTERNAL_FOLDER).ensure()
     }
 

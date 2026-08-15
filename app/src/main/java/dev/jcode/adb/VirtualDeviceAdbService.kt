@@ -14,6 +14,7 @@ import dev.jcode.vdevice.AppSandboxSession
 import dev.jcode.vdevice.LauncherApp
 import dev.jcode.vdevice.VirtualDevice
 import dev.jcode.vdevice.VirtualDeviceApps
+import dev.jcode.vdevice.VirtualDeviceFiles
 import dev.jcode.vdevice.VirtualDeviceLog
 import dev.jcode.vdevice.VirtualIdentity
 import dev.jcode.vdevice.VirtualInput
@@ -250,7 +251,7 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
             home { width, height, density, apps -> VirtualLauncher.dump(width, height, density, apps) }
                 .toByteArray(Charsets.UTF_8)
         } else {
-            val xml = File(appContext.filesDir, DUMP_FILE)
+            val xml = VirtualDeviceFiles.file(appContext, DUMP_FILE)
             if (!session.dump(xml)) {
                 return stream.write("uiautomator: could not read the guest's view tree\n")
             }
@@ -617,7 +618,7 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
         private const val NOTHING_RUNNING =
             "error: no app is running on the virtual device — `am start -n <pkg>/<activity>` first\n"
 
-        private const val DUMP_FILE = "vdevice/window_dump.xml"
+        private const val DUMP_FILE = "window_dump.xml"
         private const val SHELL = "shell:"
         private const val EXEC = "exec:"
         private const val SYNC = "sync"

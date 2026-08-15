@@ -228,7 +228,7 @@ internal object GuestLoader {
             ?: throw VirtualDeviceException("${info.packageName} has no <application>")
 
         val packageName = info.packageName
-        val guestDataDir = File(host.filesDir, "vdevice/$packageName").apply { mkdirs() }
+        val guestDataDir = VirtualDeviceFiles.directory(host, packageName)
         val nativeLibDir = extractNativeLibraries(allApks, File(guestDataDir, "lib"))
 
         appInfo.sourceDir = apkPath

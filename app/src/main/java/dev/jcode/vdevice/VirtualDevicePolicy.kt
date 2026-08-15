@@ -653,5 +653,5 @@ internal object VirtualDevicePolicy {
     }
 
     private fun file(context: Context): File =
-        File(context.applicationContext.filesDir, "vdevice/$FILE")
+        VirtualDeviceFiles.file(context, FILE)
 }

@@ -14,6 +14,27 @@
 Running a built APK **inside JCode** — no install, no ADB, no root — so a developer can build and
 try an Android app on the same device, in an editor tab.
 
+**The virtual device mirrors the host device's capabilities, isolated within JCode**, with some of
+them simulated rather than passed through. That is the whole design in one sentence, and both halves
+carry weight:
+
+- *Mirrors* — it is a container, not an emulator. It shares the phone's runtime, its Android version
+  and its CPU, so **an app that runs on the host runs here**. There is no second Android to be
+  incompatible with.
+- *Isolated* — what it does **not** share is anything the app could mistake for the user: its
+  storage, its apps, its permissions, its sensors, its network answers, its browsing profile. Each
+  of those is a thing that used to be the phone's and is now the device's, and each one is a section
+  of this document.
+- *Simulated for safety* — the camera, the location and the motion sensors are synthesised rather
+  than forwarded. Not because forwarding is hard, but because a tool that runs somebody else's build
+  must not be the way that build sees through the user's camera or learns where they are.
+
+**Everything on the device is volatile.** Its apps, their data and its internal storage live in
+JCode's *cache* and are emptied on every start — so they cost nothing to lose, the platform may
+reclaim them under pressure, and **Clear cache** is a legitimate way to reset the device (§7g,
+`VirtualDeviceFiles`). The one exception is the external volume, which is a folder in the workspace
+precisely so that what should survive can.
+
 > **This is a sandboxed preview, not a security boundary.** The guest runs in a separate *process*
 > of JCode, but shares JCode's uid, permissions and data directory. Never run untrusted APKs in it.
 
@@ -646,9 +667,26 @@ cannot have both.
 | | Internal | External |
 |---|---|---|
 | Device path | `/sdcard` | `/storage/external` |
-| Lives in | `filesDir/vdevice/storage` | the workspace, as `vDevice_ExtStorage` |
+| Lives in | `cacheDir/vdevice/storage` | the workspace, as `vDevice_ExtStorage` |
 | Survives a JCode restart | **no** | yes |
+| Survives **Clear cache** | **no** | yes |
 | Visible in the IDE | no | yes, beside your projects |
+
+**Internal is in the cache, and that is a claim about what it is.** `filesDir` is for what an app
+would be sorry to lose; `cacheDir` is for what it can rebuild, and the platform may reclaim it under
+storage pressure or when somebody taps Clear cache. All of that was already true of the device's
+tree — it is deleted on the next start regardless — so keeping it in `filesDir` was claiming a
+durability the device neither has nor wants. `VirtualDeviceFiles` is the one place that says where
+it lives; six files used to work it out for themselves.
+
+The trade is that the tree can go away *while JCode is running*, and that is handled rather than
+hoped about: `VirtualDeviceApps.healIfEmptied` puts the built-ins back when it finds **nothing**
+installed, which is a state no start-up path produces and so can only mean the tree went away. The
+test is deliberately "nothing at all" rather than "a built-in is missing" — somebody who uninstalls
+the hardware fixture wants it gone, and having it reappear would be the app arguing with them.
+
+> Device-verified: `rm -rf` of the whole tree while JCode ran, then reopening the device — all five
+> built-ins were back, and the external volume was untouched.
 
 **Internal is the clean room**, emptied on every start with the installed apps and for the same
 reason: a file that outlived the app that wrote it would be waiting to be found by whatever was
