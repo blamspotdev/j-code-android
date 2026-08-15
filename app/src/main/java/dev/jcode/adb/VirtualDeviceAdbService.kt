@@ -194,24 +194,30 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
         return if (from.renameTo(target)) "" else "mv: cannot move ${paths[0]}\n"
     }
 
-    private fun df(): String {
-        val root = VirtualStorage.root(appContext)
-        val total = root.totalSpace / 1024
-        val free = root.freeSpace / 1024
-        return "Filesystem     1K-blocks      Used Available Mounted on\n" +
-            "%-14s %9d %9d %9d %s\n".format(
-                "jcode-vdevice",
-                total,
-                total - free,
-                free,
-                VirtualStorage.DEVICE_ROOT,
+    /** Both volumes, because the device has two and only one of them survives a restart. */
+    private fun df(): String = buildString {
+        append("Filesystem     1K-blocks      Used Available Mounted on\n")
+        VirtualStorage.Volume.entries.forEach { volume ->
+            val root = VirtualStorage.root(appContext, volume)
+            val total = root.totalSpace / 1024
+            val free = root.freeSpace / 1024
+            append(
+                "%-14s %9d %9d %9d %s\n".format(
+                    if (volume == VirtualStorage.Volume.Internal) "jcode-vdevice" else "jcode-vdext",
+                    total,
+                    total - free,
+                    free,
+                    volume.deviceRoot,
+                ),
             )
+        }
     }
 
     private fun resolve(path: String): File? = VirtualStorage.resolve(appContext, path)
 
     private fun notOnDevice(path: String): String =
-        "$path is not on the virtual device — its storage is ${VirtualStorage.DEVICE_ROOT}\n"
+        "$path is not on the virtual device — its storage is " +
+            VirtualStorage.Volume.entries.joinToString(" and ") { it.deviceRoot } + "\n"
 
     /**
      * `screencap [-p] [-d <display>]`, answering the device sandbox's screen as a PNG.

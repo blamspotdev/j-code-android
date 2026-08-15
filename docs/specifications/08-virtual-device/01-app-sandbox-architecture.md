@@ -562,43 +562,65 @@ Device-verified: with the spin loop at a 4 s period the guest reads a gyroscope 
 −1.57080 rad/s (−2π/4 s) and a rotating magnetic field, while gravity stays at (0, 0, 9.80665) —
 a device turning about its vertical does not tip.
 
-### 7g. The device's internal storage
+### 7g. The device's two storage volumes
 
-A device with no filesystem is a device most apps cannot finish a sentence on. An app opens a
-document, saves an export, unpacks its assets, writes a log — and before this the container had
-nowhere for any of that to go, so those calls either failed or, worse, landed in the **phone's**
-shared storage among the user's own files, under JCode's `MANAGE_EXTERNAL_STORAGE`.
+A device with no filesystem is a device most apps cannot finish a sentence on — an app opens a
+document, saves an export, unpacks its assets, writes a log. Before this the container had nowhere
+for any of that to go, so those calls either failed or landed in the **phone's** shared storage,
+among the user's own files, under JCode's `MANAGE_EXTERNAL_STORAGE`.
 
-`VirtualStorage` is `filesDir/vdevice/storage`, presented as `/sdcard`:
+There are two volumes, because the device needs storage for two different lifetimes and one volume
+cannot have both.
 
-| | |
-|---|---|
-| `/sdcard/Download`, `Documents`, `Music`, `Pictures`, `Movies`, `DCIM` | Seeded empty on every start, so `adb push … /sdcard/Download/` works on a device nothing has run on |
-| `/sdcard/Android/data/<pkg>/files` and `/cache` | What `getExternalFilesDir` and `getExternalCacheDir` answer |
-| `/sdcard/Android/media/<pkg>`, `/sdcard/Android/obb/<pkg>` | `getExternalMediaDirs`, `getObbDir` |
+| | Internal | External |
+|---|---|---|
+| Device path | `/sdcard` | `/storage/external` |
+| Lives in | `filesDir/vdevice/storage` | the workspace, as `vDevice_ExtStorage` |
+| Survives a JCode restart | **no** | yes |
+| Visible in the IDE | no | yes, beside your projects |
 
-It is under `filesDir/vdevice/`, so **`resetOnStart` empties it with everything else** — the same
-clean-room rule the installed apps follow, and for the same reason. `pm uninstall` and `pm clear`
-take an app's corner of it too, which a phone does not do for uninstall and is criticised for.
+**Internal is the clean room**, emptied on every start with the installed apps and for the same
+reason: a file that outlived the app that wrote it would be waiting to be found by whatever was
+installed under that package name next. `seed` puts the empty media directories back, so the device
+starts as a formatted phone does rather than as a bare directory.
 
-Reachable three ways: through the guest's `Context`; over adb (`pull`, `push`, `ls`, `cat` — see
-[ADB bridge §10.2](../03-runtime/05-adb-bridge.md#102-the-devices-filesystem--sync-and-the-shell-commands));
-and as `content://` URIs through `VirtualStorageProvider`, which is what a picker hands an app.
+**External is the way out.** A photo the device took, a file an app exported — on a clean-room device
+those are gone the next time JCode starts, which is right for a sandbox and useless for the thing a
+sandbox is for. It is an ordinary folder in the workspace, so what an app writes there is still there
+tomorrow, is visible in the project explorer, is editable in the IDE, and is reachable from the Linux
+environment at `/workspace/vDevice_ExtStorage`.
 
-> **Known gap.** `Environment.getExternalStorageDirectory()` still answers the **phone's** path. It
-> is computed fresh inside `Environment.UserEnvironment.getExternalDirs()` on every call, out of
-> `StorageManager.getVolumeList`, so there is no cached field to redirect and no method to override
-> without standing in front of the storage service for the whole process. Everything reached through
-> a `Context` — which is what an app targeting API 30 or later has to use — is redirected.
+Both are presented the way a phone presents two volumes: `getExternalFilesDirs` and its siblings
+answer with **two** entries, internal first. An app written for a phone with an SD card already
+handles that, and one that only reads `[0]` gets internal, which is what it would get on a phone.
+`adb df` lists both, `VirtualStorageProvider` publishes both as SAF roots with summaries that say
+which is which, and the Files app opens on the choice between them.
 
-`VirtualStorageProvider` is a `DocumentsProvider`, and it cannot be a private one:
-`DocumentsProvider.attachInfo` refuses to start unless it is exported, grants URI permissions and is
-guarded by `MANAGE_DOCUMENTS`. That permission is held by DocumentsUI alone, so the practical
-audience is exactly two — the person, through the phone's Files app, which is the only way onto the
-device that is not `adb push`; and the guest, which reaches it because a provider never
-permission-checks its **own uid**. Its document ids are *device* paths, so an app falling back to
-`DocumentsContract.getDocumentId` gets a sensible display name and JCode's data directory never
-travels inside a URI a guest can read.
+> **The bug this shipped with, found by looking.** `WorkspaceHostPaths` is a process-wide latch the
+> IDE sets at startup, and `:guest` is a different process that never ran that code — so it fell back
+> to the *legacy* shared path and created the device's external volume at
+> `/storage/emulated/0/JCode/projects/vDevice_ExtStorage`: **in the user's own storage**, the exact
+> leak this container exists to prevent. `GuestRuntime.install` now initialises it before anything
+> can touch storage.
+
+`VirtualStorage.resolve` compares canonical paths against the volume's root, which is what makes
+`../` — and a symlink planted by a guest, which `..` alone would not catch — land outside and be
+refused. That matters more for the external volume, because outside *it* is the user's whole
+workspace. And `forget(package)` clears an app's private trees on both volumes but deliberately
+leaves the shared part of external alone: uninstalling an app is not a licence to delete files a
+person has been working with.
+
+#### Known gap
+
+`Environment.getExternalStorageDirectory()` still answers the **phone's** path. It is computed fresh
+inside `Environment.UserEnvironment.getExternalDirs()` on every call, out of
+`StorageManager.getVolumeList`, so there is no cached field to redirect and no method to override
+without standing in front of the storage service for the whole process. Everything reached through a
+`Context` — which is what an app targeting API 30 or later has to use — is redirected; an app that
+reaches for the static instead sees the phone.
+
+> Device-verified: a file written to external survived `am force-stop` and a relaunch, while
+> `/sdcard/Download` came back empty.
 
 ### 7h. Resolving an intent against the device's own apps
 

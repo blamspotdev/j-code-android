@@ -133,22 +133,38 @@ internal class GuestContext(base: Context, private val guest: LoadedGuest) : Con
     // it cannot reach: `Environment.getExternalStorageDirectory()` is computed rather than cached and
     // still reports the phone.
 
+    // The plural forms answer with **both** volumes, internal first, which is the order and the
+    // shape a phone with an SD card uses — so an app that already handles two volumes handles this
+    // device's without knowing anything about it, and one that only reads [0] gets the internal one,
+    // which is the same thing it would get on a phone.
+
     override fun getExternalFilesDir(type: String?): File =
         VirtualStorage.externalFilesDir(baseContext, guest.packageName, type)
 
-    override fun getExternalFilesDirs(type: String?): Array<File> = arrayOf(getExternalFilesDir(type))
+    override fun getExternalFilesDirs(type: String?): Array<File> =
+        VirtualStorage.Volume.entries
+            .map { VirtualStorage.externalFilesDir(baseContext, guest.packageName, type, it) }
+            .toTypedArray()
 
     override fun getExternalCacheDir(): File =
         VirtualStorage.externalCacheDir(baseContext, guest.packageName)
 
-    override fun getExternalCacheDirs(): Array<File> = arrayOf(getExternalCacheDir())
+    override fun getExternalCacheDirs(): Array<File> =
+        VirtualStorage.Volume.entries
+            .map { VirtualStorage.externalCacheDir(baseContext, guest.packageName, it) }
+            .toTypedArray()
 
     override fun getExternalMediaDirs(): Array<File> =
-        arrayOf(VirtualStorage.externalMediaDir(baseContext, guest.packageName))
+        VirtualStorage.Volume.entries
+            .map { VirtualStorage.externalMediaDir(baseContext, guest.packageName, it) }
+            .toTypedArray()
 
     override fun getObbDir(): File = VirtualStorage.obbDir(baseContext, guest.packageName)
 
-    override fun getObbDirs(): Array<File> = arrayOf(getObbDir())
+    override fun getObbDirs(): Array<File> =
+        VirtualStorage.Volume.entries
+            .map { VirtualStorage.obbDir(baseContext, guest.packageName, it) }
+            .toTypedArray()
 
     override fun getDataDir(): File = guest.dataDir.ensure()
     override fun getFilesDir(): File = guest.filesDir.ensure()

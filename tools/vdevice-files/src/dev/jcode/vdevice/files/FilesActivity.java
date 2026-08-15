@@ -73,6 +73,8 @@ public class FilesActivity extends Activity {
     private static final int BACKGROUND = 0xFF101418;
 
     private int mode = MODE_BROWSE;
+    private List<DeviceStorage.Volume> volumes;
+    /** Null while the volume list is on screen, which is the top of this app's tree. */
     private File root;
     private File current;
 
@@ -84,10 +86,16 @@ public class FilesActivity extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         mode = modeFor(getIntent() == null ? null : getIntent().getAction());
-        root = DeviceStorage.root(this);
-        current = root;
+        volumes = DeviceStorage.volumes(this);
         setContentView(screen());
-        show(current);
+        // Straight into the only volume when there is only one, so a device with a single store
+        // does not make somebody tap through a list of one.
+        if (volumes.size() == 1) {
+            root = volumes.get(0).directory;
+            show(root);
+        } else {
+            showVolumes();
+        }
     }
 
     private int modeFor(String action) {
@@ -213,20 +221,49 @@ public class FilesActivity extends Activity {
     }
 
     /** Lists {@code directory}, newest layout first: up, then folders, then files, each by name. */
-    private void show(File directory) {
-        current = directory;
-        pathLabel.setText(DeviceStorage.display(this, directory));
+    /**
+     * The top of the tree: which store to look in.
+     *
+     * <p>The device has two and they behave differently — one is emptied every time JCode starts and
+     * the other is a folder in the workspace that is still there tomorrow. Naming that difference
+     * here is the point; a file explorer that hides which store you are writing into is one you
+     * cannot trust with the answer.
+     */
+    private void showVolumes() {
+        current = null;
+        root = null;
+        pathLabel.setText("This device");
         listing.removeAllViews();
-
-        if (!directory.equals(root)) {
-            listing.addView(row("..", "Up one folder", true, new Runnable() {
+        for (final DeviceStorage.Volume volume : volumes) {
+            listing.addView(row(volume.label, describeVolume(volume), true, new Runnable() {
                 @Override
                 public void run() {
-                    File parent = current.getParentFile();
-                    show(parent == null ? root : parent);
+                    root = volume.directory;
+                    show(root);
                 }
             }));
         }
+    }
+
+    private String describeVolume(DeviceStorage.Volume volume) {
+        return volume.deviceRoot + (volume.deviceRoot.equals("/sdcard")
+            ? " — emptied when JCode starts"
+            : " — kept in your workspace");
+    }
+
+    private void show(File directory) {
+        current = directory;
+        pathLabel.setText(DeviceStorage.display(volumes, directory));
+        listing.removeAllViews();
+
+        // Up from a volume's own root goes to the volume list, not nowhere.
+        listing.addView(row("..", directory.equals(root) ? "All storage" : "Up one folder", true,
+            new Runnable() {
+                @Override
+                public void run() {
+                    up();
+                }
+            }));
         for (final File entry : sorted(directory)) {
             final boolean isDirectory = entry.isDirectory();
             listing.addView(row(entry.getName(), describe(entry), isDirectory, new Runnable() {
@@ -330,7 +367,7 @@ public class FilesActivity extends Activity {
             return;
         }
         Toast.makeText(this,
-            DeviceStorage.display(this, file) + " — " + bytes(file.length()),
+            DeviceStorage.display(volumes, file) + " — " + bytes(file.length()),
             Toast.LENGTH_SHORT).show();
     }
 
@@ -366,7 +403,7 @@ public class FilesActivity extends Activity {
     }
 
     private void answer(File chosen) {
-        String path = DeviceStorage.display(this, chosen);
+        String path = DeviceStorage.display(volumes, chosen);
         Log.i(TAG, "chose " + path);
         setResult(RESULT_OK, new Intent().putExtra(EXTRA_DEVICE_PATH, path));
         finish();
@@ -380,12 +417,29 @@ public class FilesActivity extends Activity {
     /** Back walks up the tree before it leaves, which is what a file explorer's Back does. */
     @Override
     public void onBackPressed() {
-        if (current != null && !current.equals(root)) {
-            File parent = current.getParentFile();
-            show(parent == null ? root : parent);
+        if (current != null) {
+            up();
             return;
         }
         cancel();
+    }
+
+    /** One step towards the volume list, and out of the app once it is showing. */
+    private void up() {
+        if (current == null) {
+            cancel();
+            return;
+        }
+        if (current.equals(root)) {
+            if (volumes.size() == 1) {
+                cancel();
+            } else {
+                showVolumes();
+            }
+            return;
+        }
+        File parent = current.getParentFile();
+        show(parent == null ? root : parent);
     }
 
     private Button button(String label, int colour, final Runnable onClick) {

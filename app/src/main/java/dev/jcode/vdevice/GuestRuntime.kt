@@ -13,6 +13,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import android.webkit.WebView
+import dev.jcode.core.distro.WorkspaceHostPaths
 
 /**
  * The container itself, living in the `:guest` process: it installs the hooks in [GuestHooks] and
@@ -86,6 +87,13 @@ internal object GuestRuntime {
     fun install(context: Context) {
         if (isInstalled) return
         host = context.applicationContext
+        // Where the workspace is, is a process-wide latch the IDE sets at startup — and `:guest` is
+        // a different process that never ran that code, so it fell back to the *legacy* shared path.
+        // The device's external volume is under the workspace root, so the guest created it at
+        // /storage/emulated/0/JCode/projects/vDevice_ExtStorage: in the **user's own storage**,
+        // which is the exact leak this container exists to prevent. Measured, and the reason this
+        // line comes before anything that can touch storage.
+        WorkspaceHostPaths.init(host.filesDir)
         VirtualIdentity.apply(Application.getProcessName())
         claimWebViewDirectory()
 

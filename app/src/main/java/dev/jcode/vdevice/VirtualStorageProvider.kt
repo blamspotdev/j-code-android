@@ -44,17 +44,22 @@ class VirtualStorageProvider : DocumentsProvider() {
     override fun queryRoots(projection: Array<out String>?): Cursor {
         val cursor = MatrixCursor(projection ?: DEFAULT_ROOT_PROJECTION)
         val context = requireContext()
-        cursor.newRow().apply {
-            add(Root.COLUMN_ROOT_ID, ROOT_ID)
-            add(Root.COLUMN_DOCUMENT_ID, VirtualStorage.DEVICE_ROOT)
-            add(Root.COLUMN_TITLE, TITLE)
-            add(Root.COLUMN_SUMMARY, SUMMARY)
-            add(
-                Root.COLUMN_FLAGS,
-                Root.FLAG_SUPPORTS_CREATE or Root.FLAG_SUPPORTS_IS_CHILD or Root.FLAG_LOCAL_ONLY,
-            )
-            add(Root.COLUMN_ICON, context.applicationInfo.icon)
-            add(Root.COLUMN_MIME_TYPES, Document.MIME_TYPE_DIR)
+        // One root per volume, and the summaries are the difference between them: a root that
+        // quietly forgets everything is worse than one that says it will, and a root that quietly
+        // writes into somebody's workspace is worse than one that says where it lands.
+        VirtualStorage.Volume.entries.forEach { volume ->
+            cursor.newRow().apply {
+                add(Root.COLUMN_ROOT_ID, "$ROOT_ID-${volume.name.lowercase()}")
+                add(Root.COLUMN_DOCUMENT_ID, volume.deviceRoot)
+                add(Root.COLUMN_TITLE, TITLE)
+                add(Root.COLUMN_SUMMARY, summaryOf(volume))
+                add(
+                    Root.COLUMN_FLAGS,
+                    Root.FLAG_SUPPORTS_CREATE or Root.FLAG_SUPPORTS_IS_CHILD or Root.FLAG_LOCAL_ONLY,
+                )
+                add(Root.COLUMN_ICON, context.applicationInfo.icon)
+                add(Root.COLUMN_MIME_TYPES, Document.MIME_TYPE_DIR)
+            }
         }
         return cursor
     }
@@ -157,7 +162,12 @@ class VirtualStorageProvider : DocumentsProvider() {
     companion object {
         private const val ROOT_ID = "jcode-virtual-device"
         private const val TITLE = "JCode virtual device"
-        private const val SUMMARY = "Emptied every time JCode starts"
+
+        private fun summaryOf(volume: VirtualStorage.Volume): String = when (volume) {
+            VirtualStorage.Volume.Internal -> "Internal — emptied every time JCode starts"
+            VirtualStorage.Volume.External ->
+                "External — kept in your workspace as ${VirtualStorage.EXTERNAL_FOLDER}"
+        }
 
         /** `${applicationId}.vdevice.files`, as declared in the manifest. */
         fun authority(context: Context): String = context.packageName + ".vdevice.files"
