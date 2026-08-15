@@ -198,6 +198,4 @@ internal object GuestNetwork {
 
     /** Returned by an answer that has no opinion, so the real service is asked instead. */
     private object Skip
-
-    private const val BLUETOOTH_STATE_ON = 12
 }

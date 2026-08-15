@@ -56,8 +56,6 @@ final class Ui {
     static final int TEXT = 0xFFE8ECF4;
     static final int MUTED = 0xFF97A2B6;
     static final int ACCENT = 0xFF8AB4F8;
-    static final int WARNING = 0xFFE6A23C;
-    static final int POSITIVE = 0xFF6EE7A8;
 
     /** One colour per kind of thing, so a chip is recognisable before its label is read. */
     static final int TINT_FOLDER = 0xFFF59E0B;
@@ -65,7 +63,6 @@ final class Ui {
     static final int TINT_IMAGE = 0xFF9333EA;
     static final int TINT_INTERNAL = 0xFF64748B;
     static final int TINT_EXTERNAL = 0xFF0EA5A4;
-    static final int TINT_ACTION = 0xFF2563EB;
 
     private Ui() {
     }

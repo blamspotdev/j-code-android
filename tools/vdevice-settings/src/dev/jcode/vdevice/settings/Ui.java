@@ -53,7 +53,6 @@ final class Ui {
     static final int MUTED = 0xFF97A2B6;
     static final int ACCENT = 0xFF8AB4F8;
     static final int WARNING = 0xFFE6A23C;
-    static final int POSITIVE = 0xFF6EE7A8;
 
     /** One colour per kind of setting, so a chip is recognisable before its label is read. */
     static final int TINT_NETWORK = 0xFF2563EB;
