@@ -1202,6 +1202,16 @@ app owns, and that is the path the two fixes below came out of:
 > and the device came back empty. The view that is going now announces itself, and the tab clears
 > only if it is still the one being held.
 
+The same gap ran through the notification's **Stop & close**, which is the one control that says the
+whole app is finished. `BackendService.shutdownRuntimeAndExit` flushed buffers, closed terminals,
+reaped the proot trees and killed *its own* process — and the device is not in that process.
+Measured: `:guest` and the `logcat` a guest had open outlived a Stop & close, holding 198 MB with no
+JCode left to show them in. It now turns the device off through its own door first and then ends
+every remaining process under the app's uid, which `/proc`'s hidepid mount makes exactly this app's
+tree and nothing else: the guest, whatever a guest forked, any proot still standing, and the detached
+adb daemon whose parent is `init` and which nothing else would ever reap. Swipe-away-to-exit takes
+the same path, so it means the same thing.
+
 ---
 
 ## 9. Invariants and constraints

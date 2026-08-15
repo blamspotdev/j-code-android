@@ -10,9 +10,13 @@ import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.IBinder
+import android.system.Os
+import android.system.OsConstants
 import androidx.core.content.ContextCompat
 import dev.jcode.backend.SessionRegistry
 import dev.jcode.backend.SessionRegistryState
+import dev.jcode.core.distro.AppProcesses
+import dev.jcode.vdevice.AppSandbox
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -68,12 +72,38 @@ class BackendService : Service() {
         runCatching { MainViewModel.sessionFlushBlocking?.invoke() }
         runCatching { TerminalSessionHost.manager(applicationContext).closeAll() }
         runCatching { MainViewModel.runtimeTeardown?.invoke() }
+        // The virtual device runs in a process of its own, and a close that only ends *this* one
+        // leaves it up: measured, `:guest` and the logcat a guest had open outlived a Stop & close,
+        // holding 198 MB with no JCode left to show them in. Turned off through its own door first,
+        // so the guest is told rather than found dead.
+        runCatching { AppSandbox.shutdown() }
+        endEveryOtherProcess()
         if (isForegroundActive) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             isForegroundActive = false
         }
         stopSelf()
         android.os.Process.killProcess(android.os.Process.myPid())
+    }
+
+    /**
+     * Everything this app owns except the process running this.
+     *
+     * "Stop & close" means the app is gone, and the app is more processes than the one with the UI
+     * in it. `/proc` is mounted with hidepid for apps, so a uid-filtered walk of it is exactly this
+     * app's tree and nothing else: the virtual device, whatever a guest forked, the detached adb
+     * daemon that has `init` for a parent and so is reaped by nobody, and any proot still standing
+     * after its own teardown.
+     *
+     * `SIGKILL` because this is the last thing that runs before the process asking is itself gone —
+     * there would be nobody left to notice a polite signal being ignored. Each kill is guarded on
+     * its own: a pid that has already exited is the ordinary case here, not a failure.
+     */
+    private fun endEveryOtherProcess() {
+        val self = android.os.Process.myPid()
+        AppProcesses.list()
+            .filter { it.pid != self }
+            .forEach { runCatching { Os.kill(it.pid, OsConstants.SIGKILL) } }
     }
 
     override fun onDestroy() {
