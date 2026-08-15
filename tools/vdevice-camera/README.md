@@ -19,6 +19,7 @@ first run — see below.
 |---|---|
 | The launcher | Viewfinder and a shutter; photos go to the device's `DCIM/Camera` |
 | `ACTION_IMAGE_CAPTURE` | The same, and answers the caller |
+| `ACTION_VIDEO_CAPTURE` | Records three seconds to an MP4 and answers with its URI |
 
 The capture contract is honoured as written: with `EXTRA_OUTPUT` the full-size JPEG is written to
 that URI and the result carries no data; without it the result carries a thumbnail under the `"data"`

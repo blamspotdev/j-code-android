@@ -79,6 +79,18 @@ public class CameraActivity extends Activity implements SensorEventListener {
 
     private static final int JPEG_QUALITY = 90;
 
+    /** How long a capture runs. Long enough to be a video, short enough to be a test fixture. */
+    private static final int VIDEO_SECONDS = 3;
+
+    /**
+     * The device path this app answers with, which the container turns into a `content://` URI.
+     *
+     * The same contract the device's Files app uses — see `FilesActivity.EXTRA_DEVICE_PATH`. A video
+     * is returned by URI rather than by value, so it needs one the caller can actually open, and the
+     * encoding of that URI is the container's business rather than this app's.
+     */
+    private static final String EXTRA_DEVICE_PATH = "dev.jcode.vdevice.DEVICE_PATH";
+
     private final Scene scene = new Scene();
     private final float[] gravity = new float[3];
     private final float[] geomagnetic = new float[3];
@@ -98,11 +110,16 @@ public class CameraActivity extends Activity implements SensorEventListener {
     private Uri output;
     private boolean answering;
 
+    /** True when the caller asked for a video rather than a still. */
+    private boolean recording;
+
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         String action = getIntent() == null ? null : getIntent().getAction();
-        answering = MediaStore.ACTION_IMAGE_CAPTURE.equals(action)
+        recording = MediaStore.ACTION_VIDEO_CAPTURE.equals(action);
+        answering = recording
+            || MediaStore.ACTION_IMAGE_CAPTURE.equals(action)
             || MediaStore.ACTION_IMAGE_CAPTURE_SECURE.equals(action);
         output = getIntent() == null ? null : getIntent().getParcelableExtra(MediaStore.EXTRA_OUTPUT);
         sensors = (SensorManager) getSystemService(SENSOR_SERVICE);
@@ -253,12 +270,17 @@ public class CameraActivity extends Activity implements SensorEventListener {
             }
         }));
         row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
-        row.addView(button("Take photo", 0xFF8AB4F8, new Runnable() {
-            @Override
-            public void run() {
-                capture();
-            }
-        }));
+        row.addView(button(recording ? "Record " + VIDEO_SECONDS + "s" : "Take photo", 0xFF8AB4F8,
+            new Runnable() {
+                @Override
+                public void run() {
+                    if (recording) {
+                        record();
+                    } else {
+                        capture();
+                    }
+                }
+            }));
         return row;
     }
 
@@ -281,7 +303,17 @@ public class CameraActivity extends Activity implements SensorEventListener {
     /** Whoever is waiting, named the way a person would recognise them. */
     private String callerLabel() {
         String caller = getCallingPackage();
-        return (caller == null ? "An app" : caller) + " wants a photo";
+        String who = "An app";
+        if (caller != null) {
+            who = caller;
+            try {
+                who = getPackageManager().getApplicationLabel(
+                    getPackageManager().getApplicationInfo(caller, 0)).toString();
+            } catch (Exception e) {
+                // The package name is a worse answer than the label and a much better one than none.
+            }
+        }
+        return who + (recording ? " wants a video" : " wants a photo");
     }
 
     /**
@@ -324,6 +356,46 @@ public class CameraActivity extends Activity implements SensorEventListener {
         Intent answer = new Intent();
         answer.putExtra(EXTRA_THUMBNAIL, thumbnail(still, file));
         still.recycle();
+        setResult(RESULT_OK, answer);
+        finish();
+    }
+
+    /**
+     * Records the scene to an MP4 and answers with it.
+     *
+     * <p>On the calling thread, which is the main one, and deliberately: three seconds at 15 fps is
+     * 45 frames of a test pattern, the encode takes well under a second, and a background thread
+     * here would buy a spinner the recording does not last long enough to need. If the clip ever
+     * grows, this is the line that has to change first.
+     */
+    private void record() {
+        File file = new File(DeviceStorage.pictures(this),
+            "VID_" + SystemClock.elapsedRealtime() + ".mp4");
+        boolean recorded = Recorder.record(file, VIDEO_SECONDS, new Recorder.Renderer() {
+            @Override
+            public void draw(Canvas canvas, int width, int height, long elapsedMs) {
+                scene.draw(canvas, width, height, degrees(0), degrees(1), degrees(2), elapsedMs);
+            }
+        });
+        if (!recorded) {
+            failed("could not record to " + DeviceStorage.display(this, file));
+            return;
+        }
+        Log.i(TAG, "recorded " + DeviceStorage.display(this, file) + " (" + file.length() + " bytes)");
+        if (!answering) {
+            Toast.makeText(this, "Saved to " + DeviceStorage.display(this, file),
+                Toast.LENGTH_SHORT).show();
+            return;
+        }
+        // EXTRA_OUTPUT wins when the caller named a destination, exactly as it does for a still.
+        if (output != null && !copy(file, output)) {
+            failed("could not write the video to " + output);
+            return;
+        }
+        Intent answer = new Intent();
+        if (output == null) {
+            answer.putExtra(EXTRA_DEVICE_PATH, DeviceStorage.display(this, file));
+        }
         setResult(RESULT_OK, answer);
         finish();
     }

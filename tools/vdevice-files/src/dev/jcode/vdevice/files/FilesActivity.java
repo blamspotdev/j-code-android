@@ -154,11 +154,11 @@ public class FilesActivity extends Activity {
     private String titleFor() {
         switch (mode) {
             case MODE_PICK_FILE:
-                return caller() + " wants a file";
+                return callerLabel() + " wants a file";
             case MODE_PICK_FOLDER:
-                return caller() + " wants a folder";
+                return callerLabel() + " wants a folder";
             case MODE_CREATE:
-                return caller() + " wants to save a file";
+                return callerLabel() + " wants to save a file";
             default:
                 return "Files";
         }
@@ -167,6 +167,20 @@ public class FilesActivity extends Activity {
     private String caller() {
         String calling = getCallingPackage();
         return calling == null ? "An app" : calling;
+    }
+
+    /** The label a person recognises, falling back to the package name. */
+    private String callerLabel() {
+        String calling = getCallingPackage();
+        if (calling == null) {
+            return "An app";
+        }
+        try {
+            return getPackageManager().getApplicationLabel(
+                getPackageManager().getApplicationInfo(calling, 0)).toString();
+        } catch (Exception e) {
+            return calling;
+        }
     }
 
     private View nameRow() {

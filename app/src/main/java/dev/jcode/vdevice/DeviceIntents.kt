@@ -78,6 +78,7 @@ internal object DeviceIntents {
                 MediaStore.ACTION_IMAGE_CAPTURE,
                 MediaStore.ACTION_IMAGE_CAPTURE_SECURE,
                 MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA,
+                MediaStore.ACTION_VIDEO_CAPTURE,
             ),
         ),
         Handler(

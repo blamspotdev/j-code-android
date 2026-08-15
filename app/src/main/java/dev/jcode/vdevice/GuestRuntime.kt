@@ -212,6 +212,10 @@ internal object GuestRuntime {
 
     /** Builds an embedded activity from a stub intent — the shape [rewriteOutgoing] hands its host. */
     fun embed(stub: Intent, windowToken: IBinder?): Activity {
+        // Read *before* anything below can move it. `resolve` sets `active` to the activity being
+        // built, so asking afterwards answers with the app that is starting rather than the app that
+        // started it — which is null-filtered out and leaves getCallingPackage() with nothing.
+        val startedBy = active?.packageName
         val instrumentation = instrumentation ?: throw VirtualDeviceException("the container is not installed")
         val component = stub.component ?: throw VirtualDeviceException("no stub component")
         val info = host.packageManager.getActivityInfo(component, 0)
@@ -240,7 +244,12 @@ internal object GuestRuntime {
 
         // Registered before the activity is built: the guest can reach ActivityClient from its own
         // onCreate, and a token the hook has not heard of yet is one the server rejects.
-        val token = Binder().also(GuestActivityClient::register)
+        // Recorded here because this is the only place that knows it — see GuestActivityClient for
+        // why getCallingPackage() has nothing else to go on. An app that started *itself* is not a
+        // caller, which is what the comparison drops.
+        val token = Binder().also {
+            GuestActivityClient.register(it, startedBy?.takeIf { name -> name != target.guest.packageName })
+        }
         val activity = instrumentation.newActivity(
             target.guest.classLoader.loadClass(target.activityClass),
             host,

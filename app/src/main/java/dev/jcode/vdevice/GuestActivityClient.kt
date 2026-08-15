@@ -64,25 +64,33 @@ internal object GuestActivityClient {
     private const val EMBEDDED_TASK_ID = 0x7C0DE
 
     /**
+     * Embedded activity tokens, each mapped to **who started it**.
+     *
      * Weak, because an activity's token is reachable for exactly as long as the activity is: the
      * `Activity` holds `mToken`, so letting go of the activity lets go of the entry.
+     *
+     * The value is what makes `getCallingPackage()` answerable. On a phone the server knows who
+     * launched an activity because it recorded the launch; here the server has never heard of either
+     * party, so the container has to remember it at the one moment it knows — when it mints the
+     * token — or the device's own Camera and Files are reduced to saying "An app wants a photo",
+     * which is the one thing a person needs those screens to tell them.
      */
-    private val tokens: MutableSet<IBinder> =
-        Collections.newSetFromMap(Collections.synchronizedMap(WeakHashMap()))
+    private val tokens: MutableMap<IBinder, String> =
+        Collections.synchronizedMap(WeakHashMap())
 
     /** The `IActivityTaskManager` method that hands the controller out — see the class docs. */
     const val CONTROLLER_GETTER = "getActivityClientController"
 
 
-    fun register(token: IBinder) {
-        tokens += token
+    fun register(token: IBinder, startedBy: String?) {
+        tokens[token] = startedBy.orEmpty()
     }
 
     fun forget(token: IBinder) {
         tokens -= token
     }
 
-    private fun isEmbedded(token: IBinder): Boolean = tokens.contains(token)
+    private fun isEmbedded(token: IBinder): Boolean = tokens.containsKey(token)
 
     /**
      * Blanks any embedded token in an outgoing `startActivity`'s arguments.
@@ -131,6 +139,11 @@ internal object GuestActivityClient {
 
         private fun answer(method: Method, args: Array<Any?>?): Any? = when (method.name) {
             "getTaskForActivity" -> EMBEDDED_TASK_ID
+            // Who started this activity. Null rather than "" for a launch nobody made — from the
+            // launcher, say — because null is what the platform answers for one, and an app that
+            // shows the caller's name should say nothing rather than nothing-in-quotes.
+            "getCallingPackage" -> args?.firstNotNullOfOrNull { it as? IBinder }
+                ?.let { tokens[it] }?.takeIf { it.isNotEmpty() }
             "getDisplayId" -> Display.DEFAULT_DISPLAY
             /*
              * Not the generic int default, which is 0 — and 0 is SCREEN_ORIENTATION_LANDSCAPE.

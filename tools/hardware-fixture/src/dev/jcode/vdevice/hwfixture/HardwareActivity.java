@@ -58,6 +58,7 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
     private static final int REQUEST_CODE = 4321;
     private static final int PHOTO_CODE = 4322;
     private static final int PICK_CODE = 4323;
+    private static final int VIDEO_CODE = 4324;
 
     private static final String[] DANGEROUS = {
         "android.permission.CAMERA",
@@ -87,6 +88,7 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
     private String lastRequest = "not asked yet";
     private String lastPhoto = "not asked yet";
     private String lastPick = "not asked yet";
+    private String lastVideo = "not asked yet";
     private String lastFix = "no update yet";
 
     @Override
@@ -134,6 +136,18 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
             startActivityForResult(open, PICK_CODE);
         });
         column.addView(pick, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // The device draws frames, so it can encode them: ACTION_VIDEO_CAPTURE comes back as a
+        // content:// URI, and reading its first bytes is the only way to tell a URI that resolves
+        // from one that merely looks right.
+        Button video = new Button(this);
+        video.setText("Record a video (ACTION_VIDEO_CAPTURE)");
+        video.setOnClickListener(v -> {
+            lastVideo = "asked, waiting for the answer…";
+            startActivityForResult(new Intent(MediaStore.ACTION_VIDEO_CAPTURE), VIDEO_CODE);
+        });
+        column.addView(video, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         // "Is there a browser?" gets asked three ways and answered here two of them: the report
@@ -220,7 +234,8 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
         }
         text.append("  last requestPermissions: ").append(lastRequest).append('\n');
         text.append("  last photo: ").append(lastPhoto).append('\n');
-        text.append("  last pick:  ").append(lastPick).append("\n\n");
+        text.append("  last pick:  ").append(lastPick).append('\n');
+        text.append("  last video: ").append(lastVideo).append("\n\n");
 
         text.append("FEATURES (hasSystemFeature)\n");
         for (String feature : FEATURES) {
@@ -236,6 +251,8 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
         resolves(text, "a web search", new Intent(Intent.ACTION_WEB_SEARCH));
         resolves(text, "a photo", new Intent(MediaStore.ACTION_IMAGE_CAPTURE));
         resolves(text, "a document", new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*"));
+        resolves(text, "a video", new Intent(MediaStore.ACTION_VIDEO_CAPTURE));
+        resolves(text, "settings", new Intent("android.settings.SETTINGS"));
 
         // What the device says about the network. An app's first question is almost always "am I
         // online?", and until the device answers it the answer is the phone's.
@@ -373,6 +390,11 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
     @Override
     protected void onActivityResult(int code, int result, Intent data) {
         super.onActivityResult(code, result, data);
+        if (code == VIDEO_CODE) {
+            lastVideo = describePick(result, data);
+            Log.i(TAG, "onActivityResult " + code + ": " + lastVideo);
+            return;
+        }
         if (code == PICK_CODE) {
             lastPick = describePick(result, data);
             Log.i(TAG, "onActivityResult " + code + ": " + lastPick);

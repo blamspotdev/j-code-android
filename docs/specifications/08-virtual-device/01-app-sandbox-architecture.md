@@ -756,7 +756,7 @@ the named app rather than letting the intent out.
 
 | Intent | The device's app |
 |---|---|
-| `ACTION_IMAGE_CAPTURE`, `…_SECURE`, `STILL_IMAGE_CAMERA` | Camera (§7j) |
+| `ACTION_IMAGE_CAPTURE`, `…_SECURE`, `STILL_IMAGE_CAMERA`, `ACTION_VIDEO_CAPTURE` | Camera (§7j) |
 | `ACTION_OPEN_DOCUMENT`, `GET_CONTENT`, `CREATE_DOCUMENT`, `OPEN_DOCUMENT_TREE` | Files (§7j) |
 | `ACTION_VIEW` on `http(s)`, `ACTION_WEB_SEARCH`, `ACTION_MAIN` + `CATEGORY_APP_BROWSER` | Browser |
 | The `android.settings.*` intents | Settings (§7m) |
@@ -816,7 +816,15 @@ Both are ordinary guests — no container privileges, started by ordinary intent
 through the ordinary result path. Sources in `tools/vdevice-camera` and `tools/vdevice-files`,
 bundled in `app/src/main/assets/vdevice/` and reinstalled into every device on every start.
 
-**Camera** draws what it sees from the device's own motion sensors, which is something any app may
+**Camera** answers `ACTION_VIDEO_CAPTURE` as well as the stills, because the specification's claim
+that the device "can draw a frame and cannot encode a film" was true of nothing except the code not
+being written: a frame is a `Bitmap`, `MediaCodec` and `MediaMuxer` are ordinary SDK API, and the
+device already knows how to draw as many frames as it is asked for. `Recorder` encodes three seconds
+at 15 fps into an MP4 — byte buffers rather than a codec input surface, because a codec's surface is
+a hardware buffer that `lockCanvas` refuses and OpenGL is a great deal of machinery to avoid a colour
+conversion that costs milliseconds; `COLOR_FormatYUV420Flexible` and `getInputImage` let the planes
+say where they are rather than guessing NV12 from I420. It draws what it sees from the device's own
+motion sensors, which is something any app may
 read: colour bars an app can check it decoded, a horizon that rolls and pitches with the attitude on
 the hardware bench, a compass rose on its heading, a frame counter. Drawn, and drawn to look drawn —
 nothing there could be mistaken for a photograph of a room, which is what a camera quietly handing
@@ -1018,6 +1026,16 @@ and getting a real phone into that state on purpose means a SIM and turning its 
 > `FEATURE_BLUETOOTH` and the two permissions — and the Settings screen says so in as many words
 > rather than showing a toggle that appears to turn a radio on.
 
+#### Who is asking
+
+`Activity.getCallingPackage()` used to answer null for every guest, so the device's own screens could
+only say "An app wants a photo" — the one thing those screens exist to tell somebody. On a phone the
+server knows who launched an activity because it recorded the launch; here the server has never heard
+of either party, so the container records it at the one moment it knows: `GuestRuntime.embed` reads
+`active` **before** `resolve` moves it to the activity being built, and `GuestActivityClient` keeps
+it against the token and answers `getCallingPackage` from it. The apps turn the package into a label,
+so the screen says *Hardware Fixture wants a video*.
+
 #### The provider
 
 `VirtualSettingsProvider` is how the app reaches any of it: `call()` rather than rows, because "tell
@@ -1105,8 +1123,7 @@ internal sealed interface SandboxStatus {
 - The guest shares JCode's uid and permissions — no isolation, by design.
 - `Environment.getExternalStorageDirectory()` reports the phone's path, not the device's — §7g.
 - Camera2 gets no frames; only `ACTION_IMAGE_CAPTURE` is answered — §7k.
-- No `ACTION_VIDEO_CAPTURE`: the device can draw a frame and cannot encode a film, and an app handed
-  a one-frame video would be worse off than one told there is no camera app for it.
+- `Environment.getExternalStorageDirectory()` reports the phone's path, not the device's — §7g.
 - An implicit intent the device has no answer for still goes to the phone. It is logged loudly, but
   a result cannot come back from one.
 - The picker's "save as" name field needs the tab's keyboard button, like every other guest text
