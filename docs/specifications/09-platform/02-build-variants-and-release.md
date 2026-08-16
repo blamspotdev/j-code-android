@@ -102,7 +102,7 @@ packaging {
 Single source of truth in `app/build.gradle.kts`:
 
 ```kotlin
-val jcodeVersion = "1.4.10"                                   // the train being prepared
+val jcodeVersion = "1.4.11"                                   // the train being prepared
 val jcodeVersionName = findProperty("jcodeVersionName") ?: jcodeVersion
 val jcodeVersionCode = (MAJOR * 10000 + MINOR * 100 + PATCH) * 100 + tier
 ```
