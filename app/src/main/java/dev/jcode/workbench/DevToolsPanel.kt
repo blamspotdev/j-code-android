@@ -38,8 +38,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.Icon
+import dev.jcode.design.CompactContextMenu
+import dev.jcode.design.ContextAction
+import dev.jcode.design.JCodeIcon
 import dev.jcode.design.LocalTerminalFontSizeSetting
 import dev.jcode.design.JCodeTheme
+import dev.jcode.design.ManagerFilterChip
+import dev.jcode.design.jcIcon
 import org.json.JSONTokener
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -139,20 +145,8 @@ fun DevtoolsSidebarContent(modifier: Modifier = Modifier) {
                         }
                     }
                 }
-                val clearAction: (() -> Unit)? = when (pane) {
-                    DevToolsPane.Console -> BuiltinBrowser::clearConsole
-                    DevToolsPane.Network -> BuiltinBrowser::clearNetwork
-                    else -> null
-                }
-                if (clearAction != null) {
-                    Text(
-                        text = "Clear",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .clickable { clearAction() }
-                            .padding(horizontal = 10.dp, vertical = 4.dp),
-                    )
+                if (pane == DevToolsPane.Console || pane == DevToolsPane.Network) {
+                    LogMenuButton(pane)
                 }
             }
         }
@@ -174,6 +168,61 @@ fun DevtoolsSidebarContent(modifier: Modifier = Modifier) {
             DevToolsPane.Application -> ApplicationPane(Modifier.weight(1f))
             DevToolsPane.Elements -> ElementsPane(Modifier.weight(1f))
         }
+    }
+}
+
+/**
+ * The Console and Network panes' overflow menu.
+ *
+ * Was a bare "Clear" link. Clearing is the one thing here you cannot undo, and it was the only thing
+ * in reach — while the setting that decides whether the log survives the next page load, which is
+ * what you actually want *before* the interesting request happens, had nowhere to live at all.
+ */
+@Composable
+private fun LogMenuButton(pane: DevToolsPane) {
+    var open by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
+    val network = pane == DevToolsPane.Network
+    Box {
+        Icon(
+            imageVector = jcIcon(JCodeIcon.MoreVert),
+            contentDescription = if (network) "Network options" else "Console options",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .clickable { open = true }
+                .padding(horizontal = 8.dp, vertical = 8.dp)
+                .size(18.dp),
+        )
+        CompactContextMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            listActions = listOf(
+                ContextAction(
+                    icon = JCodeIcon.Pin,
+                    label = "Preserve log",
+                    checked = BuiltinBrowser.preserveLog.value,
+                ) { BuiltinBrowser.preserveLog.value = !BuiltinBrowser.preserveLog.value },
+                ContextAction(
+                    icon = JCodeIcon.Copy,
+                    label = if (network) "Copy all requests" else "Copy all messages",
+                    enabled = if (network) BuiltinBrowser.network.isNotEmpty() else BuiltinBrowser.console.isNotEmpty(),
+                ) {
+                    val text = if (network) {
+                        BuiltinBrowser.network.joinToString("\n") {
+                            "${statusLabel(it)}\t${it.method}\t${it.url}\t${it.durationMs}ms"
+                        }
+                    } else {
+                        BuiltinBrowser.console.joinToString("\n") { "[${it.level}] ${it.message}" }
+                    }
+                    clipboard.setText(AnnotatedString(text))
+                },
+                ContextAction(
+                    icon = JCodeIcon.Clear,
+                    label = if (network) "Clear network" else "Clear console",
+                    destructive = true,
+                ) { if (network) BuiltinBrowser.clearNetwork() else BuiltinBrowser.clearConsole() },
+            ),
+        )
     }
 }
 
@@ -817,36 +866,391 @@ private fun removeItemJs(store: String, key: String): String =
 private fun expireCookieJs(key: String): String =
     "(function(){document.cookie=${JSONObject.quote(key)}+'=; Max-Age=0; Path=/';return 1})()"
 
+/** The Network pane's type filter. Null matches everything; the rest match [BrowserNetworkEntry.kind]. */
+private val NETWORK_FILTERS: List<Pair<String, Set<String>?>> = listOf(
+    "All" to null,
+    "Fetch/XHR" to setOf("fetch", "xhr"),
+    "Doc" to setOf("document"),
+    "JS" to setOf("script"),
+    "CSS" to setOf("css"),
+    "Img" to setOf("img"),
+    "Media" to setOf("media", "font"),
+    "Other" to setOf("other"),
+)
+
 @Composable
 private fun NetworkPane(modifier: Modifier = Modifier) {
     val entries = BuiltinBrowser.network
-    if (entries.isEmpty()) {
-        Box(modifier) { EmptyHint("fetch / XHR requests made by the page appear here.") }
+    var filter by remember { mutableStateOf(0) }
+    var selectedId by remember { mutableStateOf<Long?>(null) }
+    // By id, not by value: two identical polls of the same endpoint are two rows, and picking the
+    // second one has to open the second one.
+    val selected = entries.firstOrNull { it.id == selectedId }
+    if (selected != null) {
+        NetworkDetail(selected, onBack = { selectedId = null }, modifier = modifier)
         return
     }
-    LazyColumn(modifier = modifier.fillMaxSize()) {
-        items(entries) { e ->
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 3.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                val statusColor = when {
-                    e.status == 0 -> MaterialTheme.colorScheme.error
-                    e.status >= 400 -> MaterialTheme.colorScheme.error
-                    e.status >= 300 -> JCodeTheme.semanticColors.warning
-                    else -> JCodeTheme.semanticColors.success
+    Column(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            NETWORK_FILTERS.forEachIndexed { i, (label, kinds) ->
+                val n = if (kinds == null) entries.size else entries.count { it.kind in kinds }
+                ManagerFilterChip(
+                    selected = filter == i,
+                    // The count is the point of the row: it says where the requests went without
+                    // making you tap through eight filters to find out.
+                    label = if (n > 0) "$label $n" else label,
+                ) { filter = i }
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
+        val shown = NETWORK_FILTERS[filter].second?.let { k -> entries.filter { it.kind in k } } ?: entries
+        if (shown.isEmpty()) {
+            EmptyHint(
+                if (entries.isEmpty()) {
+                    "Requests the page makes appear here — documents, scripts, styles, images, " +
+                        "fetch and XHR. Tap one for its headers, payload and response."
+                } else {
+                    "No ${NETWORK_FILTERS[filter].first} requests."
+                },
+            )
+            return
+        }
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(shown, key = { it.id }) { e -> NetworkRow(e) { selectedId = e.id } }
+        }
+    }
+}
+
+@Composable
+private fun NetworkRow(e: BrowserNetworkEntry, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = statusLabel(e),
+                color = statusColor(e),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                modifier = Modifier.widthIn(min = 28.dp),
+            )
+            Text(
+                text = shortName(e.url),
+                color = MaterialTheme.colorScheme.onSurface,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = "${e.durationMs}ms",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+            )
+        }
+        Text(
+            text = buildList {
+                add(if (e.method == "GET") e.kind else "${e.method} · ${e.kind}")
+                sizeLabel(e)?.let { add(it) }
+                hostOf(e.url)?.let { add(it) }
+            }.joinToString(" · "),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 10.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 36.dp),
+        )
+    }
+}
+
+/**
+ * One request, opened out.
+ *
+ * The sections mirror Chrome's tabs (Headers / Payload / Response) because that is the order the
+ * questions come in, but only the ones with an answer are drawn: a row that came from resource
+ * timing has no headers and no body to show, and four empty accordions would suggest the request
+ * had none rather than that nothing here can see them.
+ */
+@Composable
+private fun NetworkDetail(e: BrowserNetworkEntry, onBack: () -> Unit, modifier: Modifier = Modifier) {
+    val clipboard = LocalClipboardManager.current
+    Column(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onBack)
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = jcIcon(JCodeIcon.ArrowBack),
+                contentDescription = "Back to requests",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(
+                text = shortName(e.url),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
+        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            DetailSection("General", initiallyExpanded = true) {
+                DetailPairs(
+                    buildList {
+                        add("Request URL" to e.url)
+                        add("Method" to e.method)
+                        add("Status" to if (e.status > 0) e.status.toString() else if (e.failed) "(failed)" else "—")
+                        add("Type" to e.kind)
+                        if (e.mimeType.isNotBlank()) add("Content-Type" to e.mimeType)
+                        add(
+                            "Transferred" to when {
+                                e.bytes > 0 -> formatBytes(e.bytes)
+                                e.bytes == 0L && e.encodedBytes > 0 ->
+                                    "0 B — served from cache (${formatBytes(e.encodedBytes)} decoded)"
+                                e.bytes == 0L ->
+                                    "not disclosed — cross-origin without Timing-Allow-Origin"
+                                else -> "unknown"
+                            },
+                        )
+                        add("Time" to "${e.durationMs} ms")
+                    },
+                    clipboard,
+                )
+            }
+            if (e.timingOnly) {
+                Text(
+                    text = "Loaded by the browser, not by page script. Resource timing reports its " +
+                        "URL, size and duration; the status code and body are not exposed to the " +
+                        "page, so there is nothing here to show for them.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+                return@Column
+            }
+            if (e.requestHeaders.isNotEmpty()) {
+                DetailSection("Request headers", "${e.requestHeaders.size}") {
+                    DetailPairs(e.requestHeaders, clipboard)
                 }
-                Text(if (e.status == 0) "ERR" else e.status.toString(), color = statusColor,
-                    fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                Text(e.method, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                Text(e.url, color = MaterialTheme.colorScheme.onSurface, fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                Text("${e.durationMs}ms", color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+            }
+            if (e.requestBody.isNotBlank()) {
+                DetailSection("Payload", initiallyExpanded = true) {
+                    DetailBody(e.requestBody, e.bodyTruncated, clipboard)
+                }
+            }
+            if (e.responseHeaders.isNotEmpty()) {
+                DetailSection("Response headers", "${e.responseHeaders.size}") {
+                    DetailPairs(e.responseHeaders, clipboard)
+                }
+            }
+            if (e.responseBody.isNotBlank()) {
+                DetailSection("Response", initiallyExpanded = true) {
+                    DetailBody(e.responseBody, e.bodyTruncated, clipboard)
+                }
+            } else if (!e.failed) {
+                Text(
+                    text = "No response body was captured — it was empty, binary, or larger than the " +
+                        "capture limit.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
             }
         }
     }
+}
+
+@Composable
+private fun DetailSection(
+    title: String,
+    trailing: String = "",
+    initiallyExpanded: Boolean = false,
+    content: @Composable () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(initiallyExpanded) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = jcIcon(if (expanded) JCodeIcon.ChevronDown else JCodeIcon.ChevronRight),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            if (trailing.isNotEmpty()) {
+                Text(
+                    text = trailing,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (expanded) content()
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f))
+    }
+}
+
+@Composable
+private fun DetailPairs(
+    pairs: List<Pair<String, String>>,
+    clipboard: androidx.compose.ui.platform.ClipboardManager,
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = 10.dp, bottom = 6.dp)) {
+        pairs.forEach { (k, v) ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { clipboard.setText(AnnotatedString(v)) }
+                    .padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = k,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    modifier = Modifier.width(96.dp),
+                )
+                Text(
+                    text = v,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailBody(
+    raw: String,
+    truncated: Boolean,
+    clipboard: androidx.compose.ui.platform.ClipboardManager,
+) {
+    // Pretty-printed when it parses as JSON, which is what most of these are and none of which is
+    // readable as one long line on a phone-width panel.
+    val text = remember(raw) { prettyJson(raw) }
+    Column(modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = 10.dp, bottom = 8.dp)) {
+        Text(
+            text = "Copy",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+                .clickable { clipboard.setText(AnnotatedString(raw)) }
+                .padding(vertical = 2.dp),
+        )
+        Text(
+            text = text,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+        )
+        if (truncated) {
+            Text(
+                text = "… truncated at the 16 KB capture limit",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun prettyJson(raw: String): String {
+    val t = raw.trim()
+    if (!t.startsWith("{") && !t.startsWith("[")) return raw
+    return runCatching {
+        when (val v = JSONTokener(t).nextValue()) {
+            is JSONObject -> v.toString(2)
+            is JSONArray -> v.toString(2)
+            else -> raw
+        }
+    }.getOrDefault(raw)
+}
+
+private fun statusLabel(e: BrowserNetworkEntry): String = when {
+    e.status > 0 -> e.status.toString()
+    e.failed -> "ERR"
+    else -> "—"
+}
+
+@Composable
+private fun statusColor(e: BrowserNetworkEntry) = when {
+    e.failed || e.status >= 400 -> MaterialTheme.colorScheme.error
+    e.status >= 300 -> JCodeTheme.semanticColors.warning
+    e.status > 0 -> JCodeTheme.semanticColors.success
+    // Not an error, just unknown — resource-timing rows have no status to report, and painting
+    // those red would put a page's whole image list in the colour of something being wrong.
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+/**
+ * The last path segment plus the query, which is what tells one request from another in a list.
+ *
+ * The query is kept because dropping it makes whole pages illegible: a site with a bundler or a
+ * resource loader answers everything from one path, and Wikipedia's fifteen stylesheets arrive as
+ * fifteen rows that all read `load.php`. The row ellipsizes, so a long query costs nothing.
+ */
+private fun shortName(url: String): String {
+    val noHash = url.substringBefore('#')
+    if (noHash.startsWith("data:")) return "(data URL)"
+    val path = noHash.substringBefore('?')
+    val query = noHash.substringAfter('?', "")
+    val tail = path.trimEnd('/').substringAfterLast('/').ifBlank { hostOf(url) ?: url }
+    return if (query.isEmpty()) tail else "$tail?$query"
+}
+
+private fun hostOf(url: String): String? =
+    runCatching { java.net.URI(url).host }.getOrNull()?.takeIf { it.isNotBlank() }
+
+/**
+ * The size as the list shows it, or null to leave it out.
+ *
+ * A cross-origin resource that withholds its figures is left out rather than printed as "0 B":
+ * on a page whose images all come from a CDN that is most of the list, and "0 B" reads as a
+ * measurement rather than as a refusal to measure.
+ */
+private fun sizeLabel(e: BrowserNetworkEntry): String? = when {
+    e.bytes > 0 -> formatBytes(e.bytes)
+    e.bytes == 0L && e.encodedBytes > 0 -> "cached"
+    e.bytes == 0L -> null
+    else -> null
+}
+
+private fun formatBytes(n: Long): String = when {
+    n <= 0 -> "0 B"
+    n < 1024 -> "$n B"
+    n < 1024 * 1024 -> "${n / 1024} kB"
+    else -> String.format(java.util.Locale.US, "%.1f MB", n / 1048576.0)
 }
 
 @Composable

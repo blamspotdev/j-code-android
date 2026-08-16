@@ -82,6 +82,7 @@ import dev.jcode.design.JCodeIcon
 import dev.jcode.design.jcIcon
 import dev.jcode.run.ProjectRunner
 import java.text.DateFormat
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Keeps the soft keyboard out of the IME's fullscreen "extract" mode so a focused input inside the
@@ -113,8 +114,28 @@ private class DevToolsBridge {
             url = o.optString("url"),
             status = o.optInt("status", 0),
             durationMs = o.optLong("ms", 0),
+            kind = o.optString("kind", "other"),
+            bytes = o.optLong("bytes", -1),
+            encodedBytes = o.optLong("enc", -1),
+            mimeType = o.optString("mime"),
+            failed = o.optBoolean("failed"),
+            timingOnly = o.optBoolean("timing"),
+            requestHeaders = headerPairs(o.optJSONArray("reqH")),
+            requestBody = o.optString("reqB"),
+            responseHeaders = headerPairs(o.optJSONArray("resH")),
+            responseBody = o.optString("resB"),
+            bodyTruncated = o.optBoolean("reqT") || o.optBoolean("resT"),
         )
         main.post { BuiltinBrowser.addNetwork(entry) }
+    }
+
+    /** `[["content-type","application/json"], ...]` as the shim sends it. */
+    private fun headerPairs(array: JSONArray?): List<Pair<String, String>> {
+        if (array == null) return emptyList()
+        return (0 until array.length()).mapNotNull { i ->
+            val p = array.optJSONArray(i) ?: return@mapNotNull null
+            p.optString(0) to p.optString(1)
+        }
     }
 }
 
@@ -337,6 +358,8 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                             BuiltinBrowser.favicon.value = favicon
                             BuiltinBrowser.loading.value = true
                             BuiltinBrowser.currentUrl.value = url
+                            // Before the shim, so the new page's first requests survive the clear.
+                            BuiltinBrowser.onNavigate()
                             view.evaluateJavascript(NET_SHIM_JS, null)
                         }
                         override fun onPageFinished(view: WebView, url: String) {
@@ -714,21 +737,126 @@ private fun webThemed(context: Context, dark: Boolean): Context {
     )
 }
 
-/** Monkeypatches `fetch` and `XMLHttpRequest` to report method/url/status/timing to the DevTools
- *  Network panel via the JCodeDevTools bridge. Idempotent (guarded), injected on each page load. */
+/**
+ * What feeds the Network panel. Injected on each page load, guarded so it installs once.
+ *
+ * Two mechanisms, because no single one sees everything (see [BrowserNetworkEntry]):
+ *
+ *  - `fetch` and `XMLHttpRequest` are wrapped, which is the only way to get at a payload or a
+ *    response body — those exist as JS values for exactly as long as the call that made them, and
+ *    a response can only be read once, so the wrapper `clone()`s it and reads the copy.
+ *  - a `PerformanceObserver` on resource timings reports what the browser fetched by itself: the
+ *    document, scripts, stylesheets, images, fonts. `buffered: true` replays the entries recorded
+ *    before this script ran, so a shim that installs at `onPageFinished` still lists the whole load.
+ *
+ * The overlap between them is settled by [t0]: a fetch/XHR timing entry that started after the
+ * wrappers went in is the wrappers' to report, and reporting it here as well would draw one request
+ * on two lines. The ones that started earlier are reported here, without a body, because a row that
+ * only knows the URL still beats a request that silently never happened.
+ *
+ * Bodies are capped at 16 KB and skipped for non-text and very large responses. A DevTools panel
+ * that holds a page's images in memory as strings is a memory leak with a nice UI.
+ */
 private const val NET_SHIM_JS = """
 (function(){
-  if (window.__jcodeNetHooked) return; window.__jcodeNetHooked = true;
-  function rep(m,u,s,t){ try{ JCodeDevTools.net(JSON.stringify({method:m,url:String(u),status:s,ms:Math.round(performance.now()-t)})); }catch(e){} }
+  if (window.__jcodeNetT0 !== undefined) return;
+  var t0 = performance.now(); window.__jcodeNetT0 = t0;
+  var CAP = 16384, BIG = 2097152;
+  function post(o){ try{ JCodeDevTools.net(JSON.stringify(o)); }catch(e){} }
+  function textual(ct){ ct=String(ct||'').toLowerCase();
+    return !ct || /json|text|xml|javascript|urlencoded|html|csv|graphql/.test(ct); }
+  function cap(s){ s=(s==null)?'':String(s); return s.length>CAP ? [s.slice(0,CAP),true] : [s,false]; }
+  function pairs(h){ var o=[]; try{
+      if(!h) return o;
+      if(Array.isArray(h)){ h.forEach(function(p){ o.push([String(p[0]),String(p[1])]); }); return o; }
+      if(typeof h.forEach==='function'){ h.forEach(function(v,k){ o.push([String(k),String(v)]); }); return o; }
+      Object.keys(h).forEach(function(k){ o.push([k,String(h[k])]); });
+    }catch(e){} return o; }
+  function rawPairs(t){ var o=[]; String(t||'').split(/\r?\n/).forEach(function(l){
+      var i=l.indexOf(':'); if(i>0) o.push([l.slice(0,i).trim(), l.slice(i+1).trim()]); }); return o; }
+  function bodyOf(b){ try{
+      if(b==null) return '';
+      if(typeof b==='string') return b;
+      if(typeof URLSearchParams!=='undefined' && b instanceof URLSearchParams) return b.toString();
+      if(typeof FormData!=='undefined' && b instanceof FormData){ var a=[];
+        b.forEach(function(v,k){ a.push(k+'='+(typeof v==='string'?v:'[file]')); }); return a.join('&'); }
+      if(typeof Blob!=='undefined' && b instanceof Blob) return '[Blob '+b.size+' bytes]';
+      if(b.byteLength!==undefined) return '[binary '+b.byteLength+' bytes]';
+      return String(b);
+    }catch(e){ return ''; } }
+
   var of = window.fetch;
-  if (of) { window.fetch = function(){ var a=arguments, t=performance.now();
-    var u=(a[0]&&a[0].url)||a[0], m=(a[1]&&a[1].method)||'GET';
-    return of.apply(this,a).then(function(r){ rep(m,u,r.status,t); return r; })
-                           .catch(function(e){ rep(m,u,0,t); throw e; }); }; }
-  var xo=XMLHttpRequest.prototype.open, xs=XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open=function(m,u){ this.__m=m; this.__u=u; return xo.apply(this,arguments); };
-  XMLHttpRequest.prototype.send=function(){ var s=this, t=performance.now();
-    s.addEventListener('loadend', function(){ rep(s.__m||'GET', s.__u, s.status, t); });
-    return xs.apply(this,arguments); };
+  if (of) window.fetch = function(){
+    var a=arguments, t=performance.now(), req=a[0], init=a[1]||{}, url, m, rh;
+    try{
+      if(req && typeof req==='object' && req.url){ url=req.url; m=init.method||req.method||'GET'; rh=pairs(init.headers||req.headers); }
+      else { url=String(req); m=init.method||'GET'; rh=pairs(init.headers); }
+    }catch(e){ url=String(req); m='GET'; rh=[]; }
+    var rb=cap(bodyOf(init.body));
+    return of.apply(this,a).then(function(r){
+      var ct='', len=0;
+      try{ ct=r.headers.get('content-type')||''; len=parseInt(r.headers.get('content-length')||'0',10)||0; }catch(e){}
+      var o={kind:'fetch',method:m,url:url,status:r.status,ms:Math.round(performance.now()-t),
+             bytes:len||-1,mime:ct,reqH:rh,reqB:rb[0],reqT:rb[1],resH:pairs(r.headers)};
+      if(!textual(ct) || len>BIG){ post(o); return r; }
+      var c; try{ c=r.clone(); }catch(e){ post(o); return r; }
+      c.text().then(function(tx){ var b=cap(tx); o.resB=b[0]; o.resT=b[1];
+                                  if(o.bytes<0) o.bytes=tx.length; post(o); },
+                    function(){ post(o); });
+      return r;
+    }).catch(function(e){
+      post({kind:'fetch',method:m,url:url,status:0,ms:Math.round(performance.now()-t),
+            failed:true,reqH:rh,reqB:rb[0],reqT:rb[1]});
+      throw e;
+    });
+  };
+
+  var xo=XMLHttpRequest.prototype.open, xs=XMLHttpRequest.prototype.send,
+      xh=XMLHttpRequest.prototype.setRequestHeader;
+  XMLHttpRequest.prototype.open=function(m,u){ this.__m=m; this.__u=u; this.__h=[]; return xo.apply(this,arguments); };
+  XMLHttpRequest.prototype.setRequestHeader=function(k,v){
+    try{ (this.__h=this.__h||[]).push([String(k),String(v)]); }catch(e){} return xh.apply(this,arguments); };
+  XMLHttpRequest.prototype.send=function(b){
+    var s=this, t=performance.now(), rb=cap(bodyOf(b));
+    s.addEventListener('loadend', function(){
+      var ct='', tx='';
+      try{ ct=s.getResponseHeader('content-type')||''; }catch(e){}
+      try{ if(!s.responseType||s.responseType==='text') tx=String(s.responseText||'');
+           else if(s.responseType==='json') tx=JSON.stringify(s.response); }catch(e){}
+      var cb=cap(tx);
+      post({kind:'xhr',method:s.__m||'GET',url:String(s.__u),status:s.status||0,
+            ms:Math.round(performance.now()-t),failed:!s.status,mime:ct,bytes:tx.length||-1,
+            reqH:s.__h||[],reqB:rb[0],reqT:rb[1],
+            resH:rawPairs(s.getAllResponseHeaders?s.getAllResponseHeaders():''),resB:cb[0],resT:cb[1]});
+    });
+    return xs.apply(this,arguments);
+  };
+
+  var TYPE={link:'css',css:'css',script:'script',img:'img',image:'img',imageset:'img',
+            input:'img',font:'font',audio:'media',video:'media',track:'media',
+            iframe:'document',frame:'document',navigation:'document'};
+  function res(e){
+    var it=e.initiatorType||'other';
+    if((it==='fetch'||it==='xmlhttprequest') && e.startTime>=t0) return;
+    // encodedBodySize alongside transferSize is what separates "came from the cache" (nothing on
+    // the wire, but the body's size is known) from "cross-origin without Timing-Allow-Origin"
+    // (both zero because the server declined to say). Both read 0 B otherwise, which looks like
+    // one fact and is two.
+    post({kind:(it==='fetch'?'fetch':it==='xmlhttprequest'?'xhr':(TYPE[it]||'other')),
+          method:'GET',url:e.name,status:0,ms:Math.round(e.duration),
+          bytes:(e.transferSize===undefined?-1:e.transferSize),
+          enc:(e.encodedBodySize===undefined?-1:e.encodedBodySize),timing:true});
+  }
+  try{ new PerformanceObserver(function(l){ l.getEntries().forEach(res); }).observe({type:'resource',buffered:true}); }
+  catch(e){ try{ performance.getEntriesByType('resource').forEach(res); }catch(e2){} }
+
+  function nav(){ try{
+      var n=performance.getEntriesByType('navigation')[0]; if(!n) return;
+      post({kind:'document',method:'GET',url:n.name,status:0,ms:Math.round(n.duration),
+            bytes:(n.transferSize===undefined?-1:n.transferSize),timing:true});
+    }catch(e){} }
+  // A navigation entry's duration runs to loadEventEnd, which is not set until the load handlers
+  // have all returned — so reading it from inside one reports 0. A tick later it is settled.
+  if(document.readyState==='complete') nav(); else addEventListener('load', function(){ setTimeout(nav,0); });
 })();
 """

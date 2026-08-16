@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -24,6 +26,15 @@ data class ContextAction(
     val label: String,
     val destructive: Boolean = false,
     val enabled: Boolean = true,
+    /**
+     * A tick at the end of the row, for a row that is a setting rather than a verb.
+     *
+     * Null for the ordinary case — a verb has no state to show, and an empty checkbox beside "Copy"
+     * would invite the reading that copying is switched off. A two-way *choice* is still better said
+     * by naming the action ("Request desktop site"); this is for a mode that is simply on or off,
+     * where the name has to stay put so you can find it again.
+     */
+    val checked: Boolean? = null,
     val onClick: () -> Unit,
 )
 
@@ -106,7 +117,16 @@ fun CompactContextMenu(
                         action.destructive -> MaterialTheme.colorScheme.error
                         else -> MaterialTheme.colorScheme.onSurface
                     },
+                    modifier = if (action.checked != null) Modifier.weight(1f) else Modifier,
                 )
+                if (action.checked == true) {
+                    Icon(
+                        imageVector = Icons.Rounded.Check,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
             }
         }
     }

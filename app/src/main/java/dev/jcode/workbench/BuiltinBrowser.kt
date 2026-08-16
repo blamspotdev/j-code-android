@@ -12,13 +12,48 @@ data class BrowserConsoleEntry(
     val line: Int = 0,
 )
 
-/** A network request observed by the injected `fetch`/`XMLHttpRequest` shim. [status] 0 means the
- *  request failed (or is a navigation with no captured status). */
+/**
+ * One request the page made, from either of the two things a WebView will tell us about.
+ *
+ * **The `fetch`/`XMLHttpRequest` shim** wraps the calls the page's own code makes, so those rows are
+ * complete: status, both sets of headers, the payload sent and the body that came back.
+ *
+ * **Resource Timing** reports everything the *browser* fetched on the page's behalf — the document,
+ * scripts, stylesheets, images, fonts — which is most of what a real Network panel lists and none of
+ * which passes through any JS function we could wrap. The catch is that the API is a timing API: it
+ * has the URL, the kind, the duration and the transferred size, and no status code and no body,
+ * because nothing in a page is allowed to read those for a resource it did not request itself. Rows
+ * from this source carry [timingOnly] so the detail view can say so rather than draw empty sections.
+ * Cross-origin entries additionally report [bytes] as 0 unless the server sends `Timing-Allow-Origin`.
+ *
+ * [status] 0 means "not known" — a failed request, or one of the timing-only rows above.
+ */
 data class BrowserNetworkEntry(
     val method: String,
     val url: String,
     val status: Int,
     val durationMs: Long,
+    /** document | fetch | xhr | script | css | img | font | media | other — the Network filter's axis. */
+    val kind: String = "other",
+    /** Bytes over the wire, or -1 when unknown (see [timingOnly]). 0 is meaningful — see [encodedBytes]. */
+    val bytes: Long = -1,
+    /**
+     * The body's own size, which is how a zero [bytes] is read: with a body size, nothing went over
+     * the wire because the cache answered; without one, the response is cross-origin and declined
+     * to disclose either figure. -1 when not reported at all.
+     */
+    val encodedBytes: Long = -1,
+    val mimeType: String = "",
+    val failed: Boolean = false,
+    val timingOnly: Boolean = false,
+    val requestHeaders: List<Pair<String, String>> = emptyList(),
+    val requestBody: String = "",
+    val responseHeaders: List<Pair<String, String>> = emptyList(),
+    val responseBody: String = "",
+    /** Set when a body hit the capture cap and what is held is a prefix. */
+    val bodyTruncated: Boolean = false,
+    /** Assigned by [BuiltinBrowser.addNetwork]; identifies a row when two requests are identical. */
+    val id: Long = 0,
 )
 
 /** Controls the live WebView backing the built-in browser; set by [BrowserPage] while it is on screen
@@ -121,11 +156,30 @@ object BuiltinBrowser {
 
     fun addNetwork(entry: BrowserNetworkEntry) {
         if (network.size >= MAX_ENTRIES) network.removeAt(0)
-        network.add(entry)
+        network.add(entry.copy(id = ++networkSeq))
     }
 
     fun clearConsole() = console.clear()
     fun clearNetwork() = network.clear()
+
+    /**
+     * Whether the console and network logs survive a navigation.
+     *
+     * Off by default, which is both Chrome's default and the only one that makes the panel readable:
+     * what a page did on load is the common question, and finding it under three pages of history is
+     * the common frustration. The times you want the other thing — a redirect chain, a form post that
+     * navigates away, an OAuth bounce — are exactly the times you know in advance to switch it on.
+     */
+    val preserveLog = mutableStateOf(false)
+
+    /** Called as each navigation commits; drops the previous page's records unless [preserveLog]. */
+    fun onNavigate() {
+        if (preserveLog.value) return
+        console.clear()
+        network.clear()
+    }
+
+    private var networkSeq = 0L
 
     /** Turn address-bar text into a loadable URL: keep known schemes; http for localhost, else https. */
     fun normalizeUrl(raw: String): String {
