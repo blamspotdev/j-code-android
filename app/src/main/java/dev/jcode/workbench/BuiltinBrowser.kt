@@ -125,6 +125,29 @@ object BuiltinBrowser {
         sourceText.value = text
     }
 
+    /**
+     * The Application pane's last survey of the page, as the JSON the page sent back.
+     *
+     * Delivered through the bridge rather than returned from the eval because most of what the pane
+     * asks about — the databases, the caches, the service workers, the manifest — is only reachable
+     * through a Promise, and `evaluateJavascript` hands back whatever the expression evaluated to
+     * synchronously, which for an async function is nothing useful.
+     *
+     * Held raw: the shapes inside are the pane's business, and nothing else in the app reads them.
+     */
+    val appDump = mutableStateOf<String?>(null)
+
+    fun deliverAppDump(json: String) {
+        appDump.value = json
+    }
+
+    /** Bumped to make the Application pane re-survey; its own menu lives outside the pane. */
+    val appRefreshSignal = mutableStateOf(0)
+
+    fun requestAppRefresh() {
+        appRefreshSignal.value += 1
+    }
+
     /** The live page controller, or null while the browser tab is not on screen. */
     var controller: BrowserController? = null
 

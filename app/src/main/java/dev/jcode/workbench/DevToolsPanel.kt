@@ -38,6 +38,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.webkit.CookieManager
+import android.webkit.WebStorage
 import androidx.compose.material3.Icon
 import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
@@ -145,8 +147,8 @@ fun DevtoolsSidebarContent(modifier: Modifier = Modifier) {
                         }
                     }
                 }
-                if (pane == DevToolsPane.Console || pane == DevToolsPane.Network) {
-                    LogMenuButton(pane)
+                if (pane != DevToolsPane.Sources && pane != DevToolsPane.Elements) {
+                    PaneMenuButton(pane)
                 }
             }
         }
@@ -172,58 +174,93 @@ fun DevtoolsSidebarContent(modifier: Modifier = Modifier) {
 }
 
 /**
- * The Console and Network panes' overflow menu.
+ * A pane's overflow menu.
  *
- * Was a bare "Clear" link. Clearing is the one thing here you cannot undo, and it was the only thing
- * in reach — while the setting that decides whether the log survives the next page load, which is
- * what you actually want *before* the interesting request happens, had nowhere to live at all.
+ * Console and Network had a bare "Clear" link. Clearing is the one thing there you cannot undo, and
+ * it was the only thing in reach — while the setting that decides whether the log survives the next
+ * page load, which is what you want set *before* the interesting request happens, had nowhere to
+ * live at all. Application had the same shape of problem from the other side: its "Refresh" sat at
+ * the bottom of a long scroll, past everything it refreshes.
  */
 @Composable
-private fun LogMenuButton(pane: DevToolsPane) {
+private fun PaneMenuButton(pane: DevToolsPane) {
     var open by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
-    val network = pane == DevToolsPane.Network
     Box {
         Icon(
             imageVector = jcIcon(JCodeIcon.MoreVert),
-            contentDescription = if (network) "Network options" else "Console options",
+            contentDescription = "${pane.label} options",
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
                 .clickable { open = true }
                 .padding(horizontal = 8.dp, vertical = 8.dp)
                 .size(18.dp),
         )
-        CompactContextMenu(
-            expanded = open,
-            onDismissRequest = { open = false },
-            listActions = listOf(
-                ContextAction(
-                    icon = JCodeIcon.Pin,
-                    label = "Preserve log",
-                    checked = BuiltinBrowser.preserveLog.value,
-                ) { BuiltinBrowser.preserveLog.value = !BuiltinBrowser.preserveLog.value },
-                ContextAction(
-                    icon = JCodeIcon.Copy,
-                    label = if (network) "Copy all requests" else "Copy all messages",
-                    enabled = if (network) BuiltinBrowser.network.isNotEmpty() else BuiltinBrowser.console.isNotEmpty(),
-                ) {
-                    val text = if (network) {
-                        BuiltinBrowser.network.joinToString("\n") {
-                            "${statusLabel(it)}\t${it.method}\t${it.url}\t${it.durationMs}ms"
-                        }
-                    } else {
-                        BuiltinBrowser.console.joinToString("\n") { "[${it.level}] ${it.message}" }
-                    }
-                    clipboard.setText(AnnotatedString(text))
+        val actions = when (pane) {
+            DevToolsPane.Application -> listOf(
+                ContextAction(icon = JCodeIcon.Refresh, label = "Refresh") {
+                    BuiltinBrowser.requestAppRefresh()
                 },
                 ContextAction(
-                    icon = JCodeIcon.Clear,
-                    label = if (network) "Clear network" else "Clear console",
+                    icon = JCodeIcon.Delete,
+                    label = "Clear site data",
                     destructive = true,
-                ) { if (network) BuiltinBrowser.clearNetwork() else BuiltinBrowser.clearConsole() },
-            ),
-        )
+                ) { clearSiteData() },
+            )
+            else -> {
+                val network = pane == DevToolsPane.Network
+                listOf(
+                    ContextAction(
+                        icon = JCodeIcon.Pin,
+                        label = "Preserve log",
+                        checked = BuiltinBrowser.preserveLog.value,
+                    ) { BuiltinBrowser.preserveLog.value = !BuiltinBrowser.preserveLog.value },
+                    ContextAction(
+                        icon = JCodeIcon.Copy,
+                        label = if (network) "Copy all requests" else "Copy all messages",
+                        enabled = if (network) {
+                            BuiltinBrowser.network.isNotEmpty()
+                        } else {
+                            BuiltinBrowser.console.isNotEmpty()
+                        },
+                    ) {
+                        val text = if (network) {
+                            BuiltinBrowser.network.joinToString("\n") {
+                                "${statusLabel(it)}\t${it.method}\t${it.url}\t${it.durationMs}ms"
+                            }
+                        } else {
+                            BuiltinBrowser.console.joinToString("\n") { "[${it.level}] ${it.message}" }
+                        }
+                        clipboard.setText(AnnotatedString(text))
+                    },
+                    ContextAction(
+                        icon = JCodeIcon.Clear,
+                        label = if (network) "Clear network" else "Clear console",
+                        destructive = true,
+                    ) { if (network) BuiltinBrowser.clearNetwork() else BuiltinBrowser.clearConsole() },
+                )
+            }
+        }
+        CompactContextMenu(expanded = open, onDismissRequest = { open = false }, listActions = actions)
     }
+}
+
+/**
+ * Everything this origin has kept, gone.
+ *
+ * `WebStorage.deleteAllData()` is what reaches IndexedDB and the caches — no page-side API can
+ * empty another origin's databases, and enumerating our own to delete them one by one would still
+ * miss the ones the page never named. The reload is not decoration: nothing about cleared storage
+ * shows on a page still running against what it read at load.
+ */
+private fun clearSiteData() {
+    CookieManager.getInstance().removeAllCookies(null)
+    CookieManager.getInstance().flush()
+    WebStorage.getInstance().deleteAllData()
+    BuiltinBrowser.controller?.eval(clearStoreJs("localStorage")) {}
+    BuiltinBrowser.controller?.eval(clearStoreJs("sessionStorage")) {}
+    BuiltinBrowser.controller?.reload()
+    BuiltinBrowser.requestAppRefresh()
 }
 
 @Composable
@@ -684,25 +721,54 @@ private fun SourcesPane(jump: SourceJump?, onJumpConsumed: () -> Unit, modifier:
  * debugging is usually to drop a single key and try again, not to wipe the site and lose the session
  * that took ten minutes to get into.
  */
+/** One stored key, and where it is stored — the store is what a delete has to be addressed to. */
+private data class StoredEntry(
+    val key: String,
+    val value: String,
+    val store: String,
+    /** Cookies the page's own script cannot see; only the WebView's cookie jar reports them. */
+    val httpOnly: Boolean = false,
+)
+
+private data class IdbStore(val name: String, val count: Int)
+private data class IdbDatabase(val name: String, val version: Int, val stores: List<IdbStore>)
+private data class CacheBucket(val name: String, val count: Int, val urls: List<String>)
+private data class WorkerInfo(val scope: String, val script: String, val state: String)
+
+private class AppSurvey(
+    val origin: String,
+    val secure: Boolean,
+    val usage: Long,
+    val quota: Long,
+    val persisted: Boolean?,
+    val local: List<StoredEntry>,
+    val session: List<StoredEntry>,
+    val cookies: List<StoredEntry>,
+    val databases: List<IdbDatabase>,
+    val caches: List<CacheBucket>,
+    val workers: List<WorkerInfo>,
+    val manifestUrl: String,
+    val manifest: String,
+)
+
 @Composable
 private fun ApplicationPane(modifier: Modifier = Modifier) {
-    var local by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    var session by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    var cookies by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    val dump = BuiltinBrowser.appDump.value
+    val pageUrl = BuiltinBrowser.currentUrl.value
+    // Re-parsed only when the page answers again, or when the URL moves under it — the jar is read
+    // per-URL, so the same dump against a different origin is a different set of cookies.
+    val survey = remember(dump, pageUrl) { dump?.let { parseAppSurvey(it, pageUrl) } }
+    var open by remember { mutableStateOf<StoredEntry?>(null) }
 
-    fun refresh() {
-        BuiltinBrowser.controller?.eval(STORAGE_DUMP_JS) { raw ->
-            val root = runCatching { JSONObject(decodeJsResult(raw)) }.getOrNull() ?: return@eval
-            local = parsePairs(root.optJSONArray("local"))
-            session = parsePairs(root.optJSONArray("session"))
-            cookies = root.optString("cookies").split(';').mapNotNull { part ->
-                val trimmed = part.trim()
-                if (trimmed.isBlank()) null else trimmed.substringBefore('=') to trimmed.substringAfter('=', "")
-            }
-        }
-    }
+    fun refresh() = BuiltinBrowser.controller?.eval(APP_DUMP_JS) {}
 
     LaunchedEffect(Unit) { refresh() }
+    // A navigation replaces everything this pane describes, so the survey is retaken rather than
+    // left showing the last site's storage under this site's name.
+    LaunchedEffect(pageUrl) { if (pageUrl.isNotBlank()) refresh() }
+    LaunchedEffect(BuiltinBrowser.appRefreshSignal.value) {
+        if (BuiltinBrowser.appRefreshSignal.value > 0) refresh()
+    }
 
     if (BuiltinBrowser.controller == null) {
         Box(modifier.fillMaxSize()) {
@@ -710,108 +776,485 @@ private fun ApplicationPane(modifier: Modifier = Modifier) {
         }
         return
     }
+    if (survey == null) {
+        Box(modifier.fillMaxSize()) { EmptyHint("Reading what this page has stored…") }
+        return
+    }
+    val entry = open
+    if (entry != null) {
+        StoredValueDetail(
+            entry = entry,
+            onBack = { open = null },
+            onDelete = {
+                open = null
+                deleteEntry(entry, pageUrl) { refresh() }
+            },
+            modifier = modifier,
+        )
+        return
+    }
+
     Column(modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        StorageSection(
-            title = "Local storage",
-            rows = local,
-            onRemove = { key -> BuiltinBrowser.controller?.eval(removeItemJs("localStorage", key)) { refresh() } },
-            onClear = { BuiltinBrowser.controller?.eval(clearStoreJs("localStorage")) { refresh() } },
-        )
-        StorageSection(
-            title = "Session storage",
-            rows = session,
-            onRemove = { key -> BuiltinBrowser.controller?.eval(removeItemJs("sessionStorage", key)) { refresh() } },
-            onClear = { BuiltinBrowser.controller?.eval(clearStoreJs("sessionStorage")) { refresh() } },
-        )
-        StorageSection(
-            title = "Cookies",
-            rows = cookies,
-            onRemove = { key -> BuiltinBrowser.controller?.eval(expireCookieJs(key)) { refresh() } },
-            onClear = null,
-        )
+        QuotaBar(survey)
+        DetailSection("Page") {
+            DetailPairs(
+                buildList {
+                    add("Origin" to survey.origin.ifBlank { "—" })
+                    add("Secure context" to if (survey.secure) "yes" else "no")
+                    if (survey.persisted != null) {
+                        add("Storage" to if (survey.persisted) "persistent" else "best-effort")
+                    }
+                },
+                LocalClipboardManager.current,
+            )
+        }
+        StoredSection("Local storage", survey.local, ::refresh, pageUrl) { open = it }
+        StoredSection("Session storage", survey.session, ::refresh, pageUrl) { open = it }
+        StoredSection("Cookies", survey.cookies, ::refresh, pageUrl) { open = it }
+        IndexedDbSection(survey.databases)
+        CacheSection(survey.caches)
+        WorkerSection(survey.workers)
+        ManifestSection(survey.manifestUrl, survey.manifest)
+    }
+}
+
+/**
+ * How much of the origin's allowance the page is using.
+ *
+ * At the top because it is the question the other sections are evidence for: a site misbehaving
+ * over storage shows up here as a number long before you would think to count cache entries.
+ */
+@Composable
+private fun QuotaBar(survey: AppSurvey) {
+    if (survey.usage < 0 || survey.quota <= 0) return
+    val fraction = (survey.usage.toFloat() / survey.quota).coerceIn(0f, 1f)
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Text(
-            text = "Refresh",
-            color = MaterialTheme.colorScheme.primary,
+            text = "${formatBytes(survey.usage)} used of ${formatBytes(survey.quota)}",
             style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.clickable { refresh() }.padding(horizontal = 12.dp, vertical = 10.dp),
+            color = MaterialTheme.colorScheme.onSurface,
         )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 5.dp)
+                .height(3.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(fraction.coerceAtLeast(0.004f))
+                    .fillMaxHeight()
+                    .background(MaterialTheme.colorScheme.primary),
+            )
+        }
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f))
+}
+
+@Composable
+private fun StoredSection(
+    title: String,
+    rows: List<StoredEntry>,
+    onChanged: () -> Unit,
+    pageUrl: String,
+    onOpen: (StoredEntry) -> Unit,
+) {
+    // Clearing a whole store stays reachable, but rows delete one at a time: the reason to look at
+    // storage while debugging is usually to drop a single key and try again, not to wipe the site
+    // and lose the session that took ten minutes to get into.
+    val clearable = rows.isNotEmpty() && title != "Cookies"
+    DetailSection(
+        title = title,
+        trailing = if (rows.isEmpty()) "empty" else rows.size.toString(),
+        // The two people actually open the pane for start open; the rest state their count in the
+        // header, which is the whole map of what a site keeps in one screen.
+        initiallyExpanded = rows.isNotEmpty() && title != "Session storage",
+        actionLabel = if (clearable) "Clear" else null,
+        onAction = if (clearable) {
+            { BuiltinBrowser.controller?.eval(clearStoreJs(rows.first().store)) { onChanged() } }
+        } else {
+            null
+        },
+    ) {
+        if (rows.isEmpty()) {
+            Text(
+                text = "Nothing stored here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 30.dp, bottom = 8.dp),
+            )
+            return@DetailSection
+        }
+        rows.forEach { row ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpen(row) }
+                    .padding(start = 30.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = row.key,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (row.httpOnly) {
+                            Text(
+                                text = "HttpOnly",
+                                color = JCodeTheme.semanticColors.warning,
+                                fontSize = 9.sp,
+                                lineHeight = 14.sp,
+                            )
+                        }
+                    }
+                    Text(
+                        text = row.value,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text(
+                    text = "✕",
+                    color = MaterialTheme.colorScheme.error,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    // Matches the key's line box above it, so the cross is on the row it deletes
+                    // rather than floating between the key and its value.
+                    lineHeight = 15.sp,
+                    modifier = Modifier
+                        .clickable { deleteEntry(row, pageUrl) { onChanged() } }
+                        .padding(start = 10.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One stored value, in full.
+ *
+ * The reason this screen exists: a two-line preview is enough to recognise a key and never enough
+ * to debug one. A framework's module cache or a session blob runs to kilobytes of JSON, and the
+ * question is always what is *in* it.
+ */
+@Composable
+private fun StoredValueDetail(
+    entry: StoredEntry,
+    onBack: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val clipboard = LocalClipboardManager.current
+    Column(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onBack)
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = jcIcon(JCodeIcon.ArrowBack),
+                contentDescription = "Back to storage",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(
+                text = entry.key,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = "Delete",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.clickable(onClick = onDelete).padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
+        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            DetailPairs(
+                buildList {
+                    add("Store" to storeLabel(entry.store))
+                    add("Size" to formatBytes(entry.value.length.toLong()))
+                    if (entry.httpOnly) add("Flag" to "HttpOnly — not visible to page script")
+                },
+                clipboard,
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f))
+            DetailBody(entry.value, truncated = false, clipboard = clipboard)
+        }
     }
 }
 
 @Composable
-private fun StorageSection(
-    title: String,
-    rows: List<Pair<String, String>>,
-    onRemove: (String) -> Unit,
-    onClear: (() -> Unit)?,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            text = if (rows.isEmpty()) "empty" else rows.size.toString(),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (onClear != null && rows.isNotEmpty()) {
-            Text(
-                text = "Clear",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.clickable { onClear() }.padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
-            )
+private fun IndexedDbSection(databases: List<IdbDatabase>) {
+    DetailSection("IndexedDB", if (databases.isEmpty()) "none" else databases.size.toString()) {
+        if (databases.isEmpty()) {
+            SectionNote("No databases on this origin.")
+            return@DetailSection
         }
-    }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.22f))
-    rows.forEach { (key, value) ->
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.Top,
-        ) {
-            Column(Modifier.weight(1f)) {
+        databases.forEach { db ->
+            Column(modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = 10.dp, bottom = 6.dp)) {
                 Text(
-                    text = key,
+                    text = "${db.name} · v${db.version}",
                     color = MaterialTheme.colorScheme.onSurface,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    text = value,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (db.stores.isEmpty()) {
+                    Text(
+                        text = "no object stores",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 10.sp,
+                    )
+                }
+                db.stores.forEach { store ->
+                    Text(
+                        text = "${store.name} — ${if (store.count >= 0) "${store.count} records" else "count unavailable"}",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(start = 10.dp),
+                    )
+                }
             }
-            Text(
-                text = "✕",
-                color = MaterialTheme.colorScheme.error,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
-                // Matches the key's line box above it, so the cross is on the row it deletes rather
-                // than floating between the key and its value.
-                lineHeight = 15.sp,
-                modifier = Modifier.clickable { onRemove(key) }.padding(start = 10.dp),
-            )
         }
     }
 }
 
-private fun parsePairs(array: JSONArray?): List<Pair<String, String>> {
+@Composable
+private fun CacheSection(caches: List<CacheBucket>) {
+    DetailSection("Cache storage", if (caches.isEmpty()) "none" else caches.size.toString()) {
+        if (caches.isEmpty()) {
+            SectionNote("No caches. A service worker is what usually puts them here.")
+            return@DetailSection
+        }
+        caches.forEach { bucket ->
+            Column(modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = 10.dp, bottom = 6.dp)) {
+                Text(
+                    text = "${bucket.name} · ${bucket.count} entries",
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                )
+                bucket.urls.forEach { url ->
+                    Text(
+                        text = shortName(url),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 10.dp),
+                    )
+                }
+                if (bucket.count > bucket.urls.size) {
+                    Text(
+                        text = "… and ${bucket.count - bucket.urls.size} more",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(start = 10.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkerSection(workers: List<WorkerInfo>) {
+    DetailSection("Service workers", if (workers.isEmpty()) "none" else workers.size.toString()) {
+        if (workers.isEmpty()) {
+            SectionNote("No service worker registered for this origin.")
+            return@DetailSection
+        }
+        workers.forEach { w ->
+            Column(modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = 10.dp, bottom = 8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = w.state,
+                        color = if (w.state == "activated") {
+                            JCodeTheme.semanticColors.success
+                        } else {
+                            JCodeTheme.semanticColors.warning
+                        },
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                    )
+                    Text(
+                        text = "Unregister",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier
+                            .clickable { BuiltinBrowser.controller?.eval(unregisterWorkerJs(w.scope)) {} }
+                            .padding(vertical = 2.dp),
+                    )
+                }
+                Text(
+                    text = w.script.ifBlank { w.scope },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ManifestSection(url: String, manifest: String) {
+    DetailSection("Manifest", if (url.isBlank()) "none" else "") {
+        if (url.isBlank()) {
+            SectionNote("This page declares no web app manifest.")
+            return@DetailSection
+        }
+        Text(
+            text = url,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 10.sp,
+            modifier = Modifier.padding(start = 30.dp, end = 10.dp, bottom = 4.dp),
+        )
+        if (manifest.isBlank()) {
+            SectionNote("Declared, but could not be read — it may be cross-origin.")
+        } else {
+            DetailBody(manifest, truncated = false, clipboard = LocalClipboardManager.current)
+        }
+    }
+}
+
+@Composable
+private fun SectionNote(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 30.dp, end = 10.dp, bottom = 8.dp),
+    )
+}
+
+private fun storeLabel(store: String): String = when (store) {
+    "localStorage" -> "Local storage"
+    "sessionStorage" -> "Session storage"
+    else -> "Cookie"
+}
+
+/**
+ * Drop one stored value.
+ *
+ * Cookies go through the WebView's own jar rather than `document.cookie`, because the jar is the
+ * only one of the two that can reach an HttpOnly cookie — which is exactly the kind you most often
+ * want gone while debugging a stuck session.
+ */
+private fun deleteEntry(entry: StoredEntry, pageUrl: String, onDone: () -> Unit) {
+    if (entry.store == "cookie") {
+        val jar = CookieManager.getInstance()
+        jar.setCookie(pageUrl, "${entry.key}=; Max-Age=0; Path=/") {
+            jar.flush()
+            onDone()
+        }
+    } else {
+        BuiltinBrowser.controller?.eval(removeItemJs(entry.store, entry.key)) { onDone() }
+    }
+}
+
+private fun parseAppSurvey(json: String, pageUrl: String): AppSurvey? {
+    val root = runCatching { JSONObject(json) }.getOrNull() ?: return null
+    return AppSurvey(
+        origin = root.optString("origin"),
+        secure = root.optBoolean("secure"),
+        usage = root.optLong("usage", -1),
+        quota = root.optLong("quota", -1),
+        persisted = if (root.isNull("persisted")) null else root.optBoolean("persisted"),
+        local = parseStored(root.optJSONArray("local"), "localStorage"),
+        session = parseStored(root.optJSONArray("session"), "sessionStorage"),
+        cookies = parseCookies(root.optString("cookies"), pageUrl),
+        databases = parseDatabases(root.optJSONArray("idb")),
+        caches = parseCaches(root.optJSONArray("caches")),
+        workers = parseWorkers(root.optJSONArray("sw")),
+        manifestUrl = root.optString("manifestUrl"),
+        manifest = root.optString("manifest"),
+    )
+}
+
+private fun parseStored(array: JSONArray?, store: String): List<StoredEntry> {
     if (array == null) return emptyList()
     return (0 until array.length()).mapNotNull { i ->
         val o = array.optJSONObject(i) ?: return@mapNotNull null
-        o.optString("k") to o.optString("v")
+        StoredEntry(key = o.optString("k"), value = o.optString("v"), store = store)
+    }
+}
+
+/**
+ * The page's cookies, from both places they can be read.
+ *
+ * `document.cookie` is what the page can see; the WebView's jar is what the server actually gets,
+ * and the difference between the two lists is precisely the HttpOnly cookies. Chrome shows those;
+ * a panel built only on `document.cookie` silently omits the session cookie on most sites, which
+ * is the one you came to look at.
+ */
+private fun parseCookies(documentCookie: String, pageUrl: String): List<StoredEntry> {
+    fun split(raw: String) = raw.split(';').mapNotNull { part ->
+        val t = part.trim()
+        if (t.isBlank()) null else t.substringBefore('=') to t.substringAfter('=', "")
+    }
+    val visible = split(documentCookie)
+    val visibleKeys = visible.map { it.first }.toSet()
+    val jar = runCatching { CookieManager.getInstance().getCookie(pageUrl) }.getOrNull().orEmpty()
+    val hidden = split(jar).filter { it.first !in visibleKeys }
+    return visible.map { StoredEntry(it.first, it.second, "cookie") } +
+        hidden.map { StoredEntry(it.first, it.second, "cookie", httpOnly = true) }
+}
+
+private fun parseDatabases(array: JSONArray?): List<IdbDatabase> {
+    if (array == null) return emptyList()
+    return (0 until array.length()).mapNotNull { i ->
+        val o = array.optJSONObject(i) ?: return@mapNotNull null
+        val stores = o.optJSONArray("stores")
+        IdbDatabase(
+            name = o.optString("name"),
+            version = o.optInt("version"),
+            stores = (0 until (stores?.length() ?: 0)).mapNotNull { j ->
+                val s = stores?.optJSONObject(j) ?: return@mapNotNull null
+                IdbStore(s.optString("name"), s.optInt("count", -1))
+            },
+        )
+    }
+}
+
+private fun parseCaches(array: JSONArray?): List<CacheBucket> {
+    if (array == null) return emptyList()
+    return (0 until array.length()).mapNotNull { i ->
+        val o = array.optJSONObject(i) ?: return@mapNotNull null
+        val urls = o.optJSONArray("urls")
+        CacheBucket(
+            name = o.optString("name"),
+            count = o.optInt("count"),
+            urls = (0 until (urls?.length() ?: 0)).map { urls!!.optString(it) },
+        )
+    }
+}
+
+private fun parseWorkers(array: JSONArray?): List<WorkerInfo> {
+    if (array == null) return emptyList()
+    return (0 until array.length()).mapNotNull { i ->
+        val o = array.optJSONObject(i) ?: return@mapNotNull null
+        WorkerInfo(o.optString("scope"), o.optString("script"), o.optString("state"))
     }
 }
 
@@ -851,10 +1294,49 @@ private fun fetchSourceJs(url: String): String =
         ".then(function(t){JCodeDevTools.source(t)})" +
         ".catch(function(e){JCodeDevTools.source('\\u0000unreadable')});return 1})()"
 
-private val STORAGE_DUMP_JS = buildString {
-    append("(function(){function d(s){var o=[];try{for(var i=0;i<s.length;i++){")
-    append("var k=s.key(i);o.push({k:k,v:String(s.getItem(k))})}}catch(e){}return o}")
-    append("return JSON.stringify({local:d(localStorage),session:d(sessionStorage),cookies:document.cookie||''})})()")
+/**
+ * Everything the Application pane asks the page about itself.
+ *
+ * Async throughout and answered through the bridge, not the return value — see
+ * [BuiltinBrowser.appDump]. Every block is wrapped separately so one unavailable API leaves the
+ * rest of the survey intact: `caches` and `serviceWorker` exist only in a secure context, and a
+ * page served over plain http would otherwise take the whole report down with it.
+ */
+private val APP_DUMP_JS = buildString {
+    append("(function(){(async function(){")
+    append("var out={origin:location.origin,url:location.href,secure:!!window.isSecureContext,")
+    append("local:[],session:[],cookies:'',idb:[],caches:[],sw:[],manifestUrl:'',manifest:'',")
+    append("usage:-1,quota:-1,persisted:null};")
+    append("function d(s){var o=[];try{for(var i=0;i<s.length;i++){var k=s.key(i);")
+    append("o.push({k:k,v:String(s.getItem(k))})}}catch(e){}return o}")
+    append("out.local=d(localStorage);out.session=d(sessionStorage);")
+    append("try{out.cookies=document.cookie||''}catch(e){}")
+    append("try{var es=await navigator.storage.estimate();out.usage=es.usage;out.quota=es.quota}catch(e){}")
+    append("try{out.persisted=await navigator.storage.persisted()}catch(e){}")
+    // Named databases only: indexedDB.databases() is what makes them enumerable at all, and a
+    // page cannot discover a database it did not name.
+    append("try{if(indexedDB.databases){var dbs=await indexedDB.databases();")
+    append("for(var i=0;i<dbs.length;i++){var info={name:dbs[i].name,version:dbs[i].version,stores:[]};")
+    append("try{var db=await new Promise(function(res,rej){var r=indexedDB.open(dbs[i].name);")
+    append("r.onsuccess=function(){res(r.result)};r.onerror=function(){rej(r.error)};")
+    append("r.onblocked=function(){rej(0)}});")
+    append("var ns=Array.prototype.slice.call(db.objectStoreNames);")
+    append("for(var j=0;j<ns.length;j++){var n=-1;try{n=await new Promise(function(res,rej){")
+    append("var q=db.transaction(ns[j],'readonly').objectStore(ns[j]).count();")
+    append("q.onsuccess=function(){res(q.result)};q.onerror=function(){rej(0)}})}catch(e){}")
+    append("info.stores.push({name:ns[j],count:n})}db.close()}catch(e){}out.idb.push(info)}}}catch(e){}")
+    append("try{if(window.caches){var ks=await caches.keys();for(var i=0;i<ks.length;i++){")
+    append("var c=await caches.open(ks[i]);var rq=await c.keys();")
+    append("out.caches.push({name:ks[i],count:rq.length,")
+    append("urls:rq.slice(0,50).map(function(x){return x.url})})}}}catch(e){}")
+    append("try{if(navigator.serviceWorker&&navigator.serviceWorker.getRegistrations){")
+    append("var rs=await navigator.serviceWorker.getRegistrations();out.sw=rs.map(function(r){")
+    append("var w=r.active||r.waiting||r.installing;return {scope:r.scope,")
+    append("script:w?w.scriptURL:'',state:w?w.state:'none'}})}}catch(e){}")
+    append("try{var lk=document.querySelector('link[rel~=\"manifest\"]');")
+    append("if(lk&&lk.href){out.manifestUrl=lk.href;")
+    append("try{var mr=await fetch(lk.href);out.manifest=(await mr.text()).slice(0,16384)}catch(e){}}}catch(e){}")
+    append("try{JCodeDevTools.app(JSON.stringify(out))}catch(e){}})();return 1})()")
 }
 
 private fun clearStoreJs(store: String): String =
@@ -863,8 +1345,17 @@ private fun clearStoreJs(store: String): String =
 private fun removeItemJs(store: String, key: String): String =
     "(function(){try{$store.removeItem(${JSONObject.quote(key)})}catch(e){};return 1})()"
 
-private fun expireCookieJs(key: String): String =
-    "(function(){document.cookie=${JSONObject.quote(key)}+'=; Max-Age=0; Path=/';return 1})()"
+/**
+ * Unregister the worker at [scope], then re-survey.
+ *
+ * The re-survey is chained onto the unregistration rather than fired alongside it: `unregister()`
+ * returns a promise, and an eval callback returns long before it settles, so a survey taken then
+ * would list the worker it just removed.
+ */
+private fun unregisterWorkerJs(scope: String): String =
+    "(function(){navigator.serviceWorker.getRegistrations().then(function(rs){" +
+        "return Promise.all(rs.filter(function(r){return r.scope===${JSONObject.quote(scope)}})" +
+        ".map(function(r){return r.unregister()}))}).then(function(){$APP_DUMP_JS});return 1})()"
 
 /** The Network pane's type filter. Null matches everything; the rest match [BrowserNetworkEntry.kind]. */
 private val NETWORK_FILTERS: List<Pair<String, Set<String>?>> = listOf(
@@ -1081,6 +1572,8 @@ private fun DetailSection(
     title: String,
     trailing: String = "",
     initiallyExpanded: Boolean = false,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(initiallyExpanded) }
@@ -1089,7 +1582,7 @@ private fun DetailSection(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable { expanded = !expanded }
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .padding(start = 10.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -1104,11 +1597,18 @@ private fun DetailSection(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            if (trailing.isNotEmpty()) {
+            Text(
+                text = trailing,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            if (actionLabel != null && onAction != null) {
                 Text(
-                    text = trailing,
+                    text = actionLabel,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable(onClick = onAction).padding(horizontal = 4.dp, vertical = 2.dp),
                 )
             }
         }
@@ -1250,7 +1750,9 @@ private fun formatBytes(n: Long): String = when {
     n <= 0 -> "0 B"
     n < 1024 -> "$n B"
     n < 1024 * 1024 -> "${n / 1024} kB"
-    else -> String.format(java.util.Locale.US, "%.1f MB", n / 1048576.0)
+    n < 1024L * 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f MB", n / 1048576.0)
+    // A storage quota is measured in tens of gigabytes; without this it reported "134379.8 MB".
+    else -> String.format(java.util.Locale.US, "%.1f GB", n / 1073741824.0)
 }
 
 @Composable

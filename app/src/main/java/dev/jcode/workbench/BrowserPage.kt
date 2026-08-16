@@ -106,6 +106,12 @@ private class DevToolsBridge {
         main.post { BuiltinBrowser.deliverSource(text) }
     }
 
+    /** The Application pane's survey of the page's storage — see [BuiltinBrowser.appDump]. */
+    @JavascriptInterface
+    fun app(json: String) {
+        main.post { BuiltinBrowser.deliverAppDump(json) }
+    }
+
     @JavascriptInterface
     fun net(json: String) {
         val o = runCatching { JSONObject(json) }.getOrNull() ?: return
