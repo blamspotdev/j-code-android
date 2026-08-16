@@ -305,6 +305,9 @@ private fun StepperScreen(
                 AddEnvironmentCard(onAdd = { addingEnvironment = true })
             }
         }
+        item {
+            WebEngineHintCard()
+        }
     }
 
     Surface(
@@ -557,6 +560,64 @@ private fun ConfigureStepCard(
 }
 
 /** Reveals the setup wizard on a device that is already configured, for adding a second distro. */
+/**
+ * A hint, not a step: shown only when the device's WebView — the Chromium engine behind JCode's
+ * browser and web previews — is old enough to break modern sites. Nothing here blocks setup, and
+ * JCode works either way by falling back to the ROM's engine; the card exists because onboarding
+ * is the one moment the user is already granting things, and a provider switch made now saves a
+ * blank-page mystery later. Threshold and actions mirror the Settings → Web engine card.
+ */
+@Composable
+private fun WebEngineHintCard() {
+    val ctx = LocalContext.current
+    val engineVersion = remember {
+        runCatching { android.webkit.WebView.getCurrentWebViewPackage()?.versionName }.getOrNull()
+    }
+    val major = engineVersion?.substringBefore('.')?.toIntOrNull() ?: 0
+    // Chromium 108 shipped dvh; below ~110 whole sites render blank rather than merely dated.
+    if (major !in 1 until 110) return
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Browser engine is outdated", fontWeight = FontWeight.SemiBold)
+            Text(
+                text = "This device's WebView is Chromium $engineVersion, which modern sites can " +
+                    "render blank or broken. JCode's built-in browser and web previews use it. " +
+                    "Recommended: install the latest Android System WebView, then pick it under " +
+                    "Developer options → WebView implementation. If your device doesn't allow the " +
+                    "switch, JCode keeps working on the ROM's engine.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FilledTonalButton(
+                onClick = {
+                    val id = "com.google.android.webview"
+                    val play = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$id"))
+                    runCatching { ctx.startActivity(play) }.onFailure {
+                        runCatching {
+                            ctx.startActivity(
+                                Intent(
+                                    Intent.ACTION_VIEW,
+                                    Uri.parse("https://play.google.com/store/apps/details?id=$id"),
+                                ),
+                            )
+                        }
+                    }
+                },
+            ) {
+                Text("Get latest WebView")
+            }
+        }
+    }
+}
+
 @Composable
 private fun AddEnvironmentCard(onAdd: () -> Unit) {
     Surface(
