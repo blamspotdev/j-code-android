@@ -8,25 +8,29 @@ name: version bump
 # not after a merge: bumping per-merge would move the target every time somebody landed a PR, and
 # there would never be a version long enough for a preview to be a preview *of* anything.
 #
-# Runs when a **stable** release is published, and only when the version that shipped is the one
-# main is carrying (see the guard) — so a hotfix published off an older line never advances the
-# open train. Can also be run by hand from the Actions tab for any level, which is how you open a
-# major train or correct a mistake.
+# **Dispatched, never triggered by an event.** release.yml asks for this at the end of a stable
+# publish, which is the only automatic path; running it by hand is the other, and that is
+# admin-only. It used to also listen for `release: published`, and that trigger has been removed
+# for three reasons at once: a release created with GITHUB_TOKEN raises no such event to begin with,
+# a `release` run's ref is the *tag* so the environment below would refuse it anyway, and anyone
+# with push access can publish a release — which made it the one way into this workflow that was
+# not admin-gated.
 #
-# **This needs a bypass actor on the `protect-main` ruleset.** That ruleset requires a pull
-# request and, with no bypass actors, binds every actor — admins and GITHUB_TOKEN included —
-# so a direct push to `main` is refused. Add one under
-# Settings > Rules > protect-main > Bypass list:
+# ## How it reaches `main`
 #
-#   - the "GitHub Actions" app, to let the built-in GITHUB_TOKEN through, or
-#   - "Repository admin" if you run this with a PAT in secrets.VERSION_BUMP_TOKEN.
+# The `protect-main` ruleset requires a pull request, and binds every actor that is not on its
+# bypass list. **"Repository admin" is on that list**, so this pushes directly using a PAT in
+# `secrets.VERSION_BUMP_TOKEN`.
 #
-# Until that exists the push is rejected and the run falls back to offering the bump as a PR
-# on `chore/bump-version`, so releases keep working and the version is never lost. The run
-# summary says which path it took.
+# That PAT is an **environment** secret on `version-bump`, not a repository secret. A repository
+# secret is readable by a workflow on *any* branch, so anyone with push access could have taken it
+# and pushed to `main` themselves — the exact rule it exists to bypass. The environment's
+# deployment branch policy is `main` alone, so a run dispatched from a branch cannot read it.
+#
+# Without the PAT the push is refused and the run falls back to offering the bump as a PR on
+# `chore/bump-version`; nothing is lost, it just needs merging by hand. The run summary says which
+# path it took.
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       level:
@@ -47,22 +51,20 @@ concurrency:
 
 jobs:
   bump:
-    # A pre-release never opens the next train: 1.5.0-beta.2 is a preview *of* the version main is
-    # already carrying, so moving main on would strand it.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.release.prerelease == false
     runs-on: ubuntu-latest
+    # Where the PAT lives, and the reason it is not a repository secret — see the header. The
+    # environment carries no reviewers: this is the tail end of a release that has already been
+    # approved, and a second gate here would only leave `main` carrying a version that has shipped.
+    environment: version-bump
     steps:
       # This job pushes to `main` under a repository-admin PAT, so who may start it by hand is the
       # same question as who may publish — see release.yml.
       #
-      # Only a person can fail this. The automatic paths have no human behind them: a release
-      # published by hand arrives as a `release` event, and release.yml opens the next train by
-      # dispatching this workflow as `github-actions[bot]`, which is not a collaborator and has no
-      # permission level to look up.
+      # Only a person can fail this. The one automatic path has nobody behind it: release.yml opens
+      # the next train by dispatching this workflow as `github-actions[bot]`, which is not a
+      # collaborator and has no permission level to look up.
       - name: Refuse anyone but an admin
-        if: github.event_name == 'workflow_dispatch' && !endsWith(github.actor, '[bot]')
+        if: ${{ !endsWith(github.actor, '[bot]') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -83,31 +85,14 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-          # A PAT (paired with a "Repository admin" bypass) if you have one; the built-in
-          # token otherwise, which needs the GitHub Actions app on the bypass list instead.
+          # The environment's PAT, which "Repository admin" on the ruleset's bypass list lets push
+          # to `main`. Falls through to the built-in token when the secret is absent — that push is
+          # refused and the run offers the bump as a PR instead, which is a working release rather
+          # than a broken one.
           token: ${{ secrets.VERSION_BUMP_TOKEN || github.token }}
 
-      # The train that just shipped has to be the one main is carrying. A hotfix released off an
-      # older line (v1.4.11 while main prepares 1.5.0) is not the end of main's train, and bumping
-      # for it would skip 1.5.0 entirely — the version every open preview is a preview of.
-      - name: Skip a release that is not main's open train
-        id: guard
-        if: github.event_name == 'release'
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          set -eu
-          released="$(printf '%s' "${TAG#v}" | tr -d ' ')"
-          carrying="$(sed -n 's/^val jcodeVersion = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)"
-          echo "released: $released | main is carrying: $carrying"
-          if [ "$released" != "$carrying" ]; then
-            echo "Not main's open train; leaving $carrying alone."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "\`$released\` is not main's open train (\`$carrying\`) — no bump." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      # A published release opens the next MINOR train. A manual run picks the level itself;
-      # anything unrecognised stays minor rather than guessing high.
+      # release.yml dispatches this with `minor` after a stable publish; a run by hand picks its
+      # own. Anything unrecognised stays minor rather than guessing high.
       - name: Choose bump level
         id: level
         env:
@@ -120,25 +105,24 @@ jobs:
           echo "Bump level: $level"
 
       - name: Bump main
-        if: steps.guard.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           BRANCH: chore/bump-version
           LEVEL: ${{ steps.level.outputs.level }}
-          SHIPPED: ${{ github.event.release.tag_name }}
+          ACTOR: ${{ github.actor }}
         run: |
           set -eu
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           blocked=0
 
-          # Says what the train was opened after, so `main` does not read as a run of bare version
-          # markers with nothing saying why each one moved.
-          if [ -n "${SHIPPED:-}" ]; then
-            why="Opening the next train after $SHIPPED."
-          else
-            why="Opening the next train (manual $LEVEL bump)."
-          fi
+          # Says why the train was opened, so `main` does not read as a run of bare version markers
+          # with nothing saying what moved each one. A bot on the handle means release.yml asked for
+          # this at the end of a stable publish; anyone else ran it themselves.
+          case "$ACTOR" in
+            *'[bot]') why="Opening the next train after a stable release." ;;
+            *) why="Opening the next train ($LEVEL bump, run by $ACTOR)." ;;
+          esac
 
           # Recomputed from the current tip on every attempt: another run may have bumped main
           # since this one started, and replaying a stale bump would reuse a version number.
@@ -178,9 +162,10 @@ jobs:
           body="$(sed 's/^          //' <<EOF
           $why main now prepares $version.
 
-          The workflow tried to bump main directly and was refused by the protect-main ruleset.
-          Add a bypass actor (Settings > Rules > protect-main > Bypass list) and future releases
-          will open the next train without going through a PR.
+          The direct push to main was refused by the protect-main ruleset, so the bump is here
+          instead. Normally it does not come through a PR at all — check that
+          VERSION_BUMP_TOKEN is still on the \`version-bump\` environment and that
+          "Repository admin" is still on the ruleset's bypass list.
 
           versionCode derives from the semver ((MAJOR*10000 + MINOR*100 + PATCH) * 100 + tier), so
           this one line is the whole change; the specifications that state the product version move
@@ -203,16 +188,20 @@ jobs:
           fi
 
           {
-            echo "### main could not be bumped directly"
+            echo "### main was not bumped — the bump is waiting on a PR"
             echo
-            echo "The protect-main ruleset refused the push, so the bump to $version is on"
-            echo "$BRANCH instead — [open the PR]($compare)."
+            echo "This is the fallback, not the normal path: the bump should push straight to main."
+            echo "The \`protect-main\` ruleset refused it, so **$version** is on \`$BRANCH\` —"
+            echo "[open the PR]($compare) and merge it, and main is on the new train."
             echo
-            echo "To have releases open the next train themselves, add a bypass actor under"
-            echo "**Settings > Rules > protect-main > Bypass list**: the **GitHub Actions** app for"
-            echo "the built-in token, or **Repository admin** if you put a PAT in VERSION_BUMP_TOKEN."
+            echo "Two things to check so the next one does not need this:"
+            echo "- \`VERSION_BUMP_TOKEN\` is still a secret on the **version-bump** environment"
+            echo "  (a repository secret of the same name is *not* enough — the job reads the"
+            echo "  environment's, and this run may have found neither)."
+            echo "- **Repository admin** is still on **Settings > Rules > protect-main > Bypass list**."
             if [ "$opened" -ne 1 ]; then
               echo
-              echo "(Opening the PR also needs *Allow GitHub Actions to create and approve pull requests*.)"
+              echo "(The branch is pushed but the PR could not be opened — that needs"
+              echo "*Settings > Actions > General > Allow GitHub Actions to create and approve pull requests*.)"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
