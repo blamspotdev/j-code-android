@@ -174,8 +174,8 @@ final class KeyboardView extends FrameLayout {
     private void dress(KeyView view) {
         switch (view.key().kind) {
             case Key.SHIFT:
-                view.showIcon(
-                    shift == SHIFT_LOCKED ? R.drawable.ic_shift_locked : R.drawable.ic_shift,
+                view.showSymbol(
+                    shift == SHIFT_LOCKED ? Ui.SHIFT_LOCKED : Ui.SHIFT,
                     shift == SHIFT_LOCKED ? "Caps lock, on" : shift == SHIFT_ON ? "Shift, on" : "Shift");
                 view.tint(shift == SHIFT_LOCKED ? Ui.LOCKED : shift == SHIFT_ON ? Ui.ACCENT : Ui.MODIFIER);
                 break;
@@ -184,6 +184,10 @@ final class KeyboardView extends FrameLayout {
                 String label = Layouts.actionLabel(info);
                 if (label != null) {
                     view.showLabel(label, label);
+                } else {
+                    // Back to the mark, and not only on the first field: a form that goes from one
+                    // asking for Search to one asking for nothing would otherwise keep saying Search.
+                    view.showSymbol(Ui.ENTER, "Enter");
                 }
                 view.tint(Ui.ACTION);
                 break;

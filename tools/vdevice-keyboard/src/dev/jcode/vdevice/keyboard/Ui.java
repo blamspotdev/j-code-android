@@ -2,9 +2,13 @@ package dev.jcode.vdevice.keyboard;
 
 import android.content.Context;
 import android.content.res.ColorStateList;
+import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.graphics.fonts.Font;
+import android.graphics.fonts.FontFamily;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
@@ -37,6 +41,58 @@ final class Ui {
 
     /** Shift while it is locked — the one piece of state a keyboard has that is easy to lose track of. */
     static final int LOCKED = 0xFF0EA5A4;
+
+    /**
+     * The faces of the keys that wear a mark instead of a word.
+     *
+     * <p>Characters, not drawables, which is how the rest of this device already does it — the
+     * terminal's extra-keys row writes its arrows as text. A key is a {@code TextView} either way,
+     * so a glyph is laid out, centred, scaled and tinted by the same code that already does all four
+     * for the letters, and {@code uiautomator dump} reports it as {@code text} alongside the
+     * {@code content-desc} that says what it means.
+     */
+    static final String SHIFT = "⇧";
+    static final String SHIFT_LOCKED = "⇪";
+    static final String BACKSPACE = "⌫";
+    static final String ENTER = "⏎";
+    /**
+     * Put the keyboard away. A filled triangle rather than a chevron: U+2304 is the obvious choice
+     * and it draws as a thin lowercase "v", which is not a mark to put in a row of letter keys.
+     */
+    static final String HIDE = "⏷";
+
+    private static Typeface symbols;
+
+    /**
+     * A typeface that can actually draw {@link #SHIFT} and the rest.
+     *
+     * <p>Those code points are the obvious ones and that is not the same as being present: phones
+     * ship *subsetted* symbol fonts, so ⇧ and ⌫ land as tofu on exactly the devices nobody tests on.
+     * JCode already carries Noto Sans Symbols 2 for this — it is what stops a TUI's glyphs coming out
+     * as boxes in the terminal — and this app carries its own copy for the same reason it carries its
+     * own palette: it is a separate APK and cannot read the container's resources.
+     *
+     * <p>Given to the marked keys only, so it can be the family rather than a fallback behind one:
+     * those keys draw a symbol and nothing else, and the letters are left on the system's own sans
+     * where they belong. Sans-serif sits behind it anyway, for a mark the bundled file happens not to
+     * carry. Best-effort throughout — a device whose fonts can already do this, or one where the file
+     * will not load, keeps the default and the keys still say what they are.
+     */
+    static Typeface symbolFont(Context context) {
+        if (symbols != null) {
+            return symbols;
+        }
+        symbols = Typeface.DEFAULT;
+        try {
+            Font bundled = new Font.Builder(context.getResources(), R.font.noto_sans_symbols2).build();
+            symbols = new Typeface.CustomFallbackBuilder(new FontFamily.Builder(bundled).build())
+                .setSystemFallback("sans-serif")
+                .build();
+        } catch (Throwable t) {
+            Log.w("VKEYBOARD", "no symbol font; the marked keys fall back to the system's", t);
+        }
+        return symbols;
+    }
 
     private Ui() {
     }

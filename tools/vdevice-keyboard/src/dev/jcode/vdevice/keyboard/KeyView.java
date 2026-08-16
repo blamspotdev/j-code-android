@@ -1,8 +1,6 @@
 package dev.jcode.vdevice.keyboard;
 
 import android.content.Context;
-import android.graphics.Canvas;
-import android.graphics.drawable.Drawable;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.widget.TextView;
@@ -22,16 +20,16 @@ import android.widget.TextView;
  * its {@code InputConnection} to stay the live one, and a key that took focus would end the input it
  * was in the middle of.
  *
- * <p>Icons are drawn in {@link #onDraw} rather than set as a compound drawable, which would put the
- * glyph beside the (empty) text and leave the key looking off-centre.
+ * <p>A key that wears a mark instead of a word wears it as <em>text</em>, in the bundled symbol font
+ * — see {@link Ui#symbolFont}. It was a vector drawn onto the key's own canvas, and that does not
+ * work here: {@link TextView#onDraw} clips the canvas to the space it lays text out in, and a key
+ * with no text lays out nothing to clip to, so shift, backspace and hide came out blank while their
+ * backgrounds, their bounds and their taps were all perfectly fine. As text they are laid out,
+ * centred, scaled and tinted by the code that already does all four for the letters.
  */
 final class KeyView extends TextView {
 
-    /** How much of the key's smaller dimension an icon takes; the rest is the key's own padding. */
-    private static final float GLYPH_FRACTION = 0.42f;
-
     private final Key key;
-    private Drawable glyph;
 
     KeyView(Context context, Key key) {
         super(context);
@@ -39,7 +37,7 @@ final class KeyView extends TextView {
         setGravity(Gravity.CENTER);
         setSingleLine(true);
         setTextColor(Ui.TEXT);
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, key.kind == Key.CHARACTER ? 18f : 14f);
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, faceSize(key));
         setContentDescription(key.description);
         setClickable(true);
         setFocusable(false);
@@ -47,10 +45,11 @@ final class KeyView extends TextView {
         if (key.id != 0) {
             setId(key.id);
         }
-        if (key.icon != 0) {
-            glyph = icon(context, key.icon);
+        if (key.symbol != null) {
+            setTypeface(Ui.symbolFont(context));
+            setText(key.symbol);
         } else if (key.label != null) {
-            // Every key that is not a glyph shows its own label from the start. Only character keys
+            // Every key that is not a mark shows its own label from the start. Only character keys
             // are redrawn by showFace, so a page key ("?123", "ABC") would otherwise be blank.
             setText(key.label);
         }
@@ -84,46 +83,39 @@ final class KeyView extends TextView {
         setContentDescription(face);
     }
 
-    void showIcon(int iconRes, String description) {
-        glyph = icon(getContext(), iconRes);
-        setText(null);
+    /** Swaps one mark for another — shift, as it goes off, on and locked. */
+    void showSymbol(String symbol, String description) {
+        setTypeface(Ui.symbolFont(getContext()));
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, SYMBOL_SP);
+        setText(symbol);
         setContentDescription(description);
-        invalidate();
     }
 
-    /** Replaces an icon key's glyph with a word — the action key, once the field has said what it is. */
+    /** Replaces a mark with a word — the action key, once the field has said what it is. */
     void showLabel(String label, String description) {
-        glyph = null;
+        setTypeface(null);
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, LABEL_SP);
         setText(label);
         setContentDescription(description);
-        invalidate();
     }
 
     void tint(int colour) {
         setBackground(Ui.key(getContext(), colour));
     }
 
-    @Override
-    protected void onDraw(Canvas canvas) {
-        super.onDraw(canvas);
-        if (glyph == null) {
-            return;
+    /**
+     * A mark is drawn bigger than a word, because it has to carry a key on its own.
+     *
+     * <p>"?123" and "Go" are read; ⇧ and ⌫ are recognised, and recognising a shape wants more of the
+     * key than reading four characters does.
+     */
+    private static float faceSize(Key key) {
+        if (key.symbol != null) {
+            return SYMBOL_SP;
         }
-        int size = Math.round(Math.min(getWidth(), getHeight()) * GLYPH_FRACTION);
-        int left = (getWidth() - size) / 2;
-        int top = (getHeight() - size) / 2;
-        glyph.setBounds(left, top, left + size, top + size);
-        glyph.draw(canvas);
+        return key.kind == Key.CHARACTER ? 18f : LABEL_SP;
     }
 
-    /** Mutated, because a shared constant-state drawable would tint every key that uses that icon. */
-    private static Drawable icon(Context context, int iconRes) {
-        Drawable drawable = context.getDrawable(iconRes);
-        if (drawable == null) {
-            return null;
-        }
-        drawable = drawable.mutate();
-        drawable.setTint(Ui.TEXT);
-        return drawable;
-    }
+    private static final float SYMBOL_SP = 22f;
+    private static final float LABEL_SP = 14f;
 }
