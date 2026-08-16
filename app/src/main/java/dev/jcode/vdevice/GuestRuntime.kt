@@ -694,14 +694,7 @@ internal object GuestRuntime {
             // An implicit intent is a question about what the *device* has — a camera, a picker, a
             // browser — and the device answers it with its own apps rather than letting the phone
             // answer it with the user's. See DeviceIntents.
-            deviceAppFor(intent)?.let { stub ->
-                val launcher = embeddedLauncher ?: return StartAction.Redirect(stub)
-                return if (runCatching { launcher(stub) }.getOrDefault(false)) {
-                    StartAction.Consumed
-                } else {
-                    StartAction.Redirect(stub)
-                }
-            }
+            deviceAppFor(intent)?.let { stub -> return hostOnDevice(stub, intent) }
             // Said in the *device's* log, not only the system one. An intent leaving the device is
             // the single most consequential thing that can happen without anybody being told: the
             // phone answers it, with the user's own apps and the user's own data, and from inside
@@ -731,12 +724,92 @@ internal object GuestRuntime {
                     "keeping it on the device rather than letting the phone answer it",
             )
         }
-        val stub = stubIntent(guest, component.className, Intent(intent))
-        val launcher = embeddedLauncher ?: return StartAction.Redirect(stub)
-        val hosted = runCatching { launcher(stub) }
-            .onFailure { Log.e(TAG, "cannot host $intent in the sandbox tab", it) }
+        return hostOnDevice(stubIntent(guest, component.className, Intent(intent)), intent)
+    }
+
+    /**
+     * Puts [stub] on the device's screen, from whichever thread the app started it on.
+     *
+     * ### Why the thread matters
+     *
+     * Hosting builds an activity and adds its decor view to the tab's container, and a view
+     * hierarchy may only be touched by the thread that created it. `startActivity` has no such rule:
+     * it is a binder call, and the platform is free to be called from anywhere — so an app that asks
+     * for a picker from a worker is doing nothing wrong. A game does it as a matter of course,
+     * because its `android_main` thread owns the state the answer belongs to and JNI is how it
+     * reaches Java at all.
+     *
+     * Measured on WaveRepo, whose native thread asked for `ACTION_OPEN_DOCUMENT`: the device
+     * resolved its own Files app, tried to host it on the calling thread, threw inside `addView`,
+     * and answered the app that there was no picker on this device —
+     * `ActivityNotFoundException: No Activity found to handle Intent { act=…OPEN_DOCUMENT }` — while
+     * the same intent from a button worked, because a button is a main-thread event. Every one of
+     * the device's apps was unreachable to that app for the same reason: its camera, its browser,
+     * its settings, its picker.
+     *
+     * So a launch from anywhere else is posted to the main looper and answered [StartAction.Consumed]
+     * before it has happened. That is not optimism — it is what the platform's own answer means. A
+     * real `startActivity` returns as soon as the server has *accepted* the launch, and the activity
+     * appears afterwards; the container is making the same promise, and [failed] is what keeps it
+     * honest when it cannot be met.
+     */
+    private fun hostOnDevice(stub: Intent, request: Intent): StartAction {
+        val launcher = embeddedLauncher ?: return StartAction.Redirect(stub).also {
+            // The tab installs its launcher once its first activity is built, so this is an app
+            // starting something from its own `onCreate` — before the device has anywhere to put it.
+            // Said out loud because the fallback then hands the intent to the system, which resolves
+            // the stub against JCode rather than the device, and the app hears only that no activity
+            // was found. That silence is what made the threading bug above cost a log pull.
+            VirtualDeviceLog.append(
+                host,
+                'W',
+                TAG,
+                "${activePackage()} started ${request.action ?: request.component} before the " +
+                    "device had a screen to put it on; it cannot be hosted",
+            )
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return if (hostNow(launcher, stub, request)) {
+                StartAction.Consumed
+            } else {
+                StartAction.Redirect(stub)
+            }
+        }
+        // Carried across rather than left in place: the field is what says who is owed an answer, and
+        // between now and the post it belongs to no launch at all.
+        val waiting = GuestResults.pending()
+        Handler(Looper.getMainLooper()).post {
+            GuestResults.resume(waiting)
+            if (hostNow(launcher, stub, request)) return@post
+            GuestResults.forget()
+            GuestResults.cancel(waiting)
+        }
+        return StartAction.Consumed
+    }
+
+    /** One hosting attempt, with the reason it failed kept rather than dropped — see [failed]. */
+    private fun hostNow(launcher: (Intent) -> Boolean, stub: Intent, request: Intent): Boolean =
+        runCatching { launcher(stub) }
+            .onFailure { failed(request, it) }
             .getOrDefault(false)
-        return if (hosted) StartAction.Consumed else StartAction.Redirect(stub)
+
+    /**
+     * Says in the device's own log that a launch the device had an app for did not happen.
+     *
+     * This used to be swallowed outright, and swallowing it is what made the bug above take a log
+     * pull to find: the container had already decided which of its apps answered the intent and said
+     * so — `launching dev.jcode.vdevice.files/…` — and then the app was told the device had nothing,
+     * with no line anywhere between the two saying why.
+     */
+    private fun failed(request: Intent, cause: Throwable) {
+        Log.e(TAG, "cannot host ${request.action ?: request.component} in the sandbox tab", cause)
+        VirtualDeviceLog.append(
+            host,
+            'E',
+            TAG,
+            "${activePackage()} asked for ${request.action ?: request.component}, and the device's " +
+                "app for it could not be opened: $cause",
+        )
     }
 
     /**
