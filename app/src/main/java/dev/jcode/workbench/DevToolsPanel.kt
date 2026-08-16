@@ -93,50 +93,69 @@ fun DevtoolsSidebarContent(modifier: Modifier = Modifier) {
     // "click the thing that says where it went wrong and end up there".
     var jump by remember { mutableStateOf<SourceJump?>(null) }
     Column(modifier = modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Scrollable, because five panes do not fit across a phone and the alternative is five
-            // chips squeezed until none of them can be read.
+        // A tab strip, the way this app already draws tab strips — the editor's and the terminal's
+        // are flat, butt against each other, and mark the active one by lifting it to
+        // `surfaceVariant` off a `surface` rail. These were rounded pills with gaps between them,
+        // which is a different component making the same claim, and two idioms for "pick one of
+        // these" in one window is one too many. Same 36dp, same padding, same label style.
+        Surface(color = MaterialTheme.colorScheme.surface) {
             Row(
-                modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth().height(36.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-            DevToolsPane.entries.forEach { p ->
-                val selected = p == pane
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (selected) {
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                    },
-                    modifier = Modifier.clickable { pane = p },
+                // Scrollable, because five panes do not fit across a phone and the alternative is
+                // five tabs squeezed until none of them can be read.
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(0.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    DevToolsPane.entries.forEach { p ->
+                        val selected = p == pane
+                        Box(
+                            modifier = Modifier
+                                .clickable { pane = p }
+                                .background(
+                                    if (selected) {
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                    } else {
+                                        Color.Transparent
+                                    },
+                                )
+                                .fillMaxHeight()
+                                .padding(horizontal = 12.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = p.label,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (selected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        }
+                    }
+                }
+                val clearAction: (() -> Unit)? = when (pane) {
+                    DevToolsPane.Console -> BuiltinBrowser::clearConsole
+                    DevToolsPane.Network -> BuiltinBrowser::clearNetwork
+                    else -> null
+                }
+                if (clearAction != null) {
                     Text(
-                        text = p.label,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        text = "Clear",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clickable { clearAction() }
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
                     )
                 }
-            }
-            }
-            val clearAction: (() -> Unit)? = when (pane) {
-                DevToolsPane.Console -> BuiltinBrowser::clearConsole
-                DevToolsPane.Network -> BuiltinBrowser::clearNetwork
-                else -> null
-            }
-            if (clearAction != null) {
-                Text(
-                    text = "Clear",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable { clearAction() }.padding(horizontal = 6.dp, vertical = 4.dp),
-                )
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
