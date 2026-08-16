@@ -85,6 +85,31 @@ internal object GuestResults {
     }
 
     /**
+     * Takes what [expect] noted so a launch that has to finish on another thread can carry it there.
+     *
+     * The field is cleared by the taking, because between here and [resume] the launch is in flight
+     * on the main looper and there is nothing for a second launch to inherit.
+     */
+    fun pending(): Pending? = expecting.also { expecting = null }
+
+    /** Puts a [pending] back, on the thread that is about to host the launch. */
+    fun resume(pending: Pending?) {
+        expecting = pending
+    }
+
+    /**
+     * Tells [pending]'s requester that the launch never happened.
+     *
+     * A cancelled result rather than silence, for the same reason [harvest] answers a Back with one:
+     * an app that called `startActivityForResult` is waiting, and an app that is told nothing waits
+     * for ever. Must be called on the main thread, like every other delivery.
+     */
+    fun cancel(pending: Pending?) {
+        val waiting = pending ?: return
+        deliver(waiting.requester, waiting.requestCode, RESULT_CANCELED, null)
+    }
+
+    /**
      * Delivers [finished]'s answer to whoever was waiting for it, as it is popped off the stack.
      *
      * A screen that finishes without ever calling `setResult` answers `RESULT_CANCELED` with no
