@@ -54,6 +54,31 @@ jobs:
       github.event.release.prerelease == false
     runs-on: ubuntu-latest
     steps:
+      # This job pushes to `main` under a repository-admin PAT, so who may start it by hand is the
+      # same question as who may publish — see release.yml.
+      #
+      # Only a person can fail this. The automatic paths have no human behind them: a release
+      # published by hand arrives as a `release` event, and release.yml opens the next train by
+      # dispatching this workflow as `github-actions[bot]`, which is not a collaborator and has no
+      # permission level to look up.
+      - name: Refuse anyone but an admin
+        if: github.event_name == 'workflow_dispatch' && !endsWith(github.actor, '[bot]')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          level="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$GITHUB_ACTOR/permission" \
+            --jq '.permission' 2>/dev/null || true)"
+          if [ -z "$level" ]; then
+            echo "::error::cannot read $GITHUB_ACTOR's permission level — the workflow token may be too narrow to query collaborators"
+            exit 1
+          fi
+          if [ "$level" != "admin" ]; then
+            echo "::error::$GITHUB_ACTOR has '$level' access; opening a release train is admin-only"
+            exit 1
+          fi
+          echo "$GITHUB_ACTOR is an admin."
+
       - uses: actions/checkout@v4
         with:
           ref: main

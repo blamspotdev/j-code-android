@@ -180,6 +180,18 @@ older line never skips the open train. It can also be run by hand for any level.
 directly where the `protect-main` ruleset allows it and falls back to a PR on `chore/bump-version`
 otherwise. See [CI, quality and invariants](03-ci-quality-and-invariants.md).
 
+> **`release.yml` asks for the bump; it does not rely on the event.** A release created with
+> `GITHUB_TOKEN` raises no events that start other workflows — the loop guard — so the
+> `release: published` trigger would never have heard the releases this project actually publishes.
+> `workflow_dispatch` is one of the two exceptions to that rule, so the publish job ends by
+> dispatching `version-bump.yml` directly. The `release` trigger remains for a release published by
+> hand in the UI.
+
+Running it by hand is **admin-only**, checked the same way as `release.yml` and for the same reason:
+the job pushes to `main` under a repository-admin PAT. The check is skipped for the two paths with
+no person behind them — the `release` event, and the dispatch from `release.yml`, which arrives as
+`github-actions[bot]`.
+
 > **The formula is duplicated in four places** and they must agree: `app/build.gradle.kts`
 > (`jcodeVersionCode`), `scripts/build-release.ps1` (`$Code`),
 > `scripts/build-release-common.sh` (`version_code`), and `.github/workflows/release.yml`. The shell
