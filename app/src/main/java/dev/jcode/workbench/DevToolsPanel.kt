@@ -19,10 +19,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -44,7 +41,6 @@ import dev.jcode.design.JCodeTheme
 import org.json.JSONTokener
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
@@ -231,17 +227,10 @@ private fun ConsolePane(onOpenSource: (String, Int) -> Unit, modifier: Modifier 
         }
         item {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 6.dp, end = 8.dp, top = 2.dp, bottom = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 2.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // The same rail and marker every other row has, because this is one of them.
-                Box(
-                    modifier = Modifier
-                        .padding(end = 0.dp)
-                        .width(2.dp)
-                        .height(18.dp)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
-                )
+                // The same marker every other row has, because this is one of them.
                 Text(
                     text = "›",
                     color = MaterialTheme.colorScheme.primary,
@@ -264,15 +253,10 @@ private fun ConsolePane(onOpenSource: (String, Int) -> Unit, modifier: Modifier 
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                     keyboardActions = KeyboardActions(onGo = { run() }),
-                    // No box around it. A field with a filled, rounded background is a form control;
-                    // this is a line in a log that happens to take typing.
+                    // No box around it and no run button beside it. A field with a filled, rounded
+                    // background is a form control; this is a line in a log that happens to take
+                    // typing, and the keyboard's Go key is how a console has always been submitted.
                     modifier = Modifier.weight(1f),
-                )
-                Icon(
-                    Icons.Rounded.PlayArrow,
-                    contentDescription = "Run",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp).clickable { run() },
                 )
             }
         }
@@ -367,14 +351,10 @@ private fun ConsoleRowView(
             )
             .padding(vertical = 3.dp),
     ) {
-        Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-            Box(
-                modifier = Modifier
-                    .padding(start = 6.dp)
-                    .width(2.dp)
-                    .fillMaxHeight()
-                    .background(accent.copy(alpha = if (tint == Color.Transparent) 0.35f else 1f)),
-            )
+        // No rail. The marker and the tint already say what kind of line this is, and a third
+        // statement of the same fact down the left edge was a stripe on every row of a log whose
+        // whole job is to let two or three rows stand out from the rest.
+        Row(modifier = Modifier.fillMaxWidth()) {
             Text(
                 text = marker,
                 color = accent,
@@ -385,7 +365,7 @@ private fun ConsoleRowView(
                 // rather than drifting down the middle of a message that ran to three.
                 lineHeight = 15.sp,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.width(20.dp),
+                modifier = Modifier.padding(start = 8.dp).width(20.dp),
             )
             Text(
                 text = entry.message,
