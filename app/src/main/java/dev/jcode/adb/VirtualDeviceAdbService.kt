@@ -113,6 +113,7 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
             "am" -> stream.write(am(args.drop(1)) ?: unsupportedService(stream.service))
             "wm" -> stream.write(wm(args.drop(1)) ?: unsupportedService(stream.service))
             "input" -> stream.write(input(args.drop(1)))
+            "ime" -> stream.write(ime(args.drop(1)))
             "logcat" -> stream.write(logcat(args.drop(1)))
             "uiautomator" -> uiautomator(args.drop(1), stream)
             "screencap" -> screencap(args.drop(1), stream)
@@ -326,6 +327,24 @@ class VirtualDeviceAdbService(context: Context) : AdbServiceHandler {
 
             else -> "input: expected tap, swipe, text or keyevent\n"
         }
+    }
+
+    /**
+     * `ime show|hide|toggle|status|list` against **the device's own keyboard**, which is a real app
+     * on its screen rather than the phone's IME over the tab.
+     *
+     * Worth having as a command for the same reason `input tap` is: everything the device draws is
+     * something an agent can photograph and press, and a keyboard it cannot open is a text field it
+     * cannot answer. `status` says which field has the focus and what kind of text it takes, which
+     * is the question asked when typing goes somewhere unexpected.
+     *
+     * `-s` and the other real command's switches are accepted and ignored; nothing here has a second
+     * keyboard to choose between.
+     */
+    private suspend fun ime(args: List<String>): String {
+        val session = running() ?: return "ime: no app is running on the device\n"
+        val command = args.firstOrNull { !it.startsWith("-") } ?: "status"
+        return session.ime(command)
     }
 
     /**

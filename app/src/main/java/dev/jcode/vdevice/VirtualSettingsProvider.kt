@@ -93,6 +93,14 @@ class VirtualSettingsProvider : ContentProvider() {
         // ordinary guest and so has no other way to learn a device setting.
         putString("camera/scene", VirtualDevicePolicy.cameraScene(context).id)
 
+        // What the keyboard has been told about itself, read by the keyboard app at the start of
+        // every input. The container keeps the values and never interprets them: which layouts
+        // exist and what "Tall" is worth are the keyboard's business, and it is the thing that would
+        // have to be changed to add another.
+        VirtualDevicePolicy.KEYBOARD_KEYS.forEach { key ->
+            putString(key, VirtualDevicePolicy.keyboard(context, key))
+        }
+
         // What the radios have around them. The Settings app cannot ask the platform for any of
         // this: a scan there reaches the phone's WifiManager, which answers a caller holding no
         // location permission with an empty list. See VirtualRadios.
@@ -150,22 +158,10 @@ class VirtualSettingsProvider : ContentProvider() {
                 "perm/$permission/rule",
                 VirtualDevicePolicy.rule(context, packageName, permission).name,
             )
-            putString("perm/$permission/label", permissionLabel(context, permission))
+            putString("perm/$permission/label", VirtualDevicePolicy.title(context, permission))
             putBoolean("perm/$permission/runtime", VirtualDevicePolicy.dangerous(context, permission))
         }
     }
-
-    /**
-     * A permission as a person would name it: the platform's own label where there is one, since the
-     * phone's package manager has already translated its own, and the tail of the name for one a
-     * guest declares itself.
-     */
-    private fun permissionLabel(context: Context, permission: String): String = runCatching {
-        context.packageManager.getPermissionInfo(permission, 0)
-            .loadLabel(context.packageManager)
-            .toString()
-            .replaceFirstChar { it.uppercase() }
-    }.getOrDefault(permission.substringAfterLast('.').replace('_', ' '))
 
     /**
      * Changes one setting. `hw/<id>` takes a [HardwareMode]; `perm/<package>/<permission>` takes a
@@ -220,6 +216,15 @@ class VirtualSettingsProvider : ContentProvider() {
 
             key == "bluetooth/scan" -> {
                 VirtualRadios.rescanBluetooth(context)
+                true
+            }
+
+            // The key is checked and the value is not, which is the whole shape of this namespace:
+            // the container is the device's store, and the keyboard is the authority on what a
+            // layout is called. Validating the value here would mean this file had to be edited to
+            // add a layout to an app it does not otherwise know anything about.
+            key in VirtualDevicePolicy.KEYBOARD_KEYS -> {
+                VirtualDevicePolicy.setKeyboard(context, key, value)
                 true
             }
 

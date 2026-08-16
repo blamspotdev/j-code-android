@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Declared ids for the keys that are not characters.
+
+     `uiautomator dump` reports a view's resource id as `package:id/name`, and that is how an agent
+     driving this device presses Backspace without knowing where it happens to be on this screen at
+     this size. The character keys need none of this: their `text` and `content-desc` are the letter
+     itself, which is already the stable name for them. -->
+<resources>
+    <item type="id" name="key_shift" />
+    <item type="id" name="key_backspace" />
+    <item type="id" name="key_action" />
+    <item type="id" name="key_space" />
+    <item type="id" name="key_page" />
+    <item type="id" name="key_hide" />
+</resources>

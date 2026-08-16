@@ -43,8 +43,13 @@ interface IGuestSession {
     /** Pops the embedded back stack, or sends Back to the only activity. */
     oneway void back();
 
-    /** The answer to one onPermissionRequest, in the order it asked. */
-    oneway void permissionResult(int requestId, in boolean[] granted);
+    /**
+     * `ime show|hide|toggle|status|list` against the device's own keyboard.
+     *
+     * Not oneway, because `status` is a question — and the keyboard is a real app hosted on the
+     * device's screen, so what it answers is the same thing screencap and uiautomator see.
+     */
+    Bundle ime(String command);
 
     /** Force-stop: ends everything the named guest is hosting and drops it from the loader. */
     oneway void forceStop(String packageName);

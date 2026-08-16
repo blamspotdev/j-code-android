@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Backspace: the key-shaped pentagon pointing at where the character goes, with the cross that
+     says it is being removed rather than moved. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <path android:pathData="M9.2,4.5 L19.5,4.5 A1.5,1.5 0 0 1 21,6 L21,18 A1.5,1.5 0 0 1 19.5,19.5 L9.2,19.5 L2.6,12 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF" android:strokeWidth="1.8"
+        android:strokeLineCap="round" android:strokeLineJoin="round"/>
+    <path android:pathData="M11.5,9.5 L17,15 M17,9.5 L11.5,15"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF" android:strokeWidth="1.8"
+        android:strokeLineCap="round"/>
+</vector>

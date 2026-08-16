@@ -3,17 +3,11 @@ package dev.jcode.vdevice
 import android.annotation.SuppressLint
 import android.content.Context
 import android.os.IBinder
-import android.os.SystemClock
-import android.text.InputType
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceControlViewHost
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import android.view.inputmethod.BaseInputConnection
-import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.InputConnection
-import android.view.inputmethod.InputMethodManager
 
 /**
  * The tab's window onto the guest.
@@ -168,52 +162,21 @@ internal class AppSandboxSurfaceView(
             .invoke(this) as? IBinder
     }.getOrNull()
 
-    fun showKeyboard() {
-        requestFocus()
-        inputMethodManager()?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
-    }
-
-    fun hideKeyboard() {
-        inputMethodManager()?.hideSoftInputFromWindow(windowToken, 0)
-    }
-
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
         super.onSizeChanged(width, height, oldWidth, oldHeight)
         if (width > 0 && height > 0) onSized(width, height)
     }
 
-    override fun onCheckIsTextEditor(): Boolean = true
-
-    /**
-     * The guest cannot raise a keyboard of its own — its fields live in a hierarchy with no window
-     * for the IME to bind to — so this view holds the connection and the container replays what is
-     * typed as key events.
-     */
-    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        // Visible-password keeps autocorrect and suggestions off, which would otherwise rewrite text
-        // on its way to an app that has its own idea of what the field contains.
-        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
-        outAttrs.imeOptions = EditorInfo.IME_ACTION_NONE or
-            EditorInfo.IME_FLAG_NO_EXTRACT_UI or
-            EditorInfo.IME_FLAG_NO_FULLSCREEN
-        return object : BaseInputConnection(this, false) {
-            override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
-                text?.toString()?.takeIf { it.isNotEmpty() }?.let { session.text(it) }
-                return true
-            }
-
-            override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-                repeat(beforeLength) { press(KeyEvent.KEYCODE_DEL) }
-                repeat(afterLength) { press(KeyEvent.KEYCODE_FORWARD_DEL) }
-                return true
-            }
-
-            override fun sendKeyEvent(event: KeyEvent): Boolean {
-                session.key(event)
-                return true
-            }
-        }
-    }
+    // No `onCheckIsTextEditor`, and that is the point of the device having a keyboard of its own.
+    //
+    // This view used to answer yes, so the *phone's* IME opened over the tab and typed into a
+    // connection that replayed each character into the guest. It worked and it was in the wrong
+    // window: the phone's keyboard is JCode's chrome, so `screencap` of the device did not show it,
+    // `uiautomator dump` did not list it, and `input tap` could not reach a key — an agent could see
+    // a text field and had no way to answer it. See [VirtualKeyboard] for what replaced it.
+    //
+    // A physical keyboard is unaffected: its keys arrive as key events, which is what the two
+    // overrides below forward.
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
         forward(keyCode, event) || super.onKeyDown(keyCode, event)
@@ -227,15 +190,6 @@ internal class AppSandboxSurfaceView(
         session.key(event)
         return true
     }
-
-    private fun press(keyCode: Int) {
-        val now = SystemClock.uptimeMillis()
-        session.key(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0))
-        session.key(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0))
-    }
-
-    private fun inputMethodManager(): InputMethodManager? =
-        context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
 
     private companion object {
         /** The platform's own long-press threshold, so the launcher feels like every other one. */

@@ -514,11 +514,14 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
         /** Past this the row is wider than the label beside it; the count carries the rest. */
         const val MAX_ICONS = 4
 
-        val BAR_BACKGROUND = Color.argb(0xCC, 0x12, 0x14, 0x1A)
-        val SHADE_BACKGROUND = Color.argb(0xF2, 0x1B, 0x1E, 0x27)
-        val FOREGROUND = Color.argb(0xFF, 0xE6, 0xE8, 0xEF)
-        val MUTED = Color.argb(0xFF, 0x9A, 0xA0, 0xB0)
-        val ACCENT = Color.argb(0xFF, 0x8A, 0xB4, 0xF8)
+        // The device's colours, not this file's — see [VirtualPalette] for why the bar, the
+        // wallpaper and the prompt each having their own near-miss grey made one machine look like
+        // three.
+        val BAR_BACKGROUND = VirtualPalette.BAR
+        val SHADE_BACKGROUND = VirtualPalette.SHADE
+        val FOREGROUND = VirtualPalette.TEXT
+        val MUTED = VirtualPalette.MUTED
+        val ACCENT = VirtualPalette.ACCENT
 
         /** For when the app has tinted the bar a light colour and dark markings are what read. */
         val ON_LIGHT = Color.argb(0xFF, 0x14, 0x16, 0x1C)

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The virtual device's keyboard.
+
+     A device with no keyboard of its own borrows the phone's, and that is what this replaces. The
+     phone's IME is JCode's chrome: it is drawn in JCode's window, so `screencap` on the device does
+     not show it, `uiautomator dump` does not list it, and `input tap` cannot reach a key. An agent
+     driving this device could see a text field and had no way to answer it, and a person typing was
+     really typing into the IDE, which then replayed the characters as key events and dropped
+     everything KeyCharacterMap has no key for.
+
+     This is an ordinary guest, like the Camera and Files apps. The container hosts its view over
+     whatever app is running and hands it the focused field's own InputConnection — the same object a
+     real IME is given — so the editing is the platform's, not a re-implementation of it. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.jcode.vdevice.keyboard">
+
+    <application
+        android:label="Keyboard"
+        android:icon="@drawable/ic_launcher"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+        <!-- An IME's own screen is its settings, which is exactly what this activity is. The typing
+             surface is not an activity at all: it has to appear over the app being typed into
+             without pausing it, and an activity on the device's back stack would do the opposite. -->
+        <activity
+            android:name=".KeyboardActivity"
+            android:exported="true"
+            android:label="Keyboard"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|density|smallestScreenSize">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- What an app sends when it wants to send somebody to the keyboard's own settings. -->
+            <intent-filter>
+                <action android:name="android.settings.INPUT_METHOD_SETTINGS" />
+                <action android:name="android.settings.HARD_KEYBOARD_SETTINGS" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

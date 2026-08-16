@@ -1,5 +1,6 @@
 package dev.jcode.vdevice.hwfixture;
 
+import android.app.ActionBar;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -26,7 +27,12 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
 import android.util.Log;
+import android.view.Menu;
+import android.view.MenuItem;
 import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -84,7 +90,19 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
     private final Map<Integer, String> readings = new LinkedHashMap<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
 
+    /** How the window is asking to be laid out around the device's status bar. */
+    private static final int NORMAL = 1;
+    private static final int BEHIND = 2;
+    private static final int FULLSCREEN = 3;
+
+    private static final int MENU_NORMAL = 101;
+    private static final int MENU_BEHIND = 102;
+    private static final int MENU_FULLSCREEN = 103;
+    private static final int MENU_REFRESH = 104;
+
     private TextView out;
+    private int statusBarMode = NORMAL;
+    private String lastInsets = "nothing dispatched yet";
     private String lastRequest = "not asked yet";
     private String lastPhoto = "not asked yet";
     private String lastPick = "not asked yet";
@@ -98,6 +116,25 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
         column.setOrientation(LinearLayout.VERTICAL);
         column.setBackgroundColor(Color.parseColor("#101418"));
         column.setPadding(24, 24, 24, 24);
+
+        // What the device says is covering this window, recorded as it is delivered rather than
+        // asked for afterwards: `getRootWindowInsets` answers out of the view root, which in an
+        // embedded hierarchy is a statement about the IDE's window. The dispatch is the thing the
+        // container substitutes, so the dispatch is what this fixture reports.
+        //
+        // Nothing is padded here on purpose. The whole question is whether the *platform* lays this
+        // app out correctly when it is handed the device's insets — the action bar sitting below
+        // the device's status bar in edge-to-edge mode is the framework doing that, and a fixture
+        // that padded itself by hand would hide exactly the thing it is meant to show.
+        getWindow().getDecorView().setOnApplyWindowInsetsListener((view, insets) -> {
+            lastInsets = String.format(Locale.US, "status %d, nav %d, ime %d (bar reported %s)",
+                insets.getInsets(WindowInsets.Type.statusBars()).top,
+                insets.getInsets(WindowInsets.Type.navigationBars()).bottom,
+                insets.getInsets(WindowInsets.Type.ime()).bottom,
+                insets.isVisible(WindowInsets.Type.statusBars()) ? "visible" : "hidden");
+            return view.onApplyWindowInsets(insets);
+        });
+        statusBarMode(NORMAL);
 
         Button ask = new Button(this);
         ask.setText("Request camera, mic and location");
@@ -164,12 +201,107 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
         out.setTypeface(Typeface.MONOSPACE);
         out.setTextColor(Color.parseColor("#D7E3EC"));
         out.setTextSize(12f);
-        ScrollView scroll = new ScrollView(this);
-        scroll.addView(out);
-        column.addView(scroll, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        column.addView(out, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        setContentView(column);
+        // The whole column scrolls, rather than a report that scrolls inside a column that does not.
+        //
+        // That was the layout, and it does not survive the window this fixture actually runs in: the
+        // device's screen is an editor tab, and five buttons at their natural height fill it, so a
+        // `ScrollView` given "whatever is left" was given about twenty pixels and the report — the
+        // entire point of the app — could not be reached at any size the tab comes in.
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(column, new ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        setContentView(scroll);
+    }
+
+    /**
+     * The app bar's menu, built in code because this fixture has no resources to inflate one from.
+     *
+     * One item as a button and the rest in the overflow, which is deliberate: they are two different
+     * pieces of machinery. The button is laid out by the action bar itself; the overflow opens a
+     * `PopupWindow`, which is a **separate window** and needs a token the embedded activity was
+     * given by the container rather than by the window manager.
+     *
+     * Reaching this method at all is the check. The framework builds an action bar's menu from a
+     * pass it schedules on the decor view, after `onPostCreate`; a container that drives the
+     * lifecycle by hand and skips that step gets a bar with a blank title and no menu, which looks
+     * near enough to right to go unnoticed.
+     */
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        menu.add(Menu.NONE, MENU_REFRESH, 0, "Refresh")
+            .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
+        menu.add(Menu.NONE, MENU_NORMAL, 1, "Status bar: sit below it");
+        menu.add(Menu.NONE, MENU_BEHIND, 2, "Status bar: draw behind it");
+        menu.add(Menu.NONE, MENU_FULLSCREEN, 3, "Status bar: take the screen");
+        return true;
+    }
+
+    @Override
+    public boolean onPrepareOptionsMenu(Menu menu) {
+        checkOnly(menu, MENU_NORMAL, statusBarMode == NORMAL);
+        checkOnly(menu, MENU_BEHIND, statusBarMode == BEHIND);
+        checkOnly(menu, MENU_FULLSCREEN, statusBarMode == FULLSCREEN);
+        return true;
+    }
+
+    private static void checkOnly(Menu menu, int id, boolean checked) {
+        MenuItem item = menu.findItem(id);
+        if (item != null) {
+            item.setCheckable(true);
+            item.setChecked(checked);
+        }
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        switch (item.getItemId()) {
+            case MENU_NORMAL: statusBarMode(NORMAL); return true;
+            case MENU_BEHIND: statusBarMode(BEHIND); return true;
+            case MENU_FULLSCREEN: statusBarMode(FULLSCREEN); return true;
+            case MENU_REFRESH: out.setText(report()); return true;
+            default: return super.onOptionsItemSelected(item);
+        }
+    }
+
+    /**
+     * Says how this window wants to be laid out around the device's status bar, in the three shapes
+     * the container reads — and then says nothing else about it.
+     *
+     * That is the test. An app states a preference through its window and the *device* decides what
+     * follows: whether the bar is there, what it is painted, whether this window starts below it,
+     * and what insets this app is handed. Off / behind / full screen should each produce a visibly
+     * different screen for the same app, with the report below saying which insets came with it.
+     */
+    private void statusBarMode(int mode) {
+        statusBarMode = mode;
+        Window window = getWindow();
+        window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN
+            | WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS);
+        switch (mode) {
+            case BEHIND:
+                // Transparent is the statement: an app that sets it is undertaking to inset its own
+                // content by whatever the device says is over it.
+                window.setStatusBarColor(Color.TRANSPARENT);
+                break;
+            case FULLSCREEN:
+                window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+                break;
+            default:
+                window.setStatusBarColor(Color.parseColor("#FF16202B"));
+                break;
+        }
+        invalidateOptionsMenu();
+    }
+
+    private String modeName() {
+        switch (statusBarMode) {
+            case BEHIND: return "draw behind it";
+            case FULLSCREEN: return "take the screen";
+            default: return "sit below it";
+        }
     }
 
     @Override
@@ -225,6 +357,26 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
 
     private String report() {
         StringBuilder text = new StringBuilder();
+
+        // The window this app was given, which is the other half of "does the device host an app
+        // properly" — the half that is about screen furniture rather than hardware. A bar with an
+        // empty title is what a container that skips onPostCreate produces, and it is close enough
+        // to right that only reading the title out loud catches it.
+        text.append("WINDOW\n");
+        ActionBar bar = getActionBar();
+        text.append("  action bar = ")
+            .append(bar == null ? "none (the theme asked for one)"
+                : (bar.isShowing() ? "showing" : "hidden"))
+            .append('\n');
+        text.append("  its title  = ")
+            .append(bar == null || bar.getTitle() == null ? "EMPTY" : "\"" + bar.getTitle() + "\"")
+            .append('\n');
+        text.append("  asked for  = ").append(modeName()).append('\n');
+        text.append("  insets     = ").append(lastInsets).append('\n');
+        text.append("  content    = ")
+            .append(findViewById(android.R.id.content).getWidth()).append('x')
+            .append(findViewById(android.R.id.content).getHeight()).append("px\n\n");
+
         text.append("PERMISSIONS (checkSelfPermission)\n");
         for (String permission : DANGEROUS) {
             text.append("  ").append(shortName(permission)).append(" = ")

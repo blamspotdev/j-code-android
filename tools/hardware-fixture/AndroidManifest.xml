@@ -21,13 +21,20 @@
     <uses-feature android:name="android.hardware.sensor.compass" android:required="false" />
     <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
 
+    <!-- An action bar on purpose, and it is the second thing this fixture is for.
+
+         Every other guest here declares NoActionBar, so nothing was checking that the container can
+         host the piece of screen furniture the platform builds for an app rather than the app
+         building it: the decor layout with a bar in it, the title the framework puts there, the
+         options menu, and the overflow popup that menu opens in a window of its own. -->
     <application
         android:label="Hardware Fixture"
         android:icon="@drawable/ic_launcher"
-        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        android:theme="@android:style/Theme.DeviceDefault">
         <activity
             android:name=".HardwareActivity"
             android:exported="true"
+            android:label="Hardware Fixture"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|density|smallestScreenSize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Declared ids for the virtual device's own on-screen controls.
+
+     These views are drawn by the container inside the device's screen, so `uiautomator dump`
+     reports them alongside the guest's own — and an agent driving the device answers a permission
+     prompt by resource id rather than by guessing which of two buttons in a screenshot says Allow.
+     The platform's real prompt is addressable the same way, as
+     `com.android.permissioncontroller:id/permission_allow_button`. -->
+<resources>
+    <item type="id" name="vdevice_permission_allow" />
+    <item type="id" name="vdevice_permission_deny" />
+</resources>

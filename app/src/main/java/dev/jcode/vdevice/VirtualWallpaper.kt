@@ -25,8 +25,15 @@ import kotlin.math.min
  */
 internal object VirtualWallpaper {
 
-    /** The device's screen colour with nothing on it. */
-    const val BACKGROUND = 0xFF2B2D31.toInt()
+    /**
+     * The device's screen colour with nothing on it.
+     *
+     * [VirtualPalette.SURFACE] rather than [VirtualPalette.BACKGROUND], and the step up is the
+     * point: the status bar *is* the ground colour at 80%, so a wallpaper painted the ground too
+     * would have the bar disappear into the home screen behind it. The wallpaper is the thing the
+     * bar sits on, so it is one tone above it.
+     */
+    const val BACKGROUND = VirtualPalette.SURFACE
 
     private const val LINE = 0xFFC3CBD8.toInt()
 
