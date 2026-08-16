@@ -14,6 +14,8 @@ import dev.jcode.core.lsp.ProcessLspTransport
 import dev.jcode.core.lsp.TextEditResult
 import dev.jcode.core.lsp.WorkspaceEditResult
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -246,6 +248,99 @@ class LspController(
         }
     }
 
+    /**
+     * Semantic tokens for text that is not a file, from a server that is already running.
+     *
+     * The DevTools panes show source fetched out of a web page: it has no path, it is not in the
+     * workspace, and it must not become one. So this borrows a session the user's own work already
+     * started — matched only by extension — announces the text under a URI in a directory that
+     * does not exist, asks for tokens, and closes it again. Nothing is written, no server is
+     * started, and the [DETACHED_DIR] segment keeps any diagnostics the server volunteers out of
+     * the Issues pane.
+     *
+     * Empty on every failure, and failure is the ordinary case: no server installed for the
+     * language, none running, none that implements semantic tokens, or one that declines a URI
+     * with no file behind it. The caller's tokenizer colouring already stands on its own, so a
+     * server that cannot help simply does not, and says nothing about it.
+     */
+    suspend fun detachedSemanticTokens(
+        fileName: String,
+        text: String,
+    ): List<SemanticToken> = withContext(Dispatchers.IO) {
+        // On IO because the transport's write is an ordinary blocking stream write with no
+        // dispatcher of its own, and the text handed to didOpen here is a whole page bundle. The
+        // caller is a composition, so this would otherwise be a megabyte pushed down a pipe on the
+        // main thread.
+        val extension = File(fileName).extensionWithDot() ?: return@withContext emptyList()
+        val descriptor = LspServerDescriptor.findForExtension(extension) ?: return@withContext emptyList()
+        val managed = sessions.values.firstOrNull {
+            it.descriptor.id == descriptor.id && it.session.state.value == LspState.READY
+        } ?: return@withContext emptyList()
+        val types = managed.session.serverCapabilities
+            ?.optJSONObject("semanticTokensProvider")
+            ?.optJSONObject("legend")
+            ?.optJSONArray("tokenTypes")
+            ?: return@withContext emptyList()
+        val legend = (0 until types.length()).map { types.optString(it) }
+        if (legend.isEmpty()) return@withContext emptyList()
+
+        val safe = File(fileName).name.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val uri = managed.session.hostToDistroUri(File(managed.key.root, "$DETACHED_DIR$safe").path)
+        val tokens = withTimeoutOrNull(DETACHED_TOKEN_TIMEOUT_MS) {
+            runCatching {
+                managed.session.didOpen(uri, descriptor.languageIdFor(extension), 1, text)
+                val result = managed.session.sendRequest(
+                    "textDocument/semanticTokens/full",
+                    org.json.JSONObject().apply {
+                        put("textDocument", org.json.JSONObject().put("uri", uri))
+                    },
+                ) as? org.json.JSONObject
+                decodeSemanticTokens(result?.optJSONArray("data"), legend, text)
+            }.getOrDefault(emptyList())
+        } ?: emptyList()
+        // Outside the timeout: closing is what drops the server's copy of a document that never
+        // existed, and it has to happen even when the request above timed out.
+        runCatching { managed.session.didClose(uri) }
+        tokens
+    }
+
+    /**
+     * LSP delivers semantic tokens as a flat run of five integers each — line delta, start-character
+     * delta, length, type index, modifiers — with every position relative to the token before it.
+     * This walks that back into absolute offsets into [text].
+     */
+    private fun decodeSemanticTokens(
+        data: org.json.JSONArray?,
+        legend: List<String>,
+        text: String,
+    ): List<SemanticToken> {
+        if (data == null || data.length() < 5) return emptyList()
+        val lineStarts = ArrayList<Int>(256).apply {
+            add(0)
+            text.forEachIndexed { i, c -> if (c == '\n') add(i + 1) }
+        }
+        val out = ArrayList<SemanticToken>(data.length() / 5)
+        var line = 0
+        var character = 0
+        var i = 0
+        while (i + 4 < data.length()) {
+            val deltaLine = data.optInt(i)
+            val deltaStart = data.optInt(i + 1)
+            val length = data.optInt(i + 2)
+            val type = data.optInt(i + 3)
+            i += 5
+            line += deltaLine
+            character = if (deltaLine == 0) character + deltaStart else deltaStart
+            if (length <= 0 || line !in lineStarts.indices) continue
+            val start = lineStarts[line] + character
+            val end = start + length
+            if (start < 0 || end > text.length || start >= end) continue
+            val name = legend.getOrNull(type) ?: continue
+            out.add(SemanticToken(start, end, name))
+        }
+        return out
+    }
+
     /** The status of the server backing [hostPath], for the status bar and error surfacing. */
     fun statusFor(hostPath: String): LspServerStatus? {
         val document = documents[hostPath] ?: return null
@@ -323,7 +418,13 @@ class LspController(
         }
         val source = diagnosticsSource(key)
         managed.diagnosticsJob = scope.launch {
-            session.diagnostics.collect { diagnosticsBus.updateSourceDiagnostics(source, it) }
+            session.diagnostics.collect { byPath ->
+                // Detached documents are not the user's files — they are page sources handed to a
+                // running server for colouring (see detachedSemanticTokens). Problems reported
+                // against a URI that names no real file would land in Issues as a file nobody can
+                // open, so they never reach the bus.
+                diagnosticsBus.updateSourceDiagnostics(source, byPath.filterKeys { DETACHED_DIR !in it })
+            }
         }
         managed.stateJob = scope.launch {
             session.state.collect { state ->
@@ -448,8 +549,15 @@ class LspController(
         const val CHANGE_DEBOUNCE_MS = 400L
         const val CATALOG_LOAD_TIMEOUT_MS = 60_000L
         const val MAX_STDERR_LINES = 12
+        const val DETACHED_TOKEN_TIMEOUT_MS = 4_000L
+
+        /** Marks a URI as belonging to no file — see [detachedSemanticTokens]. */
+        const val DETACHED_DIR = "/.jcode-detached/"
     }
 }
+
+/** One range a language server classified, named by the server's own legend (`keyword`, `string`…). */
+data class SemanticToken(val start: Int, val end: Int, val type: String)
 
 /** The capabilities the editor gates its UI on. */
 enum class LspFeature { Definition, References, Rename, Formatting, Completion, Hover }

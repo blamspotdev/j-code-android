@@ -2060,6 +2060,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * capped: a server answering a bare `.` returns every member in scope, which is more than a
      * phone-sized popup can usefully show.
      */
+    /**
+     * Semantic tokens for a DevTools page source, from a server the workspace already has running.
+     *
+     * Nothing here is guaranteed and nothing is reported: it is a colouring improvement offered
+     * when the pieces happen to be in place. See
+     * [dev.jcode.lsp.LspController.detachedSemanticTokens].
+     */
+    suspend fun devtoolsSemanticTokens(fileName: String, text: String): List<dev.jcode.lsp.SemanticToken> =
+        runCatching { lspController.detachedSemanticTokens(fileName, text) }.getOrDefault(emptyList())
+
     suspend fun lspCompletions(
         hostPath: String,
         line: Int,

@@ -254,7 +254,9 @@ import dev.jcode.workbench.AndroidDevicePage
 import dev.jcode.workbench.adbStatusLabel
 import dev.jcode.workbench.BrowserPage
 import dev.jcode.workbench.BuiltinBrowser
+import dev.jcode.workbench.DevToolsCodeSupport
 import dev.jcode.workbench.DevtoolsSidebarContent
+import dev.jcode.workbench.LocalDevToolsCodeSupport
 import dev.jcode.workbench.ExtensionDevSidebarContent
 import dev.jcode.workbench.ImageViewerPage
 import dev.jcode.workbench.MarkdownPreviewPage
@@ -1371,7 +1373,18 @@ fun JCodeApp(
         )
     }
 
+    // What DevTools colours page source with. Resolved from the same installed extensions the
+    // editor uses, so a Dev Pack that lights up a .js file in a tab lights up the same file when
+    // it arrives from a web page instead of the workspace.
+    val devToolsCodeSupport = remember(activeLanguageExtensions, viewModel) {
+        DevToolsCodeSupport(
+            packResolver = { name -> activeLanguageExtensions.firstNotNullOfOrNull { it.languageFor(name) } },
+            semanticTokens = { name, text -> viewModel.devtoolsSemanticTokens(name, text) },
+        )
+    }
+
     CompositionLocalProvider(
+        LocalDevToolsCodeSupport provides devToolsCodeSupport,
         LocalTerminalTapConfig provides terminalTapConfig,
         LocalTabCloseButtonSetting provides tabCloseSetting,
         LocalExtraKeysSetting provides extraKeysSetting,

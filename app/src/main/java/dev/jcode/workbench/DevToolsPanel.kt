@@ -41,6 +41,14 @@ import androidx.compose.ui.unit.sp
 import android.webkit.CookieManager
 import android.webkit.WebStorage
 import androidx.compose.material3.Icon
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.luminance
+import dev.jcode.editor.TokenPalette
+import dev.jcode.feature.marketplace.LanguagePack
+import dev.jcode.lsp.SemanticToken
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
 import dev.jcode.design.JCodeIcon
@@ -94,6 +102,9 @@ private data class SourceJump(val url: String, val line: Int)
  */
 @Composable
 fun DevtoolsSidebarContent(modifier: Modifier = Modifier) {
+    val support = LocalDevToolsCodeSupport.current
+    val packResolver = support.packResolver
+    val semanticTokens = support.semanticTokens
     var pane by remember { mutableStateOf(DevToolsPane.Console) }
     // Set by a console line's source link and consumed by the Sources pane, which is the whole of
     // "click the thing that says where it went wrong and end up there".
@@ -164,11 +175,17 @@ fun DevtoolsSidebarContent(modifier: Modifier = Modifier) {
             DevToolsPane.Sources -> SourcesPane(
                 jump = jump,
                 onJumpConsumed = { jump = null },
+                packResolver = packResolver,
+                semanticTokens = semanticTokens,
                 modifier = Modifier.weight(1f),
             )
             DevToolsPane.Network -> NetworkPane(Modifier.weight(1f))
             DevToolsPane.Application -> ApplicationPane(Modifier.weight(1f))
-            DevToolsPane.Elements -> ElementsPane(Modifier.weight(1f))
+            DevToolsPane.Elements -> ElementsPane(
+                packResolver = packResolver,
+                semanticTokens = semanticTokens,
+                modifier = Modifier.weight(1f),
+            )
         }
     }
 }
@@ -547,11 +564,25 @@ private data class PageSource(val kind: String, val url: String, val index: Int,
  * of showing an empty file and letting you conclude the file was empty.
  */
 @Composable
-private fun SourcesPane(jump: SourceJump?, onJumpConsumed: () -> Unit, modifier: Modifier = Modifier) {
+private fun SourcesPane(
+    jump: SourceJump?,
+    onJumpConsumed: () -> Unit,
+    packResolver: (String) -> LanguagePack?,
+    semanticTokens: suspend (String, String) -> List<SemanticToken>,
+    modifier: Modifier = Modifier,
+) {
     var sources by remember { mutableStateOf<List<PageSource>>(emptyList()) }
     var selected by remember { mutableStateOf<PageSource?>(null) }
     var highlight by remember { mutableStateOf(0) }
+    var prettyPrinted by remember { mutableStateOf(false) }
     val text by BuiltinBrowser.sourceText
+    val minified = remember(text) { text?.let(CodeColoring::looksMinified) == true }
+    // Reformatting is a full pass over the source, which for the bundles this button exists for is
+    // hundreds of kilobytes; on the main thread it is an ANR, so the raw text stands until it lands.
+    val shown by produceState(initialValue = text.orEmpty(), text, prettyPrinted) {
+        val raw = text.orEmpty()
+        value = if (!prettyPrinted) raw else withContext(Dispatchers.Default) { CodeColoring.prettyPrint(raw) }
+    }
     val listState = rememberLazyListState()
 
     fun list() {
@@ -563,6 +594,9 @@ private fun SourcesPane(jump: SourceJump?, onJumpConsumed: () -> Unit, modifier:
     fun open(source: PageSource, atLine: Int) {
         selected = source
         highlight = atLine
+        // Per source, not sticky: the next file may not be minified, and reformatting one that
+        // already has lines only moves them.
+        prettyPrinted = false
         BuiltinBrowser.sourceText.value = null
         val ctl = BuiltinBrowser.controller ?: return
         when {
@@ -661,6 +695,22 @@ private fun SourcesPane(jump: SourceJump?, onJumpConsumed: () -> Unit, modifier:
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                // Offered only when the source needs it, which on a real site is nearly always.
+                if (minified) {
+                    Text(
+                        text = "{ }",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (prettyPrinted) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier
+                            .clickable { prettyPrinted = !prettyPrinted }
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
             val body = text
@@ -674,40 +724,15 @@ private fun SourcesPane(jump: SourceJump?, onJumpConsumed: () -> Unit, modifier:
                     )
                 }
 
-                else -> {
-                    val lines = remember(body) { body.lines() }
-                    LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth()) {
-                        itemsIndexed(lines) { index, line ->
-                            val number = index + 1
-                            Row(
-                                modifier = Modifier.fillMaxWidth().background(
-                                    if (number == highlight) {
-                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-                                    } else {
-                                        Color.Transparent
-                                    },
-                                ),
-                            ) {
-                                Text(
-                                    text = number.toString(),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 10.sp,
-                                    textAlign = TextAlign.End,
-                                    modifier = Modifier.width(42.dp).padding(end = 8.dp),
-                                )
-                                Text(
-                                    text = line.ifEmpty { " " },
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 11.sp,
-                                    lineHeight = 15.sp,
-                                    modifier = Modifier.weight(1f).padding(end = 8.dp),
-                                )
-                            }
-                        }
-                    }
-                }
+                else -> CodeListing(
+                    body = shown,
+                    fileName = CodeColoring.pseudoFileName(chosen.url, chosen.kind),
+                    packResolver = packResolver,
+                    semanticTokens = semanticTokens,
+                    listState = listState,
+                    highlightLine = highlight,
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
     }
@@ -1756,13 +1781,19 @@ private fun formatBytes(n: Long): String = when {
 }
 
 @Composable
-private fun ElementsPane(modifier: Modifier = Modifier) {
+private fun ElementsPane(
+    packResolver: (String) -> LanguagePack?,
+    semanticTokens: suspend (String, String) -> List<SemanticToken>,
+    modifier: Modifier = Modifier,
+) {
     var dom by remember { mutableStateOf("") }
     fun refresh() {
         BuiltinBrowser.controller?.eval("document.documentElement.outerHTML") { raw ->
             dom = decodeJsResult(raw)
-        } ?: run { dom = "No page — open the built-in browser first." }
+        } ?: run { dom = "" }
     }
+    // Serialised in one line by the DOM, which is how it arrived and not how it can be read.
+    val pretty = remember(dom) { prettyHtml(dom) }
     Column(modifier = modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
@@ -1782,17 +1813,158 @@ private fun ElementsPane(modifier: Modifier = Modifier) {
             )
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (dom.isEmpty()) {
-                EmptyHint("Tap “Refresh snapshot” to capture the current page's HTML.")
-            } else {
+        if (pretty.isEmpty()) {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                EmptyHint(
+                    if (BuiltinBrowser.controller == null) {
+                        "Open a page in the built-in browser first."
+                    } else {
+                        "Tap “Refresh snapshot” to capture the current page's HTML."
+                    },
+                )
+            }
+        } else {
+            CodeListing(
+                body = pretty,
+                fileName = "snapshot.html",
+                packResolver = packResolver,
+                semanticTokens = semanticTokens,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+/**
+ * Break a serialised DOM onto lines it can be read on.
+ *
+ * `outerHTML` comes back as one line, because that is what serialising a tree produces — the whole
+ * document arrives as a single row that scrolls sideways forever. This puts each tag on its own
+ * line and indents by depth.
+ *
+ * Script, style and preformatted content is copied through untouched. Their text is not markup, and
+ * re-wrapping a JavaScript body on its angle brackets would produce something that reads like code
+ * and is not the code that ran.
+ */
+private fun prettyHtml(src: String): String {
+    if (src.isBlank() || src.length > CodeColoring.MAX_COLORED_CHARS) return src
+    val sb = StringBuilder(src.length + src.length / 4)
+    var i = 0
+    var depth = 0
+    fun newline() {
+        if (sb.isNotEmpty()) sb.append('\n')
+        repeat(depth.coerceIn(0, 30)) { sb.append("  ") }
+    }
+    while (i < src.length) {
+        val lt = src.indexOf('<', i)
+        if (lt < 0) {
+            val rest = src.substring(i)
+            if (rest.isNotBlank()) { newline(); sb.append(rest.trim()) }
+            break
+        }
+        val between = src.substring(i, lt)
+        if (between.isNotBlank()) { newline(); sb.append(between.trim()) }
+        val gt = src.indexOf('>', lt)
+        if (gt < 0) { sb.append(src, lt, src.length); break }
+        val tag = src.substring(lt, gt + 1)
+        val name = htmlTagName(tag)
+        val closing = tag.startsWith("</")
+        if (closing) depth--
+        newline()
+        sb.append(tag)
+        if (!closing && !tag.endsWith("/>") && name !in VOID_TAGS && name.isNotEmpty()) depth++
+        i = gt + 1
+        if (!closing && name in RAW_TEXT_TAGS) {
+            val close = src.indexOf("</$name", i, ignoreCase = true)
+            val end = if (close < 0) src.length else close
+            sb.append(src, i, end)
+            i = end
+        }
+    }
+    return sb.toString()
+}
+
+private fun htmlTagName(tag: String): String =
+    tag.trim('<', '>', '/').substringBefore(' ').substringBefore('\n').substringBefore('\t').lowercase()
+
+private val VOID_TAGS = setOf(
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr", "!doctype",
+)
+private val RAW_TEXT_TAGS = setOf("script", "style", "pre", "textarea")
+
+/**
+ * A source file as the panes draw it: numbered lines, coloured, one row each.
+ *
+ * The colouring arrives in up to three passes, so the text is never waiting on it — plain first,
+ * then the tokenizer, then a language server's classification if one answers. See [CodeColoring].
+ */
+@Composable
+private fun CodeListing(
+    body: String,
+    fileName: String,
+    packResolver: (String) -> LanguagePack?,
+    semanticTokens: suspend (String, String) -> List<SemanticToken>,
+    modifier: Modifier = Modifier,
+    listState: LazyListState = rememberLazyListState(),
+    highlightLine: Int = 0,
+) {
+    val palette = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) {
+        TokenPalette.DARK
+    } else {
+        TokenPalette.LIGHT
+    }
+    val lines by produceState(initialValue = emptyList<AnnotatedString>(), body, fileName, palette) {
+        // Every stage is off the main thread. Tokenizing a page bundle is hundreds of milliseconds
+        // of work, and doing it in composition is an ANR rather than a slow frame.
+        value = withContext(Dispatchers.Default) {
+            body.lines().map { AnnotatedString(CodeColoring.clipLine(it)) }
+        }
+        val pack = packResolver(fileName)
+        val tokenized = withContext(Dispatchers.Default) {
+            CodeColoring.coloredLines(body, fileName, pack, palette)
+        }
+        if (tokenized != null) value = tokenized
+        // Last and optional. A server that is not installed, not running, or not interested returns
+        // nothing, and what is already on screen stands.
+        val tokens = runCatching { semanticTokens(fileName, body) }.getOrDefault(emptyList())
+        if (tokens.isEmpty()) return@produceState
+        val semantic = withContext(Dispatchers.Default) {
+            CodeColoring.coloredLines(body, fileName, pack, palette, tokens)
+        }
+        if (semantic != null) value = semantic
+    }
+    LazyColumn(state = listState, modifier = modifier.fillMaxWidth()) {
+        itemsIndexed(lines) { index, line ->
+            val number = index + 1
+            Row(
+                modifier = Modifier.fillMaxWidth().background(
+                    if (number == highlightLine) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                    } else {
+                        Color.Transparent
+                    },
+                ),
+            ) {
                 Text(
-                    text = dom,
+                    text = number.toString(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.width(42.dp).padding(end = 8.dp),
+                )
+                Text(
+                    text = line,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                        .horizontalScroll(rememberScrollState()).padding(10.dp),
+                    // One row per line, scrolled sideways rather than wrapped: a wrapped row makes
+                    // the number in the gutter point at something several rows tall, and the
+                    // console's jump-to-line lands nowhere in particular.
+                    softWrap = false,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()).padding(end = 10.dp),
                 )
             }
         }
