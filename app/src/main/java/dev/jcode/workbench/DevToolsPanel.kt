@@ -42,6 +42,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jcode.design.JCodeTheme
 import org.json.JSONTokener
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.background
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.style.TextAlign
 
 private enum class DevToolsPane(val label: String) { Console("Console"), Network("Network"), Elements("Elements") }
 
@@ -107,7 +121,17 @@ fun DevtoolsSidebarContent(modifier: Modifier = Modifier) {
 private fun ConsolePane(modifier: Modifier = Modifier) {
     val entries = BuiltinBrowser.console
     val listState = rememberLazyListState()
+    val clipboard = LocalClipboardManager.current
     var input by remember { mutableStateOf("") }
+    // Folded, because a page repeats itself and a console that repeats with it is unreadable. One
+    // load of an ordinary site put the same Permissions-Policy warning on the screen three times,
+    // two wrapped lines each, and pushed everything worth reading off the top.
+    val rows by remember { derivedStateOf { foldConsole(entries) } }
+    // Follow the newest line. A log that has to be scrolled to see the thing that just happened is
+    // a log nobody looks at while the thing is happening.
+    LaunchedEffect(rows.size) {
+        if (rows.isNotEmpty()) listState.scrollToItem(rows.lastIndex)
+    }
     fun run() {
         val script = input.trim()
         if (script.isEmpty()) return
@@ -129,23 +153,7 @@ private fun ConsolePane(modifier: Modifier = Modifier) {
             }
         } else {
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth()) {
-                items(entries) { e ->
-                    val color = when (e.level) {
-                        "error" -> MaterialTheme.colorScheme.error
-                        "warning", "warn" -> JCodeTheme.semanticColors.warning
-                        "input" -> MaterialTheme.colorScheme.primary
-                        "eval" -> MaterialTheme.colorScheme.onSurfaceVariant
-                        else -> MaterialTheme.colorScheme.onSurface
-                    }
-                    val prefix = when (e.level) { "input" -> "› "; "eval" -> "‹ "; else -> "" }
-                    Text(
-                        text = prefix + e.message + if (e.line > 0) "  (${e.source}:${e.line})" else "",
-                        color = color,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp),
-                    )
-                }
+                items(rows) { row -> ConsoleRowView(row, clipboard) }
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
@@ -180,6 +188,134 @@ private fun ConsolePane(modifier: Modifier = Modifier) {
                 contentDescription = "Run",
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(22.dp).clickable { run() },
+            )
+        }
+    }
+}
+
+/** One console line, and how many times the page said it without saying anything else in between. */
+private data class ConsoleRow(val entry: BrowserConsoleEntry, val count: Int)
+
+/**
+ * Collapses runs of identical messages.
+ *
+ * Only *consecutive* ones, which is what a browser's console does and is the honest version: two
+ * identical errors either side of something else happened at different moments and are two events.
+ * Folding them all together would lose the ordering that makes a log worth reading.
+ */
+private fun foldConsole(entries: List<BrowserConsoleEntry>): List<ConsoleRow> {
+    val out = ArrayList<ConsoleRow>(entries.size)
+    entries.forEach { entry ->
+        val last = out.lastOrNull()
+        if (last != null && last.entry == entry) {
+            out[out.lastIndex] = last.copy(count = last.count + 1)
+        } else {
+            out += ConsoleRow(entry, 1)
+        }
+    }
+    return out
+}
+
+/**
+ * A console line: a coloured rail, a one-character marker, the message, and where it came from.
+ *
+ * The rail and the marker do the work a colour alone was doing badly. Every line used to be the same
+ * shape — one paragraph of monospace, wrapping flush to the left margin — so a long error's second
+ * line looked exactly like the next entry, and telling an error from a log meant comparing two
+ * shades of text against each other rather than reading one mark.
+ *
+ * `source:line` is on the right rather than appended to the message, where it used to wrap into the
+ * middle of the prose it was supposed to annotate.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ConsoleRowView(row: ConsoleRow, clipboard: androidx.compose.ui.platform.ClipboardManager) {
+    val entry = row.entry
+    val accent = when (entry.level) {
+        "error" -> MaterialTheme.colorScheme.error
+        "warning", "warn" -> JCodeTheme.semanticColors.warning
+        "input" -> MaterialTheme.colorScheme.primary
+        "eval" -> MaterialTheme.colorScheme.tertiary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val marker = when (entry.level) {
+        "error" -> "✕"
+        "warning", "warn" -> "!"
+        "input" -> "›"
+        "eval" -> "‹"
+        else -> "·"
+    }
+    // Tinted rather than outlined: a row of dividers on a log this dense reads as a table, and the
+    // two lines worth finding are the ones that are not ordinary.
+    val tint = when (entry.level) {
+        "error" -> MaterialTheme.colorScheme.error.copy(alpha = 0.07f)
+        "warning", "warn" -> JCodeTheme.semanticColors.warning.copy(alpha = 0.07f)
+        "input" -> MaterialTheme.colorScheme.primary.copy(alpha = 0.06f)
+        else -> Color.Transparent
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .background(tint)
+            .combinedClickable(
+                onClick = {},
+                // The reason anybody reaches for a console line: to put it somewhere else.
+                onLongClick = { clipboard.setText(AnnotatedString(entry.message)) },
+            )
+            .padding(vertical = 3.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(start = 6.dp)
+                .width(2.dp)
+                .fillMaxHeight()
+                .background(accent.copy(alpha = if (tint == Color.Transparent) 0.35f else 1f)),
+        )
+        Text(
+            text = marker,
+            color = accent,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.width(20.dp).padding(top = 1.dp),
+        )
+        Text(
+            text = entry.message,
+            color = if (entry.level == "log" || entry.level == "input") {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                accent
+            },
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.5.sp,
+            lineHeight = 15.sp,
+            modifier = Modifier.weight(1f).padding(end = 6.dp),
+        )
+        if (row.count > 1) {
+            Text(
+                text = "×${row.count}",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                modifier = Modifier
+                    .padding(end = 6.dp, top = 1.dp)
+                    .background(
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f),
+                        RoundedCornerShape(6.dp),
+                    )
+                    .padding(horizontal = 5.dp, vertical = 1.dp),
+            )
+        }
+        if (entry.line > 0 && entry.source.isNotBlank()) {
+            Text(
+                text = "${entry.source}:${entry.line}",
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 110.dp).padding(end = 8.dp, top = 1.dp),
             )
         }
     }
