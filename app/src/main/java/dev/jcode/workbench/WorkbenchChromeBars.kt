@@ -244,18 +244,29 @@ internal fun WorkbenchTopBar(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(1.dp),
             ) {
+                val heading = activeTab?.title ?: selectedProject?.name ?: "JCode"
                 Text(
-                    text = activeTab?.title ?: selectedProject?.name ?: "JCode",
+                    text = heading,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
+                    // Where the thing above *is*, which means everything up to it and not it again.
+                    // The trail ended with the same name the heading was already showing — "Device
+                    // sandbox" over "Default Workspace / waverepo / Device sandbox" — so the line
+                    // with the least room on it spent its last third repeating the line above.
+                    //
+                    // Only the last one is dropped, and only when it matches. A project that happens
+                    // to share its name with the tab open in it is still a real step on the way
+                    // there, and taking it out would leave a path that goes somewhere else.
                     text = listOfNotNull(
                         workspace?.name,
                         selectedProject?.name,
                         activeTab?.title,
-                    ).joinToString(" / ").ifBlank { "Editor workspace" },
+                    ).let { if (it.lastOrNull() == heading) it.dropLast(1) else it }
+                        .joinToString(" / ")
+                        .ifBlank { "Editor workspace" },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
