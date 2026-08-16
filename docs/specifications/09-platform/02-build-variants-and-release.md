@@ -250,13 +250,12 @@ repository says it is preparing. What you choose is the channel:
 It builds the Rust JNI libraries, assembles, signs with `apksigner`, verifies the signature, then
 creates the tag and the release with the APK attached.
 
-> **CMake is chosen, not pinned.** `native/CMakeLists.txt` uses `$<LINK_LIBRARY:WHOLE_ARCHIVE,…>`,
-> so the resolver in the root `build.gradle.kts` discards every installed version below 3.24 —
-> `cmake;3.22.1` included, which is what the SDK installs by default and what the *release scripts*
-> still pin. With nothing usable installed the resolver names `3.28.3`, which the SDK does not
-> publish as a package at all; AGP then builds with something else and the release dies merging
-> native libraries, the cargo-less stub arriving beside the real cargo library under one name. The
-> workflow takes the newest CMake `sdkmanager` offers and fails outright if that is below 3.24. The tag is created *by* the publish step
+> **The workflow installs no CMake.** `native/CMakeLists.txt` uses
+> `$<LINK_LIBRARY:WHOLE_ARCHIVE,…>`, so the resolver in the root `build.gradle.kts` discards every
+> installed version below 3.24 — `cmake;3.22.1` included, which is what the SDK installs by default
+> and what the *release scripts* still pin. Asking for it adds a download the build then refuses to
+> use. The runner image ships a usable one; the workflow asserts that rather than installing, because
+> the resolver's fallback names `3.28.3`, a version the SDK does not publish as a package at all. The tag is created *by* the publish step
 (`--target`), so a failed build never leaves a tag pointing at a release that does not exist, and an
 already-published tag is refused before the build rather than after it.
 
@@ -295,7 +294,12 @@ for building:
 
 - One `native/CMakeLists.txt` superbuild, selected per module by `-DJCODE_NATIVE_MODULE`.
 - Rust FFI via `gradle/cargo.gradle.kts` (`cargo ndk`), falling back to a CMake stub when cargo is
-  unavailable.
+  unavailable. Once cargo has produced the real library for a variant, the root build passes
+  `-DJCODE_REAL_LIB_PRESENT=ON` and the stub is built **STATIC** instead of shared — a shared one
+  lands in the CMake object directory under the same name AGP takes the cargo library from, and
+  `mergeReleaseNativeLibs` cannot choose between them. Dropping the target altogether would leave
+  the module's CMake project with nothing to build; a `.a` is never packaged. The same flag decides
+  whether `generated/jniLibs/<variant>` is registered as a `jniLibs` srcDir.
 - CMake `FetchContent` pulls tree-sitter, yaml-cpp, libgit2, libssh2 and mbedTLS at pinned revisions,
   so the **first** build needs network access.
 

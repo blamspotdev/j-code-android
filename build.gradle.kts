@@ -121,6 +121,15 @@ subprojects {
                     }
                 }
 
+                // Rust FFI modules build their real library with cargo (see gradle/cargo.gradle.kts)
+                // and carry a CMake stub for machines without it. Whether the real one is there
+                // decides two things below — which srcDir is registered, and whether CMake builds
+                // the stub as a shared library at all — and they have to agree, so it is asked once.
+                val cargoModule = path == ":native:ripgrep-ffi" || path == ":native:wasmtime-ffi"
+                fun hasCargoLibs(variant: String): Boolean = cargoModule &&
+                    layout.buildDirectory.dir("generated/cargoJniLibs/$variant").get().asFile
+                        .walkTopDown().any { it.extension == "so" }
+
                 buildTypes {
                     getByName("debug") {
                         ndk {
@@ -130,6 +139,7 @@ subprojects {
                         externalNativeBuild {
                             cmake {
                                 arguments.add("-DJCODE_VARIANT_DIR=debug")
+                                if (hasCargoLibs("debug")) arguments.add("-DJCODE_REAL_LIB_PRESENT=ON")
                             }
                         }
                     }
@@ -142,6 +152,7 @@ subprojects {
                         externalNativeBuild {
                             cmake {
                                 arguments.add("-DJCODE_VARIANT_DIR=release")
+                                if (hasCargoLibs("release")) arguments.add("-DJCODE_REAL_LIB_PRESENT=ON")
                             }
                         }
                     }
@@ -154,14 +165,11 @@ subprojects {
                     }
                 }
 
-                // Rust FFI modules also register generated/cargoJniLibs (see gradle/cargo.gradle.kts).
-                // Their CMake target is only a stub for cargo-less machines: once real cargo-built
-                // libs exist for a variant, drop the stub dir or the jniLibs merger sees duplicates.
-                val cargoModule = path == ":native:ripgrep-ffi" || path == ":native:wasmtime-ffi"
+                // Where the CMake stub is picked up from. Once cargo has built the real library for
+                // a variant, this dir holds last run's stub and registering it would put two
+                // libraries of the same name in front of the jniLibs merger.
                 listOf("debug", "release").forEach { variant ->
-                    val cargoLibs = layout.buildDirectory.dir("generated/cargoJniLibs/$variant").get().asFile
-                    val hasCargoLibs = cargoModule && cargoLibs.walkTopDown().any { it.extension == "so" }
-                    if (!hasCargoLibs) {
+                    if (!hasCargoLibs(variant)) {
                         sourceSets.getByName(variant).jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs/$variant"))
                     }
                 }

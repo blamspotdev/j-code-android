@@ -178,31 +178,21 @@ jobs:
             "build-tools;34.0.0" \
             "ndk;${NDK_VERSION}"
 
-          # CMake is CHOSEN, not pinned, and this is load-bearing. `native/CMakeLists.txt` uses
-          # `$<LINK_LIBRARY:WHOLE_ARCHIVE,…>`, so the resolver in the root build.gradle.kts drops
-          # every version below 3.24 — including `cmake;3.22.1`, which is the one the SDK installs
-          # by default and the one this step used to ask for. With nothing usable installed the
-          # resolver fell back to naming a version that was not there, AGP quietly built with
-          # another, and the release died merging native libraries: the stub that exists for
-          # cargo-less machines came out beside the real cargo-built library under the same name.
-          #
-          # A version is not hard-coded here because the SDK's catalogue moves and 3.28.3 — the
-          # version the resolver prefers — is not a package it publishes at all.
-          newest="$(sdkmanager --list 2>/dev/null \
-            | grep -oE 'cmake;[0-9][0-9.]*' | sed 's/\.$//' | sort -u -V | tail -1)"
-          [ -n "$newest" ] || { echo "::error::sdkmanager offers no cmake package"; exit 1; }
-
-          ordinal() { echo "${1#cmake;}" | awk -F. '{ printf "%d", $1 * 100000 + $2 }'; }
-          if [ "$(ordinal "$newest")" -lt "$(ordinal 'cmake;3.24')" ]; then
-            echo "::error::newest CMake on offer is $newest; native/CMakeLists.txt needs 3.24 or above"
-            exit 1
-          fi
-          sdkmanager --install "$newest"
-
-          # The resolver reads ANDROID_HOME specifically. Unset, it would fall back to the same
-          # not-installed version and the failure above would come back looking like something else.
+          # CMake is deliberately NOT installed here. `native/CMakeLists.txt` uses
+          # `$<LINK_LIBRARY:WHOLE_ARCHIVE,…>`, so the resolver in the root build.gradle.kts discards
+          # everything below 3.24 — `cmake;3.22.1`, the version the SDK installs by default,
+          # included. Asking for it would add a download the build then refuses to use. The runner
+          # image already ships a usable one; this only checks that it does, because the resolver's
+          # fallback names a version the SDK does not publish and the failure would surface much
+          # later as something else entirely.
           [ -n "${ANDROID_HOME:-}" ] || { echo "::error::ANDROID_HOME is unset"; exit 1; }
-          echo "CMake available to the build: $(ls "$ANDROID_HOME/cmake" | tr '\n' ' ')"
+          usable="$(ls "$ANDROID_HOME/cmake" 2>/dev/null | awk -F. '$1 * 100000 + $2 >= 300024' | tail -1)"
+          [ -n "$usable" ] || {
+            echo "::error::no installed CMake is 3.24 or above; native/CMakeLists.txt cannot configure"
+            ls "$ANDROID_HOME/cmake" 2>/dev/null || true
+            exit 1
+          }
+          echo "CMake the build will use: $usable"
 
       # cargo-ndk cross-compiles the Rust FFI crates against the NDK; gradle/cargo.gradle.kts shells
       # out to it and builds arm64-v8a only for release.
