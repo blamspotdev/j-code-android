@@ -49,6 +49,8 @@ on:
 
 permissions:
   contents: write
+  # `gh workflow run` needs this — see "Open the next train" at the end of the publish job.
+  actions: write
 
 env:
   NDK_VERSION: '27.2.12479018'
@@ -368,6 +370,22 @@ jobs:
             echo "- versionCode \`$CODE\`"
             echo "- SHA-256 \`$SHA256\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # version-bump.yml listens for `release: published` and would never have heard this one.
+      # A release created with GITHUB_TOKEN does not raise events that start other workflows — the
+      # loop guard — and `workflow_dispatch` is one of the two exceptions to that rule, so the train
+      # is opened by asking for it directly rather than by hoping the event arrives.
+      #
+      # Only after a stable release. A preview is a preview *of* the version main is carrying, and
+      # moving main on would strand it.
+      - name: Open the next train
+        if: inputs.channel == 'stable'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh workflow run version-bump.yml -f level=minor
+          echo "Asked version-bump to open the next train." >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
