@@ -44,7 +44,26 @@ function(jcode_configure_target target output_name)
     )
 endfunction()
 
+# A placeholder `lib<output_name>.so` so a machine without cargo still links and runs, with the
+# feature degraded rather than the build broken.
+#
+# `JCODE_REAL_LIB_PRESENT` says cargo has already produced the genuine library for this variant, and
+# then the stub must not exist *as a shared library at all*. A SHARED stub is written into the
+# CMake object directory under the very name AGP takes the cargo library from, and the native-library
+# merger cannot choose between them — it fails the build:
+#
+#   2 files found with path 'lib/arm64-v8a/libripgrep_ffi.so'
+#     - …/merged_jni_libs/release/…/libripgrep_ffi.so     (3.9 MB, cargo)
+#     - …/intermediates/cxx/RelWithDebInfo/…/obj/…         (4 KB, this stub)
+#
+# Dropping the target entirely would leave the module's CMake project with nothing to build, so it
+# is built STATIC instead: AGP still has a target, and a `.a` is never packaged.
 function(jcode_add_stub_library target output_name)
+    if(JCODE_REAL_LIB_PRESENT)
+        add_library(${target} STATIC "${JCODE_STUB_SOURCE}")
+        target_compile_definitions(${target} PRIVATE JCODE_STUB_MODULE="${output_name}")
+        return()
+    endif()
     add_library(${target} SHARED "${JCODE_STUB_SOURCE}")
     target_compile_definitions(${target} PRIVATE JCODE_STUB_MODULE="${output_name}")
     jcode_configure_target(${target} ${output_name})

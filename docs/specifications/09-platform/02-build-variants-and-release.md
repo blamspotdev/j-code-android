@@ -136,9 +136,9 @@ somebody landed a PR, and no version would stand still long enough for a preview
 Pre-release labels are never stored in `app/build.gradle.kts`; they are applied at build time via
 `-PjcodeVersionName`, and `scripts/bump-version.sh` refuses to bump a version that carries one.
 
-A label must be **`alpha.N`, `beta.N` or `rc.N`** — numbered, because a bare `beta` cannot be
-iterated. The release scripts and the release workflow reject anything else rather than accept it,
-for the reason the `tier` exists at all:
+A label must resolve to **`alpha.N`, `beta.N` or `rc.N`** — numbered, because a bare `beta` cannot be
+iterated. Anything that does not is rejected rather than accepted, for the reason the `tier` exists
+at all:
 
 | versionName | versionCode | tier |
 |---|---|---|
@@ -153,6 +153,24 @@ The old derivation ignored the suffix entirely, so `1.5.0-beta.1`, `1.5.0-beta.2
 produced **the same code** — successive previews never climbed, which is the one thing a version
 code has to do. An unrecognised label falls to the release tier, which is the safe end of the range
 and the reason the labels are validated before a build starts.
+
+The **number is derived, not typed.** `release.yml` reads the tags this train has already published
+and takes one past the highest in the line asked for, so the label input accepts three shapes:
+
+| Input | Resolves to |
+|---|---|
+| *(blank)* | the next beta — `beta.1`, then `beta.2`, … |
+| `alpha` / `beta` / `rc` | the next in that line |
+| `beta.7` | exactly that |
+
+A new train starts back at `beta.1` on its own, because `v1.6.0-beta.*` is a different prefix.
+
+Whatever the label resolves to, **nothing already published for the train may be at or above the
+build's version code**, and that is checked in seconds rather than after an hour of building. It
+covers republishing a label, which `gh release create` would otherwise only reject at the very last
+step — and, for a label given by hand, going *backwards*, which no tag check can see and which would
+put a lower version code on devices already carrying a higher one. It also means a train that has
+shipped cannot be previewed again: open the next one instead.
 
 ### 4.3 Opening the next train
 
@@ -226,11 +244,18 @@ repository says it is preparing. What you choose is the channel:
 
 | Input | versionName | Tag | App id | GitHub |
 |---|---|---|---|---|
-| `beta` + `beta.1` | `1.5.0-beta.1` | `v1.5.0-beta.1` | `dev.jcode.beta` | pre-release |
+| `beta`, label blank | `1.5.0-beta.N` (next) | `v1.5.0-beta.N` | `dev.jcode.beta` | pre-release |
 | `stable` | `1.5.0` | `v1.5.0` | `dev.jcode` | release |
 
 It builds the Rust JNI libraries, assembles, signs with `apksigner`, verifies the signature, then
-creates the tag and the release with the APK attached. The tag is created *by* the publish step
+creates the tag and the release with the APK attached.
+
+> **The workflow installs no CMake.** `native/CMakeLists.txt` uses
+> `$<LINK_LIBRARY:WHOLE_ARCHIVE,…>`, so the resolver in the root `build.gradle.kts` discards every
+> installed version below 3.24 — `cmake;3.22.1` included, which is what the SDK installs by default
+> and what the *release scripts* still pin. Asking for it adds a download the build then refuses to
+> use. The runner image ships a usable one; the workflow asserts that rather than installing, because
+> the resolver's fallback names `3.28.3`, a version the SDK does not publish as a package at all. The tag is created *by* the publish step
 (`--target`), so a failed build never leaves a tag pointing at a release that does not exist, and an
 already-published tag is refused before the build rather than after it.
 
@@ -252,7 +277,10 @@ The local scripts remain, and are the same build without the publishing:
 They run `:app:assembleRelease` with `-PjcodeVersionName=…` (plus `-PjcodeIdSuffix=.beta` for Beta),
 resolve or install the SDK components (`platform-tools`, the platform package, build-tools,
 `ndk;27.2.12479018`, a CMake package — pinned at `3.22.1` in the scripts), and sign. `--label=` takes
-the same `alpha.N|beta.N|rc.N` shape and is validated the same way.
+the same `alpha.N|beta.N|rc.N` shape and is validated the same way, but is **always explicit**
+(default `beta.1`): deriving the number means reading the published tags, and these scripts build
+without a network or a GitHub token by design. They produce a local APK and never publish, so
+nothing they name can collide with a release.
 
 **Every release script runs `scripts/check-no-host-root.sh` first** as a pre-flight — see
 [CI, quality and invariants](03-ci-quality-and-invariants.md).
@@ -266,7 +294,12 @@ for building:
 
 - One `native/CMakeLists.txt` superbuild, selected per module by `-DJCODE_NATIVE_MODULE`.
 - Rust FFI via `gradle/cargo.gradle.kts` (`cargo ndk`), falling back to a CMake stub when cargo is
-  unavailable.
+  unavailable. Once cargo has produced the real library for a variant, the root build passes
+  `-DJCODE_REAL_LIB_PRESENT=ON` and the stub is built **STATIC** instead of shared — a shared one
+  lands in the CMake object directory under the same name AGP takes the cargo library from, and
+  `mergeReleaseNativeLibs` cannot choose between them. Dropping the target altogether would leave
+  the module's CMake project with nothing to build; a `.a` is never packaged. The same flag decides
+  whether `generated/jniLibs/<variant>` is registered as a `jniLibs` srcDir.
 - CMake `FetchContent` pulls tree-sitter, yaml-cpp, libgit2, libssh2 and mbedTLS at pinned revisions,
   so the **first** build needs network access.
 
@@ -311,7 +344,8 @@ The root `detekt` task is currently a **bootstrap placeholder** registered in `b
 | `cargo` absent | Search falls back to the Kotlin walk; the app still links |
 | `JCODE_KEYSTORE` set but missing | Build fails with a clear message |
 | Version formula drifting between script and Gradle | The APK's `versionCode` disagrees with its filename |
-| A pre-release label that is not `alpha.N`/`beta.N`/`rc.N` | Refused before the build — it would derive the release tier, giving a preview the same `versionCode` as the release |
+| A pre-release label that resolves to none of `alpha.N`/`beta.N`/`rc.N` | Refused before the build — it would derive the release tier, giving a preview the same `versionCode` as the release |
+| A hand-written label at or below one already published for the train | Refused before the build; a tag check alone cannot see the "below" case |
 | Release keystore secrets missing in Actions | The workflow fails at the signing step; nothing is published |
 | Wrong CMake version installed | Root script picks the newest available instead of 3.28.3 |
 
