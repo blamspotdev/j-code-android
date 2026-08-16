@@ -86,7 +86,23 @@ internal class AppSandboxSurfaceView(
     fun showHome(apps: List<LauncherApp>?) {
         home = apps
         cancelPress()
-        if (apps != null) paintHome()
+        if (apps == null) return
+        paintHome()
+        // A surface that does not exist yet cannot be painted on, and stopping an app is exactly
+        // when it does not exist: the tab rebuilds this view as the guest's screen goes (see its
+        // `generation`), so the launcher is handed to a view that was created moments ago.
+        //
+        // That is normally nothing to worry about — [SurfaceHolder.Callback.surfaceCreated] paints
+        // again, from the list [home] is already holding. But a `SurfaceView` creates its surface
+        // from an `OnPreDrawListener`, so it needs the view tree to *draw* once after it is
+        // attached, and the moment an app stops is the moment the screen goes still: nothing
+        // animates, nothing invalidates, no traversal runs, and the callback that would have
+        // rescued this never comes. Measured — the device sat on its wallpaper colour with no
+        // wallpaper, no status bar and no icons until the tab was closed and reopened, while taps
+        // still landed on the icons nobody could see.
+        //
+        // So the draw is asked for rather than waited for. One traversal is all it takes.
+        if (!holder.surface.isValid) invalidate()
     }
 
     /**
