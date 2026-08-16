@@ -99,6 +99,12 @@ private class BrowserWebView(context: Context) : WebView(context) {
 private class DevToolsBridge {
     private val main = Handler(Looper.getMainLooper())
 
+    /** A source file the page fetched on the Sources pane's behalf — see [BuiltinBrowser.sourceText]. */
+    @JavascriptInterface
+    fun source(text: String) {
+        main.post { BuiltinBrowser.deliverSource(text) }
+    }
+
     @JavascriptInterface
     fun net(json: String) {
         val o = runCatching { JSONObject(json) }.getOrNull() ?: return
@@ -360,7 +366,11 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                                 BrowserConsoleEntry(
                                     level = msg.messageLevel().name.lowercase(),
                                     message = msg.message() ?: "",
-                                    source = msg.sourceId()?.substringAfterLast('/') ?: "",
+                                    // The whole id, not just the file name: the Sources pane has to
+                                    // match this against a real URL to jump to it, and a bare
+                                    // "settings" matches nothing. The short form is a render-time
+                                    // concern — see DevToolsPanel.
+                                    source = msg.sourceId().orEmpty(),
                                     line = msg.lineNumber(),
                                 ),
                             )

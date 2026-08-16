@@ -77,6 +77,19 @@ object BuiltinBrowser {
     val console = mutableStateListOf<BrowserConsoleEntry>()
     val network = mutableStateListOf<BrowserNetworkEntry>()
 
+    /**
+     * The text of whichever source the Sources pane is showing, and whether it is still coming.
+     *
+     * Here rather than in the pane because an external file cannot be read synchronously: the page
+     * fetches it and hands it back through the `JCodeDevTools` bridge, which is a different thread
+     * and a later moment than the `evaluateJavascript` that asked for it.
+     */
+    val sourceText = mutableStateOf<String?>(null)
+
+    fun deliverSource(text: String) {
+        sourceText.value = text
+    }
+
     /** The live page controller, or null while the browser tab is not on screen. */
     var controller: BrowserController? = null
 
