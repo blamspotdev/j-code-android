@@ -179,13 +179,24 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
     private var dragFrom = 0
     private var dragTo = 0
 
+    /**
+     * The strip and the shade, held at the top of a view that is **the whole screen tall**.
+     *
+     * The height is what makes an open shade dismissable. This view was only as tall as the two
+     * things it draws, so a touch below them was never delivered to it at all — the container gave
+     * it to the guest — and the one gesture everybody tries on a shade did nothing. Anything a view
+     * is going to close itself on has to be something the view is given.
+     *
+     * It costs nothing while the shade is shut: [onTouchEvent] refuses a press below the grab strip,
+     * so the container moves on to the app underneath and the app never knows this is here.
+     */
     init {
         val column = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             addView(bar, LinearLayout.LayoutParams(MATCH, dp(BAR_DP)))
             addView(shade, LinearLayout.LayoutParams(MATCH, WRAP))
         }
-        addView(column, LayoutParams(MATCH, WRAP))
+        addView(column, LayoutParams(MATCH, WRAP, Gravity.TOP))
         refresh()
     }
 
@@ -570,6 +581,9 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
 
     private fun shadeHeight(): Int = shade.layoutParams?.height?.takeIf { it >= 0 } ?: 0
 
+    /** The bottom edge of what is actually drawn — the strip plus however far the shade is pulled. */
+    private fun panelBottom(): Int = dp(BAR_DP) + shadeHeight()
+
     /** Notes where the pane is and how far it may go, so the drag has fixed ends to work between. */
     private fun beginDrag() {
         dragging = true
@@ -668,8 +682,12 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
                     // Past a third of the way is a commitment; short of it the finger changed its
                     // mind, and either way the pane finishes the journey rather than jumping.
                     settle(if (shadeHeight() > dragTo / 3) dragTo else 0)
-                } else if (isOpen && event.y > grabHeight) {
-                    // A tap below an open shade closes it, the way tapping outside one does.
+                } else if (isOpen && event.y > panelBottom()) {
+                    // A press that was not a drag, landing past the bottom of the panel: that is
+                    // somebody reaching for the app behind an open shade, and on a phone it puts the
+                    // shade away. Measured against the *panel* rather than the grab strip, because
+                    // the strip's edge is inside the shade — tapping a notification's own card would
+                    // otherwise dismiss the thing being read.
                     collapse()
                 }
                 dragging = false

@@ -295,6 +295,10 @@ internal class EmbeddedGuest(
         val activity = stack.lastOrNull() ?: return
         if (visible == shown) return
         shown = visible
+        // Nobody is looking at the device, so nothing on it has the focus — and a shade found still
+        // open on the way back is a panel from a session that ended, hiding the app it was pulled
+        // over. A phone's goes away with the screen for the same reason.
+        if (!visible) statusBar?.collapse()
         if (visible) GuestRuntime.resumeEmbedded(activity) else GuestRuntime.pauseEmbedded(activity)
     }
 
@@ -427,8 +431,10 @@ internal class EmbeddedGuest(
             return
         }
         // Before the prompt goes up, not after: a keyboard left over a modal is a row of keys
-        // still taking touches for a field nobody can see.
+        // still taking touches for a field nobody can see, and an open shade over one is a panel
+        // the person can still pull about while the app underneath is blocked on an answer.
         keyboard?.dismiss()
+        statusBar?.collapse()
         val prompt = VirtualPermissionDialog(context, packageName, permissions) { allow ->
             answerPermission(allow)
         }
@@ -523,13 +529,9 @@ internal class EmbeddedGuest(
         statusBar?.let(container::removeView)
         val bar = statusBar ?: VirtualStatusBar(context)
             .also { statusBar = it }
-        container.addView(
-            bar,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
-        )
+        // Full height, not as tall as the strip — see [VirtualStatusBar] for why a shade has to
+        // cover the screen it can be dismissed by tapping.
+        container.addView(bar, matchParent())
         keyboard?.raise()
         permission?.let { prompt ->
             container.removeView(prompt)
@@ -549,6 +551,11 @@ internal class EmbeddedGuest(
             it.window.decorView.visibility = View.GONE
             GuestRuntime.pauseEmbedded(it)
         }
+        // Whatever the shade was showing belonged to the screen that is going away. A phone closes
+        // it when something starts on top — opening an app from a notification is the ordinary way
+        // to see that — and an open shade left hanging over a screen nobody chose it from is the
+        // clearest case of a panel that has lost the focus it was pulled with.
+        statusBar?.collapse()
         container.addView(activity.window.decorView, contentParams())
         raiseDeviceUi(container)
         stack += activity
