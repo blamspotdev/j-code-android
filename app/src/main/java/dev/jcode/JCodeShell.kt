@@ -4231,17 +4231,21 @@ private fun WorkbenchRightSidebar(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    .height(40.dp)
+                    .padding(end = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // Tabs scroll within their own weighted area so the trailing actions below stay
-                // pinned to the right edge — no scrolling to reach "Hide".
+                // pinned to the right edge — no scrolling to reach "Hide". Butted together with no
+                // gap, because a tab strip's tabs share edges; the gap is what made these read as
+                // buttons that happened to be in a row.
                 Row(
                     modifier = Modifier
                         .weight(1f)
+                        .fillMaxHeight()
                         .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(0.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     val devMode = LocalDeveloperSetting.current.enabled
@@ -4252,7 +4256,7 @@ private fun WorkbenchRightSidebar(
                                 (it != RightPanelTab.ExtensionDev || devMode)
                         }
                         .forEach { tab ->
-                            RightPanelChip(
+                            RightPanelTabItem(
                                 label = tab.label,
                                 icon = tab.icon,
                                 selected = selected == RightPanelSelection.Builtin(tab),
@@ -4262,7 +4266,7 @@ private fun WorkbenchRightSidebar(
                     // An imported .vsix gets a tab of its own, under its own name — a VS Code
                     // extension exists to show a view, and this is where it belongs.
                     vsixExtensions.forEach { ext ->
-                        RightPanelChip(
+                        RightPanelTabItem(
                             label = ext.name,
                             icon = JCodeIcon.Extensions,
                             selected = selected == RightPanelSelection.Extension(ext.id),
@@ -4364,37 +4368,34 @@ private fun WorkspaceSplitHandle(onDrag: (Float) -> Unit, onDragStopped: () -> U
 
 /** One tab in the right drawer's strip, built-in or extension-backed. */
 @Composable
-private fun RightPanelChip(
+private fun RightPanelTabItem(
     label: String,
     icon: JCodeIcon,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = if (selected) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)
-        },
+    // Flat, like the editor's tab strip, the terminal's and the DevTools pane switcher. This was the
+    // last row of rounded pills in the workbench, and it sits directly above one of the flat ones —
+    // two ways of drawing "pick one of these", a few pixels apart.
+    val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
-            val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-            Icon(
-                imageVector = jcIcon(icon),
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = tint,
+            .clickable(onClick = onClick)
+            .background(
+                if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
             )
-            Text(text = label, style = MaterialTheme.typography.labelMedium, color = tint)
-        }
+            .fillMaxHeight()
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Icon(
+            imageVector = jcIcon(icon),
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = tint,
+        )
+        Text(text = label, style = MaterialTheme.typography.labelMedium, color = tint)
     }
 }
 
