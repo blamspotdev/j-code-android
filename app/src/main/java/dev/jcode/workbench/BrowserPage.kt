@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.view.MotionEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.webkit.ConsoleMessage
@@ -281,6 +282,22 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                         wv.settings.userAgentString = desktopUserAgent(ctx)
                     }
                     wv.addJavascriptInterface(DevToolsBridge(), "JCodeDevTools")
+                    // Claim the gesture the moment a finger lands on the page, or the workbench's
+                    // navigation drawer takes any drag that has some sideways in it and slides itself
+                    // open over the site. A page is full of things that answer a sideways drag — a
+                    // carousel, a row of tabs, a map, and plain scrolling that is never perfectly
+                    // vertical on a touchscreen — so the drawer was winning gestures that were never
+                    // meant for it. Every other embedded surface here already says this: the editor,
+                    // the terminal, the markdown preview, the extension hosts and the virtual
+                    // device's screen. The browser was the one that did not.
+                    wv.setOnTouchListener { v, event ->
+                        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                            v.parent?.requestDisallowInterceptTouchEvent(true)
+                        }
+                        // False: the WebView still handles the event itself. This only settles who
+                        // *else* is allowed to take it away.
+                        false
+                    }
                     wv.webViewClient = object : WebViewClient() {
                         override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                             // Dropped at the start of every load: a heading showing the last site's
