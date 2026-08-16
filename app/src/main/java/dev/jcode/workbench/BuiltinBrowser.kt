@@ -68,6 +68,20 @@ object BuiltinBrowser {
         revealSignal.value += 1
     }
 
+    /**
+     * Open (or come back to) the browser, leaving the page it is on alone.
+     *
+     * The difference from [requestOpen] is [pendingUrl], and it is the whole point: everything that
+     * opened this browser until now arrived holding a URL — a preview, a link in a terminal — so
+     * "open the browser" and "go here" were one action. Reaching it from the Command Palette is the
+     * first case with nothing to navigate to, and sending it somewhere would throw away the page
+     * that was already loaded.
+     */
+    fun requestOpen() {
+        everOpened.value = true
+        revealSignal.value += 1
+    }
+
     fun addConsole(entry: BrowserConsoleEntry) {
         if (console.size >= MAX_ENTRIES) console.removeAt(0)
         console.add(entry)

@@ -5,6 +5,8 @@ import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.TextFields
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
@@ -86,7 +88,7 @@ enum class JCodeIcon {
     Continue, Rerun, StepInto, StepOver, StepOut,
     Output, Logs, Problems, Radar, Debug, Tasks, Chat, Cursor,
     Browser, DevTools, Image,
-    DropDown, ChevronDown, ChevronUp, ChevronRight, ArrowUp, MenuToggle, Help,
+    DropDown, ChevronDown, ChevronUp, ChevronRight, ArrowUp, ArrowBack, ArrowForward, MenuToggle, Help,
     Copy, Cut, Delete, Open, Rename, SelectAll, Clear, Definition, References, Format,
     Preview, Pin, Palette, CommandPalette, ScreenRotation, Fullscreen, KeepAwake,
     TextIncrease, TextDecrease, GoToLine,
@@ -172,6 +174,9 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.ChevronUp to Icons.Rounded.KeyboardArrowUp,
         JCodeIcon.ChevronRight to Icons.AutoMirrored.Rounded.KeyboardArrowRight,
         JCodeIcon.ArrowUp to Icons.Rounded.ArrowUpward,
+        // Auto-mirrored: back is a direction, and it is the other one in a right-to-left locale.
+        JCodeIcon.ArrowBack to Icons.AutoMirrored.Rounded.ArrowBack,
+        JCodeIcon.ArrowForward to Icons.AutoMirrored.Rounded.ArrowForward,
         JCodeIcon.MenuToggle to Icons.AutoMirrored.Rounded.MenuOpen,
         JCodeIcon.Help to Icons.AutoMirrored.Rounded.HelpOutline,
         JCodeIcon.Copy to Icons.Rounded.ContentCopy,

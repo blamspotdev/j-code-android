@@ -2665,6 +2665,13 @@ private fun JCodeShell(
         val name = paletteTab?.filePath?.name
         name != null && activeLanguageExtensions.any { it.languageFor(name) != null }
     }
+    // The browser's controller is only alive while its page is composed, which is only while its tab
+    // is the one on screen — so "is the browser in front" is the honest gate for its nav commands,
+    // and reading the flags here is what re-registers them as a page navigates.
+    val paletteBrowserActive = paletteTab?.pageKind == EditorPageKind.Browser
+    val paletteBrowserBack = BuiltinBrowser.canGoBack.value
+    val paletteBrowserForward = BuiltinBrowser.canGoForward.value
+    val paletteBrowserLoading = BuiltinBrowser.loading.value
     val paletteFontSize = effectiveConfig.editor.fontSize
     // Mirror Settings' most-specific-scope rule so a font-size nudge isn't masked by an existing
     // project override.
@@ -2675,6 +2682,7 @@ private fun JCodeShell(
         selectedProject?.id, paletteSetting.disabledIds, paletteTab?.id, paletteHasTabs,
         paletteEditorActive, paletteLanguageIdentified, chromeHidden, fullscreenMode, keepAwakeMode,
         orientationLockedMode, paletteFontSize,
+        paletteBrowserActive, paletteBrowserBack, paletteBrowserForward, paletteBrowserLoading,
     ) {
         CommandRegistry.clear()
         // A configurable command registers only while enabled in Settings → Command Palette AND its
@@ -2751,6 +2759,45 @@ private fun JCodeShell(
             group = "Tools",
             icon = JCodeIcon.Destinations,
         ) { AppSandbox.requestOpen(null) }
+        // The browser had a toolbar and nothing else. That is fine while you are looking at it and no
+        // use at all from anywhere else, which is where the palette is reached from — so opening it
+        // is here beside the device, and its three nav actions are here for the same reason the
+        // editor's are: a command anybody can find beats a button only the right screen has.
+        registerConfigurable(
+            id = "browser.open",
+            title = "Open Browser",
+            group = "Tools",
+            icon = JCodeIcon.Browser,
+        ) { BuiltinBrowser.requestOpen() }
+        registerConfigurable(
+            id = "browser.back",
+            title = "Browser: Back",
+            group = "Browser",
+            icon = JCodeIcon.ArrowBack,
+            // Not merely "the browser exists": a Back with nowhere to go is a command that answers a
+            // search and then does nothing, which is worse than not being offered.
+            visible = paletteBrowserActive && paletteBrowserBack,
+        ) { BuiltinBrowser.controller?.goBack() }
+        registerConfigurable(
+            id = "browser.forward",
+            title = "Browser: Forward",
+            group = "Browser",
+            icon = JCodeIcon.ArrowForward,
+            visible = paletteBrowserActive && paletteBrowserForward,
+        ) { BuiltinBrowser.controller?.goForward() }
+        registerConfigurable(
+            id = "browser.reload",
+            // One command wearing the state, the way the browser's own button does — and the way
+            // Fullscreen above does. A page is either loading or it is not, so the two are never both
+            // worth offering.
+            title = if (paletteBrowserLoading) "Browser: Stop Loading" else "Browser: Reload Page",
+            group = "Browser",
+            icon = if (paletteBrowserLoading) JCodeIcon.Stop else JCodeIcon.Refresh,
+            visible = paletteBrowserActive,
+        ) {
+            val browser = BuiltinBrowser.controller
+            if (paletteBrowserLoading) browser?.stop() else browser?.reload()
+        }
         CommandRegistry.register(
             id = "workspace.newFolder",
             title = "New Folder",
