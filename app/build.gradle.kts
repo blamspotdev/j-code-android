@@ -154,6 +154,11 @@ android {
     }
 
     ndkVersion = "27.2.12479018"
+
+    // JCode's own web engine (GeckoView), shipped as an optional split rather than in the base
+    // APK: only users who open web surfaces pay its ~70 MB, delivered by the Web Engine
+    // marketplace extension. See dev.jcode.webengine for the seam the app talks to.
+    dynamicFeatures += ":webengine"
 }
 
 dependencies {
