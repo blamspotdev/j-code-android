@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Bluetooth, on the device's status bar and its quick actions — see ic_vdevice_wifi for why the
+     device's own apps carry a second copy of the same glyph. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M12,2.5v19l5,-4.75l-10,-9.5M12,21.5v-19l5,4.75l-10,9.5" android:strokeColor="#FFFFFF" android:strokeWidth="2" android:strokeLineJoin="round" android:strokeLineCap="round" android:fillColor="#00000000"/>
+</vector>

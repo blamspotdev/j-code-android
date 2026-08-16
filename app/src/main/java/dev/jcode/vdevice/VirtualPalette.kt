@@ -39,13 +39,23 @@ internal object VirtualPalette {
     const val ACCENT = 0xFF8AB4F8.toInt()
 
     /**
-     * The status bar, and the shade behind it.
-     *
-     * Both translucent, because a bar over an app should let a little of the app through — that is
-     * what says it is over the app rather than part of it.
+     * The status bar: translucent, because a strip over an app should let a little of the app
+     * through — that is what says it is over the app rather than part of it.
      */
     val BAR = translucent(BACKGROUND, 0xCC)
-    val SHADE = translucent(SURFACE, 0xF2)
+
+    /**
+     * The shade: **opaque**, and the difference from [BAR] is the difference between a strip and a
+     * surface with reading on it.
+     *
+     * It was translucent to match, and a hair of an app showing through a 22dp strip is texture
+     * while the same hair through a full pane is a second layer of words: a notification's title
+     * competing with whatever button the app happens to have underneath it. Measured on the hardware
+     * fixture, whose buttons are pale and full-width — "REQUEST CAMERA, MIC AND LOCATION" ghosted
+     * straight through "No notifications", and the shade read as a rendering fault rather than as a
+     * design. A phone's shade is opaque for the same reason.
+     */
+    const val SHADE = SURFACE
 
     /** Behind a modal: dark enough that the app reads as out of reach, light enough to still see it. */
     val SCRIM = translucent(Color.BLACK, 0xB3)

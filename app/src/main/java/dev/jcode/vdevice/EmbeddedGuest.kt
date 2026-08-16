@@ -265,15 +265,21 @@ internal class EmbeddedGuest(
      * Whether the device's own UI owns [x], [y], which is a question the ordinary path cannot answer.
      *
      * A guest's dialog is a *separate window* rather than a child of the container, so [topWindow]
-     * would take every touch the moment one is open — and an app with a dialog up is exactly when
-     * the device's keyboard and its permission prompt need to be reachable. So they are asked first.
+     * would take every touch the moment one is open. Being in front of the container is not enough
+     * when the thing in front of *that* is a different window — and an app with a dialog up is
+     * exactly when the device's own chrome needs to be reachable.
      *
-     * The status bar is deliberately not: the shade is drawn as the container's own child, so it is
-     * already in front of anything the container holds, and leaving it on the ordinary path is what
-     * lets a guest's dialog keep the touches that are genuinely its own.
+     * All three of them, and the status bar is the one that had been left out. A shade you can only
+     * pull down on some screens is not the device's shade, it is a decoration on the ones that
+     * happen to have no dialog open; the same argument that put the keyboard and the prompt here
+     * applies to it unchanged. [VirtualStatusBar.ownsTouchAt] keeps the claim narrow — the grab
+     * strip, or anywhere at all once the shade is open — so a guest keeps every touch that is
+     * genuinely its own.
      */
     private fun deviceUiUnder(x: Float, y: Float): Boolean =
-        permission != null || keyboard?.contains(x, y) == true
+        permission != null ||
+            keyboard?.contains(x, y) == true ||
+            statusBar?.ownsTouchAt(x, y) == true
 
     /** The dialog, popup or drop-down the guest currently has open, if any. */
     private fun topWindow(): EmbeddedWindow? = windows?.children()?.lastOrNull()
@@ -669,7 +675,10 @@ internal class EmbeddedGuest(
         if (next == style) return
         style = next
         val bar = statusBar ?: return
-        bar.visibility = if (next.hidden) View.GONE else View.VISIBLE
+        // Not `GONE` for a full-screen app any more, and that is the whole of "the shade can be
+        // pulled anywhere": a view with no height receives no touches, so taking the bar away took
+        // the shade with it. [VirtualStatusBar.apply] stops *drawing* the strip instead and keeps
+        // the edge to pull from.
         bar.apply(next)
         // The guest's own window grows into the space the bar gives up, and shrinks when it takes it
         // back.
