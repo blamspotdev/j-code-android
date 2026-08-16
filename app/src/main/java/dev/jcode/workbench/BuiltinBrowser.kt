@@ -151,15 +151,6 @@ object BuiltinBrowser {
     /** The live page controller, or null while the browser tab is not on screen. */
     var controller: BrowserController? = null
 
-    /**
-     * True while the browser is rendered by JCode's own engine (the Web Engine split).
-     *
-     * What the DevTools panel keys its notice on: the panes' eval/shim plumbing spoke to a
-     * WebView, the engine exposes none of it, and panes silently showing nothing would read as
-     * "the page did nothing" — the one wrong answer. The Gecko RDP client replaces the plumbing.
-     */
-    val engineBacked = mutableStateOf(false)
-
     /** Open (or navigate) the built-in browser to [url]; also flags it for the DevTools reveal. */
     fun requestOpen(url: String) {
         everOpened.value = true

@@ -102,20 +102,6 @@ private data class SourceJump(val url: String, val line: Int)
  */
 @Composable
 fun DevtoolsSidebarContent(modifier: Modifier = Modifier) {
-    // The panes below were built on WebView plumbing — evaluateJavascript, injected shims, the
-    // system cookie jar — none of which exists against JCode's own engine. Showing them empty
-    // would claim the page is idle; saying why they're absent is the honest state until the
-    // engine's RDP-based DevTools lands (Web Engine extension roadmap).
-    if (BuiltinBrowser.engineBacked.value) {
-        Box(modifier.fillMaxSize()) {
-            EmptyHint(
-                "DevTools for the Web Engine is on its way — Console, Network and Inspector " +
-                    "will attach over the engine's debugging protocol. The previous panes " +
-                    "spoke WebView-only interfaces and would show nothing truthful here.",
-            )
-        }
-        return
-    }
     val support = LocalDevToolsCodeSupport.current
     val packResolver = support.packResolver
     val semanticTokens = support.semanticTokens

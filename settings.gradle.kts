@@ -15,18 +15,12 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // GeckoView (the :webengine dynamic feature) is published on Mozilla's own Maven.
-        maven("https://maven.mozilla.org/maven2/")
     }
 }
 
 rootProject.name = "JCode"
 
 include(":app")
-
-// Dynamic-feature split: JCode's own web engine (GeckoView). Optional at install time —
-// delivered by the Web Engine marketplace extension, not by the base APK.
-include(":webengine")
 
 // Core modules
 include(":core:design")

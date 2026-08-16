@@ -136,11 +136,6 @@
             android:name=".AppInstallReceiver"
             android:exported="false" />
 
-        <!-- Same contract for the Web Engine split install (see webengine.WebEngineInstaller). -->
-        <receiver
-            android:name="dev.jcode.webengine.WebEngineInstallReceiver"
-            android:exported="false" />
-
         <!-- Virtual device (dev.jcode.vdevice): a declared activity the container never launches.
              A guest activity belongs to a package the system has never heard of, so there is no
              ActivityInfo to build one from; this stub is that template, and nothing else. It is
