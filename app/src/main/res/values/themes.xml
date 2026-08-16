@@ -21,4 +21,22 @@
         <item name="android:navigationBarColor">@color/ic_launcher_background</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
+
+    <!-- What the built-in browser's WebView is handed, and the only reason these exist.
+
+         A WebView decides what to report for `prefers-color-scheme` from `android:isLightTheme` on
+         the context it was built with — not from the night bits of the configuration, and not from
+         whatever the app happens to be painting. The runtime theme above is a Light parent (kept
+         that way on purpose, so any android-themed component stays as it was), so every page in a
+         dark workbench was being told the user prefers light and themed itself accordingly.
+
+         Two themes rather than a night-qualified one: the workbench's own theme setting can differ
+         from the device's, and this has to follow the workbench. -->
+    <style name="Theme.JCode.Web.Light" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:isLightTheme">true</item>
+    </style>
+
+    <style name="Theme.JCode.Web.Dark" parent="android:Theme.Material.NoActionBar">
+        <item name="android:isLightTheme">false</item>
+    </style>
 </resources>

@@ -2,9 +2,11 @@ package dev.jcode.workbench
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.view.ContextThemeWrapper
 import android.view.MotionEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -51,6 +53,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -60,6 +63,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -71,6 +75,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import dev.jcode.R
 import dev.jcode.design.CompactContextMenu
 import dev.jcode.design.ContextAction
 import dev.jcode.design.JCodeIcon
@@ -153,6 +158,11 @@ fun BrowserPage(modifier: Modifier = Modifier) {
 
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
+    // Asked of the palette that is actually painting this tab, not of the phone: JCode's own theme
+    // setting can differ from the device's, and the browser should be the colour of the window it is
+    // in rather than the colour of the machine that window happens to be on.
+    val pageIsDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val pageBackground = MaterialTheme.colorScheme.background.toArgb()
     var menuOpen by remember { mutableStateOf(false) }
     var siteInfoOpen by remember { mutableStateOf(false) }
 
@@ -260,11 +270,27 @@ fun BrowserPage(modifier: Modifier = Modifier) {
             }
         }
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    val wv = BrowserWebView(ctx)
-                    wv.setBackgroundColor(Color.White.toArgb())
+            // Keyed on the theme, because a `WebView` reads its night mode from the configuration of
+            // the context it was built with and there is no setter for it afterwards. A theme change
+            // is rare and re-navigates to the same URL, which is a page that has to be re-rendered
+            // anyway; the alternative is a browser that stays light until the tab is closed.
+            key(pageIsDark) {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { ctx ->
+                    val wv = BrowserWebView(webThemed(ctx, pageIsDark))
+                    // The surface behind the page, which is what shows before it has painted. White
+                    // regardless of the theme meant every navigation in a dark workbench flashed a
+                    // full-pane white rectangle.
+                    wv.setBackgroundColor(pageBackground)
+                    // Follows the workbench's theme rather than the phone's, which is the promise the
+                    // rest of this app makes: JCode's own theme setting can differ from the device's,
+                    // and the browser inside it should be the colour of the window it is in.
+                    //
+                    // Two things come out of one switch: a site that handles `prefers-color-scheme`
+                    // is told the truth and themes itself, and a site that does not gets WebView's
+                    // algorithmic darkening rather than a white page in a dark room.
+                    wv.settings.isAlgorithmicDarkeningAllowed = pageIsDark
                     wv.settings.javaScriptEnabled = true
                     wv.settings.domStorageEnabled = true
                     // BuiltinBrowser.normalizeUrl accepts file:// URLs; the WebView default
@@ -354,9 +380,10 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                     // brand-new navigations requested while the tab wasn't on screen.
                     wv.loadUrl(BuiltinBrowser.currentUrl.value.ifBlank { "about:blank" })
                     webView = wv
-                    wv
-                },
-            )
+                        wv
+                    },
+                )
+            }
         }
     }
 }
@@ -652,6 +679,30 @@ private const val STORAGE_COUNT_JS =
 
 private const val STORAGE_CLEAR_JS =
     "(function(){try{localStorage.clear()}catch(e){};try{sessionStorage.clear()}catch(e){};return 1})()"
+
+/**
+ * The same context, dressed so a `WebView` built from it agrees with the workbench about dark.
+ *
+ * The attribute that decides this is **`android:isLightTheme`**, read off the context's theme — not
+ * the night bits of the configuration, which is the obvious guess and is wrong. Measured: with the
+ * configuration forced to `UI_MODE_NIGHT_YES` and algorithmic darkening allowed, the page still
+ * answered `false` to `prefers-color-scheme: dark`, because JCode's runtime theme has a Light parent
+ * and that is what the WebView was asking.
+ *
+ * The configuration is set as well, for anything else in there that reads the night bits, but the
+ * theme is the part that does the work.
+ */
+private fun webThemed(context: Context, dark: Boolean): Context {
+    val night = if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+    val configuration = Configuration(context.resources.configuration).apply {
+        uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or night
+    }
+    val based = runCatching { context.createConfigurationContext(configuration) }.getOrDefault(context)
+    return ContextThemeWrapper(
+        based,
+        if (dark) R.style.Theme_JCode_Web_Dark else R.style.Theme_JCode_Web_Light,
+    )
+}
 
 /** Monkeypatches `fetch` and `XMLHttpRequest` to report method/url/status/timing to the DevTools
  *  Network panel via the JCodeDevTools bridge. Idempotent (guarded), injected on each page load. */
