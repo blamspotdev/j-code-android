@@ -9,19 +9,27 @@
 #
 # The version has a single source of truth — `val jcodeVersion = "…"` in
 # app/build.gradle.kts — and versionCode derives from it as
-# MAJOR*10000 + MINOR*100 + PATCH, so a bump is one line of real change.
-# docs/specifications states the product version in a few places purely as
-# documentation; they are rewritten here so they cannot drift.
+# (MAJOR*10000 + MINOR*100 + PATCH) * 100 + tier, so a bump is one line of real
+# change. docs/specifications states the product version in a few places purely
+# as documentation; they are rewritten here so they cannot drift.
 #
-# Resetting the lower parts keeps versionCode climbing (1.4.6 = 10406 ->
-# 1.5.0 = 10500 -> 2.0.0 = 20000), which Android requires for update-over-install.
+# Resetting the lower parts keeps versionCode climbing (1.4.6 = 1040699 ->
+# 1.5.0 = 1050099 -> 2.0.0 = 2000099), which Android requires for
+# update-over-install.
 #
-# Pre-release labels (`1.4.3-beta`) are NEVER stored in the file — the release
-# scripts apply them at build time via -PjcodeVersionName — so a suffix found
-# here means something upstream is wrong and this refuses to bump it.
+# This OPENS A TRAIN rather than records a shipped version: `jcodeVersion` is
+# the version being prepared, and previews of it are built as 1.5.0-beta.N
+# before 1.5.0 is ever published. So the bump belongs *after* a release goes
+# out, not after a merge — see
+# docs/specifications/09-platform/02-build-variants-and-release.md.
 #
-# Used by .github/workflows/version-bump.yml, which bumps main after a merge
-# (patch by default; a bump-minor / bump-major label on the PR picks the level).
+# Pre-release labels (`1.5.0-beta.1`) are NEVER stored in the file — the release
+# scripts and the release workflow apply them at build time via
+# -PjcodeVersionName — so a suffix found here means something upstream is wrong
+# and this refuses to bump it.
+#
+# Used by .github/workflows/version-bump.yml, which opens the next train when a
+# stable release is published (minor), and can be run by hand for any level.
 #
 # Prints the NEW version on stdout (so it can be captured); progress goes to stderr.
 set -eu
@@ -104,7 +112,9 @@ done
 AFTER="$(read_version)"
 [ "$AFTER" = "$NEXT" ] || fail "rewrite failed: $GRADLE_FILE still reads '$AFTER'"
 
-# versionCode must keep climbing or an update-over-install is refused by Android.
-CODE="$(echo "$NEXT" | awk -F. '{ printf "%d", $1*10000 + $2*100 + $3 }')"
+# versionCode must keep climbing or an update-over-install is refused by Android. Shown at the
+# release tier (99), which is what this version will be built as once its train ships; its previews
+# derive lower codes from the same base. See app/build.gradle.kts for the whole table.
+CODE="$(echo "$NEXT" | awk -F. '{ printf "%d", ($1*10000 + $2*100 + $3) * 100 + 99 }')"
 echo "bump-version: $LEVEL: $CURRENT -> $NEXT (versionCode $CODE)" >&2
 echo "$NEXT"

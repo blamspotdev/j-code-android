@@ -1,0 +1,285 @@
+name: release
+
+# Builds, signs and publishes a JCode APK — the whole of what scripts/build-release-*.sh does
+# locally, plus the tag and the GitHub release the in-app updater reads.
+#
+# The version is NOT an input. It is read from `val jcodeVersion` in app/build.gradle.kts — the
+# train main is currently carrying — so a release can only ever publish the version the repository
+# says it is preparing. What you choose here is which *channel* it goes out on:
+#
+#   beta   -> dev.jcode.beta, versionName 1.5.0-beta.1, tagged v1.5.0-beta.1, marked pre-release.
+#             Installs alongside the release app; the Beta channel of the updater offers it.
+#   stable -> dev.jcode,      versionName 1.5.0,        tagged v1.5.0,        a full release.
+#             Publishing one also opens the next train (see version-bump.yml).
+#
+# ## Secrets this needs
+#
+# The release keystore lives in Actions secrets, so anyone who can push a workflow or has repo
+# admin can produce builds signed as you. Rotating it means every installed app must be
+# uninstalled before it can update, so treat these as the most sensitive thing in the repository.
+#
+#   RELEASE_KEYSTORE_BASE64    base64 of the .jks    (base64 -w0 jcode.jks | pbcopy)
+#   RELEASE_KEYSTORE_PASSWORD  its store password
+#   RELEASE_KEY_ALIAS          the key alias         (the local scripts create "jcode")
+#   RELEASE_KEY_PASSWORD       the key password      (same as the store password by default)
+#
+# Without them the build still runs and the APK is produced, but the publish step fails rather
+# than shipping something unsigned that nobody can install.
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Which channel to publish'
+        type: choice
+        options: [beta, stable]
+        default: beta
+      label:
+        description: 'Pre-release label, alpha.N | beta.N | rc.N (ignored for stable)'
+        type: string
+        default: beta.1
+
+permissions:
+  contents: write
+
+env:
+  NDK_VERSION: '27.2.12479018'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # The Rust side builds wasmtime from source; a cold cache is slow, and failing at 60 minutes
+    # with no artefact is worse than waiting.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # Everything downstream reads these, so they are worked out once, here, from the same rules
+      # the local scripts use — see scripts/build-release-common.sh.
+      - name: Work out what is being published
+        id: v
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          LABEL: ${{ inputs.label }}
+        run: |
+          set -eu
+          version="$(sed -n 's/^val jcodeVersion = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)"
+          [ -n "$version" ] || { echo "::error::no 'val jcodeVersion' in app/build.gradle.kts"; exit 1; }
+
+          if [ "$CHANNEL" = "beta" ]; then
+            # Refused rather than accepted-and-mangled: an unrecognised label falls to the release
+            # tier below, so a preview would derive the SAME versionCode as the release it is
+            # previewing. See app/build.gradle.kts.
+            case "$LABEL" in
+              alpha.[0-9]* | beta.[0-9]* | rc.[0-9]*) : ;;
+              *) echo "::error::label must be alpha.N, beta.N or rc.N (got '$LABEL')"; exit 1 ;;
+            esac
+            version_name="$version-$LABEL"
+            label="$LABEL"
+            id_suffix=".beta"
+            variant="beta"
+          else
+            version_name="$version"
+            label=""
+            id_suffix=""
+            variant="release"
+          fi
+
+          # versionCode = (MAJOR*10000 + MINOR*100 + PATCH) * 100 + tier.
+          # MUST MATCH app/build.gradle.kts, build-release-common.sh and build-release.ps1.
+          code="$(echo "$version" | awk -v label="$label" -F. '{
+              base = $1 * 10000 + $2 * 100 + $3
+              step = 0
+              if (match(label, /[0-9]+$/)) step = substr(label, RSTART, RLENGTH) + 0
+              if (label ~ /^alpha/)     tier = step
+              else if (label ~ /^beta/) tier = 30 + step
+              else if (label ~ /^rc/)   tier = 60 + step
+              else                      tier = 99
+              if (tier > 99) tier = 99
+              if (tier < 0)  tier = 0
+              printf "%d", base * 100 + tier
+          }')"
+
+          {
+            echo "version_name=$version_name"
+            echo "code=$code"
+            echo "id_suffix=$id_suffix"
+            echo "variant=$variant"
+            echo "tag=v$version_name"
+            echo "apk=jcode-v$version_name-$code-$variant.apk"
+          } >> "$GITHUB_OUTPUT"
+          echo "Publishing v$version_name ($code) on the $CHANNEL channel." >> "$GITHUB_STEP_SUMMARY"
+
+      # Checked before an hour of building rather than after: a tag that already exists means this
+      # label has been published, and `gh release create` would fail at the very last step.
+      - name: Refuse a tag that already exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          set -eu
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::$TAG is already published — bump the label (beta.N) or the train."
+            exit 1
+          fi
+
+      # wasmtime's build tree plus the NDK is more than the runner has spare with the preinstalled
+      # toolchains still on it. These two are the large ones JCode does not use.
+      - name: Make room on the runner
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
+          df -h /
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install the SDK pieces the build pins
+        run: |
+          set -eu
+          sdkmanager --install \
+            "platforms;android-36" \
+            "build-tools;34.0.0" \
+            "cmake;3.22.1" \
+            "ndk;${NDK_VERSION}"
+
+      # cargo-ndk cross-compiles the Rust FFI crates against the NDK; gradle/cargo.gradle.kts shells
+      # out to it and builds arm64-v8a only for release.
+      - name: Set up Rust for Android
+        run: |
+          set -eu
+          rustup target add aarch64-linux-android
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Cache the Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/ripgrep-ffi/rust/target
+            native/wasmtime-ffi/rust/target
+          key: cargo-android-${{ runner.os }}-${{ hashFiles('native/**/Cargo.lock', 'native/**/Cargo.toml') }}
+          restore-keys: cargo-android-${{ runner.os }}-
+
+      - name: Install cargo-ndk
+        run: command -v cargo-ndk >/dev/null 2>&1 || cargo install cargo-ndk --locked
+
+      # A separate invocation, exactly as the local scripts do it: assembleRelease's configuration
+      # then sees the built libraries and drops the CMake stub for the Rust modules (see the root
+      # build.gradle.kts). Built in the same run, so a stub can never reach a published APK.
+      - name: Build the Rust JNI libraries
+        run: ./gradlew --no-daemon :native:ripgrep-ffi:cargoBuildReleaseJniLibs :native:wasmtime-ffi:cargoBuildReleaseJniLibs
+
+      - name: Assemble the release APK
+        env:
+          VERSION_NAME: ${{ steps.v.outputs.version_name }}
+          ID_SUFFIX: ${{ steps.v.outputs.id_suffix }}
+        run: |
+          set -eu
+          # if/fi rather than `[ … ] && …`: that form returns the test's status, and a false test
+          # under `set -e` would end the step rather than skip the argument.
+          if [ -n "$ID_SUFFIX" ]; then
+            ./gradlew --no-daemon :app:assembleRelease \
+              "-PjcodeVersionName=$VERSION_NAME" "-PjcodeIdSuffix=$ID_SUFFIX"
+          else
+            ./gradlew --no-daemon :app:assembleRelease "-PjcodeVersionName=$VERSION_NAME"
+          fi
+
+      # The same apksigner call the local scripts make. Passwords go in through `env:` rather than
+      # `pass:` so they are never a command-line argument.
+      - name: Sign it
+        id: sign
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          JCODE_KS_PASS: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          JCODE_KEY_PASS: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          APK_NAME: ${{ steps.v.outputs.apk }}
+        run: |
+          set -eu
+          if [ -z "${KEYSTORE_BASE64:-}" ] || [ -z "${JCODE_KS_PASS:-}" ]; then
+            echo "::error::RELEASE_KEYSTORE_BASE64 and RELEASE_KEYSTORE_PASSWORD are not set."
+            echo "::error::An unsigned APK cannot be installed, so nothing is published."
+            exit 1
+          fi
+          unsigned="$(find app/build/outputs/apk/release -name '*.apk' | head -1)"
+          [ -n "$unsigned" ] || { echo "::error::no APK in app/build/outputs/apk/release"; exit 1; }
+
+          keystore="$RUNNER_TEMP/release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$keystore"
+
+          build_tools="$ANDROID_SDK_ROOT/build-tools/$(ls "$ANDROID_SDK_ROOT/build-tools" | sort -V | tail -1)"
+          mkdir -p builds
+          "$build_tools/apksigner" sign \
+            --ks "$keystore" \
+            --ks-pass env:JCODE_KS_PASS \
+            ${KEY_ALIAS:+--ks-key-alias "$KEY_ALIAS"} \
+            ${JCODE_KEY_PASS:+--key-pass env:JCODE_KEY_PASS} \
+            --out "builds/$APK_NAME" "$unsigned"
+          rm -f "$keystore"
+
+          # Proves the artefact about to be published is installable, rather than assuming the
+          # signer succeeded because it exited zero.
+          "$build_tools/apksigner" verify --print-certs "builds/$APK_NAME"
+          echo "sha256=$(sha256sum "builds/$APK_NAME" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
+          APK_NAME: ${{ steps.v.outputs.apk }}
+          VARIANT: ${{ steps.v.outputs.variant }}
+          CODE: ${{ steps.v.outputs.code }}
+          SHA256: ${{ steps.sign.outputs.sha256 }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -eu
+          if [ "$CHANNEL" = "beta" ]; then
+            installs_as="dev.jcode.beta, alongside the release app"
+          else
+            installs_as="dev.jcode"
+          fi
+
+          # printf rather than a heredoc: everything here is inside an indented YAML block scalar,
+          # and a heredoc would keep that indentation — ten leading spaces, which GitHub renders as
+          # a code block rather than as the note it is.
+          notes="$(printf '%s\n' \
+            "Installs as \`$installs_as\` — versionCode \`$CODE\`." \
+            "" \
+            "\`$APK_NAME\`" \
+            "SHA-256: \`$SHA256\`")"
+
+          # --target creates the tag on this commit as part of publishing, so a failed build never
+          # leaves a tag behind pointing at a release that does not exist. Custom notes sit above
+          # the generated changelog.
+          #
+          # A function rather than a `$pre` variable holding "--prerelease" or "": an empty variable
+          # still expands to an empty argument, which `gh` would read as a second asset path.
+          publish() {
+            gh release create "$TAG" "builds/$APK_NAME" \
+              --target "$GITHUB_SHA" \
+              --title "$TAG" \
+              --generate-notes \
+              --notes "$notes" \
+              "$@"
+          }
+          if [ "$CHANNEL" = "beta" ]; then publish --prerelease; else publish; fi
+
+          {
+            echo "Published **$TAG** on the \`$CHANNEL\` channel."
+            echo ""
+            echo "- versionCode \`$CODE\`"
+            echo "- SHA-256 \`$SHA256\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.v.outputs.apk }}
+          path: builds/${{ steps.v.outputs.apk }}
+          if-no-files-found: error

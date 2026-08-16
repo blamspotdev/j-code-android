@@ -9,7 +9,9 @@ CMAKE_PKG="cmake;3.22.1"
 
 ASSUME_YES=0
 VARIANT="${JCODE_VARIANT:-}"
-PRERELEASE_LABEL="${JCODE_PRERELEASE_LABEL:-beta}"
+# Numbered on purpose: a bare "beta" cannot be iterated, and every build of it would derive the
+# same versionCode. See version_code below.
+PRERELEASE_LABEL="${JCODE_PRERELEASE_LABEL:-beta.1}"
 KEYSTORE_ARG=""
 for arg in "$@"; do
     case "$arg" in
@@ -25,7 +27,7 @@ for arg in "$@"; do
             echo "  --release       final build (default; dev.jcode / \"JCode\"; version from app/build.gradle.kts)"
             echo "  --beta          side-by-side testing build (dev.jcode.beta / \"JCode (beta)\") that"
             echo "                  installs ALONGSIDE the release app; versionName gets a -label suffix"
-            echo "  --label=<s>     beta version label (default: beta -> 1.0.2-beta)"
+            echo "  --label=<s>     pre-release label, alpha.N|beta.N|rc.N (default: beta.1 -> 1.5.0-beta.1)"
             echo "  --keystore=<f>  signing keystore (overrides \$JCODE_KEYSTORE + the default). Omit it"
             echo "                  and, if none is auto-found, a picker lets you BROWSE to your .jks."
             echo "Without --release/--beta you're prompted interactively."
@@ -227,10 +229,42 @@ ID_SUFFIX=""; APP_LABEL="JCode"; [ "$IS_PRE" = 1 ] && { ID_SUFFIX=".beta"; APP_L
 # The version lives in app/build.gradle.kts (`val jcodeVersion = "…"`) — real Android metadata.
 VERSION="$(sed -n 's/^val jcodeVersion = "\([^"]*\)".*/\1/p' app/build.gradle.kts 2>/dev/null | head -1)"
 [ -n "$VERSION" ] || VERSION=1.0.0
-# Beta appends the label to versionName (1.0.2 -> 1.0.2-beta); versionCode ignores the suffix.
-if [ "$IS_PRE" = 1 ]; then VERSION_NAME="$VERSION-$PRERELEASE_LABEL"; else VERSION_NAME="$VERSION"; fi
-# versionCode = MAJOR*10000 + MINOR*100 + PATCH (must match app/build.gradle.kts jcodeVersionCode).
-CODE="$(echo "$VERSION" | awk -F. '{ c = $1*10000 + $2*100 + $3; printf "%d", (c > 0 ? c : 10000) }')"
+# Beta appends the label to versionName (1.5.0 -> 1.5.0-beta.1).
+if [ "$IS_PRE" = 1 ]; then
+    # Refused rather than accepted-and-mangled: an unrecognised label falls to the release tier, so
+    # a preview would derive the SAME versionCode as the release it is previewing, and successive
+    # previews the same code as each other. That is the failure this whole scheme exists to stop.
+    case "$PRERELEASE_LABEL" in
+        alpha.[0-9]* | beta.[0-9]* | rc.[0-9]*) : ;;
+        *) die "--label must be alpha.N, beta.N or rc.N (got '$PRERELEASE_LABEL')" ;;
+    esac
+    VERSION_NAME="$VERSION-$PRERELEASE_LABEL"
+    LABEL="$PRERELEASE_LABEL"
+else
+    VERSION_NAME="$VERSION"
+    LABEL=""
+fi
+
+# versionCode = (MAJOR*10000 + MINOR*100 + PATCH) * 100 + tier, where the tier orders a build
+# against the other builds of the same version the way SemVer orders their labels:
+# alpha.N -> N, beta.N -> 30+N, rc.N -> 60+N, a release -> 99.
+# MUST MATCH app/build.gradle.kts (jcodeVersionCode) and scripts/build-release.ps1 ($Code).
+version_code() {
+    echo "$1" | awk -v label="$2" -F. '{
+        base = $1 * 10000 + $2 * 100 + $3
+        step = 0
+        if (match(label, /[0-9]+$/)) step = substr(label, RSTART, RLENGTH) + 0
+        if (label ~ /^alpha/)     tier = step
+        else if (label ~ /^beta/) tier = 30 + step
+        else if (label ~ /^rc/)   tier = 60 + step
+        else                      tier = 99
+        if (tier > 99) tier = 99
+        if (tier < 0)  tier = 0
+        c = base * 100 + tier
+        printf "%d", (c > 0 ? c : 1000099)
+    }'
+}
+CODE="$(version_code "$VERSION" "$LABEL")"
 say "Building JCode v$VERSION_NAME ($CODE) [$VARIANT] — this compiles native code and can take a while..."
 
 # Cargo libs build in a separate invocation: assembleRelease's configuration then sees them

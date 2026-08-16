@@ -5,24 +5,53 @@ plugins {
 }
 
 // The app version — actual Android metadata, single source of truth (VERSION.txt is gone).
-// The release scripts parse the `val jcodeVersion = "…"` line below, and `-PjcodeVersionName=…`
-// still overrides for pre-release tagging (the Beta build passes e.g. 1.3.3-beta).
-// versionCode is derived from the semver as MAJOR*10000 + MINOR*100 + PATCH — monotonic,
-// deterministic, offline, and independent of git history (a squash-merge collapsed the old
-// git-commit-count scheme and produced downgrades). Pre-release suffixes (e.g. -beta) are
-// ignored by the derivation. The formula must match scripts/build-release.ps1 ($Code) and
-// build-release-common.sh (CODE).
+//
+// `val jcodeVersion` is the version being *prepared*, not the last one shipped: main carries the
+// open release train (see docs/specifications/09-platform/02-build-variants-and-release.md), and
+// merges no longer move it. The release scripts parse this line, and `-PjcodeVersionName=…`
+// overrides it to add the pre-release label a Beta build carries (e.g. 1.5.0-beta.1).
 val jcodeVersion = "1.4.11"
 
 val jcodeVersionName: String =
     (project.findProperty("jcodeVersionName") as? String)?.trim()?.takeIf { it.isNotBlank() }
         ?: jcodeVersion
 
+/**
+ * versionCode = (MAJOR*10000 + MINOR*100 + PATCH) * 100 + tier.
+ *
+ * Monotonic, deterministic, offline, and independent of git history (a squash-merge collapsed the
+ * old git-commit-count scheme and produced downgrades). The formula must match
+ * scripts/build-release.ps1 ($Code) and build-release-common.sh (CODE).
+ *
+ * The trailing tier is what the old formula had no room for. It used to ignore the pre-release
+ * suffix entirely, so 1.5.0-beta.1, 1.5.0-beta.2 and 1.5.0 all derived the *same* code — and
+ * successive betas therefore never climbed, which is the one thing a version code has to do.
+ * A tier is ordered the way SemVer orders the label it comes from, so a build never goes backwards
+ * on its way from the first preview to the release:
+ *
+ *     1.5.0-alpha.1  1050001      alpha.N -> N
+ *     1.5.0-beta.1   1050031      beta.N  -> 30 + N
+ *     1.5.0-beta.2   1050032
+ *     1.5.0-rc.1     1050061      rc.N    -> 60 + N
+ *     1.5.0          1050099      release -> 99   (always above every preview of itself)
+ *
+ * An unrecognised or absent label reads as a release, which is the safe end of the range: a build
+ * whose label could not be understood sorts above the previews rather than silently below them.
+ */
 val jcodeVersionCode: Int = runCatching {
     val (major, minor, patch) = Regex("""^(\d+)\.(\d+)\.(\d+)""")
         .find(jcodeVersionName)!!.destructured
-    major.toInt() * 10000 + minor.toInt() * 100 + patch.toInt()
-}.getOrNull()?.takeIf { it > 0 } ?: 10000
+    val base = major.toInt() * 10000 + minor.toInt() * 100 + patch.toInt()
+    val label = jcodeVersionName.substringAfter('-', "").substringBefore('+')
+    val step = Regex("""\.?(\d+)$""").find(label)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+    val tier = when {
+        label.startsWith("alpha") -> step
+        label.startsWith("beta") -> 30 + step
+        label.startsWith("rc") -> 60 + step
+        else -> 99
+    }
+    base * 100 + tier.coerceIn(0, 99)
+}.getOrNull()?.takeIf { it > 0 } ?: 1000099
 
 // A non-empty `-PjcodeIdSuffix` (e.g. ".beta") gives this build its own applicationId AND launcher
 // label so it installs ALONGSIDE the normal release app instead of replacing it (the release script
@@ -32,6 +61,16 @@ val jcodeVersionCode: Int = runCatching {
 // (compile-time R/BuildConfig package), so no source references break.
 val jcodeIdSuffix: String =
     (project.findProperty("jcodeIdSuffix") as? String)?.trim().orEmpty()
+
+/**
+ * Which GitHub release channel this build follows — see [dev.jcode.UpdateChecker].
+ *
+ * Read off the id suffix rather than declared separately, because the two cannot be allowed to
+ * disagree: the channel decides which APK the updater downloads, and an APK from the other channel
+ * carries the other channel's `applicationId`, so installing it would be installing a *different
+ * app* rather than an update. One derivation is what makes that impossible to get wrong.
+ */
+val jcodeUpdateChannel: String = if (jcodeIdSuffix == ".beta") "beta" else "stable"
 
 android {
     namespace = "dev.jcode"
@@ -43,6 +82,8 @@ android {
         targetSdk = 33
         versionCode = jcodeVersionCode
         versionName = jcodeVersionName
+
+        buildConfigField("String", "UPDATE_CHANNEL", "\"$jcodeUpdateChannel\"")
 
         // Launcher name (AndroidManifest android:label="${appLabel}"). The Beta build overrides this
         // to "JCode.beta" in the release block below.
