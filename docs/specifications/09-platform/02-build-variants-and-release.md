@@ -259,11 +259,25 @@ creates the tag and the release with the APK attached.
 (`--target`), so a failed build never leaves a tag pointing at a release that does not exist, and an
 already-published tag is refused before the build rather than after it.
 
+### 6.1 Who may publish
+
 Signing needs four secrets: `RELEASE_KEYSTORE_BASE64`, `RELEASE_KEYSTORE_PASSWORD`,
-`RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`. **The release keystore therefore lives in Actions
-secrets**, so anyone able to push a workflow or holding repo admin can produce builds signed as the
-project — and §5's rule that the key can never be rotated without every user reinstalling applies to
-that exposure too.
+`RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`. They are **environment** secrets on a `release`
+environment, deliberately not repository secrets: a repository secret is readable by a workflow
+running on *any* branch, so anyone with push access could take the keystore by dispatching a branch
+of their own. §5's rule — that the key cannot be rotated without every user uninstalling first —
+is what makes that worth guarding.
+
+| Control | Setting | What it stops |
+|---|---|---|
+| Deployment branches | `main` only | A pushed branch reaching the secrets at all |
+| Required reviewers | the repo admin | A non-admin's run starting |
+| Allow administrators to bypass | on | An admin's own release waiting on a second approver |
+
+The `publish` job declares `environment: release`; the `guard` job ahead of it refuses a
+non-admin actor outright. **The guard is courtesy, not control** — it lives in a file anyone with
+push access can edit on their own branch. The environment is the control, and it is the reason
+editing the guard away gains nothing.
 
 The local scripts remain, and are the same build without the publishing:
 

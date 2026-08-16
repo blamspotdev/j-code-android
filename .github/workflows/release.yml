@@ -12,13 +12,22 @@ name: release
 #   stable -> dev.jcode,      versionName 1.5.0,        tagged v1.5.0,        a full release.
 #             Publishing one also opens the next train (see version-bump.yml).
 #
-# ## Secrets this needs
+# ## Who may run this, and the secrets it needs
 #
-# The release keystore lives in Actions secrets, so anyone who can push a workflow or has repo
-# admin can produce builds signed as you. Rotating it means every installed app must be
-# uninstalled before it can update, so treat these as the most sensitive thing in the repository.
+# The signing key cannot be rotated without every installed app having to be uninstalled first, so
+# it is the most sensitive thing in the repository. It lives in the **`release` environment**, not in
+# repository secrets — repository secrets are readable by a workflow running on *any* branch, which
+# would let anyone with push access take the keystore by dispatching a branch of their own.
 #
-#   RELEASE_KEYSTORE_BASE64    base64 of the .jks    (base64 -w0 jcode.jks | pbcopy)
+# The environment is configured with:
+#
+#   - **Required reviewers**: the repo admin. A run by anyone else waits and never starts.
+#   - **Allow administrators to bypass**: on, so an admin's own release is not held up.
+#   - **Deployment branches**: `main` only, which is what closes the pushed-branch route.
+#
+# Its four secrets:
+#
+#   RELEASE_KEYSTORE_BASE64    base64 of the .jks    (base64 -w0 jcode.jks)
 #   RELEASE_KEYSTORE_PASSWORD  its store password
 #   RELEASE_KEY_ALIAS          the key alias         (the local scripts create "jcode")
 #   RELEASE_KEY_PASSWORD       the key password      (same as the store password by default)
@@ -45,8 +54,43 @@ env:
   NDK_VERSION: '27.2.12479018'
 
 jobs:
-  publish:
+  # A job of its own, ahead of the one that matters, so somebody without the rights is told so in
+  # seconds. The `release` environment would stop them anyway — but it stops them by *waiting* for an
+  # approval that is never coming, which reads as a queue rather than as a refusal.
+  #
+  # This is the courtesy, not the control. Anyone with push access can dispatch a branch whose
+  # workflow has this job removed; what they cannot do is reach the signing key, because it lives in
+  # the environment below and that environment only accepts deployments from `main`.
+  guard:
     runs-on: ubuntu-latest
+    steps:
+      - name: Refuse anyone but an admin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          level="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$GITHUB_ACTOR/permission" \
+            --jq '.permission' 2>/dev/null || true)"
+          # Refused rather than waved through when the answer cannot be read at all: this decides
+          # who may sign a release with a key that cannot be rotated without every user reinstalling.
+          if [ -z "$level" ]; then
+            echo "::error::cannot read $GITHUB_ACTOR's permission level — the workflow token may be too narrow to query collaborators"
+            exit 1
+          fi
+          if [ "$level" != "admin" ]; then
+            echo "::error::$GITHUB_ACTOR has '$level' access; publishing a signed release is admin-only"
+            exit 1
+          fi
+          echo "$GITHUB_ACTOR is an admin."
+
+  publish:
+    needs: guard
+    runs-on: ubuntu-latest
+    # Where the signing secrets live, and the reason they are not repository secrets: those are
+    # readable by a workflow on *any* branch, so a pushed branch could take the keystore. This
+    # environment is restricted to `main` and gated on an admin's approval, which is what makes
+    # "admin-only" a rule rather than a request.
+    environment: release
     # The Rust side builds wasmtime from source; a cold cache is slow, and failing at 60 minutes
     # with no artefact is worse than waiting.
     timeout-minutes: 120
