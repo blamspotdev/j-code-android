@@ -35,8 +35,10 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.jcode.design.LocalTerminalFontSizeSetting
 import dev.jcode.design.JCodeTheme
 import org.json.JSONTokener
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -180,6 +182,10 @@ private fun ConsolePane(onOpenSource: (String, Int) -> Unit, modifier: Modifier 
     val entries = BuiltinBrowser.console
     val listState = rememberLazyListState()
     val clipboard = LocalClipboardManager.current
+    // The terminal's size, not a number of this pane's own. Both are monospace logs of a machine
+    // talking back, they are two tabs of the same drawer, and somebody who sized the terminal to
+    // something they can read on this screen has already answered the question for both.
+    val fontSize = LocalTerminalFontSizeSetting.current.value.sp
     var input by remember { mutableStateOf("") }
     // Folded, because a page repeats itself and a console that repeats with it is unreadable. One
     // load of an ordinary site put the same Permissions-Policy warning on the screen three times,
@@ -223,11 +229,11 @@ private fun ConsolePane(onOpenSource: (String, Int) -> Unit, modifier: Modifier 
                 )
             }
         } else {
-            items(rows) { row -> ConsoleRowView(row, clipboard, onOpenSource) }
+            items(rows) { row -> ConsoleRowView(row, fontSize, clipboard, onOpenSource) }
         }
         item {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 2.dp, bottom = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 2.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // The same marker every other row has, because this is one of them.
@@ -235,10 +241,10 @@ private fun ConsolePane(onOpenSource: (String, Int) -> Unit, modifier: Modifier 
                     text = "›",
                     color = MaterialTheme.colorScheme.primary,
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    lineHeight = 15.sp,
+                    fontSize = fontSize,
+                    lineHeight = fontSize * 1.3f,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.width(20.dp),
+                    modifier = Modifier.width(14.dp),
                 )
                 BasicTextField(
                     value = input,
@@ -247,8 +253,8 @@ private fun ConsolePane(onOpenSource: (String, Int) -> Unit, modifier: Modifier 
                     textStyle = LocalTextStyle.current.copy(
                         color = MaterialTheme.colorScheme.onSurface,
                         fontFamily = FontFamily.Monospace,
-                        fontSize = 11.5.sp,
-                        lineHeight = 15.sp,
+                        fontSize = fontSize,
+                        lineHeight = fontSize * 1.3f,
                     ),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
@@ -313,9 +319,13 @@ private fun foldConsole(entries: List<BrowserConsoleEntry>): List<ConsoleRow> {
 @Composable
 private fun ConsoleRowView(
     row: ConsoleRow,
+    fontSize: TextUnit,
     clipboard: androidx.compose.ui.platform.ClipboardManager,
     onOpenSource: (String, Int) -> Unit,
 ) {
+    // Leading is a proportion of the type rather than a constant, so a console set to 18sp does not
+    // end up with lines touching each other.
+    val leading = fontSize * 1.3f
     val entry = row.entry
     val accent = when (entry.level) {
         "error" -> MaterialTheme.colorScheme.error
@@ -359,13 +369,15 @@ private fun ConsoleRowView(
                 text = marker,
                 color = accent,
                 fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
+                fontSize = fontSize,
                 // The message's line height, not the marker's own. Both texts then have first line
                 // boxes of the same height, so the mark sits on the first line of what it is marking
                 // rather than drifting down the middle of a message that ran to three.
-                lineHeight = 15.sp,
+                lineHeight = leading,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(start = 8.dp).width(20.dp),
+                // A narrow gutter. There is one character in it, and the 28dp it used to cost was
+                // 28dp off the front of every line on a panel a phone can spare about forty for.
+                modifier = Modifier.padding(start = 4.dp).width(14.dp),
             )
             Text(
                 text = entry.message,
@@ -375,8 +387,8 @@ private fun ConsoleRowView(
                     accent
                 },
                 fontFamily = FontFamily.Monospace,
-                fontSize = 11.5.sp,
-                lineHeight = 15.sp,
+                fontSize = fontSize,
+                lineHeight = leading,
                 maxLines = if (expanded) Int.MAX_VALUE else 1,
                 overflow = if (expanded) TextOverflow.Clip else TextOverflow.Ellipsis,
                 // Measured, not guessed: only a line with something hidden earns a chevron, and the
@@ -389,8 +401,8 @@ private fun ConsoleRowView(
                     text = "×${row.count}",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
-                    lineHeight = 13.sp,
+                    fontSize = fontSize * 0.85f,
+                    lineHeight = leading,
                     modifier = Modifier
                         .padding(end = 6.dp)
                         .background(
@@ -405,9 +417,9 @@ private fun ConsoleRowView(
                     text = if (expanded) "⌃" else "⌄",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    lineHeight = 15.sp,
-                    modifier = Modifier.width(18.dp),
+                    fontSize = fontSize,
+                    lineHeight = leading,
+                    modifier = Modifier.width(16.dp),
                 )
             }
         }
@@ -416,11 +428,11 @@ private fun ConsoleRowView(
                 text = "${entry.source.substringAfterLast('/').ifBlank { entry.source }}:${entry.line}",
                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
                 fontFamily = FontFamily.Monospace,
-                fontSize = 10.sp,
+                fontSize = fontSize * 0.85f,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
-                    .padding(start = 28.dp, top = 1.dp, end = 8.dp)
+                    .padding(start = 18.dp, top = 1.dp, end = 8.dp)
                     .clickable { onOpenSource(entry.source, entry.line) },
             )
         }
