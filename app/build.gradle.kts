@@ -10,7 +10,7 @@ plugins {
 // open release train (see docs/specifications/09-platform/02-build-variants-and-release.md), and
 // merges no longer move it. The release scripts parse this line, and `-PjcodeVersionName=…`
 // overrides it to add the pre-release label a Beta build carries (e.g. 1.5.0-beta.1).
-val jcodeVersion = "1.4.11"
+val jcodeVersion = "1.5.0"
 
 val jcodeVersionName: String =
     (project.findProperty("jcodeVersionName") as? String)?.trim()?.takeIf { it.isNotBlank() }
