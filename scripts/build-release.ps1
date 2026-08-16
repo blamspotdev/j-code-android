@@ -3,7 +3,10 @@
 #   -Variant release|beta            : pick the build variant non-interactively (else you're prompted).
 #                                      beta = side-by-side app (dev.jcode.beta / "JCode (beta)") that
 #                                      installs ALONGSIDE the release build instead of replacing it.
-#   -PreReleaseLabel <label>         : label appended to a beta versionName (default: beta -> 1.0.2-beta)
+#   -PreReleaseLabel <label>         : pre-release label appended to a beta versionName, alpha.N|beta.N|
+#                                      rc.N (default: beta.1 -> 1.5.0-beta.1). Numbered on purpose: a
+#                                      bare "beta" cannot be iterated and every build of it would
+#                                      derive the same versionCode.
 #   -KeystorePath <file.jks>         : signing keystore to use (overrides $env:JCODE_KEYSTORE and the
 #                                      default). Omit it and, if no keystore is auto-found, a terminal
 #                                      file picker lets you BROWSE to your backed-up .jks so a fresh
@@ -13,7 +16,7 @@ param(
     [switch]$Yes,
     [ValidateSet('release', 'beta', 'prerelease')]
     [string]$Variant,
-    [string]$PreReleaseLabel = 'beta',
+    [string]$PreReleaseLabel = 'beta.1',
     [string]$KeystorePath
 )
 
@@ -242,10 +245,31 @@ if ($rustReady) {
 # The version lives in app/build.gradle.kts (`val jcodeVersion = "…"`) — real Android metadata.
 $VersionMatch = Select-String -Path 'app\build.gradle.kts' -Pattern '^val jcodeVersion\s*=\s*"([^"]+)"' | Select-Object -First 1
 $Version = if ($VersionMatch) { $VersionMatch.Matches[0].Groups[1].Value } else { '1.0.0' }
-# Pre-release appends the label to versionName (1.0.2 -> 1.0.2-beta); versionCode ignores the suffix.
+# Pre-release appends the label to versionName (1.5.0 -> 1.5.0-beta.1). Refused rather than
+# accepted-and-mangled: an unrecognised label falls to the release tier below, so a preview would
+# derive the SAME versionCode as the release it is previewing, and successive previews the same code
+# as each other — the failure this whole scheme exists to stop.
+if ($IsPre -and $PreReleaseLabel -notmatch '^(alpha|beta|rc)\.\d+$') {
+    Fail "-PreReleaseLabel must be alpha.N, beta.N or rc.N (got '$PreReleaseLabel')"
+}
 $VersionName = if ($IsPre) { "$Version-$PreReleaseLabel" } else { $Version }
-# versionCode = MAJOR*10000 + MINOR*100 + PATCH (must match app/build.gradle.kts jcodeVersionCode).
-$Code = if ($Version -match '^(\d+)\.(\d+)\.(\d+)') { [int]$Matches[1] * 10000 + [int]$Matches[2] * 100 + [int]$Matches[3] } else { 10000 }
+$Label = if ($IsPre) { $PreReleaseLabel } else { '' }
+
+# versionCode = (MAJOR*10000 + MINOR*100 + PATCH) * 100 + tier, where the tier orders a build against
+# the other builds of the same version the way SemVer orders their labels:
+# alpha.N -> N, beta.N -> 30+N, rc.N -> 60+N, a release -> 99.
+# MUST MATCH app/build.gradle.kts (jcodeVersionCode) and scripts/build-release-common.sh (CODE).
+$Code = if ($Version -match '^(\d+)\.(\d+)\.(\d+)') {
+    $Base = [int]$Matches[1] * 10000 + [int]$Matches[2] * 100 + [int]$Matches[3]
+    $Step = if ($Label -match '(\d+)$') { [int]$Matches[1] } else { 0 }
+    $Tier = switch -Regex ($Label) {
+        '^alpha' { $Step; break }
+        '^beta'  { 30 + $Step; break }
+        '^rc'    { 60 + $Step; break }
+        default  { 99 }
+    }
+    $Base * 100 + [Math]::Min([Math]::Max($Tier, 0), 99)
+} else { 1000099 }
 Say "Building JCode v$VersionName ($Code) [$VariantTag] - this compiles native code and can take a while..."
 
 # Cargo libs build in a separate invocation: assembleRelease's configuration then sees them

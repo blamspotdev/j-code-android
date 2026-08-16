@@ -1,10 +1,17 @@
 name: version bump
 
-# Bumps the version on `main` after every merged PR, so nobody has to remember it
-# (main has merged a feature batch unbumped more than once — see the #28 and #34 bump PRs).
+# Opens the next release train on `main`.
 #
-# Patch by default. Label a PR `bump-minor` or `bump-major` to raise that part instead, or
-# run this by hand from the Actions tab and pick the level there.
+# `val jcodeVersion` in app/build.gradle.kts is the version being *prepared*, not the last one
+# shipped — main carries an open train, previews of it are built as 1.5.0-beta.N, and 1.5.0 is
+# published from the same commits when it is ready. So the bump belongs after a release goes out,
+# not after a merge: bumping per-merge would move the target every time somebody landed a PR, and
+# there would never be a version long enough for a preview to be a preview *of* anything.
+#
+# Runs when a **stable** release is published, and only when the version that shipped is the one
+# main is carrying (see the guard) — so a hotfix published off an older line never advances the
+# open train. Can also be run by hand from the Actions tab for any level, which is how you open a
+# major train or correct a mistake.
 #
 # **This needs a bypass actor on the `protect-main` ruleset.** That ruleset requires a pull
 # request and, with no bypass actors, binds every actor — admins and GITHUB_TOKEN included —
@@ -15,40 +22,36 @@ name: version bump
 #   - "Repository admin" if you run this with a PAT in secrets.VERSION_BUMP_TOKEN.
 #
 # Until that exists the push is rejected and the run falls back to offering the bump as a PR
-# on `chore/bump-version`, so merges keep working and the version is never lost. The run
+# on `chore/bump-version`, so releases keep working and the version is never lost. The run
 # summary says which path it took.
-#
-# Note: pushes made with GITHUB_TOKEN do not trigger other workflows, so a direct bump will
-# not re-run this workflow (no loop). A PAT in VERSION_BUMP_TOKEN does trigger them; that is
-# still no loop — a push cannot fire `pull_request`.
 on:
-  pull_request:
-    types: [closed]
-    branches: [main]
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       level:
         description: 'Which part of the version to raise'
         type: choice
-        options: [patch, minor, major]
-        default: patch
+        options: [minor, patch, major]
+        default: minor
 
 permissions:
   contents: write
   pull-requests: write
 
-# Merges can land in quick succession; queue the runs instead of cancelling so each one sees
-# the previous bump rather than racing it.
+# Two releases can be published in quick succession; queue the runs instead of cancelling so each
+# one sees the previous bump rather than racing it.
 concurrency:
   group: version-bump
   cancel-in-progress: false
 
 jobs:
   bump:
+    # A pre-release never opens the next train: 1.5.0-beta.2 is a preview *of* the version main is
+    # already carrying, so moving main on would strand it.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event.pull_request.merged == true &&
-       !contains(github.event.pull_request.labels.*.name, 'skip-bump'))
+      github.event.release.prerelease == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,45 +62,35 @@ jobs:
           # token otherwise, which needs the GitHub Actions app on the bypass list instead.
           token: ${{ secrets.VERSION_BUMP_TOKEN || github.token }}
 
-      - name: Skip when the merged PR moved the version itself
+      # The train that just shipped has to be the one main is carrying. A hotfix released off an
+      # older line (v1.4.11 while main prepares 1.5.0) is not the end of main's train, and bumping
+      # for it would skip 1.5.0 entirely — the version every open preview is a preview of.
+      - name: Skip a release that is not main's open train
         id: guard
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'release'
         env:
-          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           set -eu
-          version_at() {
-            git show "$1:app/build.gradle.kts" 2>/dev/null \
-              | sed -n 's/^val jcodeVersion = "\([^"]*\)".*/\1/p' | head -1
-          }
-          # First parent of the merge/squash commit is the previous main tip either way.
-          before="$(version_at "$MERGE_SHA^")"
-          after="$(version_at "$MERGE_SHA")"
-          if [ -z "$before" ] || [ -z "$after" ]; then
-            echo "Could not read the version around $MERGE_SHA; bumping anyway."
-          elif [ "$before" != "$after" ]; then
-            echo "This PR already bumped $before -> $after; nothing to do."
+          released="$(printf '%s' "${TAG#v}" | tr -d ' ')"
+          carrying="$(sed -n 's/^val jcodeVersion = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)"
+          echo "released: $released | main is carrying: $carrying"
+          if [ "$released" != "$carrying" ]; then
+            echo "Not main's open train; leaving $carrying alone."
             echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "\`$released\` is not main's open train (\`$carrying\`) — no bump." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # patch unless the merged PR asked for more. A manual run picks the level from the
-      # dispatch input instead; anything unrecognised stays patch rather than guessing high.
+      # A published release opens the next MINOR train. A manual run picks the level itself;
+      # anything unrecognised stays minor rather than guessing high.
       - name: Choose bump level
         id: level
         env:
           DISPATCH_LEVEL: ${{ inputs.level }}
-          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
         run: |
           set -eu
-          if [ -n "${DISPATCH_LEVEL:-}" ]; then
-            level="$DISPATCH_LEVEL"
-          else
-            case " ${LABELS:-} " in
-              *' bump-major '*) level=major ;;
-              *' bump-minor '*) level=minor ;;
-              *) level=patch ;;
-            esac
-          fi
+          level="${DISPATCH_LEVEL:-minor}"
+          case "$level" in patch | minor | major) : ;; *) level=minor ;; esac
           echo "level=$level" >> "$GITHUB_OUTPUT"
           echo "Bump level: $level"
 
@@ -107,28 +100,32 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BRANCH: chore/bump-version
           LEVEL: ${{ steps.level.outputs.level }}
+          SHIPPED: ${{ github.event.release.tag_name }}
         run: |
           set -eu
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           blocked=0
 
-          # Recomputed from the current tip on every attempt: another merge may have bumped main
-          # since this run started, and replaying a stale bump would reuse a version number.
+          # Says what the train was opened after, so `main` does not read as a run of bare version
+          # markers with nothing saying why each one moved.
+          if [ -n "${SHIPPED:-}" ]; then
+            why="Opening the next train after $SHIPPED."
+          else
+            why="Opening the next train (manual $LEVEL bump)."
+          fi
+
+          # Recomputed from the current tip on every attempt: another run may have bumped main
+          # since this one started, and replaying a stale bump would reuse a version number.
           for attempt in 1 2 3; do
             git fetch --quiet origin main
             git reset --quiet --hard origin/main
-            # The bump's body is the subject of the commit it follows, so `main` does not read as a
-            # run of bare version markers with nothing saying what shipped in them. Read AFTER the
-            # reset: a retry only happens when another run moved main, and a subject captured before
-            # that would name the wrong merge.
-            merged="$(git log -1 --pretty=%s)"
             version="$(sh scripts/bump-version.sh "$LEVEL")"
-            git commit --quiet -am "Bump version to $version" -m "$merged"
+            git commit --quiet -am "Open the $version train" -m "$why"
 
             if git push origin HEAD:main 2>push.err; then
-              echo "main bumped to $version"
-              echo "main bumped to $version." >> "$GITHUB_STEP_SUMMARY"
+              echo "main is now preparing $version"
+              echo "main is now preparing **$version**. $why" >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             cat push.err
@@ -150,18 +147,22 @@ jobs:
           # from the loop above are still in place.
           git push --force origin HEAD:"$BRANCH"
 
-          body="$(cat <<EOF
-          Automatic $LEVEL bump to $version, pushed after a merge to main.
+          # Dedented on the way out: the heredoc sits inside an indented YAML block scalar, and
+          # those ten leading spaces would reach GitHub as an indented code block rather than as
+          # the prose it is.
+          body="$(sed 's/^          //' <<EOF
+          $why main now prepares $version.
 
           The workflow tried to bump main directly and was refused by the protect-main ruleset.
-          Add a bypass actor (Settings > Rules > protect-main > Bypass list) and future merges
-          will bump main without going through a PR.
+          Add a bypass actor (Settings > Rules > protect-main > Bypass list) and future releases
+          will open the next train without going through a PR.
 
-          versionCode derives from the semver (MAJOR*10000 + MINOR*100 + PATCH), so this one line
-          is the whole change; the specifications that state the product version move with it.
+          versionCode derives from the semver ((MAJOR*10000 + MINOR*100 + PATCH) * 100 + tier), so
+          this one line is the whole change; the specifications that state the product version move
+          with it.
 
-          To skip the bump for a PR, label it skip-bump. To raise more than the patch, label it
-          bump-minor or bump-major. A PR that changes jcodeVersion itself is detected and skipped.
+          Previews of this train are built as $version-beta.N by the release workflow; publishing
+          $version itself is what opens the train after this one.
           EOF
           )"
 
@@ -169,10 +170,10 @@ jobs:
           existing="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)"
           opened=0
           if [ -n "$existing" ]; then
-            if gh pr edit "$existing" --title "Bump version to $version" --body "$body"; then
+            if gh pr edit "$existing" --title "Open the $version train" --body "$body"; then
               opened=1
             fi
-          elif gh pr create --base main --head "$BRANCH" --title "Bump version to $version" --body "$body"; then
+          elif gh pr create --base main --head "$BRANCH" --title "Open the $version train" --body "$body"; then
             opened=1
           fi
 
@@ -182,9 +183,9 @@ jobs:
             echo "The protect-main ruleset refused the push, so the bump to $version is on"
             echo "$BRANCH instead — [open the PR]($compare)."
             echo
-            echo "To have merges bump main itself, add a bypass actor under **Settings > Rules >"
-            echo "protect-main > Bypass list**: the **GitHub Actions** app for the built-in token,"
-            echo "or **Repository admin** if you put a PAT in VERSION_BUMP_TOKEN."
+            echo "To have releases open the next train themselves, add a bypass actor under"
+            echo "**Settings > Rules > protect-main > Bypass list**: the **GitHub Actions** app for"
+            echo "the built-in token, or **Repository admin** if you put a PAT in VERSION_BUMP_TOKEN."
             if [ "$opened" -ne 1 ]; then
               echo
               echo "(Opening the PR also needs *Allow GitHub Actions to create and approve pull requests*.)"

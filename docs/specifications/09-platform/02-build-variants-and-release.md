@@ -102,30 +102,87 @@ packaging {
 Single source of truth in `app/build.gradle.kts`:
 
 ```kotlin
-val jcodeVersion = "1.4.10"
+val jcodeVersion = "1.4.10"                                   // the train being prepared
 val jcodeVersionName = findProperty("jcodeVersionName") ?: jcodeVersion
-val jcodeVersionCode = MAJOR * 10000 + MINOR * 100 + PATCH   // falls back to 10000
+val jcodeVersionCode = (MAJOR * 10000 + MINOR * 100 + PATCH) * 100 + tier
 ```
 
 Properties of the scheme, as documented in the file: monotonic, deterministic, offline, and
 independent of git history — **a squash-merge collapsed the old git-commit-count scheme and produced
 downgrades**.
 
-Pre-release suffixes (`1.4.10-beta`) are ignored by the code derivation, and are never stored in
-`app/build.gradle.kts` — the release scripts apply them at build time via `-PjcodeVersionName`.
-`scripts/bump-version.sh` refuses to bump a version that has one, on the grounds that a
-suffix in the file means something upstream is wrong.
+### 4.1 Release trains
 
-The version is bumped for you: `.github/workflows/version-bump.yml` opens a standing bump PR
-after each merge to `main`. It raises the patch by default; label the PR `bump-minor` or
-`bump-major` to raise that part instead (lower parts reset, so `1.4.6` becomes `1.5.0` or
-`2.0.0`), or run the workflow by hand and pick the level. See
-[CI, quality and invariants](03-ci-quality-and-invariants.md).
+`jcodeVersion` is the version being **prepared**, not the last one shipped. `main` carries an open
+train; merges do not move it. Previews of that train are built and published as `1.5.0-beta.N`, and
+`1.5.0` is published from the same line of commits when it is ready — publishing it is what opens
+the next train.
 
-> **The formula is duplicated in three places** and they must agree: `app/build.gradle.kts`
-> (`jcodeVersionCode`), `scripts/build-release.ps1` (`$Code`), and
-> `scripts/build-release-common.sh` (`CODE`). The shell scripts parse the version by
+```
+main = 1.5.0        merge, merge, merge          (jcodeVersion unchanged)
+                    publish v1.5.0-beta.1        pre-release, dev.jcode.beta
+                    merge
+                    publish v1.5.0-beta.2        pre-release
+                    publish v1.5.0               release, dev.jcode
+main = 1.6.0        opened automatically
+```
+
+Bumping per merge — which is what `version-bump.yml` used to do — would move the target every time
+somebody landed a PR, and no version would stand still long enough for a preview to be a preview
+*of* anything.
+
+### 4.2 Pre-release labels and the tier
+
+Pre-release labels are never stored in `app/build.gradle.kts`; they are applied at build time via
+`-PjcodeVersionName`, and `scripts/bump-version.sh` refuses to bump a version that carries one.
+
+A label must be **`alpha.N`, `beta.N` or `rc.N`** — numbered, because a bare `beta` cannot be
+iterated. The release scripts and the release workflow reject anything else rather than accept it,
+for the reason the `tier` exists at all:
+
+| versionName | versionCode | tier |
+|---|---|---|
+| `1.5.0-alpha.1` | 1050001 | `N` |
+| `1.5.0-beta.1` | 1050031 | `30 + N` |
+| `1.5.0-beta.2` | 1050032 | |
+| `1.5.0-rc.1` | 1050061 | `60 + N` |
+| `1.5.0` | 1050099 | `99` |
+| `1.5.1` | 1050199 | |
+
+The old derivation ignored the suffix entirely, so `1.5.0-beta.1`, `1.5.0-beta.2` and `1.5.0` all
+produced **the same code** — successive previews never climbed, which is the one thing a version
+code has to do. An unrecognised label falls to the release tier, which is the safe end of the range
+and the reason the labels are validated before a build starts.
+
+### 4.3 Opening the next train
+
+`.github/workflows/version-bump.yml` raises the **minor** part when a stable release is published,
+and only when the version that shipped is the one `main` is carrying — so a hotfix released off an
+older line never skips the open train. It can also be run by hand for any level. It pushes to `main`
+directly where the `protect-main` ruleset allows it and falls back to a PR on `chore/bump-version`
+otherwise. See [CI, quality and invariants](03-ci-quality-and-invariants.md).
+
+> **The formula is duplicated in four places** and they must agree: `app/build.gradle.kts`
+> (`jcodeVersionCode`), `scripts/build-release.ps1` (`$Code`),
+> `scripts/build-release-common.sh` (`version_code`), and `.github/workflows/release.yml`. The shell
+> scripts and both workflows parse the version by
 > `sed -n 's/^val jcodeVersion = "\([^"]*\)".*/\1/p'`, so **that line's shape is load-bearing**.
+
+### 4.4 Update channels
+
+The two identities are two applications, so "is there an update?" is a different question for each,
+and `dev.jcode.beta` can never be updated *into* `dev.jcode`. `app/build.gradle.kts` derives
+`BuildConfig.UPDATE_CHANNEL` from the id suffix, and `dev.jcode.UpdateChecker` follows it:
+
+| Channel | Asks GitHub for | Offers |
+|---|---|---|
+| `stable` | `releases/latest` — never a draft or pre-release | the `-release` APK asset |
+| `beta` | the release *list*, highest version including pre-releases | the `-beta` APK asset |
+
+A Beta build is still told when the train it was previewing ships: the final release is the highest
+version on the list, and it is reported with **no APK URL**, so the app offers the release page
+rather than an install it cannot perform. Comparison is Semantic Versioning 2.0.0 precedence —
+`1.5.0-beta.2 < 1.5.0-rc.1 < 1.5.0` — covered by `app/src/test/java/dev/jcode/UpdateCheckerTest.kt`.
 
 ---
 
@@ -161,7 +218,29 @@ The script prints the output size and SHA-256.
 
 ---
 
-## 6. Release scripts
+## 6. Release scripts and the release workflow
+
+Publishing is `.github/workflows/release.yml`, run by hand from the Actions tab. The version is
+**not** an input — it is read from `jcodeVersion`, so a release can only publish the train the
+repository says it is preparing. What you choose is the channel:
+
+| Input | versionName | Tag | App id | GitHub |
+|---|---|---|---|---|
+| `beta` + `beta.1` | `1.5.0-beta.1` | `v1.5.0-beta.1` | `dev.jcode.beta` | pre-release |
+| `stable` | `1.5.0` | `v1.5.0` | `dev.jcode` | release |
+
+It builds the Rust JNI libraries, assembles, signs with `apksigner`, verifies the signature, then
+creates the tag and the release with the APK attached. The tag is created *by* the publish step
+(`--target`), so a failed build never leaves a tag pointing at a release that does not exist, and an
+already-published tag is refused before the build rather than after it.
+
+Signing needs four secrets: `RELEASE_KEYSTORE_BASE64`, `RELEASE_KEYSTORE_PASSWORD`,
+`RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`. **The release keystore therefore lives in Actions
+secrets**, so anyone able to push a workflow or holding repo admin can produce builds signed as the
+project — and §5's rule that the key can never be rotated without every user reinstalling applies to
+that exposure too.
+
+The local scripts remain, and are the same build without the publishing:
 
 | Script | Platform |
 |---|---|
@@ -172,7 +251,8 @@ The script prints the output size and SHA-256.
 
 They run `:app:assembleRelease` with `-PjcodeVersionName=…` (plus `-PjcodeIdSuffix=.beta` for Beta),
 resolve or install the SDK components (`platform-tools`, the platform package, build-tools,
-`ndk;27.2.12479018`, a CMake package — pinned at `3.22.1` in the scripts), and sign.
+`ndk;27.2.12479018`, a CMake package — pinned at `3.22.1` in the scripts), and sign. `--label=` takes
+the same `alpha.N|beta.N|rc.N` shape and is validated the same way.
 
 **Every release script runs `scripts/check-no-host-root.sh` first** as a pre-flight — see
 [CI, quality and invariants](03-ci-quality-and-invariants.md).
@@ -210,8 +290,9 @@ The root `detekt` task is currently a **bootstrap placeholder** registered in `b
 
 ## 9. Invariants and constraints
 
-1. The version-code formula must match in all three places.
-2. The `val jcodeVersion = "…"` line's shape must not change — the scripts parse it with `sed`.
+1. The version-code formula must match in all four places (§4.2).
+2. The `val jcodeVersion = "…"` line's shape must not change — the scripts and both workflows parse
+   it with `sed`.
 3. `libproot*.so` must stay unstripped and legacy-packaged.
 4. Release ABI is `arm64-v8a`; do not ship `x86_64` in release.
 5. Keep `-Wl,-z,max-page-size=16384` and `-fvisibility=hidden` on every native target.
@@ -230,6 +311,8 @@ The root `detekt` task is currently a **bootstrap placeholder** registered in `b
 | `cargo` absent | Search falls back to the Kotlin walk; the app still links |
 | `JCODE_KEYSTORE` set but missing | Build fails with a clear message |
 | Version formula drifting between script and Gradle | The APK's `versionCode` disagrees with its filename |
+| A pre-release label that is not `alpha.N`/`beta.N`/`rc.N` | Refused before the build — it would derive the release tier, giving a preview the same `versionCode` as the release |
+| Release keystore secrets missing in Actions | The workflow fails at the signing step; nothing is published |
 | Wrong CMake version installed | Root script picks the newest available instead of 3.28.3 |
 
 ---
@@ -238,7 +321,11 @@ The root `detekt` task is currently a **bootstrap placeholder** registered in `b
 
 - `detekt` is a placeholder task with no configuration.
 - R8 is disabled on release, so the APK ships unshrunk and unobfuscated.
-- The only CI workflow is the no-host-root guard; there is no build or test workflow.
+- There is still no CI workflow that builds or tests a pull request; `release.yml` is the first
+  workflow that compiles the app, and it only runs when a release is published by hand.
+- `UPDATE_CHANNEL` has exactly two values. A second side-by-side preview slot (an `alpha` app id
+  beside `beta`) would need a third, and `jcodeIdSuffix` is a free-form string that nothing
+  validates against the channel derivation.
 
 ---
 
