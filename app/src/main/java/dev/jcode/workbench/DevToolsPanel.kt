@@ -191,8 +191,10 @@ private fun ConsolePane(onOpenSource: (String, Int) -> Unit, modifier: Modifier 
     val rows by remember { derivedStateOf { foldConsole(entries) } }
     // Follow the newest line. A log that has to be scrolled to see the thing that just happened is
     // a log nobody looks at while the thing is happening.
+    // Scrolled to the *prompt* rather than to the last message, which is now one row further down:
+    // the point of following the output is to end up looking at the place you type the next thing.
     LaunchedEffect(rows.size) {
-        if (rows.isNotEmpty()) listState.scrollToItem(rows.lastIndex)
+        listState.scrollToItem(if (rows.isEmpty()) 0 else rows.size)
     }
     fun run() {
         val script = input.trim()
@@ -208,28 +210,47 @@ private fun ConsolePane(onOpenSource: (String, Int) -> Unit, modifier: Modifier 
         }
         input = ""
     }
-    Column(modifier = modifier.fillMaxSize()) {
-        if (entries.isEmpty()) {
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                EmptyHint("Console messages from the page appear here. Type JavaScript below to run it in the page.")
+    // The prompt is the last *row of the log*, not a bar across the floor of the panel. That is
+    // where a browser's console puts it, and the reason is that the prompt and the answer to it are
+    // the same conversation: what you typed, what came back, and the caret waiting for the next
+    // thing all read in one column. Pinned to the bottom it was a separate instrument, with the
+    // whole empty middle of the panel between a result and the place you would type the follow-up.
+    LazyColumn(state = listState, modifier = modifier.fillMaxSize()) {
+        if (rows.isEmpty()) {
+            item {
+                Text(
+                    text = "Console messages from the page appear here. Type JavaScript below to " +
+                        "run it in the page.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                )
             }
         } else {
-            LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth()) {
-                items(rows) { row -> ConsoleRowView(row, clipboard, onOpenSource) }
-            }
+            items(rows) { row -> ConsoleRowView(row, clipboard, onOpenSource) }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text("›", color = MaterialTheme.colorScheme.primary, fontFamily = FontFamily.Monospace)
-            Surface(
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 6.dp, end = 8.dp, top = 2.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                // The same rail and marker every other row has, because this is one of them.
+                Box(
+                    modifier = Modifier
+                        .padding(end = 0.dp)
+                        .width(2.dp)
+                        .height(18.dp)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                )
+                Text(
+                    text = "›",
+                    color = MaterialTheme.colorScheme.primary,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.width(20.dp),
+                )
                 BasicTextField(
                     value = input,
                     onValueChange = { input = it },
@@ -237,20 +258,23 @@ private fun ConsolePane(onOpenSource: (String, Int) -> Unit, modifier: Modifier 
                     textStyle = LocalTextStyle.current.copy(
                         color = MaterialTheme.colorScheme.onSurface,
                         fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
+                        fontSize = 11.5.sp,
+                        lineHeight = 15.sp,
                     ),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                     keyboardActions = KeyboardActions(onGo = { run() }),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+                    // No box around it. A field with a filled, rounded background is a form control;
+                    // this is a line in a log that happens to take typing.
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    Icons.Rounded.PlayArrow,
+                    contentDescription = "Run",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp).clickable { run() },
                 )
             }
-            Icon(
-                Icons.Rounded.PlayArrow,
-                contentDescription = "Run",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(22.dp).clickable { run() },
-            )
         }
     }
 }
