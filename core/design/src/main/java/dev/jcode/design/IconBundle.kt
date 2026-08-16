@@ -14,6 +14,8 @@ import androidx.compose.material.icons.automirrored.rounded.MenuOpen
 import androidx.compose.material.icons.automirrored.rounded.Redo
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.ArrowUpward
@@ -91,6 +93,7 @@ enum class JCodeIcon {
     DropDown, ChevronDown, ChevronUp, ChevronRight, ArrowUp, ArrowBack, ArrowForward, MenuToggle, Help,
     Copy, Cut, Delete, Open, Rename, SelectAll, Clear, Definition, References, Format,
     Preview, Pin, Palette, CommandPalette, ScreenRotation, Fullscreen, KeepAwake,
+    Lock, LockOpen,
     TextIncrease, TextDecrease, GoToLine,
 }
 
@@ -128,6 +131,8 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.NewFile to Icons.Rounded.NoteAdd,
         JCodeIcon.Sdk to Icons.Rounded.BuildCircle,
         JCodeIcon.Palette to Icons.Rounded.Palette,
+        JCodeIcon.Lock to Icons.Rounded.Lock,
+        JCodeIcon.LockOpen to Icons.Rounded.LockOpen,
         JCodeIcon.CommandPalette to Icons.Rounded.KeyboardCommandKey,
         JCodeIcon.ScreenRotation to Icons.Rounded.ScreenRotation,
         JCodeIcon.Fullscreen to Icons.Rounded.Fullscreen,

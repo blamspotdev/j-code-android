@@ -2,6 +2,7 @@ package dev.jcode.workbench
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.view.inputmethod.EditorInfo
@@ -14,6 +15,7 @@ import android.webkit.WebSettings
 import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -34,11 +37,15 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -51,13 +58,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.jcode.design.CompactContextMenu
@@ -65,6 +75,7 @@ import dev.jcode.design.ContextAction
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.jcIcon
 import dev.jcode.run.ProjectRunner
+import java.text.DateFormat
 import org.json.JSONObject
 
 /** Keeps the soft keyboard out of the IME's fullscreen "extract" mode so a focused input inside the
@@ -142,6 +153,7 @@ fun BrowserPage(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var menuOpen by remember { mutableStateOf(false) }
+    var siteInfoOpen by remember { mutableStateOf(false) }
 
     Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         // One compact row. The bar was built out of default 48dp icon buttons over a field with 9dp
@@ -182,19 +194,41 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                 shape = RoundedCornerShape(7.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
             ) {
-                BasicTextField(
-                    value = address,
-                    onValueChange = { address = it; editing = true },
-                    singleLine = true,
-                    textStyle = LocalTextStyle.current.copy(
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = MaterialTheme.typography.bodySmall.fontSize,
-                    ),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
-                    keyboardActions = KeyboardActions(onGo = { go(address) }),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box {
+                        val trust = trustOf(BuiltinBrowser.currentUrl.value)
+                        IconButton(
+                            onClick = { siteInfoOpen = true },
+                            modifier = Modifier.size(26.dp),
+                        ) {
+                            Icon(
+                                jcIcon(trust.icon),
+                                contentDescription = "Site information: ${trust.summary}",
+                                tint = trust.tint(),
+                                modifier = Modifier.size(14.dp),
+                            )
+                        }
+                        SiteInfoPanel(
+                            expanded = siteInfoOpen,
+                            onDismiss = { siteInfoOpen = false },
+                            trust = trust,
+                            webView = webView,
+                        )
+                    }
+                    BasicTextField(
+                        value = address,
+                        onValueChange = { address = it; editing = true },
+                        singleLine = true,
+                        textStyle = LocalTextStyle.current.copy(
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = MaterialTheme.typography.bodySmall.fontSize,
+                        ),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+                        keyboardActions = KeyboardActions(onGo = { go(address) }),
+                        modifier = Modifier.weight(1f).padding(end = 8.dp, top = 6.dp, bottom = 6.dp),
+                    )
+                }
             }
             Box {
                 IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(30.dp)) {
@@ -249,6 +283,9 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                     wv.addJavascriptInterface(DevToolsBridge(), "JCodeDevTools")
                     wv.webViewClient = object : WebViewClient() {
                         override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                            // Dropped at the start of every load: a heading showing the last site's
+                            // mark beside this site's host is the one mistake this panel must not make.
+                            BuiltinBrowser.favicon.value = favicon
                             BuiltinBrowser.loading.value = true
                             BuiltinBrowser.currentUrl.value = url
                             view.evaluateJavascript(NET_SHIM_JS, null)
@@ -268,6 +305,9 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                     wv.webChromeClient = object : WebChromeClient() {
                         override fun onProgressChanged(view: WebView, newProgress: Int) {
                             BuiltinBrowser.progress.value = newProgress
+                        }
+                        override fun onReceivedIcon(view: WebView, icon: android.graphics.Bitmap?) {
+                            BuiltinBrowser.favicon.value = icon
                         }
                         override fun onReceivedTitle(view: WebView, title: String?) {
                             BuiltinBrowser.title.value = title?.ifBlank { "Browser" } ?: "Browser"
@@ -301,6 +341,198 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                 },
             )
         }
+    }
+}
+
+/**
+ * What the address bar's leading mark says about the connection.
+ *
+ * A padlock and not the site's own icon, which is what a favicon is: the question the slot answers
+ * is whether what is on the screen came from where it says it did, and a picture the site supplied
+ * cannot be evidence about the site. Browsers learned this the hard way — a favicon of a padlock was
+ * a phishing kit's first move — and the favicon is in the panel's heading instead, next to the host,
+ * where identifying is all it is being asked to do.
+ */
+private enum class SiteTrust(val icon: JCodeIcon, val summary: String, val detail: String) {
+    Secure(
+        JCodeIcon.Lock,
+        "connection is secure",
+        "Encrypted between this device and the site. What was sent cannot be read or changed on the way.",
+    ),
+    Insecure(
+        JCodeIcon.LockOpen,
+        "connection is not secure",
+        "Sent in the clear over HTTP. Anything on the network between here and the server can read it " +
+            "and change it — ordinary for a dev server on this machine, and worth noticing anywhere else.",
+    ),
+    Local(
+        JCodeIcon.Files,
+        "local file",
+        "Loaded from this device rather than fetched over a network.",
+    ),
+    Blank(
+        JCodeIcon.Browser,
+        "no page loaded",
+        "Nothing has been loaded into this tab yet.",
+    );
+
+    @Composable
+    fun tint(): Color = when (this) {
+        Secure -> MaterialTheme.colorScheme.primary
+        Insecure -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+}
+
+private fun trustOf(url: String): SiteTrust = when (Uri.parse(url).scheme?.lowercase()) {
+    "https" -> SiteTrust.Secure
+    "http" -> SiteTrust.Insecure
+    "file", "content" -> SiteTrust.Local
+    else -> SiteTrust.Blank
+}
+
+/**
+ * What this one site is, is allowed to remember, and was served by.
+ *
+ * Everything here is about the *current origin*, which is what separates it from the overflow menu:
+ * that one clears every site's cookies because it is a blunt instrument for starting again, and this
+ * one clears the cookies of the thing being looked at, because a login you are debugging is not a
+ * reason to sign out of everything else.
+ *
+ * The rows are the questions a browser is actually asked. What is this connection, who says so
+ * (certificate), what has it stored on me (cookies, site data). Nothing about trackers, because
+ * nothing here blocks any and a row claiming otherwise would be worse than no row.
+ */
+@Composable
+private fun SiteInfoPanel(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    trust: SiteTrust,
+    webView: WebView?,
+) {
+    val url = BuiltinBrowser.currentUrl.value
+    val uri = remember(url) { Uri.parse(url) }
+    val host = uri.host?.takeIf { it.isNotBlank() } ?: url.ifBlank { "about:blank" }
+    val origin = remember(url) { uri.scheme?.let { "$it://${uri.authority}" }.orEmpty() }
+
+    // Re-read each time the panel opens: cookies and storage change under a page without anything
+    // telling the composition, so a value remembered from last time is a value that is quietly wrong.
+    var cookies by remember { mutableStateOf(0) }
+    var storage by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(expanded, url) {
+        if (!expanded) return@LaunchedEffect
+        cookies = runCatching { CookieManager.getInstance().getCookie(url) }
+            .getOrNull()
+            ?.split(';')
+            ?.count { it.isNotBlank() }
+            ?: 0
+        storage = null
+        // Asked of the page rather than of WebStorage, whose `getOrigins` only knows about the
+        // quota-managed APIs and answers "nothing" for the one storage anybody actually uses. A row
+        // that says None whatever the site has stored is worse than no row: it is a wrong answer to
+        // the question a dev opened this panel to ask.
+        BuiltinBrowser.controller?.eval(STORAGE_COUNT_JS) { result ->
+            val counts = result.trim('"').split('|')
+            val local = counts.getOrNull(0)?.toIntOrNull() ?: 0
+            val session = counts.getOrNull(1)?.toIntOrNull() ?: 0
+            storage = when {
+                local == 0 && session == 0 -> "None"
+                session == 0 -> "$local in localStorage"
+                local == 0 -> "$session in sessionStorage"
+                else -> "$local local, $session session"
+            }
+        } ?: run { storage = "None" }
+    }
+
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp).width(260.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                BuiltinBrowser.favicon.value?.let { icon ->
+                    Image(
+                        bitmap = icon.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp).padding(end = 6.dp),
+                    )
+                }
+                Text(host, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Row(
+                modifier = Modifier.padding(top = 8.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Icon(
+                    jcIcon(trust.icon),
+                    contentDescription = null,
+                    tint = trust.tint(),
+                    modifier = Modifier.size(15.dp).padding(top = 2.dp),
+                )
+                Column(modifier = Modifier.padding(start = 8.dp)) {
+                    Text(
+                        trust.summary.replaceFirstChar { it.uppercase() },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = trust.tint(),
+                    )
+                    Text(
+                        trust.detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            // Who says so. Only https has an answer, and it is the answer a padlock is shorthand for.
+            webView?.certificate?.let { cert ->
+                SiteInfoRow("Issued to", cert.issuedTo?.cName?.ifBlank { host } ?: host)
+                SiteInfoRow("Issued by", cert.issuedBy?.oName?.ifBlank { "—" } ?: "—")
+                SiteInfoRow("Expires", cert.validNotAfterDate?.let { DateFormat.getDateInstance().format(it) } ?: "—")
+            }
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            SiteInfoRow("Cookies", if (cookies == 0) "None" else "$cookies for this site")
+            SiteInfoRow("Site data", storage ?: "Reading…")
+            TextButton(
+                onClick = {
+                    // This origin only. The overflow menu is where "forget everything" lives.
+                    runCatching { CookieManager.getInstance().getCookie(url) }.getOrNull()
+                        ?.split(';')
+                        ?.mapNotNull { it.substringBefore('=').trim().takeIf(String::isNotBlank) }
+                        ?.forEach { name ->
+                            // Expiring it in the past is how a cookie is deleted; there is no
+                            // per-site remove in CookieManager.
+                            CookieManager.getInstance()
+                                .setCookie(url, "$name=; Max-Age=0; Path=/")
+                        }
+                    CookieManager.getInstance().flush()
+                    if (origin.isNotBlank()) runCatching { WebStorage.getInstance().deleteOrigin(origin) }
+                    // The same two the row counts, or the button would clear something else.
+                    BuiltinBrowser.controller?.eval(STORAGE_CLEAR_JS) {}
+                    cookies = 0
+                    storage = "None"
+                    webView?.reload()
+                    onDismiss()
+                },
+                enabled = trust != SiteTrust.Blank,
+                modifier = Modifier.padding(top = 2.dp),
+            ) {
+                Text("Clear this site's data", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SiteInfoRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(74.dp),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -395,6 +627,14 @@ private fun desktopUserAgent(context: android.content.Context): String {
     return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) " +
         "Chrome/$chrome Safari/537.36"
 }
+
+/** How much this origin is keeping, counted where it is actually kept. Guarded: a page on `file://`
+ *  or with storage blocked throws on the property access rather than returning empty. */
+private const val STORAGE_COUNT_JS =
+    "(function(){var l=0,s=0;try{l=localStorage.length}catch(e){};try{s=sessionStorage.length}catch(e){};return l+'|'+s})()"
+
+private const val STORAGE_CLEAR_JS =
+    "(function(){try{localStorage.clear()}catch(e){};try{sessionStorage.clear()}catch(e){};return 1})()"
 
 /** Monkeypatches `fetch` and `XMLHttpRequest` to report method/url/status/timing to the DevTools
  *  Network panel via the JCodeDevTools bridge. Idempotent (guarded), injected on each page load. */

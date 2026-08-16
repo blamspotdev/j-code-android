@@ -64,6 +64,16 @@ object BuiltinBrowser {
      */
     val desktopMode = mutableStateOf(false)
 
+    /**
+     * The page's own icon, as the page hands it over.
+     *
+     * Deliberately *not* what the address bar's indicator draws: that slot says whether the
+     * connection can be trusted, and a mark supplied by the site being asked about is the one thing
+     * that cannot answer it. It identifies instead — in the site panel's heading, beside the host —
+     * which is the job it is good at.
+     */
+    val favicon = mutableStateOf<android.graphics.Bitmap?>(null)
+
     val console = mutableStateListOf<BrowserConsoleEntry>()
     val network = mutableStateListOf<BrowserNetworkEntry>()
 
