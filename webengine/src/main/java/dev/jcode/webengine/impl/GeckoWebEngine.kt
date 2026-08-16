@@ -45,7 +45,30 @@ class GeckoWebEngine(private val appContext: Context) : WebEngine {
                     else GeckoRuntimeSettings.COLOR_SCHEME_LIGHT,
                 )
                 .build()
-            return GeckoRuntime.create(appContext, settings).also { runtime = it }
+            return GeckoRuntime.create(omniContext(), settings).also { runtime = it }
+        }
+    }
+
+    /**
+     * The context Gecko boots against, with one correction: [Context.getPackageResourcePath]
+     * answers with the engine split's APK instead of the base APK.
+     *
+     * Gecko assumes it was packaged in the base APK — GeckoThread passes
+     * `-greomni getPackageResourcePath()` as the first argument, and an `omni.ja` that isn't at
+     * that path is a segfault at 0x30 in GeckoThread.run (measured on the Odin2). Appending our
+     * own `-greomni` loses: Gecko takes the first occurrence. The path Gecko uses is asked of the
+     * context it was created with, so a wrapper that answers with `split_webengine.apk` — and
+     * returns itself from [getApplicationContext] so the wrapper survives Gecko's own
+     * `getApplicationContext()` hop — puts every Gecko payload lookup where the payload actually
+     * lives. Verified against the AAR's bytecode (GeckoThread.getMainProcessArgs).
+     */
+    private fun omniContext(): Context {
+        val split = appContext.applicationInfo.splitSourceDirs
+            ?.firstOrNull { it.contains("webengine") }
+            ?: return appContext
+        return object : android.content.ContextWrapper(appContext) {
+            override fun getPackageResourcePath(): String = split
+            override fun getApplicationContext(): Context = this
         }
     }
 
