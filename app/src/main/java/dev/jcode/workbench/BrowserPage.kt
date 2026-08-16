@@ -9,6 +9,9 @@ import android.view.inputmethod.InputConnection
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
+import android.webkit.CookieManager
+import android.webkit.WebSettings
+import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
@@ -49,11 +52,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import dev.jcode.design.CompactContextMenu
+import dev.jcode.design.ContextAction
+import dev.jcode.design.JCodeIcon
+import dev.jcode.design.jcIcon
+import dev.jcode.run.ProjectRunner
 import org.json.JSONObject
 
 /** Keeps the soft keyboard out of the IME's fullscreen "extract" mode so a focused input inside the
@@ -128,28 +139,47 @@ fun BrowserPage(modifier: Modifier = Modifier) {
         BuiltinBrowser.currentUrl.value = url
     }
 
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    var menuOpen by remember { mutableStateOf(false) }
+
     Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        // One compact row. The bar was built out of default 48dp icon buttons over a field with 9dp
+        // of its own padding, which is a phone browser's chrome on a pane that is already sharing a
+        // screen with the editor, the tab strip and the workbench header — nearly sixty density-
+        // independent pixels of frame around a page that is the entire point of the tab.
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            horizontalArrangement = Arrangement.spacedBy(1.dp),
         ) {
-            IconButton(onClick = { webView?.goBack() }, enabled = BuiltinBrowser.canGoBack.value) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", modifier = Modifier.size(20.dp))
+            IconButton(
+                onClick = { webView?.goBack() },
+                enabled = BuiltinBrowser.canGoBack.value,
+                modifier = Modifier.size(30.dp),
+            ) {
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", modifier = Modifier.size(17.dp))
             }
-            IconButton(onClick = { webView?.goForward() }, enabled = BuiltinBrowser.canGoForward.value) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = "Forward", modifier = Modifier.size(20.dp))
+            IconButton(
+                onClick = { webView?.goForward() },
+                enabled = BuiltinBrowser.canGoForward.value,
+                modifier = Modifier.size(30.dp),
+            ) {
+                Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = "Forward", modifier = Modifier.size(17.dp))
             }
-            IconButton(onClick = { if (BuiltinBrowser.loading.value) webView?.stopLoading() else webView?.reload() }) {
+            IconButton(
+                onClick = { if (BuiltinBrowser.loading.value) webView?.stopLoading() else webView?.reload() },
+                modifier = Modifier.size(30.dp),
+            ) {
                 Icon(
                     if (BuiltinBrowser.loading.value) Icons.Rounded.Close else Icons.Rounded.Refresh,
                     contentDescription = if (BuiltinBrowser.loading.value) "Stop" else "Reload",
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(16.dp),
                 )
             }
             Surface(
                 modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(7.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
             ) {
                 BasicTextField(
@@ -163,7 +193,23 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
                     keyboardActions = KeyboardActions(onGo = { go(address) }),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                )
+            }
+            Box {
+                IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(30.dp)) {
+                    Icon(
+                        jcIcon(JCodeIcon.MoreVert),
+                        contentDescription = "More browser options",
+                        modifier = Modifier.size(17.dp),
+                    )
+                }
+                BrowserMenu(
+                    expanded = menuOpen,
+                    onDismiss = { menuOpen = false },
+                    webView = webView,
+                    context = context,
+                    onCopyUrl = { clipboard.setText(AnnotatedString(BuiltinBrowser.currentUrl.value)) },
                 )
             }
         }
@@ -194,6 +240,12 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                     wv.settings.builtInZoomControls = true
                     wv.settings.displayZoomControls = false
                     wv.settings.mediaPlaybackRequiresUserGesture = false
+                    // Applied on creation, not only on the toggle: the WebView is destroyed whenever
+                    // this tab is not the one on screen, so a mode set here has to be re-stated to
+                    // every WebView after it or comparing two layouts means setting it each time.
+                    if (BuiltinBrowser.desktopMode.value) {
+                        wv.settings.userAgentString = desktopUserAgent(ctx)
+                    }
                     wv.addJavascriptInterface(DevToolsBridge(), "JCodeDevTools")
                     wv.webViewClient = object : WebViewClient() {
                         override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
@@ -250,6 +302,98 @@ fun BrowserPage(modifier: Modifier = Modifier) {
             )
         }
     }
+}
+
+/**
+ * Everything the toolbar has no room for, behind one button.
+ *
+ * The bar carries what is pressed on the way somewhere — back, forward, reload, the address. These
+ * are the ones pressed *about* a page, which is a different frequency: a person clears site data
+ * once an afternoon and would still rather it were two taps away than a paragraph in a README.
+ *
+ * They are the ones a **built-in** browser is for, too. This one exists to look at a dev server on
+ * the machine it is being written on, so the list is what that job asks for and not what a phone
+ * browser ships: how the server sees this client, what it is allowed to remember, and the two ways
+ * out of here — the system's own browser, and DevTools.
+ */
+@Composable
+private fun BrowserMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    webView: WebView?,
+    context: android.content.Context,
+    onCopyUrl: () -> Unit,
+) {
+    val desktop = BuiltinBrowser.desktopMode.value
+    CompactContextMenu(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        listActions = listOf(
+            ContextAction(
+                icon = JCodeIcon.Preview,
+                // The action, not the state: a row that reads "Desktop site" with no tick beside it
+                // is a question about which of the two it is telling you.
+                label = if (desktop) "Request mobile site" else "Request desktop site",
+                enabled = webView != null,
+            ) {
+                BuiltinBrowser.desktopMode.value = !desktop
+                webView?.let { wv ->
+                    wv.settings.userAgentString = if (desktop) null else desktopUserAgent(context)
+                    // The server was told the old thing; only a fresh request unsays it.
+                    wv.reload()
+                }
+            },
+            ContextAction(
+                icon = JCodeIcon.Refresh,
+                label = "Reload without cache",
+                enabled = webView != null,
+            ) {
+                // The one a dev server asks for by the hour: a preview that keeps serving last
+                // build's bundle looks exactly like a change that did not work.
+                webView?.clearCache(true)
+                webView?.reload()
+            },
+            ContextAction(
+                icon = JCodeIcon.Delete,
+                label = "Clear cookies and site data",
+                destructive = true,
+                enabled = webView != null,
+            ) {
+                CookieManager.getInstance().removeAllCookies(null)
+                CookieManager.getInstance().flush()
+                WebStorage.getInstance().deleteAllData()
+                webView?.clearCache(true)
+                // Reloaded so the clearing is something you can see happen. Nothing about a cleared
+                // localStorage shows on a page that is still the one it was drawn from.
+                webView?.reload()
+            },
+            ContextAction(icon = JCodeIcon.Copy, label = "Copy URL", onClick = onCopyUrl),
+            ContextAction(icon = JCodeIcon.Open, label = "Open in system browser") {
+                ProjectRunner.openInBrowser(context, BuiltinBrowser.currentUrl.value)
+            },
+            ContextAction(icon = JCodeIcon.DevTools, label = "DevTools") {
+                // The same signal a preview sends, which is what reveals the drawer panel; the
+                // browser tab it also focuses is the one already in front.
+                BuiltinBrowser.requestOpen()
+            },
+        ),
+    )
+}
+
+/**
+ * The device's own user agent, said the way a desktop says it.
+ *
+ * Composed from [WebSettings.getDefaultUserAgent] rather than written down, so the engine version in
+ * it is the version actually rendering the page — a made-up Chrome number is a lie a server can act
+ * on, and this browser exists to show what a server does. That static is also why the mobile string
+ * can be recovered: it answers with the device default however many times the setting has been
+ * overwritten, which reading the setting back would not.
+ */
+private fun desktopUserAgent(context: android.content.Context): String {
+    val mobile = runCatching { WebSettings.getDefaultUserAgent(context) }.getOrDefault("")
+    val chrome = Regex("Chrome/([\\d.]+)").find(mobile)?.groupValues?.getOrNull(1) ?: "120.0.0.0"
+    return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+        "Chrome/$chrome Safari/537.36"
 }
 
 /** Monkeypatches `fetch` and `XMLHttpRequest` to report method/url/status/timing to the DevTools

@@ -55,6 +55,15 @@ object BuiltinBrowser {
     val canGoBack = mutableStateOf(false)
     val canGoForward = mutableStateOf(false)
 
+    /**
+     * Whether the page is being asked for as a desktop would ask for it.
+     *
+     * Here rather than in [BrowserPage] because it has to outlive the page: the tab's WebView is
+     * destroyed whenever the tab is not the one on screen, and a mode that reset itself every time
+     * you looked at something else would be a mode nobody could use to compare two layouts.
+     */
+    val desktopMode = mutableStateOf(false)
+
     val console = mutableStateListOf<BrowserConsoleEntry>()
     val network = mutableStateListOf<BrowserNetworkEntry>()
 
