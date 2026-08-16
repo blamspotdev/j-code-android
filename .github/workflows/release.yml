@@ -34,9 +34,9 @@ on:
         options: [beta, stable]
         default: beta
       label:
-        description: 'Pre-release label, alpha.N | beta.N | rc.N (ignored for stable)'
+        description: 'Blank = the next beta. Or a tier (alpha|beta|rc) for the next in that line, or an exact alpha.N|beta.N|rc.N. Ignored for stable.'
         type: string
-        default: beta.1
+        default: ''
 
 permissions:
   contents: write
@@ -55,9 +55,12 @@ jobs:
 
       # Everything downstream reads these, so they are worked out once, here, from the same rules
       # the local scripts use — see scripts/build-release-common.sh.
+      # Everything downstream reads these, and the whole of it is worked out before anything
+      # expensive runs — a build that cannot be published should fail in seconds, not in an hour.
       - name: Work out what is being published
         id: v
         env:
+          GH_TOKEN: ${{ github.token }}
           CHANNEL: ${{ inputs.channel }}
           LABEL: ${{ inputs.label }}
         run: |
@@ -65,39 +68,81 @@ jobs:
           version="$(sed -n 's/^val jcodeVersion = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)"
           [ -n "$version" ] || { echo "::error::no 'val jcodeVersion' in app/build.gradle.kts"; exit 1; }
 
+          # versionCode = (MAJOR*10000 + MINOR*100 + PATCH) * 100 + tier.
+          # MUST MATCH app/build.gradle.kts, build-release-common.sh and build-release.ps1.
+          version_code() {
+            echo "$1" | awk -v label="$2" -F. '{
+                base = $1 * 10000 + $2 * 100 + $3
+                step = 0
+                if (match(label, /[0-9]+$/)) step = substr(label, RSTART, RLENGTH) + 0
+                if (label ~ /^alpha/)     tier = step
+                else if (label ~ /^beta/) tier = 30 + step
+                else if (label ~ /^rc/)   tier = 60 + step
+                else                      tier = 99
+                if (tier > 99) tier = 99
+                if (tier < 0)  tier = 0
+                printf "%d", base * 100 + tier
+            }'
+          }
+
+          # What this train has already published. The number in a label is derivable from it, and
+          # anything derivable is not somebody's job to remember.
+          published="$(gh release list --limit 200 --json tagName --jq '.[].tagName' 2>/dev/null || true)"
+          escaped="$(printf '%s' "$version" | sed 's/\./\\./g')"
+
           if [ "$CHANNEL" = "beta" ]; then
-            # Refused rather than accepted-and-mangled: an unrecognised label falls to the release
-            # tier below, so a preview would derive the SAME versionCode as the release it is
-            # previewing. See app/build.gradle.kts.
-            case "$LABEL" in
-              alpha.[0-9]* | beta.[0-9]* | rc.[0-9]*) : ;;
-              *) echo "::error::label must be alpha.N, beta.N or rc.N (got '$LABEL')"; exit 1 ;;
+            # Blank asks for the next beta; a bare tier asks for the next in that line; a full
+            # label pins one exactly. Anything else is refused rather than accepted-and-mangled —
+            # an unrecognised label falls to the release tier in the derivation above, so a preview
+            # would take the very version code of the release it is previewing.
+            case "${LABEL:-}" in
+              '')                tier="beta";          step="" ;;
+              alpha | beta | rc) tier="$LABEL";        step="" ;;
+              alpha.[0-9]* | beta.[0-9]* | rc.[0-9]*)
+                                 tier="${LABEL%%.*}";  step="${LABEL#*.}" ;;
+              *)
+                echo "::error::label must be blank, a tier (alpha|beta|rc), or alpha.N|beta.N|rc.N — got '$LABEL'"
+                exit 1
+                ;;
             esac
-            version_name="$version-$LABEL"
-            label="$LABEL"
+            if [ -z "$step" ]; then
+              # One past the highest already out in this line. A new train starts back at 1 by
+              # itself, because v1.6.0-beta.* is a different prefix from v1.5.0-beta.*.
+              highest="$(printf '%s\n' "$published" \
+                | sed -n "s/^v${escaped}-${tier}\.\([0-9][0-9]*\)$/\1/p" \
+                | sort -n | tail -1)"
+              step="$(( ${highest:-0} + 1 ))"
+            fi
+            label="$tier.$step"
+            version_name="$version-$label"
             id_suffix=".beta"
             variant="beta"
           else
-            version_name="$version"
             label=""
+            version_name="$version"
             id_suffix=""
             variant="release"
           fi
+          code="$(version_code "$version" "$label")"
 
-          # versionCode = (MAJOR*10000 + MINOR*100 + PATCH) * 100 + tier.
-          # MUST MATCH app/build.gradle.kts, build-release-common.sh and build-release.ps1.
-          code="$(echo "$version" | awk -v label="$label" -F. '{
-              base = $1 * 10000 + $2 * 100 + $3
-              step = 0
-              if (match(label, /[0-9]+$/)) step = substr(label, RSTART, RLENGTH) + 0
-              if (label ~ /^alpha/)     tier = step
-              else if (label ~ /^beta/) tier = 30 + step
-              else if (label ~ /^rc/)   tier = 60 + step
-              else                      tier = 99
-              if (tier > 99) tier = 99
-              if (tier < 0)  tier = 0
-              printf "%d", base * 100 + tier
-          }')"
+          # Nothing already published for this train may be at or above what is about to be built.
+          # That covers republishing a label — which `gh release create` would only reject at the
+          # very last step, an hour in — and, for a label given by hand, going *backwards*: a tag
+          # check cannot see that one, and it would put a lower version code on devices already
+          # carrying a higher one.
+          for tag in $published; do
+            case "$tag" in
+              "v$version" | "v$version"-*) : ;;
+              *) continue ;;
+            esac
+            other="${tag#v$version}"
+            other="${other#-}"
+            other_code="$(version_code "$version" "$other")"
+            if [ "$other_code" -ge "$code" ]; then
+              echo "::error::$tag is already published at versionCode $other_code, and v$version_name would be $code — a release has to climb above everything before it."
+              exit 1
+            fi
+          done
 
           {
             echo "version_name=$version_name"
@@ -107,20 +152,7 @@ jobs:
             echo "tag=v$version_name"
             echo "apk=jcode-v$version_name-$code-$variant.apk"
           } >> "$GITHUB_OUTPUT"
-          echo "Publishing v$version_name ($code) on the $CHANNEL channel." >> "$GITHUB_STEP_SUMMARY"
-
-      # Checked before an hour of building rather than after: a tag that already exists means this
-      # label has been published, and `gh release create` would fail at the very last step.
-      - name: Refuse a tag that already exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.v.outputs.tag }}
-        run: |
-          set -eu
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::error::$TAG is already published — bump the label (beta.N) or the train."
-            exit 1
-          fi
+          echo "Publishing **v$version_name** ($code) on the \`$CHANNEL\` channel." >> "$GITHUB_STEP_SUMMARY"
 
       # wasmtime's build tree plus the NDK is more than the runner has spare with the preinstalled
       # toolchains still on it. These two are the large ones JCode does not use.
