@@ -248,7 +248,15 @@ repository says it is preparing. What you choose is the channel:
 | `stable` | `1.5.0` | `v1.5.0` | `dev.jcode` | release |
 
 It builds the Rust JNI libraries, assembles, signs with `apksigner`, verifies the signature, then
-creates the tag and the release with the APK attached. The tag is created *by* the publish step
+creates the tag and the release with the APK attached.
+
+> **CMake is chosen, not pinned.** `native/CMakeLists.txt` uses `$<LINK_LIBRARY:WHOLE_ARCHIVE,…>`,
+> so the resolver in the root `build.gradle.kts` discards every installed version below 3.24 —
+> `cmake;3.22.1` included, which is what the SDK installs by default and what the *release scripts*
+> still pin. With nothing usable installed the resolver names `3.28.3`, which the SDK does not
+> publish as a package at all; AGP then builds with something else and the release dies merging
+> native libraries, the cargo-less stub arriving beside the real cargo library under one name. The
+> workflow takes the newest CMake `sdkmanager` offers and fails outright if that is below 3.24. The tag is created *by* the publish step
 (`--target`), so a failed build never leaves a tag pointing at a release that does not exist, and an
 already-published tag is refused before the build rather than after it.
 
