@@ -174,23 +174,29 @@ shipped cannot be previewed again: open the next one instead.
 
 ### 4.3 Opening the next train
 
-`.github/workflows/version-bump.yml` raises the **minor** part when a stable release is published,
-and only when the version that shipped is the one `main` is carrying — so a hotfix released off an
-older line never skips the open train. It can also be run by hand for any level. It pushes to `main`
-directly where the `protect-main` ruleset allows it and falls back to a PR on `chore/bump-version`
-otherwise. See [CI, quality and invariants](03-ci-quality-and-invariants.md).
+`.github/workflows/version-bump.yml` raises the **minor** part, and is **dispatched, never triggered
+by an event**: `release.yml` asks for it at the end of a stable publish. Running it by hand for any
+level is the other way in, and that is **admin-only** — the same check as `release.yml`, skipped only
+for the dispatch from `release.yml`, which arrives as `github-actions[bot]`.
 
-> **`release.yml` asks for the bump; it does not rely on the event.** A release created with
-> `GITHUB_TOKEN` raises no events that start other workflows — the loop guard — so the
-> `release: published` trigger would never have heard the releases this project actually publishes.
-> `workflow_dispatch` is one of the two exceptions to that rule, so the publish job ends by
-> dispatching `version-bump.yml` directly. The `release` trigger remains for a release published by
-> hand in the UI.
+> **It used to also listen for `release: published`, and that trigger is gone.** Three reasons at
+> once. A release created with `GITHUB_TOKEN` raises no events that start other workflows — the loop
+> guard — so it would never have heard this project's own releases. A `release` run's ref is the
+> *tag*, so the `main`-only environment below would refuse it. And **anyone with push access can
+> publish a release**, which made it the one way into this workflow that was not admin-gated.
 
-Running it by hand is **admin-only**, checked the same way as `release.yml` and for the same reason:
-the job pushes to `main` under a repository-admin PAT. The check is skipped for the two paths with
-no person behind them — the `release` event, and the dispatch from `release.yml`, which arrives as
-`github-actions[bot]`.
+It pushes to `main` directly. `protect-main` requires a pull request and binds every actor not on
+its bypass list; **"Repository admin" is on that list**, so the job checks out with a PAT.
+
+That PAT is an **environment secret on `version-bump`**, not a repository secret, for the reason
+given in §6.1: a repository secret is readable by a workflow on any branch, so anyone with push
+access could take it and push to `main` themselves — the exact rule it exists to bypass. The
+environment's deployment branch policy is `main` alone and it carries **no reviewers**, because this
+is the tail of a release that has already been approved and a second gate would only leave `main`
+carrying a version that has shipped.
+
+Without the PAT the push is refused and the run offers the bump as a PR on `chore/bump-version`.
+Nothing is lost; it just needs merging by hand, and the run summary says so.
 
 > **The formula is duplicated in four places** and they must agree: `app/build.gradle.kts`
 > (`jcodeVersionCode`), `scripts/build-release.ps1` (`$Code`),
