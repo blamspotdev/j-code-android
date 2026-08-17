@@ -343,6 +343,7 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                     // every WebView after it or comparing two layouts means setting it each time.
                     if (BuiltinBrowser.desktopMode.value) {
                         wv.settings.userAgentString = desktopUserAgent(ctx)
+                        wv.setInitialScale(desktopScalePercent(wv))
                     }
                     wv.addJavascriptInterface(DevToolsBridge(), "JCodeDevTools")
                     // Claim the gesture the moment a finger lands on the page, or the workbench's
@@ -370,6 +371,10 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                             BuiltinBrowser.currentUrl.value = url
                             // Before the shim, so the new page's first requests survive the clear.
                             BuiltinBrowser.onNavigate()
+                            if (BuiltinBrowser.desktopMode.value) {
+                                view.setInitialScale(desktopScalePercent(view))
+                                view.evaluateJavascript(DESKTOP_VIEWPORT_JS, null)
+                            }
                             view.evaluateJavascript(VIEWPORT_FIX_JS, null)
                             view.evaluateJavascript(NET_SHIM_JS, null)
                         }
@@ -378,6 +383,14 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                             BuiltinBrowser.currentUrl.value = url
                             BuiltinBrowser.canGoBack.value = view.canGoBack()
                             BuiltinBrowser.canGoForward.value = view.canGoForward()
+                            if (BuiltinBrowser.desktopMode.value) {
+                                view.evaluateJavascript(DESKTOP_VIEWPORT_JS, null)
+                                // Twice: the widened layout has to have been applied before the fit is
+                                // measured, and a framework that rewrites the viewport tag on mount
+                                // moves the target after the first one.
+                                view.postDelayed({ fitDesktopWidth(view) }, 400)
+                                view.postDelayed({ fitDesktopWidth(view) }, 1500)
+                            }
                             view.evaluateJavascript(VIEWPORT_FIX_JS, null)
                             view.evaluateJavascript(NET_SHIM_JS, null)
                         }
@@ -660,6 +673,9 @@ private fun BrowserMenu(
                 BuiltinBrowser.desktopMode.value = !desktop
                 webView?.let { wv ->
                     wv.settings.userAgentString = if (desktop) null else desktopUserAgent(context)
+                    // Back to the WebView's own default (0) on the way out, or the page stays zoomed
+                    // out after the layout it was zoomed out for is gone.
+                    wv.setInitialScale(if (desktop) 0 else desktopScalePercent(wv))
                     // The server was told the old thing; only a fresh request unsays it.
                     wv.reload()
                 }
@@ -710,6 +726,85 @@ private fun BrowserMenu(
  * can be recovered: it answers with the device default however many times the setting has been
  * overwritten, which reading the setting back would not.
  */
+/**
+ * Zoom a [DESKTOP_WIDTH_CSS]-wide layout down until the whole width is on screen.
+ *
+ * The declarative routes both lose to the page: `setInitialScale` and an injected `initial-scale` are
+ * read off the *first* viewport tag the parser sees, which is the site's own, so widening the layout
+ * afterwards left Google's results at 1:1 with two thirds of the page off the right edge — measured.
+ * The zoom is therefore applied to the WebView after the fact, from what the page reports it can
+ * actually see: `zoomBy` multiplies the scale, so the factor that turns a [visibleCssWidth]-wide view
+ * into a [DESKTOP_WIDTH_CSS]-wide one is simply their ratio.
+ */
+private fun fitDesktopWidth(view: WebView) {
+    view.evaluateJavascript(
+        "(window.visualViewport ? Math.round(window.visualViewport.width) : window.innerWidth)",
+    ) { result ->
+        val visibleCssWidth = result?.trim('"')?.toFloatOrNull() ?: return@evaluateJavascript
+        if (visibleCssWidth <= 0f) return@evaluateJavascript
+        val factor = visibleCssWidth / DESKTOP_WIDTH_CSS
+        // Only ever zoom out, and not for the rounding error of an already-fitting page.
+        if (factor in 0.01f..0.98f) runCatching { view.zoomBy(factor) }
+    }
+}
+
+/**
+ * The same fit as a percentage for [WebView.setInitialScale], which is the one that lands before the
+ * first paint on a page that has no viewport tag of its own. A CSS pixel at 100% is a
+ * density-independent pixel, so the screen is `widthPixels / density` CSS px wide.
+ */
+private fun desktopScalePercent(view: WebView): Int {
+    val metrics = view.resources.displayMetrics
+    val widthPx = if (view.width > 0) view.width.toFloat() else metrics.widthPixels.toFloat()
+    val widthDp = widthPx / metrics.density
+    return ((widthDp / DESKTOP_WIDTH_CSS) * 100f).toInt().coerceIn(25, 100)
+}
+
+/**
+ * The other half of "Request desktop site": lay the page out at a desktop *width*.
+ *
+ * Swapping the user agent only changes what the server is told. The layout viewport stays the phone's
+ * — measured on-device: with the desktop UA in place, `innerWidth` was still 468 — so a site that reads
+ * the agent and sends its desktop stylesheet gets that stylesheet applied to a 468px column and spills
+ * off the right edge (Google's results did exactly this), while a responsive site honours its own
+ * `width=device-width` and hands back the mobile layout the mode was asked to escape. Neither is what
+ * "desktop site" means, and both are what this browser did.
+ *
+ * A real browser's desktop mode also pins the layout viewport to a desktop width and zooms out to fit,
+ * which is what this does: rewrite (or add) the page's `viewport` meta to a fixed [DESKTOP_WIDTH_CSS]
+ * with the scale that fits that width on this screen, computed from the viewport width measured
+ * *before* the override so a second run cannot compound it. `useWideViewPort` is what makes the WebView
+ * honour the width; a `MutationObserver` re-asserts it because SPA frameworks rewrite the tag.
+ */
+private const val DESKTOP_WIDTH_CSS = 1280
+
+private const val DESKTOP_VIEWPORT_JS = """
+(function(){
+  var W = $DESKTOP_WIDTH_CSS;
+  if (window.__jcodeDesktopVP) return; window.__jcodeDesktopVP = true;
+  // The device's own width in CSS px, read before the override — after it, innerWidth reports W and
+  // computing the scale from it would just yield 1 and undo the fit.
+  var base = window.innerWidth > 0 ? window.innerWidth : (screen.width || W);
+  var want = 'width=' + W + ', initial-scale=' + (base / W) + ', minimum-scale=' + (base / W);
+  function apply(){
+    var d = document, head = d.head || d.documentElement;
+    if (!head) return;
+    var m = d.querySelector('meta[name="viewport"]');
+    if (!m) { m = d.createElement('meta'); m.setAttribute('name', 'viewport'); head.appendChild(m); }
+    if (m.getAttribute('content') !== want) m.setAttribute('content', want);
+  }
+  apply();
+  document.addEventListener('DOMContentLoaded', apply);
+  window.addEventListener('load', apply);
+  try {
+    new MutationObserver(apply).observe(document.documentElement, {
+      childList: true, subtree: true, attributes: true, attributeFilter: ['content'],
+    });
+  } catch (e) {}
+  var n = 0, t = setInterval(function(){ apply(); if (++n > 25) clearInterval(t); }, 200);
+})();
+"""
+
 private fun desktopUserAgent(context: android.content.Context): String {
     val mobile = runCatching { WebSettings.getDefaultUserAgent(context) }.getOrDefault("")
     val chrome = Regex("Chrome/([\\d.]+)").find(mobile)?.groupValues?.getOrNull(1) ?: "120.0.0.0"
