@@ -120,6 +120,9 @@ fun ManagerPanelHeader(
     onImport: (() -> Unit)? = null,
     importIcon: JCodeIcon = JCodeIcon.Open,
     importContentDescription: String = "Import",
+    onExtras: (() -> Unit)? = null,
+    extrasIcon: JCodeIcon = JCodeIcon.MoreVert,
+    extrasContentDescription: String = "More",
 ) {
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -129,6 +132,13 @@ fun ManagerPanelHeader(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
             )
+            if (onExtras != null) {
+                HeaderIconButton(
+                    icon = LocalIconBundle.current[extrasIcon],
+                    contentDescription = extrasContentDescription,
+                    onClick = onExtras,
+                )
+            }
             if (onImport != null) {
                 HeaderIconButton(
                     icon = LocalIconBundle.current[importIcon],

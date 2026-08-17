@@ -81,6 +81,7 @@ internal fun ExtensionsPanel(
     onOpenDetail: (String) -> Unit,
     onOpenPermissions: () -> Unit,
     onImportVsix: (() -> Unit)? = null,
+    onOpenSources: (() -> Unit)? = null,
     pendingReloadNames: List<String> = emptyList(),
     onReloadPending: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -111,6 +112,9 @@ internal fun ExtensionsPanel(
             manageContentDescription = "Extension settings",
             onImport = onImportVsix,
             importContentDescription = "Import a VS Code extension (.vsix)",
+            onExtras = onOpenSources,
+            extrasIcon = JCodeIcon.Sources,
+            extrasContentDescription = "Extension sources",
         )
 
         if (pendingReloadNames.isNotEmpty()) {

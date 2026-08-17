@@ -269,6 +269,7 @@ import dev.jcode.workbench.marketplace.VmPanel
 import dev.jcode.workbench.marketplace.hasVmManagerClient
 import dev.jcode.workbench.marketplace.ExtensionDetailPage
 import dev.jcode.workbench.marketplace.ExtensionPermissionsPage
+import dev.jcode.workbench.marketplace.ExtensionSourcesPage
 import dev.jcode.workbench.marketplace.LocalExtensionActivation
 import dev.jcode.workbench.marketplace.ExtensionsPanel
 import dev.jcode.workbench.DebugEditorState
@@ -278,7 +279,9 @@ import dev.jcode.workbench.LocalSdkInstallRequestedId
 import dev.jcode.workbench.LocalDebugCatalogState
 import dev.jcode.workbench.LocalDebugEditorState
 import dev.jcode.workbench.LocalDebugSession
+import dev.jcode.workbench.ExtensionSourcesState
 import dev.jcode.workbench.LocalExtensionInstallPhases
+import dev.jcode.workbench.LocalExtensionSources
 import dev.jcode.workbench.LocalPendingReload
 import dev.jcode.workbench.PendingReloadUi
 import dev.jcode.workbench.LocalRunConfigPresets
@@ -475,6 +478,10 @@ fun JCodeApp(
     }
     val marketplaceEntries by viewModel.marketplaceEntries.collectAsStateWithLifecycle()
     val marketplaceBusy by viewModel.marketplaceBusy.collectAsStateWithLifecycle()
+    val extensionSources by viewModel.extensionSources.collectAsStateWithLifecycle()
+    val extensionSourceReleases by viewModel.sourceReleases.collectAsStateWithLifecycle()
+    val extensionSourcesRefreshing by viewModel.sourcesRefreshing.collectAsStateWithLifecycle()
+    val extensionSourceOfId by viewModel.extensionSourceOfId.collectAsStateWithLifecycle()
     val extensionInstallPhases by viewModel.extensionInstallPhases.collectAsStateWithLifecycle()
     val setupTerminalSessionId by viewModel.setupTerminalRunner.sessionId.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -1441,6 +1448,12 @@ fun JCodeApp(
         LocalCatalogProgress provides catalogProgress,
         LocalSdkInstallRequestedId provides sdkInstallRequestedId,
         LocalExtensionInstallPhases provides extensionInstallPhases,
+        LocalExtensionSources provides ExtensionSourcesState(
+            sources = extensionSources,
+            releases = extensionSourceReleases,
+            attribution = extensionSourceOfId,
+            refreshing = extensionSourcesRefreshing,
+        ),
         LocalPendingReload provides pendingReloadUi,
         LocalRunConfigPresets provides contributedRunPresets,
         LocalSetupTerminalSessionId provides setupTerminalSessionId,
@@ -1569,6 +1582,11 @@ fun JCodeApp(
             onUninstallExtension = viewModel::uninstallExtension,
             onOpenExtensionDetail = viewModel::openExtensionDetailPage,
             onOpenExtensionPermissions = viewModel::openExtensionPermissionsPage,
+            onOpenExtensionSources = viewModel::openExtensionSourcesPage,
+            onAddExtensionSource = viewModel::addExtensionSource,
+            onRemoveExtensionSource = viewModel::removeExtensionSource,
+            onRefreshExtensionSources = viewModel::refreshExtensionSources,
+            onInstallFromSource = viewModel::installFromSource,
             onImportVsix = { showVsixImportInfo = true },
             // The Source Control extension renders its git-identity + GitHub-auth screen at its
             // `#github` route (a global-config screen that works with no project open).
@@ -3297,6 +3315,16 @@ private fun JCodeShell(
                                     onOpenConfig = managerActions.onOpenExtensionConfig,
                                     modifier = Modifier.fillMaxSize(),
                                 )
+                                EditorPageKind.ExtensionSources -> ExtensionSourcesPage(
+                                    state = LocalExtensionSources.current,
+                                    installed = installedExtensions,
+                                    busy = marketplaceBusy,
+                                    onAdd = managerActions.onAddExtensionSource,
+                                    onRemove = managerActions.onRemoveExtensionSource,
+                                    onRefresh = managerActions.onRefreshExtensionSources,
+                                    onInstall = managerActions.onInstallFromSource,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
                                 EditorPageKind.AndroidDevice -> AndroidDevicePage(
                                     adbInstalled = ADB_CATALOG_ID in sdkCatalogState.installedEntryIds,
                                     onOpenAdbToolchain = { managerActions.onOpenSdkDetail(ADB_CATALOG_ID) },
@@ -3807,6 +3835,7 @@ private fun WorkspacePanel(
                             onOpenDetail = managerActions.onOpenExtensionDetail,
                             onOpenPermissions = managerActions.onOpenExtensionPermissions,
                             onImportVsix = managerActions.onImportVsix,
+                            onOpenSources = managerActions.onOpenExtensionSources,
                             pendingReloadNames = pendingReload.names,
                             onReloadPending = pendingReload.onReload,
                             modifier = Modifier.fillMaxSize(),
