@@ -732,12 +732,14 @@ private const val STORAGE_CLEAR_JS =
  * The site cannot be edited, so this pins `<html>` to `innerHeight` pixels — a definite height the
  * `100%` chain resolves against — and keeps it in step on resize. It arms only when the bug is
  * actually present (a `100vh` probe measures 0 while `innerHeight` is non-zero), so on a healthy
- * WebView it is a no-op. Re-probed for a couple of seconds for SPAs that lay out after first paint.
+ * WebView it is a no-op. Re-probed for ~5s for SPAs that lay out after first paint, and it fires a
+ * `resize` each time the pinned height changes so a tab restored on a cold start (whose app already
+ * laid out against a size-0 viewport) recomputes instead of staying a blank pane until a reload.
  */
 private const val VIEWPORT_FIX_JS = """
 (function(){
   if (window.__jcodeVPFix) return; window.__jcodeVPFix = true;
-  var d = document, root = d.documentElement, armed = false;
+  var d = document, root = d.documentElement, armed = false, lastH = 0;
   function collapsed(){
     if (!d.body || !(window.innerHeight > 0)) return false;
     var p = d.createElement('div');
@@ -747,12 +749,23 @@ private const val VIEWPORT_FIX_JS = """
     p.remove();
     return z;
   }
-  function sync(){ if (window.innerHeight > 0) root.style.setProperty('height', window.innerHeight + 'px', 'important'); }
+  // Pin <html> to a definite pixel height; when that height actually changes, fire a
+  // resize so a full-viewport app that already laid out against the wrong height
+  // (e.g. a tab restored on a cold start, before the pin) recomputes. Guarding on a
+  // real change means the resize we dispatch sees no change and can't re-enter a loop.
+  function sync(){
+    var h = window.innerHeight;
+    if (h > 0 && h !== lastH) {
+      lastH = h;
+      root.style.setProperty('height', h + 'px', 'important');
+      try { window.dispatchEvent(new Event('resize')); } catch(e){}
+    }
+  }
   function check(){ if (armed) { sync(); return; } if (collapsed()) { armed = true; sync(); } }
   d.addEventListener('DOMContentLoaded', check);
   window.addEventListener('load', check);
   window.addEventListener('resize', function(){ if (armed) sync(); });
-  var n = 0, t = setInterval(function(){ check(); if (++n > 12) clearInterval(t); }, 200);
+  var n = 0, t = setInterval(function(){ check(); if (++n > 25) clearInterval(t); }, 200);
   check();
 })();
 """
