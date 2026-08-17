@@ -871,7 +871,13 @@ private const val VIEWPORT_FIX_JS = """
   d.addEventListener('DOMContentLoaded', tryArm);
   window.addEventListener('load', tryArm);
   window.addEventListener('resize', function(){ if (armed) { setVars(); pin(); } });
-  var n = 0, t = setInterval(function(){ tryArm(); if (armed) { setVars(); fixSheets(); fixInline(); } if (++n > 25) clearInterval(t); }, 200);
+  // The re-pin + `resize` each tick are a RECOVERY, not churn: this device's WebView returns from a
+  // reload with a black, uncomposited content surface on a minority of loads (measured — even a
+  // position:fixed probe fails to paint), and re-applying the pin + nudging the page to re-render once
+  // it has mounted forces a fresh frame that unsticks it. Removing these MORE than doubled the black
+  // rate in testing, so they run for a longer window here to catch a late-mounting SPA. The resize goes
+  // only through the (media-free) resize handler, so it cannot re-trigger the rotation blank.
+  var n = 0, t = setInterval(function(){ tryArm(); if (armed) { setVars(); pin(); fixSheets(); fixInline(); try { window.dispatchEvent(new Event('resize')); } catch (e) {} } if (++n > 45) clearInterval(t); }, 200);
   tryArm();
 })();
 """
