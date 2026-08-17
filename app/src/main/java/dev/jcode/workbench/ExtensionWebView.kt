@@ -1092,6 +1092,46 @@ html,body{margin:0;padding:0;overflow:hidden}
     window.dispatchEvent(new MessageEvent('message', { data: data }));
   };
 })();
+(function () {
+  // OpenChamber ships a per-host bundle; its VS Code build hard-codes runtime.isVSCode = true and,
+  // from that alone, pins a desktop layout (desktop dialogs, keyboard hints, no touch sheets) no
+  // matter how narrow or touch-first the surface is. JCode's webview is ~469 CSS px and coarse, so
+  // that pin is wrong here. The extension exposes no ?surface=touch/auto opt-out, but it publishes
+  // its runtime object on this namespaced global before reading it back, so intercept the write and
+  // clear the flag. Transport is untouched (it keys on acquireVsCodeApi, not this flag); only the
+  // device class and a few isVSCode-gated affordances flip to their touch variants.
+  try {
+    var apis;
+    Object.defineProperty(window, '__OPENCHAMBER_RUNTIME_APIS__', {
+      configurable: true,
+      get: function () { return apis; },
+      set: function (next) {
+        try { if (next && next.runtime) next.runtime.isVSCode = false; } catch (e) {}
+        apis = next;
+      },
+    });
+  } catch (e) {}
+  // Clearing isVSCode above also stops the extension reading VS Code's theme, so in "system" mode
+  // (its default, and what its backend re-applies after connecting) it resolves via
+  // prefers-color-scheme — which this WebView reports as light, leaving a light panel in a dark IDE.
+  // Report dark for that one query so "system" tracks the host; every other media query (the
+  // pointer/hover checks that drive the touch layout) passes through untouched. An explicit in-app
+  // light/dark choice still wins over system, so this only steers the follow-the-host case.
+  try {
+    var realMatchMedia = window.matchMedia.bind(window);
+    window.matchMedia = function (q) {
+      if (typeof q === 'string' && q.indexOf('prefers-color-scheme') !== -1) {
+        return {
+          matches: q.indexOf('dark') !== -1, media: q, onchange: null,
+          addListener: function () {}, removeListener: function () {},
+          addEventListener: function () {}, removeEventListener: function () {},
+          dispatchEvent: function () { return false; },
+        };
+      }
+      return realMatchMedia(q);
+    };
+  } catch (e) {}
+})();
 </script>
 """.trimIndent()
 
