@@ -2002,10 +2002,12 @@ private fun JCodeShell(
     val webPreviewBrowsersLocal = LocalWebPreviewBrowsers.current
     // Likewise for the device an Android run launches on, so the handlers can force ANDROID_SERIAL.
     val androidRunTargetsLocal = LocalAndroidRunTargets.current
-    // Reveal + select the DevTools drawer tab whenever the built-in browser is opened (a preview or a
-    // direct open bumps BuiltinBrowser.revealSignal).
+    // Reveal + select the DevTools drawer tab only when the browser was opened with a URL to show (a
+    // preview or a terminal link, which bump BuiltinBrowser.devToolsRevealSignal). A plain "Open
+    // Browser" from the Command Palette bumps only revealSignal, so it surfaces the browser tab
+    // without forcing the DevTools drawer open over it.
     LaunchedEffect(Unit) {
-        snapshotFlow { BuiltinBrowser.revealSignal.value }.collect { sig ->
+        snapshotFlow { BuiltinBrowser.devToolsRevealSignal.value }.collect { sig ->
             if (sig > 0) {
                 selectRightPanelTab(RightPanelTab.Devtools)
                 rightSidebarVisible = true

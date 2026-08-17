@@ -77,8 +77,14 @@ object BuiltinBrowser {
     /** True once the browser has been opened this session — gates the DevTools drawer tab's visibility. */
     val everOpened = mutableStateOf(false)
 
-    /** Bumped on each open request so the shell can reveal + select the DevTools drawer tab. */
+    /** Bumped on each open request so the shell surfaces the built-in browser editor tab. */
     val revealSignal = mutableStateOf(0)
+
+    /** Bumped only when an open should ALSO surface the DevTools drawer — an open that arrived holding
+     *  a URL (a preview, a terminal link), where DevTools is part of the intent. A plain "Open Browser"
+     *  from the Command Palette bumps only [revealSignal], so it opens the browser without forcing the
+     *  DevTools drawer open over it. */
+    val devToolsRevealSignal = mutableStateOf(0)
 
     /** A pending navigation for [BrowserPage] to consume (set by MainViewModel.openBrowserPage). */
     val pendingUrl = mutableStateOf<String?>(null)
@@ -156,6 +162,7 @@ object BuiltinBrowser {
         everOpened.value = true
         pendingUrl.value = normalizeUrl(url)
         revealSignal.value += 1
+        devToolsRevealSignal.value += 1
     }
 
     /**
