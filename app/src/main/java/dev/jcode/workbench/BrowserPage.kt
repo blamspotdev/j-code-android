@@ -723,50 +723,115 @@ private const val STORAGE_CLEAR_JS =
 
 /**
  * Repair for a WebView quirk measured on the AYN Odin2's WebView (Chromium 101, and still there on
- * 150): a top-level page is laid out against a zero-height *layout viewport*, so `html,body{height
- * :100%}`, `vh` and `dvh` all resolve to 0 while `window.innerHeight`, `clientHeight` and
- * `position:fixed` still report and use the real size. A full-viewport app whose layout hangs off
- * `height:100%` (excalidraw and most canvas SPAs) then collapses to a blank pane, and nothing looks
- * wrong from the outside.
+ * 150): CSS viewport-length units — `vh`, `dvh`, `svh`, `lvh` and their `vw` counterparts — resolve
+ * to ~0 on a top-level page, while `window.innerHeight`, `documentElement.clientHeight`, percentage
+ * heights and `position:fixed` offsets all report and use the real size. Measured on-device:
+ * `innerHeight` 631, `clientHeight` 632, `height:100%` (even on a fixed element) 632, but
+ * `100vh`/`100dvh`/`100svh`/`100lvh` all 0. So the layout size is fine; it is only the viewport
+ * *unit* that is wrong. Anything sized off `100vh` then collapses — a full-screen canvas SPA, and the
+ * case this was extended for: Excalidraw's mobile menu and modals shrank to a sliver.
  *
- * The site cannot be edited, so this pins `<html>` to `innerHeight` pixels — a definite height the
- * `100%` chain resolves against — and keeps it in step on resize. It arms only when the bug is
- * actually present (a `100vh` probe measures 0 while `innerHeight` is non-zero), so on a healthy
- * WebView it is a no-op. Re-probed for ~5s for SPAs that lay out after first paint, and it fires a
- * `resize` each time the pinned height changes so a tab restored on a cold start (whose app already
- * laid out against a size-0 viewport) recomputes instead of staying a blank pane until a reload.
+ * The site cannot be edited, so this: (1) exposes the real `1vh`/`1vw` as the pixel custom properties
+ * `--jcode-vh`/`--jcode-vw`, kept in step on resize; (2) rewrites every `vh`/`vw`-family unit in the
+ * page's own CSS — stylesheets, grouped `@media`/`@supports` rules, inline styles and custom
+ * properties — to `calc(var(--jcode-vh) * N)`, which was verified on-device to resolve correctly
+ * where the bare unit does not; (3) pins `<html>` to `innerHeight` as a definite root for any
+ * `height:100%` chain. A `MutationObserver` and a short re-probe catch stylesheets and nodes added
+ * after first paint (a modal mounting on demand), and it fires one `resize` on arming so a page that
+ * already laid out against the broken unit recomputes.
+ *
+ * It arms only when the bug is present (a `100vh` probe measures under half of `innerHeight`), so on
+ * a healthy WebView it never touches the page.
  */
 private const val VIEWPORT_FIX_JS = """
 (function(){
   if (window.__jcodeVPFix) return; window.__jcodeVPFix = true;
-  var d = document, root = d.documentElement, armed = false, lastH = 0;
-  function collapsed(){
-    if (!d.body || !(window.innerHeight > 0)) return false;
-    var p = d.createElement('div');
-    p.style.cssText = 'position:absolute;left:-9999px;top:0;width:1px;height:100vh;visibility:hidden;pointer-events:none';
-    d.body.appendChild(p);
-    var z = p.offsetHeight === 0;
-    p.remove();
-    return z;
+  var d = document, root = d.documentElement, armed = false, mo = null, seen = null;
+  try { seen = new WeakSet(); } catch (e) { seen = null; }
+
+  var HASU = /[\d.](?:dvh|svh|lvh|vh|dvw|svw|lvw|vw|vmin|vmax)\b/i;
+  var UNIT = /(-?[\d.]+)(dvh|svh|lvh|vh|dvw|svw|lvw|vw|vmin|vmax)\b/gi;
+  function repl(v){
+    return v.replace(UNIT, function(_, n, u){
+      u = u.toLowerCase();
+      if (u === 'vmin') return 'calc(min(var(--jcode-vw), var(--jcode-vh)) * ' + n + ')';
+      if (u === 'vmax') return 'calc(max(var(--jcode-vw), var(--jcode-vh)) * ' + n + ')';
+      var w = u.charAt(u.length - 1) === 'w';
+      return 'calc(var(' + (w ? '--jcode-vw' : '--jcode-vh') + ') * ' + n + ')';
+    });
   }
-  // Pin <html> to a definite pixel height; when that height actually changes, fire a
-  // resize so a full-viewport app that already laid out against the wrong height
-  // (e.g. a tab restored on a cold start, before the pin) recomputes. Guarding on a
-  // real change means the resize we dispatch sees no change and can't re-enter a loop.
-  function sync(){
-    var h = window.innerHeight;
-    if (h > 0 && h !== lastH) {
-      lastH = h;
-      root.style.setProperty('height', h + 'px', 'important');
-      try { window.dispatchEvent(new Event('resize')); } catch(e){}
+  // Rewrite every property whose value carries a viewport unit — iterate by index so custom
+  // properties and every longhand are covered, and keep each declaration's !important priority.
+  function fixDecl(s){
+    if (!s || !s.length) return;
+    for (var i = 0; i < s.length; i++){
+      var p = s[i], v = s.getPropertyValue(p);
+      if (v && HASU.test(v)) { try { s.setProperty(p, repl(v), s.getPropertyPriority(p)); } catch (e) {} }
     }
   }
-  function check(){ if (armed) { sync(); return; } if (collapsed()) { armed = true; sync(); } }
-  d.addEventListener('DOMContentLoaded', check);
-  window.addEventListener('load', check);
-  window.addEventListener('resize', function(){ if (armed) sync(); });
-  var n = 0, t = setInterval(function(){ check(); if (++n > 25) clearInterval(t); }, 200);
-  check();
+  function walk(rules){
+    if (!rules) return;
+    for (var i = 0; i < rules.length; i++){
+      var r = rules[i];
+      if (r.style) fixDecl(r.style);
+      if (r.cssRules) walk(r.cssRules);   // @media / @supports / @container
+    }
+  }
+  function fixSheet(sh){
+    if (seen && seen.has(sh)) return;
+    var rules; try { rules = sh.cssRules; } catch (e) { return; }  // cross-origin / not yet loaded: retry later
+    if (!rules) return;
+    walk(rules);
+    if (seen) seen.add(sh);
+  }
+  function fixSheets(){ var ss = d.styleSheets; for (var i = 0; i < ss.length; i++) fixSheet(ss[i]); }
+  function fixInline(scope){
+    var els; try { els = (scope || d).querySelectorAll('[style*="vh"],[style*="vw"]'); } catch (e) { return; }
+    for (var i = 0; i < els.length; i++) fixDecl(els[i].style);
+  }
+  function setVars(){
+    root.style.setProperty('--jcode-vh', (window.innerHeight / 100) + 'px');
+    root.style.setProperty('--jcode-vw', (window.innerWidth / 100) + 'px');
+  }
+  function pin(){ root.style.setProperty('height', window.innerHeight + 'px', 'important'); }
+
+  function broken(){
+    if (!(window.innerHeight > 0)) return false;
+    var p = d.createElement('div');
+    p.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:100vh;visibility:hidden;pointer-events:none';
+    (d.body || root).appendChild(p);
+    var z = p.getBoundingClientRect().height;
+    p.remove();
+    return z < window.innerHeight * 0.5;
+  }
+  function onArm(){
+    setVars(); pin(); fixSheets(); fixInline();
+    try {
+      mo = new MutationObserver(function(muts){
+        var reSheet = false;
+        for (var i = 0; i < muts.length; i++){
+          var a = muts[i].addedNodes; if (!a) continue;
+          for (var j = 0; j < a.length; j++){
+            var nd = a[j]; if (!nd || nd.nodeType !== 1) continue;
+            var tag = nd.tagName;
+            if (tag === 'STYLE' || tag === 'LINK') { reSheet = true; if (tag === 'LINK') { try { nd.addEventListener('load', fixSheets); } catch (e) {} } }
+            if (nd.getAttribute) { var sv = nd.getAttribute('style'); if (sv && (sv.indexOf('vh') !== -1 || sv.indexOf('vw') !== -1)) fixDecl(nd.style); }
+            if (nd.querySelectorAll) fixInline(nd);
+          }
+        }
+        if (reSheet) fixSheets();
+      });
+      mo.observe(root, { childList: true, subtree: true });
+    } catch (e) {}
+    try { window.dispatchEvent(new Event('resize')); } catch (e) {}
+  }
+  function tryArm(){ if (armed) return true; if (broken()) { armed = true; onArm(); } return armed; }
+
+  d.addEventListener('DOMContentLoaded', tryArm);
+  window.addEventListener('load', tryArm);
+  window.addEventListener('resize', function(){ if (armed) { setVars(); pin(); } });
+  var n = 0, t = setInterval(function(){ tryArm(); if (armed) { setVars(); fixSheets(); fixInline(); } if (++n > 25) clearInterval(t); }, 200);
+  tryArm();
 })();
 """
 
