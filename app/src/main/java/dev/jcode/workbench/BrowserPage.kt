@@ -366,6 +366,7 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                             BuiltinBrowser.currentUrl.value = url
                             // Before the shim, so the new page's first requests survive the clear.
                             BuiltinBrowser.onNavigate()
+                            view.evaluateJavascript(VIEWPORT_FIX_JS, null)
                             view.evaluateJavascript(NET_SHIM_JS, null)
                         }
                         override fun onPageFinished(view: WebView, url: String) {
@@ -373,6 +374,7 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                             BuiltinBrowser.currentUrl.value = url
                             BuiltinBrowser.canGoBack.value = view.canGoBack()
                             BuiltinBrowser.canGoForward.value = view.canGoForward()
+                            view.evaluateJavascript(VIEWPORT_FIX_JS, null)
                             view.evaluateJavascript(NET_SHIM_JS, null)
                         }
                         override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
@@ -718,6 +720,42 @@ private const val STORAGE_COUNT_JS =
 
 private const val STORAGE_CLEAR_JS =
     "(function(){try{localStorage.clear()}catch(e){};try{sessionStorage.clear()}catch(e){};return 1})()"
+
+/**
+ * Repair for a WebView quirk measured on the AYN Odin2's WebView (Chromium 101, and still there on
+ * 150): a top-level page is laid out against a zero-height *layout viewport*, so `html,body{height
+ * :100%}`, `vh` and `dvh` all resolve to 0 while `window.innerHeight`, `clientHeight` and
+ * `position:fixed` still report and use the real size. A full-viewport app whose layout hangs off
+ * `height:100%` (excalidraw and most canvas SPAs) then collapses to a blank pane, and nothing looks
+ * wrong from the outside.
+ *
+ * The site cannot be edited, so this pins `<html>` to `innerHeight` pixels — a definite height the
+ * `100%` chain resolves against — and keeps it in step on resize. It arms only when the bug is
+ * actually present (a `100vh` probe measures 0 while `innerHeight` is non-zero), so on a healthy
+ * WebView it is a no-op. Re-probed for a couple of seconds for SPAs that lay out after first paint.
+ */
+private const val VIEWPORT_FIX_JS = """
+(function(){
+  if (window.__jcodeVPFix) return; window.__jcodeVPFix = true;
+  var d = document, root = d.documentElement, armed = false;
+  function collapsed(){
+    if (!d.body || !(window.innerHeight > 0)) return false;
+    var p = d.createElement('div');
+    p.style.cssText = 'position:absolute;left:-9999px;top:0;width:1px;height:100vh;visibility:hidden;pointer-events:none';
+    d.body.appendChild(p);
+    var z = p.offsetHeight === 0;
+    p.remove();
+    return z;
+  }
+  function sync(){ if (window.innerHeight > 0) root.style.setProperty('height', window.innerHeight + 'px', 'important'); }
+  function check(){ if (armed) { sync(); return; } if (collapsed()) { armed = true; sync(); } }
+  d.addEventListener('DOMContentLoaded', check);
+  window.addEventListener('load', check);
+  window.addEventListener('resize', function(){ if (armed) sync(); });
+  var n = 0, t = setInterval(function(){ check(); if (++n > 12) clearInterval(t); }, 200);
+  check();
+})();
+"""
 
 /**
  * The same context, dressed so a `WebView` built from it agrees with the workbench about dark.
