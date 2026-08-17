@@ -318,12 +318,16 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                     wv.setBackgroundColor(pageBackground)
                     // Follows the workbench's theme rather than the phone's, which is the promise the
                     // rest of this app makes: JCode's own theme setting can differ from the device's,
-                    // and the browser inside it should be the colour of the window it is in.
+                    // and the browser inside it should be the colour of the window it is in. A site
+                    // that handles `prefers-color-scheme` (via the themed context above) is told the
+                    // truth and themes itself.
                     //
-                    // Two things come out of one switch: a site that handles `prefers-color-scheme`
-                    // is told the truth and themes itself, and a site that does not gets WebView's
-                    // algorithmic darkening rather than a white page in a dark room.
-                    wv.settings.isAlgorithmicDarkeningAllowed = pageIsDark
+                    // Algorithmic darkening is deliberately NOT enabled. It force-darkens a page's DOM
+                    // but cannot touch a `<canvas>`, so a self-theming app viewed in its LIGHT theme
+                    // comes out wrong — Excalidraw's white canvas under a force-darkened toolbar and
+                    // menu. Letting the page paint its own colours, which is what a mobile browser
+                    // does, is the one rule that is right for both a light site and a dark one.
+                    wv.settings.isAlgorithmicDarkeningAllowed = false
                     wv.settings.javaScriptEnabled = true
                     wv.settings.domStorageEnabled = true
                     // BuiltinBrowser.normalizeUrl accepts file:// URLs; the WebView default
