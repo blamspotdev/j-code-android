@@ -733,16 +733,20 @@ private const val STORAGE_CLEAR_JS =
  * `innerHeight` 631, `clientHeight` 632, `height:100%` (even on a fixed element) 632, but
  * `100vh`/`100dvh`/`100svh`/`100lvh` all 0. So the layout size is fine; it is only the viewport
  * *unit* that is wrong. Anything sized off `100vh` then collapses — a full-screen canvas SPA, and the
- * case this was extended for: Excalidraw's mobile menu and modals shrank to a sliver.
+ * case this was extended for: Excalidraw's mobile menu and modals shrank to a sliver. The same zero
+ * height reaches `@media (min-/max-height)` and `orientation` too, so a height-gated block matches as
+ * if the screen were 0px tall — which is why Excalidraw's empty-canvas welcome screen never appears.
  *
  * The site cannot be edited, so this: (1) exposes the real `1vh`/`1vw` as the pixel custom properties
  * `--jcode-vh`/`--jcode-vw`, kept in step on resize; (2) rewrites every `vh`/`vw`-family unit in the
  * page's own CSS — stylesheets, grouped `@media`/`@supports` rules, inline styles and custom
  * properties — to `calc(var(--jcode-vh) * N)`, which was verified on-device to resolve correctly
  * where the bare unit does not; (3) pins `<html>` to `innerHeight` as a definite root for any
- * `height:100%` chain. A `MutationObserver` and a short re-probe catch stylesheets and nodes added
- * after first paint (a modal mounting on demand), and it fires one `resize` on arming so a page that
- * already laid out against the broken unit recomputes.
+ * `height:100%` chain; (4) re-evaluates height/orientation `@media` conditions against the real
+ * `innerHeight`/`innerWidth` and pins each rule to that result, since the engine measures those
+ * queries against the same zero height. A `MutationObserver` and a short re-probe catch stylesheets
+ * and nodes added after first paint (a modal mounting on demand), and it fires one `resize` on arming
+ * so a page that already laid out against the broken unit recomputes.
  *
  * It arms only when the bug is present (a `100vh` probe measures under half of `innerHeight`), so on
  * a healthy WebView it never touches the page.
@@ -777,6 +781,7 @@ private const val VIEWPORT_FIX_JS = """
     if (!rules) return;
     for (var i = 0; i < rules.length; i++){
       var r = rules[i];
+      if (r.media && r.media.mediaText != null) fixMedia(r);   // @media height/orientation gates
       if (r.style) fixDecl(r.style);
       if (r.cssRules) walk(r.cssRules);   // @media / @supports / @container
     }
@@ -798,6 +803,38 @@ private const val VIEWPORT_FIX_JS = """
     root.style.setProperty('--jcode-vw', (window.innerWidth / 100) + 'px');
   }
   function pin(){ root.style.setProperty('height', window.innerHeight + 'px', 'important'); }
+
+  // Media queries carry the same disease as the units: this WebView evaluates the viewport HEIGHT as 0
+  // for `@media (min-/max-height)` and for `orientation` (width is fine). So a height-gated block — and
+  // Excalidraw hides its empty-canvas welcome screen behind `@media (max-height: ...)` — matches as if
+  // the screen were 0px tall and vanishes. The engine won't say what it measures a query against, so
+  // re-evaluate each height/orientation feature against the REAL innerHeight/innerWidth and pin the rule
+  // to that result (what it would do on a real phone of this size). Done ONCE per rule and never again:
+  // re-mutating a page's `mediaText` on the resize a rotation fires wedged Excalidraw into a blank canvas
+  // that only a reload cleared, and the visual-viewport pin already carries the layout across a rotation.
+  // The trade-off is that a rotated window keeps the media verdict from the orientation it loaded in.
+  var mediaOrig = null; try { mediaOrig = new WeakMap(); } catch (e) { mediaOrig = null; }
+  function forceCond(pass){ return pass ? '(min-width: 0px)' : '(min-width: 99999px)'; }
+  function rewriteMedia(mt){
+    var ih = window.innerHeight, iw = window.innerWidth;
+    var out = mt.replace(/\(\s*(min-|max-)?height\s*:\s*([\d.]+)px\s*\)/gi, function(_, pre, num){
+      var n = parseFloat(num);
+      return forceCond(pre === 'min-' ? ih >= n : pre === 'max-' ? ih <= n : Math.abs(ih - n) < 1);
+    });
+    out = out.replace(/\(\s*orientation\s*:\s*(portrait|landscape)\s*\)/gi, function(_, o){
+      var portrait = ih >= iw;
+      return forceCond(o.toLowerCase() === 'portrait' ? portrait : !portrait);
+    });
+    return out;
+  }
+  function fixMedia(rule){
+    var m = rule.media; if (!m || m.mediaText == null) return;
+    if (mediaOrig && mediaOrig.has(rule)) return;   // rewrite each rule once; never re-touch on resize
+    var orig = m.mediaText; if (mediaOrig) mediaOrig.set(rule, orig);
+    if (!/height|orientation/i.test(orig)) return;
+    var neu = rewriteMedia(orig);
+    if (neu !== m.mediaText) { try { m.mediaText = neu; } catch (e) {} }
+  }
 
   function broken(){
     if (!(window.innerHeight > 0)) return false;
