@@ -86,13 +86,6 @@ internal fun ExtensionSourcesPage(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text(
-            text = "Add a GitHub repo whose releases publish a .vsix (e.g. OpenChamber). JCode installs and " +
-                "updates the extension from here — the same flow as the built-in marketplace.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
         ManagerGroupHeader("Add a source")
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
