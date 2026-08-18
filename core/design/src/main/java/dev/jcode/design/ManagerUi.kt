@@ -295,6 +295,34 @@ fun ManagerListRow(
     }
 }
 
+/**
+ * A primary-tinted section header for grouping manager cards, matching the App Settings groups
+ * (`labelLarge`, primary, semi-bold). [trailing] holds an optional right-aligned action (e.g. a
+ * refresh button).
+ */
+@Composable
+fun ManagerGroupHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(top = 6.dp, start = 2.dp, end = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+        )
+        trailing?.invoke()
+    }
+}
+
 /** A titled section/header card used in the manager panels. When [collapsible] is set, the header
  *  toggles a chevron and hides its body; collapse state is session-only, keyed by [title], and starts
  *  from [defaultExpanded]. */

@@ -50,6 +50,7 @@ import dev.jcode.design.ManagerDetailScreen
 import dev.jcode.design.ManagerItemStatus
 import dev.jcode.design.ManagerListRow
 import dev.jcode.design.ManagerPanelHeader
+import dev.jcode.design.ManagerGroupHeader
 import dev.jcode.design.ManagerSectionCard
 import dev.jcode.design.SettingsDropdownRow
 import dev.jcode.design.SettingsTextFieldRow
@@ -580,20 +581,8 @@ internal fun ExtensionPermissionsPage(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            Text(
-                text = "Extension Settings",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = "${installed.size} installed",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
         Text(
             text = "Each extension's own settings plus its permissions. Activation controls when an " +
                 "extension turns on; Manual disables it.",
@@ -607,46 +596,72 @@ internal fun ExtensionPermissionsPage(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            installed.sortedBy { it.name.lowercase() }.forEach { ext ->
-                ManagerSectionCard(
-                    title = ext.name,
-                    description = listOfNotNull(
-                        authorLabel(ext.primaryAuthor, ext.otherAuthors),
-                        ext.type.name.lowercase(),
-                    ).joinToString(" · "),
-                    collapsible = true,
-                    defaultExpanded = false,
-                    leading = {
-                        ExtensionIcon(
-                            type = ext.type,
-                            name = ext.name,
-                            iconFile = ext.iconFile,
-                            size = 32.dp,
-                        )
-                    },
-                ) {
-                    ExtensionSettingsControls(extensionId = ext.id)
-                    if (ext.type == ExtensionType.Scm && ext.hasWebUi) {
-                        Text(
-                            "Set up your Git identity (name/email) and authentication for this device.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        FilledTonalButton(onClick = { onOpenConfig(ext.id) }, modifier = Modifier.fillMaxWidth()) {
-                            Text("Configure Git…")
+            val byType = installed.groupBy { it.type }
+            EXTENSION_TYPE_ORDER.forEach { type ->
+                val exts = byType[type]?.sortedBy { it.name.lowercase() }.orEmpty()
+                if (exts.isEmpty()) return@forEach
+                ManagerGroupHeader(extensionTypeLabel(type))
+                exts.forEach { ext ->
+                    ManagerSectionCard(
+                        title = ext.name,
+                        description = authorLabel(ext.primaryAuthor, ext.otherAuthors),
+                        collapsible = true,
+                        defaultExpanded = false,
+                        leading = {
+                            ExtensionIcon(
+                                type = ext.type,
+                                name = ext.name,
+                                iconFile = ext.iconFile,
+                                size = 32.dp,
+                            )
+                        },
+                    ) {
+                        ExtensionSettingsControls(extensionId = ext.id)
+                        if (ext.type == ExtensionType.Scm && ext.hasWebUi) {
+                            Text(
+                                "Set up your Git identity (name/email) and authentication for this device.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            FilledTonalButton(onClick = { onOpenConfig(ext.id) }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Configure Git…")
+                            }
                         }
-                    }
-                    ActivationSelector(extensionId = ext.id)
-                    if (ext.apiCapabilities.isNotEmpty()) {
-                        CapabilityToggles(extensionId = ext.id, capabilities = ext.apiCapabilities)
-                    }
-                    if (ext.hasWebUi) {
-                        KeepAliveToggle(extensionId = ext.id)
+                        ActivationSelector(extensionId = ext.id)
+                        if (ext.apiCapabilities.isNotEmpty()) {
+                            CapabilityToggles(extensionId = ext.id, capabilities = ext.apiCapabilities)
+                        }
+                        if (ext.hasWebUi) {
+                            KeepAliveToggle(extensionId = ext.id)
+                        }
                     }
                 }
             }
         }
     }
+}
+
+/** Section order for the Extension Settings page — the useful/most-configurable types first. */
+private val EXTENSION_TYPE_ORDER = listOf(
+    ExtensionType.App,
+    ExtensionType.Language,
+    ExtensionType.Scm,
+    ExtensionType.DbManager,
+    ExtensionType.Vm,
+    ExtensionType.Formatter,
+    ExtensionType.Templates,
+    ExtensionType.Unknown,
+)
+
+private fun extensionTypeLabel(type: ExtensionType): String = when (type) {
+    ExtensionType.App -> "Apps"
+    ExtensionType.Language -> "Language packs"
+    ExtensionType.Scm -> "Source control"
+    ExtensionType.DbManager -> "Database managers"
+    ExtensionType.Vm -> "Virtual machines"
+    ExtensionType.Formatter -> "Formatters"
+    ExtensionType.Templates -> "Templates"
+    ExtensionType.Unknown -> "Other"
 }
 
 /**

@@ -40,6 +40,7 @@ import dev.jcode.ProviderReleaseFetcher
 import dev.jcode.design.CompactFilledButton
 import dev.jcode.design.CompactOutlinedButton
 import dev.jcode.design.JCodeIcon
+import dev.jcode.design.ManagerGroupHeader
 import dev.jcode.design.ManagerItemStatus
 import dev.jcode.design.ManagerStatusChip
 import dev.jcode.design.ManagerSummaryRow
@@ -83,38 +84,8 @@ internal fun ExtensionSourcesPage(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Extension Sources",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = if (state.sources.isEmpty()) "No sources"
-                    else "${state.sources.size} source${if (state.sources.size == 1) "" else "s"}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (state.refreshing) {
-                Box(modifier = Modifier.size(36.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                }
-            } else {
-                IconButton(onClick = onRefresh, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        imageVector = jcIcon(JCodeIcon.Refresh),
-                        contentDescription = "Refresh sources",
-                        modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-
         Text(
             text = "Add a GitHub repo whose releases publish a .vsix (e.g. OpenChamber). JCode installs and " +
                 "updates the extension from here — the same flow as the built-in marketplace.",
@@ -122,48 +93,56 @@ internal fun ExtensionSourcesPage(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        // Add-source card.
-        Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f)) {
-            Column(
-                modifier = Modifier.padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    text = "Add a source",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CompactUrlField(
-                        value = newUrl,
-                        onValueChange = { newUrl = it },
-                        placeholder = "github.com/owner/repo",
-                        onImeAction = submit,
-                        modifier = Modifier.weight(1f),
-                    )
-                    CompactFilledButton(text = "Add", onClick = submit, enabled = newUrl.isNotBlank())
-                }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = jcIcon(JCodeIcon.Lock),
-                        contentDescription = null,
-                        modifier = Modifier.size(13.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        text = "Installs as unsigned third-party code — only add sources you trust.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+        ManagerGroupHeader("Add a source")
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CompactUrlField(
+                value = newUrl,
+                onValueChange = { newUrl = it },
+                placeholder = "github.com/owner/repo",
+                onImeAction = submit,
+                modifier = Modifier.weight(1f),
+            )
+            CompactFilledButton(text = "Add", onClick = submit, enabled = newUrl.isNotBlank())
         }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = jcIcon(JCodeIcon.Lock),
+                contentDescription = null,
+                modifier = Modifier.size(13.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "Installs as unsigned third-party code — only add sources you trust.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        ManagerGroupHeader(
+            title = "Sources",
+            trailing = {
+                if (state.refreshing) {
+                    Box(modifier = Modifier.size(32.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
+                    }
+                } else {
+                    IconButton(onClick = onRefresh, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            imageVector = jcIcon(JCodeIcon.Refresh),
+                            contentDescription = "Refresh sources",
+                            modifier = Modifier.size(17.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            },
+        )
 
         if (state.sources.isEmpty()) {
             Text(
