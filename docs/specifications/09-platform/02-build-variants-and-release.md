@@ -102,7 +102,7 @@ packaging {
 Single source of truth in `app/build.gradle.kts`:
 
 ```kotlin
-val jcodeVersion = "1.7.0"                                   // the train being prepared
+val jcodeVersion = "1.6.1"                                   // the train being prepared
 val jcodeVersionName = findProperty("jcodeVersionName") ?: jcodeVersion
 val jcodeVersionCode = (MAJOR * 10000 + MINOR * 100 + PATCH) * 100 + tier
 ```
@@ -114,17 +114,17 @@ downgrades**.
 ### 4.1 Release trains
 
 `jcodeVersion` is the version being **prepared**, not the last one shipped. `main` carries an open
-train; merges do not move it. Previews of that train are built and published as `1.7.0-beta.N`, and
-`1.7.0` is published from the same line of commits when it is ready — publishing it is what opens
+train; merges do not move it. Previews of that train are built and published as `1.6.1-beta.N`, and
+`1.6.1` is published from the same line of commits when it is ready — publishing it is what opens
 the next train.
 
 ```
-main = 1.7.0        merge, merge, merge          (jcodeVersion unchanged)
-                    publish v1.7.0-beta.1        pre-release, dev.jcode.beta
+main = 1.6.1        merge, merge, merge          (jcodeVersion unchanged)
+                    publish v1.6.1-beta.1        pre-release, dev.jcode.beta
                     merge
-                    publish v1.7.0-beta.2        pre-release
-                    publish v1.7.0               release, dev.jcode
-main = 1.7.0        opened automatically
+                    publish v1.6.1-beta.2        pre-release
+                    publish v1.6.1               release, dev.jcode
+main = next patch   opened automatically
 ```
 
 Bumping per merge — which is what `version-bump.yml` used to do — would move the target every time
@@ -142,14 +142,13 @@ at all:
 
 | versionName | versionCode | tier |
 |---|---|---|
-| `1.7.0-alpha.1` | 1050001 | `N` |
-| `1.7.0-beta.1` | 1050031 | `30 + N` |
-| `1.7.0-beta.2` | 1050032 | |
-| `1.7.0-rc.1` | 1050061 | `60 + N` |
-| `1.7.0` | 1050099 | `99` |
-| `1.7.0` | 1050199 | |
+| `1.6.1-alpha.1` | 1060101 | `N` |
+| `1.6.1-beta.1` | 1060131 | `30 + N` |
+| `1.6.1-beta.2` | 1060132 | |
+| `1.6.1-rc.1` | 1060161 | `60 + N` |
+| `1.6.1` | 1060199 | `99` |
 
-The old derivation ignored the suffix entirely, so `1.7.0-beta.1`, `1.7.0-beta.2` and `1.7.0` all
+The old derivation ignored the suffix entirely, so `1.6.1-beta.1`, `1.6.1-beta.2` and `1.6.1` all
 produced **the same code** — successive previews never climbed, which is the one thing a version
 code has to do. An unrecognised label falls to the release tier, which is the safe end of the range
 and the reason the labels are validated before a build starts.
@@ -163,7 +162,7 @@ and takes one past the highest in the line asked for, so the label input accepts
 | `alpha` / `beta` / `rc` | the next in that line |
 | `beta.7` | exactly that |
 
-A new train starts back at `beta.1` on its own, because `v1.7.0-beta.*` is a different prefix.
+A new train starts back at `beta.1` on its own, because `v1.6.1-beta.*` is a different prefix.
 
 Whatever the label resolves to, **nothing already published for the train may be at or above the
 build's version code**, and that is checked in seconds rather than after an hour of building. It
@@ -174,10 +173,12 @@ shipped cannot be previewed again: open the next one instead.
 
 ### 4.3 Opening the next train
 
-`.github/workflows/version-bump.yml` raises the **minor** part, and is **dispatched, never triggered
-by an event**: `release.yml` asks for it at the end of a stable publish. Running it by hand for any
-level is the other way in, and that is **admin-only** — the same check as `release.yml`, skipped only
-for the dispatch from `release.yml`, which arrives as `github-actions[bot]`.
+`.github/workflows/version-bump.yml` is **dispatched, never triggered by an event**: `release.yml`
+asks for it at the end of a stable publish, and asks for a **patch** bump — a train that ships opens
+the next one along the same minor line, and a train that is to carry features is raised by hand.
+Running it by hand for any level is the other way in, and that is **admin-only** — the same check as
+`release.yml`, skipped only for the dispatch from `release.yml`, which arrives as
+`github-actions[bot]`.
 
 > **It used to also listen for `release: published`, and that trigger is gone.** Three reasons at
 > once. A release created with `GITHUB_TOKEN` raises no events that start other workflows — the loop
@@ -218,7 +219,7 @@ and `dev.jcode.beta` can never be updated *into* `dev.jcode`. `app/build.gradle.
 A Beta build is still told when the train it was previewing ships: the final release is the highest
 version on the list, and it is reported with **no APK URL**, so the app offers the release page
 rather than an install it cannot perform. Comparison is Semantic Versioning 2.0.0 precedence —
-`1.7.0-beta.2 < 1.7.0-rc.1 < 1.7.0` — covered by `app/src/test/java/dev/jcode/UpdateCheckerTest.kt`.
+`1.6.1-beta.2 < 1.6.1-rc.1 < 1.6.1` — covered by `app/src/test/java/dev/jcode/UpdateCheckerTest.kt`.
 
 ---
 
@@ -262,8 +263,8 @@ repository says it is preparing. What you choose is the channel:
 
 | Input | versionName | Tag | App id | GitHub |
 |---|---|---|---|---|
-| `beta`, label blank | `1.7.0-beta.N` (next) | `v1.7.0-beta.N` | `dev.jcode.beta` | pre-release |
-| `stable` | `1.7.0` | `v1.7.0` | `dev.jcode` | release |
+| `beta`, label blank | `1.6.1-beta.N` (next) | `v1.6.1-beta.N` | `dev.jcode.beta` | pre-release |
+| `stable` | `1.6.1` | `v1.6.1` | `dev.jcode` | release |
 
 It builds the Rust JNI libraries, assembles, signs with `apksigner`, verifies the signature, then
 creates the tag and the release with the APK attached.

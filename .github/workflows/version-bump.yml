@@ -91,7 +91,7 @@ jobs:
           # than a broken one.
           token: ${{ secrets.VERSION_BUMP_TOKEN || github.token }}
 
-      # release.yml dispatches this with `minor` after a stable publish; a run by hand picks its
+      # release.yml dispatches this with `patch` after a stable publish; a run by hand picks its
       # own. Anything unrecognised stays minor rather than guessing high.
       - name: Choose bump level
         id: level

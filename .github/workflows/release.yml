@@ -384,7 +384,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          gh workflow run version-bump.yml -f level=minor
+          gh workflow run version-bump.yml -f level=patch
           echo "Asked version-bump to open the next train." >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
