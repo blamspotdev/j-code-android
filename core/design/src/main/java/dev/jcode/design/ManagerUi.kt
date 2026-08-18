@@ -520,12 +520,9 @@ fun ManagerDetailScreen(
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
-        if (description.isNotBlank()) {
-            Text(text = description, style = MaterialTheme.typography.bodyMedium)
-        }
-
-        extra()
-
+        // Actions sit directly under the header: what you came to do, before what it is. The version
+        // picker travels with them because it is what the install button acts on — leaving it below
+        // would put "Install v26.7.0" above the control that chooses the version.
         if (showActions && hasVersions) {
             VersionSection(
                 multiVersion = multiVersion,
@@ -581,6 +578,12 @@ fun ManagerDetailScreen(
                 )
             }
         }
+
+        if (description.isNotBlank()) {
+            Text(text = description, style = MaterialTheme.typography.bodyMedium)
+        }
+
+        extra()
     }
 }
 
