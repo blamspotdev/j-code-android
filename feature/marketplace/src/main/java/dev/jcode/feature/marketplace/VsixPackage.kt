@@ -23,7 +23,9 @@ object VsixPackage {
     /** Where the extension's own files live inside the archive. */
     const val PAYLOAD_PREFIX = "extension/"
     private const val VSIX_MANIFEST = "extension.vsixmanifest"
-    private const val PACKAGE_JSON = PAYLOAD_PREFIX + "package.json"
+
+    /** The manifest that matters, inside the archive. */
+    const val PACKAGE_JSON = PAYLOAD_PREFIX + "package.json"
 
     /** Marker written into an install directory that came from a `.vsix`. */
     const val VSIX_MARKER = ".jcode-vsix"

@@ -2,6 +2,7 @@ package dev.jcode.feature.marketplace
 
 import android.content.Context
 import java.io.ByteArrayInputStream
+import java.io.DataInputStream
 import java.io.File
 import java.io.InputStream
 import java.net.HttpURLConnection
@@ -103,13 +104,14 @@ class ExtensionInstaller internal constructor(context: Context) {
     suspend fun installLocalPackage(file: File, appVersion: String): Result<SideloadOutcome> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val bytes = file.readBytes()
-                val isVsix = !JextCrypto.isSignedJext(bytes) &&
-                    runCatching { VsixPackage.looksLikeVsix(readZipEntries(bytes).keys) }.getOrDefault(false)
-                if (isVsix) {
-                    val result = installFromVsixBytes(bytes, appVersion)
+                // Only a .jext is read into memory: it is small, and verifying it means hashing its
+                // whole byte range anyway. A .vsix can be hundreds of megabytes, so it is recognised
+                // from a peek at the file and then installed by streaming.
+                if (looksLikeVsixFile(file)) {
+                    val result = installFromVsix(file, appVersion)
                     SideloadOutcome.Vsix(result.extension, result.manifest, result.compatibility)
                 } else {
+                    val bytes = file.readBytes()
                     val signed = JextCrypto.isSignedJext(bytes)
                     val ext = installFromJextBytes(bytes, null, appVersion, markDev = !signed)
                     SideloadOutcome.Jext(ext, signed)
@@ -141,18 +143,30 @@ class ExtensionInstaller internal constructor(context: Context) {
      */
     suspend fun installLocalVsix(file: File, appVersion: String): Result<VsixInstallResult> =
         withContext(Dispatchers.IO) {
-            runCatching { installFromVsixBytes(file.readBytes(), appVersion) }
+            runCatching { installFromVsix(file, appVersion) }
         }
 
     /**
      * Install a `.vsix` fetched from an arbitrary absolute [url] — a custom provider's release asset.
      * Same footing as [installLocalVsix]: unsigned third-party code, marked dev. [openStream] already
-     * accepts any absolute URL and [installFromVsixBytes] is origin-agnostic, so this just bridges the
+     * accepts any absolute URL and [installFromVsix] is origin-agnostic, so this just bridges the
      * two; nothing here is tied to the marketplace [BASE_URL].
      */
     suspend fun installVsixFromUrl(url: String, appVersion: String): Result<VsixInstallResult> =
         withContext(Dispatchers.IO) {
-            runCatching { installFromVsixBytes(openStream(url).use { it.readBytes() }, appVersion) }
+            runCatching {
+                // Staged through a file for the same reason a picked one is: a released .vsix is
+                // routinely far larger than the heap it would otherwise have to fit in.
+                val staged = File.createTempFile("vsix", ".vsix", appContext.cacheDir)
+                try {
+                    openStream(url).use { input ->
+                        staged.outputStream().use { output -> input.copyTo(output, DOWNLOAD_BUFFER) }
+                    }
+                    installFromVsix(staged, appVersion)
+                } finally {
+                    staged.delete()
+                }
+            }
         }
 
     /** Outcome of a `.vsix` install: what landed, and what JCode could not honour in it. */
@@ -166,63 +180,70 @@ class ExtensionInstaller internal constructor(context: Context) {
     suspend fun inspectVsix(file: File): Result<Pair<VsixManifest, VsixCompatibility>> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val entries = readZipEntries(file.readBytes())
-                val manifest = VsixPackage.parse(readVsixPackageJson(entries), readVsixNls(entries))
-                manifest to VsixPackage.compatibilityOf(manifest)
+                VsixArchive.open(file).use { archive ->
+                    val manifest = VsixPackage.parse(archive.packageJson(), archive.nlsJson())
+                    manifest to VsixPackage.compatibilityOf(manifest)
+                }
             }
         }
 
-    private fun readVsixPackageJson(files: Map<String, ByteArray>): String {
-        if (!VsixPackage.looksLikeVsix(files.keys)) {
-            error("not a .vsix package (no ${VsixPackage.PAYLOAD_PREFIX}package.json)")
-        }
-        return files.getValue(VsixPackage.PAYLOAD_PREFIX + "package.json").toString(Charsets.UTF_8)
+    /**
+     * True when [file] is a `.vsix`. A file picked through SAF often arrives without a usable name,
+     * so this looks inside: first at the signed-`.jext` magic (which is not a zip at all), then for
+     * the payload every `.vsix` has.
+     */
+    private fun looksLikeVsixFile(file: File): Boolean {
+        val head = runCatching {
+            ByteArray(JEXT_MAGIC_PEEK).also { DataInputStream(file.inputStream()).use { s -> s.readFully(it) } }
+        }.getOrNull()
+        if (head != null && JextCrypto.isSignedJext(head)) return false
+        return runCatching { VsixArchive.open(file).use { VsixPackage.looksLikeVsix(it.names) } }
+            .getOrDefault(false)
     }
 
-    private fun readVsixNls(files: Map<String, ByteArray>): String? =
-        files[VsixPackage.NLS_JSON]?.toString(Charsets.UTF_8)
+    private fun installFromVsix(file: File, appVersion: String): VsixInstallResult =
+        VsixArchive.open(file).use { archive ->
+            val manifest = VsixPackage.parse(archive.packageJson(), archive.nlsJson())
+            val compatibility = VsixPackage.compatibilityOf(manifest)
 
-    private fun installFromVsixBytes(bytes: ByteArray, appVersion: String): VsixInstallResult {
-        val files = readZipEntries(bytes)
-        val manifest = VsixPackage.parse(readVsixPackageJson(files), readVsixNls(files))
-        val compatibility = VsixPackage.compatibilityOf(manifest)
-
-        installRoot.mkdirs()
-        val dest = File(installRoot, safeDirName(manifest.id))
-        val tmp = File(installRoot, ".tmp-${safeDirName(manifest.id)}")
-        tmp.deleteRecursively()
-        tmp.mkdirs()
-        val tmpPath = tmp.canonicalPath + File.separator
-        for ((rel, data) in files) {
-            // Only the extension's own subtree is installed; the archive's VS Code packaging
-            // metadata is of no use once the manifest has been translated.
-            if (!rel.startsWith(VsixPackage.PAYLOAD_PREFIX)) continue
-            val relative = rel.removePrefix(VsixPackage.PAYLOAD_PREFIX)
-            if (relative.isEmpty()) continue
-            // Never let a package supply its own markers — only the host writes those.
-            if (relative == DEV_MARKER || relative.endsWith("/$DEV_MARKER")) continue
-            if (relative == VsixPackage.VSIX_MARKER || relative.endsWith("/${VsixPackage.VSIX_MARKER}")) continue
-            // The generated manifest is the source of truth; an extension.yaml in the archive is not.
-            if (relative == "extension.yaml") continue
-            val outFile = File(tmp, relative)
-            if (!outFile.canonicalPath.startsWith(tmpPath)) continue // zip-slip guard
-            outFile.parentFile?.mkdirs()
-            outFile.writeBytes(data)
-        }
-        File(tmp, "extension.yaml").writeText(VsixPackage.toExtensionYaml(manifest))
-
-        dest.deleteRecursively()
-        if (!tmp.renameTo(dest)) {
-            tmp.copyRecursively(dest, overwrite = true)
+            installRoot.mkdirs()
+            val dest = File(installRoot, safeDirName(manifest.id))
+            val tmp = File(installRoot, ".tmp-${safeDirName(manifest.id)}")
             tmp.deleteRecursively()
-        }
-        // Markers are written after the atomic swap so a package can never smuggle them in.
-        runCatching { File(dest, VsixPackage.VSIX_MARKER).writeText(manifest.main.orEmpty()) }
-        runCatching { File(dest, DEV_MARKER).writeText("vsix") }
+            tmp.mkdirs()
+            // Only the extension's own subtree is installed; the archive's VS Code packaging metadata
+            // is of no use once the manifest has been translated.
+            val executables = runCatching {
+                archive.extractPayload(tmp) { relative ->
+                    // Never let a package supply its own markers — only the host writes those — and
+                    // treat the generated manifest, not one in the archive, as the source of truth.
+                    relative == DEV_MARKER || relative.endsWith("/$DEV_MARKER") ||
+                        relative == VsixPackage.VSIX_MARKER || relative.endsWith("/${VsixPackage.VSIX_MARKER}") ||
+                        relative == "extension.yaml"
+                }
+            }.onFailure {
+                // These unpack to hundreds of megabytes, so running out of room part-way through is a
+                // real outcome. Clear the debris rather than leave it holding the space a retry needs.
+                tmp.deleteRecursively()
+            }.getOrThrow()
+            File(tmp, "extension.yaml").writeText(VsixPackage.toExtensionYaml(manifest))
 
-        val installed = loadInstalled(dest) ?: error("could not read the manifest generated for ${manifest.id}")
-        return VsixInstallResult(installed, manifest, compatibility)
-    }
+            dest.deleteRecursively()
+            if (!tmp.renameTo(dest)) {
+                tmp.copyRecursively(dest, overwrite = true)
+                tmp.deleteRecursively()
+            }
+            // Re-applied on the installed copy rather than trusted to survive the move: the fallback
+            // above is a plain recursive copy, which carries bytes but not permissions, and an
+            // extension that ships its own executable is dead the moment that bit is lost.
+            executables.forEach { File(dest, it).setExecutable(true, false) }
+            // Markers are written after the atomic swap so a package can never smuggle them in.
+            runCatching { File(dest, VsixPackage.VSIX_MARKER).writeText(manifest.main.orEmpty()) }
+            runCatching { File(dest, DEV_MARKER).writeText("vsix") }
+
+            val installed = loadInstalled(dest) ?: error("could not read the manifest generated for ${manifest.id}")
+            VsixInstallResult(installed, manifest, compatibility)
+        }
 
     /**
      * Install extensions bundled in the APK assets (e.g. `builtin-extensions/foo.jext`) that aren't
@@ -634,6 +655,10 @@ class ExtensionInstaller internal constructor(context: Context) {
         const val JEHM_FILE = "extension.jehm"
         const val JEXT_MANIFEST = ".jext-manifest.json"
         const val DEV_MARKER = ".jcode-dev"
+
+        /** Enough of a file's head to tell a signed `.jext` from a plain zip without reading either. */
+        const val JEXT_MAGIC_PEEK = 16
+        const val DOWNLOAD_BUFFER = 1 shl 16
     }
 }
 

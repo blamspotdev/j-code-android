@@ -27,5 +27,8 @@ dependencies {
     // Ed25519 signature verification for official (signed) .jext packages — used via BC's lightweight
     // crypto API (Ed25519Signer), no JCA provider registration needed.
     implementation(libs.bouncycastle.provider)
+    // Reads a .vsix by random access: a zip keeps file permissions in its central directory, which a
+    // streaming reader cannot see, and losing them makes an extension's bundled executable unrunnable.
+    implementation(libs.commons.compress)
     implementation(project(":core:distro"))
 }

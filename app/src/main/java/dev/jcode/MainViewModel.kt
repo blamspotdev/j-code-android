@@ -423,6 +423,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun importVsix(uri: android.net.Uri) {
         viewModelScope.launch {
             val installedBefore = _installedExtensions.value.map { it.id }.toSet()
+            // Extensions that bundle their own runtime run to hundreds of megabytes, and unpacking one
+            // takes long enough that a silent wait reads as a hang. Say it started before doing it.
+            emitMessage("Importing extension… large packages take a while.")
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val tmp = File.createTempFile("import", ".vsix", appContext.cacheDir)
