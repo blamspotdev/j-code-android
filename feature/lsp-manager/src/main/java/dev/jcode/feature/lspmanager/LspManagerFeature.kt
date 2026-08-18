@@ -41,7 +41,10 @@ object LspManagerFeature {
                 LspCatalogAction.Uninstall -> "Removing…"
                 null -> "Checking…"
             },
-            actionsEnabled = environmentReady && state.runningEntryId == null && !state.checking,
+            // A status sweep across the whole catalog is background work — it must not freeze the
+            // page's actions. Only an action actually running does that, and the service serializes
+            // on its own lock, so anything started during a check simply queues behind it.
+            actionsEnabled = environmentReady && state.runningEntryId == null,
             onInstall = { onInstall(entry.id) },
             onUpdate = { onUpdate(entry.id) },
             onUninstall = { onUninstall(entry.id) },

@@ -48,6 +48,7 @@ internal class SdkCatalogLoader(
                 multiVersion = entry.bool("multiVersion") ?: false,
                 versionsScript = entry.string("versionsScript")?.trim().orEmpty(),
                 installedVersionsScript = entry.string("installedVersionsScript")?.trim().orEmpty(),
+                useVersionScript = entry.string("useVersionScript")?.trim().orEmpty(),
                 supportedDistros = entry.stringList("supportedDistros"),
                 supportedArches = entry.stringList("supportedArches"),
                 requiredSdks = entry.stringList("requiredSdks"),

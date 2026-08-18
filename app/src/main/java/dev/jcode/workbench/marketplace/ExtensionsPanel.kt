@@ -480,6 +480,10 @@ internal fun ExtensionDetailPage(
     installedIds: Set<String>,
     busy: Boolean,
     installPhase: String?,
+    /** True when [installed] is what the extension WAS: it has been uninstalled while this page was
+     *  open, and the page keeps its identity — name, icon, description, version — until the tab is
+     *  closed. Nothing is left to act on unless an [entry] can put it back. */
+    uninstalled: Boolean = false,
     onInstall: (MarketplaceEntry) -> Unit,
     onUninstall: (String) -> Unit,
     onOpenExtensionDetail: (String) -> Unit,
@@ -489,7 +493,10 @@ internal fun ExtensionDetailPage(
     modifier: Modifier = Modifier,
 ) {
     val id = entry?.id ?: installed?.id ?: return
-    val status = marketStatus(entry, installed)
+    val status = if (uninstalled) ManagerItemStatus.NotInstalled else marketStatus(entry, installed)
+    // An uninstalled extension can only be put back by something that still offers it: the
+    // marketplace, or a custom source. With neither, the page is a record of what was there.
+    val reinstallable = entry != null
     val subtitle = buildString {
         val primary = entry?.primaryAuthor ?: installed?.primaryAuthor
         val others = entry?.otherAuthors ?: installed?.otherAuthors ?: emptyList()
@@ -515,7 +522,7 @@ internal fun ExtensionDetailPage(
         status = status,
         busy = busy,
         busyLabel = installPhase,
-        actionsEnabled = !busy,
+        actionsEnabled = !busy && (!uninstalled || reinstallable),
         onInstall = { if (hasDeps) showDeps = true else entry?.let(onInstall) },
         onUpdate = { entry?.let(onInstall) },
         onUninstall = { onUninstall(id) },
@@ -530,6 +537,15 @@ internal fun ExtensionDetailPage(
             )
         },
         extra = {
+            if (uninstalled) {
+                RemovedNotice(
+                    text = if (reinstallable) {
+                        "Removed. Install puts it back from its source."
+                    } else {
+                        "Removed. Close this tab to dismiss it — nothing here offers it any more."
+                    },
+                )
+            }
             if (samples.isNotEmpty()) {
                 ManagerSectionCard(title = "Samples", description = "Example usage.") {
                     samples.forEach { sample -> SampleBlock(sample) }
@@ -970,6 +986,23 @@ private fun marketStatus(entry: MarketplaceEntry?, installed: InstalledExtension
     else -> ManagerItemStatus.Installed
 }
 
+/** Says why a detail page is showing an extension that is no longer on disk. */
+@Composable
+private fun RemovedNotice(text: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+        )
+    }
+}
+
 /** Marks a row as a VS Code import: unverified, and only as supported as JCode's API slice allows. */
 @Composable
 private fun VsixBadge() {
@@ -1024,6 +1057,9 @@ private fun buildExtensionRows(
             installed = inst != null,
             iconFile = inst?.iconFile,
             iconUrl = e.iconUrl,
+            // Anything a custom source publishes is a `.vsix`, so it carries the badge before it is
+            // installed too — and keeps it once an update entry stands in for the installed row.
+            vsix = inst?.isVsix ?: (e.vsixAssetUrl != null),
         )
     }
     val installedOnly = installed.filter { it.id !in availableIds }.map { ext ->

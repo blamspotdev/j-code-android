@@ -476,10 +476,15 @@ fun ManagerDetailScreen(
     /** Installable versions, newest first (index 0 is treated as "latest"), each with an optional tag
      *  (e.g. "LTS Jod"). Empty = no version picker. */
     availableVersions: List<VersionOption> = emptyList(),
-    /** Currently-installed versions, newest first. For [multiVersion] the first is the default (on PATH). */
+    /** Currently-installed versions, newest first. */
     installedVersions: List<String> = emptyList(),
+    /** The installed version currently on PATH. Null = the newest installed one is active. */
+    activeVersion: String? = null,
     /** When true, several versions coexist and each is removable independently. */
     multiVersion: Boolean = false,
+    /** Whether this tool can switch which installed version is active (`nvm use` and friends). False
+     *  for tools whose versions are all usable at once, which have nothing to switch. */
+    canUseVersion: Boolean = false,
     /** Whether the available-versions list is still being fetched (shows a spinner in the picker). */
     versionsLoading: Boolean = false,
     /** 0..100 reported by the running install itself; null while it reports nothing (the chip then
@@ -489,12 +494,21 @@ fun ManagerDetailScreen(
     progressLabel: String? = null,
     onInstallVersion: (String) -> Unit = {},
     onUninstallVersion: (String) -> Unit = {},
+    onUseVersion: (String) -> Unit = {},
     extra: @Composable () -> Unit = {},
 ) {
-    val hasVersions = availableVersions.isNotEmpty() || versionsLoading
-    var selectedVersion by remember(availableVersions) {
-        mutableStateOf(availableVersions.firstOrNull()?.value ?: "latest")
+    // Everything installed has to be selectable, not just what is installable today: a listing script
+    // typically offers the newest release of each line, so an older installed patch appears in neither
+    // list and would have no way to be switched to or removed.
+    val versionOptions = remember(availableVersions, installedVersions) {
+        val offered = availableVersions.mapTo(mutableSetOf()) { it.value }
+        availableVersions + installedVersions.filterNot { it in offered }.map { VersionOption(it) }
     }
+    val hasVersions = versionOptions.isNotEmpty() || versionsLoading
+    var selectedVersion by remember(versionOptions) {
+        mutableStateOf(versionOptions.firstOrNull()?.value ?: "latest")
+    }
+    val activeInstalled = activeVersion ?: installedVersions.firstOrNull()
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
@@ -520,53 +534,103 @@ fun ManagerDetailScreen(
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
-        if (description.isNotBlank()) {
-            Text(text = description, style = MaterialTheme.typography.bodyMedium)
-        }
-
-        extra()
-
+        // Actions sit directly under the header: what you came to do, before what it is. The version
+        // picker travels with them because it is what the install button acts on — leaving it below
+        // would put "Install v26.7.0" above the control that chooses the version.
         if (showActions && hasVersions) {
             VersionSection(
                 multiVersion = multiVersion,
-                availableVersions = availableVersions,
+                versions = versionOptions,
                 installedVersions = installedVersions,
+                activeVersion = activeInstalled,
                 selectedVersion = selectedVersion,
                 loading = versionsLoading,
                 enabled = actionsEnabled,
                 onSelectVersion = { selectedVersion = it },
-                onUninstallVersion = onUninstallVersion,
             )
         }
 
         if (showActions) {
             val installed = status == ManagerItemStatus.Installed || status == ManagerItemStatus.UpdateAvailable
+            // Sized to their labels, like every other action pair in the app (a source card's
+            // Install/Remove, a version row's Remove). Stretching two buttons across the page put a
+            // 900px "Install" on a landscape tablet. `fill = false` keeps them intrinsic while still
+            // capping each at half the row, so a long version label cannot overflow a narrow phone.
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (hasVersions) {
                     val versionInstalled = selectedVersion in installedVersions
-                    CompactFilledButton(
-                        text = (if (versionInstalled) "Reinstall " else "Install ") + shortVersionLabel(selectedVersion),
-                        onClick = { onInstallVersion(selectedVersion) },
-                        enabled = actionsEnabled && !versionsLoading,
-                        modifier = Modifier.weight(1f),
-                    )
+                    // Picking an installed version you are not on means you want to switch to it, so
+                    // that becomes the filled action and re-installing steps back to an outlined one.
+                    // Exactly one button is ever filled, and it is the likely intent.
+                    val switchable = canUseVersion && versionInstalled && selectedVersion != activeInstalled
+                    if (switchable) {
+                        CompactFilledButton(
+                            text = "Use",
+                            onClick = { onUseVersion(selectedVersion) },
+                            enabled = actionsEnabled && !versionsLoading,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                    }
+                    // Unversioned: the picker directly above already names what these act on.
+                    val reinstallLabel = if (versionInstalled) "Reinstall" else "Install"
+                    if (switchable) {
+                        CompactOutlinedButton(
+                            text = reinstallLabel,
+                            onClick = { onInstallVersion(selectedVersion) },
+                            enabled = actionsEnabled && !versionsLoading,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                    } else {
+                        CompactFilledButton(
+                            text = reinstallLabel,
+                            onClick = { onInstallVersion(selectedVersion) },
+                            enabled = actionsEnabled && !versionsLoading,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                    }
+                    // The one way to delete a single version now that they are not listed separately.
+                    // Named with its version so it cannot be read as the whole-toolchain Uninstall.
+                    if (versionInstalled && multiVersion) {
+                        CompactOutlinedButton(
+                            text = "Remove",
+                            onClick = { onUninstallVersion(selectedVersion) },
+                            enabled = actionsEnabled && !versionsLoading,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                    }
                 } else if (!installed) {
-                    CompactFilledButton("Install", onClick = onInstall, enabled = actionsEnabled, modifier = Modifier.weight(1f))
+                    CompactFilledButton(
+                        text = "Install",
+                        onClick = onInstall,
+                        enabled = actionsEnabled,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
                 } else {
                     CompactFilledButton(
                         text = if (status == ManagerItemStatus.UpdateAvailable) "Update" else "Reinstall",
                         onClick = onUpdate,
                         enabled = actionsEnabled,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                 }
                 // Kept for multi-version tools too. Individual versions are removed in the list above,
                 // but "Uninstall" means the whole toolchain — which for something like the Android
                 // SDK is more than its versions: removing every platform would still leave the
                 // command-line tools, build-tools and Gradle behind with no way to get rid of them.
-                CompactOutlinedButton("Uninstall", onClick = onUninstall, enabled = installed && actionsEnabled, modifier = Modifier.weight(1f))
+                CompactOutlinedButton(
+                    text = "Uninstall",
+                    onClick = onUninstall,
+                    enabled = installed && actionsEnabled,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
             }
         }
+
+        if (description.isNotBlank()) {
+            Text(text = description, style = MaterialTheme.typography.bodyMedium)
+        }
+
+        extra()
     }
 }
 
@@ -605,13 +669,13 @@ private fun ManagerProgress(percent: Int, label: String?) {
 @Composable
 private fun VersionSection(
     multiVersion: Boolean,
-    availableVersions: List<VersionOption>,
+    versions: List<VersionOption>,
     installedVersions: List<String>,
+    activeVersion: String?,
     selectedVersion: String,
     loading: Boolean,
     enabled: Boolean,
     onSelectVersion: (String) -> Unit,
-    onUninstallVersion: (String) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
         Text(
@@ -619,34 +683,14 @@ private fun VersionSection(
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
         )
-        if (multiVersion && installedVersions.isNotEmpty()) {
-            installedVersions.forEachIndexed { index, version ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(text = version, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    if (index == 0) {
-                        Text(
-                            text = "default",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    CompactOutlinedButton("Remove", onClick = { onUninstallVersion(version) }, enabled = enabled)
-                }
-            }
-            Text(
-                text = "Install another version",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        // One picker rather than a row per installed version: a tool with a dozen of them turned the
+        // top of the page into a list to scroll past. What each version *is* — installed, in use — is
+        // marked in the picker, and the actions below apply to whichever is selected.
         VersionDropdown(
-            versions = availableVersions,
+            versions = versions,
             selected = selectedVersion,
             installedVersions = installedVersions,
+            activeVersion = activeVersion,
             loading = loading,
             enabled = enabled,
             onSelect = onSelectVersion,
@@ -659,6 +703,7 @@ private fun VersionDropdown(
     versions: List<VersionOption>,
     selected: String,
     installedVersions: List<String>,
+    activeVersion: String?,
     loading: Boolean,
     enabled: Boolean,
     onSelect: (String) -> Unit,
@@ -694,6 +739,7 @@ private fun VersionDropdown(
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     if (selectedTag != null) VersionBadge(selectedTag)
+                    VersionStateLabel(selected, installedVersions, activeVersion)
                     Spacer(modifier = Modifier.weight(1f))
                     Text(text = "▾", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -706,13 +752,7 @@ private fun VersionDropdown(
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(versionLabel(option.value, latest))
                             if (option.tag != null) VersionBadge(option.tag)
-                            if (option.value in installedVersions) {
-                                Text(
-                                    text = "installed",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
+                            VersionStateLabel(option.value, installedVersions, activeVersion)
                         }
                     },
                     onClick = {
@@ -741,8 +781,20 @@ private fun VersionBadge(text: String) {
     }
 }
 
+/** "in use" / "installed" beside a version — what the per-version list used to say. */
+@Composable
+private fun VersionStateLabel(version: String, installedVersions: List<String>, activeVersion: String?) {
+    val state = when {
+        version == activeVersion -> "in use"
+        version in installedVersions -> "installed"
+        else -> return
+    }
+    Text(
+        text = state,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
 private fun versionLabel(version: String, latest: String?): String =
     if (latest != null && version == latest) "$version · latest" else version
-
-private fun shortVersionLabel(version: String): String =
-    if (version.length > 14) version.take(13) + "…" else version

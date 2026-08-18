@@ -282,6 +282,7 @@ import dev.jcode.workbench.LocalDebugSession
 import dev.jcode.workbench.ExtensionSourcesState
 import dev.jcode.workbench.LocalExtensionInstallPhases
 import dev.jcode.workbench.LocalExtensionSources
+import dev.jcode.workbench.LocalUninstalledExtension
 import dev.jcode.workbench.LocalPendingReload
 import dev.jcode.workbench.PendingReloadUi
 import dev.jcode.workbench.LocalRunConfigPresets
@@ -483,6 +484,7 @@ fun JCodeApp(
     val extensionSourcesRefreshing by viewModel.sourcesRefreshing.collectAsStateWithLifecycle()
     val extensionSourceOfId by viewModel.extensionSourceOfId.collectAsStateWithLifecycle()
     val extensionInstallPhases by viewModel.extensionInstallPhases.collectAsStateWithLifecycle()
+    val uninstalledDetailExtension by viewModel.uninstalledDetailExtension.collectAsStateWithLifecycle()
     val setupTerminalSessionId by viewModel.setupTerminalRunner.sessionId.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val themeBundleId by viewModel.themeBundleId.collectAsStateWithLifecycle()
@@ -1454,6 +1456,7 @@ fun JCodeApp(
             attribution = extensionSourceOfId,
             refreshing = extensionSourcesRefreshing,
         ),
+        LocalUninstalledExtension provides uninstalledDetailExtension,
         LocalPendingReload provides pendingReloadUi,
         LocalRunConfigPresets provides contributedRunPresets,
         LocalSetupTerminalSessionId provides setupTerminalSessionId,
@@ -1567,6 +1570,7 @@ fun JCodeApp(
             onInstallSdkCatalogEntry = viewModel::installSdkCatalogEntry,
             onInstallSdkCatalogVersion = viewModel::installSdkCatalogVersion,
             onUninstallSdkCatalogVersion = viewModel::uninstallSdkCatalogVersion,
+            onUseSdkCatalogVersion = viewModel::useSdkCatalogVersion,
             onUninstallSdkCatalogEntry = viewModel::uninstallSdkCatalogEntry,
             onOpenSdkDetail = viewModel::openSdkDetailPage,
             onCheckLspStatuses = viewModel::checkLspStatuses,
@@ -3212,6 +3216,7 @@ private fun JCodeShell(
                                             onUninstall = managerActions.onUninstallSdkCatalogEntry,
                                             onInstallVersion = managerActions.onInstallSdkCatalogVersion,
                                             onUninstallVersion = managerActions.onUninstallSdkCatalogVersion,
+                                            onUseVersion = managerActions.onUseSdkCatalogVersion,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
@@ -3292,10 +3297,14 @@ private fun JCodeShell(
                                     val id = tab.id.substringAfter(MainViewModel.EXT_DETAIL_PREFIX)
                                     val entry = marketplaceEntries.firstOrNull { it.id == id }
                                     val inst = installedExtensions.firstOrNull { it.id == id }
-                                    if (entry != null || inst != null) {
+                                    // What this page was about before it was uninstalled — kept so
+                                    // the page does not blank out under whoever pressed Uninstall.
+                                    val removed = LocalUninstalledExtension.current?.takeIf { it.id == id }
+                                    if (entry != null || inst != null || removed != null) {
                                         ExtensionDetailPage(
                                             entry = entry,
-                                            installed = inst,
+                                            installed = inst ?: removed,
+                                            uninstalled = inst == null && removed != null,
                                             available = marketplaceEntries,
                                             installedIds = installedExtensions.map { it.id }.toSet(),
                                             busy = marketplaceBusy,

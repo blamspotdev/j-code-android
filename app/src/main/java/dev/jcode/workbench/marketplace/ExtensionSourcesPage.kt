@@ -45,6 +45,7 @@ import dev.jcode.design.ManagerItemStatus
 import dev.jcode.design.ManagerStatusChip
 import dev.jcode.design.ManagerSummaryRow
 import dev.jcode.design.jcIcon
+import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.isUpdateAvailable
 import dev.jcode.workbench.ExtensionSourcesState
@@ -146,11 +147,15 @@ internal fun ExtensionSourcesPage(
             )
         } else {
             state.sources.forEach { url ->
+                val release = state.releases[url]
                 SourceCard(
                     url = url,
-                    release = state.releases[url],
+                    release = release,
                     refreshing = state.refreshing,
-                    installedFromSource = installed.firstOrNull { state.attribution[it.id] == url },
+                    // Attributed to this source by a previous install, or — for a copy imported by
+                    // hand — matched to the id the repo's own manifest declares.
+                    installedFromSource = installed.firstOrNull { state.attribution[it.id] == url }
+                        ?: release?.extensionId?.let { id -> installed.firstOrNull { it.id == id } },
                     busy = busy,
                     onInstall = { onInstall(url) },
                     onRemove = { onRemove(url) },
@@ -197,11 +202,13 @@ private fun SourceCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(11.dp),
             ) {
-                if (installedFromSource != null) {
+                val extensionName = installedFromSource?.name ?: release?.displayName
+                if (installedFromSource != null || release?.iconUrl != null) {
                     ExtensionIcon(
-                        type = installedFromSource.type,
-                        name = installedFromSource.name,
-                        iconFile = installedFromSource.iconFile,
+                        type = installedFromSource?.type ?: ExtensionType.App,
+                        name = extensionName ?: repo,
+                        iconFile = installedFromSource?.iconFile,
+                        iconUrl = release?.iconUrl,
                         size = 38.dp,
                     )
                 } else {
@@ -232,7 +239,7 @@ private fun SourceCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = installedFromSource?.name ?: "github.com",
+                        text = extensionName ?: "github.com",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

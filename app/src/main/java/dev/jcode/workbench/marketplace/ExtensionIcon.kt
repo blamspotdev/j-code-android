@@ -113,14 +113,23 @@ private fun fallbackColor(type: ExtensionType): Color = when (type) {
 
 private suspend fun loadIcon(context: Context, iconFile: File?, iconUrl: String?): ImageBitmap? = withContext(Dispatchers.IO) {
     val cache = ExtensionIconCache.of(context)
-    if (iconFile != null && iconFile.isFile) {
-        val key = "file:${iconFile.absolutePath}:${iconFile.lastModified()}"
-        cache.get(key)?.let { return@withContext it }
-        runCatching { BitmapFactory.decodeFile(iconFile.absolutePath)?.asImageBitmap() }
-            .getOrNull()?.let {
-                cache.put(key, it)
-                return@withContext it
-            }
+    if (iconFile != null) {
+        // Cached under the path alone as well as under its mtime: an uninstalled extension's detail
+        // page outlives its files, and the icon it was showing should not turn into a monogram
+        // because the file it came from has just been deleted.
+        val path = "file:${iconFile.absolutePath}"
+        if (iconFile.isFile) {
+            val key = "$path:${iconFile.lastModified()}"
+            cache.get(key)?.let { return@withContext it }
+            runCatching { BitmapFactory.decodeFile(iconFile.absolutePath)?.asImageBitmap() }
+                .getOrNull()?.let {
+                    cache.put(key, it)
+                    cache.put(path, it)
+                    return@withContext it
+                }
+        } else {
+            cache.get(path)?.let { return@withContext it }
+        }
     }
     if (iconUrl.isNullOrBlank()) return@withContext null
     val urlKey = "url:$iconUrl"

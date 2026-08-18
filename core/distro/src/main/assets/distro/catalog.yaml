@@ -122,7 +122,29 @@ entries:
       ' "$SCHEDFILE" - | head -24
       rm -f "$SCHEDFILE"
     installedVersionsScript: |
-      ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -rV
+      NVM_DIR="$HOME/.nvm"
+      # The active version is whatever /usr/local/bin/node resolves to — that symlink, not nvm's
+      # default alias, is what every non-login shell in JCode actually runs. Matched loosely on
+      # ".../versions/node/<v>/" because under proot readlink can hand back a host-prefixed path that
+      # no $HOME-anchored pattern would match; the alias file is the fallback when it resolves nothing.
+      ACTIVE=$({ readlink -f /usr/local/bin/node || readlink /usr/local/bin/node; } 2>/dev/null |
+        sed -n 's#.*/versions/node/\([^/]*\)/.*#\1#p' | head -1)
+      [ -n "$ACTIVE" ] || ACTIVE=$(cat "$NVM_DIR/alias/default" 2>/dev/null)
+      ls -1 "$NVM_DIR/versions/node" 2>/dev/null | sort -rV | while read -r V; do
+        if [ "$V" = "$ACTIVE" ]; then printf '%s\tactive\n' "$V"; else printf '%s\n' "$V"; fi
+      done
+    useVersionScript: |
+      set -e
+      export NVM_DIR="$HOME/.nvm"
+      V="${JCODE_VERSION:-}"
+      [ -n "$V" ] || { echo "No Node.js version given."; exit 1; }
+      DIR="$NVM_DIR/versions/node/$V"
+      [ -d "$DIR" ] || { echo "Node.js $V is not installed."; exit 1; }
+      [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm alias default "$V" >/dev/null 2>&1 || true
+      for b in node npm npx corepack; do
+        if [ -x "$DIR/bin/$b" ]; then sudo ln -sf "$DIR/bin/$b" "/usr/local/bin/$b"; else sudo rm -f "/usr/local/bin/$b"; fi
+      done
+      node --version
 
   - id: jdk
     category: languages
@@ -204,7 +226,25 @@ entries:
           esac
         done
     installedVersionsScript: |
-      ls -1 /usr/lib/jvm 2>/dev/null | sed -n 's/^java-\([0-9][0-9]*\)-openjdk.*/\1/p' | sort -rn | uniq
+      # JAVA_HOME in the profile drop-in is the chosen one; Gradle and jdtls read it, not PATH.
+      ACTIVE=$(sed -n 's#^export JAVA_HOME=/usr/lib/jvm/java-\([0-9][0-9]*\)-openjdk.*#\1#p' /etc/profile.d/jcode-java.sh 2>/dev/null | head -1)
+      ls -1 /usr/lib/jvm 2>/dev/null | sed -n 's/^java-\([0-9][0-9]*\)-openjdk.*/\1/p' | sort -rn | uniq | while read -r V; do
+        if [ "$V" = "$ACTIVE" ]; then printf '%s\tactive\n' "$V"; else printf '%s\n' "$V"; fi
+      done
+    useVersionScript: |
+      set -e
+      V="${JCODE_VERSION:-}"
+      [ -n "$V" ] || { echo "No JDK version given."; exit 1; }
+      JH=$(ls -d /usr/lib/jvm/java-"$V"-openjdk-* 2>/dev/null | head -1)
+      [ -n "$JH" ] || { echo "OpenJDK $V is not installed."; exit 1; }
+      for b in java javac jar javadoc jarsigner keytool; do
+        if [ -x "$JH/bin/$b" ]; then
+          sudo update-alternatives --install "/usr/bin/$b" "$b" "$JH/bin/$b" 2000 >/dev/null 2>&1 || true
+          sudo update-alternatives --set "$b" "$JH/bin/$b" >/dev/null 2>&1 || true
+        fi
+      done
+      printf 'export JAVA_HOME=%s\n' "$JH" | sudo tee /etc/profile.d/jcode-java.sh >/dev/null
+      java -version 2>&1 | head -1
 
   - id: go
     category: languages
@@ -281,7 +321,20 @@ entries:
         awk -F. '{ line = $1 "." $2; if (!seen[line]++) { n++; printf "%s\t%s\n", $0, (n <= 2 ? "Supported" : "") } }' |
         head -12
     installedVersionsScript: |
-      ls -1d /usr/local/go-* 2>/dev/null | sed 's#.*/go-##' | sort -rV
+      # /usr/local/go is the symlink the PATH entries point through, so it names the active release.
+      ACTIVE=$(readlink /usr/local/go 2>/dev/null | sed 's#.*/go-##')
+      ls -1d /usr/local/go-* 2>/dev/null | sed 's#.*/go-##' | sort -rV | while read -r V; do
+        if [ "$V" = "$ACTIVE" ]; then printf '%s\tactive\n' "$V"; else printf '%s\n' "$V"; fi
+      done
+    useVersionScript: |
+      set -e
+      V="${JCODE_VERSION:-}"
+      [ -n "$V" ] || { echo "No Go version given."; exit 1; }
+      [ -x "/usr/local/go-$V/bin/go" ] || { echo "Go $V is not installed."; exit 1; }
+      sudo ln -sfn "/usr/local/go-$V" /usr/local/go
+      sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go
+      sudo ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+      go version
 
   - id: rust
     category: build-tools
@@ -352,9 +405,22 @@ entries:
         sed -n 's/^Version \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -15 |
         while read -r v; do printf '%s\t\n' "$v"; done
     installedVersionsScript: |
+      # rustup already prints "(default)" beside the active toolchain, so the marker is read rather
+      # than stripped; the host triple is trimmed off the name to leave a bare channel/version.
       "$HOME/.cargo/bin/rustup" toolchain list 2>/dev/null |
         grep -v 'no installed toolchains' |
-        sed 's/ (default)//; s/ (override)//; s/-[a-z0-9_]*-unknown-linux-gnu$//; s/-aarch64.*$//; s/-x86_64.*$//'
+        while read -r NAME REST; do
+          V=$(printf '%s' "$NAME" | sed 's/-[a-z0-9_]*-unknown-linux-gnu$//; s/-aarch64.*$//; s/-x86_64.*$//')
+          [ -n "$V" ] || continue
+          case "$REST" in *'(default)'*) printf '%s\tactive\n' "$V" ;; *) printf '%s\n' "$V" ;; esac
+        done
+    useVersionScript: |
+      set -e
+      export CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup"
+      V="${JCODE_VERSION:-}"
+      [ -n "$V" ] || { echo "No Rust toolchain given."; exit 1; }
+      "$CARGO_HOME/bin/rustup" default "$V"
+      "$CARGO_HOME/bin/rustc" --version
 
   - id: cmake-ninja
     category: build-tools
