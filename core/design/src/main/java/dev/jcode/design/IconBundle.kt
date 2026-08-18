@@ -84,7 +84,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
  */
 enum class JCodeIcon {
     Run, Stop, Terminal,
-    Files, Folder, NewFolder, NewFile,
+    Files, Folder, OpenFolder, NewFolder, NewFile,
     Sdk, Lsp, Scm, Settings, Search, Extensions, Sources, Destinations, Code, Database, Vm,
     Add, Close, Refresh, Paste, Collapse, MoreVert, Save, Undo, Redo, Discard,
     Continue, Rerun, StepInto, StepOver, StepOut,
@@ -127,6 +127,7 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.Terminal to Icons.Rounded.Terminal,
         JCodeIcon.Files to Icons.Rounded.FolderOpen,
         JCodeIcon.Folder to Icons.Rounded.Folder,
+        JCodeIcon.OpenFolder to Icons.Rounded.FolderOpen,
         JCodeIcon.NewFolder to Icons.Rounded.CreateNewFolder,
         JCodeIcon.NewFile to Icons.Rounded.NoteAdd,
         JCodeIcon.Sdk to Icons.Rounded.BuildCircle,

@@ -152,7 +152,7 @@ internal fun WorkspaceHeader(
             Box {
                 var openFolderMenu by remember { mutableStateOf(false) }
                 WorkbenchIconActionButton(
-                    icon = jcIcon(JCodeIcon.Destinations),
+                    icon = jcIcon(JCodeIcon.OpenFolder),
                     contentDescription = "Open folder",
                     onClick = { if (contributedDrawerActions.isEmpty()) onOpenExternalFolder() else openFolderMenu = true },
                 )
@@ -161,7 +161,7 @@ internal fun WorkspaceHeader(
                         expanded = openFolderMenu,
                         onDismissRequest = { openFolderMenu = false },
                         listActions = buildList {
-                            add(ContextAction(JCodeIcon.Destinations, "Open Folder") { onOpenExternalFolder() })
+                            add(ContextAction(JCodeIcon.OpenFolder, "Open Folder") { onOpenExternalFolder() })
                             contributedDrawerActions.forEach { a ->
                                 add(ContextAction(contributedActionIcon(a.id), a.label) { onDrawerAction(a) })
                             }
