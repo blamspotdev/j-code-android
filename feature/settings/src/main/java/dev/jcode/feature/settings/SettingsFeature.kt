@@ -11,7 +11,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -35,9 +37,10 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ScrollableTabRow
 import dev.jcode.design.AlertDialog
+import dev.jcode.design.CompactFilledButton
+import dev.jcode.design.CompactOutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
@@ -804,7 +807,9 @@ object SettingsFeature {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                FilledTonalButton(
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CompactFilledButton(
+                    text = "Get latest WebView",
                     onClick = {
                         val play = Intent(
                             Intent.ACTION_VIEW,
@@ -821,11 +826,9 @@ object SettingsFeature {
                             }
                         }
                     },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Get latest WebView (Play Store)")
-                }
-                OutlinedButton(
+                )
+                CompactOutlinedButton(
+                    text = "Choose provider…",
                     onClick = {
                         runCatching {
                             ctx.startActivity(
@@ -834,9 +837,7 @@ object SettingsFeature {
                             )
                         }
                     },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Choose WebView provider…")
+                )
                 }
             }
             } // end Web preview
@@ -900,12 +901,8 @@ object SettingsFeature {
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(onClick = onOpenEnvironmentWizard, modifier = Modifier.weight(1f)) {
-                        Text("Manage environments")
-                    }
-                    OutlinedButton(onClick = onRefreshEnvironment, modifier = Modifier.weight(1f)) {
-                        Text("Refresh checks")
-                    }
+                    CompactFilledButton(text = "Manage environments", onClick = onOpenEnvironmentWizard)
+                    CompactOutlinedButton(text = "Refresh checks", onClick = onRefreshEnvironment)
                 }
                 if (environmentState.distroInstalled == true) {
                     val envBackup = LocalEnvironmentBackup.current
@@ -916,12 +913,8 @@ object SettingsFeature {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilledTonalButton(onClick = envBackup.onBackup, modifier = Modifier.weight(1f)) {
-                            Text("Back up (.tar.gz)")
-                        }
-                        OutlinedButton(onClick = envBackup.onRestore, modifier = Modifier.weight(1f)) {
-                            Text("Restore…")
-                        }
+                        CompactFilledButton(text = "Back up (.tar.gz)", onClick = envBackup.onBackup)
+                        CompactOutlinedButton(text = "Restore…", onClick = envBackup.onRestore)
                     }
                     Text(
                         text = "Refresh package lists and upgrade installed packages " +
@@ -929,13 +922,11 @@ object SettingsFeature {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    OutlinedButton(
+                    CompactOutlinedButton(
+                        text = if (envBackup.updatingPackages) "Updating packages…" else "Update system packages",
                         onClick = envBackup.onUpdatePackages,
                         enabled = !envBackup.updatingPackages,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(if (envBackup.updatingPackages) "Updating packages…" else "Update system packages")
-                    }
+                    )
                 }
             }
 
@@ -978,12 +969,10 @@ object SettingsFeature {
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
-                OutlinedButton(
+                CompactOutlinedButton(
+                    text = "Copy commands",
                     onClick = { clipboard.setText(AnnotatedString(AppProcesses.RAISE_LIMIT_COMMANDS)) },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Copy commands")
-                }
+                )
             }
 
             SettingsCard(
@@ -995,9 +984,10 @@ object SettingsFeature {
                 val androidDevice = LocalAndroidDevice.current
                 SummaryRow(label = "ADB bridge", value = androidDevice.status)
                 androidDevice.serial?.let { SummaryRow(label = "Serial", value = it) }
-                FilledTonalButton(onClick = androidDevice.onOpenPage, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (androidDevice.ready) "Manage device" else "Set up ADB")
-                }
+                CompactFilledButton(
+                    text = if (androidDevice.ready) "Manage device" else "Set up ADB",
+                    onClick = androidDevice.onOpenPage,
+                )
             }
 
             SettingsCard(
@@ -1080,27 +1070,21 @@ object SettingsFeature {
                 // A single button: "Install Update" when a newer release is available (its label shows
                 // download/install progress while running), otherwise "Check for updates".
                 if (appUpdate.updateAvailable) {
-                    FilledTonalButton(
+                    CompactFilledButton(
+                        text = when {
+                            !appUpdate.installing -> "Install Update"
+                            appUpdate.installProgress in 1..99 -> "Downloading… ${appUpdate.installProgress}%"
+                            else -> "Installing…"
+                        },
                         onClick = appUpdate.onInstallUpdate,
                         enabled = !appUpdate.installing,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            when {
-                                !appUpdate.installing -> "Install Update"
-                                appUpdate.installProgress in 1..99 -> "Downloading… ${appUpdate.installProgress}%"
-                                else -> "Installing…"
-                            },
-                        )
-                    }
+                    )
                 } else {
-                    OutlinedButton(
+                    CompactOutlinedButton(
+                        text = if (appUpdate.checking) "Checking…" else "Check for updates",
                         onClick = appUpdate.onCheck,
                         enabled = !appUpdate.checking,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(if (appUpdate.checking) "Checking…" else "Check for updates")
-                    }
+                    )
                 }
             }
 
@@ -1111,11 +1095,9 @@ object SettingsFeature {
                 keywords = "backup restore export import settings preferences file save load transfer migrate json device",
             ) {
                 val backup = LocalSettingsBackup.current
-                FilledTonalButton(onClick = backup.onExport, modifier = Modifier.fillMaxWidth()) {
-                    Text("Export settings…")
-                }
-                OutlinedButton(onClick = backup.onImport, modifier = Modifier.fillMaxWidth()) {
-                    Text("Import settings…")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CompactFilledButton(text = "Export settings…", onClick = backup.onExport)
+                    CompactOutlinedButton(text = "Import settings…", onClick = backup.onImport)
                 }
             }
 
@@ -1182,27 +1164,21 @@ object SettingsFeature {
                     SummaryRow(label = "Location", value = diagnostics.location.ifBlank { "Starting…" })
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(
+                    CompactFilledButton(
+                        text = "View",
                         onClick = { showLog = true },
                         enabled = diagnostics.sizeBytes > 0L,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("View")
-                    }
-                    OutlinedButton(
+                    )
+                    CompactOutlinedButton(
+                        text = "Export…",
                         onClick = diagnostics.onExport,
                         enabled = diagnostics.sizeBytes > 0L,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("Export…")
-                    }
-                    OutlinedButton(
+                    )
+                    CompactOutlinedButton(
+                        text = "Clear",
                         onClick = diagnostics.onClear,
                         enabled = diagnostics.sizeBytes > 0L,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("Clear")
-                    }
+                    )
                 }
                 if (showLog) {
                     DiagnosticLogDialog(lines = diagnostics.recentLines(), onDismiss = { showLog = false })
@@ -1409,9 +1385,10 @@ object SettingsFeature {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    FilledTonalButton(onClick = developerSetting.onLoadExtension, modifier = Modifier.fillMaxWidth()) {
-                        Text("Load extension (.jext)…")
-                    }
+                    CompactFilledButton(
+                        text = "Load extension (.jext)…",
+                        onClick = developerSetting.onLoadExtension,
+                    )
                 }
             }
 
@@ -1520,19 +1497,17 @@ object SettingsFeature {
                         listOf("Tree", "List").forEach { option ->
                             val selected = explorerViewMode == option
                             if (selected) {
-                                FilledTonalButton(
+                                CompactFilledButton(
+                                    text = option,
                                     onClick = { onUpdateExplorerViewMode(selectedScope, option) },
                                     modifier = Modifier.weight(1f),
-                                ) {
-                                    Text(option)
-                                }
+                                )
                             } else {
-                                OutlinedButton(
+                                CompactOutlinedButton(
+                                    text = option,
                                     onClick = { onUpdateExplorerViewMode(selectedScope, option) },
                                     modifier = Modifier.weight(1f),
-                                ) {
-                                    Text(option)
-                                }
+                                )
                             }
                         }
                     }
@@ -1547,15 +1522,13 @@ object SettingsFeature {
                 description = "Open the backing config files directly when you want full control.",
                 keywords = "yaml files config workspace project open backing edit",
             ) {
-                FilledTonalButton(onClick = onOpenWorkspaceConfig, modifier = Modifier.fillMaxWidth()) {
-                    Text("Open workspace YAML")
-                }
-                OutlinedButton(
-                    onClick = onOpenProjectConfig,
-                    enabled = projectOverridesAvailable,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Open project YAML")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CompactFilledButton(text = "Open workspace YAML", onClick = onOpenWorkspaceConfig)
+                    CompactOutlinedButton(
+                        text = "Open project YAML",
+                        onClick = onOpenProjectConfig,
+                        enabled = projectOverridesAvailable,
+                    )
                 }
             }
             } // end Files
@@ -2087,18 +2060,13 @@ private fun EnvVarEditor(settings: EnvVarSettings) {
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        OutlinedButton(onClick = { editTarget = name; adding = false }) { Text("Edit") }
-                        OutlinedButton(onClick = { settings.onRemove(name) }) { Text("Delete") }
+                        CompactOutlinedButton(text = "Edit", onClick = { editTarget = name; adding = false })
+                        CompactOutlinedButton(text = "Delete", onClick = { settings.onRemove(name) })
                     }
                 }
             }
         }
-        FilledTonalButton(
-            onClick = { editTarget = ""; adding = true },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Add variable")
-        }
+        CompactFilledButton(text = "Add variable", onClick = { editTarget = ""; adding = true })
     }
 
     val target = editTarget
@@ -2196,8 +2164,8 @@ private fun StepperRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            OutlinedButton(onClick = onDecrease) { Text("-") }
-            FilledTonalButton(onClick = onIncrease) { Text("+") }
+            CompactOutlinedButton(text = "-", onClick = onDecrease)
+            CompactFilledButton(text = "+", onClick = onIncrease)
         }
     }
 }
@@ -2246,18 +2214,25 @@ private fun SettingsActionRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        FilledTonalButton(onClick = onClick, enabled = enabled && !busy) {
+        // Not CompactFilledButton only because this one carries a spinner beside its label; the
+        // metrics are copied from it so it sits at the same height as every other settings button.
+        FilledTonalButton(
+            onClick = onClick,
+            enabled = enabled && !busy,
+            modifier = Modifier.defaultMinSize(minHeight = 32.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+        ) {
             // The label stays put and the spinner takes the leading slot, so the button keeps its
             // width and the row does not jump the moment it is pressed.
             if (busy) {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(14.dp),
                     strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                 )
                 Spacer(Modifier.width(8.dp))
             }
-            Text(buttonLabel)
+            Text(buttonLabel, style = MaterialTheme.typography.labelMedium)
         }
     }
 }
