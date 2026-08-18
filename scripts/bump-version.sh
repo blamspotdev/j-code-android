@@ -29,7 +29,7 @@
 # and this refuses to bump it.
 #
 # Used by .github/workflows/version-bump.yml, which opens the next train when a
-# stable release is published (minor), and can be run by hand for any level.
+# stable release is published (patch), and can be run by hand for any level.
 #
 # Prints the NEW version on stdout (so it can be captured); progress goes to stderr.
 set -eu

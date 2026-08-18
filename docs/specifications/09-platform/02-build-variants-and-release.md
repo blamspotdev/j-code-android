@@ -124,7 +124,7 @@ main = 1.7.0        merge, merge, merge          (jcodeVersion unchanged)
                     merge
                     publish v1.7.0-beta.2        pre-release
                     publish v1.7.0               release, dev.jcode
-main = 1.7.0        opened automatically
+main = next patch   opened automatically
 ```
 
 Bumping per merge — which is what `version-bump.yml` used to do — would move the target every time
@@ -174,10 +174,12 @@ shipped cannot be previewed again: open the next one instead.
 
 ### 4.3 Opening the next train
 
-`.github/workflows/version-bump.yml` raises the **minor** part, and is **dispatched, never triggered
-by an event**: `release.yml` asks for it at the end of a stable publish. Running it by hand for any
-level is the other way in, and that is **admin-only** — the same check as `release.yml`, skipped only
-for the dispatch from `release.yml`, which arrives as `github-actions[bot]`.
+`.github/workflows/version-bump.yml` is **dispatched, never triggered by an event**: `release.yml`
+asks for it at the end of a stable publish, and asks for a **patch** bump — a train that ships opens
+the next one along the same minor line, and a train that is to carry features is raised by hand.
+Running it by hand for any level is the other way in, and that is **admin-only** — the same check as
+`release.yml`, skipped only for the dispatch from `release.yml`, which arrives as
+`github-actions[bot]`.
 
 > **It used to also listen for `release: published`, and that trigger is gone.** Three reasons at
 > once. A release created with `GITHUB_TOKEN` raises no events that start other workflows — the loop
