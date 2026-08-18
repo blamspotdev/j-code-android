@@ -9,8 +9,8 @@ plugins {
 // `val jcodeVersion` is the version being *prepared*, not the last one shipped: main carries the
 // open release train (see docs/specifications/09-platform/02-build-variants-and-release.md), and
 // merges no longer move it. The release scripts parse this line, and `-PjcodeVersionName=…`
-// overrides it to add the pre-release label a Beta build carries (e.g. 1.6.0-beta.1).
-val jcodeVersion = "1.6.0"
+// overrides it to add the pre-release label a Beta build carries (e.g. 1.7.0-beta.1).
+val jcodeVersion = "1.7.0"
 
 val jcodeVersionName: String =
     (project.findProperty("jcodeVersionName") as? String)?.trim()?.takeIf { it.isNotBlank() }
@@ -24,16 +24,16 @@ val jcodeVersionName: String =
  * scripts/build-release.ps1 ($Code) and build-release-common.sh (CODE).
  *
  * The trailing tier is what the old formula had no room for. It used to ignore the pre-release
- * suffix entirely, so 1.6.0-beta.1, 1.6.0-beta.2 and 1.6.0 all derived the *same* code — and
+ * suffix entirely, so 1.7.0-beta.1, 1.7.0-beta.2 and 1.7.0 all derived the *same* code — and
  * successive betas therefore never climbed, which is the one thing a version code has to do.
  * A tier is ordered the way SemVer orders the label it comes from, so a build never goes backwards
  * on its way from the first preview to the release:
  *
- *     1.6.0-alpha.1  1050001      alpha.N -> N
- *     1.6.0-beta.1   1050031      beta.N  -> 30 + N
- *     1.6.0-beta.2   1050032
- *     1.6.0-rc.1     1050061      rc.N    -> 60 + N
- *     1.6.0          1050099      release -> 99   (always above every preview of itself)
+ *     1.7.0-alpha.1  1050001      alpha.N -> N
+ *     1.7.0-beta.1   1050031      beta.N  -> 30 + N
+ *     1.7.0-beta.2   1050032
+ *     1.7.0-rc.1     1050061      rc.N    -> 60 + N
+ *     1.7.0          1050099      release -> 99   (always above every preview of itself)
  *
  * An unrecognised or absent label reads as a release, which is the safe end of the range: a build
  * whose label could not be understood sorts above the previews rather than silently below them.
