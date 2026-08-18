@@ -541,6 +541,10 @@ fun ManagerDetailScreen(
 
         if (showActions) {
             val installed = status == ManagerItemStatus.Installed || status == ManagerItemStatus.UpdateAvailable
+            // Sized to their labels, like every other action pair in the app (a source card's
+            // Install/Remove, a version row's Remove). Stretching two buttons across the page put a
+            // 900px "Install" on a landscape tablet. `fill = false` keeps them intrinsic while still
+            // capping each at half the row, so a long version label cannot overflow a narrow phone.
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (hasVersions) {
                     val versionInstalled = selectedVersion in installedVersions
@@ -548,23 +552,33 @@ fun ManagerDetailScreen(
                         text = (if (versionInstalled) "Reinstall " else "Install ") + shortVersionLabel(selectedVersion),
                         onClick = { onInstallVersion(selectedVersion) },
                         enabled = actionsEnabled && !versionsLoading,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                 } else if (!installed) {
-                    CompactFilledButton("Install", onClick = onInstall, enabled = actionsEnabled, modifier = Modifier.weight(1f))
+                    CompactFilledButton(
+                        text = "Install",
+                        onClick = onInstall,
+                        enabled = actionsEnabled,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
                 } else {
                     CompactFilledButton(
                         text = if (status == ManagerItemStatus.UpdateAvailable) "Update" else "Reinstall",
                         onClick = onUpdate,
                         enabled = actionsEnabled,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                 }
                 // Kept for multi-version tools too. Individual versions are removed in the list above,
                 // but "Uninstall" means the whole toolchain — which for something like the Android
                 // SDK is more than its versions: removing every platform would still leave the
                 // command-line tools, build-tools and Gradle behind with no way to get rid of them.
-                CompactOutlinedButton("Uninstall", onClick = onUninstall, enabled = installed && actionsEnabled, modifier = Modifier.weight(1f))
+                CompactOutlinedButton(
+                    text = "Uninstall",
+                    onClick = onUninstall,
+                    enabled = installed && actionsEnabled,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
             }
         }
     }
