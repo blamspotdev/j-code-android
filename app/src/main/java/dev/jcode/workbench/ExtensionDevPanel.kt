@@ -6,18 +6,19 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -75,18 +76,23 @@ fun ExtensionDevSidebarContent(modifier: Modifier = Modifier) {
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            DevPane.entries.forEach { p ->
-                StripTab(label = p.label, selected = p == pane) { pane = p }
+        Surface(color = MaterialTheme.colorScheme.surface) {
+            Row(
+                modifier = Modifier.fillMaxWidth().height(36.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f).fillMaxHeight().horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    DevPane.entries.forEach { p ->
+                        DevTab(label = p.label, selected = p == pane) { pane = p }
+                    }
+                }
+                ActionText("Load") { state.onLoad() }
+                ActionText("Reload") { state.onReload() }
+                if (pane == DevPane.Log) ActionText("Clear") { ExtensionDevLog.clear() }
             }
-            Box(Modifier.weight(1f))
-            ActionText("Load") { state.onLoad() }
-            ActionText("Reload") { state.onReload() }
-            if (pane == DevPane.Log) ActionText("Clear") { ExtensionDevLog.clear() }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
 
@@ -101,13 +107,14 @@ fun ExtensionDevSidebarContent(modifier: Modifier = Modifier) {
         }
 
         // Extension selector (usually just one or two).
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            exts.forEach { e ->
-                StripTab(label = e.name, selected = e.id == selected?.id) { selectedId = e.id }
+        Surface(color = MaterialTheme.colorScheme.surface) {
+            Row(
+                modifier = Modifier.fillMaxWidth().height(36.dp).horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                exts.forEach { e ->
+                    DevTab(label = e.name, selected = e.id == selected?.id) { selectedId = e.id }
+                }
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
@@ -263,26 +270,21 @@ private fun SectionLabel(text: String) {
 }
 
 @Composable
-private fun StripTab(label: String, selected: Boolean, onClick: () -> Unit) {
-    val accent = MaterialTheme.colorScheme.primary
-    Column(
-        // Size to the label (IntrinsicSize.Max) so the underline hugs the tab instead of the row.
-        modifier = Modifier.width(IntrinsicSize.Max).clickable(onClick = onClick),
-        horizontalAlignment = Alignment.CenterHorizontally,
+private fun DevTab(label: String, selected: Boolean, onClick: () -> Unit) {
+    // The flat tab-strip idiom the editor, terminal, and DevTools panels use: the active tab lifts to
+    // `surfaceVariant` off the `surface` rail, full-height and butted against its neighbours.
+    Box(
+        modifier = Modifier
+            .clickable(onClick = onClick)
+            .background(if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
+            .fillMaxHeight()
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-            color = if (selected) accent else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
-        )
-        // A flat underline marks the active tab, like a browser devtools strip.
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(2.dp)
-                .background(if (selected) accent else Color.Transparent),
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
