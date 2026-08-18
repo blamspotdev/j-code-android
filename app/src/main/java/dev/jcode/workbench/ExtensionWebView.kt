@@ -809,7 +809,7 @@ internal class VsixSession private constructor(
      */
     private fun render(handle: String, html: String) {
         if (html.isBlank() || handle.isBlank()) return
-        val document = vsixBootstrap(projectName, projectPath) + html
+        val document = vsixBootstrap(context, projectName, projectPath) + html
         val stamp = html.hashCode()
         scope.launch {
             val surface = surfaceFor(handle)
@@ -1166,7 +1166,7 @@ internal fun PersistentWebViewHost(webView: WebView, modifier: Modifier = Modifi
  * available in JS, so it is applied from there as pixels and republished as a variable for anything
  * sizing itself in viewport units.
  */
-private fun vsixBootstrap(projectName: String?, projectPath: String?): String {
+private fun vsixBootstrap(context: Context, projectName: String?, projectPath: String?): String {
     // A VS Code webview is handed its workspace through page config, not through the extension API —
     // the page cannot call vscode.workspace itself. Telling only the extension host which project is
     // open therefore leaves the UI to fall back to whatever it last persisted, which is how it ends
@@ -1213,33 +1213,32 @@ private fun vsixBootstrap(projectName: String?, projectPath: String?): String {
   }
 })();
 </script>
-""" + VSIX_BOOTSTRAP
+""" + vsixChrome(vsixThemeCss(context))
 }
 
-private val VSIX_BOOTSTRAP = """
+/**
+ * The palette a VS Code webview expects, read once from assets.
+ *
+ * An extension's stylesheet is written entirely against `--vscode-*`, and a missing one does not
+ * degrade — the declaration is invalid, so the property inherits instead. That is not a small
+ * effect: Codex colours its primary button's label with `--vscode-dropdown-background`, so the one
+ * token nobody had defined made the label the same colour as the button under it. It referenced 259
+ * others JCode did not supply.
+ */
+private var themeCssCache: String? = null
+
+private fun vsixThemeCss(context: Context): String = themeCssCache ?: runCatching {
+    context.assets.open("vscode-host/webview-theme.css").use { it.readBytes().toString(Charsets.UTF_8) }
+}.getOrDefault("").also { themeCssCache = it }
+
+private fun vsixChrome(themeCss: String) = """
 <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1, user-scalable=no">
 <style>
 html,body{margin:0;padding:0;overflow:hidden}
-/* VS Code hands a webview its theme as --vscode-* variables. An extension's styling resolves
-   against those, so without them it draws in a washed-out fallback. Only the variables are
-   supplied — the extension owns what it does with them. */
-:root{
-  --vscode-editor-background:#14151d; --vscode-editor-foreground:#d5d9e0;
-  --vscode-sideBar-background:#101118; --vscode-sideBar-foreground:#c8cdd6;
-  --vscode-panel-background:#14151d; --vscode-panel-border:#2a2d3c;
-  --vscode-button-background:#3d5afe; --vscode-button-foreground:#ffffff;
-  --vscode-button-hoverBackground:#4d68ff; --vscode-button-secondaryBackground:#2a2d3c;
-  --vscode-button-secondaryForeground:#d5d9e0;
-  --vscode-input-background:#1c1e29; --vscode-input-foreground:#d5d9e0;
-  --vscode-input-border:#2a2d3c; --vscode-input-placeholderForeground:#8b93a3;
-  --vscode-focusBorder:#3d5afe; --vscode-errorForeground:#d06262;
-  --vscode-descriptionForeground:#8b93a3; --vscode-textLink-foreground:#7f9cff;
-  --vscode-foreground:#d5d9e0; --vscode-widget-border:#2a2d3c;
-  --vscode-list-hoverBackground:#1c1e29; --vscode-list-activeSelectionBackground:#2a2d3c;
-  --vscode-editorWidget-background:#181a24; --vscode-editorWidget-border:#2a2d3c;
-  --vscode-editor-font-family:monospace; --vscode-font-family:system-ui,sans-serif;
-  --vscode-font-size:13px; --vscode-font-weight:400;
-}
+/* VS Code hands a webview its theme as --vscode-* variables and an extension's styling resolves
+   entirely against them. The palette is vscode-host/webview-theme.css; only the variables are
+   supplied, and the extension owns what it does with them. */
+$themeCss
 </style>
 <script>
 (function () {
@@ -1288,7 +1287,12 @@ html,body{margin:0;padding:0;overflow:hidden}
  * exists here), but the intent can: a faint tint reads far closer to nothing than to solid. So the
  * faint ones are dropped and the strong ones kept.
  *
- * Appended rather than edited in place: same selector, same specificity, later in the sheet.
+ * Appended rather than edited in place: same selector, same specificity, later in the sheet — and
+ * wrapped in the negation of the same query the sheet used, so it applies only on the engines it was
+ * written for. Without that guard it is actively destructive on a current WebView, which resolves
+ * `color-mix()` correctly and then has the result overwritten with `transparent`: Codex's stylesheet
+ * defines `--color-border` and other design tokens on `:root` this way, so the whole theme lost its
+ * colours rather than one wash being wrong.
  */
 private fun tintOverridesFor(css: String): String {
     val supportsBlock = Regex("""@supports\s*\(color:\s*color-mix\([^)]*\)\)\s*\{((?:[^{}]|\{[^{}]*\})*)\}""")
@@ -1307,11 +1311,15 @@ private fun tintOverridesFor(css: String): String {
             }
         }
     }
-    return overrides.toString()
+    if (overrides.isEmpty()) return ""
+    return "@supports not ($COLOR_MIX_PROBE){$overrides}"
 }
 
 /** Above this, a tint is a real fill and is left alone; below it, it was meant to be barely there. */
 private const val FAINT_TINT_CEILING = 60f
+
+/** The capability the overrides stand in for. Only where this is absent should they apply. */
+private const val COLOR_MIX_PROBE = "color: color-mix(in oklab, red 50%, transparent)"
 
 /** Serve a file from the extension's install directory for [VSIX_RESOURCE_ORIGIN] requests. */
 private fun serveExtensionResource(extensionDir: File, url: Uri): android.webkit.WebResourceResponse? {
