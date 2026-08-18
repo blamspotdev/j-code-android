@@ -49,8 +49,26 @@ class GuestSessionService : Service() {
         return false
     }
 
-    /** Which app the question is about — the one on the device's screen. */
-    private fun guestPackage(): String = GuestRuntime.activePackage().orEmpty()
+    /**
+     * The device's own prompt, put up over the app that is asking.
+     *
+     * This used to be a round trip: out of `:guest` over the binder, on to the screen as a Compose
+     * dialog in the tab, and back again with the answer. Both halves of it were in this process the
+     * whole time — [GuestPermissions] asks and [EmbeddedGuest] draws — so the question never needed
+     * to leave, and leaving was what put it in the wrong window. See [VirtualPermissionDialog] for
+     * why a dialog an agent can photograph and cannot tap is worse than no dialog at all.
+     *
+     * Posted rather than called: the ask arrives on whatever thread the guest called
+     * `requestPermissions` on, and the view tree is the main thread's alone.
+     */
+    private fun ask(requestId: Int, permissions: Array<String>) {
+        val packageName = GuestRuntime.activePackage().orEmpty()
+        main.post {
+            guest.askPermission(packageName, permissions.toList()) { allow ->
+                GuestPermissions.answered(requestId, BooleanArray(permissions.size) { allow })
+            }
+        }
+    }
 
     private val binder = object : IGuestSession.Stub() {
 
@@ -63,13 +81,9 @@ class GuestSessionService : Service() {
             callback: IGuestSessionCallback?,
         ): Bundle = Bundle().also { result ->
             this@GuestSessionService.callback = callback
-            // The device's own permission prompt lives in the IDE, so the container can only ask
-            // while a tab is bound to it. Wired here rather than at install, because this is the
-            // moment there is somebody to ask.
-            GuestPermissions.setPrompt { requestId, permissions ->
-                runCatching { callback?.onPermissionRequest(requestId, permissions, guestPackage()) }
-                    .onFailure { throw VirtualDeviceException("the tab is not listening") }
-            }
+            // Wired here rather than at install, because the prompt is drawn on the device's screen
+            // and until now there has not been one.
+            GuestPermissions.setPrompt(::ask)
             if (!GuestRuntime.isInstalled) {
                 result.putString(KEY_ERROR, "The container's framework hooks are not installed.")
                 return@also
@@ -134,8 +148,10 @@ class GuestSessionService : Service() {
 
         override fun back() = post { guest.back() }
 
-        override fun permissionResult(requestId: Int, granted: BooleanArray?) {
-            GuestPermissions.answered(requestId, granted ?: BooleanArray(0))
+        override fun ime(command: String?): Bundle = Bundle().also { result ->
+            runCatching { onMain { guest.ime(command.orEmpty()) } }
+                .onSuccess { result.putString(KEY_OUTPUT, it) }
+                .onFailure { result.putString(KEY_ERROR, it.message ?: it.toString()) }
         }
 
         override fun forceStop(packageName: String?) {
@@ -196,6 +212,9 @@ class GuestSessionService : Service() {
     companion object {
         const val KEY_SURFACE = "surface"
         const val KEY_ERROR = "error"
+
+        /** What a command wrote, for the calls that answer with text rather than with a screen. */
+        const val KEY_OUTPUT = "output"
 
         /** Long enough for the shutdown transaction and the unbind behind it to finish. */
         private const val SHUTDOWN_DELAY_MS = 150L

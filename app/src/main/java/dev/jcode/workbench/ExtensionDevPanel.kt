@@ -1,17 +1,20 @@
 package dev.jcode.workbench
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -25,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -72,18 +76,23 @@ fun ExtensionDevSidebarContent(modifier: Modifier = Modifier) {
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            DevPane.entries.forEach { p ->
-                PillTab(label = p.label, selected = p == pane) { pane = p }
+        Surface(color = MaterialTheme.colorScheme.surface) {
+            Row(
+                modifier = Modifier.fillMaxWidth().height(36.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f).fillMaxHeight().horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    DevPane.entries.forEach { p ->
+                        DevTab(label = p.label, selected = p == pane) { pane = p }
+                    }
+                }
+                ActionText("Load") { state.onLoad() }
+                ActionText("Reload") { state.onReload() }
+                if (pane == DevPane.Log) ActionText("Clear") { ExtensionDevLog.clear() }
             }
-            Box(Modifier.weight(1f))
-            ActionText("Load") { state.onLoad() }
-            ActionText("Reload") { state.onReload() }
-            if (pane == DevPane.Log) ActionText("Clear") { ExtensionDevLog.clear() }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
 
@@ -98,13 +107,14 @@ fun ExtensionDevSidebarContent(modifier: Modifier = Modifier) {
         }
 
         // Extension selector (usually just one or two).
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            exts.forEach { e ->
-                PillTab(label = e.name, selected = e.id == selected?.id) { selectedId = e.id }
+        Surface(color = MaterialTheme.colorScheme.surface) {
+            Row(
+                modifier = Modifier.fillMaxWidth().height(36.dp).horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                exts.forEach { e ->
+                    DevTab(label = e.name, selected = e.id == selected?.id) { selectedId = e.id }
+                }
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
@@ -260,18 +270,21 @@ private fun SectionLabel(text: String) {
 }
 
 @Composable
-private fun PillTab(label: String, selected: Boolean, onClick: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-        modifier = Modifier.clickable(onClick = onClick),
+private fun DevTab(label: String, selected: Boolean, onClick: () -> Unit) {
+    // The flat tab-strip idiom the editor, terminal, and DevTools panels use: the active tab lifts to
+    // `surfaceVariant` off the `surface` rail, full-height and butted against its neighbours.
+    Box(
+        modifier = Modifier
+            .clickable(onClick = onClick)
+            .background(if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
+            .fillMaxHeight()
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
             color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
         )
     }
 }

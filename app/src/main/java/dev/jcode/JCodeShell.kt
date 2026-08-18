@@ -254,7 +254,9 @@ import dev.jcode.workbench.AndroidDevicePage
 import dev.jcode.workbench.adbStatusLabel
 import dev.jcode.workbench.BrowserPage
 import dev.jcode.workbench.BuiltinBrowser
+import dev.jcode.workbench.DevToolsCodeSupport
 import dev.jcode.workbench.DevtoolsSidebarContent
+import dev.jcode.workbench.LocalDevToolsCodeSupport
 import dev.jcode.workbench.ExtensionDevSidebarContent
 import dev.jcode.workbench.ImageViewerPage
 import dev.jcode.workbench.MarkdownPreviewPage
@@ -267,6 +269,7 @@ import dev.jcode.workbench.marketplace.VmPanel
 import dev.jcode.workbench.marketplace.hasVmManagerClient
 import dev.jcode.workbench.marketplace.ExtensionDetailPage
 import dev.jcode.workbench.marketplace.ExtensionPermissionsPage
+import dev.jcode.workbench.marketplace.ExtensionSourcesPage
 import dev.jcode.workbench.marketplace.LocalExtensionActivation
 import dev.jcode.workbench.marketplace.ExtensionsPanel
 import dev.jcode.workbench.DebugEditorState
@@ -276,7 +279,9 @@ import dev.jcode.workbench.LocalSdkInstallRequestedId
 import dev.jcode.workbench.LocalDebugCatalogState
 import dev.jcode.workbench.LocalDebugEditorState
 import dev.jcode.workbench.LocalDebugSession
+import dev.jcode.workbench.ExtensionSourcesState
 import dev.jcode.workbench.LocalExtensionInstallPhases
+import dev.jcode.workbench.LocalExtensionSources
 import dev.jcode.workbench.LocalPendingReload
 import dev.jcode.workbench.PendingReloadUi
 import dev.jcode.workbench.LocalRunConfigPresets
@@ -473,6 +478,10 @@ fun JCodeApp(
     }
     val marketplaceEntries by viewModel.marketplaceEntries.collectAsStateWithLifecycle()
     val marketplaceBusy by viewModel.marketplaceBusy.collectAsStateWithLifecycle()
+    val extensionSources by viewModel.extensionSources.collectAsStateWithLifecycle()
+    val extensionSourceReleases by viewModel.sourceReleases.collectAsStateWithLifecycle()
+    val extensionSourcesRefreshing by viewModel.sourcesRefreshing.collectAsStateWithLifecycle()
+    val extensionSourceOfId by viewModel.extensionSourceOfId.collectAsStateWithLifecycle()
     val extensionInstallPhases by viewModel.extensionInstallPhases.collectAsStateWithLifecycle()
     val setupTerminalSessionId by viewModel.setupTerminalRunner.sessionId.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -1371,7 +1380,18 @@ fun JCodeApp(
         )
     }
 
+    // What DevTools colours page source with. Resolved from the same installed extensions the
+    // editor uses, so a Dev Pack that lights up a .js file in a tab lights up the same file when
+    // it arrives from a web page instead of the workspace.
+    val devToolsCodeSupport = remember(activeLanguageExtensions, viewModel) {
+        DevToolsCodeSupport(
+            packResolver = { name -> activeLanguageExtensions.firstNotNullOfOrNull { it.languageFor(name) } },
+            semanticTokens = { name, text -> viewModel.devtoolsSemanticTokens(name, text) },
+        )
+    }
+
     CompositionLocalProvider(
+        LocalDevToolsCodeSupport provides devToolsCodeSupport,
         LocalTerminalTapConfig provides terminalTapConfig,
         LocalTabCloseButtonSetting provides tabCloseSetting,
         LocalExtraKeysSetting provides extraKeysSetting,
@@ -1428,6 +1448,12 @@ fun JCodeApp(
         LocalCatalogProgress provides catalogProgress,
         LocalSdkInstallRequestedId provides sdkInstallRequestedId,
         LocalExtensionInstallPhases provides extensionInstallPhases,
+        LocalExtensionSources provides ExtensionSourcesState(
+            sources = extensionSources,
+            releases = extensionSourceReleases,
+            attribution = extensionSourceOfId,
+            refreshing = extensionSourcesRefreshing,
+        ),
         LocalPendingReload provides pendingReloadUi,
         LocalRunConfigPresets provides contributedRunPresets,
         LocalSetupTerminalSessionId provides setupTerminalSessionId,
@@ -1556,6 +1582,11 @@ fun JCodeApp(
             onUninstallExtension = viewModel::uninstallExtension,
             onOpenExtensionDetail = viewModel::openExtensionDetailPage,
             onOpenExtensionPermissions = viewModel::openExtensionPermissionsPage,
+            onOpenExtensionSources = viewModel::openExtensionSourcesPage,
+            onAddExtensionSource = viewModel::addExtensionSource,
+            onRemoveExtensionSource = viewModel::removeExtensionSource,
+            onRefreshExtensionSources = viewModel::refreshExtensionSources,
+            onInstallFromSource = viewModel::installFromSource,
             onImportVsix = { showVsixImportInfo = true },
             // The Source Control extension renders its git-identity + GitHub-auth screen at its
             // `#github` route (a global-config screen that works with no project open).
@@ -1989,10 +2020,12 @@ private fun JCodeShell(
     val webPreviewBrowsersLocal = LocalWebPreviewBrowsers.current
     // Likewise for the device an Android run launches on, so the handlers can force ANDROID_SERIAL.
     val androidRunTargetsLocal = LocalAndroidRunTargets.current
-    // Reveal + select the DevTools drawer tab whenever the built-in browser is opened (a preview or a
-    // direct open bumps BuiltinBrowser.revealSignal).
+    // Reveal + select the DevTools drawer tab only when the browser was opened with a URL to show (a
+    // preview or a terminal link, which bump BuiltinBrowser.devToolsRevealSignal). A plain "Open
+    // Browser" from the Command Palette bumps only revealSignal, so it surfaces the browser tab
+    // without forcing the DevTools drawer open over it.
     LaunchedEffect(Unit) {
-        snapshotFlow { BuiltinBrowser.revealSignal.value }.collect { sig ->
+        snapshotFlow { BuiltinBrowser.devToolsRevealSignal.value }.collect { sig ->
             if (sig > 0) {
                 selectRightPanelTab(RightPanelTab.Devtools)
                 rightSidebarVisible = true
@@ -2665,6 +2698,13 @@ private fun JCodeShell(
         val name = paletteTab?.filePath?.name
         name != null && activeLanguageExtensions.any { it.languageFor(name) != null }
     }
+    // The browser's controller is only alive while its page is composed, which is only while its tab
+    // is the one on screen — so "is the browser in front" is the honest gate for its nav commands,
+    // and reading the flags here is what re-registers them as a page navigates.
+    val paletteBrowserActive = paletteTab?.pageKind == EditorPageKind.Browser
+    val paletteBrowserBack = BuiltinBrowser.canGoBack.value
+    val paletteBrowserForward = BuiltinBrowser.canGoForward.value
+    val paletteBrowserLoading = BuiltinBrowser.loading.value
     val paletteFontSize = effectiveConfig.editor.fontSize
     // Mirror Settings' most-specific-scope rule so a font-size nudge isn't masked by an existing
     // project override.
@@ -2675,6 +2715,7 @@ private fun JCodeShell(
         selectedProject?.id, paletteSetting.disabledIds, paletteTab?.id, paletteHasTabs,
         paletteEditorActive, paletteLanguageIdentified, chromeHidden, fullscreenMode, keepAwakeMode,
         orientationLockedMode, paletteFontSize,
+        paletteBrowserActive, paletteBrowserBack, paletteBrowserForward, paletteBrowserLoading,
     ) {
         CommandRegistry.clear()
         // A configurable command registers only while enabled in Settings → Command Palette AND its
@@ -2751,6 +2792,45 @@ private fun JCodeShell(
             group = "Tools",
             icon = JCodeIcon.Destinations,
         ) { AppSandbox.requestOpen(null) }
+        // The browser had a toolbar and nothing else. That is fine while you are looking at it and no
+        // use at all from anywhere else, which is where the palette is reached from — so opening it
+        // is here beside the device, and its three nav actions are here for the same reason the
+        // editor's are: a command anybody can find beats a button only the right screen has.
+        registerConfigurable(
+            id = "browser.open",
+            title = "Open Browser",
+            group = "Tools",
+            icon = JCodeIcon.Browser,
+        ) { BuiltinBrowser.requestOpen() }
+        registerConfigurable(
+            id = "browser.back",
+            title = "Browser: Back",
+            group = "Browser",
+            icon = JCodeIcon.ArrowBack,
+            // Not merely "the browser exists": a Back with nowhere to go is a command that answers a
+            // search and then does nothing, which is worse than not being offered.
+            visible = paletteBrowserActive && paletteBrowserBack,
+        ) { BuiltinBrowser.controller?.goBack() }
+        registerConfigurable(
+            id = "browser.forward",
+            title = "Browser: Forward",
+            group = "Browser",
+            icon = JCodeIcon.ArrowForward,
+            visible = paletteBrowserActive && paletteBrowserForward,
+        ) { BuiltinBrowser.controller?.goForward() }
+        registerConfigurable(
+            id = "browser.reload",
+            // One command wearing the state, the way the browser's own button does — and the way
+            // Fullscreen above does. A page is either loading or it is not, so the two are never both
+            // worth offering.
+            title = if (paletteBrowserLoading) "Browser: Stop Loading" else "Browser: Reload Page",
+            group = "Browser",
+            icon = if (paletteBrowserLoading) JCodeIcon.Stop else JCodeIcon.Refresh,
+            visible = paletteBrowserActive,
+        ) {
+            val browser = BuiltinBrowser.controller
+            if (paletteBrowserLoading) browser?.stop() else browser?.reload()
+        }
         CommandRegistry.register(
             id = "workspace.newFolder",
             title = "New Folder",
@@ -3233,6 +3313,16 @@ private fun JCodeShell(
                                 EditorPageKind.ExtensionPermissions -> ExtensionPermissionsPage(
                                     installed = installedExtensions,
                                     onOpenConfig = managerActions.onOpenExtensionConfig,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                                EditorPageKind.ExtensionSources -> ExtensionSourcesPage(
+                                    state = LocalExtensionSources.current,
+                                    installed = installedExtensions,
+                                    busy = marketplaceBusy,
+                                    onAdd = managerActions.onAddExtensionSource,
+                                    onRemove = managerActions.onRemoveExtensionSource,
+                                    onRefresh = managerActions.onRefreshExtensionSources,
+                                    onInstall = managerActions.onInstallFromSource,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                                 EditorPageKind.AndroidDevice -> AndroidDevicePage(
@@ -3745,6 +3835,7 @@ private fun WorkspacePanel(
                             onOpenDetail = managerActions.onOpenExtensionDetail,
                             onOpenPermissions = managerActions.onOpenExtensionPermissions,
                             onImportVsix = managerActions.onImportVsix,
+                            onOpenSources = managerActions.onOpenExtensionSources,
                             pendingReloadNames = pendingReload.names,
                             onReloadPending = pendingReload.onReload,
                             modifier = Modifier.fillMaxSize(),
@@ -4184,17 +4275,21 @@ private fun WorkbenchRightSidebar(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    .height(40.dp)
+                    .padding(end = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // Tabs scroll within their own weighted area so the trailing actions below stay
-                // pinned to the right edge — no scrolling to reach "Hide".
+                // pinned to the right edge — no scrolling to reach "Hide". Butted together with no
+                // gap, because a tab strip's tabs share edges; the gap is what made these read as
+                // buttons that happened to be in a row.
                 Row(
                     modifier = Modifier
                         .weight(1f)
+                        .fillMaxHeight()
                         .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(0.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     val devMode = LocalDeveloperSetting.current.enabled
@@ -4205,7 +4300,7 @@ private fun WorkbenchRightSidebar(
                                 (it != RightPanelTab.ExtensionDev || devMode)
                         }
                         .forEach { tab ->
-                            RightPanelChip(
+                            RightPanelTabItem(
                                 label = tab.label,
                                 icon = tab.icon,
                                 selected = selected == RightPanelSelection.Builtin(tab),
@@ -4215,7 +4310,7 @@ private fun WorkbenchRightSidebar(
                     // An imported .vsix gets a tab of its own, under its own name — a VS Code
                     // extension exists to show a view, and this is where it belongs.
                     vsixExtensions.forEach { ext ->
-                        RightPanelChip(
+                        RightPanelTabItem(
                             label = ext.name,
                             icon = JCodeIcon.Extensions,
                             selected = selected == RightPanelSelection.Extension(ext.id),
@@ -4317,37 +4412,34 @@ private fun WorkspaceSplitHandle(onDrag: (Float) -> Unit, onDragStopped: () -> U
 
 /** One tab in the right drawer's strip, built-in or extension-backed. */
 @Composable
-private fun RightPanelChip(
+private fun RightPanelTabItem(
     label: String,
     icon: JCodeIcon,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = if (selected) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f)
-        },
+    // Flat, like the editor's tab strip, the terminal's and the DevTools pane switcher. This was the
+    // last row of rounded pills in the workbench, and it sits directly above one of the flat ones —
+    // two ways of drawing "pick one of these", a few pixels apart.
+    val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
-            val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-            Icon(
-                imageVector = jcIcon(icon),
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = tint,
+            .clickable(onClick = onClick)
+            .background(
+                if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
             )
-            Text(text = label, style = MaterialTheme.typography.labelMedium, color = tint)
-        }
+            .fillMaxHeight()
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Icon(
+            imageVector = jcIcon(icon),
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = tint,
+        )
+        Text(text = label, style = MaterialTheme.typography.labelMedium, color = tint)
     }
 }
 

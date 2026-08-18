@@ -38,6 +38,24 @@ internal object GuestHierarchy {
         xml.writeText(out.toString())
     }
 
+    /**
+     * What real `uiautomator` calls this view, which is **not** its Java class name.
+     *
+     * `AccessibilityNodeInfo.className` is what a dump reports, and a view sets it to the platform
+     * class it behaves like: an `AppCompatButton`, a `MaterialButton` and every other button in
+     * every library all answer `android.widget.Button`. Reporting the Java name instead meant a
+     * selector written against a real device — `className("android.widget.Button")`, which is what
+     * every uiautomator example and every agent uses — matched nothing here, while the dump looked
+     * perfectly reasonable to read.
+     *
+     * The Java name is the fallback for a view that declines to say, which is what the platform's
+     * own default does anyway.
+     */
+    private fun className(view: View): String =
+        runCatching { view.accessibilityClassName?.toString() }.getOrNull()
+            ?.takeIf { it.isNotEmpty() }
+            ?: view.javaClass.name
+
     private fun node(out: StringBuilder, view: View, index: Int, dx: Int, dy: Int, depth: Int) {
         if (view.visibility != View.VISIBLE) return
 
@@ -48,7 +66,7 @@ internal object GuestHierarchy {
             depth = depth,
             index = index,
             bounds = bounds(view, dx, dy),
-            className = view.javaClass.name,
+            className = className(view),
             packageName = runCatching { view.context.packageName }.getOrNull().orEmpty(),
             selfClosing = children.isEmpty(),
             text = (view as? TextView)?.text?.toString().orEmpty(),

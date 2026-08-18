@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The mobile radio, on the device's status bar and its quick actions — see ic_vdevice_wifi for
+     why the device's own apps carry a second copy of the same glyph. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M3,18h3v3h-3zM8,14h3v7h-3zM13,9h3v12h-3zM18,3h3v18h-3z" android:fillColor="#FFFFFF"/>
+</vector>

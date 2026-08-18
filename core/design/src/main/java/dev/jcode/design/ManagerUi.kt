@@ -120,6 +120,9 @@ fun ManagerPanelHeader(
     onImport: (() -> Unit)? = null,
     importIcon: JCodeIcon = JCodeIcon.Open,
     importContentDescription: String = "Import",
+    onExtras: (() -> Unit)? = null,
+    extrasIcon: JCodeIcon = JCodeIcon.MoreVert,
+    extrasContentDescription: String = "More",
 ) {
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -129,6 +132,13 @@ fun ManagerPanelHeader(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
             )
+            if (onExtras != null) {
+                HeaderIconButton(
+                    icon = LocalIconBundle.current[extrasIcon],
+                    contentDescription = extrasContentDescription,
+                    onClick = onExtras,
+                )
+            }
             if (onImport != null) {
                 HeaderIconButton(
                     icon = LocalIconBundle.current[importIcon],
@@ -285,6 +295,34 @@ fun ManagerListRow(
     }
 }
 
+/**
+ * A primary-tinted section header for grouping manager cards, matching the App Settings groups
+ * (`labelLarge`, primary, semi-bold). [trailing] holds an optional right-aligned action (e.g. a
+ * refresh button).
+ */
+@Composable
+fun ManagerGroupHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(top = 6.dp, start = 2.dp, end = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+        )
+        trailing?.invoke()
+    }
+}
+
 /** A titled section/header card used in the manager panels. When [collapsible] is set, the header
  *  toggles a chevron and hides its body; collapse state is session-only, keyed by [title], and starts
  *  from [defaultExpanded]. */
@@ -294,6 +332,8 @@ fun ManagerSectionCard(
     description: String,
     collapsible: Boolean = false,
     defaultExpanded: Boolean = true,
+    /** Optional glyph/icon shown before the title (e.g. an extension icon). */
+    leading: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     var expanded by rememberSaveable(title) { mutableStateOf(defaultExpanded) }
@@ -307,8 +347,9 @@ fun ManagerSectionCard(
                     .fillMaxWidth()
                     .then(if (collapsible) Modifier.clickable { expanded = !expanded } else Modifier),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                leading?.invoke()
                 Column(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(2.dp),

@@ -238,18 +238,8 @@ private fun declaredBy(context: Context, app: VirtualDeviceApp): List<Declared> 
     return info?.requestedPermissions.orEmpty().map { name ->
         Declared(
             name = name,
-            label = label(context, name),
+            label = VirtualDevicePolicy.title(context, name),
             runtime = VirtualDevicePolicy.dangerous(context, name),
         )
     }.sortedWith(compareByDescending<Declared> { it.runtime }.thenBy { it.label.lowercase() })
 }
-
-/**
- * A permission as a person would name it: the platform's own label where there is one, since the
- * phone's package manager has already translated its own permissions, and the tail of the name for
- * one a guest declares itself.
- */
-private fun label(context: Context, permission: String): String = runCatching {
-    val info = context.packageManager.getPermissionInfo(permission, 0)
-    info.loadLabel(context.packageManager).toString().replaceFirstChar { it.uppercase() }
-}.getOrDefault(permission.substringAfterLast('.').replace('_', ' '))

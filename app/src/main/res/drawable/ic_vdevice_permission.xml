@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The mark on the virtual device's permission prompt. A shield, because what the dialog is about
+     is what the app is being let past — and deliberately not the requesting app's own icon, which
+     would read as the app vouching for itself. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <path android:pathData="M12,2.75 L20,5.6 L20,11.5 C20,16.2 16.6,19.9 12,21.25 C7.4,19.9 4,16.2 4,11.5 L4,5.6 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF" android:strokeWidth="1.7"
+        android:strokeLineCap="round" android:strokeLineJoin="round"/>
+    <path android:pathData="M8.75,11.9 L11.1,14.25 L15.4,9.95"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF" android:strokeWidth="1.9"
+        android:strokeLineCap="round" android:strokeLineJoin="round"/>
+</vector>

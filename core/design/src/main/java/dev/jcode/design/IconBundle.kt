@@ -5,6 +5,8 @@ import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.TextFields
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
@@ -12,6 +14,8 @@ import androidx.compose.material.icons.automirrored.rounded.MenuOpen
 import androidx.compose.material.icons.automirrored.rounded.Redo
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.ArrowUpward
@@ -80,15 +84,16 @@ import androidx.compose.ui.graphics.vector.ImageVector
  */
 enum class JCodeIcon {
     Run, Stop, Terminal,
-    Files, Folder, NewFolder, NewFile,
-    Sdk, Lsp, Scm, Settings, Search, Extensions, Destinations, Code, Database, Vm,
+    Files, Folder, OpenFolder, NewFolder, NewFile,
+    Sdk, Lsp, Scm, Settings, Search, Extensions, Sources, Destinations, Code, Database, Vm,
     Add, Close, Refresh, Paste, Collapse, MoreVert, Save, Undo, Redo, Discard,
     Continue, Rerun, StepInto, StepOver, StepOut,
     Output, Logs, Problems, Radar, Debug, Tasks, Chat, Cursor,
     Browser, DevTools, Image,
-    DropDown, ChevronDown, ChevronUp, ChevronRight, ArrowUp, MenuToggle, Help,
+    DropDown, ChevronDown, ChevronUp, ChevronRight, ArrowUp, ArrowBack, ArrowForward, MenuToggle, Help,
     Copy, Cut, Delete, Open, Rename, SelectAll, Clear, Definition, References, Format,
     Preview, Pin, Palette, CommandPalette, ScreenRotation, Fullscreen, KeepAwake,
+    Lock, LockOpen,
     TextIncrease, TextDecrease, GoToLine,
 }
 
@@ -122,10 +127,13 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.Terminal to Icons.Rounded.Terminal,
         JCodeIcon.Files to Icons.Rounded.FolderOpen,
         JCodeIcon.Folder to Icons.Rounded.Folder,
+        JCodeIcon.OpenFolder to Icons.Rounded.FolderOpen,
         JCodeIcon.NewFolder to Icons.Rounded.CreateNewFolder,
         JCodeIcon.NewFile to Icons.Rounded.NoteAdd,
         JCodeIcon.Sdk to Icons.Rounded.BuildCircle,
         JCodeIcon.Palette to Icons.Rounded.Palette,
+        JCodeIcon.Lock to Icons.Rounded.Lock,
+        JCodeIcon.LockOpen to Icons.Rounded.LockOpen,
         JCodeIcon.CommandPalette to Icons.Rounded.KeyboardCommandKey,
         JCodeIcon.ScreenRotation to Icons.Rounded.ScreenRotation,
         JCodeIcon.Fullscreen to Icons.Rounded.Fullscreen,
@@ -138,6 +146,7 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.Settings to Icons.Rounded.Settings,
         JCodeIcon.Search to Icons.Rounded.Search,
         JCodeIcon.Extensions to Icons.Rounded.Extension,
+        JCodeIcon.Sources to Icons.Rounded.DatasetLinked,
         JCodeIcon.Destinations to Icons.Rounded.DatasetLinked,
         JCodeIcon.Database to Icons.Rounded.DatasetLinked,
         JCodeIcon.Vm to Icons.Rounded.Dns,
@@ -172,6 +181,9 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.ChevronUp to Icons.Rounded.KeyboardArrowUp,
         JCodeIcon.ChevronRight to Icons.AutoMirrored.Rounded.KeyboardArrowRight,
         JCodeIcon.ArrowUp to Icons.Rounded.ArrowUpward,
+        // Auto-mirrored: back is a direction, and it is the other one in a right-to-left locale.
+        JCodeIcon.ArrowBack to Icons.AutoMirrored.Rounded.ArrowBack,
+        JCodeIcon.ArrowForward to Icons.AutoMirrored.Rounded.ArrowForward,
         JCodeIcon.MenuToggle to Icons.AutoMirrored.Rounded.MenuOpen,
         JCodeIcon.Help to Icons.AutoMirrored.Rounded.HelpOutline,
         JCodeIcon.Copy to Icons.Rounded.ContentCopy,

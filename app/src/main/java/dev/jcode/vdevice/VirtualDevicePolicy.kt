@@ -506,6 +506,32 @@ internal object VirtualDevicePolicy {
     }
 
     /**
+     * What the device's keyboard has been told about itself.
+     *
+     * The container owns the namespace and the keyboard owns the values. These four keys are
+     * written down here so that a guest cannot invent a fifth and use the device's policy as scratch
+     * storage — but what `keyboard/layout` may say is the keyboard's business, not this file's, and
+     * an empty string means "you have never been told", which is what makes the app's own defaults
+     * the defaults.
+     *
+     * Volatile with the rest of the device: a device that is wiped forgets which layout it was on,
+     * the same way it forgets what was installed on it.
+     */
+    val KEYBOARD_KEYS = setOf(
+        "keyboard/layout",
+        "keyboard/height",
+        "keyboard/preview",
+        "keyboard/haptics",
+    )
+
+    fun keyboard(context: Context, key: String): String =
+        read(context).getProperty(key).orEmpty()
+
+    fun setKeyboard(context: Context, key: String, value: String) {
+        edit(context) { it.setProperty(key, value) }
+    }
+
+    /**
      * Whether the platform treats [permission] as one to ask about at runtime.
      *
      * Asked of the *phone's* package manager, which is the authority on the platform's own
@@ -516,6 +542,40 @@ internal object VirtualDevicePolicy {
         val info = context.applicationContext.packageManager.getPermissionInfo(permission, 0)
         info.protection == PermissionInfo.PROTECTION_DANGEROUS
     }.getOrDefault(false)
+
+    /**
+     * [permission] as a person would say it, in a sentence: "take pictures and videos".
+     *
+     * The platform's own label wherever there is one, because the phone's package manager is the
+     * authority on the phone's permissions and has already translated them into every language it
+     * ships. Those labels are **verb phrases**, which is what the prompt's wording is built around —
+     * "Allow Maps to *access precise location*?".
+     *
+     * A permission an app declares itself has no label there, so the last segment of its name is the
+     * best that can be done. That is a noun, so it is given the verb the platform's label would have
+     * carried, and one sentence template stays correct for both.
+     */
+    fun phrase(context: Context, permission: String): String = runCatching {
+        val manager = context.applicationContext.packageManager
+        manager.getPermissionInfo(permission, 0).loadLabel(manager).toString()
+    }.getOrDefault("use " + plainly(permission).lowercase())
+
+    /**
+     * The same permission as a **title** — "Camera", "Precise location" — for a row in a list.
+     *
+     * Two functions rather than one with a flag, because these are two different pieces of English
+     * and neither is the other with a capital letter. A sentence needs the verb; a row heading with
+     * a switch beside it reads as an instruction if it keeps one.
+     */
+    fun title(context: Context, permission: String): String = runCatching {
+        val manager = context.applicationContext.packageManager
+        manager.getPermissionInfo(permission, 0).loadLabel(manager).toString()
+            .replaceFirstChar { it.uppercase() }
+    }.getOrDefault(plainly(permission))
+
+    /** `android.permission.ACCESS_FINE_LOCATION` with nothing left but the words in it. */
+    private fun plainly(permission: String): String =
+        permission.substringAfterLast('.').replace('_', ' ')
 
     private fun defaultRule(context: Context, permission: String): PermissionRule =
         if (dangerous(context, permission)) PermissionRule.Ask else PermissionRule.Allow

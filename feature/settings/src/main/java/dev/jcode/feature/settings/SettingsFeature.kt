@@ -1,5 +1,9 @@
 package dev.jcode.feature.settings
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import android.webkit.WebView
 import androidx.compose.foundation.background
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
@@ -15,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -39,6 +44,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
@@ -737,6 +743,100 @@ object SettingsFeature {
                             }
                         },
                     )
+                }
+            }
+
+            SettingsCard(
+                title = "Web engine",
+                description = "The Chromium engine behind JCode's built-in browser and web previews. " +
+                    "It is the device's WebView provider — a system component JCode can read but not " +
+                    "choose; when it can't be updated, JCode falls back to the ROM's engine.",
+                keywords = "web engine webview chromium version provider outdated update play store " +
+                    "browser render blank dvh modern developer options implementation",
+            ) {
+                val ctx = LocalContext.current
+                // Re-read on each composition of the card: the user may return from Play or the
+                // provider picker with the engine changed, and a stale number here would claim the
+                // trip changed nothing.
+                val enginePackage = remember { runCatching { WebView.getCurrentWebViewPackage() }.getOrNull() }
+                val engineVersion = enginePackage?.versionName ?: "unknown"
+                val engineMajor = engineVersion.substringBefore('.').toIntOrNull() ?: 0
+                // Chromium 108 shipped dynamic viewport units (dvh) — the line below which modern
+                // sites visibly break. A margin above it counts as "current enough".
+                val outdated = engineMajor in 1 until WEBVIEW_MODERN_MAJOR
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Chromium $engineVersion",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (outdated) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = RoundedCornerShape(50),
+                        ) {
+                            Text(
+                                text = "Outdated",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            )
+                        }
+                    } else if (engineMajor > 0) {
+                        Text(
+                            text = "Current",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                enginePackage?.packageName?.let { SummaryRow(label = "Provider", value = it) }
+                if (outdated) {
+                    Text(
+                        text = "Modern sites can render blank or broken on this engine. Install the " +
+                            "latest Android System WebView, then select it under Developer options → " +
+                            "WebView implementation. Some devices lock the provider; JCode then keeps " +
+                            "using the ROM's engine.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                FilledTonalButton(
+                    onClick = {
+                        val play = Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse("market://details?id=$GOOGLE_WEBVIEW_PACKAGE"),
+                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        runCatching { ctx.startActivity(play) }.onFailure {
+                            runCatching {
+                                ctx.startActivity(
+                                    Intent(
+                                        Intent.ACTION_VIEW,
+                                        Uri.parse("https://play.google.com/store/apps/details?id=$GOOGLE_WEBVIEW_PACKAGE"),
+                                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                )
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Get latest WebView (Play Store)")
+                }
+                OutlinedButton(
+                    onClick = {
+                        runCatching {
+                            ctx.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Choose WebView provider…")
                 }
             }
             } // end Web preview
@@ -1472,6 +1572,19 @@ object SettingsFeature {
 }
 
 /** Human-readable labels for the exclude "Mode" dropdown — WHICH entries are excluded. */
+/**
+ * The floor below which the device's Chromium counts as outdated in the Web engine card.
+ *
+ * Chromium 108 shipped dynamic viewport units (`dvh`), the first modern-CSS line whose absence
+ * makes whole sites render blank rather than merely imperfect; a small margin above it counts as
+ * current enough. Deliberately far below the actual current release: the card exists to flag
+ * engines that *break* pages, not to nag every device that trails by a few versions.
+ */
+private const val WEBVIEW_MODERN_MAJOR = 110
+
+/** Google's updatable WebView provider on Play — the install target for outdated engines. */
+private const val GOOGLE_WEBVIEW_PACKAGE = "com.google.android.webview"
+
 private fun explorerHiddenModeLabel(mode: ExplorerHiddenMode): String = when (mode) {
     ExplorerHiddenMode.HideSpecifiedAndInjected -> "Specified + By-Injected"
     ExplorerHiddenMode.HideInjected -> "By-Injected only"
@@ -1692,7 +1805,9 @@ private fun SettingsCard(
     if (query.isNotEmpty() && !matchesSettingsQuery(query, title, description, keywords)) return
     LocalSettingsMatchSink.current.count++
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.16f),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -1728,6 +1843,8 @@ private fun WarningCard(
     LocalSettingsMatchSink.current.count++
     Surface(
         color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f)),
     ) {
         Column(
             modifier = Modifier.padding(12.dp),

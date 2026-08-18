@@ -1,6 +1,7 @@
 package dev.jcode
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.JcTooltip
+import dev.jcode.design.ManagerFilterChip
 import dev.jcode.design.jcIcon
 
 import androidx.compose.foundation.background
@@ -45,7 +46,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -422,29 +422,9 @@ private fun ChoiceRow(
 
 @Composable
 private fun SegmentedToggle(selected: Segment, onSelect: (Segment) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f))
-            .padding(3.dp),
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Segment.entries.forEach { seg ->
-            val active = seg == selected
-            Text(
-                text = seg.name,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.20f) else Color.Transparent)
-                    .clickable { onSelect(seg) }
-                    .padding(vertical = 5.dp),
-            )
+            ManagerFilterChip(selected = seg == selected, label = seg.name) { onSelect(seg) }
         }
     }
 }

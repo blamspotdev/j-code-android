@@ -14,6 +14,8 @@ import android.os.Looper
 import android.util.Log
 import android.webkit.WebView
 import dev.jcode.core.distro.WorkspaceHostPaths
+import java.util.Collections
+import java.util.WeakHashMap
 
 /**
  * The container itself, living in the `:guest` process: it installs the hooks in [GuestHooks] and
@@ -412,6 +414,8 @@ internal object GuestRuntime {
         instrumentation.callActivityOnStart(activity)
         val started = GuestHooks.dispatchLifecycleCallback(activity, "onActivityPostStarted")
 
+        postCreate(activity)
+
         GuestHooks.dispatchLifecycleCallback(activity, "onActivityPreResumed")
         instrumentation.callActivityOnResume(activity)
         postResume(activity)
@@ -461,6 +465,40 @@ internal object GuestRuntime {
             .onFailure { Log.w(TAG, "cannot tell ${activity.javaClass.name} it has focus", it) }
         runCatching { activity.window?.decorView?.dispatchWindowFocusChanged(hasFocus) }
             .onFailure { Log.w(TAG, "cannot dispatch window focus into the guest's views", it) }
+    }
+
+    /** Activities that have had their `onPostCreate`, which is once per instance — see [postCreate]. */
+    private val postCreated = Collections.newSetFromMap(WeakHashMap<Activity, Boolean>())
+
+    /**
+     * `onPostCreate`, which `performLaunchActivity` calls between start and resume — and which the
+     * container was skipping, because it drives the lifecycle itself and this is the one step with
+     * no obvious effect to miss.
+     *
+     * It has one: **the app bar's title**. `Activity.onPostCreate` sets `mTitleReady` and only then
+     * does `onTitleChanged` reach the window at all, so a guest whose theme declares an action bar
+     * got the bar and never got the words in it — `PhoneWindow.mTitle` stayed null and
+     * `setWindowTitle` was handed nothing. The label is on the activity the whole time, put there by
+     * `attach`; nothing was going to ask for it.
+     *
+     * It is also where `AppCompatActivity` hands its delegate `onPostCreate`, which is that
+     * library's own action bar and day/night pass — so an AppCompat guest was missing the same
+     * screen furniture for a second, unrelated reason.
+     *
+     * [Activity.invalidateOptionsMenu] after it, because a bar without its menu is as half-drawn as
+     * one without its title: `installDecor` schedules that build itself, and asking again is public
+     * SDK, costs one pass, and does not depend on when that schedule ran.
+     *
+     * Once per instance. [resumeEmbedded] is also the path back to an activity that was merely
+     * paused, and `onPostCreate` on an app's second appearance is not something a phone ever does.
+     */
+    private fun postCreate(activity: Activity) {
+        val instrumentation = instrumentation ?: return
+        if (!postCreated.add(activity)) return
+        runCatching { instrumentation.callActivityOnPostCreate(activity, null) }
+            .onFailure { Log.w(TAG, "${activity.javaClass.name} threw in onPostCreate", it) }
+        runCatching { activity.invalidateOptionsMenu() }
+            .onFailure { Log.w(TAG, "cannot build ${activity.javaClass.name}'s options menu", it) }
     }
 
     /**

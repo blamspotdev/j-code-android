@@ -18,6 +18,7 @@ import android.view.SurfaceControlViewHost
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.view.WindowInsets
 import android.widget.FrameLayout
 import java.io.File
 
@@ -50,12 +51,20 @@ internal class EmbeddedGuest(
 ) {
 
     private var host: SurfaceControlViewHost? = null
-    private var container: FrameLayout? = null
+    private var container: DeviceRoot? = null
     private var windows: EmbeddedWindows? = null
 
     /** The device's own status bar, over whatever activity is on the screen — see [VirtualStatusBar]. */
     private var statusBar: VirtualStatusBar? = null
 
+    /** The device's keyboard, over the app being typed into — see [VirtualKeyboard]. */
+    private var keyboard: VirtualKeyboard? = null
+
+    /** The device's permission prompt while an app is blocked on it — see [VirtualPermissionDialog]. */
+    private var permission: VirtualPermissionDialog? = null
+
+    /** Whether the current stroke belongs to the device's own UI — see [deviceUiUnder]. */
+    private var strokeIsDeviceUi = false
 
     /** Layout listener that catches `SurfaceView`s a guest adds after it has started. */
     private var surfaceWatcher: ViewTreeObserver.OnGlobalLayoutListener? = null
@@ -91,7 +100,7 @@ internal class EmbeddedGuest(
         val display = context.getSystemService(DisplayManager::class.java)
             ?.getDisplay(Display.DEFAULT_DISPLAY)
             ?: throw VirtualDeviceException("no default display")
-        val container = FrameLayout(context)
+        val container = DeviceRoot(context)
         // The cast picks the long-standing IBinder overload over the InputTransferToken one.
         val host = SurfaceControlViewHost(context, display, hostToken as IBinder?)
         // Assigned before setView: a host that fails half-way still has a pending traversal, and
@@ -119,11 +128,15 @@ internal class EmbeddedGuest(
             GuestRuntime.setEmbeddedLauncher(::push)
             GuestRuntime.setEmbeddedFinisher(::reapFinished)
             GuestRuntime.setEmbeddedBackHandler(::finishTop)
-            // Added last, so it is the topmost child: the device's own status bar has to sit over
-            // the app the way a phone's does, and a FrameLayout hands the front child the touch
-            // first — which is what lets the shade be pulled down over a guest that is drawing
-            // full-bleed underneath it.
-            addStatusBar(container)
+            // Built before the device's layers go up, because it is one of them. Loading the
+            // keyboard's APK is not part of this: that waits until something is focused to type
+            // into, so a device nobody types on never pays for one.
+            keyboard = VirtualKeyboard(context, container, ::divide, ::keyFromKeyboard)
+            raiseDeviceUi(container)
+            // Explicitly, rather than leaving it to the first change [followForegroundApp] notices:
+            // an app whose window happens to match the container's starting assumption is a change
+            // of nothing, and would have been the one app never told what its screen looks like.
+            divide()
             followForegroundApp()
             watchForSurfaces(container)
 
@@ -144,7 +157,7 @@ internal class EmbeddedGuest(
         this.height = height
         // The guest's own configuration first: relayout is what asks it to measure again, so it has
         // to already know the size it is measuring for.
-        GuestRuntime.sizeEmbeddedWindow(width, height - contentTop())
+        divide()
         windows?.resize(width, height)
         host?.relayout(width, height)
     }
@@ -190,19 +203,35 @@ internal class EmbeddedGuest(
      * what keeps every `bounds` in the coordinates `input tap` takes.
      */
     fun dump(xml: File) {
-        val container = container ?: throw VirtualDeviceException("no guest is running")
-        val roots = listOf<Pair<View, Rect>>(container to Rect()) +
-            windows?.children().orEmpty().map { it.view to it.frame }
-        GuestHierarchy.write(xml, roots)
+        GuestHierarchy.write(xml, roots())
     }
 
+    /**
+     * Everything on the device's screen and where it sits: the container, then each window the guest
+     * has open, at the frame [EmbeddedWindows] placed it at.
+     *
+     * One list, because "what is on the screen" has one answer — [dump] walks it and
+     * [VirtualKeyboard] searches it for the focused field, and a keyboard that disagreed with the
+     * dump about which field that is would be a keyboard an agent cannot drive.
+     */
+    private fun roots(): List<Pair<View, Rect>> =
+        listOfNotNull(container?.let { it to Rect() }) +
+            windows?.children().orEmpty().map { it.view to it.frame }
+
     fun touch(event: MotionEvent) {
-        val child = topWindow()
         // Re-anchored first, so the guest's raw coordinates are the device's screen rather than the
         // phone's — see VirtualInput.inDeviceSpace, without which a native app hit-tests against an
         // origin that is wherever the tab happens to sit in JCode's window.
         val anchored = VirtualInput.inDeviceSpace(event)
         try {
+            if (anchored.actionMasked == MotionEvent.ACTION_DOWN) {
+                // Decided once and kept for the whole stroke. Re-hit-testing a MOVE hands the rest
+                // of a drag to whatever is underneath the moment the finger leaves the key it
+                // started on — and a keyboard is nothing but strokes that begin on one thing.
+                strokeIsDeviceUi = deviceUiUnder(anchored.x, anchored.y)
+                keyboard?.press(anchored.x, anchored.y)
+            }
+            val child = if (strokeIsDeviceUi) null else topWindow()
             if (child == null) {
                 container?.dispatchTouchEvent(anchored)
             } else {
@@ -212,16 +241,45 @@ internal class EmbeddedGuest(
                 child.view.dispatchTouchEvent(anchored)
             }
         } finally {
+            when (anchored.actionMasked) {
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> strokeIsDeviceUi = false
+            }
             if (anchored !== event) anchored.recycle()
         }
+        followFocus()
         reapFinished()
     }
 
     fun key(event: KeyEvent) {
+        // A modal takes the keys as well as the touches. The app underneath keeps its focus while
+        // the prompt is up, so without this anything typed over the question would land in the
+        // field behind it — see [deviceUiUnder] for the same decision about the other hand.
+        if (permission != null) return
         val child = topWindow()
         if (child == null) container?.dispatchKeyEvent(event) else child.view.dispatchKeyEvent(event)
+        followFocus()
         reapFinished()
     }
+
+    /**
+     * Whether the device's own UI owns [x], [y], which is a question the ordinary path cannot answer.
+     *
+     * A guest's dialog is a *separate window* rather than a child of the container, so [topWindow]
+     * would take every touch the moment one is open. Being in front of the container is not enough
+     * when the thing in front of *that* is a different window — and an app with a dialog up is
+     * exactly when the device's own chrome needs to be reachable.
+     *
+     * All three of them, and the status bar is the one that had been left out. A shade you can only
+     * pull down on some screens is not the device's shade, it is a decoration on the ones that
+     * happen to have no dialog open; the same argument that put the keyboard and the prompt here
+     * applies to it unchanged. [VirtualStatusBar.ownsTouchAt] keeps the claim narrow — the grab
+     * strip, or anywhere at all once the shade is open — so a guest keeps every touch that is
+     * genuinely its own.
+     */
+    private fun deviceUiUnder(x: Float, y: Float): Boolean =
+        permission != null ||
+            keyboard?.contains(x, y) == true ||
+            statusBar?.ownsTouchAt(x, y) == true
 
     /** The dialog, popup or drop-down the guest currently has open, if any. */
     private fun topWindow(): EmbeddedWindow? = windows?.children()?.lastOrNull()
@@ -237,20 +295,42 @@ internal class EmbeddedGuest(
         val activity = stack.lastOrNull() ?: return
         if (visible == shown) return
         shown = visible
+        // Nobody is looking at the device, so nothing on it has the focus — and a shade found still
+        // open on the way back is a panel from a session that ended, hiding the app it was pulled
+        // over. A phone's goes away with the screen for the same reason.
+        if (!visible) statusBar?.collapse()
         if (visible) GuestRuntime.resumeEmbedded(activity) else GuestRuntime.pauseEmbedded(activity)
     }
 
-    /** Types [text] as key events: with no window, the guest's fields cannot bind an IME. */
+    /**
+     * Types [text] into whatever the device is focused on.
+     *
+     * Down the field's own `InputConnection` when there is one, which is the whole reason the device
+     * has a keyboard: `KeyCharacterMap` has no key for `é` and none at all for an emoji, and dropped
+     * both without saying so. Key events remain the answer when nothing on the screen takes text —
+     * a game reading raw keys, a launcher, a guest that has focused nothing yet.
+     */
     fun text(text: String) {
+        followFocus()
+        if (keyboard?.type(text) == true) return
         val map = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD)
         map.getEvents(text.toCharArray())?.forEach { key(it) }
     }
 
     fun back() {
+        // Modal, and the app is blocked on the answer: Back is dropped rather than allowed to leave
+        // a callback nobody is going to make. The prompt has no dismiss for the same reason.
+        if (permission != null) return
         // The device's own shade is above everything else, so it takes Back first — the same order a
         // phone answers in, and the guest never sees a key that was not meant for it.
         statusBar?.takeIf { it.isOpen }?.let {
             it.collapse()
+            return
+        }
+        // Then the keyboard, which is what Back means to anybody who has one open. The field keeps
+        // its focus, as on a phone — see [VirtualKeyboard.dismiss] for why that has to be remembered.
+        keyboard?.takeIf { it.isShowing }?.let {
+            it.dismiss()
             return
         }
         // A dialog or popup closes itself on Back, so it is sent the key rather than being reached
@@ -277,6 +357,108 @@ internal class EmbeddedGuest(
         reapFinished()
     }
 
+    // --- the device's keyboard ----------------------------------------------------------------
+
+    /**
+     * `adb shell ime <show|hide|toggle|status|list>`, and the tab's keyboard button behind `toggle`.
+     *
+     * The override for the one bound [followFocus] has: a guest that moves the focus with no input
+     * at all is only noticed on the *next* event, so there has to be a way to say "now".
+     */
+    fun ime(command: String): String {
+        val keyboard = keyboard ?: return "ime: no device is running\n"
+        return when (command) {
+            "show" -> if (keyboard.show(roots())) "" else "ime: nothing on this screen takes text\n"
+            "hide" -> {
+                keyboard.dismiss()
+                ""
+            }
+
+            "toggle" -> {
+                if (keyboard.isShowing) keyboard.dismiss() else keyboard.show(roots())
+                ""
+            }
+
+            "status" -> keyboard.status()
+            // One keyboard, and it is the device's. Shaped like the real command's `-s` output,
+            // which is the id an `ime set` would take if this device ever had a second one.
+            "list" -> "${KeyboardApp.PACKAGE}/.KeyboardHost\n"
+            else -> "ime: expected show, hide, toggle, status or list\n"
+        }
+    }
+
+    /**
+     * Re-reads which field has the focus and opens or closes the keyboard to match.
+     *
+     * Called after every touch and every key, which are the moments focus can move. **Known bound:**
+     * a guest that moves it on its own — a form that jumps to the next field on a timer — is caught
+     * only when the next event arrives; `ime show` is the way out of that.
+     *
+     * Suspended entirely while the prompt is up. The field underneath keeps its focus, so without
+     * this the keyboard would come straight back up *under* a modal the person cannot get past.
+     */
+    private fun followFocus() {
+        if (permission != null) return
+        keyboard?.refresh(roots())
+    }
+
+    /**
+     * The one thing the keyboard cannot say through an `InputConnection` — see [KeyboardApp.MSG_KEY].
+     *
+     * Enter on a single-line field that asked for no editor action is delivered as a key on a phone,
+     * because that is the only way an app that watches for it hears about it at all.
+     */
+    private fun keyFromKeyboard(code: Int) {
+        val now = SystemClock.uptimeMillis()
+        key(KeyEvent(now, now, KeyEvent.ACTION_DOWN, code, 0))
+        key(KeyEvent(now, now, KeyEvent.ACTION_UP, code, 0))
+    }
+
+    // --- the device's permission prompt -------------------------------------------------------
+
+    /**
+     * Puts the device's own permission prompt on the screen, and answers [onAnswer] with what the
+     * person said — see [VirtualPermissionDialog] for why it is drawn here rather than by the IDE.
+     *
+     * One at a time, which costs nothing: `Activity.requestPermissions` is one at a time too, so a
+     * second question can only exist if something has gone wrong, and denying it is the answer that
+     * leaves an app running.
+     */
+    fun askPermission(packageName: String, permissions: List<String>, onAnswer: (Boolean) -> Unit) {
+        val container = container
+        if (container == null || permission != null) {
+            onAnswer(false)
+            return
+        }
+        // Before the prompt goes up, not after: a keyboard left over a modal is a row of keys
+        // still taking touches for a field nobody can see, and an open shade over one is a panel
+        // the person can still pull about while the app underneath is blocked on an answer.
+        keyboard?.dismiss()
+        statusBar?.collapse()
+        val prompt = VirtualPermissionDialog(context, packageName, permissions) { allow ->
+            answerPermission(allow)
+        }
+        permission = prompt
+        answer = onAnswer
+        container.addView(prompt, matchParent())
+    }
+
+    /** What the guest is blocked on, held only while [permission] is on the screen. */
+    private var answer: ((Boolean) -> Unit)? = null
+
+    private fun answerPermission(allow: Boolean) {
+        val prompt = permission ?: return
+        (prompt.parent as? ViewGroup)?.removeView(prompt)
+        permission = null
+        val waiting = answer
+        answer = null
+        waiting?.invoke(allow)
+        // The field under the prompt still has the focus it had before, so the keyboard the prompt
+        // displaced comes back the way it went — which is what the person was doing when the app
+        // interrupted them.
+        followFocus()
+    }
+
     fun stop() {
         // Whether the app is allowed to outlive its screen is the one question here, and the answer
         // decides both halves: an app kept in the background keeps its services *and* the
@@ -296,6 +478,11 @@ internal class EmbeddedGuest(
         }
         stack.clear()
         GuestResults.clear()
+        keyboard?.release()
+        keyboard = null
+        // Answered rather than abandoned: a guest is blocked inside requestPermissions, and the
+        // thread it is blocked on belongs to a process that is not going away.
+        answerPermission(false)
         statusBar = null
         surfaceWatcher?.let { watcher ->
             runCatching { container?.viewTreeObserver?.removeOnGlobalLayoutListener(watcher) }
@@ -328,22 +515,28 @@ internal class EmbeddedGuest(
     }
 
     /**
-     * The device's status bar, kept as the container's last child.
+     * The device's own layers, kept as the container's last children: the status bar, the keyboard,
+     * and the permission prompt over both.
      *
-     * Re-added rather than moved whenever an activity goes in below it, because `addView` appends
-     * and a new decor view would otherwise be drawn over the bar — and take its touches with it.
+     * Re-added rather than moved whenever an activity goes in below them, because `addView` appends
+     * and a new decor view would otherwise be drawn over the lot — and take their touches with it.
+     *
+     * The order is a phone's. The prompt is last because it is modal over everything, including the
+     * device's own chrome. The bar and the keyboard never overlap, so which of the two is in front
+     * is a question that does not arise.
      */
-    private fun addStatusBar(container: FrameLayout) {
+    private fun raiseDeviceUi(container: FrameLayout) {
         statusBar?.let(container::removeView)
         val bar = statusBar ?: VirtualStatusBar(context)
             .also { statusBar = it }
-        container.addView(
-            bar,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
-        )
+        // Full height, not as tall as the strip — see [VirtualStatusBar] for why a shade has to
+        // cover the screen it can be dismissed by tapping.
+        container.addView(bar, matchParent())
+        keyboard?.raise()
+        permission?.let { prompt ->
+            container.removeView(prompt)
+            container.addView(prompt, matchParent())
+        }
     }
 
     /** [GuestRuntime.setEmbeddedLauncher] callback: a guest activity started another one. */
@@ -358,8 +551,13 @@ internal class EmbeddedGuest(
             it.window.decorView.visibility = View.GONE
             GuestRuntime.pauseEmbedded(it)
         }
+        // Whatever the shade was showing belonged to the screen that is going away. A phone closes
+        // it when something starts on top — opening an app from a notification is the ordinary way
+        // to see that — and an open shade left hanging over a screen nobody chose it from is the
+        // clearest case of a panel that has lost the focus it was pulled with.
+        statusBar?.collapse()
         container.addView(activity.window.decorView, contentParams())
-        addStatusBar(container)
+        raiseDeviceUi(container)
         stack += activity
         // Whoever started this one is owed an answer when it finishes — see GuestResults.
         GuestResults.attach(activity)
@@ -405,22 +603,63 @@ internal class EmbeddedGuest(
         while (stack.lastOrNull()?.isFinishing == true) pop()
     }
 
-    /**
-     * The guest's window: the whole container **below the device's status bar**.
-     *
-     * The bar is drawn over the container's top strip, and a guest laid out to the full height drew
-     * underneath it — NewPipe's toolbar came out with its title half-hidden behind the device's own
-     * name. A phone does not ask an app to avoid the status bar, it gives the app a window that does
-     * not include it, and that is what the top margin is.
-     *
-     * Doing it by margin rather than by dispatching insets is deliberate: insets only help an app
-     * that reads them, and one that does not would still draw underneath. A window that stops where
-     * the bar starts is true for every guest, however it lays itself out.
-     */
-    private fun contentParams() = matchParent().apply { topMargin = contentTop() }
+    /** The guest's window as it goes in: whatever [divide] currently leaves it. */
+    private fun contentParams() = matchParent().apply {
+        topMargin = contentTop()
+        bottomMargin = keyboard?.height ?: 0
+    }
 
     /** Where the guest's window starts: below the bar, or at the top when the bar is not taking room. */
     private fun contentTop(): Int = if (style.hidden || style.overlay) 0 else statusBarHeight()
+
+    /**
+     * What the guest should be told is around it — see [GuestInsets].
+     *
+     * The inset is the other half of [contentTop]: between them they always add up to the bar's
+     * height, because the space has to be accounted for exactly once. A window that starts below the
+     * bar is covered by none of it; one that starts at the top is covered by all of it.
+     *
+     * `wouldCover` keys off `contentTop() == 0`, which is precisely "this window is full height" —
+     * the only case in which a bar, were it shown, would be over any of it.
+     */
+    private fun deviceInsets(): WindowInsets = GuestInsets.of(
+        covered = if (style.overlay) statusBarHeight() else 0,
+        wouldCover = if (contentTop() == 0) statusBarHeight() else 0,
+        shown = !style.hidden,
+    )
+
+    /**
+     * Hands out the container's height to the three things that share it — the device's status bar
+     * at the top, its keyboard at the bottom, and the guest's window in between — and tells the
+     * guest what is left.
+     *
+     * One function for both ends on purpose. They were two, and two can disagree: the guest's
+     * `Configuration` is what its resource qualifiers and its measurement come from, and a window
+     * whose margins said one thing while its configuration said another is an app laid out for a
+     * screen it does not have.
+     *
+     * The bottom margin is what `adjustResize` means. Shortening the window is what every app copes
+     * with however old it is, which is why the keyboard is *not* also reported as an inset — see
+     * [GuestInsets].
+     */
+    private fun divide() {
+        val top = contentTop()
+        val bottom = keyboard?.height ?: 0
+        // The guest's own configuration first: a relayout is what asks it to measure again, so it
+        // has to already know the size it is measuring for.
+        GuestRuntime.sizeEmbeddedWindow(width, (height - top - bottom).coerceAtLeast(1))
+        stack.forEach { hosted ->
+            val decor = hosted.window.decorView
+            (decor.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+                if (params.topMargin == top && params.bottomMargin == bottom) return@let
+                params.topMargin = top
+                params.bottomMargin = bottom
+                decor.layoutParams = params
+            }
+        }
+        // And what the app should make of it, for the apps that ask — see [DeviceRoot].
+        container?.dispatchApplyWindowInsets(deviceInsets())
+    }
 
     /**
      * What the bar currently looks like. Held rather than recomputed on every layout pass so that
@@ -443,20 +682,14 @@ internal class EmbeddedGuest(
         if (next == style) return
         style = next
         val bar = statusBar ?: return
-        bar.visibility = if (next.hidden) View.GONE else View.VISIBLE
+        // Not `GONE` for a full-screen app any more, and that is the whole of "the shade can be
+        // pulled anywhere": a view with no height receives no touches, so taking the bar away took
+        // the shade with it. [VirtualStatusBar.apply] stops *drawing* the strip instead and keeps
+        // the edge to pull from.
         bar.apply(next)
         // The guest's own window grows into the space the bar gives up, and shrinks when it takes it
-        // back. Its configuration has to be told first — relayout is what makes it measure again.
-        GuestRuntime.sizeEmbeddedWindow(width, height - contentTop())
-        stack.forEach { hosted ->
-            val decor = hosted.window.decorView
-            (decor.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
-                if (params.topMargin != contentTop()) {
-                    params.topMargin = contentTop()
-                    decor.layoutParams = params
-                }
-            }
-        }
+        // back.
+        divide()
         Log.i(TAG, "status bar over ${GuestRuntime.activePackage()}: $next")
     }
 
@@ -464,6 +697,23 @@ internal class EmbeddedGuest(
         ViewGroup.LayoutParams.MATCH_PARENT,
         ViewGroup.LayoutParams.MATCH_PARENT,
     )
+
+    /**
+     * The device's screen, and the one thing on it that is not a view: what the apps on it are told
+     * about the chrome around them.
+     *
+     * A windowless hierarchy is still given insets by its `ViewRootImpl`, and they describe
+     * **JCode's** window — the phone's status bar, the phone's gesture strip. An app that trusts
+     * them is padding itself around furniture on a device it is not running on, which is the same
+     * category of leak as a guest reading the phone's sensors. Substituting them here rather than on
+     * each guest's decor view is what keeps an app's own `setOnApplyWindowInsetsListener` working:
+     * the app still gets to be the last word on its own window, it is just answering a question
+     * about the right device. See [GuestInsets] for what the answers are.
+     */
+    private inner class DeviceRoot(context: Context) : FrameLayout(context) {
+        override fun dispatchApplyWindowInsets(insets: WindowInsets): WindowInsets =
+            super.dispatchApplyWindowInsets(deviceInsets())
+    }
 
     private fun statusBarHeight(): Int =
         (VirtualStatusBar.BAR_DP * context.resources.displayMetrics.density).toInt()

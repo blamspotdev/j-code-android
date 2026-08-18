@@ -16,15 +16,27 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.Space
 import android.widget.TextView
+import dev.jcode.R
 import kotlin.math.abs
 
 /**
  * The virtual device's status bar and notification shade.
  *
  * **No clock and no battery, on purpose.** Those belong to the phone, and the phone's own status bar
- * is right above this one — a second copy would be either a lie or a duplicate. What the device has
- * that the phone's bar cannot show is the state of the app *inside* it, so that is all this carries:
- * what is running, and what it has posted.
+ * is right above this one — a second copy would be either a lie or a duplicate. What this carries is
+ * what the phone's bar *cannot* say: what the app inside has posted, and what the device's own
+ * radios are doing. Wi-Fi is the clearest case of the difference — the icon up here is the device's
+ * Wi-Fi, which the shade can switch off while the phone stays online, and which is the whole reason
+ * an app can be taken offline without disconnecting the machine being worked on.
+ *
+ * ### The shade
+ *
+ * Quick actions above notifications, as on a phone: one tile per radio the device was built with,
+ * switching it on and off where the app is rather than three screens away in Settings. And it can be
+ * pulled from anywhere — over a dialog, over a popup, over an app that has taken the whole screen —
+ * because a shade that only works on some screens is not the device's shade. See
+ * [EmbeddedGuest.deviceUiUnder] for how it wins a touch from a guest's own window, and [immersive]
+ * for what is left to pull when the strip itself is not drawn.
  *
  * ### Why it lives in the guest's hierarchy
  *
@@ -67,19 +79,52 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
         isSingleLine = true
     }
 
+    /**
+     * The device's radios, on the right where a phone puts its system icons.
+     *
+     * Which ones are drawn is the whole point: a radio the device was built without has no icon at
+     * all, and one the device has but has switched off has none either — the same two states a
+     * phone shows, and the two an app is written to tell apart. What is up there is what
+     * `ConnectivityManager` will answer with, so a person looking at the device can see why an app
+     * thinks it is offline without opening Settings.
+     */
+    private val radios = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+    }
+
     private val bar = LinearLayout(context).apply {
+        id = R.id.vdevice_status_bar
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setBackgroundColor(BAR_BACKGROUND)
         setPadding(dp(10f), 0, dp(10f), 0)
         addView(icons, LinearLayout.LayoutParams(WRAP, WRAP))
-        addView(Space(context), LinearLayout.LayoutParams(0, 1, 1f))
         addView(summary, LinearLayout.LayoutParams(WRAP, WRAP))
+        addView(Space(context), LinearLayout.LayoutParams(0, 1, 1f))
+        addView(radios, LinearLayout.LayoutParams(WRAP, WRAP))
     }
 
     /** What the foreground app has asked the bar to look like — see [GuestWindow.statusBarStyleOf]. */
     private var ink = FOREGROUND
     private var inkMuted = MUTED
+
+    /**
+     * The shade's quick actions: one tile per radio the device *has*, switching it on and off.
+     *
+     * These are the device's own switches rather than a shortcut into its Settings app, and that is
+     * the point of putting them here. Seeing what an app does when it goes offline is one of the
+     * things this device is for, and until now it took opening Settings, finding the row and coming
+     * back — by which time the app had usually decided. Two taps from anywhere, without leaving the
+     * app, is the difference between testing that and reading about it.
+     *
+     * A radio the device was built without gets no tile, for the same reason it gets no status-bar
+     * icon: the bench decides what hardware exists, and the shade only decides whether it is on.
+     */
+    private val quickActions = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        setPadding(dp(10f), dp(12f), dp(10f), dp(4f))
+    }
 
     private val shadeList = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -98,18 +143,33 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
     }
 
     private val shade = LinearLayout(context).apply {
+        id = R.id.vdevice_shade
         orientation = LinearLayout.VERTICAL
         background = GradientDrawable().apply {
             setColor(SHADE_BACKGROUND)
             cornerRadii = floatArrayOf(0f, 0f, 0f, 0f, dp(14f).toFloat(), dp(14f).toFloat(), dp(14f).toFloat(), dp(14f).toFloat())
         }
         visibility = GONE
+        // Quick actions above the notifications, which is where a phone puts them and which is also
+        // the order they are wanted in: the tiles are reachable after a short pull, and reading a
+        // notification is what the rest of the pull is for.
+        addView(quickActions, LayoutParams(MATCH, WRAP))
         addView(shadeList, LayoutParams(MATCH, WRAP))
         addView(clearAll, LayoutParams(MATCH, WRAP))
     }
 
+    /**
+     * True while the foreground app has taken the whole screen.
+     *
+     * The bar is not drawn then — an app that asked for the screen means it — but it is still
+     * *there*, because a phone in immersive mode does not take the shade away with the strip. What
+     * is left is an edge to pull from, and it is deliberately narrower than the ordinary grab: a
+     * game with something in its top corner should keep as much of it as a reveal gesture can spare.
+     */
+    private var immersive = false
+
     /** The grabbable strip: the bar itself plus a little slack below, so a drag is easy to start. */
-    private val grabHeight = dp(GRAB_DP)
+    private val grabHeight: Int get() = dp(if (immersive) IMMERSIVE_GRAB_DP else GRAB_DP)
 
     private var downY = 0f
     private var downX = 0f
@@ -119,13 +179,24 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
     private var dragFrom = 0
     private var dragTo = 0
 
+    /**
+     * The strip and the shade, held at the top of a view that is **the whole screen tall**.
+     *
+     * The height is what makes an open shade dismissable. This view was only as tall as the two
+     * things it draws, so a touch below them was never delivered to it at all — the container gave
+     * it to the guest — and the one gesture everybody tries on a shade did nothing. Anything a view
+     * is going to close itself on has to be something the view is given.
+     *
+     * It costs nothing while the shade is shut: [onTouchEvent] refuses a press below the grab strip,
+     * so the container moves on to the app underneath and the app never knows this is here.
+     */
     init {
         val column = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             addView(bar, LinearLayout.LayoutParams(MATCH, dp(BAR_DP)))
             addView(shade, LinearLayout.LayoutParams(MATCH, WRAP))
         }
-        addView(column, LayoutParams(MATCH, WRAP))
+        addView(column, LayoutParams(MATCH, WRAP, Gravity.TOP))
         refresh()
     }
 
@@ -153,7 +224,35 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
         ink = if (style.lightBackground) ON_LIGHT else FOREGROUND
         inkMuted = if (style.lightBackground) ON_LIGHT_MUTED else MUTED
         summary.setTextColor(ink)
+        immersive = style.hidden
+        showStrip()
         refresh()
+    }
+
+    /**
+     * Whether the strip is drawn, which is not the same question as whether it is there.
+     *
+     * A full-screen app gets its screen: the strip is `INVISIBLE`, so nothing is painted over the
+     * app — but the view keeps its height, and height is what makes the touches arrive. Pulling the
+     * shade brings the strip back with it, because a shade hanging off nothing reads as a panel that
+     * appeared rather than as the device's own bar being pulled down.
+     */
+    private fun showStrip() {
+        bar.visibility = if (immersive && !dragging && shadeHeight() == 0) INVISIBLE else VISIBLE
+    }
+
+    /**
+     * True while [x], [y] is the bar's rather than the app's — see [EmbeddedGuest.deviceUiUnder],
+     * which asks so that the shade can be pulled over a guest's *dialog*, whose window would
+     * otherwise take every touch on the screen.
+     *
+     * An open shade owns everything: a tap anywhere below it closes it, the way tapping outside one
+     * does on a phone.
+     */
+    fun ownsTouchAt(x: Float, y: Float): Boolean {
+        if (visibility != VISIBLE) return false
+        if (isOpen) return true
+        return y >= 0 && y <= grabHeight && x >= 0 && x <= width
     }
 
     /** Redraws the bar's icons and summary and rebuilds the shade's rows from what is posted now. */
@@ -180,6 +279,8 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
             else -> "${posted.size} notifications"
         }
 
+        refreshRadios()
+
         shadeList.removeAllViews()
         if (posted.isEmpty()) {
             shadeList.addView(row(null, "No notifications", "", emptyList(), dim = true))
@@ -187,6 +288,108 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
             posted.forEach { shadeList.addView(card(it)) }
         }
         clearAll.visibility = if (VirtualNotifications.anyClearable()) VISIBLE else GONE
+    }
+
+    /**
+     * Rebuilds the status bar's radio icons and the shade's tiles from what the device's policy says
+     * right now.
+     *
+     * Read rather than remembered, because this is not the only thing that writes it: the device's
+     * Settings app is an ordinary guest changing the same policy file through the settings provider,
+     * so a cached answer here would be a bar that disagrees with the screen the person just left.
+     * [VirtualDevicePolicy] re-stats the file behind a short window, so asking often is cheap.
+     */
+    private fun refreshRadios() {
+        radios.removeAllViews()
+        quickActions.removeAllViews()
+        RADIOS.forEach { radio ->
+            // Absent hardware, not switched-off hardware. A device built without Wi-Fi has no icon
+            // and no tile, because there is nothing there to switch.
+            if (VirtualDevicePolicy.mode(context, radio.hardware) == HardwareMode.Off) return@forEach
+            val on = VirtualDevicePolicy.switchedOn(context, radio.hardware)
+            if (on) radios.addView(statusIcon(radio), LinearLayout.LayoutParams(dp(ICON_DP), dp(ICON_DP)).apply {
+                marginStart = dp(5f)
+            })
+            quickActions.addView(tile(radio, on), LinearLayout.LayoutParams(0, WRAP, 1f).apply {
+                marginStart = dp(3f)
+                marginEnd = dp(3f)
+            })
+        }
+    }
+
+    /** One radio's icon in the strip, described the way a person would read it out. */
+    private fun statusIcon(radio: Radio): ImageView = ImageView(context).apply {
+        setImageResource(radio.icon)
+        imageTintList = android.content.res.ColorStateList.valueOf(ink)
+        contentDescription = radio.describe(context)
+    }
+
+    /**
+     * One quick-action tile: the radio's name, lit when it is on.
+     *
+     * Filled rather than outlined for "on", because a row of pills that differ only in text colour
+     * is a row nobody can read at a glance — and glancing is the entire job of a shade.
+     */
+    private fun tile(radio: Radio, on: Boolean): View = LinearLayout(context).apply {
+        id = radio.id
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        background = GradientDrawable().apply {
+            setColor(if (on) VirtualPalette.ACCENT else VirtualPalette.CHIP)
+            cornerRadius = dp(14f).toFloat()
+        }
+        setPadding(dp(6f), dp(10f), dp(6f), dp(10f))
+        isClickable = true
+        contentDescription = radio.describe(context)
+        addView(
+            ImageView(context).apply {
+                setImageResource(radio.icon)
+                imageTintList = android.content.res.ColorStateList.valueOf(
+                    if (on) VirtualPalette.SURFACE else VirtualPalette.TEXT,
+                )
+            },
+            LinearLayout.LayoutParams(dp(20f), dp(20f)),
+        )
+        addView(
+            TextView(context).apply {
+                text = radio.hardware.label
+                setTextColor(if (on) VirtualPalette.SURFACE else VirtualPalette.TEXT)
+                textSize = 11f
+                isSingleLine = true
+                setPadding(0, dp(4f), 0, 0)
+            },
+            LinearLayout.LayoutParams(WRAP, WRAP),
+        )
+        setOnClickListener {
+            VirtualDevicePolicy.setSwitchedOn(context, radio.hardware, !on)
+            VirtualDeviceLog.append(
+                context,
+                'I',
+                TAG,
+                "quick action: ${radio.hardware.label} switched ${if (on) "off" else "on"}",
+            )
+            // The whole shade, not just this tile: switching Wi-Fi off takes its icon out of the
+            // strip above, and a tile that updated while the bar did not would be two answers.
+            refresh()
+        }
+    }
+
+    /** A radio the device's status bar and shade know how to show. */
+    private class Radio(val hardware: VirtualHardware, val id: Int, val icon: Int) {
+
+        /**
+         * What this radio is doing, for `uiautomator dump` and for anything reading the screen
+         * aloud. Wi-Fi says which network, because "Wi-Fi is on" and "Wi-Fi is connected to
+         * something" are different claims and only the second one explains an app's behaviour.
+         */
+        fun describe(context: Context): String {
+            val on = VirtualDevicePolicy.switchedOn(context, hardware)
+            if (!on) return "${hardware.label}, off"
+            if (hardware != VirtualHardware.WiFi) return "${hardware.label}, on"
+            val network = runCatching { VirtualRadios.connected(context) }.getOrNull()
+                ?: return "${hardware.label}, on, not connected"
+            return "${hardware.label}, ${network.ssid}, ${signalLabel(network.level)}"
+        }
     }
 
     /**
@@ -378,9 +581,13 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
 
     private fun shadeHeight(): Int = shade.layoutParams?.height?.takeIf { it >= 0 } ?: 0
 
+    /** The bottom edge of what is actually drawn — the strip plus however far the shade is pulled. */
+    private fun panelBottom(): Int = dp(BAR_DP) + shadeHeight()
+
     /** Notes where the pane is and how far it may go, so the drag has fixed ends to work between. */
     private fun beginDrag() {
         dragging = true
+        showStrip()
         dragFrom = shadeHeight()
         if (dragFrom == 0) refresh()
         dragTo = fullShadeHeight()
@@ -392,6 +599,10 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
         shade.layoutParams = (shade.layoutParams as LinearLayout.LayoutParams).apply {
             this.height = height.coerceAtLeast(0)
         }
+        // Here rather than at each call site: this is the one function every path to the shade
+        // moving goes through — a finger, a settle animation, `collapse()` — so it is the one place
+        // that cannot forget to bring the strip with it over a full-screen app.
+        showStrip()
     }
 
     /** Animates the pane the rest of the way, so releasing mid-drag lands somewhere deliberate. */
@@ -471,17 +682,23 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
                     // Past a third of the way is a commitment; short of it the finger changed its
                     // mind, and either way the pane finishes the journey rather than jumping.
                     settle(if (shadeHeight() > dragTo / 3) dragTo else 0)
-                } else if (isOpen && event.y > grabHeight) {
-                    // A tap below an open shade closes it, the way tapping outside one does.
+                } else if (isOpen && event.y > panelBottom()) {
+                    // A press that was not a drag, landing past the bottom of the panel: that is
+                    // somebody reaching for the app behind an open shade, and on a phone it puts the
+                    // shade away. Measured against the *panel* rather than the grab strip, because
+                    // the strip's edge is inside the shade — tapping a notification's own card would
+                    // otherwise dismiss the thing being read.
                     collapse()
                 }
                 dragging = false
+                showStrip()
                 return true
             }
 
             MotionEvent.ACTION_CANCEL -> {
                 if (dragging) settle(if (shadeHeight() > dragTo / 3) dragTo else 0)
                 dragging = false
+                showStrip()
                 return true
             }
         }
@@ -500,6 +717,16 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
         const val BAR_DP = 22f
         const val TEXT_DP = 11f
         const val GRAB_DP = 30f
+
+        /**
+         * The strip a full-screen app leaves for the shade.
+         *
+         * Narrower than [GRAB_DP] on purpose. Over an ordinary app the top of the screen is the
+         * bar's anyway; over a full-screen one it is the *app's*, and every pixel claimed here is a
+         * pixel a game's pause button cannot have. This is the same bargain a phone strikes in
+         * immersive mode — the edge is reserved, and it is reserved narrowly.
+         */
+        const val IMMERSIVE_GRAB_DP = 16f
         const val TOUCH_SLOP_DP = 8f
         const val ICON_DP = 14f
 
@@ -514,11 +741,27 @@ internal class VirtualStatusBar(context: Context) : FrameLayout(context) {
         /** Past this the row is wider than the label beside it; the count carries the rest. */
         const val MAX_ICONS = 4
 
-        val BAR_BACKGROUND = Color.argb(0xCC, 0x12, 0x14, 0x1A)
-        val SHADE_BACKGROUND = Color.argb(0xF2, 0x1B, 0x1E, 0x27)
-        val FOREGROUND = Color.argb(0xFF, 0xE6, 0xE8, 0xEF)
-        val MUTED = Color.argb(0xFF, 0x9A, 0xA0, 0xB0)
-        val ACCENT = Color.argb(0xFF, 0x8A, 0xB4, 0xF8)
+        /**
+         * The radios the bar shows and the shade switches, in a phone's order — the one that changes
+         * least often on the outside.
+         *
+         * Not every [VirtualHardware] entry: a camera is not something a status bar reports or a
+         * shade toggles, and the ones that are, are exactly the ones the bench calls radios.
+         */
+        private val RADIOS = listOf(
+            Radio(VirtualHardware.Bluetooth, R.id.vdevice_quick_bluetooth, R.drawable.ic_vdevice_bluetooth),
+            Radio(VirtualHardware.WiFi, R.id.vdevice_quick_wifi, R.drawable.ic_vdevice_wifi),
+            Radio(VirtualHardware.Cellular, R.id.vdevice_quick_cellular, R.drawable.ic_vdevice_cellular),
+        )
+
+        // The device's colours, not this file's — see [VirtualPalette] for why the bar, the
+        // wallpaper and the prompt each having their own near-miss grey made one machine look like
+        // three.
+        val BAR_BACKGROUND = VirtualPalette.BAR
+        val SHADE_BACKGROUND = VirtualPalette.SHADE
+        val FOREGROUND = VirtualPalette.TEXT
+        val MUTED = VirtualPalette.MUTED
+        val ACCENT = VirtualPalette.ACCENT
 
         /** For when the app has tinted the bar a light colour and dark markings are what read. */
         val ON_LIGHT = Color.argb(0xFF, 0x14, 0x16, 0x1C)

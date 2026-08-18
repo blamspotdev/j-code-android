@@ -82,6 +82,7 @@ import dev.jcode.feature.marketplace.ExtensionActivation
 import dev.jcode.feature.marketplace.ExtensionDeps
 import dev.jcode.feature.marketplace.ExtensionInstaller
 import dev.jcode.feature.marketplace.InstalledExtension
+import dev.jcode.feature.marketplace.isUpdateAvailable
 import dev.jcode.feature.marketplace.languageFor
 import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.MarketplaceServiceLocator
@@ -284,9 +285,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _installedExtensions = MutableStateFlow<List<InstalledExtension>>(emptyList())
     val installedExtensions: StateFlow<List<InstalledExtension>> = _installedExtensions.asStateFlow()
 
-    /** Extensions available in the remote marketplace index (populated on demand). */
+    /** Extensions available in the remote marketplace index (populated on demand). The public,
+     *  UI-facing list is [marketplaceEntries] below — it folds in custom-source update entries and so
+     *  is declared after the source state it depends on. */
     private val _marketplaceEntries = MutableStateFlow<List<MarketplaceEntry>>(emptyList())
-    val marketplaceEntries: StateFlow<List<MarketplaceEntry>> = _marketplaceEntries.asStateFlow()
 
     /** True while a marketplace fetch / install is in flight. */
     private val _marketplaceBusy = MutableStateFlow(false)
@@ -455,9 +457,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .onFailure { _messages.tryEmit("Marketplace: ${it.message ?: "failed to load"}") }
             _marketplaceBusy.value = false
         }
+        // Custom sources refresh alongside so their update badges stay current with the built-in index.
+        refreshExtensionSources()
     }
 
     fun installExtension(entry: MarketplaceEntry) {
+        // A custom-source entry (synthesized from a provider's release) installs from its `.vsix` asset
+        // URL, not the marketplace `.jext` path — route it through the single source-install flow.
+        if (entry.vsixAssetUrl != null) {
+            val sourceUrl = extensionSourceOfId.value[entry.id]
+            if (sourceUrl != null) { installFromSource(sourceUrl); return }
+        }
         viewModelScope.launch {
             val wasInstalled = _installedExtensions.value.any { it.id == entry.id }
             _marketplaceBusy.value = true
@@ -710,6 +720,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun uninstallExtension(id: String) {
         clearExtensionActivation(id)
+        clearExtensionSource(id)
         viewModelScope.launch(Dispatchers.IO) {
             extensionInstaller.uninstall(id)
             refreshInstalledExtensions()
@@ -1918,6 +1929,189 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ----- Custom extension sources (user-added .vsix release repos) -------------------------------
+    // An "extension source" is a GitHub repo URL whose releases publish `.vsix` files. JCode resolves
+    // each repo's newest `.vsix` release and, for an extension installed from a source, folds an
+    // "Update available" entry into the same Extensions list as the built-in marketplace. Managed on
+    // the Extension Sources page (Extensions panel → Sources button). This is how a VSIX extension
+    // like OpenChamber gets updated inside JCode — the host owns updates, the extension doesn't.
+
+    private val extensionSourcesKey = stringPreferencesKey("extension_sources")
+
+    /** User-added source repo URLs (JSON array). */
+    val extensionSources: StateFlow<List<String>> = uiPreferences.data
+        .map { prefs -> parseStringList(prefs[extensionSourcesKey]) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    // Attribution: installed extension id -> the source URL it came from, so an update check knows
+    // which repo to poll. JSON object; cleared on uninstall. Same shape as extensionActivations.
+    private val extensionSourceOfIdKey = stringPreferencesKey("extension_source_of_id")
+
+    val extensionSourceOfId: StateFlow<Map<String, String>> = uiPreferences.data
+        .map { prefs -> parseStringMap(prefs[extensionSourceOfIdKey]) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** Newest `.vsix` release resolved per source URL (in-memory; refreshed from GitHub). Absent =
+     *  not fetched yet or none found. */
+    private val _sourceReleases = MutableStateFlow<Map<String, ProviderRelease>>(emptyMap())
+    val sourceReleases: StateFlow<Map<String, ProviderRelease>> = _sourceReleases.asStateFlow()
+
+    private val _sourcesRefreshing = MutableStateFlow(false)
+    val sourcesRefreshing: StateFlow<Boolean> = _sourcesRefreshing.asStateFlow()
+
+    /**
+     * The extensions the Extensions panel lists: the built-in marketplace index, plus a synthesized
+     * entry for any extension installed from a custom source that now has a newer release. Keying the
+     * synthesized entry by the installed id makes the existing `marketStatus`/`isUpdateAvailable`
+     * badge logic light up with no UI change; its [MarketplaceEntry.vsixAssetUrl] routes an update
+     * install back to the source's release asset.
+     */
+    val marketplaceEntries: StateFlow<List<MarketplaceEntry>> =
+        combine(_marketplaceEntries, _installedExtensions, extensionSourceOfId, _sourceReleases) {
+            market, installed, attribution, releases ->
+            val marketIds = market.mapTo(mutableSetOf()) { it.id }
+            val updates = installed.mapNotNull { ext ->
+                if (ext.id in marketIds) return@mapNotNull null                 // marketplace already lists it
+                val sourceUrl = attribution[ext.id] ?: return@mapNotNull null
+                val release = releases[sourceUrl] ?: return@mapNotNull null
+                if (!isUpdateAvailable(release.version, ext.version)) return@mapNotNull null
+                MarketplaceEntry(
+                    id = ext.id, name = ext.name, author = ext.author, authors = ext.authors,
+                    type = ext.type, category = null, subcategory = null,
+                    version = release.version, jext = null,
+                    description = ext.description, longDescription = ext.longDescription,
+                    vsixAssetUrl = release.vsixAssetUrl,
+                )
+            }
+            market + updates
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    private fun parseStringList(json: String?): List<String> {
+        if (json.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val arr = org.json.JSONArray(json)
+            buildList { for (i in 0 until arr.length()) arr.optString(i).takeIf { it.isNotBlank() }?.let(::add) }
+        }.getOrDefault(emptyList())
+    }
+
+    /** Add a custom source (a GitHub repo URL whose releases publish `.vsix` files) and fetch it. */
+    fun addExtensionSource(url: String) {
+        val normalized = url.trim()
+        if (normalized.isBlank()) return
+        if (ProviderReleaseFetcher.parseRepo(normalized) == null) {
+            _messages.tryEmit("Not a recognizable GitHub repo URL")
+            return
+        }
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val current = parseStringList(prefs[extensionSourcesKey])
+                if (current.none { it.equals(normalized, ignoreCase = true) }) {
+                    prefs[extensionSourcesKey] = org.json.JSONArray(current + normalized).toString()
+                }
+            }
+            fetchSourceRelease(normalized)
+        }
+    }
+
+    /** Remove a custom source. Any extension installed from it stays installed; its attribution is
+     *  kept so re-adding the source still recognizes the installed copy. */
+    fun removeExtensionSource(url: String) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val current = parseStringList(prefs[extensionSourcesKey])
+                prefs[extensionSourcesKey] =
+                    org.json.JSONArray(current.filterNot { it.equals(url, ignoreCase = true) }).toString()
+            }
+            _sourceReleases.value = _sourceReleases.value - url
+        }
+    }
+
+    /** Re-resolve the newest `.vsix` release for every configured source. */
+    fun refreshExtensionSources() {
+        viewModelScope.launch {
+            val urls = extensionSources.value
+            if (urls.isEmpty()) { _sourceReleases.value = emptyMap(); return@launch }
+            _sourcesRefreshing.value = true
+            try {
+                val resolved = urls.associateWith { runCatching { ProviderReleaseFetcher.latest(it) }.getOrNull() }
+                _sourceReleases.value = buildMap { resolved.forEach { (u, r) -> if (r != null) put(u, r) } }
+            } finally {
+                _sourcesRefreshing.value = false
+            }
+        }
+    }
+
+    private suspend fun fetchSourceRelease(url: String) {
+        _sourcesRefreshing.value = true
+        try {
+            runCatching { ProviderReleaseFetcher.latest(url) }.getOrNull()?.let {
+                _sourceReleases.value = _sourceReleases.value + (url to it)
+            }
+        } finally {
+            _sourcesRefreshing.value = false
+        }
+    }
+
+    /**
+     * Install (or update to) the newest `.vsix` release from [sourceUrl]. Records which source the
+     * resulting extension came from, so its update badge tracks the right repo afterward. Handles both
+     * a fresh install and an update, since a `.vsix` install swaps in place by id.
+     */
+    fun installFromSource(sourceUrl: String) {
+        viewModelScope.launch {
+            val release = _sourceReleases.value[sourceUrl]
+                ?: runCatching { ProviderReleaseFetcher.latest(sourceUrl) }.getOrNull()
+            if (release == null) { _messages.tryEmit("No .vsix release found for this source"); return@launch }
+            _marketplaceBusy.value = true
+            try {
+                extensionInstaller.installVsixFromUrl(release.vsixAssetUrl, BuildConfig.VERSION_NAME)
+                    .onSuccess { result ->
+                        recordExtensionSource(result.extension.id, sourceUrl)
+                        _messages.tryEmit("Installed ${result.extension.name} ${result.manifest.version}")
+                        markPendingReload(result.extension.id, result.extension.name)
+                    }
+                    .onFailure { _messages.tryEmit("Install failed: ${it.message ?: "error"}") }
+            } finally {
+                _marketplaceBusy.value = false
+            }
+            refreshInstalledExtensions()
+        }
+    }
+
+    private fun recordExtensionSource(extId: String, sourceUrl: String) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val obj = runCatching { JSONObject(prefs[extensionSourceOfIdKey] ?: "{}") }.getOrDefault(JSONObject())
+                obj.put(extId, sourceUrl)
+                prefs[extensionSourceOfIdKey] = obj.toString()
+            }
+        }
+    }
+
+    private fun clearExtensionSource(id: String) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs ->
+                val obj = runCatching { JSONObject(prefs[extensionSourceOfIdKey] ?: "{}") }.getOrDefault(JSONObject())
+                obj.remove(id)
+                prefs[extensionSourceOfIdKey] = obj.toString()
+            }
+        }
+    }
+
+    /** Open (or focus) the Extension Sources page and refresh each source's latest release. */
+    fun openExtensionSourcesPage() {
+        _bringEditorToFront.tryEmit(Unit)
+        val existing = _editorGroup.value.tabs.firstOrNull { it.pageKind == EditorPageKind.ExtensionSources }
+        if (existing != null) {
+            _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
+        } else {
+            _editorGroup.value = _editorGroup.value.withTabAdded(
+                EditorTab.page(EXT_SOURCES_TAB_ID, "Extension Sources", EditorPageKind.ExtensionSources),
+            )
+        }
+        refreshExtensionSources()
+    }
+
     val workspaceConfig = configService.workspaceConfig
     val projectConfig = configService.projectConfig
     val workspaceConfigError = configService.workspaceError
@@ -2060,6 +2254,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * capped: a server answering a bare `.` returns every member in scope, which is more than a
      * phone-sized popup can usefully show.
      */
+    /**
+     * Semantic tokens for a DevTools page source, from a server the workspace already has running.
+     *
+     * Nothing here is guaranteed and nothing is reported: it is a colouring improvement offered
+     * when the pieces happen to be in place. See
+     * [dev.jcode.lsp.LspController.detachedSemanticTokens].
+     */
+    suspend fun devtoolsSemanticTokens(fileName: String, text: String): List<dev.jcode.lsp.SemanticToken> =
+        runCatching { lspController.detachedSemanticTokens(fileName, text) }.getOrDefault(emptyList())
+
     suspend fun lspCompletions(
         hostPath: String,
         line: Int,
@@ -5455,6 +5659,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val EXT_APP_PREFIX = "jcode://ext-app/"
         const val VSIX_PANEL_PREFIX = "jcode://vsix-panel/"
         const val EXT_PERMISSIONS_TAB_ID = "jcode://ext-permissions"
+        const val EXT_SOURCES_TAB_ID = "jcode://ext-sources"
         const val RUN_CONFIG_PREFIX = "jcode://run-config/"
         const val BUILD_CONFIG_PREFIX = "jcode://build-config/"
         /** Stable id of the single built-in browser editor tab (see [openBrowserPage]). */

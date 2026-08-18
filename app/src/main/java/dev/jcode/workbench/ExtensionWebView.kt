@@ -670,9 +670,15 @@ internal class VsixSession private constructor(
         host.start(projectDir = projectPath)?.let { failure = it; return }
         status = "Loading ${extension.name}…"
 
+        // Seed the host with the extension's settings — `contributes.configuration` defaults overlaid
+        // with the user's saved values — so `getConfiguration(section).get(key)` returns them. Empty
+        // when the extension declares none or the query is refused; the host then uses its own defaults.
+        val configuration = runCatching {
+            JSONObject(apiRequest("""{"type":"config.all","payload":{}}""")).optJSONObject("data")
+        }.getOrNull() ?: JSONObject()
         val activated = host.activate(
             folders = projectPath?.let { listOf((projectName ?: it.substringAfterLast('/')) to it) }.orEmpty(),
-            configuration = JSONObject(),
+            configuration = configuration,
         )
         // Tell the extension which theme it is being shown in before it builds its view, so it styles
         // itself correctly the first time rather than after a repaint.

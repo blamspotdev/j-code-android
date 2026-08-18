@@ -1,15 +1,14 @@
 package dev.jcode.vdevice;
 
-/** Guest -> IDE notifications for one embedded session. */
+/**
+ * Guest -> IDE notifications for one embedded session.
+ *
+ * Deliberately short. Anything the device can draw on its own screen belongs there rather than
+ * here: the permission prompt used to come out over this interface for the IDE to compose, and a
+ * dialog composed over the tab is one an agent can photograph and cannot tap. What is left is what
+ * the IDE genuinely has to know — that there is no longer an app to show.
+ */
 interface IGuestSessionCallback {
     /** The guest's last activity finished, or the container tore the session down. */
     oneway void onGuestFinished(String reason);
-
-    /**
-     * The guest asked for permissions the device has not decided about, and the person at the
-     * keyboard has to. The IDE puts them on the screen and answers with
-     * IGuestSession.permissionResult under the same requestId; the guest is waiting on it, so an
-     * answer that never comes is an app that never gets its callback.
-     */
-    oneway void onPermissionRequest(int requestId, in String[] permissions, String packageName);
 }

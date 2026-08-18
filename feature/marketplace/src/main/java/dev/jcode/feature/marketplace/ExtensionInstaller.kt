@@ -144,6 +144,17 @@ class ExtensionInstaller internal constructor(context: Context) {
             runCatching { installFromVsixBytes(file.readBytes(), appVersion) }
         }
 
+    /**
+     * Install a `.vsix` fetched from an arbitrary absolute [url] — a custom provider's release asset.
+     * Same footing as [installLocalVsix]: unsigned third-party code, marked dev. [openStream] already
+     * accepts any absolute URL and [installFromVsixBytes] is origin-agnostic, so this just bridges the
+     * two; nothing here is tied to the marketplace [BASE_URL].
+     */
+    suspend fun installVsixFromUrl(url: String, appVersion: String): Result<VsixInstallResult> =
+        withContext(Dispatchers.IO) {
+            runCatching { installFromVsixBytes(openStream(url).use { it.readBytes() }, appVersion) }
+        }
+
     /** Outcome of a `.vsix` install: what landed, and what JCode could not honour in it. */
     data class VsixInstallResult(
         val extension: InstalledExtension,

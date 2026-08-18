@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Declared ids for the virtual device's own on-screen controls.
+
+     These views are drawn by the container inside the device's screen, so `uiautomator dump`
+     reports them alongside the guest's own — and an agent driving the device answers a permission
+     prompt by resource id rather than by guessing which of two buttons in a screenshot says Allow.
+     The platform's real prompt is addressable the same way, as
+     `com.android.permissioncontroller:id/permission_allow_button`. -->
+<resources>
+    <item type="id" name="vdevice_permission_allow" />
+    <item type="id" name="vdevice_permission_deny" />
+
+    <!-- The shade's quick actions, one per radio the device has. A phone's are addressable the same
+         way (`com.android.systemui:id/tile_label`), and without ids an agent switching Wi-Fi off
+         would be reading a screenshot for a pill whose position depends on how many radios this
+         device was built with. -->
+    <item type="id" name="vdevice_quick_wifi" />
+    <item type="id" name="vdevice_quick_bluetooth" />
+    <item type="id" name="vdevice_quick_cellular" />
+
+    <!-- The status bar's own strip and the shade behind it, so a dump can tell "the shade is open"
+         from "the app happens to have drawn something there". -->
+    <item type="id" name="vdevice_status_bar" />
+    <item type="id" name="vdevice_shade" />
+</resources>

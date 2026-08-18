@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The device's keyboard. Keys rather than a letter: what this app is is the surface, and the one
+     row that matters is the space bar, so that is what the accent colour is spent on. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp" android:height="48dp"
+    android:viewportWidth="48" android:viewportHeight="48">
+    <path android:pathData="M11,3h26a8,8 0 0 1 8,8v26a8,8 0 0 1 -8,8h-26a8,8 0 0 1 -8,-8v-26a8,8 0 0 1 8,-8z"
+        android:fillColor="#1E2733"/>
+    <path android:pathData="M11,3h26a8,8 0 0 1 8,8v5h-42v-5a8,8 0 0 1 8,-8z"
+        android:fillColor="#2B3646"/>
+    <path android:pathData="M9,21h5v5h-5zM17,21h5v5h-5zM25,21h5v5h-5zM33,21h6v5h-6z"
+        android:fillColor="#E8ECF4"/>
+    <path android:pathData="M9,29h5v5h-5zM17,29h5v5h-5zM25,29h5v5h-5zM33,29h6v5h-6z"
+        android:fillColor="#97A2B6"/>
+    <path android:pathData="M13,37h22v4h-22z"
+        android:fillColor="#8AB4F8"/>
+</vector>

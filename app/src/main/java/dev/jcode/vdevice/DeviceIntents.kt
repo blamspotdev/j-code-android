@@ -42,6 +42,7 @@ internal object DeviceIntents {
         CAMERA_PACKAGE,
         FILES_PACKAGE,
         SETTINGS_PACKAGE,
+        KeyboardApp.PACKAGE,
     )
 
     /**
@@ -127,6 +128,15 @@ internal object DeviceIntents {
                 "android.settings.MANAGE_APPLICATIONS_SETTINGS",
                 "android.settings.APPLICATION_DETAILS_SETTINGS",
                 "android.settings.DEVICE_INFO_SETTINGS",
+            ),
+        ),
+        // "Take me to my keyboard's settings", which an app sends when text is going somewhere the
+        // person did not mean. The device has a keyboard now, and its own screen is its settings.
+        Handler(
+            packageName = KeyboardApp.PACKAGE,
+            actions = setOf(
+                "android.settings.INPUT_METHOD_SETTINGS",
+                "android.settings.HARD_KEYBOARD_SETTINGS",
             ),
         ),
     )

@@ -183,6 +183,13 @@ data class MarketplaceEntry(
     val samples: List<CodeSample> = emptyList(),
     val requires: ExtensionDeps = ExtensionDeps.EMPTY,
     val suggests: ExtensionDeps = ExtensionDeps.EMPTY,
+    /**
+     * Absolute URL of a `.vsix` release asset to install/update from, for entries synthesized from a
+     * user-added custom provider (a repo whose releases publish `.vsix` files). When set, install goes
+     * through [ExtensionInstaller.installVsixFromUrl] instead of the marketplace `jext` path. Null for
+     * normal marketplace (`.jext`) entries.
+     */
+    val vsixAssetUrl: String? = null,
 )
 
 /** Compare dotted versions ("0.2.0" vs "0.1.3"); missing parts count as 0. */

@@ -11,7 +11,36 @@ It declares camera, microphone and location in its manifest — an app that does
 platform's own rules and would say nothing about the container — and requires none of them, because
 the interesting case is running with the hardware switched off and reporting that it is off.
 
+It is also the only guest here with an **action bar**, which makes it the fixture for the other half
+of hosting an app properly: not what the app can reach, but whether the device gives it a window it
+can lay itself out in. Every other fixture declares `NoActionBar`, so nothing was checking that the
+container can host the screen furniture the *platform* builds — the decor layout with a bar in it,
+the title the framework puts there, the options menu, and the overflow popup that opens in a window
+of its own.
+
 ## What it shows
+
+- **The window it was given**, at the top of the report and worth reading first:
+
+  | Line | What a wrong answer means |
+  |---|---|
+  | `action bar = showing` | `none` — the theme asked for one and the container did not produce it |
+  | `its title = "Hardware Fixture"` | `EMPTY` — the bar was built but `onPostCreate` never ran, so `mTitleReady` stayed false and the title never reached the window |
+  | `insets = status N, nav 0, ime 0` | the phone's numbers, or all zeros in "draw behind it" mode — the app is being told about the wrong device |
+  | `content = WxH px` | a height taller than the window, which is an app laid out for a screen it does not have |
+
+  The **Status bar** items in the overflow move the window between the three shapes the container
+  reads, and each should produce a visibly different screen for the same app:
+
+  | Asked for | The device should | The insets should say |
+  |---|---|---|
+  | *sit below it* | paint its bar the app's own colour, app starts underneath | `status 0` — the window already excludes the bar |
+  | *draw behind it* | float a transparent bar over the app, **app bar moves down by itself** | `status N` — the app owes its own padding, and the framework pays it |
+  | *take the screen* | remove the bar entirely | `status 0`, reported `hidden` |
+
+  Nothing in this fixture pads itself. The action bar sliding below the device's clock in "draw
+  behind it" mode is the framework doing that with the insets the container substituted, which is
+  the thing being tested.
 
 - **`checkSelfPermission`** for `CAMERA`, `RECORD_AUDIO` and `ACCESS_FINE_LOCATION`, which is where
   the device's policy has to surface for any app that asks before it reaches.
@@ -61,24 +90,30 @@ because the device has no microphone and no GPS.
 
 ## Build
 
-Plain `javac` + `d8` + `aapt2`, like the other small fixtures — no Gradle project, no resources.
+Plain `javac` + `d8` + `aapt2`, like the other small fixtures — no Gradle project. It does have
+resources (a launcher icon), so `aapt2 compile` comes first and the link is given the result; a link
+without it fails on the manifest's `@drawable/ic_launcher`.
 
 ```powershell
 $sdk = "$env:LOCALAPPDATA\Android\Sdk"; $jar = "$sdk\platforms\android-33\android.jar"; $bt = "$sdk\build-tools\37.0.0"
-javac -source 11 -target 11 -encoding UTF-8 -nowarn -cp $jar -d out (Get-ChildItem src -Recurse -Filter *.java | % FullName)
+& "$bt\aapt2.exe" compile --dir res -o res.zip
+& "$bt\aapt2.exe" link -o base.apk --manifest AndroidManifest.xml -I $jar --min-sdk-version 24 --target-sdk-version 33 res.zip --java gen
+javac -source 11 -target 11 -encoding UTF-8 -nowarn -cp $jar -d out (Get-ChildItem src,gen -Recurse -Filter *.java | % FullName)
 & "$bt\d8.bat" --min-api 24 --lib $jar --output out (Get-ChildItem out -Recurse -Filter *.class | % FullName)
-& "$bt\aapt2.exe" link -o base.apk --manifest AndroidManifest.xml -I $jar --min-sdk-version 24 --target-sdk-version 33
 Push-Location out; jar uf ..\base.apk classes.dex; Pop-Location
 & "$bt\zipalign.exe" -f 4 base.apk aligned.apk
 & "$bt\apksigner.bat" sign --ks "$env:USERPROFILE\.android\debug.keystore" --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out hwfixture.apk aligned.apk
 ```
 
-Then push it somewhere JCode can read and install it from the device's **Install an app** sheet:
+Then copy it over the bundled copy, which is what every device is built from:
 
 ```powershell
-adb push hwfixture.apk /sdcard/JCode/hwfixture.apk
+Copy-Item hwfixture.apk ..\..\app\src\main\assets\vdevice\hardware.apk
 ```
 
-The device is wiped on every JCode start, so the install has to be repeated after each rebuild of
-the IDE. Note also that opening an app from the launcher rewrites the sheet's APK path to the
-*installed* copy — reinstalling without retyping the source path reinstalls the build already there.
+Being bundled is what makes it survive a wipe: the device is rebuilt on every JCode start and
+installs whatever is in `assets/vdevice`, so there is nothing to push and nothing to reinstall. A
+one-off build can still go in through the device's **Install an app** sheet from
+`adb push hwfixture.apk /sdcard/JCode/hwfixture.apk`, but it is gone on the next start — and note
+that opening an app from the launcher rewrites the sheet's APK path to the *installed* copy, so
+reinstalling without retyping the source path reinstalls the build already there.

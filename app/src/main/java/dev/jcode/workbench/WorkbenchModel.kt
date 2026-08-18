@@ -46,6 +46,19 @@ internal val LocalSdkInstallRequestedId = compositionLocalOf<String?> { null }
  *  under the ART register limit. */
 internal val LocalExtensionInstallPhases = compositionLocalOf<Map<String, String>> { emptyMap() }
 
+/** State for the Extension Sources page: the configured source repo URLs, the newest `.vsix` release
+ *  resolved per URL, the installed-extension-id → source URL attribution, and whether a refresh is in
+ *  flight. Provided as a CompositionLocal so the page reads it without threading four params through
+ *  the workbench composables (same reason as [LocalExtensionInstallPhases]). */
+internal data class ExtensionSourcesState(
+    val sources: List<String> = emptyList(),
+    val releases: Map<String, dev.jcode.ProviderRelease> = emptyMap(),
+    val attribution: Map<String, String> = emptyMap(),
+    val refreshing: Boolean = false,
+)
+
+internal val LocalExtensionSources = compositionLocalOf { ExtensionSourcesState() }
+
 /** Names of extensions updated this session and awaiting a reload, plus the reload action — shown as a
  *  compact banner atop the Extensions panel. A CompositionLocal for the same register-limit reason. */
 internal data class PendingReloadUi(val names: List<String> = emptyList(), val onReload: () -> Unit = {})
@@ -157,6 +170,14 @@ internal data class WorkbenchManagerActions(
     val onUninstallExtension: (String) -> Unit,
     val onOpenExtensionDetail: (String) -> Unit,
     val onOpenExtensionPermissions: () -> Unit,
+    /** Opens the Extension Sources page (manage custom .vsix release repos) as an editor tab. */
+    val onOpenExtensionSources: () -> Unit,
+    /** Extension Sources page actions: add/remove a source repo URL, re-resolve releases, and
+     *  install/update the newest `.vsix` from a source. */
+    val onAddExtensionSource: (String) -> Unit = {},
+    val onRemoveExtensionSource: (String) -> Unit = {},
+    val onRefreshExtensionSources: () -> Unit = {},
+    val onInstallFromSource: (String) -> Unit = {},
     /** Starts the "import a VS Code .vsix" flow from the extension list. Not a developer action —
      *  importing an extension JCode does not publish is ordinary use, so it is always available. */
     val onImportVsix: (() -> Unit)? = null,
