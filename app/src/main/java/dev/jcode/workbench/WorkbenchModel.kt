@@ -59,6 +59,11 @@ internal data class ExtensionSourcesState(
 
 internal val LocalExtensionSources = compositionLocalOf { ExtensionSourcesState() }
 
+/** The extension an open detail tab is about, once it is no longer installed — the record the page
+ *  keeps rendering (with its actions off) until that tab is closed. A CompositionLocal for the same
+ *  register-limit reason as [LocalExtensionSources]. */
+internal val LocalUninstalledExtension = compositionLocalOf<InstalledExtension?> { null }
+
 /** Names of extensions updated this session and awaiting a reload, plus the reload action — shown as a
  *  compact banner atop the Extensions panel. A CompositionLocal for the same register-limit reason. */
 internal data class PendingReloadUi(val names: List<String> = emptyList(), val onReload: () -> Unit = {})

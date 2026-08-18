@@ -81,6 +81,7 @@ import dev.jcode.feature.marketplace.BundledExtensionSpec
 import dev.jcode.feature.marketplace.ExtensionActivation
 import dev.jcode.feature.marketplace.ExtensionDeps
 import dev.jcode.feature.marketplace.ExtensionInstaller
+import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.isUpdateAvailable
 import dev.jcode.feature.marketplace.languageFor
@@ -310,6 +311,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val installed = runCatching { extensionInstaller.installed() }.getOrDefault(emptyList())
             _installedExtensions.value = installed
+            // Keep the open detail tab's record current while its extension is installed — including
+            // one installed FROM that page — so it has something to fall back to when removed.
+            openExtensionDetailId()?.let { id ->
+                installed.firstOrNull { it.id == id }?.let { _detailExtensionSnapshot.value = it }
+            }
             // Gate the Extension Dev log to dev (unsigned sideloaded) extensions only.
             dev.jcode.workbench.ExtensionDevLog.devIds = installed.filter { it.dev }.map { it.id }.toSet()
             // Any extension may contribute templates (a language/dev pack can bundle them too).
@@ -464,8 +470,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun installExtension(entry: MarketplaceEntry) {
         // A custom-source entry (synthesized from a provider's release) installs from its `.vsix` asset
         // URL, not the marketplace `.jext` path — route it through the single source-install flow.
+        // A first install has no attribution yet, so the owning source is found by the asset it offers.
         if (entry.vsixAssetUrl != null) {
             val sourceUrl = extensionSourceOfId.value[entry.id]
+                ?: _sourceReleases.value.entries
+                    .firstOrNull { it.value.vsixAssetUrl == entry.vsixAssetUrl }?.key
             if (sourceUrl != null) { installFromSource(sourceUrl); return }
         }
         viewModelScope.launch {
@@ -720,7 +729,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun uninstallExtension(id: String) {
         clearExtensionActivation(id)
-        clearExtensionSource(id)
+        // The source attribution deliberately survives: it is what still ties the removed extension to
+        // the repo that publishes it, so its source keeps offering it under the right id — and the
+        // detail page left open by this uninstall keeps a working Install.
         viewModelScope.launch(Dispatchers.IO) {
             extensionInstaller.uninstall(id)
             refreshInstalledExtensions()
@@ -1961,30 +1972,63 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * The extensions the Extensions panel lists: the built-in marketplace index, plus a synthesized
-     * entry for any extension installed from a custom source that now has a newer release. Keying the
-     * synthesized entry by the installed id makes the existing `marketStatus`/`isUpdateAvailable`
-     * badge logic light up with no UI change; its [MarketplaceEntry.vsixAssetUrl] routes an update
-     * install back to the source's release asset.
+     * entry per custom source — so a source's extension is offered in the same list as a marketplace
+     * one, and an installed one badges "Update available" when its source publishes a newer release.
+     * Keying the synthesized entry by the id the extension installs under makes the existing
+     * `marketStatus`/`isUpdateAvailable` logic cover both with no UI change; its
+     * [MarketplaceEntry.vsixAssetUrl] routes the install back to the source's release asset.
      */
     val marketplaceEntries: StateFlow<List<MarketplaceEntry>> =
         combine(_marketplaceEntries, _installedExtensions, extensionSourceOfId, _sourceReleases) {
             market, installed, attribution, releases ->
             val marketIds = market.mapTo(mutableSetOf()) { it.id }
-            val updates = installed.mapNotNull { ext ->
-                if (ext.id in marketIds) return@mapNotNull null                 // marketplace already lists it
-                val sourceUrl = attribution[ext.id] ?: return@mapNotNull null
-                val release = releases[sourceUrl] ?: return@mapNotNull null
-                if (!isUpdateAvailable(release.version, ext.version)) return@mapNotNull null
+            val installedById = installed.associateBy { it.id }
+            val fromSources = releases.mapNotNull { (sourceUrl, release) ->
+                val id = sourceExtensionId(sourceUrl, release, attribution)
+                if (id in marketIds) return@mapNotNull null       // the built-in index already lists it
+                val ext = installedById[id]
+                // Installed and current: the installed extension is already its own row, and listing
+                // the source too would double it.
+                if (ext != null && !isUpdateAvailable(release.version, ext.version)) return@mapNotNull null
                 MarketplaceEntry(
-                    id = ext.id, name = ext.name, author = ext.author, authors = ext.authors,
-                    type = ext.type, category = null, subcategory = null,
-                    version = release.version, jext = null,
-                    description = ext.description, longDescription = ext.longDescription,
+                    id = id,
+                    name = ext?.name ?: release.displayName ?: sourceRepoName(sourceUrl) ?: id,
+                    author = ext?.author ?: release.publisher,
+                    authors = ext?.authors.orEmpty(),
+                    // Everything a `.vsix` installs as is an app; before install there is nothing
+                    // else to go on, and afterwards the installed record is authoritative anyway.
+                    type = ext?.type ?: ExtensionType.App,
+                    category = null,
+                    subcategory = null,
+                    version = release.version,
+                    jext = null,
+                    iconUrl = release.iconUrl,
+                    description = ext?.description?.takeIf { it.isNotBlank() } ?: release.description,
+                    longDescription = ext?.longDescription ?: release.description,
                     vsixAssetUrl = release.vsixAssetUrl,
                 )
             }
-            market + updates
+            market + fromSources
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * The id a source's extension installs under: what a previous install from it was attributed to,
+     * else what the repo's own manifest declares — which also matches a copy imported by hand, so
+     * adding the source to a `.vsix` already installed starts tracking its updates. A repo that
+     * exposes neither gets a stand-in keyed by the repo, so the source still lists and installs; the
+     * real id takes over from the attribution recorded on that first install.
+     */
+    private fun sourceExtensionId(
+        sourceUrl: String,
+        release: ProviderRelease,
+        attribution: Map<String, String>,
+    ): String =
+        attribution.entries.firstOrNull { it.value.equals(sourceUrl, ignoreCase = true) }?.key
+            ?: release.extensionId
+            ?: (SOURCE_EXTENSION_ID_PREFIX + (ProviderReleaseFetcher.parseRepo(sourceUrl) ?: sourceUrl))
+
+    private fun sourceRepoName(sourceUrl: String): String? =
+        ProviderReleaseFetcher.parseRepo(sourceUrl)?.substringAfterLast('/')
 
     private fun parseStringList(json: String?): List<String> {
         if (json.isNullOrBlank()) return emptyList()
@@ -2083,16 +2127,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             uiPreferences.edit { prefs ->
                 val obj = runCatching { JSONObject(prefs[extensionSourceOfIdKey] ?: "{}") }.getOrDefault(JSONObject())
                 obj.put(extId, sourceUrl)
-                prefs[extensionSourceOfIdKey] = obj.toString()
-            }
-        }
-    }
-
-    private fun clearExtensionSource(id: String) {
-        viewModelScope.launch {
-            uiPreferences.edit { prefs ->
-                val obj = runCatching { JSONObject(prefs[extensionSourceOfIdKey] ?: "{}") }.getOrDefault(JSONObject())
-                obj.remove(id)
                 prefs[extensionSourceOfIdKey] = obj.toString()
             }
         }
@@ -4795,12 +4829,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Open the detail page for a single extension. Reuses one extension-detail tab (replaces any other). */
     fun openExtensionDetailPage(extensionId: String) {
+        // Only one detail tab exists at a time, so this snapshot belongs to the tab about to open.
+        _detailExtensionSnapshot.value = _installedExtensions.value.firstOrNull { it.id == extensionId }
         openDetailPage(EXT_DETAIL_PREFIX + extensionId, EditorPageKind.ExtensionDetail) {
             _installedExtensions.value.firstOrNull { it.id == extensionId }?.name
-                ?: _marketplaceEntries.value.firstOrNull { it.id == extensionId }?.name
+                ?: marketplaceEntries.value.firstOrNull { it.id == extensionId }?.name
                 ?: extensionId
         }
     }
+
+    // The extension the open detail tab is about, as it was while installed. An extension with no
+    // marketplace or source entry behind it — an imported `.vsix` — has nothing left to render from
+    // once it is uninstalled, and the page would blank out under the user who just pressed Uninstall.
+    // Holding the last-known record keeps the page showing what it was, with its actions off, until
+    // the tab is closed.
+    private val _detailExtensionSnapshot = MutableStateFlow<InstalledExtension?>(null)
+
+    /** The extension the open detail tab is about, or null when no such tab is open. */
+    private fun openExtensionDetailId(): String? =
+        _editorGroup.value.tabs
+            .firstOrNull { it.pageKind == EditorPageKind.ExtensionDetail }
+            ?.id?.removePrefix(EXT_DETAIL_PREFIX)
+
+    /** The open detail tab's extension once it is no longer installed; null while it still is. */
+    val uninstalledDetailExtension: StateFlow<InstalledExtension?> =
+        combine(_detailExtensionSnapshot, _installedExtensions) { snapshot, installed ->
+            snapshot?.takeIf { gone -> installed.none { it.id == gone.id } }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     private val _runConfigVersion = MutableStateFlow(0)
     /** Bumped when a run config is saved so the Run panel re-reads `.jcode/run.yaml`. */
@@ -5044,6 +5099,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             tab.editorState?.close()
             untrackDirty(tab.id)
             diskSignatures.remove(tab.id)
+            // Closing the tab is what dismisses an uninstalled extension's page for good.
+            if (tab.pageKind == EditorPageKind.ExtensionDetail) _detailExtensionSnapshot.value = null
         }
         val remaining = group.tabs.filterNot { it.id in ids }
         val newActive = when {
@@ -5660,6 +5717,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val VSIX_PANEL_PREFIX = "jcode://vsix-panel/"
         const val EXT_PERMISSIONS_TAB_ID = "jcode://ext-permissions"
         const val EXT_SOURCES_TAB_ID = "jcode://ext-sources"
+        /** Prefix of the stand-in id a custom source lists under while its real one is unknown. */
+        const val SOURCE_EXTENSION_ID_PREFIX = "source:"
         const val RUN_CONFIG_PREFIX = "jcode://run-config/"
         const val BUILD_CONFIG_PREFIX = "jcode://build-config/"
         /** Stable id of the single built-in browser editor tab (see [openBrowserPage]). */
