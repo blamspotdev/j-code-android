@@ -304,6 +304,8 @@ fun ManagerSectionCard(
     description: String,
     collapsible: Boolean = false,
     defaultExpanded: Boolean = true,
+    /** Optional glyph/icon shown before the title (e.g. an extension icon). */
+    leading: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     var expanded by rememberSaveable(title) { mutableStateOf(defaultExpanded) }
@@ -317,8 +319,9 @@ fun ManagerSectionCard(
                     .fillMaxWidth()
                     .then(if (collapsible) Modifier.clickable { expanded = !expanded } else Modifier),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                leading?.invoke()
                 Column(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(2.dp),

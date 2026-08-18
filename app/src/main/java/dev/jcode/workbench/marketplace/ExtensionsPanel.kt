@@ -580,12 +580,24 @@ internal fun ExtensionPermissionsPage(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                text = "Extension Settings",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "${installed.size} installed",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Text(
-            text = "Per-extension settings and permissions. Activation controls when an extension turns " +
-                "on; Manual disables it.",
-            style = MaterialTheme.typography.bodyMedium,
+            text = "Each extension's own settings plus its permissions. Activation controls when an " +
+                "extension turns on; Manual disables it.",
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         if (installed.isEmpty()) {
@@ -604,6 +616,14 @@ internal fun ExtensionPermissionsPage(
                     ).joinToString(" · "),
                     collapsible = true,
                     defaultExpanded = false,
+                    leading = {
+                        ExtensionIcon(
+                            type = ext.type,
+                            name = ext.name,
+                            iconFile = ext.iconFile,
+                            size = 32.dp,
+                        )
+                    },
                 ) {
                     ExtensionSettingsControls(extensionId = ext.id)
                     if (ext.type == ExtensionType.Scm && ext.hasWebUi) {
