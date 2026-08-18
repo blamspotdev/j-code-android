@@ -65,18 +65,18 @@ data class ThemeBundle(
 object ThemeBundleRegistry {
     val builtIns: List<ThemeBundle> = listOf(
         catppuccinBundle,
-        draculaBundle,
-        midnightBundle,
+        pierreDarkBundle,
+        nightOwlBundle,
     )
 
-    val default: ThemeBundle get() = catppuccinBundle
+    val default: ThemeBundle get() = pierreDarkBundle
 
     fun byId(id: String?): ThemeBundle = builtIns.firstOrNull { it.id == id } ?: default
 }
 
 // --- Built-in bundles ------------------------------------------------------------------------
 
-// Catppuccin — Mocha (dark) / Latte (light). The app's original palette, kept as the default.
+// Catppuccin — Mocha (dark) / Latte (light).
 private val catppuccinBundle = ThemeBundle(
     id = "catppuccin",
     name = "Catppuccin",
@@ -125,103 +125,107 @@ private val catppuccinBundle = ThemeBundle(
     ),
 )
 
-// Dracula — classic dark; paired with a soft light variant.
-private val draculaBundle = ThemeBundle(
-    id = "dracula",
-    name = "Dracula",
-    description = "High-contrast dark with vivid accents.",
+// Pierre Dark — the default. A near-black canvas with a single bright-blue accent; monochrome
+// surfaces keep the blue (and the magenta/green highlights) doing all the talking. Palette from The
+// Pierre Computer Company's theme (github.com/pierrecomputer/theme).
+private val pierreDarkBundle = ThemeBundle(
+    id = "pierre-dark",
+    name = "Pierre Dark",
+    description = "Near-black canvas with a bright blue accent.",
+    author = "The Pierre Computer Company",
     dark = darkColorScheme(
-        primary = Color(0xFFBD93F9),
-        onPrimary = Color(0xFF282A36),
-        primaryContainer = Color(0xFF44475A),
-        onPrimaryContainer = Color(0xFFF8F8F2),
-        secondary = Color(0xFFFF79C6),
-        onSecondary = Color(0xFF282A36),
-        tertiary = Color(0xFF50FA7B),
-        onTertiary = Color(0xFF282A36),
-        background = Color(0xFF282A36),
-        onBackground = Color(0xFFF8F8F2),
-        surface = Color(0xFF21222C),
-        onSurface = Color(0xFFF8F8F2),
-        surfaceVariant = Color(0xFF44475A),
-        onSurfaceVariant = Color(0xFFBFC7D5),
+        primary = Color(0xFF009FFF),
+        onPrimary = Color(0xFF0A0A0A),
+        primaryContainer = Color(0xFF19283C),
+        onPrimaryContainer = Color(0xFFDCEBFF),
+        secondary = Color(0xFFE130AC),
+        onSecondary = Color(0xFF0A0A0A),
+        tertiary = Color(0xFF0DBE4E),
+        onTertiary = Color(0xFF0A0A0A),
+        background = Color(0xFF0A0A0A),
+        onBackground = Color(0xFFFAFAFA),
+        surface = Color(0xFF171717),
+        onSurface = Color(0xFFFAFAFA),
+        surfaceVariant = Color(0xFF262626),
+        onSurfaceVariant = Color(0xFFA3A3A3),
     ),
     light = lightColorScheme(
-        primary = Color(0xFF7C4DD6),
-        onPrimary = Color(0xFFF8F8F2),
-        primaryContainer = Color(0xFFE5DEF7),
-        onPrimaryContainer = Color(0xFF282A36),
-        secondary = Color(0xFFD6247E),
-        onSecondary = Color(0xFFF8F8F2),
-        tertiary = Color(0xFF1F8B3F),
-        onTertiary = Color(0xFFF8F8F2),
-        background = Color(0xFFF7F6FB),
-        onBackground = Color(0xFF282A36),
-        surface = Color(0xFFEFEDF6),
-        onSurface = Color(0xFF282A36),
-        surfaceVariant = Color(0xFFDDD8EC),
-        onSurfaceVariant = Color(0xFF565869),
+        primary = Color(0xFF0072D6),
+        onPrimary = Color(0xFFFFFFFF),
+        primaryContainer = Color(0xFFDFEBFF),
+        onPrimaryContainer = Color(0xFF0A0A0A),
+        secondary = Color(0xFFBD2E90),
+        onSecondary = Color(0xFFFFFFFF),
+        tertiary = Color(0xFF18A46C),
+        onTertiary = Color(0xFFFFFFFF),
+        background = Color(0xFFFFFFFF),
+        onBackground = Color(0xFF0A0A0A),
+        surface = Color(0xFFF5F5F5),
+        onSurface = Color(0xFF0A0A0A),
+        surfaceVariant = Color(0xFFE5E5E5),
+        onSurfaceVariant = Color(0xFF525252),
     ),
     darkSemantic = JCodeSemanticColors(
-        success = Color(0xFF50FA7B), onSuccess = Color(0xFF282A36),
-        warning = Color(0xFFF1FA8C), onWarning = Color(0xFF282A36),
-        info = Color(0xFF8BE9FD), onInfo = Color(0xFF282A36),
+        success = Color(0xFF0DBE4E), onSuccess = Color(0xFF0A0A0A),
+        warning = Color(0xFFFFCA00), onWarning = Color(0xFF0A0A0A),
+        info = Color(0xFF08C0EF), onInfo = Color(0xFF0A0A0A),
     ),
     lightSemantic = JCodeSemanticColors(
-        success = Color(0xFF1F8B3F), onSuccess = Color(0xFFF8F8F2),
-        warning = Color(0xFFB59B00), onWarning = Color(0xFF282A36),
-        info = Color(0xFF1B91A8), onInfo = Color(0xFFF8F8F2),
+        success = Color(0xFF18A46C), onSuccess = Color(0xFFFFFFFF),
+        warning = Color(0xFFD5A910), onWarning = Color(0xFF0A0A0A),
+        info = Color(0xFF1CA1C7), onInfo = Color(0xFFFFFFFF),
     ),
 )
 
-// Midnight — a true-black theme tuned for OLED displays: pure #000000 canvas so unlit pixels stay
-// dark, with cool blue/violet accents that stay legible against the black.
-private val midnightBundle = ThemeBundle(
-    id = "midnight",
-    name = "Midnight OLED",
-    description = "True-black theme tuned for OLED displays.",
+// Night Owl — Sarah Drasner's deep-navy theme (#011627 canvas) with soft, glowing blue/purple/cyan
+// accents tuned for low-light coding. Surfaces lift a touch off the canvas so drawers read as panels.
+private val nightOwlBundle = ThemeBundle(
+    id = "night-owl",
+    name = "Night Owl",
+    description = "Deep navy with soft, glowing accents.",
+    author = "Sarah Drasner",
     dark = darkColorScheme(
         primary = Color(0xFF82AAFF),
-        onPrimary = Color(0xFF00030D),
-        primaryContainer = Color(0xFF1E2540),
-        onPrimaryContainer = Color(0xFFC8D3F5),
-        secondary = Color(0xFFC099FF),
-        onSecondary = Color(0xFF11061F),
-        tertiary = Color(0xFF4FD6BE),
-        onTertiary = Color(0xFF00201A),
-        // background stays true #000000 (unlit OLED pixels) for the main canvas + editor content;
-        // surface is a faint grey so the drawers/sheets and the editor gutter lift off the black.
-        background = Color(0xFF000000),
-        onBackground = Color(0xFFC8D3F5),
-        surface = Color(0xFF181A21),
-        onSurface = Color(0xFFC8D3F5),
-        surfaceVariant = Color(0xFF262A40),
-        onSurfaceVariant = Color(0xFFA9B2D0),
+        onPrimary = Color(0xFF011627),
+        primaryContainer = Color(0xFF1D3B53),
+        onPrimaryContainer = Color(0xFFD6DEEB),
+        secondary = Color(0xFFC792EA),
+        onSecondary = Color(0xFF011627),
+        tertiary = Color(0xFF7FDBCA),
+        onTertiary = Color(0xFF011627),
+        // background is Night Owl's signature deep navy; surface lifts a touch so drawers/sheets and
+        // the editor gutter separate from the canvas.
+        background = Color(0xFF011627),
+        onBackground = Color(0xFFD6DEEB),
+        surface = Color(0xFF0B2942),
+        onSurface = Color(0xFFD6DEEB),
+        surfaceVariant = Color(0xFF1D3B53),
+        onSurfaceVariant = Color(0xFF8BADC9),
     ),
     light = lightColorScheme(
-        primary = Color(0xFF2E7DE9),
+        primary = Color(0xFF4876D6),
         onPrimary = Color(0xFFFFFFFF),
-        primaryContainer = Color(0xFFD3DDF6),
-        onPrimaryContainer = Color(0xFF17284A),
-        secondary = Color(0xFF9854F1),
+        primaryContainer = Color(0xFFD3E1F8),
+        onPrimaryContainer = Color(0xFF15294A),
+        secondary = Color(0xFF994CC3),
         onSecondary = Color(0xFFFFFFFF),
-        tertiary = Color(0xFF118C74),
+        tertiary = Color(0xFF0C969B),
         onTertiary = Color(0xFFFFFFFF),
-        background = Color(0xFFE1E2E7),
-        onBackground = Color(0xFF3760BF),
-        surface = Color(0xFFDADBE2),
-        onSurface = Color(0xFF3760BF),
-        surfaceVariant = Color(0xFFC7CBDB),
-        onSurfaceVariant = Color(0xFF585F80),
+        background = Color(0xFFFBFBFB),
+        onBackground = Color(0xFF403F53),
+        surface = Color(0xFFF0F0F0),
+        onSurface = Color(0xFF403F53),
+        surfaceVariant = Color(0xFFE3E4EC),
+        onSurfaceVariant = Color(0xFF5F6673),
     ),
     darkSemantic = JCodeSemanticColors(
-        success = Color(0xFFC3E88D), onSuccess = Color(0xFF06210A),
-        warning = Color(0xFFFFC777), onWarning = Color(0xFF201400),
-        info = Color(0xFF86E1FC), onInfo = Color(0xFF00212B),
+        success = Color(0xFF22DA6E), onSuccess = Color(0xFF011627),
+        warning = Color(0xFFECC48D), onWarning = Color(0xFF011627),
+        info = Color(0xFF21C7A8), onInfo = Color(0xFF011627),
     ),
     lightSemantic = JCodeSemanticColors(
-        success = Color(0xFF587539), onSuccess = Color(0xFFFFFFFF),
-        warning = Color(0xFF8F5E15), onWarning = Color(0xFFFFFFFF),
-        info = Color(0xFF007197), onInfo = Color(0xFFFFFFFF),
+        success = Color(0xFF08916A), onSuccess = Color(0xFFFFFFFF),
+        warning = Color(0xFFDAAA01), onWarning = Color(0xFF403F53),
+        info = Color(0xFF0C969B), onInfo = Color(0xFFFFFFFF),
     ),
 )
