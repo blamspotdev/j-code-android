@@ -184,33 +184,37 @@ private fun SourceCard(
         else -> "Reinstall"
     }
 
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f)) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.16f),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+    ) {
         Column(
-            modifier = Modifier.padding(10.dp),
+            modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(11.dp),
             ) {
                 if (installedFromSource != null) {
                     ExtensionIcon(
                         type = installedFromSource.type,
                         name = installedFromSource.name,
                         iconFile = installedFromSource.iconFile,
-                        size = 32.dp,
+                        size = 38.dp,
                     )
                 } else {
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.size(32.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.size(38.dp),
                     ) {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = jcIcon(JCodeIcon.Sources),
                                 contentDescription = null,
-                                modifier = Modifier.size(18.dp),
+                                modifier = Modifier.size(20.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
