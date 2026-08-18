@@ -167,6 +167,42 @@ object VsixPackage {
     }
 
     /**
+     * The name to put on the extension's tab: the title of the container its view lives in.
+     *
+     * An extension's `displayName` is written for a marketplace listing — "Claude Code for VS Code",
+     * "Codex – OpenAI's coding agent" — and putting that on a tab costs more width than the rest of
+     * the tab strip together. VS Code never shows it there either: the activity bar is labelled from
+     * `contributes.viewsContainers`, which is where an extension puts the short name it wants to be
+     * known by. Falling back to a view's own `name` covers an extension that contributes a view to
+     * someone else's container; null means it said nothing and the display name is all there is.
+     */
+    fun parseViewContainerTitle(packageJson: String, nlsJson: String? = null): String? {
+        val contributes = runCatching { JSONObject(packageJson) }.getOrNull()?.optJSONObject("contributes")
+            ?: return null
+        val strings = parseNls(nlsJson)
+        val containers = contributes.optJSONObject("viewsContainers")
+        // The activity bar first: that is the label VS Code itself shows, so it is the one an
+        // extension author wrote for this purpose.
+        val groups = containers?.keys()?.asSequence()?.toList().orEmpty().sortedBy { it != "activitybar" }
+        for (group in groups) {
+            val list = containers?.optJSONArray(group) ?: continue
+            for (i in 0 until list.length()) {
+                val title = list.optJSONObject(i)?.optString("title").orEmpty()
+                if (title.isNotBlank()) return localize(title, strings)
+            }
+        }
+        val views = contributes.optJSONObject("views") ?: return null
+        for (container in views.keys()) {
+            val list = views.optJSONArray(container) ?: continue
+            for (i in 0 until list.length()) {
+                val name = list.optJSONObject(i)?.optString("name").orEmpty()
+                if (name.isNotBlank()) return localize(name, strings)
+            }
+        }
+        return null
+    }
+
+    /**
      * The actions belonging to a view's title bar, in declaration order.
      *
      * VS Code puts a view's own buttons in `contributes.menus["view/title"]`, each naming a command

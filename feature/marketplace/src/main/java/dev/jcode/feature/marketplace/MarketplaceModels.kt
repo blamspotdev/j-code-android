@@ -325,7 +325,19 @@ data class InstalledExtension(
     /** True for an UNSIGNED extension sideloaded via Developer options — the only kind that is
      *  "debuggable" (surfaced in the Extension Dev tools). Signed/marketplace extensions are false. */
     val dev: Boolean = false,
+    /** Short name for a tab, when the extension declared one. See [InstalledExtension.tabName]. */
+    val shortName: String? = null,
 )
+
+/**
+ * What to put on this extension's tab.
+ *
+ * [name] is the marketplace display name and is written to sell the extension, not to fit beside
+ * five other tabs — "Codex – OpenAI's coding agent" is wider than the rest of the strip. Where the
+ * extension declared a short name for its own view container, that is used instead, matching what
+ * VS Code labels the activity bar with.
+ */
+val InstalledExtension.tabName: String get() = shortName?.takeIf { it.isNotBlank() } ?: name
 
 /** The first bundled language that claims [fileName] (by file extension), or null. */
 fun InstalledExtension.languageFor(fileName: String): LanguagePack? =

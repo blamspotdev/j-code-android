@@ -228,6 +228,7 @@ import dev.jcode.feature.explorer.ExplorerViewMode
 import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.languageFor
+import dev.jcode.feature.marketplace.tabName
 import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.onboarding.EnvironmentManagerActions
 import dev.jcode.feature.onboarding.LocalEnvironmentManager
@@ -4357,11 +4358,12 @@ private fun WorkbenchRightSidebar(
                                 onClick = { onSelected(RightPanelSelection.Builtin(tab)) },
                             )
                         }
-                    // An imported .vsix gets a tab of its own, under its own name — a VS Code
-                    // extension exists to show a view, and this is where it belongs.
+                    // An imported .vsix gets a tab of its own, under the short name it declared for
+                    // its view container — a VS Code extension exists to show a view, and this is
+                    // where it belongs. See InstalledExtension.tabName for why not the display name.
                     vsixExtensions.forEach { ext ->
                         RightPanelTabItem(
-                            label = ext.name,
+                            label = ext.tabName,
                             icon = JCodeIcon.Extensions,
                             selected = selected == RightPanelSelection.Extension(ext.id),
                             onClick = { onSelected(RightPanelSelection.Extension(ext.id)) },

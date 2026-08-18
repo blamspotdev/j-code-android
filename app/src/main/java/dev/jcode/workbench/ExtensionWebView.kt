@@ -47,6 +47,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.jcode.design.JCodeTheme
 import dev.jcode.feature.marketplace.InstalledExtension
+import dev.jcode.feature.marketplace.tabName
 import dev.jcode.feature.marketplace.VsixCommand
 import dev.jcode.feature.marketplace.VsixPackage
 import dev.jcode.feature.marketplace.webUiFile
@@ -580,7 +581,7 @@ internal class VsixSession private constructor(
             // is how "Open Session in Editor" and the Agent Manager reach the main screen.
             "webview/panelCreated" -> {
                 val handle = params.optString("handle").takeIf { it.isNotBlank() } ?: return
-                val title = params.optString("title").ifBlank { extension.name }
+                val title = params.optString("title").ifBlank { extension.tabName }
                 scope.launch {
                     surfaceFor(handle)
                     rememberPanelTitle(handle, title)
@@ -592,7 +593,7 @@ internal class VsixSession private constructor(
             "webview/reveal" -> {
                 val handle = params.optString("handle").takeIf { it.isNotBlank() } ?: return
                 if (handle != viewHandle) {
-                    scope.launch { onOpenPanel(handle, panelTitles[handle] ?: extension.name) }
+                    scope.launch { onOpenPanel(handle, panelTitles[handle] ?: extension.tabName) }
                 }
             }
             "webview/disposed" -> {

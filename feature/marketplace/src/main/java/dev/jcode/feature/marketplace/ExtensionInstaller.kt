@@ -422,7 +422,26 @@ class ExtensionInstaller internal constructor(context: Context) {
             suggests = parseDeps(map["suggests"]),
             contributes = parseContributions(map["contributes"]),
             dev = File(dir, DEV_MARKER).exists(),
+            shortName = vsixTabName(dir),
         )
+    }
+
+    /**
+     * The tab name a `.vsix` declared for itself, read from the VS Code manifest kept in [dir].
+     *
+     * Read here rather than baked into the generated `extension.yaml` so an extension imported
+     * before this existed gets its short name without being reinstalled — which, for a package
+     * measured in hundreds of megabytes, is not a small ask.
+     */
+    private fun vsixTabName(dir: File): String? {
+        val packageJson = File(dir, "package.json").takeIf { it.isFile && File(dir, VsixPackage.VSIX_MARKER).isFile }
+            ?: return null
+        return runCatching {
+            VsixPackage.parseViewContainerTitle(
+                packageJson.readText(),
+                File(dir, "package.nls.json").takeIf { it.isFile }?.readText(),
+            )
+        }.getOrNull()
     }
 
     // The extension header (entry, images, …), read from extension.yaml overlaid on a legacy
