@@ -1552,8 +1552,9 @@ private fun NetworkDetail(e: BrowserNetworkEntry, onBack: () -> Unit, modifier: 
             if (e.timingOnly) {
                 Text(
                     text = "Loaded by the browser, not by page script. Resource timing reports its " +
-                        "URL, size and duration; the status code and body are not exposed to the " +
-                        "page, so there is nothing here to show for them.",
+                        "URL, size, duration, and — where the origin allows it — the status; the " +
+                        "response body and headers aren't exposed to the page, so there's nothing " +
+                        "more to show here.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),

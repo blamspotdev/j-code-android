@@ -1106,8 +1106,10 @@ private const val NET_SHIM_JS = """
     // the wire, but the body's size is known) from "cross-origin without Timing-Allow-Origin"
     // (both zero because the server declined to say). Both read 0 B otherwise, which looks like
     // one fact and is two.
+    // responseStatus exposes the HTTP status on resource-timing entries (Chromium 109+); it reads 0
+    // for cross-origin responses without Timing-Allow-Origin, which stays a "—" as before.
     post({kind:(it==='fetch'?'fetch':it==='xmlhttprequest'?'xhr':(TYPE[it]||'other')),
-          method:'GET',url:e.name,status:0,ms:Math.round(e.duration),
+          method:'GET',url:e.name,status:(e.responseStatus||0),ms:Math.round(e.duration),
           bytes:(e.transferSize===undefined?-1:e.transferSize),
           enc:(e.encodedBodySize===undefined?-1:e.encodedBodySize),timing:true});
   }
@@ -1116,7 +1118,7 @@ private const val NET_SHIM_JS = """
 
   function nav(){ try{
       var n=performance.getEntriesByType('navigation')[0]; if(!n) return;
-      post({kind:'document',method:'GET',url:n.name,status:0,ms:Math.round(n.duration),
+      post({kind:'document',method:'GET',url:n.name,status:(n.responseStatus||0),ms:Math.round(n.duration),
             bytes:(n.transferSize===undefined?-1:n.transferSize),timing:true});
     }catch(e){} }
   // A navigation entry's duration runs to loadEventEnd, which is not set until the load handlers
