@@ -53,7 +53,7 @@ duplicated in both and must stay in sync. Both files carry a comment saying so.
 ## 3. On-device layout
 
 ```
-/data/data/dev.jcode/files/                 (context.filesDir — ext4, app-private)
+/data/data/dev.blamspot.jcode/files/                 (context.filesDir — ext4, app-private)
 ├─ bin/proot/
 │   ├─ lib/
 │   │   ├─ libtalloc.so.2                   extracted from assets (mmap-only)

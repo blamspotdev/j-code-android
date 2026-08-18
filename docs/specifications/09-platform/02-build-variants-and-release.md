@@ -59,9 +59,9 @@ There are **no product flavors**. Three identities come from build types plus a 
 
 | Build | `applicationId` | Label | Launcher icon |
 |---|---|---|---|
-| `debug` | `dev.jcode.debug` | JCode (debug) | `ic_launcher_debug` (red gradient) |
-| `release` | `dev.jcode` | JCode | `ic_launcher` |
-| `release -PjcodeIdSuffix=.beta` | `dev.jcode.beta` | JCode (beta) | `ic_launcher_beta` (purple gradient) |
+| `debug` | `dev.blamspot.jcode.debug` | JCode (debug) | `ic_launcher_debug` (red gradient) |
+| `release` | `dev.blamspot.jcode` | JCode | `ic_launcher` |
+| `release -PjcodeIdSuffix=.beta` | `dev.blamspot.jcode.beta` | JCode (beta) | `ic_launcher_beta` (purple gradient) |
 
 All three install **side by side**. The `namespace` stays `dev.jcode` (the compile-time R and
 BuildConfig package), so no source reference breaks.
@@ -120,10 +120,10 @@ the next train.
 
 ```
 main = 1.6.1        merge, merge, merge          (jcodeVersion unchanged)
-                    publish v1.6.1-beta.1        pre-release, dev.jcode.beta
+                    publish v1.6.1-beta.1        pre-release, dev.blamspot.jcode.beta
                     merge
                     publish v1.6.1-beta.2        pre-release
-                    publish v1.6.1               release, dev.jcode
+                    publish v1.6.1               release, dev.blamspot.jcode
 main = next patch   opened automatically
 ```
 
@@ -208,7 +208,7 @@ Nothing is lost; it just needs merging by hand, and the run summary says so.
 ### 4.4 Update channels
 
 The two identities are two applications, so "is there an update?" is a different question for each,
-and `dev.jcode.beta` can never be updated *into* `dev.jcode`. `app/build.gradle.kts` derives
+and `dev.blamspot.jcode.beta` can never be updated *into* `dev.blamspot.jcode`. `app/build.gradle.kts` derives
 `BuildConfig.UPDATE_CHANNEL` from the id suffix, and `dev.jcode.UpdateChecker` follows it:
 
 | Channel | Asks GitHub for | Offers |
@@ -263,8 +263,8 @@ repository says it is preparing. What you choose is the channel:
 
 | Input | versionName | Tag | App id | GitHub |
 |---|---|---|---|---|
-| `beta`, label blank | `1.6.1-beta.N` (next) | `v1.6.1-beta.N` | `dev.jcode.beta` | pre-release |
-| `stable` | `1.6.1` | `v1.6.1` | `dev.jcode` | release |
+| `beta`, label blank | `1.6.1-beta.N` (next) | `v1.6.1-beta.N` | `dev.blamspot.jcode.beta` | pre-release |
+| `stable` | `1.6.1` | `v1.6.1` | `dev.blamspot.jcode` | release |
 
 It builds the Rust JNI libraries, assembles, signs with `apksigner`, verifies the signature, then
 creates the tag and the release with the APK attached.

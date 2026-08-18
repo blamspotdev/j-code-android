@@ -57,8 +57,8 @@ val jcodeVersionCode: Int = runCatching {
 // label so it installs ALONGSIDE the normal release app instead of replacing it (the release script
 // passes ".beta" for a Beta build). Its private data (Linux rootfs, settings, sessions) is isolated
 // under the suffixed package; only the shared /storage/emulated/0/JCode projects folder is common.
-// Empty (the default) keeps the normal dev.jcode / "JCode" release identity. namespace is unchanged
-// (compile-time R/BuildConfig package), so no source references break.
+// Empty (the default) keeps the normal dev.blamspot.jcode / "JCode" release identity. namespace is
+// unchanged (compile-time R/BuildConfig package), so no source references break.
 val jcodeIdSuffix: String =
     (project.findProperty("jcodeIdSuffix") as? String)?.trim().orEmpty()
 
@@ -77,7 +77,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "dev.jcode"
+        applicationId = "dev.blamspot.jcode"
         minSdk = 33
         targetSdk = 33
         versionCode = jcodeVersionCode
@@ -100,7 +100,7 @@ android {
 
     buildTypes {
         debug {
-            // Dev builds install as a separate app (dev.jcode.debug / "JCode (debug)") so an
+            // Dev builds install as a separate app (dev.blamspot.jcode.debug / "JCode (debug)") so an
             // `installDebug` never overwrites an installed release or beta build.
             applicationIdSuffix = ".debug"
             manifestPlaceholders["appLabel"] = "JCode (debug)"
@@ -113,7 +113,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // Side-by-side Beta: a distinct applicationId (dev.jcode.beta) + launcher label
+            // Side-by-side Beta: a distinct applicationId (dev.blamspot.jcode.beta) + launcher label
             // ("JCode (beta)") so the Beta APK never overwrites an installed release build.
             if (jcodeIdSuffix.isNotEmpty()) {
                 applicationIdSuffix = jcodeIdSuffix
