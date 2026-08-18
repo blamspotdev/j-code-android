@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -1804,7 +1805,9 @@ private fun SettingsCard(
     if (query.isNotEmpty() && !matchesSettingsQuery(query, title, description, keywords)) return
     LocalSettingsMatchSink.current.count++
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.16f),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -1840,6 +1843,8 @@ private fun WarningCard(
     LocalSettingsMatchSink.current.count++
     Surface(
         color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f)),
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
