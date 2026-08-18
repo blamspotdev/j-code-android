@@ -501,11 +501,32 @@ internal class VsixSession private constructor(
     var failure by mutableStateOf<String?>(null)
         private set
 
+    /**
+     * The workbench bridge, held so host requests can reach it too.
+     *
+     * It arrives as an argument to [start], but the calls that need it come from the extension at
+     * any time — opening a file, showing a notice, following a sign-in link — not just while
+     * starting up.
+     */
+    private var api: (suspend (envelopeJson: String) -> String)? = null
+
     /** One webview the extension has open, mounted wherever it belongs. */
     inner class Surface(val handle: String, val webView: WebView) {
         var hasPage by mutableStateOf(false)
             internal set
         internal var loadedStamp: Int? = null
+
+        /**
+         * Messages the extension sent before the page could receive them.
+         *
+         * The two sides are both local, so the extension answers in single-digit milliseconds —
+         * faster than the page finishes loading the scripts that will listen. A page that opens its
+         * RPC from an early inline script and wires the receiving end a few modules later (Codex
+         * does) would otherwise lose the reply to its first call and wait forever. Held until the
+         * page has loaded, then delivered in order.
+         */
+        internal val queued = ArrayDeque<String>()
+        internal var loaded = false
     }
 
     private val surfaces = mutableStateMapOf<String, Surface>()
@@ -595,12 +616,98 @@ internal class VsixSession private constructor(
                         else -> payload.toString()
                     },
                 )
-                scope.launch {
-                    surfaces[handle]?.webView
-                        ?.evaluateJavascript("window.__jcodeDeliver && window.__jcodeDeliver($json)", null)
-                }
+                scope.launch { deliverToPage(handle, json) }
                 host.reply(params.optInt("__requestId"), null)
             }
+
+            // --- what the VS Code API asks of the editor ------------------------------------------
+            //
+            // These are the other half of the shim: the host implements the API surface, and each
+            // call that needs the editor rather than the runtime lands here. Answering matters as
+            // much as acting — the extension awaits these, so an unanswered one strands it.
+
+            // Notices. Items make it a question, and the only honest way to ask one on a snackbar is
+            // not to pretend: the message is shown and "no item chosen" is reported, which is what
+            // VS Code reports when a notification is dismissed.
+            "window/message" -> {
+                scope.launch { workbench("workbench.notify", JSONObject().put("message", params.optString("message"))) }
+                host.reply(params.optInt("__requestId"), null)
+            }
+
+            "window/showTextDocument" -> scope.launch {
+                val error = workbench(
+                    "workbench.openFile",
+                    JSONObject()
+                        .put("path", params.optString("path"))
+                        .put("line", params.optInt("line"))
+                        .put("column", params.optInt("column")),
+                )
+                host.reply(params.optInt("__requestId"), null, error)
+            }
+
+            "env/openExternal" -> scope.launch {
+                // Sign-in runs through here: the extension hands over an OAuth URL and waits to be
+                // told it opened. Refusing it is refusing to let the user log in.
+                val error = workbench("workbench.openUrl", JSONObject().put("url", params.optString("uri")))
+                host.reply(params.optInt("__requestId"), null, error)
+            }
+
+            "env/clipboardRead" -> host.reply(params.optInt("__requestId"), clipboardText())
+            "env/clipboardWrite" -> {
+                writeClipboard(params.optString("text"))
+                host.reply(params.optInt("__requestId"), null)
+            }
+
+            // Credentials the extension asked JCode to keep — an API key, a refresh token. Stored in
+            // app-private storage, per extension, which is the same protection the extension's own
+            // files get; a `.vsix` already runs its own code in the runtime, so this grants it
+            // nothing it could not do for itself, and losing them on every restart breaks sign-in.
+            "secrets/get" -> host.reply(params.optInt("__requestId"), secrets().optString(params.optString("key")).takeIf { it.isNotEmpty() })
+            "secrets/store" -> {
+                updateSecrets { it.put(params.optString("key"), params.optString("value")) }
+                host.reply(params.optInt("__requestId"), null)
+            }
+            "secrets/delete" -> {
+                updateSecrets { it.remove(params.optString("key")) }
+                host.reply(params.optInt("__requestId"), null)
+            }
+
+            // The extension's own output channel, folded into JCode's Output pane under its name so
+            // the extension's logs are somewhere the user can actually read them.
+            "output/append" -> ExtensionDevLog.log(
+                ExtensionDevLogEntry.Kind.Console,
+                extension.id,
+                "[${params.optString("name")}] ${params.optString("text").trimEnd()}",
+            )
+            "output/replace", "output/clear", "output/show", "output/hide" -> Unit
+
+            // A command JCode has no built-in for. `setContext` is the common one and is genuinely
+            // nothing to do here — JCode has no when-clause context to set — so it is answered rather
+            // than refused; an extension that treats a rejection as fatal would otherwise die on it.
+            "commands/execute" -> host.reply(params.optInt("__requestId"), null)
+            "commands/registered", "webview/providerRegistered" -> Unit
+
+            // A setting the extension changed on its own behalf. Kept in the same store its
+            // `contributes.configuration` defaults are read from, so it survives a restart.
+            "config/update" -> scope.launch {
+                val error = workbench(
+                    "config.set",
+                    JSONObject().put("key", params.optString("key")).put("value", params.opt("value")),
+                )
+                host.reply(params.optInt("__requestId"), null, error)
+            }
+
+            // A terminal the extension opened. Real: JCode has terminals, and "run this in a
+            // terminal" is the whole point of the button an extension puts it behind.
+            "terminal/create" -> scope.launch {
+                VsixTerminals.create(params.optString("id"), params.optString("name"), params.optString("cwd"))
+            }
+            "terminal/sendText" -> scope.launch {
+                VsixTerminals.sendText(params.optString("id"), params.optString("text"), params.optBoolean("newline", true))
+            }
+            "terminal/show" -> scope.launch { VsixTerminals.show(params.optString("id")) }
+            "terminal/hide", "terminal/dispose" -> scope.launch { VsixTerminals.dispose(params.optString("id")) }
+
             else -> {
                 ExtensionDevLog.log(ExtensionDevLogEntry.Kind.Event, extension.id, "$method $params")
                 // Anything else the extension asks for is not implemented yet, but it must still be
@@ -609,6 +716,65 @@ internal class VsixSession private constructor(
                     host.reply(params.optInt("__requestId"), null, "$method is not implemented by JCode")
                 }
             }
+        }
+    }
+
+    /** Call a workbench API route; null when it succeeded, else the reason it did not. */
+    private suspend fun workbench(type: String, payload: JSONObject): String? {
+        val request = api ?: return "the workbench bridge is not available"
+        val envelope = JSONObject().put("type", type).put("payload", payload).toString()
+        val reply = runCatching { JSONObject(request(envelope)) }.getOrElse { return it.message ?: "$type failed" }
+        return reply.optString("error").takeIf { it.isNotBlank() }
+    }
+
+    // --- secret storage ---------------------------------------------------------------------
+
+    private val secretsFile: File
+        get() = File(context.filesDir, "vsix-secrets/${extension.id.replace(Regex("[^A-Za-z0-9._-]"), "_")}.json")
+
+    private fun secrets(): JSONObject =
+        runCatching { JSONObject(secretsFile.readText()) }.getOrDefault(JSONObject())
+
+    private fun updateSecrets(change: (JSONObject) -> Unit) {
+        val store = secrets().also(change)
+        runCatching {
+            secretsFile.parentFile?.mkdirs()
+            secretsFile.writeText(store.toString())
+        }
+    }
+
+    private fun clipboardText(): String {
+        val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+        return manager?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+    }
+
+    private fun writeClipboard(text: String) {
+        val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+        manager?.setPrimaryClip(android.content.ClipData.newPlainText(extension.name, text))
+    }
+
+    /**
+     * Hand a message to the page, or hold it until the page can take one.
+     *
+     * See [Surface.queued] for why holding is necessary: both sides are local, so a reply can beat
+     * the page's own scripts into existence.
+     */
+    private fun deliverToPage(handle: String, json: String) {
+        val surface = surfaces[handle] ?: return
+        if (!surface.loaded) {
+            surface.queued += json
+            return
+        }
+        surface.webView.evaluateJavascript("window.__jcodeDeliver && window.__jcodeDeliver($json)", null)
+    }
+
+    /** The page finished loading: deliver everything the extension said while it could not listen. */
+    private fun onPageLoaded(handle: String) {
+        val surface = surfaces[handle] ?: return
+        surface.loaded = true
+        while (surface.queued.isNotEmpty()) {
+            val json = surface.queued.removeFirst()
+            surface.webView.evaluateJavascript("window.__jcodeDeliver && window.__jcodeDeliver($json)", null)
         }
     }
 
@@ -622,7 +788,7 @@ internal class VsixSession private constructor(
 
     /** The surface for [handle], creating its WebView on first use. Main thread only. */
     private fun surfaceFor(handle: String): Surface = surfaces.getOrPut(handle) {
-        Surface(handle, newWebView(context, extension, backgroundArgb, handle, ::onPageMessage))
+        Surface(handle, newWebView(context, extension, backgroundArgb, handle, ::onPageMessage, ::onPageLoaded))
     }
 
     private fun closeSurface(handle: String) {
@@ -648,6 +814,10 @@ internal class VsixSession private constructor(
             val surface = surfaceFor(handle)
             if (surface.loadedStamp == stamp) return@launch
             surface.loadedStamp = stamp
+            // A new document has none of the previous page's listeners; anything the extension sends
+            // from here waits for it to load.
+            surface.loaded = false
+            surface.queued.clear()
             surface.webView.loadDataWithBaseURL("$VSIX_RESOURCE_ORIGIN/", document, "text/html", "utf-8", null)
             surface.hasPage = true
         }
@@ -657,6 +827,7 @@ internal class VsixSession private constructor(
         apiRequest: suspend (envelopeJson: String) -> String,
         isDarkTheme: Boolean,
     ) {
+        api = apiRequest
         // Resolved before the host is spawned, not after: the project is the host's HOME, and an
         // extension reads workspaceFolders to decide what it is working on, so the wrong answer here
         // is the difference between it loading the project and asking the user to pick one.
@@ -755,6 +926,7 @@ internal class VsixSession private constructor(
             backgroundArgb: Int,
             handle: String,
             onPageMessage: (handle: String, payload: String) -> Unit,
+            onPageLoaded: (handle: String) -> Unit,
         ): WebView = NoFullscreenWebView(context).apply {
             setBackgroundColor(backgroundArgb)
             settings.javaScriptEnabled = true
@@ -779,6 +951,7 @@ internal class VsixSession private constructor(
                     // Dynamic units (dvh) are rejected outright by these engines whatever the viewport
                     // is, so the repair pass still runs — it no-ops where unneeded.
                     view.evaluateJavascript(VIEWPORT_SIZE_JS, null)
+                    onPageLoaded(handle)
                 }
 
                 override fun shouldInterceptRequest(
@@ -1095,7 +1268,10 @@ html,body{margin:0;padding:0;overflow:hidden}
   window.__jcodeDeliver = function (json) {
     var data;
     try { data = JSON.parse(json); } catch (e) { data = json; }
-    window.dispatchEvent(new MessageEvent('message', { data: data }));
+    // origin and source are not decoration. A VS Code webview message carries the webview's own
+    // origin, and a page that checks it drops anything arriving without one — silently, which is
+    // exactly how Codex's renderer sat waiting for a handshake that had already been answered.
+    window.dispatchEvent(new MessageEvent('message', { data: data, origin: location.origin, source: window }));
   };
 })();
 </script>

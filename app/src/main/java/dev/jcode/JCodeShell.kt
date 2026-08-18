@@ -343,6 +343,7 @@ import dev.jcode.workbench.WorkbenchIconActionButton
 import dev.jcode.workbench.ExtensionDrawerActions
 import dev.jcode.workbench.VsixDrawerContent
 import dev.jcode.workbench.VsixPanelPage
+import dev.jcode.workbench.VsixTerminals
 import dev.jcode.workbench.VsixViewHolder
 import dev.jcode.workbench.hasClipboardImage
 import dev.jcode.workbench.ScmBackgroundHost
@@ -2209,6 +2210,7 @@ private fun JCodeShell(
         spawnTerminalSession()
     }
 
+
     // Relocate an interactive sub-shell (OSC 7715 from the guest wrapper) into its own temporary tab,
     // focused and linked to its parent so exiting/closing it returns focus to the parent. A no-op if the
     // feature is off, the parent tab is gone, or the payload is malformed — the guest wrapper's watchdog
@@ -2524,6 +2526,45 @@ private fun JCodeShell(
         terminalSessionIds = emptyList()
         terminalTitles.clear()
         selectedTerminalSessionId = ""
+    }
+
+    // A `.vsix` extension calling vscode.window.createTerminal / sendText / show. The extension host
+    // is a background process that outlives this composition and cannot reach it, so its requests
+    // queue in VsixTerminals and are carried out here — see that object for why these are real
+    // terminals rather than a stand-in. Declared after the helpers above because it calls them.
+    LaunchedEffect(Unit) {
+        snapshotFlow { VsixTerminals.signal.value }.collect {
+            for (request in VsixTerminals.drain()) {
+                when (request) {
+                    is VsixTerminals.Request.Create -> {
+                        val session = spawnTerminalSession(label = request.name) ?: continue
+                        VsixTerminals.sessions[request.id] = session.id
+                        terminalTitles[session.id] = request.name
+                        selectRightPanelTab(RightPanelTab.Terminal)
+                        rightSidebarVisible = true
+                        // Start where the extension asked, when the guest can see that directory.
+                        if (request.cwd.isNotBlank()) {
+                            terminalSessionManager.sendInput(session.id, "cd '${request.cwd.replace("'", "'\\''")}'\n")
+                        }
+                    }
+                    is VsixTerminals.Request.SendText -> {
+                        val id = VsixTerminals.sessions[request.id] ?: continue
+                        terminalSessionManager.sendInput(id, request.text + if (request.newline) "\n" else "")
+                    }
+                    is VsixTerminals.Request.Show -> {
+                        val id = VsixTerminals.sessions[request.id]?.takeIf { it in terminalSessionIds } ?: continue
+                        selectedTerminalSessionId = id
+                        terminalSessionManager.switchSession(id)
+                        selectRightPanelTab(RightPanelTab.Terminal)
+                        rightSidebarVisible = true
+                    }
+                    is VsixTerminals.Request.Dispose -> {
+                        val id = VsixTerminals.sessions.remove(request.id) ?: continue
+                        if (id in terminalSessionIds) closeTerminalSession(id)
+                    }
+                }
+            }
+        }
     }
 
     // Set when the user explicitly closes the project: suppresses the convenience auto-start so the
