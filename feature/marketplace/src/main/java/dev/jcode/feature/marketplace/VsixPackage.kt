@@ -111,7 +111,57 @@ object VsixPackage {
             engineRange = json.optJSONObject("engines")?.optString("vscode")?.takeIf { it.isNotBlank() },
             activationEvents = json.optJSONArray("activationEvents").toStringList(),
             contributeKeys = json.optJSONObject("contributes")?.keys()?.asSequence()?.toList().orEmpty(),
+            settings = parseConfigurationSettings(json.optJSONObject("contributes"), strings),
         )
+    }
+
+    /**
+     * Translate `contributes.configuration` into JCode [ExtensionSetting]s. VS Code allows the value
+     * to be a single object or an array of them, each with a `properties` map keyed by the full
+     * dotted setting id (e.g. `openchamber.apiUrl`) — that id is kept verbatim so it round-trips
+     * through `getConfiguration(section).get(key)` on the host side.
+     */
+    private fun parseConfigurationSettings(contributes: JSONObject?, strings: Map<String, String>): List<ExtensionSetting> {
+        val raw = contributes?.opt("configuration") ?: return emptyList()
+        val blocks = when (raw) {
+            is JSONArray -> (0 until raw.length()).mapNotNull { raw.optJSONObject(it) }
+            is JSONObject -> listOf(raw)
+            else -> emptyList()
+        }
+        val out = mutableListOf<ExtensionSetting>()
+        for (block in blocks) {
+            val props = block.optJSONObject("properties") ?: continue
+            props.keys().forEach { key ->
+                val schema = props.optJSONObject(key) ?: return@forEach
+                val options = schema.optJSONArray("enum")
+                    ?.let { arr -> (0 until arr.length()).map { arr.optString(it) } }
+                    .orEmpty()
+                val type = when {
+                    options.isNotEmpty() -> SettingType.Enum
+                    else -> when (schema.optString("type")) {
+                        "boolean" -> SettingType.Bool
+                        "number", "integer" -> SettingType.Int
+                        else -> SettingType.Str
+                    }
+                }
+                val default = if (schema.has("default") && !schema.isNull("default")) {
+                    schema.get("default").toString()
+                } else {
+                    null
+                }
+                val description = schema.optString("markdownDescription")
+                    .ifBlank { schema.optString("description") }
+                out += ExtensionSetting(
+                    key = key,
+                    label = readableTitle(key),
+                    type = type,
+                    default = default,
+                    options = options,
+                    description = localize(description, strings).takeIf { it.isNotBlank() },
+                )
+            }
+        }
+        return out
     }
 
     /**
@@ -206,6 +256,20 @@ object VsixPackage {
         appendLine("  minApiVersion: 1")
         appendLine("  capabilities:")
         appendLine("    - workbench")
+        if (manifest.settings.isNotEmpty()) {
+            appendLine("settings:")
+            manifest.settings.forEach { s ->
+                appendLine("  - key: ${s.key.yaml()}")
+                appendLine("    label: ${s.label.yaml()}")
+                appendLine("    type: ${settingTypeYaml(s.type).yaml()}")
+                s.default?.let { appendLine("    default: ${it.yaml()}") }
+                s.description?.let { appendLine("    description: ${it.yaml()}") }
+                if (s.options.isNotEmpty()) {
+                    appendLine("    options:")
+                    s.options.forEach { appendLine("      - ${it.yaml()}") }
+                }
+            }
+        }
         if (manifest.icon != null) {
             appendLine("images:")
             appendLine("  icon: ${manifest.icon.yaml()}")
@@ -222,6 +286,14 @@ object VsixPackage {
     /** Quote a scalar so any punctuation in it survives the YAML round-trip. */
     private fun String.yaml(): String = "\"" + replace("\\", "\\\\").replace("\"", "\\\"")
         .replace("\n", " ").replace("\r", "") + "\""
+
+    /** The `type:` token the settings parser ([SettingType.from]) reads back. */
+    private fun settingTypeYaml(type: SettingType): String = when (type) {
+        SettingType.Bool -> "bool"
+        SettingType.Enum -> "enum"
+        SettingType.Int -> "int"
+        SettingType.Str -> "str"
+    }
 
     private fun JSONArray?.toStringList(): List<String> {
         if (this == null) return emptyList()
@@ -262,6 +334,9 @@ data class VsixManifest(
     val engineRange: String?,
     val activationEvents: List<String>,
     val contributeKeys: List<String>,
+    /** Settings translated from `contributes.configuration`, surfaced on JCode's Extension Settings
+     *  page and delivered to the extension through `getConfiguration`. */
+    val settings: List<ExtensionSetting> = emptyList(),
 ) {
     /** VS Code's identity for an extension, and the id JCode installs it under. */
     val id: String get() = "$publisher.$name"
