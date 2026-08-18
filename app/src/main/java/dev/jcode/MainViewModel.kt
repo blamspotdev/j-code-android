@@ -3742,6 +3742,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Make one installed [version] of a multi-version catalog entry the active one (the one on PATH). */
+    fun useSdkCatalogVersion(entryId: String, version: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = SessionRegistry.registerSession(
+                context = getApplication(),
+                kind = BackendSessionKind.JOB,
+                name = "sdk:use:$entryId",
+            )
+            try {
+                distroService.runSdkCatalogAction(entryId, SdkCatalogAction.Use, version = version)
+            } finally {
+                session.close()
+            }
+        }
+    }
+
     fun installLspCatalogEntry(entryId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val entry = LspServerCatalog.findById(entryId)

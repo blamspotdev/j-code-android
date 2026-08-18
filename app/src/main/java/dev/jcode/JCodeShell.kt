@@ -1570,6 +1570,7 @@ fun JCodeApp(
             onInstallSdkCatalogEntry = viewModel::installSdkCatalogEntry,
             onInstallSdkCatalogVersion = viewModel::installSdkCatalogVersion,
             onUninstallSdkCatalogVersion = viewModel::uninstallSdkCatalogVersion,
+            onUseSdkCatalogVersion = viewModel::useSdkCatalogVersion,
             onUninstallSdkCatalogEntry = viewModel::uninstallSdkCatalogEntry,
             onOpenSdkDetail = viewModel::openSdkDetailPage,
             onCheckLspStatuses = viewModel::checkLspStatuses,
@@ -3215,6 +3216,7 @@ private fun JCodeShell(
                                             onUninstall = managerActions.onUninstallSdkCatalogEntry,
                                             onInstallVersion = managerActions.onInstallSdkCatalogVersion,
                                             onUninstallVersion = managerActions.onUninstallSdkCatalogVersion,
+                                            onUseVersion = managerActions.onUseSdkCatalogVersion,
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }

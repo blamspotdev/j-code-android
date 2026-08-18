@@ -32,6 +32,7 @@ object SdkManagerFeature {
         onUninstall: (String) -> Unit,
         onInstallVersion: (String, String) -> Unit = { _, _ -> },
         onUninstallVersion: (String, String) -> Unit = { _, _ -> },
+        onUseVersion: (String, String) -> Unit = { _, _ -> },
         modifier: Modifier = Modifier,
     ) {
         val environmentReady = environmentState.distroInstalled == true && environmentState.jcodeUserReady == true
@@ -51,6 +52,7 @@ object SdkManagerFeature {
                 else -> when (state.runningAction.takeIf { running }) {
                     SdkCatalogAction.Install -> "Installing…"
                     SdkCatalogAction.Uninstall -> "Removing…"
+                    SdkCatalogAction.Use -> "Switching…"
                     null -> "Checking…"
                 }
             },
@@ -64,12 +66,15 @@ object SdkManagerFeature {
                 emptyList()
             },
             installedVersions = if (versioned) state.installedVersions[entry.id].orEmpty() else emptyList(),
+            activeVersion = if (versioned) state.activeVersions[entry.id] else null,
             multiVersion = entry.multiVersion,
+            canUseVersion = entry.useVersionScript.isNotBlank(),
             versionsLoading = versioned && state.versionsLoadingEntryId == entry.id,
             progressPercent = progress?.percent.takeIf { running || prerequisite },
             progressLabel = progress?.label,
             onInstallVersion = { version -> onInstallVersion(entry.id, version) },
             onUninstallVersion = { version -> onUninstallVersion(entry.id, version) },
+            onUseVersion = { version -> onUseVersion(entry.id, version) },
             modifier = modifier,
         )
     }

@@ -395,6 +395,8 @@ class DistroService(
                     timeoutMs = entry.installTimeoutMs(catalogInstallTimeoutMs),
                 )
                 SdkCatalogAction.Uninstall -> execCatalogAction("${action.label} ${entry.name}", applyVersion(entry.uninstallScript, version), timeoutMs = 900_000L)
+                // Repointing a symlink or an alternatives entry — nothing to download.
+                SdkCatalogAction.Use -> execCatalogAction("${action.label} ${entry.name}", applyVersion(entry.useVersionScript, version), timeoutMs = 120_000L)
             }
             // The install/uninstall script's own exit status is not trusted — the verify script is
             // what decides whether the tool is actually there afterwards.
@@ -410,13 +412,20 @@ class DistroService(
             }.toSet()
             persistInstalledCatalogEntries(distroId, updatedInstalledEntries)
 
-            val refreshedInstalledVersions =
-                if (entry.versionsScript.isNotBlank()) {
-                    _sdkCatalogState.value.installedVersions.toMutableMap()
-                        .apply { put(entry.id, readInstalledVersionsForEntry(entry)) }
-                } else {
-                    _sdkCatalogState.value.installedVersions
-                }
+            val versioned = entry.versionsScript.isNotBlank()
+            val refreshed = if (versioned) readInstalledVersionsForEntry(entry) else null
+            val refreshedInstalledVersions = if (refreshed != null) {
+                _sdkCatalogState.value.installedVersions.toMutableMap()
+                    .apply { put(entry.id, refreshed.versions) }
+            } else {
+                _sdkCatalogState.value.installedVersions
+            }
+            val refreshedActiveVersions = if (refreshed != null) {
+                _sdkCatalogState.value.activeVersions.toMutableMap()
+                    .apply { refreshed.active?.also { put(entry.id, it) } ?: remove(entry.id) }
+            } else {
+                _sdkCatalogState.value.activeVersions
+            }
 
             val errorMessage = when {
                 !actionResult.succeeded -> actionResult.internalError
@@ -436,6 +445,7 @@ class DistroService(
             _sdkCatalogState.value = _sdkCatalogState.value.copy(
                 installedEntryIds = updatedInstalledEntries,
                 installedVersions = refreshedInstalledVersions,
+                activeVersions = refreshedActiveVersions,
                 runningEntryId = null,
                 runningAction = null,
                 executionLabel = "${action.label} ${entry.name}",
@@ -477,7 +487,9 @@ class DistroService(
                 availableVersions = _sdkCatalogState.value.availableVersions.toMutableMap()
                     .apply { if (available.isNotEmpty()) put(entryId, available) },
                 installedVersions = _sdkCatalogState.value.installedVersions.toMutableMap()
-                    .apply { put(entryId, installed) },
+                    .apply { put(entryId, installed.versions) },
+                activeVersions = _sdkCatalogState.value.activeVersions.toMutableMap()
+                    .apply { installed.active?.also { put(entryId, it) } ?: remove(entryId) },
                 // Compare-and-clear: only drop the spinner if this entry is still the one loading — a
                 // slower concurrent fetch for another entry must keep its own spinner.
                 versionsLoadingEntryId = _sdkCatalogState.value.versionsLoadingEntryId.takeIf { it != entryId },
@@ -2196,6 +2208,11 @@ class DistroService(
 
                     SdkCatalogAction.Uninstall ->
                         if (!installedNow) "[result] Removed." else "[result] Still detected after removal."
+
+                    // Nothing was added or taken away, so the verify result says nothing about it —
+                    // the listing script re-read afterwards is what confirms the switch.
+                    SdkCatalogAction.Use ->
+                        if (actionResult.succeeded) "[result] Switched." else "[result] Switch failed."
                 },
             )
         }
@@ -2221,6 +2238,7 @@ class DistroService(
         return when (action) {
             SdkCatalogAction.Install -> installScript
             SdkCatalogAction.Uninstall -> uninstallScript
+            SdkCatalogAction.Use -> useVersionScript
         }
     }
 
@@ -2231,13 +2249,6 @@ class DistroService(
         val quoted = "'" + version.replace("'", "'\\''") + "'"
         return "export JCODE_VERSION=$quoted\n" + script.replace("{{version}}", version)
     }
-
-    private fun parseVersionLines(stdout: String): List<String> =
-        stdout.lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .distinct()
-            .toList()
 
     /** Parse a [SdkCatalogEntry.versionsScript] into tagged versions. Each line is `version` or
      *  `version<TAB>tag` (e.g. `v22.23.1\tLTS Jod`); the tag column is optional and display-only. */
@@ -2253,10 +2264,29 @@ class DistroService(
             .distinctBy { it.version }
             .toList()
 
-    private fun readInstalledVersionsForEntry(entry: SdkCatalogEntry): List<String> {
-        if (entry.installedVersionsScript.isBlank()) return emptyList()
+    /** An entry's installed versions plus the one on PATH, when its listing script marks it. */
+    private data class InstalledVersions(val versions: List<String> = emptyList(), val active: String? = null)
+
+    private fun readInstalledVersionsForEntry(entry: SdkCatalogEntry): InstalledVersions {
+        if (entry.installedVersionsScript.isBlank()) return InstalledVersions()
         val result = execCatalogScript(entry.installedVersionsScript, timeoutMs = 60_000L)
-        return if (result.succeeded) parseVersionLines(result.stdout) else emptyList()
+        if (!result.succeeded) return InstalledVersions()
+        // Lines are "version" or "version<TAB>active" — the same tab-separated shape versionsScript
+        // uses for its tags, so a script that reports no active version still parses.
+        val rows = result.stdout.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .map { line ->
+                val parts = line.split('\t', limit = 2)
+                parts[0].trim() to parts.getOrNull(1)?.trim().orEmpty()
+            }
+            .filter { it.first.isNotEmpty() }
+            .distinctBy { it.first }
+            .toList()
+        return InstalledVersions(
+            versions = rows.map { it.first },
+            active = rows.firstOrNull { it.second.equals("active", ignoreCase = true) }?.first,
+        )
     }
 
     private fun installedEntriesKey(distroId: String) =

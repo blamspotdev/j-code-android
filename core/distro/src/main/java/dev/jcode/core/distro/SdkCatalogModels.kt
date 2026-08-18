@@ -18,9 +18,15 @@ data class SdkCatalogEntry(
      *  The chosen version is substituted for the `{{version}}` placeholder in the install/uninstall
      *  scripts (and exported as `JCODE_VERSION`); "latest" is passed through so the script can resolve it. */
     val versionsScript: String = "",
-    /** For [multiVersion]: prints the currently-installed versions, one per line. Empty = fall back to
-     *  the binary [verifyScript] (installed / not-installed only). */
+    /** For [multiVersion]: prints the currently-installed versions, one per line, newest first. A line
+     *  may mark the one currently on PATH as `version<TAB>active`; when none does, the newest is
+     *  assumed active. Empty = fall back to the binary [verifyScript] (installed / not-installed only). */
     val installedVersionsScript: String = "",
+    /** For [multiVersion]: makes an already-installed version the active one (the one on PATH), the
+     *  equivalent of `nvm use` / `rustup default`. The version arrives as `JCODE_VERSION` and via the
+     *  `{{version}}` placeholder. Empty = this tool has no single active version (Android SDK platforms
+     *  and .NET SDK bands are all usable at once), and no Use action is offered. */
+    val useVersionScript: String = "",
     /** Distro ids this entry supports. Empty = every distro. */
     val supportedDistros: List<String> = emptyList(),
     /** Arch keys (Arch.rootfsKey: "arm64"/"amd64") this entry supports. Empty = every arch. */
@@ -80,6 +86,8 @@ enum class SdkCatalogCategory(val label: String) {
 enum class SdkCatalogAction(val label: String) {
     Install("Install"),
     Uninstall("Remove"),
+    /** Switch an installed multi-version tool to a different one of its versions. */
+    Use("Use"),
 }
 
 /** One installable version, with an optional presentational [tag] (e.g. "LTS Jod") emitted by a
@@ -100,8 +108,11 @@ data class SdkCatalogState(
     /** Installable versions per entry id, newest first (index 0 is "latest"), each with an optional tag.
      *  Populated lazily when a detail page opens for an entry whose [SdkCatalogEntry.versionsScript] is set. */
     val availableVersions: Map<String, List<CatalogVersion>> = emptyMap(),
-    /** Currently-installed versions per entry id, newest first (index 0 is the default on PATH). */
+    /** Currently-installed versions per entry id, newest first. */
     val installedVersions: Map<String, List<String>> = emptyMap(),
+    /** The version on PATH per entry id, when its listing script reports one. Absent = the newest
+     *  installed is active, which is what every entry did before switching existed. */
+    val activeVersions: Map<String, String> = emptyMap(),
     /** Entry id whose version list is currently being fetched (drives the picker spinner). */
     val versionsLoadingEntryId: String? = null,
 )

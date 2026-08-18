@@ -160,6 +160,7 @@ internal data class WorkbenchManagerActions(
     val onInstallSdkCatalogEntry: (String) -> Unit,
     val onInstallSdkCatalogVersion: (String, String) -> Unit,
     val onUninstallSdkCatalogVersion: (String, String) -> Unit,
+    val onUseSdkCatalogVersion: (String, String) -> Unit,
     val onUninstallSdkCatalogEntry: (String) -> Unit,
     val onOpenSdkDetail: (String) -> Unit,
     val onCheckLspStatuses: () -> Unit,

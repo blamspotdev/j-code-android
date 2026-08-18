@@ -476,10 +476,15 @@ fun ManagerDetailScreen(
     /** Installable versions, newest first (index 0 is treated as "latest"), each with an optional tag
      *  (e.g. "LTS Jod"). Empty = no version picker. */
     availableVersions: List<VersionOption> = emptyList(),
-    /** Currently-installed versions, newest first. For [multiVersion] the first is the default (on PATH). */
+    /** Currently-installed versions, newest first. */
     installedVersions: List<String> = emptyList(),
+    /** The installed version currently on PATH. Null = the newest installed one is active. */
+    activeVersion: String? = null,
     /** When true, several versions coexist and each is removable independently. */
     multiVersion: Boolean = false,
+    /** Whether this tool can switch which installed version is active (`nvm use` and friends). False
+     *  for tools whose versions are all usable at once, which have nothing to switch. */
+    canUseVersion: Boolean = false,
     /** Whether the available-versions list is still being fetched (shows a spinner in the picker). */
     versionsLoading: Boolean = false,
     /** 0..100 reported by the running install itself; null while it reports nothing (the chip then
@@ -489,6 +494,7 @@ fun ManagerDetailScreen(
     progressLabel: String? = null,
     onInstallVersion: (String) -> Unit = {},
     onUninstallVersion: (String) -> Unit = {},
+    onUseVersion: (String) -> Unit = {},
     extra: @Composable () -> Unit = {},
 ) {
     val hasVersions = availableVersions.isNotEmpty() || versionsLoading
@@ -528,11 +534,14 @@ fun ManagerDetailScreen(
                 multiVersion = multiVersion,
                 availableVersions = availableVersions,
                 installedVersions = installedVersions,
+                activeVersion = activeVersion ?: installedVersions.firstOrNull(),
+                canUseVersion = canUseVersion,
                 selectedVersion = selectedVersion,
                 loading = versionsLoading,
                 enabled = actionsEnabled,
                 onSelectVersion = { selectedVersion = it },
                 onUninstallVersion = onUninstallVersion,
+                onUseVersion = onUseVersion,
             )
         }
 
@@ -624,11 +633,14 @@ private fun VersionSection(
     multiVersion: Boolean,
     availableVersions: List<VersionOption>,
     installedVersions: List<String>,
+    activeVersion: String?,
+    canUseVersion: Boolean,
     selectedVersion: String,
     loading: Boolean,
     enabled: Boolean,
     onSelectVersion: (String) -> Unit,
     onUninstallVersion: (String) -> Unit,
+    onUseVersion: (String) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
         Text(
@@ -637,19 +649,24 @@ private fun VersionSection(
             fontWeight = FontWeight.SemiBold,
         )
         if (multiVersion && installedVersions.isNotEmpty()) {
-            installedVersions.forEachIndexed { index, version ->
+            installedVersions.forEach { version ->
+                val isActive = version == activeVersion
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(text = version, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    if (index == 0) {
+                    if (isActive) {
                         Text(
-                            text = "default",
+                            text = "active",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                    // Only what can be acted on: the active version has nothing to switch to.
+                    if (canUseVersion && !isActive) {
+                        CompactOutlinedButton("Use", onClick = { onUseVersion(version) }, enabled = enabled)
                     }
                     CompactOutlinedButton("Remove", onClick = { onUninstallVersion(version) }, enabled = enabled)
                 }
