@@ -511,6 +511,12 @@ internal class VsixSession private constructor(
      */
     private var api: (suspend (envelopeJson: String) -> String)? = null
 
+    /**
+     * The `--jc-*` ramp the page is drawn with, kept so a surface created later starts in the theme
+     * that is on screen now rather than the one that was current when the session began.
+     */
+    internal var themeRampCss: String = ""
+
     /** One webview the extension has open, mounted wherever it belongs. */
     inner class Surface(val handle: String, val webView: WebView) {
         var hasPage by mutableStateOf(false)
@@ -754,6 +760,28 @@ internal class VsixSession private constructor(
         manager?.setPrimaryClip(android.content.ClipData.newPlainText(extension.name, text))
     }
 
+    /** The live ramp as a stylesheet, overriding the asset's defaults for this render. */
+    private fun themeStyle(): String =
+        themeRampCss.takeIf { it.isNotBlank() }?.let { "<style>$it</style>" }.orEmpty()
+
+    /**
+     * Adopt [rampCss] as the theme.
+     *
+     * Applied to every page already open rather than only to the next one: switching theme with an
+     * extension on screen should recolour it, and its page is built by the extension — reloading to
+     * repaint would throw away whatever the user was in the middle of.
+     */
+    fun applyTheme(rampCss: String, backgroundArgb: Int, dark: Boolean) {
+        if (rampCss == themeRampCss) return
+        themeRampCss = rampCss
+        val js = vsixThemeRampJs(rampCss)
+        surfaces.values.forEach { surface ->
+            surface.webView.setBackgroundColor(backgroundArgb)
+            surface.webView.evaluateJavascript(js, null)
+        }
+        scope.launch { runCatching { host.setTheme(dark = dark) } }
+    }
+
     /**
      * Hand a message to the page, or hold it until the page can take one.
      *
@@ -809,7 +837,7 @@ internal class VsixSession private constructor(
      */
     private fun render(handle: String, html: String) {
         if (html.isBlank() || handle.isBlank()) return
-        val document = vsixBootstrap(context, projectName, projectPath) + html
+        val document = vsixBootstrap(context, projectName, projectPath) + themeStyle() + html
         val stamp = html.hashCode()
         scope.launch {
             val surface = surfaceFor(handle)
@@ -892,6 +920,7 @@ internal class VsixSession private constructor(
             apiRequest: suspend (envelopeJson: String) -> String,
             backgroundArgb: Int,
             isDarkTheme: Boolean,
+            themeRampCss: String,
             onOpenPanel: (handle: String, title: String) -> Unit,
         ): VsixSession {
             val appContext = context.applicationContext
@@ -910,7 +939,7 @@ internal class VsixSession private constructor(
                 context = appContext,
                 backgroundArgb = backgroundArgb,
                 onOpenPanel = onOpenPanel,
-            )
+            ).also { it.themeRampCss = themeRampCss }
             scope.launch { session.start(apiRequest, isDarkTheme) }
             return session
         }
@@ -1029,6 +1058,7 @@ internal object VsixViewHolder {
         apiRequest: suspend (envelopeJson: String) -> String,
         backgroundArgb: Int,
         isDarkTheme: Boolean,
+        themeRampCss: String,
         onOpenPanel: (handle: String, title: String) -> Unit,
     ): VsixSession {
         sessions[extension.id]?.let { existing ->
@@ -1045,6 +1075,7 @@ internal object VsixViewHolder {
             apiRequest = apiRequest,
             backgroundArgb = backgroundArgb,
             isDarkTheme = isDarkTheme,
+            themeRampCss = themeRampCss,
             onOpenPanel = onOpenPanel,
         ).also { sessions[extension.id] = it }
     }
@@ -1067,8 +1098,11 @@ internal fun VsixExtensionView(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val backgroundArgb = MaterialTheme.colorScheme.background.toArgb()
-    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val colorScheme = MaterialTheme.colorScheme
+    val semantic = JCodeTheme.semanticColors
+    val backgroundArgb = colorScheme.background.toArgb()
+    val isDarkTheme = colorScheme.background.luminance() < 0.5f
+    val themeRampCss = remember(colorScheme, semantic) { vsixThemeRampCss(colorScheme, semantic) }
     val session = remember(extension.id, extension.version) {
         VsixViewHolder.getOrStart(
             context = context,
@@ -1077,8 +1111,14 @@ internal fun VsixExtensionView(
             apiRequest = onApiRequest,
             backgroundArgb = backgroundArgb,
             isDarkTheme = isDarkTheme,
+            themeRampCss = themeRampCss,
             onOpenPanel = onOpenPanel,
         )
+    }
+    // Follow the theme while the extension is on screen. The session outlives this composable, so a
+    // switch made elsewhere is picked up here rather than at the next start.
+    LaunchedEffect(session, themeRampCss, backgroundArgb, isDarkTheme) {
+        session.applyTheme(themeRampCss, backgroundArgb, isDarkTheme)
     }
 
     session.failure?.let {
@@ -1490,5 +1530,113 @@ internal fun extensionThemeJs(
         "--jcode-warning" to hex(semantic.warning),
     )
     val sets = vars.joinToString("") { (k, v) -> "r.setProperty('$k','$v');" }
+    return "(function(){try{var r=document.documentElement.style;$sets}catch(e){}})()"
+}
+
+/**
+ * The `--jc-*` ramp the `--vscode-*` palette resolves through, taken from the theme now on screen.
+ *
+ * A VS Code webview is handed its host editor's colours; JCode's are whichever bundle the user
+ * picked, so an imported extension is drawn in that rather than in one hard-coded palette. Only the
+ * ramp is emitted — every VS Code token is expressed against it in `webview-theme.css`, so ~20
+ * colours here decide all 286.
+ *
+ * Derived from the roles a theme bundle actually sets (background/surface/surfaceVariant and their
+ * `on-` pairs, primary, and the semantic three). The bundles leave `outline` and the
+ * `surfaceContainer*` roles unset, so those come back as Material's own greys rather than anything
+ * belonging to the theme — steps between the roles that ARE set are mixed here instead.
+ */
+internal fun vsixThemeRampCss(
+    colorScheme: androidx.compose.material3.ColorScheme,
+    semantic: dev.jcode.design.JCodeSemanticColors,
+): String {
+    val bg = colorScheme.background
+    val fg = colorScheme.onBackground
+    val variant = colorScheme.surfaceVariant
+    val muted = colorScheme.onSurfaceVariant
+
+    fun hex(c: Color): String = String.format("#%06X", 0xFFFFFF and c.toArgb())
+    fun mix(a: Color, b: Color, amount: Float) = Color(
+        red = a.red + (b.red - a.red) * amount,
+        green = a.green + (b.green - a.green) * amount,
+        blue = a.blue + (b.blue - a.blue) * amount,
+    )
+    fun rgba(c: Color, alpha: String) =
+        "rgba(${(c.red * 255).toInt()},${(c.green * 255).toInt()},${(c.blue * 255).toInt()},$alpha)"
+
+    val ramp = listOf(
+        // Surfaces. `surface` is the bundles' second plane — darker than the canvas on a dark theme
+        // and lighter on a light one — which is the role a sidebar wants either way.
+        "bg" to hex(bg),
+        "bg-deep" to hex(colorScheme.surface),
+        "bg-raised" to hex(mix(bg, variant, 0.5f)),
+        "surface" to hex(variant),
+        "surface-hi" to hex(mix(variant, fg, 0.10f)),
+        "border" to hex(mix(variant, fg, 0.12f)),
+        "border-hi" to hex(mix(variant, fg, 0.30f)),
+        // Text.
+        "fg" to hex(fg),
+        "fg-muted" to hex(muted),
+        "fg-dim" to hex(mix(muted, bg, 0.35f)),
+        // Accent. `onPrimary` matters more than it looks: Codex paints its primary button's label
+        // with it, so a wrong value here is an unreadable button rather than an off shade.
+        "accent" to hex(colorScheme.primary),
+        "accent-hi" to hex(mix(colorScheme.primary, fg, 0.15f)),
+        "on-accent" to hex(colorScheme.onPrimary),
+        "link" to hex(colorScheme.primary),
+        "link-hi" to hex(mix(colorScheme.primary, fg, 0.25f)),
+        // Status.
+        "error" to hex(colorScheme.error),
+        "warn" to hex(semantic.warning),
+        "info" to hex(semantic.info),
+        "ok" to hex(semantic.success),
+        "purple" to hex(colorScheme.tertiary),
+        "orange" to hex(mix(semantic.warning, colorScheme.error, 0.35f)),
+        "cyan" to hex(semantic.info),
+        // Overlays. Mixed from the foreground rather than fixed to white, so a wash still darkens
+        // rather than disappears when the theme is a light one.
+        "shadow" to rgba(Color.Black, ".36"),
+        "wash" to rgba(fg, ".05"),
+        "wash-2" to rgba(fg, ".09"),
+        "wash-3" to rgba(fg, ".06"),
+        "wash-faint" to rgba(fg, ".03"),
+        "guide" to hex(mix(bg, fg, 0.10f)),
+        "guide-hi" to hex(mix(bg, fg, 0.18f)),
+        "accent-faint" to rgba(colorScheme.primary, ".12"),
+        "accent-soft" to rgba(colorScheme.primary, ".16"),
+        "accent-mid" to rgba(colorScheme.primary, ".18"),
+        "accent-strong" to rgba(colorScheme.primary, ".20"),
+        "accent-select" to rgba(colorScheme.primary, ".32"),
+        "accent-bracket" to rgba(colorScheme.primary, ".22"),
+        "accent-active" to rgba(colorScheme.primary, ".28"),
+        "ok-soft" to rgba(semantic.success, ".18"),
+        "ok-faint" to rgba(semantic.success, ".10"),
+        "ok-gutter" to rgba(semantic.success, ".14"),
+        "ok-mid" to rgba(semantic.success, ".16"),
+        "error-soft" to rgba(colorScheme.error, ".20"),
+        "error-faint" to rgba(colorScheme.error, ".11"),
+        "error-gutter" to rgba(colorScheme.error, ".15"),
+        "warn-soft" to rgba(semantic.warning, ".42"),
+        "warn-faint" to rgba(semantic.warning, ".22"),
+        "scroll" to rgba(muted, ".28"),
+        "scroll-hi" to rgba(muted, ".42"),
+        "scroll-active" to rgba(muted, ".56"),
+        "error-bg" to hex(mix(bg, colorScheme.error, 0.18f)),
+        "warn-bg" to hex(mix(bg, semantic.warning, 0.18f)),
+        "info-bg" to hex(mix(bg, semantic.info, 0.18f)),
+        "separator" to rgba(colorScheme.onPrimary, ".28"),
+        "preformat" to hex(colorScheme.tertiary),
+    )
+    return ramp.joinToString(separator = "", prefix = ":root{", postfix = "}") { (k, v) -> "--jc-$k:$v;" }
+}
+
+/** The same ramp applied to a page already on screen, so a theme switch does not need a reload. */
+internal fun vsixThemeRampJs(rampCss: String): String {
+    val declarations = rampCss.substringAfter('{').substringBeforeLast('}')
+    val sets = declarations.split(';').filter { it.isNotBlank() }.joinToString("") {
+        val name = it.substringBefore(':').trim()
+        val value = it.substringAfter(':').trim()
+        "r.setProperty('$name','$value');"
+    }
     return "(function(){try{var r=document.documentElement.style;$sets}catch(e){}})()"
 }
