@@ -565,13 +565,14 @@ fun ManagerDetailScreen(
                     val switchable = canUseVersion && versionInstalled && selectedVersion != activeInstalled
                     if (switchable) {
                         CompactFilledButton(
-                            text = "Use " + shortVersionLabel(selectedVersion),
+                            text = "Use",
                             onClick = { onUseVersion(selectedVersion) },
                             enabled = actionsEnabled && !versionsLoading,
                             modifier = Modifier.weight(1f, fill = false),
                         )
                     }
-                    val reinstallLabel = (if (versionInstalled) "Reinstall " else "Install ") + shortVersionLabel(selectedVersion)
+                    // Unversioned: the picker directly above already names what these act on.
+                    val reinstallLabel = if (versionInstalled) "Reinstall" else "Install"
                     if (switchable) {
                         CompactOutlinedButton(
                             text = reinstallLabel,
@@ -591,7 +592,7 @@ fun ManagerDetailScreen(
                     // Named with its version so it cannot be read as the whole-toolchain Uninstall.
                     if (versionInstalled && multiVersion) {
                         CompactOutlinedButton(
-                            text = "Remove " + shortVersionLabel(selectedVersion),
+                            text = "Remove",
                             onClick = { onUninstallVersion(selectedVersion) },
                             enabled = actionsEnabled && !versionsLoading,
                             modifier = Modifier.weight(1f, fill = false),
@@ -797,6 +798,3 @@ private fun VersionStateLabel(version: String, installedVersions: List<String>, 
 
 private fun versionLabel(version: String, latest: String?): String =
     if (latest != null && version == latest) "$version · latest" else version
-
-private fun shortVersionLabel(version: String): String =
-    if (version.length > 14) version.take(13) + "…" else version
