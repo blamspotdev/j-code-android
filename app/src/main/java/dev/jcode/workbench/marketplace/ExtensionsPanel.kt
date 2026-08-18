@@ -3,7 +3,13 @@ package dev.jcode.workbench.marketplace
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -583,12 +589,29 @@ internal fun ExtensionPermissionsPage(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text(
-            text = "Each extension's own settings plus its permissions. Activation controls when an " +
-                "extension turns on; Manual disables it.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Extension settings",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (installed.isNotEmpty()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(20.dp),
+                ) {
+                    Text(
+                        text = "${installed.size} installed",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 2.dp),
+                    )
+                }
+            }
+        }
         if (installed.isEmpty()) {
             Text(
                 text = "No extensions installed yet.",
@@ -601,42 +624,115 @@ internal fun ExtensionPermissionsPage(
                 val exts = byType[type]?.sortedBy { it.name.lowercase() }.orEmpty()
                 if (exts.isEmpty()) return@forEach
                 ManagerGroupHeader(extensionTypeLabel(type))
-                exts.forEach { ext ->
-                    ManagerSectionCard(
-                        title = ext.name,
-                        description = authorLabel(ext.primaryAuthor, ext.otherAuthors),
-                        collapsible = true,
-                        defaultExpanded = false,
-                        leading = {
-                            ExtensionIcon(
-                                type = ext.type,
-                                name = ext.name,
-                                iconFile = ext.iconFile,
-                                size = 32.dp,
-                            )
-                        },
-                    ) {
-                        ExtensionSettingsControls(extensionId = ext.id)
-                        if (ext.type == ExtensionType.Scm && ext.hasWebUi) {
-                            Text(
-                                "Set up your Git identity (name/email) and authentication for this device.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            FilledTonalButton(onClick = { onOpenConfig(ext.id) }, modifier = Modifier.fillMaxWidth()) {
-                                Text("Configure Git…")
-                            }
+                exts.forEach { ext -> ExtensionSettingsCard(ext = ext, onOpenConfig = onOpenConfig) }
+            }
+        }
+    }
+}
+
+/**
+ * One extension on the Extension Settings page: a defined card with its icon, name, a metadata line
+ * (description · version · VSIX), and its activation-status pill; expands to its settings and
+ * permissions.
+ */
+@Composable
+private fun ExtensionSettingsCard(
+    ext: InstalledExtension,
+    onOpenConfig: (String) -> Unit,
+) {
+    var expanded by rememberSaveable("ext-settings-${ext.id}") { mutableStateOf(false) }
+    val mode = LocalExtensionActivation.current.modeFor(ext.id)
+    val subtitle = remember(ext) {
+        buildList {
+            ext.description.takeIf { it.isNotBlank() }?.let { add(it) }
+            ext.version?.takeIf { it.isNotBlank() }?.let { add("v$it") }
+            if (ext.isVsix) add("VSIX")
+        }.joinToString("  ·  ")
+    }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.16f),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(11.dp),
+            ) {
+                ExtensionIcon(type = ext.type, name = ext.name, iconFile = ext.iconFile, size = 38.dp)
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    Text(
+                        text = ext.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (subtitle.isNotBlank()) {
+                        Text(
+                            text = subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                ActivationPill(mode)
+                Icon(
+                    imageVector = jcIcon(if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown),
+                    contentDescription = if (expanded) "Collapse ${ext.name}" else "Expand ${ext.name}",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            AnimatedVisibility(visible = expanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                    ExtensionSettingsControls(extensionId = ext.id)
+                    if (ext.type == ExtensionType.Scm && ext.hasWebUi) {
+                        Text(
+                            "Set up your Git identity (name/email) and authentication for this device.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        FilledTonalButton(onClick = { onOpenConfig(ext.id) }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Configure Git…")
                         }
-                        ActivationSelector(extensionId = ext.id)
-                        if (ext.apiCapabilities.isNotEmpty()) {
-                            CapabilityToggles(extensionId = ext.id, capabilities = ext.apiCapabilities)
-                        }
-                        if (ext.hasWebUi) {
-                            KeepAliveToggle(extensionId = ext.id)
-                        }
+                    }
+                    ActivationSelector(extensionId = ext.id)
+                    if (ext.apiCapabilities.isNotEmpty()) {
+                        CapabilityToggles(extensionId = ext.id, capabilities = ext.apiCapabilities)
+                    }
+                    if (ext.hasWebUi) {
+                        KeepAliveToggle(extensionId = ext.id)
                     }
                 }
             }
+        }
+    }
+}
+
+/** The extension's activation mode as a status pill — the collapsed card's at-a-glance on/off signal. */
+@Composable
+private fun ActivationPill(mode: ExtensionActivation) {
+    val (label, color) = when (mode) {
+        ExtensionActivation.AutoStart -> "Auto-start" to Color(0xFF63C088)
+        ExtensionActivation.OnDemand -> "On-demand" to MaterialTheme.colorScheme.primary
+        ExtensionActivation.Manual -> "Manual" to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(20.dp)) {
+        Row(
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(color))
+            Text(text = label, style = MaterialTheme.typography.labelSmall, color = color, maxLines = 1)
         }
     }
 }
