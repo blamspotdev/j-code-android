@@ -323,10 +323,8 @@ data class InstalledExtension(
     val nativeClass: String? = null,
     /** Extension-API version [nativeEntry] was built against; must equal JCode's `JCODE_EXT_ABI`. */
     val nativeAbi: Int = 0,
-    /** File extensions this extension's native UI claims, lower-case and dotless (e.g. "xml"). */
-    val nativeFileTypes: List<String> = emptyList(),
-    /** Path fragment a claimed file must contain, so a layout XML is claimed and a manifest is not. */
-    val nativePathContains: String? = null,
+    /** What this extension's native UI will draw. Any rule matching is enough. */
+    val nativeClaims: List<NativeClaim> = emptyList(),
     /** Lowest JCode extension-API version this extension needs (0 = legacy exec-only bridge). */
     val apiMinVersion: Int = 0,
     /** Capability families this extension declares it uses (e.g. "exec", "fs", "workbench"). */
@@ -367,10 +365,45 @@ fun InstalledExtension.languageFor(fileName: String): LanguagePack? =
  */
 fun InstalledExtension.claimsNatively(file: File): Boolean {
     if (nativeEntry == null || nativeClass == null) return false
-    if (file.extension.lowercase() !in nativeFileTypes) return false
-    val fragment = nativePathContains ?: return true
-    return file.path.replace(File.separatorChar, '/').contains(fragment)
+    return nativeClaims.any { it.matches(file) }
 }
+
+/**
+ * One rule for a file a native extension will draw.
+ *
+ * A file type alone is far too broad: a layout designer wants `res/layout/…` and would be actively
+ * wrong on `AndroidManifest.xml`. Where a *path* cannot separate them — a Kotlin file holding
+ * composable UI looks exactly like one that does not — [contains] asks the file itself, which is the
+ * only thing that actually knows.
+ */
+data class NativeClaim(
+    /** Lower-case, dotless file extensions (e.g. "xml"). Empty matches any extension. */
+    val fileTypes: List<String> = emptyList(),
+    /** Path fragment the file must contain, with forward slashes. */
+    val pathContains: String? = null,
+    /** Text the file must contain. Read from the head of the file, never the whole of it. */
+    val contains: String? = null,
+) {
+    fun matches(file: File): Boolean {
+        if (fileTypes.isNotEmpty() && file.extension.lowercase() !in fileTypes) return false
+        pathContains?.let {
+            if (!file.path.replace(File.separatorChar, '/').contains(it)) return false
+        }
+        val needle = contains ?: return true
+        // Bounded, because this runs when a tab is opened and the file could be anything. A
+        // declaration that decides whether a file is UI is at the top of it or is not there.
+        return runCatching {
+            file.takeIf { it.isFile && it.length() > 0 }
+                ?.inputStream()?.use { stream ->
+                    val buffer = ByteArray(CLAIM_HEAD_BYTES)
+                    val read = stream.read(buffer)
+                    read > 0 && String(buffer, 0, read).contains(needle)
+                } ?: false
+        }.getOrDefault(false)
+    }
+}
+
+private const val CLAIM_HEAD_BYTES = 64 * 1024
 
 /** True if this extension ships a web-frontend ("Manage" / DB-manager) UI that resolves on disk. */
 /** True when the extension has a UI to show. A `.vsix` builds its own at runtime, so it has one

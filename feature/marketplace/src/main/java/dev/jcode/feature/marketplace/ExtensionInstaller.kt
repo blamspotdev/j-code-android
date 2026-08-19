@@ -418,10 +418,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             nativeEntry = nativeEntry(dir),
             nativeClass = nativeHeader(dir).str("class"),
             nativeAbi = (nativeHeader(dir)["abi"] as? Number)?.toInt() ?: 0,
-            nativeFileTypes = (nativeHeader(dir)["fileTypes"] as? List<*>)
-                .orEmpty().mapNotNull { it?.toString()?.trim()?.removePrefix(".")?.lowercase() }
-                .filter { it.isNotEmpty() },
-            nativePathContains = nativeHeader(dir).str("pathContains")?.takeIf { it.isNotBlank() },
+            nativeClaims = parseNativeClaims(nativeHeader(dir)),
             apiMinVersion = (map["api"] as? Map<*, *>)?.toStringKeyMap()?.str("minApiVersion")?.toIntOrNull() ?: 0,
             apiCapabilities = (map["api"] as? Map<*, *>)?.toStringKeyMap()?.strList("capabilities") ?: emptyList(),
             settings = settings,
@@ -468,6 +465,26 @@ class ExtensionInstaller internal constructor(context: Context) {
 
     // The `entry.native` block, or empty. Read as a map so a package that declares only `entry.ui`
     // costs nothing and cannot half-declare a native entry.
+    // `claims:` is a list because one designer can draw more than one kind of file, and the rules
+    // for each differ: an Android layout is decided by its directory, a composable by its contents.
+    private fun parseNativeClaims(header: Map<String, Any?>): List<NativeClaim> {
+        val listed = (header["claims"] as? List<*>).orEmpty().mapNotNull { entry ->
+            (entry as? Map<*, *>)?.toStringKeyMap()?.let { claim(it) }
+        }
+        if (listed.isNotEmpty()) return listed
+        return claim(header)?.let { listOf(it) }.orEmpty()
+    }
+
+    private fun claim(map: Map<String, Any?>): NativeClaim? {
+        val types = (map["fileTypes"] as? List<*>)
+            .orEmpty().mapNotNull { it?.toString()?.trim()?.removePrefix(".")?.lowercase() }
+            .filter { it.isNotEmpty() }
+        val path = map.str("pathContains")?.takeIf { it.isNotBlank() }
+        val contains = map.str("contains")?.takeIf { it.isNotBlank() }
+        if (types.isEmpty() && path == null && contains == null) return null
+        return NativeClaim(types, path, contains)
+    }
+
     private fun nativeHeader(dir: File): Map<String, Any?> =
         ((headerMap(dir)["entry"] as? Map<*, *>)?.toStringKeyMap()?.get("native") as? Map<*, *>)
             ?.toStringKeyMap().orEmpty()
