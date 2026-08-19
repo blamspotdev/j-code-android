@@ -242,6 +242,26 @@ class EditorState(
         true
     }
 
+    /**
+     * Replace the whole buffer as an **edit**, not as a load.
+     *
+     * [replaceAll] is how a file gets *into* a buffer — opened, reverted, re-read after an external
+     * change — so it leaves the buffer clean and throws the undo history away. A whole-buffer
+     * rewrite made by a tool inside the app is none of those things: the layout designer changing a
+     * layout is exactly as unsaved as typing the same characters would be, and has to be as
+     * undoable. Sharing [replaceAll] for it silently un-marks the tab and drops the user's history.
+     */
+    suspend fun replaceAllAsEdit(text: String) = withContext(scope.coroutineContext) {
+        if (readOnly) return@withContext
+        val oldLength = _snapshot.value.byteLength
+        val caretBefore = _carets.value.firstOrNull()?.head ?: 0
+        applyEdit(EditTx.replace(0, oldLength, text))
+        // The caret was an offset into the old text and the new text may be shorter.
+        val caret = caretBefore.coerceIn(0, _snapshot.value.byteLength)
+        _carets.value = listOf(Caret(caret, caret))
+        _events.tryEmit(EditorEvent.SelectionChanged)
+    }
+
     /** Set the caret selection. */
     suspend fun setSelection(carets: List<Caret>) = withContext(scope.coroutineContext) {
         _carets.value = carets.sortedBy { it.head }

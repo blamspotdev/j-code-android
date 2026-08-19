@@ -5330,9 +5330,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             return
         }
-        // No explicit dirty marking: trackDirty already mirrors the buffer's own dirty flag onto the
-        // tab, so a designer edit marks the tab exactly the way a keystroke does.
-        viewModelScope.launch { state.replaceAll(text) }
+        // As an edit, not a load. `replaceAll` is the open/revert path: it leaves the buffer clean
+        // and clears undo, so routing a designer edit through it left the tab showing no unsaved
+        // marker for a change that very much was unsaved — and threw away the editor's history.
+        viewModelScope.launch { state.replaceAllAsEdit(text) }
     }
 
     /** Flip a file tab between the source editor and its rendered preview (Markdown). */
