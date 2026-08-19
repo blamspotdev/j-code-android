@@ -686,7 +686,7 @@ internal class VsixSession private constructor(
                 extension.id,
                 "[${params.optString("name")}] ${params.optString("text").trimEnd()}",
             )
-            "output/replace", "output/clear", "output/show", "output/hide" -> Unit
+            "output/replace", "output/clear", "output/show" -> Unit
 
             // A command JCode has no built-in for. `setContext` is the common one and is genuinely
             // nothing to do here — JCode has no when-clause context to set — so it is answered rather
@@ -1608,7 +1608,6 @@ internal fun vsixThemeRampCss(
         "accent-strong" to rgba(colorScheme.primary, ".20"),
         "accent-select" to rgba(colorScheme.primary, ".32"),
         "accent-bracket" to rgba(colorScheme.primary, ".22"),
-        "accent-active" to rgba(colorScheme.primary, ".28"),
         "ok-soft" to rgba(semantic.success, ".18"),
         "ok-faint" to rgba(semantic.success, ".10"),
         "ok-gutter" to rgba(semantic.success, ".14"),

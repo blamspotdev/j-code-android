@@ -26,8 +26,8 @@ object VsixTerminals {
         data class Dispose(override val id: String) : Request
     }
 
-    /** Pending requests, in order. Drained by the workbench; never read for state. */
-    val pending = mutableStateListOf<Request>()
+    /** Pending requests, in order. Handed over by [drain]; never read for state. */
+    private val pending = mutableStateListOf<Request>()
 
     /** Bumped on each request so a snapshot observer sees one even if the list is drained between. */
     val signal = mutableStateOf(0)

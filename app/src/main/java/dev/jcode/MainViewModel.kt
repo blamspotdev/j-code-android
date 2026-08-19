@@ -435,7 +435,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         appContext.contentResolver.openInputStream(uri)?.use { input ->
                             tmp.outputStream().use { input.copyTo(it) }
                         } ?: error("cannot open the selected file")
-                        extensionInstaller.installLocalVsix(tmp, BuildConfig.VERSION_NAME).getOrThrow()
+                        extensionInstaller.installLocalVsix(tmp).getOrThrow()
                     } finally {
                         tmp.delete()
                     }
@@ -2350,7 +2350,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (release == null) { _messages.tryEmit("No .vsix release found for this source"); return@launch }
             _marketplaceBusy.value = true
             try {
-                extensionInstaller.installVsixFromUrl(release.vsixAssetUrl, BuildConfig.VERSION_NAME)
+                extensionInstaller.installVsixFromUrl(release.vsixAssetUrl)
                     .onSuccess { result ->
                         recordExtensionSource(result.extension.id, sourceUrl)
                         _messages.tryEmit("Installed ${result.extension.name} ${result.manifest.version}")
@@ -2904,12 +2904,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val apkUrl = _updateInfo.value?.apkUrl ?: return
         val appContext = context.applicationContext
         viewModelScope.launch {
-            AppUpdateInstaller.downloadAndInstall(appContext, apkUrl) { onProgress ->
+            AppUpdateInstaller.downloadAndInstall(appContext, apkUrl) {
                 try {
-                    prepareMigrationForUpdate { detail ->
-                        onProgress(detail)
-                        _envBackupStatus.value = detail
-                    }
+                    prepareMigrationForUpdate { detail -> _envBackupStatus.value = detail }
                 } finally {
                     _envBackupStatus.value = null
                 }

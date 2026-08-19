@@ -48,7 +48,6 @@
   --jc-accent-strong: rgba(61,90,254,.20);
   --jc-accent-select: rgba(61,90,254,.32);
   --jc-accent-bracket: rgba(61,90,254,.22);
-  --jc-accent-active: rgba(61,90,254,.28);
   --jc-ok-soft: rgba(124,196,144,.18);
   --jc-ok-faint: rgba(124,196,144,.10);
   --jc-ok-gutter: rgba(124,196,144,.14);
@@ -236,8 +235,11 @@
   --vscode-input-placeholderForeground: var(--jc-fg-muted);
   --vscode-inputOption-activeBorder: var(--jc-accent);
   --vscode-inputOption-hoverBackground: var(--jc-surface-hi);
+  --vscode-inputValidation-errorBackground: var(--jc-error-bg);
   --vscode-inputValidation-errorBorder: var(--jc-error);
+  --vscode-inputValidation-infoBackground: var(--jc-info-bg);
   --vscode-inputValidation-infoBorder: var(--jc-info);
+  --vscode-inputValidation-warningBackground: var(--jc-warn-bg);
   --vscode-inputValidation-warningBorder: var(--jc-warn);
   --vscode-keybindingLabel-background: var(--jc-surface);
   --vscode-keybindingLabel-border: var(--jc-border);

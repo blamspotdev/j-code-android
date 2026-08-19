@@ -108,7 +108,7 @@ class ExtensionInstaller internal constructor(context: Context) {
                 // whole byte range anyway. A .vsix can be hundreds of megabytes, so it is recognised
                 // from a peek at the file and then installed by streaming.
                 if (looksLikeVsixFile(file)) {
-                    val result = installFromVsix(file, appVersion)
+                    val result = installFromVsix(file)
                     SideloadOutcome.Vsix(result.extension, result.manifest, result.compatibility)
                 } else {
                     val bytes = file.readBytes()
@@ -141,9 +141,9 @@ class ExtensionInstaller internal constructor(context: Context) {
      * A `.vsix` is unsigned third-party code, so it installs on the same footing as an unsigned
      * sideload: marked dev, and never mistaken for a verified marketplace package.
      */
-    suspend fun installLocalVsix(file: File, appVersion: String): Result<VsixInstallResult> =
+    suspend fun installLocalVsix(file: File): Result<VsixInstallResult> =
         withContext(Dispatchers.IO) {
-            runCatching { installFromVsix(file, appVersion) }
+            runCatching { installFromVsix(file) }
         }
 
     /**
@@ -152,7 +152,7 @@ class ExtensionInstaller internal constructor(context: Context) {
      * accepts any absolute URL and [installFromVsix] is origin-agnostic, so this just bridges the
      * two; nothing here is tied to the marketplace [BASE_URL].
      */
-    suspend fun installVsixFromUrl(url: String, appVersion: String): Result<VsixInstallResult> =
+    suspend fun installVsixFromUrl(url: String): Result<VsixInstallResult> =
         withContext(Dispatchers.IO) {
             runCatching {
                 // Staged through a file for the same reason a picked one is: a released .vsix is
@@ -162,7 +162,7 @@ class ExtensionInstaller internal constructor(context: Context) {
                     openStream(url).use { input ->
                         staged.outputStream().use { output -> input.copyTo(output, DOWNLOAD_BUFFER) }
                     }
-                    installFromVsix(staged, appVersion)
+                    installFromVsix(staged)
                 } finally {
                     staged.delete()
                 }
@@ -201,7 +201,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             .getOrDefault(false)
     }
 
-    private fun installFromVsix(file: File, appVersion: String): VsixInstallResult =
+    private fun installFromVsix(file: File): VsixInstallResult =
         VsixArchive.open(file).use { archive ->
             val manifest = VsixPackage.parse(archive.packageJson(), archive.nlsJson())
             val compatibility = VsixPackage.compatibilityOf(manifest)

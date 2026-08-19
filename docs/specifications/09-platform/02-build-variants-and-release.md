@@ -244,7 +244,7 @@ When they differ, the sequence between download and install is:
 | Phase | State | What happens |
 |---|---|---|
 | 1 | `Downloading` | as usual |
-| 2 | `PreparingMigration(detail)` | `MainViewModel.prepareMigrationForUpdate` writes a bundle to shared storage |
+| 2 | `PreparingMigration` | `MainViewModel.prepareMigrationForUpdate` writes a bundle to shared storage, reporting what it is packing through the environment status the workbench already shows |
 | 3 | `Installing` | the APK goes to `PackageInstaller` |
 
 Step 2 is its own state because it is the slow one: a rootfs is measured in gigabytes, so an update

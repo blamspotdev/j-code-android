@@ -40,7 +40,6 @@ object MigrationBundle {
         /** The applicationId that wrote it, so an import can say where it came from. */
         val sourcePackage: String,
         val versionName: String,
-        val createdAt: Long,
         val parts: Set<String>,
     ) {
         fun file(name: String): File? = File(dir, name).takeIf { it.isFile && name in parts }
@@ -63,7 +62,6 @@ object MigrationBundle {
             dir = dir,
             sourcePackage = source,
             versionName = json.optString("version"),
-            createdAt = json.optLong("createdAt"),
             parts = (0 until parts.length()).mapNotNull { parts.optString(it).takeIf { p -> p.isNotBlank() } }.toSet(),
         )
     }

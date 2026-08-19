@@ -48,9 +48,10 @@ object AppUpdateInstaller {
          *
          * Its own phase because it is the slow one — the Linux environment is measured in gigabytes,
          * so an update that would otherwise take seconds takes minutes, and a progress bar that said
-         * nothing during it would look like a hang.
+         * nothing during it would look like a hang. What it is currently copying is reported by
+         * whoever does the copying, which has somewhere to show it; this is only the phase.
          */
-        data class PreparingMigration(val detail: String) : State
+        data object PreparingMigration : State
         data object Installing : State
 
         /**
@@ -107,15 +108,15 @@ object AppUpdateInstaller {
     /**
      * Install [apkUrl], carrying this install's data across first when the update changes the package.
      *
-     * [prepareMigration] does that copy; it reports progress through the callback it is given and
-     * returns null on success or a reason on failure. It is passed in rather than called directly
-     * because the copy needs the distro service and the settings store, and this object is reachable
-     * from a broadcast receiver with nothing but a Context.
+     * [prepareMigration] does that copy, returning null on success or a reason on failure. It is
+     * passed in rather than called directly because the copy needs the distro service and the
+     * settings store, and this object is reachable from a broadcast receiver with nothing but a
+     * Context.
      */
     suspend fun downloadAndInstall(
         context: Context,
         apkUrl: String,
-        prepareMigration: (suspend (onProgress: (String) -> Unit) -> String?)? = null,
+        prepareMigration: (suspend () -> String?)? = null,
     ) {
         val app = context.applicationContext
         if (!canInstall(app)) {
@@ -134,8 +135,9 @@ object AppUpdateInstaller {
         // to shared storage first, because nothing can read it afterwards.
         val incoming = packageOf(app, apk)
         if (prepareMigration != null && incoming != null && incoming != app.packageName) {
+            _state.value = State.PreparingMigration
             val failure = try {
-                prepareMigration { detail -> _state.value = State.PreparingMigration(detail) }
+                prepareMigration()
             } catch (e: Exception) {
                 e.message ?: "the copy could not be completed"
             }
