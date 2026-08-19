@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Status** | Implemented — the client runs the catalogued servers and is wired to the editor (diagnostics, completions, go-to-definition, references, rename, formatting) |
-| **Modules** | `:core:lsp`, `:core:distro` (catalog + process spawn), `:feature:lsp-manager` (install UI), `:app` (`dev.jcode.lsp.LspController`) |
+| **Modules** | `:core:lsp`, `:core:distro` (catalog + process spawn), `:feature:lsp-manager` (install UI), `:app` (`dev.blamspot.jcode.lsp.LspController`) |
 | **Primary sources** | core/lsp/src/main/java/dev/jcode/core/lsp/LspSession.kt, core/lsp/src/main/java/dev/jcode/core/lsp/LspTransport.kt, core/lsp/src/main/java/dev/jcode/core/lsp/LspServerDescriptor.kt, core/lsp/src/main/java/dev/jcode/core/lsp/DiagnosticsBus.kt, app/src/main/java/dev/jcode/lsp/LspController.kt, core/distro/src/main/java/dev/jcode/core/distro/LspCatalogModels.kt |
 
 ---
@@ -107,7 +107,7 @@ data class LspServerDescriptor(
 )
 ```
 
-`BUILT_IN` is **derived** from `dev.jcode.core.distro.LspServerCatalog.BUILT_IN` rather than
+`BUILT_IN` is **derived** from `dev.blamspot.jcode.core.distro.LspServerCatalog.BUILT_IN` rather than
 duplicating it, "so the catalog never drifts". Lookup helpers: `findForLanguage(languageId)`,
 `findForExtension(extension)`, `findForFile(fileName)`.
 
@@ -232,7 +232,7 @@ data class WorkspaceEditResult(val editsByPath: Map<String, List<TextEditResult>
 
 `DiagnosticSeverity.fromLsp(value)` maps 1–4 and **defaults to `ERROR`** for anything else.
 
-> This `DiagnosticSeverity` is a different type from `dev.jcode.core.editor.decor.DiagnosticSeverity`,
+> This `DiagnosticSeverity` is a different type from `dev.blamspot.jcode.core.editor.decor.DiagnosticSeverity`,
 > which carries a colour instead of the LSP number. Conversion happens at the editor boundary.
 
 Positions in `TextEditResult` and `LocationResult` are LSP coordinates — 0-based line, UTF-16

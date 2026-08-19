@@ -50,7 +50,7 @@ Syntax colouring actually comes from `core/buffer/src/main/java/dev/jcode/core/b
 (with yaml-cpp), plus JNI bridges. `jni_editor_state.cpp` exports
 `Java_dev_jcode_core_editor_EditorState_*` and `Java_dev_jcode_core_editor_UndoManager_*` —
 targeting the **real** Kotlin classes — and `jni_config.cpp` backs
-`dev.jcode.native.core.ConfigServiceNative`.
+`dev.blamspot.jcode.native.core.ConfigServiceNative`.
 
 Nothing binds: `core/editor` and `core/config` declare **no `external fun` at all**. Only
 `CoreNativeModule.nativeIsAvailable` and the library's `JNI_OnLoad` infrastructure are live.
@@ -83,7 +83,7 @@ depending on `:core:editor-decor` is really depending on `:core:editor`.
 ### 3.1 Duplicate package leftovers
 
 `:core:vcs`, `:core:ctags`, `:core:state` and `:core:ext` each ship the **same** marker under two
-package names (`dev.jcode.<x>` and `dev.jcode.core.<x>`). Harmless, but the doubled file count is not
+package names (`dev.blamspot.jcode.<x>` and `dev.blamspot.jcode.core.<x>`). Harmless, but the doubled file count is not
 evidence of implementation.
 
 ---
@@ -108,7 +108,7 @@ Five `:feature:*` modules are marker objects; their working implementations are 
 
 ### 5.1 Editor ↔ language server
 
-Wired, via `dev.jcode.lsp.LspController` — diagnostics, completions, Go to Definition, Find
+Wired, via `dev.blamspot.jcode.lsp.LspController` — diagnostics, completions, Go to Definition, Find
 References, Rename Symbol and Format Document all reach a running server. See
 [LSP client](../04-language-services/01-lsp-client.md). What remains:
 

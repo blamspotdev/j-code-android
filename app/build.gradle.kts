@@ -86,7 +86,7 @@ val jcodeApplicationId: String =
         ?: "dev.blamspot.jcode"
 
 android {
-    namespace = "dev.jcode"
+    namespace = "dev.blamspot.jcode"
     compileSdk = 36
 
     defaultConfig {

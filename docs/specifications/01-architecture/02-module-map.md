@@ -39,7 +39,7 @@ worth knowing: the distro layer reads project configuration to resolve bind moun
 | | |
 |---|---|
 | Path | `app/` |
-| Namespace | `dev.jcode` |
+| Namespace | `dev.blamspot.jcode` |
 | Depends on | All 19 `:core:*`, all 12 `:feature:*`, all 11 `:native:*` |
 
 The integration layer. It also *contains* a large amount of feature implementation that the module
@@ -148,7 +148,7 @@ mechanism.
 - **Toolchains never ship in the APK.** Compilers, JDKs, LSPs and debug adapters install into the
   guest rootfs at runtime.
 - **Duplicate package leftovers.** `:core:vcs`, `:core:ctags`, `:core:state`, `:core:ext` each ship
-  the same marker under two package names (`dev.jcode.<x>` and `dev.jcode.core.<x>`). Harmless, but
+  the same marker under two package names (`dev.blamspot.jcode.<x>` and `dev.blamspot.jcode.core.<x>`). Harmless, but
   do not take the doubled file count as evidence of implementation.
 
 ---

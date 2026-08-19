@@ -4,5 +4,5 @@ plugins {
 }
 
 android {
-    namespace = "dev.jcode.nativeffi.tree.sitter"
+    namespace = "dev.blamspot.jcode.nativeffi.tree.sitter"
 }

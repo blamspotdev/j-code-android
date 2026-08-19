@@ -63,8 +63,9 @@ There are **no product flavors**. Three identities come from build types plus a 
 | `release` | `dev.blamspot.jcode` | JCode | `ic_launcher` |
 | `release -PjcodeIdSuffix=.beta` | `dev.blamspot.jcode.beta` | JCode (beta) | `ic_launcher_beta` (purple gradient) |
 
-All three install **side by side**. The `namespace` stays `dev.jcode` (the compile-time R and
-BuildConfig package), so no source reference breaks.
+All three install **side by side**. `namespace` (the compile-time R and BuildConfig package) is
+also `dev.blamspot.jcode`; the suffixes apply to `applicationId` only, so the three variants share one
+set of generated classes and differ only in identity on the device.
 
 Each identity gets its own private data — Linux rootfs, settings, sessions — because the package
 differs. Only the legacy shared `/storage/emulated/0/JCode` projects folder was common; post-migration
@@ -209,7 +210,7 @@ Nothing is lost; it just needs merging by hand, and the run summary says so.
 
 The two identities are two applications, so "is there an update?" is a different question for each,
 and `dev.blamspot.jcode.beta` can never be updated *into* `dev.blamspot.jcode`. `app/build.gradle.kts` derives
-`BuildConfig.UPDATE_CHANNEL` from the id suffix, and `dev.jcode.UpdateChecker` follows it:
+`BuildConfig.UPDATE_CHANNEL` from the id suffix, and `dev.blamspot.jcode.UpdateChecker` follows it:
 
 | Channel | Asks GitHub for | Offers |
 |---|---|---|
@@ -364,7 +365,7 @@ The root `detekt` task is currently a **bootstrap placeholder** registered in `b
 5. Keep `-Wl,-z,max-page-size=16384` and `-fvisibility=hidden` on every native target.
 6. Do not change the release signing key.
 7. No module may declare its own repository (`FAIL_ON_PROJECT_REPOS`).
-8. `namespace` stays `dev.jcode` regardless of `applicationId`.
+8. `namespace` is `dev.blamspot.jcode` and does not take the variant suffixes `applicationId` does.
 
 ---
 

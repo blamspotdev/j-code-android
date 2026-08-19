@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Status** | Implemented |
-| **Modules** | `:core:distro` (package `dev.jcode.core.distro.adb`), `:app` (`dev.jcode.adb`) |
+| **Modules** | `:core:distro` (package `dev.blamspot.jcode.core.distro.adb`), `:app` (`dev.blamspot.jcode.adb`) |
 | **Primary sources** | core/distro/src/main/java/dev/jcode/core/distro/adb/AdbWire.kt, AdbAuth.kt, AdbDaemon.kt, AdbHostClient.kt, AdbRelayServer.kt, AdbBackendDiscovery.kt, AdbBridge.kt, AdbBridgeLocator.kt, AdbModels.kt, app/src/main/java/dev/jcode/adb/VirtualDeviceAdbService.kt |
 | **Verified against** | device-verified on Android 13, 2026-08-11 |
 

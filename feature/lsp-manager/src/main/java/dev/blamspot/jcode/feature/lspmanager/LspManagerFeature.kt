@@ -1,0 +1,62 @@
+package dev.blamspot.jcode.feature.lspmanager
+
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import dev.blamspot.jcode.core.distro.CatalogProgress
+import dev.blamspot.jcode.core.distro.DistroEnvironmentState
+import dev.blamspot.jcode.core.distro.LspCatalogAction
+import dev.blamspot.jcode.core.distro.LspCatalogEntry
+import dev.blamspot.jcode.core.distro.LspCatalogState
+import dev.blamspot.jcode.design.ManagerDetailScreen
+import dev.blamspot.jcode.design.ManagerItemStatus
+
+/**
+ * Language-server detail page (install/verify/remove one server). Browsing lives in the merged
+ * Toolchains panel; this feature keeps only the full-width in-editor page.
+ */
+object LspManagerFeature {
+
+    /** Full-width detail page for one language server, opened as an in-editor page tab. */
+    @Composable
+    fun DetailPage(
+        entry: LspCatalogEntry,
+        state: LspCatalogState,
+        environmentState: DistroEnvironmentState,
+        progress: CatalogProgress? = null,
+        onInstall: (String) -> Unit,
+        onUpdate: (String) -> Unit,
+        onUninstall: (String) -> Unit,
+        modifier: Modifier = Modifier,
+    ) {
+        val environmentReady = environmentState.distroInstalled == true && environmentState.jcodeUserReady == true
+        val running = state.runningEntryId == entry.id
+        ManagerDetailScreen(
+            title = entry.name,
+            subtitle = entry.category,
+            description = entry.description,
+            status = statusOf(entry.id, state),
+            busy = state.checking || running,
+            busyLabel = when (state.runningAction.takeIf { running }) {
+                LspCatalogAction.Install -> "Installing…"
+                LspCatalogAction.Uninstall -> "Removing…"
+                null -> "Checking…"
+            },
+            // A status sweep across the whole catalog is background work — it must not freeze the
+            // page's actions. Only an action actually running does that, and the service serializes
+            // on its own lock, so anything started during a check simply queues behind it.
+            actionsEnabled = environmentReady && state.runningEntryId == null,
+            onInstall = { onInstall(entry.id) },
+            onUpdate = { onUpdate(entry.id) },
+            onUninstall = { onUninstall(entry.id) },
+            progressPercent = progress?.percent.takeIf { running },
+            progressLabel = progress?.label,
+            modifier = modifier,
+        )
+    }
+
+    private fun statusOf(id: String, state: LspCatalogState): ManagerItemStatus = when {
+        id in state.updatableEntryIds -> ManagerItemStatus.UpdateAvailable
+        id in state.installedEntryIds -> ManagerItemStatus.Installed
+        else -> ManagerItemStatus.NotInstalled
+    }
+}
