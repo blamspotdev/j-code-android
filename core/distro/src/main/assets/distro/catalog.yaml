@@ -652,9 +652,17 @@ entries:
       ARM=/opt/jcode-arm-tools
       DEB=/usr/lib/android-sdk/build-tools/debian
 
-      fresh() {
+      # Copy unless the target is already this exact binary. NOT a timestamp comparison, which is
+      # what this was and which had it backwards: the ARM tools keep the mtimes stored in their zip
+      # (2024), while sdkmanager stamps what it installs with the current time — so "source is newer"
+      # is false the moment build-tools is freshly downloaded, which is precisely when the patch
+      # matters. Google's x86_64 aapt2 then survived, and since the platform probe runs it, every
+      # platform was downloaded, judged unreadable and deleted: "No available Android platform can be
+      # read by this device's aapt2". `cmp` on a handful of 6 MB files is cheap enough to run before
+      # every build, which is the only reason the guard exists.
+      differs() {
         [ -e "$2" ] || return 0
-        [ "$1" -nt "$2" ]
+        ! cmp -s "$1" "$2"
       }
 
       # build-tools: prefer the fetched modern static tools; fall back to Debian's.
@@ -662,9 +670,9 @@ entries:
         [ -d "$BTDIR" ] || continue
         for t in aapt2 aapt zipalign aidl dexdump split-select aidl-cpp; do
           if [ -x "$ARM/$t" ]; then
-            if fresh "$ARM/$t" "$BTDIR$t"; then cp -f "$ARM/$t" "$BTDIR$t" && chmod 755 "$BTDIR$t"; fi
+            if differs "$ARM/$t" "$BTDIR$t"; then cp -f "$ARM/$t" "$BTDIR$t" && chmod 755 "$BTDIR$t"; fi
           elif [ -e "$DEB/$t" ]; then
-            if fresh "$DEB/$t" "$BTDIR$t"; then cp -f "$DEB/$t" "$BTDIR$t"; fi
+            if differs "$DEB/$t" "$BTDIR$t"; then cp -f "$DEB/$t" "$BTDIR$t"; fi
           fi
         done
         # Debian's aidl 29.0.3 cannot parse the annotations android-34+ framework.aidl files carry
@@ -700,7 +708,7 @@ entries:
       # adb: AGP invokes $ANDROID_HOME/platform-tools/adb by ABSOLUTE path, so a native adb earlier
       # on PATH does not save installDebug from "Exec format error".
       if [ -x /usr/bin/adb ] && [ -d "$ANDROID_HOME/platform-tools" ]; then
-        if fresh /usr/bin/adb "$ANDROID_HOME/platform-tools/adb"; then
+        if differs /usr/bin/adb "$ANDROID_HOME/platform-tools/adb"; then
           cp -f /usr/bin/adb "$ANDROID_HOME/platform-tools/adb"
         fi
       fi
@@ -796,9 +804,14 @@ entries:
       # Debian build — is given the benefit of the doubt and starts from the newest platform.
       AAPT2_VER=$("$NATIVE_AAPT2" version 2>&1 | sed -n 's/.*(aapt) \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1)
       # The version string cannot tell the two apart — the modern static build reports "2.19-eng"
-      # too — so the flag is whether the fetched tools are actually installed.
+      # too — so the flag is whether the fetched tools are actually installed. They are NOT
+      # unbounded: the static build is 2.19-eng.202505, and it reads 36.1 and below but not the 37.x
+      # tables Google began shipping after it was cut (measured on an Odin2, 2026-08-19: 34, 35, 36
+      # and 36.1 all link; 37.0 and 37.1 do not). Re-measure with `aapt2 link -I <platform>/android.jar`
+      # before raising it — the same number drives the version list's "Unsupported here" marks, and an
+      # over-optimistic ceiling makes the picker recommend a platform nothing here can build against.
       if [ -x /opt/jcode-arm-tools/aapt2 ]; then
-        CEILING=9999
+        CEILING=36
       else
         case "$AAPT2_VER" in
           2.19) CEILING=34 ;;
@@ -973,14 +986,19 @@ entries:
       [ -n "$G" ] && [ ! -x "/opt/gradle/gradle-$G/bin/gradle" ]
     # Every Android platform Google publishes that is worth building against here, newest first, each
     # marked with whether THIS device's aapt2 can actually read it — Google ships no arm64 aapt2, so
-    # we run Debian's, and above its ceiling a platform links nowhere (see the install script). They
-    # are still offered: the ceiling table is a shortcut, and the install probes for real before
-    # keeping anything. Runs without the catalog helpers (the versions fetch is a quiet exec).
+    # we run either the fetched static build or Debian's, and above that build's ceiling a platform
+    # links nowhere (see the install script for where each ceiling comes from). They are still
+    # offered: the ceiling table is a shortcut, and the install probes for real before keeping
+    # anything. Runs without the catalog helpers (the versions fetch is a quiet exec).
     versionsScript: |
       A=/usr/lib/android-sdk/build-tools/debian/aapt2
       CEILING=9999
-      # With the fetched modern ARM tools there is no ceiling; only the Debian-tools fallback has one.
-      if [ ! -x /opt/jcode-arm-tools/aapt2 ] && [ -x "$A" ]; then
+      # Both aapt2 builds have a ceiling; they differ in where it is. Keep this in step with the
+      # install script's copy — a version marked Recommended here and refused there is the worst of
+      # both, and that is exactly what an unbounded ceiling produced once 37.x shipped.
+      if [ -x /opt/jcode-arm-tools/aapt2 ]; then
+        CEILING=36
+      elif [ -x "$A" ]; then
         case "$("$A" version 2>&1 | sed -n 's/.*(aapt) \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1)" in
           2.19) CEILING=34 ;;
         esac
