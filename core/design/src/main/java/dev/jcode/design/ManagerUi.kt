@@ -1,9 +1,11 @@
 package dev.jcode.design
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -123,6 +125,13 @@ fun ManagerPanelHeader(
     onExtras: (() -> Unit)? = null,
     extrasIcon: JCodeIcon = JCodeIcon.MoreVert,
     extrasContentDescription: String = "More",
+    /**
+     * Problems this panel wants to report. A count rather than the text: the messages themselves go
+     * to the Issues pane, which is where the workbench already collects things that went wrong and
+     * has the room to show them. A banner in the panel pushed the list down instead.
+     */
+    noticeCount: Int = 0,
+    onNotice: (() -> Unit)? = null,
 ) {
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -152,6 +161,9 @@ fun ManagerPanelHeader(
                     contentDescription = manageContentDescription,
                     onClick = onManage,
                 )
+            }
+            if (noticeCount > 0 && onNotice != null) {
+                HeaderNoticeButton(count = noticeCount, onClick = onNotice)
             }
             HeaderIconButton(
                 icon = LocalIconBundle.current[JCodeIcon.Search],
@@ -226,6 +238,32 @@ fun ManagerFilterChip(
             color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
         )
+    }
+}
+
+/**
+ * The "!" that stands in for a notice banner. Drawn rather than taken from the icon bundle: it is a
+ * single glyph, and every bundle would otherwise have to carry a slot for it.
+ */
+@Composable
+private fun HeaderNoticeButton(count: Int, onClick: () -> Unit) {
+    val label = if (count == 1) "1 problem — show in Issues" else "$count problems — show in Issues"
+    JcTooltip(label) {
+        IconButton(onClick = onClick, modifier = Modifier.size(36.dp)) {
+            Box(
+                modifier = Modifier
+                    .size(18.dp)
+                    .background(MaterialTheme.colorScheme.error, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "!",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onError,
+                )
+            }
+        }
     }
 }
 

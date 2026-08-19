@@ -2053,6 +2053,17 @@ private fun JCodeShell(
     val rightPanelTab = (rightPanelSelection as? RightPanelSelection.Builtin)?.tab
     fun selectRightPanel(selection: RightPanelSelection) { rightPanelKey = selection.asKey() }
     fun selectRightPanelTab(tab: RightPanelTab) = selectRightPanel(RightPanelSelection.Builtin(tab))
+    // The Issues pane is this scope's, not that of the caller who built the bundle, so the reveal is
+    // attached here: a manager panel reports a failure by pointing at the pane instead of bannering
+    // it, and needs a way to bring the pane forward.
+    val panelActions = remember(managerActions) {
+        managerActions.copy(
+            onShowIssues = {
+                selectRightPanelTab(RightPanelTab.Problems)
+                rightSidebarVisible = true
+            },
+        )
+    }
     // Turning Developer options off must fully retire the Ext Dev tab — including the landscape
     // persistent sidebar, which renders the selection directly (no portrait clamp). Reset it so the
     // panel (and its auto-reload loop) stop composing everywhere.
@@ -3081,7 +3092,7 @@ private fun JCodeShell(
                 onOpenProjectConfig = onOpenProjectConfig,
                 onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                 onAutoSetup = onAutoSetup,
-                managerActions = managerActions,
+                managerActions = panelActions,
                 runActions = runActions,
                 runningProjectId = runningProjectId,
                 runningRunName = runningRunName,
@@ -3573,7 +3584,7 @@ private fun JCodeShell(
                             onOpenProjectConfig = onOpenProjectConfig,
                             onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                             onAutoSetup = onAutoSetup,
-                            managerActions = managerActions,
+                            managerActions = panelActions,
                             runActions = runActions,
                             runningProjectId = runningProjectId,
                             runningRunName = runningRunName,
@@ -3982,6 +3993,7 @@ private fun WorkspacePanel(
                         onOpenDebugDetail = managerActions.onOpenDebugEngineDetail,
                         modifier = Modifier.fillMaxSize(),
                         progress = LocalCatalogProgress.current,
+                        onShowIssues = managerActions.onShowIssues,
                     )
 
                     WorkbenchTool.DbManager -> DbManagerPanel(

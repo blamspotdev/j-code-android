@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +33,9 @@ import dev.jcode.design.ManagerListRow
 import dev.jcode.design.ManagerNoticeCard
 import dev.jcode.design.ManagerFilterChip
 import dev.jcode.design.ManagerPanelHeader
+
+/** How this panel names itself in the Issues pane. */
+private const val NOTICE_SOURCE = "Toolchains"
 
 /** What a unified toolchain row is: which catalog it came from decides its detail route. */
 private enum class ToolchainKind(val chip: String, val section: String) {
@@ -68,6 +72,8 @@ internal fun ToolchainManagerPanel(
     modifier: Modifier = Modifier,
     /** Percent + phase of the running install, so the row shows it without opening the detail page. */
     progress: CatalogProgress? = null,
+    /** Reveal the Issues pane, where this panel's failures are listed. */
+    onShowIssues: () -> Unit = {},
 ) {
     val environmentReady = environmentState.distroInstalled == true && environmentState.jcodeUserReady == true
     var query by remember { mutableStateOf("") }
@@ -163,11 +169,18 @@ internal fun ToolchainManagerPanel(
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        // Reported to the Issues pane rather than drawn here: a failure is worth keeping after the
+        // user has moved on to another tool, and the list is what this panel is for.
+        val notices = listOfNotNull(sdkState.errorMessage, lspState.errorMessage, debugState.errorMessage).distinct()
+        LaunchedEffect(notices) { WorkbenchNotices.set(NOTICE_SOURCE, notices) }
+
         ManagerPanelHeader(
             title = "Toolchains",
             installedCount = installedTotal,
             onRefresh = onRefreshAll,
             busy = busy,
+            noticeCount = notices.size,
+            onNotice = onShowIssues,
             searchActive = searchActive,
             onToggleSearch = { searchActive = !searchActive; if (!searchActive) query = "" },
             query = query,
@@ -201,9 +214,6 @@ internal fun ToolchainManagerPanel(
                 message = "Set up the Linux environment in Settings before installing.",
             )
         }
-        listOfNotNull(sdkState.errorMessage, lspState.errorMessage, debugState.errorMessage)
-            .distinct()
-            .forEach { ManagerNoticeCard(title = "Toolchains notice", message = it) }
 
         val visibleKinds = ToolchainKind.entries.filter { !rows[it].isNullOrEmpty() }
         if (visibleKinds.isEmpty()) {
