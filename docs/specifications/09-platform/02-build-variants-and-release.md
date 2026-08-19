@@ -63,6 +63,19 @@ There are **no product flavors**. Three identities come from build types plus a 
 | `release` | `dev.blamspot.jcode` | JCode | `ic_launcher` |
 | `release -PjcodeIdSuffix=.beta` | `dev.blamspot.jcode.beta` | JCode (beta) | `ic_launcher_beta` (purple gradient) |
 
+> **Temporary — remove at 1.7.0.** The package-migration bridge (Settings > Environment > "Export
+> for migration", the onboarding "Import from previous install", and the cleanup prompt that follows
+> an import) exists only to carry installs across the `dev.jcode` -> `dev.blamspot.jcode` rename
+> shipped in 1.6.1. It has no purpose once users have moved. When `jcodeVersion` reads `1.7.0`,
+> delete `MigrationBundle.kt`; the `exportMigrationBundle` / `importMigrationBundle` /
+> `cleanUpAfterMigration` / `requestUninstall` / `refreshMigrationBundle` members and the
+> `migrationBundle` / `migrationCleanup` state in `MainViewModel`; the cleanup dialog in
+> `JCodeShell`; `onExportMigration` / `onImportMigration` / `migrationSummary` from
+> `EnvironmentBackupActions`, `SettingsFeature` and `OnboardingFeature`; the
+> `REQUEST_DELETE_PACKAGES` permission and the `<queries>` block in the manifest; and the
+> `-PjcodeApplicationId` override below. Keep `DistroService.extractArchive` and the `isRootfs`
+> parameter on `RootfsManager.extractRootfs` — environment backup/restore uses both.
+
 All three install **side by side**. `namespace` (the compile-time R and BuildConfig package) is
 also `dev.blamspot.jcode`; the suffixes apply to `applicationId` only, so the three variants share one
 set of generated classes and differ only in identity on the device.

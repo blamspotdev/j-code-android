@@ -18,6 +18,11 @@ import org.json.JSONObject
  * [dev.blamspot.jcode.core.distro.RootfsArchiver] already produces, and the settings document
  * [SettingsBackup] already writes — so a bundle is also just a full backup, and restoring one is the
  * same code path as restoring those.
+ *
+ * TEMPORARY — DELETE AT 1.7.0. This exists for one rename, shipped in 1.6.1, and has no purpose once
+ * users have moved off `dev.jcode`. See "Temporary code with a removal date" in AGENTS.md and the
+ * note in docs/specifications/09-platform/02-build-variants-and-release.md for everything that comes
+ * out with it.
  */
 object MigrationBundle {
 

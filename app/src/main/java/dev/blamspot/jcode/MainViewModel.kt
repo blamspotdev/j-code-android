@@ -854,9 +854,65 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * What a finished import left behind: the bundle in shared storage, and the install it came
+     * from. Held rather than announced once, because the import happens during onboarding where a
+     * transient message would go unread — the offer has to survive until the user reaches a screen
+     * that can show it.
+     */
+    data class MigrationCleanup(val sourcePackage: String, val bytes: Long, val oldAppInstalled: Boolean)
+
+    private val _migrationCleanup = MutableStateFlow<MigrationCleanup?>(null)
+    val migrationCleanup: StateFlow<MigrationCleanup?> = _migrationCleanup.asStateFlow()
+
+    fun dismissMigrationCleanup() {
+        _migrationCleanup.value = null
+    }
+
+    /**
+     * Delete the bundle now that its contents live here.
+     *
+     * Safe to do without asking twice: the install it came from still holds everything, so this
+     * removes a copy rather than the last one. Uninstalling that install is a separate step, and
+     * Android puts its own confirmation in front of it.
+     */
+    fun cleanUpAfterMigration() {
+        val pending = _migrationCleanup.value ?: return
+        _migrationCleanup.value = null
+        viewModelScope.launch {
+            val freed = withContext(Dispatchers.IO) {
+                val dir = MigrationBundle.directory()
+                val size = runCatching { dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() } }.getOrDefault(0L)
+                runCatching { dir.deleteRecursively() }
+                size
+            }
+            _migrationBundle.value = null
+            emitMessage("Removed the migration bundle (${freed / (1024 * 1024)} MB).")
+            if (pending.oldAppInstalled) requestUninstall(pending.sourcePackage)
+        }
+    }
+
+    /**
+     * Ask Android to uninstall [packageName]. It shows its own confirmation and does the work; an
+     * app cannot remove another one on its own, and should not be able to.
+     */
+    fun requestUninstall(packageName: String) {
+        runCatching {
+            appContext.startActivity(
+                android.content.Intent(android.content.Intent.ACTION_DELETE)
+                    .setData(android.net.Uri.parse("package:$packageName"))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }.onFailure { _messages.tryEmit("Could not open the uninstaller for $packageName.") }
+    }
+
     /** A migration bundle waiting to be imported, refreshed on demand. See [MigrationBundle]. */
     private val _migrationBundle = MutableStateFlow<MigrationBundle.Found?>(null)
     val migrationBundle: StateFlow<MigrationBundle.Found?> = _migrationBundle.asStateFlow()
+
+    private fun isPackageInstalled(packageName: String): Boolean = runCatching {
+        appContext.packageManager.getPackageInfo(packageName, 0) != null
+    }.getOrDefault(false)
 
     fun refreshMigrationBundle() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -976,6 +1032,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             _envBackupStatus.value = null
             refreshInstalledExtensions()
+            _migrationCleanup.value = MigrationCleanup(
+                sourcePackage = bundle.sourcePackage,
+                bytes = bundle.bytes,
+                oldAppInstalled = isPackageInstalled(bundle.sourcePackage),
+            )
+            _migrationBundle.value = null
             if (restored != null) {
                 distroService.setPendingRestoreTarball(restored)
                 runAutoSetup()

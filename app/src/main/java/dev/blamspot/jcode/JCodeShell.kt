@@ -727,6 +727,39 @@ fun JCodeApp(
             dismissButton = { TextButton(onClick = { showVsixImportInfo = false }) { Text("Cancel") } },
         )
     }
+    // Offered once an import has finished, and as a dialog rather than a message: the import runs
+    // during onboarding, so anything transient is shown to a screen the user is not reading yet.
+    val migrationCleanup by viewModel.migrationCleanup.collectAsStateWithLifecycle()
+    migrationCleanup?.let { cleanup ->
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissMigrationCleanup() },
+            title = { Text("Finish moving from ${cleanup.sourcePackage}") },
+            text = {
+                Text(
+                    buildString {
+                        append("Your environment, projects, extensions and settings are now here.\n\n")
+                        append("The ${cleanup.bytes / (1024 * 1024)} MB migration bundle in the shared JCode folder ")
+                        append("is a copy and can go — ")
+                        if (cleanup.oldAppInstalled) {
+                            append("the old app still has everything until you remove it.\n\n")
+                            append("Removing it frees the rest of the space it is using. Android will ask you ")
+                            append("to confirm the uninstall itself.")
+                        } else {
+                            append("nothing else needs it.")
+                        }
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.cleanUpAfterMigration() }) {
+                    Text(if (cleanup.oldAppInstalled) "Clean up and uninstall" else "Remove the bundle")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissMigrationCleanup() }) { Text("Keep for now") }
+            },
+        )
+    }
     val cursorDragHorizontalLevel by viewModel.editorCursorDragHorizontalLevel.collectAsStateWithLifecycle()
     val editorDragSetting = remember(editorDragMovesCursor, cursorDragVerticalLevel, cursorDragHorizontalLevel) {
         EditorDragSetting(
