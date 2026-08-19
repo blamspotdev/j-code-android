@@ -37,6 +37,9 @@ import dev.jcode.design.ManagerPanelHeader
 /** How this panel names itself in the Issues pane. */
 private const val NOTICE_SOURCE = "Toolchains"
 
+/** How much of a failed run's log travels with its message. */
+private const val DETAIL_LINES = 60
+
 /** What a unified toolchain row is: which catalog it came from decides its detail route. */
 private enum class ToolchainKind(val chip: String, val section: String) {
     Sdk("SDKs", "SDKs"),
@@ -170,8 +173,16 @@ internal fun ToolchainManagerPanel(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         // Reported to the Issues pane rather than drawn here: a failure is worth keeping after the
-        // user has moved on to another tool, and the list is what this panel is for.
-        val notices = listOfNotNull(sdkState.errorMessage, lspState.errorMessage, debugState.errorMessage).distinct()
+        // user has moved on to another tool, and the list is what this panel is for. Each message is
+        // carried with the log of the run it came out of — what a catalog puts in errorMessage is the
+        // first line the script printed, which names the outcome ("Install failed.") far more often
+        // than the cause. The tail rather than all 240 kept lines: a failure explains itself at the
+        // end, and the beginning is the previous action.
+        val notices = listOfNotNull(
+            sdkState.errorMessage?.let { WorkbenchNotices.Notice(it, sdkState.logLines.takeLast(DETAIL_LINES)) },
+            lspState.errorMessage?.let { WorkbenchNotices.Notice(it, lspState.logLines.takeLast(DETAIL_LINES)) },
+            debugState.errorMessage?.let { WorkbenchNotices.Notice(it, debugState.logLines.takeLast(DETAIL_LINES)) },
+        )
         LaunchedEffect(notices) { WorkbenchNotices.set(NOTICE_SOURCE, notices) }
 
         ManagerPanelHeader(

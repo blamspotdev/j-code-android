@@ -19,27 +19,29 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 object WorkbenchNotices {
 
-    /** One problem, and the part of the workbench reporting it. */
-    data class Notice(val source: String, val message: String)
+    /**
+     * One problem: a line to show, and the output it came out of.
+     *
+     * [message] is whatever the failing tool said first, which is routinely the least useful thing
+     * it said — "Install failed." names the outcome and not one reason for it. [detail] is the run's
+     * own log, kept so the pane can be opened up to what actually happened instead of sending the
+     * user back to re-run the thing that just failed.
+     */
+    data class Notice(val message: String, val detail: List<String> = emptyList())
 
-    private val bySource = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    private val bySource = MutableStateFlow<Map<String, List<Notice>>>(emptyMap())
 
-    val notices: StateFlow<Map<String, List<String>>> = bySource.asStateFlow()
-
-    /** Everything currently reported, flattened in source order. */
-    fun all(): List<Notice> = bySource.value.entries
-        .sortedBy { it.key }
-        .flatMap { (source, messages) -> messages.map { Notice(source, it) } }
+    val notices: StateFlow<Map<String, List<Notice>>> = bySource.asStateFlow()
 
     /**
      * Replace what [source] is reporting. Whole-set rather than add/remove because a panel knows its
      * current problems, not which of yesterday's have since been fixed — an append-only list would
      * keep showing an install failure after the retry succeeded.
      */
-    fun set(source: String, messages: List<String>) {
-        val distinct = messages.filter { it.isNotBlank() }.distinct()
+    fun set(source: String, notices: List<Notice>) {
+        val cleaned = notices.filter { it.message.isNotBlank() }.distinctBy { it.message }
         val current = bySource.value
-        if (current[source].orEmpty() == distinct) return
-        bySource.value = if (distinct.isEmpty()) current - source else current + (source to distinct)
+        if (current[source].orEmpty() == cleaned) return
+        bySource.value = if (cleaned.isEmpty()) current - source else current + (source to cleaned)
     }
 }

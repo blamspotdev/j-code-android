@@ -2,6 +2,7 @@ package dev.jcode
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,20 +12,30 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jcode.core.lsp.DiagnosticSeverity
 import dev.jcode.core.lsp.LspModule
+import dev.jcode.design.JCodeIcon
+import dev.jcode.design.LocalIconBundle
 import dev.jcode.workbench.LocalIssueActions
 
 /**
@@ -85,24 +96,7 @@ internal fun IssuesSidebarContent(modifier: Modifier = Modifier) {
                 }
             }
             items(messages.size, key = { i -> "notice:$source#$i" }) { i ->
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 5.dp),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .padding(top = 5.dp)
-                            .size(8.dp)
-                            .background(MaterialTheme.colorScheme.error, CircleShape),
-                    )
-                    // Not truncated to two lines like a diagnostic: an install failure carries the
-                    // tool's own words, and the sentence that names the cause is usually the last one.
-                    Text(
-                        text = messages[i],
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+                NoticeRow(messages[i])
             }
         }
         files.forEach { (path, diags) ->
@@ -169,6 +163,80 @@ internal fun IssuesSidebarContent(modifier: Modifier = Modifier) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                     )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * One workbench problem, opened up on demand.
+ *
+ * Collapsed it is the one line the failing tool led with, which usually names the outcome and not a
+ * reason; expanded it is that run's own log. Kept behind a tap because the log is dozens of lines
+ * and the pane is a list of problems, not one problem's transcript.
+ */
+@Composable
+private fun NoticeRow(notice: WorkbenchNotices.Notice) {
+    var expanded by rememberSaveable(notice.message) { mutableStateOf(false) }
+    val hasDetail = notice.detail.isNotEmpty()
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (hasDetail) Modifier.clickable { expanded = !expanded } else Modifier)
+                .padding(horizontal = 8.dp, vertical = 5.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .padding(top = 5.dp)
+                    .size(8.dp)
+                    .background(MaterialTheme.colorScheme.error, CircleShape),
+            )
+            // Not clamped to two lines like a diagnostic: this is the whole of what the tool said.
+            Text(
+                text = notice.message,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.weight(1f),
+            )
+            if (hasDetail) {
+                Icon(
+                    imageVector = LocalIconBundle.current[
+                        if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown,
+                    ],
+                    contentDescription = if (expanded) "Hide details" else "Show details",
+                    modifier = Modifier.padding(top = 2.dp).size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (expanded) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                shape = RoundedCornerShape(6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 8.dp, bottom = 6.dp),
+            ) {
+                // Horizontally scrollable rather than wrapped: these are command lines and tool
+                // output, where a wrapped line stops looking like the thing that was actually run.
+                Column(
+                    modifier = Modifier
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                ) {
+                    notice.detail.forEach { line ->
+                        Text(
+                            text = line,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            softWrap = false,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
