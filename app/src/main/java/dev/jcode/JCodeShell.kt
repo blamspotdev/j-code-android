@@ -1151,10 +1151,18 @@ fun JCodeApp(
     // is passed down as params and reacted to there (find carries a nonce so the same word re-seeds).
     var editorGoToLineNonce by remember { mutableStateOf(0) }
     var editorFindRequest by remember { mutableStateOf<Pair<Int, String>?>(null) }
-    val editorMenuExtras = remember(viewModel, menuTabId, menuIsFileTab, menuFileName, contributedContextActions) {
+    // Rebuilt when the installed set changes too: whether this file has a rendered view depends on
+    // whether an extension claims it, and installing the Android pack must light the toggle up
+    // without reopening the file.
+    val editorMenuExtras = remember(
+        viewModel, menuTabId, menuIsFileTab, menuFileName, contributedContextActions, installedExtensions,
+    ) {
         val fileExt = menuFileName.substringAfterLast('.', "").lowercase()
+        // Markdown renders itself; anything else needs an extension that says it can draw this file.
+        val hasRenderedView = SyntaxHighlighter.isMarkdownFile(menuFileName) ||
+            (menuTab != null && installedExtensions.any { it.claimsNatively(menuTab.filePath) })
         EditorMenuExtras(
-            previewToggle = if (menuIsFileTab && menuTabId != null && SyntaxHighlighter.isMarkdownFile(menuFileName)) {
+            previewToggle = if (menuIsFileTab && menuTabId != null && hasRenderedView) {
                 { viewModel.toggleTabPreview(menuTabId) }
             } else {
                 null
