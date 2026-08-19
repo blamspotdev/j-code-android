@@ -3778,6 +3778,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             workspaceManager.refreshStorageRoots()
         }
+        // A migration bundle lives in shared storage, so it is unreadable until this moment — and on
+        // a fresh install this moment always comes AFTER the first look for one. Without re-checking
+        // here the offer never appears for the person it exists for: someone who just moved.
+        refreshMigrationBundle()
     }
 
     fun runAutoSetup() {
