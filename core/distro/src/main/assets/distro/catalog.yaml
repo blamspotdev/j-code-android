@@ -547,7 +547,17 @@ entries:
       # -extNN extension SDKs, and -rcN build-tools in one step.
       BUILD_TOOLS=$(grep -oE 'path="build-tools;[0-9]+\.[0-9]+\.[0-9]+"' "$REPO_XML" | sed -E 's/^path="//; s/"$//' | sort -u -V | tail -1)
       ALL_PLATFORMS=$(grep -oE 'path="platforms;android-[0-9]+(\.[0-9]+)?"' "$REPO_XML" | sed -E 's/^path="//; s/"$//' | sort -u -Vr)
-      CLT_ZIP=$(grep -oE 'commandlinetools-linux-[0-9]+_latest\.zip' "$REPO_XML" | sort -u -V | tail -1)
+      # NOT simply the newest. cmdline-tools 23.0 (build 16111833) replaced `sdkmanager` with a shell
+      # shim that forwards to a new `android` binary, and Google publishes that binary for x86-64 only
+      # — there is no Linux aarch64 archive, only one `commandlinetools-linux-*.zip` per release. On
+      # this device it cannot execute, so every sdkmanager call became a no-op that still exits 0: no
+      # licences written, no packages installed, and nothing said to explain it. 22.0 is the last
+      # release whose sdkmanager is the real tool. Build numbers sort in release order, so capping the
+      # build caps the revision. Raise CLT_MAX_BUILD only after checking that the newer release's
+      # bin/sdkmanager is still a Java launcher, not the shim (the guard below catches it if not).
+      CLT_MAX_BUILD=15859902
+      CLT_ZIP=$(grep -oE 'commandlinetools-linux-[0-9]+_latest\.zip' "$REPO_XML" | sort -u -V |
+        awk -F'[-_]' -v max="$CLT_MAX_BUILD" '$3 + 0 <= max' | tail -1)
       if [ -z "$BUILD_TOOLS" ] || [ -z "$ALL_PLATFORMS" ] || [ -z "$CLT_ZIP" ]; then
         echo "Google's package manifest did not list the packages JCode needs (build-tools / platforms / command-line tools)."
         exit 1
@@ -563,6 +573,13 @@ entries:
         rm -rf /tmp/cmdline-tools /tmp/clt.zip
       fi
       [ -x "$SDKM" ] || { echo "The Android command-line tools did not unpack correctly."; exit 1; }
+      # The shim described above, in case a future release reintroduces it below the cap. Caught here
+      # rather than three steps later, where it reads as a licence problem instead of an arch one.
+      if grep -q 'Android CLI will be used instead' "$SDKM" 2>/dev/null &&
+         ! "$ANDROID_HOME/cmdline-tools/latest/bin/android" --version >/dev/null 2>&1; then
+        echo "These Android command-line tools drive sdkmanager through an x86-64 'android' binary, which this device cannot run. Use a cmdline-tools build whose sdkmanager is the standalone tool."
+        exit 1
+      fi
 
       jcode_progress 15 "Accepting SDK licenses"
       # Neither `yes |` nor /dev/null works here. `yes` never dies (see above), but a plain
@@ -570,9 +587,12 @@ entries:
       # reads EOF as "No", then silently skips every package — the install then fails several minutes
       # later with "could not install build-tools" and no hint why. A FINITE stream of confirmations
       # satisfies both: it answers every prompt and then ends on its own.
-      printf 'y\n%.0s' $(seq 40) | "$SDKM" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
+      printf 'y\n%.0s' $(seq 40) | "$SDKM" --sdk_root="$ANDROID_HOME" --licenses > /tmp/jcode-licenses.log 2>&1 || true
       if [ -z "$(ls -A "$ANDROID_HOME/licenses" 2>/dev/null)" ]; then
-        echo "Could not accept the Android SDK licences — sdkmanager wrote none to $ANDROID_HOME/licenses."
+        # Kept, not discarded: when this step fails the reason is only ever in sdkmanager's own
+        # output, and without it the message names a symptom nobody can act on.
+        echo "Could not accept the Android SDK licences — sdkmanager wrote none to $ANDROID_HOME/licenses:"
+        tail -n 12 /tmp/jcode-licenses.log 2>/dev/null || true
         exit 1
       fi
 
