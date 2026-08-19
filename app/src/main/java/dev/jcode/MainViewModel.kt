@@ -5292,6 +5292,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         requestSyncOpenFilesFromDisk()
     }
 
+    /**
+     * A file's current text as a native extension should see it: the **editor's** copy when the file
+     * is open, the disk's otherwise.
+     *
+     * The distinction is the whole point. A designer handed the disk copy of a file with unsaved
+     * edits would render something the user is not looking at, and their next visual edit would
+     * write that stale text back over what they had typed.
+     */
+    fun readOpenFileText(path: String): String? {
+        val tab = _editorGroup.value.tabs.firstOrNull { it.filePath.path == path && it.editorState != null }
+        tab?.editorState?.let { state ->
+            val snapshot = state.snapshot.value
+            return runCatching { String(snapshot.readRange(0, snapshot.byteLength), Charsets.UTF_8) }.getOrNull()
+        }
+        return runCatching { File(path).takeIf { it.isFile }?.readText() }.getOrNull()
+    }
+
+    /**
+     * Replace a file's text through the open editor buffer, so one visual edit is one edit.
+     *
+     * Deliberately NOT a disk write: going through the buffer is what keeps the source view, the
+     * dirty marker, undo and Save all describing the same document. Writing the file directly would
+     * leave the open buffer holding the pre-edit text, and the user's next keystroke would save that
+     * over the change they just made in the designer.
+     *
+     * A file that is not open has no buffer to route through and is written directly — there is
+     * nothing to get out of step with.
+     */
+    fun replaceFileText(path: String, text: String) {
+        val tab = _editorGroup.value.tabs.firstOrNull { it.filePath.path == path && it.editorState != null }
+        val state = tab?.editorState
+        if (state == null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { File(path).writeText(text) }
+                    .onFailure { emitMessage("Could not write ${File(path).name}: ${it.message ?: "error"}") }
+            }
+            return
+        }
+        // No explicit dirty marking: trackDirty already mirrors the buffer's own dirty flag onto the
+        // tab, so a designer edit marks the tab exactly the way a keystroke does.
+        viewModelScope.launch { state.replaceAll(text) }
+    }
+
     /** Flip a file tab between the source editor and its rendered preview (Markdown). */
     fun toggleTabPreview(tabId: String) {
         val current = _editorGroup.value.tabs.firstOrNull { it.id == tabId } ?: return

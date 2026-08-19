@@ -206,6 +206,7 @@ dependencies {
     implementation(project(":core:search"))
     implementation(project(":core:config"))
     implementation(project(":core:ext"))
+    implementation(project(":core:ext-api"))
     implementation(project(":core:state"))
     implementation(project(":core:diag"))
 

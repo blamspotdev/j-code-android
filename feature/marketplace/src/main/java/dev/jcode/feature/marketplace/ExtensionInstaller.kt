@@ -415,6 +415,13 @@ class ExtensionInstaller internal constructor(context: Context) {
             languages = languages,
             iconFile = findIconFile(dir),
             webUiEntry = findWebUiEntry(dir),
+            nativeEntry = nativeEntry(dir),
+            nativeClass = nativeHeader(dir).str("class"),
+            nativeAbi = (nativeHeader(dir)["abi"] as? Number)?.toInt() ?: 0,
+            nativeFileTypes = (nativeHeader(dir)["fileTypes"] as? List<*>)
+                .orEmpty().mapNotNull { it?.toString()?.trim()?.removePrefix(".")?.lowercase() }
+                .filter { it.isNotEmpty() },
+            nativePathContains = nativeHeader(dir).str("pathContains")?.takeIf { it.isNotBlank() },
             apiMinVersion = (map["api"] as? Map<*, *>)?.toStringKeyMap()?.str("minApiVersion")?.toIntOrNull() ?: 0,
             apiCapabilities = (map["api"] as? Map<*, *>)?.toStringKeyMap()?.strList("capabilities") ?: emptyList(),
             settings = settings,
@@ -458,6 +465,19 @@ class ExtensionInstaller internal constructor(context: Context) {
     private fun findWebUiEntry(dir: File): String? =
         (headerMap(dir)["entry"] as? Map<*, *>)?.toStringKeyMap()?.str("ui")
             ?.takeIf { it.isNotBlank() && File(dir, it).isFile }
+
+    // The `entry.native` block, or empty. Read as a map so a package that declares only `entry.ui`
+    // costs nothing and cannot half-declare a native entry.
+    private fun nativeHeader(dir: File): Map<String, Any?> =
+        ((headerMap(dir)["entry"] as? Map<*, *>)?.toStringKeyMap()?.get("native") as? Map<*, *>)
+            ?.toStringKeyMap().orEmpty()
+
+    // The native payload the header declares, if it is actually there. Deliberately NOT checked for
+    // signature here: install-time is the wrong place, because an extension may legitimately be
+    // sideloaded unsigned for development and only its *native* half is refused. The loader makes
+    // that call, where it can say so to the user (see NativeExtensionLoader.resolve).
+    private fun nativeEntry(dir: File): String? =
+        nativeHeader(dir).str("apk")?.takeIf { it.isNotBlank() && File(dir, it).isFile }
 
     // The icon path the header declares (images.icon), else a conventional location; null if absent.
     private fun findIconFile(dir: File): File? {

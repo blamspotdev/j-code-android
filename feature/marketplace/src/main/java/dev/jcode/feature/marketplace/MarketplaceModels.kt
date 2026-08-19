@@ -311,6 +311,22 @@ data class InstalledExtension(
     val iconFile: File? = null,
     /** Relative path (from [dir]) to the extension's web-frontend HTML entry, e.g. "www/index.html". */
     val webUiEntry: String? = null,
+    /**
+     * Relative path (from [dir]) to a **native** UI payload — an APK the extension ships, loaded
+     * into JCode's own process on demand. Null for the ordinary WebView-frontend kind.
+     *
+     * An APK rather than a bare dex because a dex has no resource table: a plugin with its own
+     * drawables or strings needs `addAssetPath`, and that takes an archive.
+     */
+    val nativeEntry: String? = null,
+    /** Fully-qualified class in [nativeEntry] implementing `JCodeNativeExtension`. */
+    val nativeClass: String? = null,
+    /** Extension-API version [nativeEntry] was built against; must equal JCode's `JCODE_EXT_ABI`. */
+    val nativeAbi: Int = 0,
+    /** File extensions this extension's native UI claims, lower-case and dotless (e.g. "xml"). */
+    val nativeFileTypes: List<String> = emptyList(),
+    /** Path fragment a claimed file must contain, so a layout XML is claimed and a manifest is not. */
+    val nativePathContains: String? = null,
     /** Lowest JCode extension-API version this extension needs (0 = legacy exec-only bridge). */
     val apiMinVersion: Int = 0,
     /** Capability families this extension declares it uses (e.g. "exec", "fs", "workbench"). */
@@ -342,6 +358,19 @@ val InstalledExtension.tabName: String get() = shortName?.takeIf { it.isNotBlank
 /** The first bundled language that claims [fileName] (by file extension), or null. */
 fun InstalledExtension.languageFor(fileName: String): LanguagePack? =
     languages.firstOrNull { it.matchesFile(fileName) }
+
+/**
+ * True when this extension ships native UI that claims [file].
+ *
+ * Both a type and a path fragment, because "an .xml file" is far too broad: a layout designer wants
+ * `res/layout/…` and would be actively wrong on `AndroidManifest.xml`.
+ */
+fun InstalledExtension.claimsNatively(file: File): Boolean {
+    if (nativeEntry == null || nativeClass == null) return false
+    if (file.extension.lowercase() !in nativeFileTypes) return false
+    val fragment = nativePathContains ?: return true
+    return file.path.replace(File.separatorChar, '/').contains(fragment)
+}
 
 /** True if this extension ships a web-frontend ("Manage" / DB-manager) UI that resolves on disk. */
 /** True when the extension has a UI to show. A `.vsix` builds its own at runtime, so it has one

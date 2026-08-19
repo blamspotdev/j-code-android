@@ -228,6 +228,7 @@ import dev.jcode.feature.explorer.ExplorerViewMode
 import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.languageFor
+import dev.jcode.feature.marketplace.claimsNatively
 import dev.jcode.feature.marketplace.tabName
 import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.onboarding.EnvironmentManagerActions
@@ -361,6 +362,7 @@ import dev.jcode.workbench.WorkbenchExtraKeysBar
 import dev.jcode.workbench.WorkbenchSnackbarHost
 import dev.jcode.workbench.BottomStatusBarSlot
 import dev.jcode.workbench.RightPanelSelection
+import dev.jcode.ext.NativeExtensionPage
 import dev.jcode.workbench.RightPanelTab
 import dev.jcode.workbench.WorkbenchManagerActions
 import dev.jcode.workbench.WorkbenchRunActions
@@ -1686,6 +1688,8 @@ fun JCodeApp(
         bringEditorToFront = viewModel.bringEditorToFront,
         volumeKeyAction = viewModel.volumeKeyAction,
         runTerminalCompletions = viewModel.runTerminalCompletions,
+        onReadFileText = viewModel::readOpenFileText,
+        onReplaceFileText = viewModel::replaceFileText,
     )
     }
 
@@ -1848,6 +1852,10 @@ private fun JCodeShell(
     onExportProject: (Project) -> Unit,
     onOpenFile: (dev.jcode.fs.FsNode) -> Unit,
     onOpenPathAtLine: (String) -> Unit,
+    /** A file's text as the editor holds it, for a native extension's page. */
+    onReadFileText: (String) -> String?,
+    /** Replace a file's text through its editor buffer, for a native extension's page. */
+    onReplaceFileText: (String, String) -> Unit,
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
     onSaveActiveTab: () -> Unit,
@@ -3526,16 +3534,37 @@ private fun JCodeShell(
                                     }
                                 }
                                 EditorPageKind.None -> if (tab.previewMode && tab.editorState != null) {
+                                    // "Preview" is per file type, not one renderer: an extension that
+                                    // ships native UI claiming this file (a layout designer for
+                                    // res/layout/*.xml) takes the toggle; everything else is Markdown.
+                                    val nativeOwner = installedExtensions.firstOrNull {
+                                        it.claimsNatively(tab.filePath)
+                                    }
                                     // Key by tab id so switching between two previewed files (same call
                                     // site) recreates the WebView instead of reusing the previous content.
                                     key(tab.id) {
-                                        MarkdownPreviewPage(
-                                            tab = tab,
-                                            dark = editorDark,
-                                            languagePacks = activeLanguageExtensions,
-                                            mermaidScript = mermaidScriptFile,
-                                            modifier = Modifier.fillMaxSize(),
-                                        )
+                                        if (nativeOwner != null) {
+                                            NativeExtensionPage(
+                                                extension = nativeOwner,
+                                                file = tab.filePath,
+                                                projectDir = selectedProject?.let { File(it.location) },
+                                                dark = editorDark,
+                                                onSnackbar = { message ->
+                                                    scope.launch { snackbarHostState.showSnackbar(message) }
+                                                },
+                                                readFile = onReadFileText,
+                                                writeFile = onReplaceFileText,
+                                                modifier = Modifier.fillMaxSize(),
+                                            )
+                                        } else {
+                                            MarkdownPreviewPage(
+                                                tab = tab,
+                                                dark = editorDark,
+                                                languagePacks = activeLanguageExtensions,
+                                                mermaidScript = mermaidScriptFile,
+                                                modifier = Modifier.fillMaxSize(),
+                                            )
+                                        }
                                     }
                                 } else {
                                     Unit
