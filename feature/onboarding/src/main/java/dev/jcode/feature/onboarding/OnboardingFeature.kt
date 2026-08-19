@@ -82,6 +82,8 @@ object OnboardingFeature {
         onStorageAccessGranted: () -> Unit,
         onDismiss: (() -> Unit)? = null,
         onRestoreEnvironment: (() -> Unit)? = null,
+        onImportMigration: (() -> Unit)? = null,
+        migrationSummary: String? = null,
     ) {
         // Full-bleed backdrop first, insets padding inside: otherwise the workbench behind the
         // onboarding shows through the status/navigation-bar strips (visible in landscape).
@@ -109,6 +111,8 @@ object OnboardingFeature {
                     showStorageStep = true,
                     onStorageAccessGranted = onStorageAccessGranted,
                     onRestoreEnvironment = onRestoreEnvironment,
+                    onImportMigration = onImportMigration,
+                    migrationSummary = migrationSummary,
                 )
             }
         }
@@ -218,6 +222,8 @@ private fun StepperScreen(
     showStorageStep: Boolean = false,
     onStorageAccessGranted: () -> Unit = {},
     onRestoreEnvironment: (() -> Unit)? = null,
+    onImportMigration: (() -> Unit)? = null,
+    migrationSummary: String? = null,
     installedEnvironments: List<EnvironmentInfo> = emptyList(),
     onSwitchEnvironment: (String) -> Unit = {},
     onDeleteEnvironment: (String) -> Unit = {},
@@ -298,6 +304,8 @@ private fun StepperScreen(
                     onAutoSetup = onAutoSetup,
                     onRefresh = onRefresh,
                     onRestoreEnvironment = onRestoreEnvironment,
+                    onImportMigration = onImportMigration,
+                    migrationSummary = migrationSummary,
                 )
             }
         } else {
@@ -399,6 +407,8 @@ private fun DistroSelectionCard(
     onAutoSetup: () -> Unit,
     onRefresh: () -> Unit,
     onRestoreEnvironment: (() -> Unit)? = null,
+    onImportMigration: (() -> Unit)? = null,
+    migrationSummary: String? = null,
 ) {
     // Interactive until the previous step (storage) is done; the whole card also locks while a setup
     // runs AND stays locked once it has succeeded (Step 3 done) — re-selecting/re-running from here
@@ -447,6 +457,11 @@ private fun DistroSelectionCard(
             FilledTonalButton(onClick = onAutoSetup, enabled = interactive) {
                 Text("Use ${environmentState.runtime.selectedDistro.label}")
             }
+            if (onImportMigration != null && migrationSummary != null) {
+                FilledTonalButton(onClick = onImportMigration, enabled = interactive) {
+                    Text("Import from previous install")
+                }
+            }
             if (onRestoreEnvironment != null) {
                 OutlinedButton(onClick = onRestoreEnvironment, enabled = interactive) {
                     Text("Restore from backup…")
@@ -455,6 +470,13 @@ private fun DistroSelectionCard(
             OutlinedButton(onClick = onRefresh, enabled = interactive) {
                 Text("Refresh")
             }
+        }
+        if (migrationSummary != null && interactive) {
+            Text(
+                text = migrationSummary,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         if (onRestoreEnvironment != null && interactive) {
             Text(

@@ -218,7 +218,7 @@ class RootfsManager(
      * when possible and otherwise degraded to a *relative* symlink to its target (already extracted
      * earlier in the stream), which resolves correctly both on the host and inside proot.
      */
-    fun extractRootfs(tarball: File, targetDir: File): Boolean {
+    fun extractRootfs(tarball: File, targetDir: File, isRootfs: Boolean = true): Boolean {
         return try {
             // A previous interrupted pass may have left a partial tree; start clean.
             if (targetDir.exists()) targetDir.deleteRecursively()
@@ -270,8 +270,11 @@ class RootfsManager(
                     entry = tin.nextTarEntry
                 }
             }
-            // A freshly extracted minimal image has no working DNS/host config — wire it up so apt works.
-            ensureRootfsNetworking(targetDir)
+            // A freshly extracted minimal image has no working DNS/host config — wire it up so apt
+            // works. Only for an actual rootfs: this unpacker also reads the projects and extensions
+            // archives in a migration bundle, and writing /etc into one of those leaves a stray
+            // `etc/resolv.conf` sitting in the user's projects folder.
+            if (isRootfs) ensureRootfsNetworking(targetDir)
             android.util.Log.d(
                 "RootfsManager",
                 "extractRootfs: OK ($hardlinks hard links, $symlinkedLinks converted to symlinks)",

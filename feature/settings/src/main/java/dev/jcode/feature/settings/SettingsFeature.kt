@@ -904,6 +904,17 @@ object SettingsFeature {
                     CompactFilledButton(text = "Manage environments", onClick = onOpenEnvironmentWizard)
                     CompactOutlinedButton(text = "Refresh checks", onClick = onRefreshEnvironment)
                 }
+                LocalEnvironmentBackup.current.migrationSummary?.let { summary ->
+                    Text(
+                        text = summary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    CompactFilledButton(
+                        text = "Import from previous install",
+                        onClick = LocalEnvironmentBackup.current.onImportMigration,
+                    )
+                }
                 if (environmentState.distroInstalled == true) {
                     val envBackup = LocalEnvironmentBackup.current
                     Text(
@@ -916,6 +927,20 @@ object SettingsFeature {
                         CompactFilledButton(text = "Back up (.tar.gz)", onClick = envBackup.onBackup)
                         CompactOutlinedButton(text = "Restore…", onClick = envBackup.onRestore)
                     }
+                    // Moving to an install with a different package name. Android gives that install
+                    // its own data directory and no way to read this one's, so everything has to go
+                    // out through shared storage first — see MigrationBundle.
+                    Text(
+                        text = "Moving to a differently-named build? Write the environment, projects, " +
+                            "extensions and settings to the shared JCode folder, then import them " +
+                            "from the new install.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    CompactOutlinedButton(
+                        text = "Export for migration",
+                        onClick = envBackup.onExportMigration,
+                    )
                     Text(
                         text = "Refresh package lists and upgrade installed packages " +
                             "(apt-get update && upgrade). Runs in the Setup terminal — can be slow and use data.",

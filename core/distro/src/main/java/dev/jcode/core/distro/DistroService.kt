@@ -269,6 +269,16 @@ class DistroService(
         ok
     }
 
+    /**
+     * Extract any tar.gz this app produced into [targetDir], replacing what is there.
+     *
+     * The rootfs unpacker, used for archives that are not a rootfs: the projects and extensions in a
+     * migration bundle are packed by the same [RootfsArchiver], so they need the same reader — it is
+     * the one that understands the symlinks, hard links and exec bits those trees carry.
+     */
+    suspend fun extractArchive(tarball: java.io.File, targetDir: java.io.File): Boolean =
+        withContext(Dispatchers.IO) { rootfsManager.extractRootfs(tarball, targetDir, isRootfs = false) }
+
     /** Switch the active environment that terminals and [exec] target. */
     fun setActiveEnvironment(environmentId: String) {
         setSelectedDistro(profileFor(environmentId))

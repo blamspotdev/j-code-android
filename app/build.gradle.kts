@@ -72,12 +72,25 @@ val jcodeIdSuffix: String =
  */
 val jcodeUpdateChannel: String = if (jcodeIdSuffix == ".beta") "beta" else "stable"
 
+/**
+ * The base applicationId, overridable with `-PjcodeApplicationId`.
+ *
+ * Exists for one job: cutting a final build under the *previous* package after the id has moved.
+ * A rename does not upgrade an installed app — Android keys an app by its package — so the old
+ * install has to be given a build that can export itself (Settings > Environment > Export for
+ * migration) before it is left behind. That build has to carry the exporter and the old id at the
+ * same time, and only this override makes both true of one commit.
+ */
+val jcodeApplicationId: String =
+    (project.findProperty("jcodeApplicationId") as? String)?.trim()?.takeIf { it.isNotBlank() }
+        ?: "dev.blamspot.jcode"
+
 android {
     namespace = "dev.jcode"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "dev.blamspot.jcode"
+        applicationId = jcodeApplicationId
         minSdk = 33
         targetSdk = 33
         versionCode = jcodeVersionCode

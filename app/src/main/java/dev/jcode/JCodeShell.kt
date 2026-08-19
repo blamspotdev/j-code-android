@@ -1318,7 +1318,15 @@ fun JCodeApp(
         ActivityResultContracts.GetContent(),
     ) { uri -> if (uri != null) viewModel.restoreEnvironmentOnboarding(uri) }
     val systemPackagesUpdating by viewModel.systemPackagesUpdating.collectAsStateWithLifecycle()
-    val environmentBackupActions = remember(systemPackagesUpdating) {
+    // A bundle another install left in shared storage, looked for once per launch — the only thing
+    // that carries data across a package rename (see MigrationBundle).
+    val migrationBundle by viewModel.migrationBundle.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { viewModel.refreshMigrationBundle() }
+    val migrationSummary = migrationBundle?.let {
+        "Found a ${it.bytes / (1024 * 1024)} MB bundle from ${it.sourcePackage} " +
+            "(${it.versionName}) holding ${it.parts.size} parts."
+    }
+    val environmentBackupActions = remember(systemPackagesUpdating, migrationSummary) {
         EnvironmentBackupActions(
             onBackup = {
                 val id = viewModel.distroService.selectedEnvironment().id
@@ -1327,6 +1335,9 @@ fun JCodeApp(
             onRestore = { envRestoreLauncher.launch("*/*") },
             onUpdatePackages = { viewModel.updateSystemPackages() },
             updatingPackages = systemPackagesUpdating,
+            onExportMigration = { viewModel.exportMigrationBundle() },
+            onImportMigration = { viewModel.importMigrationBundle() },
+            migrationSummary = migrationSummary,
         )
     }
     val adbBridgeState by viewModel.adbBridge.state.collectAsStateWithLifecycle()
@@ -1734,6 +1745,8 @@ fun JCodeApp(
             onStorageAccessGranted = { viewModel.onStorageAccessGranted() },
             onDismiss = { viewModel.deferFirstRunEnvironmentSetup() },
             onRestoreEnvironment = { envRestoreOnboardingLauncher.launch("*/*") },
+            onImportMigration = { viewModel.importMigrationBundle() },
+            migrationSummary = migrationSummary,
         )
     }
 

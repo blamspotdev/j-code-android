@@ -25,6 +25,8 @@ import dev.jcode.core.editor.Caret
 import dev.jcode.core.buffer.EditTx
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.distro.DistroProfile
+import dev.jcode.core.distro.RootfsArchiver
+import dev.jcode.core.distro.WorkspaceHostPaths
 import dev.jcode.core.distro.DebugEngineAction
 import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.core.distro.LspCatalogAction
@@ -849,6 +851,137 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             distroService.setPendingRestoreTarball(tmp)
             runAutoSetup()
+        }
+    }
+
+    /** A migration bundle waiting to be imported, refreshed on demand. See [MigrationBundle]. */
+    private val _migrationBundle = MutableStateFlow<MigrationBundle.Found?>(null)
+    val migrationBundle: StateFlow<MigrationBundle.Found?> = _migrationBundle.asStateFlow()
+
+    fun refreshMigrationBundle() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _migrationBundle.value = runCatching { MigrationBundle.find(appContext) }.getOrNull()
+        }
+    }
+
+    /**
+     * Write this install's rootfs, projects, extensions and settings to shared storage so a
+     * differently-packaged build can pick them up. See [MigrationBundle] for why that is the only
+     * way across.
+     *
+     * The parts are written first and the manifest last, so an export that is interrupted — and at
+     * 2.5 GB that is a real possibility — leaves nothing that presents itself as importable.
+     */
+    fun exportMigrationBundle() {
+        if (_envBackupStatus.value != null) return
+        viewModelScope.launch {
+            _envBackupStatus.value = "Preparing migration bundle…"
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    val dir = MigrationBundle.directory()
+                    dir.deleteRecursively()
+                    require(dir.mkdirs() || dir.isDirectory) { "cannot write to ${dir.absolutePath}" }
+                    val parts = mutableListOf<String>()
+
+                    File(dir, MigrationBundle.SETTINGS).writeText(SettingsBackup.export(uiPreferences))
+                    parts += MigrationBundle.SETTINGS
+
+                    // Reuses the same packer the "Back up environment" action uses, so a bundle's
+                    // rootfs is byte-for-byte an ordinary environment backup.
+                    if (distroService.selectedEnvironmentInstalled()) {
+                        _envBackupStatus.value = "Packing the Linux environment…"
+                        File(dir, MigrationBundle.ROOTFS).outputStream().use { out ->
+                            distroService.packSelectedEnvironment(out) { files, bytes ->
+                                _envBackupStatus.value =
+                                    "Packing the environment… $files files (${bytes / (1024 * 1024)} MB)"
+                            }
+                        }
+                        parts += MigrationBundle.ROOTFS
+                    }
+
+                    // Projects only when they have moved to app-private storage; before that
+                    // migration they are already in the shared folder and go nowhere.
+                    val projects = File(WorkspaceHostPaths.projectsRoot)
+                    if (projects.isDirectory && projects.absolutePath.startsWith(appContext.filesDir.absolutePath)) {
+                        _envBackupStatus.value = "Packing projects…"
+                        File(dir, MigrationBundle.PROJECTS).outputStream().use { out ->
+                            RootfsArchiver.pack(projects, out) { files, _ ->
+                                _envBackupStatus.value = "Packing projects… $files files"
+                            }
+                        }
+                        parts += MigrationBundle.PROJECTS
+                    }
+
+                    val extensions = File(appContext.filesDir, "extensions")
+                    if (extensions.isDirectory) {
+                        _envBackupStatus.value = "Packing extensions…"
+                        File(dir, MigrationBundle.EXTENSIONS).outputStream().use { out ->
+                            RootfsArchiver.pack(extensions, out) { files, _ ->
+                                _envBackupStatus.value = "Packing extensions… $files files"
+                            }
+                        }
+                        parts += MigrationBundle.EXTENSIONS
+                    }
+
+                    MigrationBundle.writeManifest(appContext, dir, parts, BuildConfig.VERSION_NAME)
+                    dir to parts
+                }
+            }
+            _envBackupStatus.value = null
+            result
+                .onSuccess { (dir, parts) ->
+                    emitMessage("Migration bundle written to ${dir.absolutePath} (${parts.size} parts).")
+                }
+                .onFailure { emitMessage("Migration export failed: ${it.message ?: "unknown error"}") }
+        }
+    }
+
+    /**
+     * Take over a bundle another install left behind.
+     *
+     * Settings, projects and extensions are restored directly. The rootfs goes through the same
+     * pipeline an onboarding restore uses ([restoreEnvironmentOnboarding]) rather than being dropped
+     * into place: proot, the jcode user and the smoke test still have to run against it, or the
+     * environment is present but not usable.
+     */
+    fun importMigrationBundle() {
+        if (_envBackupStatus.value != null) return
+        val bundle = _migrationBundle.value ?: return
+        viewModelScope.launch {
+            _envBackupStatus.value = "Importing from ${bundle.sourcePackage}…"
+            val restored = runCatching {
+                withContext(Dispatchers.IO) {
+                    bundle.file(MigrationBundle.SETTINGS)?.let { SettingsBackup.import(uiPreferences, it.readText()) }
+
+                    bundle.file(MigrationBundle.PROJECTS)?.let {
+                        _envBackupStatus.value = "Restoring projects…"
+                        distroService.extractArchive(it, File(WorkspaceHostPaths.projectsRoot))
+                    }
+                    bundle.file(MigrationBundle.EXTENSIONS)?.let {
+                        _envBackupStatus.value = "Restoring extensions…"
+                        distroService.extractArchive(it, File(appContext.filesDir, "extensions"))
+                    }
+                    // Copied out of shared storage first: the setup pipeline consumes the tarball,
+                    // and the bundle is the user's only copy until the import has finished.
+                    bundle.file(MigrationBundle.ROOTFS)?.let { source ->
+                        val tmp = File(appContext.cacheDir, "env-migrate-${System.nanoTime()}.tar.gz")
+                        source.inputStream().use { input -> tmp.outputStream().use { input.copyTo(it, 1 shl 16) } }
+                        tmp
+                    }
+                }
+            }.getOrElse {
+                _envBackupStatus.value = null
+                emitMessage("Migration import failed: ${it.message ?: "unknown error"}")
+                return@launch
+            }
+            _envBackupStatus.value = null
+            refreshInstalledExtensions()
+            if (restored != null) {
+                distroService.setPendingRestoreTarball(restored)
+                runAutoSetup()
+            } else {
+                emitMessage("Imported settings, projects and extensions.")
+            }
         }
     }
 
