@@ -72,12 +72,25 @@ val jcodeIdSuffix: String =
  */
 val jcodeUpdateChannel: String = if (jcodeIdSuffix == ".beta") "beta" else "stable"
 
+/**
+ * The base applicationId, overridable with `-PjcodeApplicationId`.
+ *
+ * Android keys an installed app by its package, so changing this is never an update — it is a
+ * second app with an empty data directory. The migration path exists for exactly that (see
+ * [dev.jcode.MigrationBundle]), and this override is how it is exercised: building an APK under a
+ * different id is the only way to produce the "update that changes the package" the updater has to
+ * detect and handle.
+ */
+val jcodeApplicationId: String =
+    (project.findProperty("jcodeApplicationId") as? String)?.trim()?.takeIf { it.isNotBlank() }
+        ?: "dev.jcode"
+
 android {
     namespace = "dev.jcode"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "dev.jcode"
+        applicationId = jcodeApplicationId
         minSdk = 33
         targetSdk = 33
         versionCode = jcodeVersionCode

@@ -619,6 +619,7 @@ fun JCodeApp(
                 if (updateInfo?.apkUrl != null) viewModel.installUpdate(updateContext) else openReleasePage()
             },
             installing = updateInstallState is AppUpdateInstaller.State.Downloading ||
+                updateInstallState is AppUpdateInstaller.State.PreparingMigration ||
                 updateInstallState is AppUpdateInstaller.State.Installing,
             installProgress = (updateInstallState as? AppUpdateInstaller.State.Downloading)?.percent ?: 0,
         )
@@ -725,6 +726,66 @@ fun JCodeApp(
                 TextButton(onClick = { showVsixImportInfo = false; vsixPicker.launch("*/*") }) { Text("Choose .vsix") }
             },
             dismissButton = { TextButton(onClick = { showVsixImportInfo = false }) { Text("Cancel") } },
+        )
+    }
+    // Offered once an import has finished, and as a dialog rather than a message: the import runs
+    // during onboarding, so anything transient is shown to a screen the user is not reading yet.
+    val migrationCleanup by viewModel.migrationCleanup.collectAsStateWithLifecycle()
+    migrationCleanup?.let { cleanup ->
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissMigrationCleanup() },
+            title = { Text("Finish moving from ${cleanup.sourcePackage}") },
+            text = {
+                Text(
+                    buildString {
+                        append("Your environment, projects, extensions and settings are now here.\n\n")
+                        append("The ${cleanup.bytes / (1024 * 1024)} MB migration bundle in the shared JCode folder ")
+                        append("is a copy and can go — ")
+                        if (cleanup.oldAppInstalled) {
+                            append("the old app still has everything until you remove it.\n\n")
+                            append("Removing it frees the rest of the space it is using. Android will ask you ")
+                            append("to confirm the uninstall itself.")
+                        } else {
+                            append("nothing else needs it.")
+                        }
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.cleanUpAfterMigration() }) {
+                    Text(if (cleanup.oldAppInstalled) "Clean up and uninstall" else "Remove the bundle")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissMigrationCleanup() }) { Text("Keep for now") }
+            },
+        )
+    }
+    // This update installs under a different package, so Android gives it an empty data directory and
+    // the environment has to be copied across — and that copy could not be made. The update is still
+    // installable; what it cannot do is bring anything with it, so the choice is the user's.
+    (updateInstallState as? AppUpdateInstaller.State.MigrationUnavailable)?.let { blocked ->
+        AlertDialog(
+            onDismissRequest = { viewModel.resetUpdateInstall() },
+            title = { Text("Update without your environment?") },
+            text = {
+                Text(
+                    "This update installs as a new app, so your Linux environment, projects, " +
+                        "extensions and settings have to be copied across first — and " +
+                        "${blocked.reason}.\n\n" +
+                        "Installing now gives you the new version with nothing in it. This one is " +
+                        "left as it is, so you can free up space and update again instead.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.resetUpdateInstall()
+                    viewModel.installUpdateWithoutMigration(blocked.apkPath)
+                }) { Text("Install anyway") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.resetUpdateInstall() }) { Text("Not now") }
+            },
         )
     }
     val cursorDragHorizontalLevel by viewModel.editorCursorDragHorizontalLevel.collectAsStateWithLifecycle()
@@ -1318,7 +1379,15 @@ fun JCodeApp(
         ActivityResultContracts.GetContent(),
     ) { uri -> if (uri != null) viewModel.restoreEnvironmentOnboarding(uri) }
     val systemPackagesUpdating by viewModel.systemPackagesUpdating.collectAsStateWithLifecycle()
-    val environmentBackupActions = remember(systemPackagesUpdating) {
+    // A bundle another install left in shared storage, looked for once per launch — the only thing
+    // that carries data across a package rename (see MigrationBundle).
+    val migrationBundle by viewModel.migrationBundle.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { viewModel.refreshMigrationBundle() }
+    val migrationSummary = migrationBundle?.let {
+        "Found a ${it.bytes / (1024 * 1024)} MB bundle from ${it.sourcePackage} " +
+            "(${it.versionName}) holding ${it.parts.size} parts."
+    }
+    val environmentBackupActions = remember(systemPackagesUpdating, migrationSummary) {
         EnvironmentBackupActions(
             onBackup = {
                 val id = viewModel.distroService.selectedEnvironment().id
@@ -1327,6 +1396,9 @@ fun JCodeApp(
             onRestore = { envRestoreLauncher.launch("*/*") },
             onUpdatePackages = { viewModel.updateSystemPackages() },
             updatingPackages = systemPackagesUpdating,
+            onExportMigration = { viewModel.exportMigrationBundle() },
+            onImportMigration = { viewModel.importMigrationBundle() },
+            migrationSummary = migrationSummary,
         )
     }
     val adbBridgeState by viewModel.adbBridge.state.collectAsStateWithLifecycle()
@@ -1734,6 +1806,8 @@ fun JCodeApp(
             onStorageAccessGranted = { viewModel.onStorageAccessGranted() },
             onDismiss = { viewModel.deferFirstRunEnvironmentSetup() },
             onRestoreEnvironment = { envRestoreOnboardingLauncher.launch("*/*") },
+            onImportMigration = { viewModel.importMigrationBundle() },
+            migrationSummary = migrationSummary,
         )
     }
 

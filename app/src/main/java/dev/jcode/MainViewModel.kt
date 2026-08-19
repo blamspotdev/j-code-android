@@ -25,6 +25,8 @@ import dev.jcode.core.editor.Caret
 import dev.jcode.core.buffer.EditTx
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.distro.DistroProfile
+import dev.jcode.core.distro.RootfsArchiver
+import dev.jcode.core.distro.WorkspaceHostPaths
 import dev.jcode.core.distro.DebugEngineAction
 import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.core.distro.LspCatalogAction
@@ -849,6 +851,243 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             distroService.setPendingRestoreTarball(tmp)
             runAutoSetup()
+        }
+    }
+
+    /**
+     * What a finished import left behind: the bundle in shared storage, and the install it came
+     * from. Held rather than announced once, because the import happens during onboarding where a
+     * transient message would go unread — the offer has to survive until the user reaches a screen
+     * that can show it.
+     */
+    data class MigrationCleanup(val sourcePackage: String, val bytes: Long, val oldAppInstalled: Boolean)
+
+    private val _migrationCleanup = MutableStateFlow<MigrationCleanup?>(null)
+    val migrationCleanup: StateFlow<MigrationCleanup?> = _migrationCleanup.asStateFlow()
+
+    fun dismissMigrationCleanup() {
+        _migrationCleanup.value = null
+    }
+
+    /**
+     * Delete the bundle now that its contents live here.
+     *
+     * Safe to do without asking twice: the install it came from still holds everything, so this
+     * removes a copy rather than the last one. Uninstalling that install is a separate step, and
+     * Android puts its own confirmation in front of it.
+     */
+    fun cleanUpAfterMigration() {
+        val pending = _migrationCleanup.value ?: return
+        _migrationCleanup.value = null
+        viewModelScope.launch {
+            val freed = withContext(Dispatchers.IO) {
+                val dir = MigrationBundle.directory()
+                val size = runCatching { dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() } }.getOrDefault(0L)
+                runCatching { dir.deleteRecursively() }
+                size
+            }
+            _migrationBundle.value = null
+            emitMessage("Removed the migration bundle (${freed / (1024 * 1024)} MB).")
+            if (pending.oldAppInstalled) requestUninstall(pending.sourcePackage)
+        }
+    }
+
+    /**
+     * Ask Android to uninstall [packageName]. It shows its own confirmation and does the work; an
+     * app cannot remove another one on its own, and should not be able to.
+     */
+    fun requestUninstall(packageName: String) {
+        runCatching {
+            appContext.startActivity(
+                android.content.Intent(android.content.Intent.ACTION_DELETE)
+                    .setData(Uri.parse("package:$packageName"))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }.onFailure { _messages.tryEmit("Could not open the uninstaller for $packageName.") }
+    }
+
+    /** A migration bundle waiting to be imported, refreshed on demand. See [MigrationBundle]. */
+    private val _migrationBundle = MutableStateFlow<MigrationBundle.Found?>(null)
+    val migrationBundle: StateFlow<MigrationBundle.Found?> = _migrationBundle.asStateFlow()
+
+    private fun isPackageInstalled(packageName: String): Boolean = runCatching {
+        appContext.packageManager.getPackageInfo(packageName, 0) != null
+    }.getOrDefault(false)
+
+    fun refreshMigrationBundle() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _migrationBundle.value = runCatching { MigrationBundle.find(appContext) }.getOrNull()
+        }
+    }
+
+    /**
+     * Write this install's rootfs, projects, extensions and settings to shared storage so a
+     * differently-packaged build can pick them up. See [MigrationBundle] for why that is the only
+     * way across.
+     *
+     * The parts are written first and the manifest last, so an export that is interrupted — and at
+     * 2.5 GB that is a real possibility — leaves nothing that presents itself as importable.
+     */
+    fun exportMigrationBundle() {
+        if (_envBackupStatus.value != null) return
+        viewModelScope.launch {
+            val result = runCatching { writeMigrationBundle { _envBackupStatus.value = it } }
+            _envBackupStatus.value = null
+            result
+                .onSuccess { (dir, parts) ->
+                    emitMessage("Migration bundle written to ${dir.absolutePath} (${parts.size} parts).")
+                }
+                .onFailure { emitMessage("Migration export failed: ${it.message ?: "unknown error"}") }
+        }
+    }
+
+    /**
+     * Copy this install out for an update that changes the package, reporting progress through
+     * [onProgress]. Returns null when the bundle is complete, or why it is not.
+     *
+     * Called by the updater between downloading an APK and installing it — see
+     * [AppUpdateInstaller.downloadAndInstall]. Failures are returned rather than thrown because the
+     * update is still installable without the data, and that is the user's call to make.
+     */
+    suspend fun prepareMigrationForUpdate(onProgress: (String) -> Unit): String? {
+        val shortfall = withContext(Dispatchers.IO) { migrationSpaceShortfall() }
+        if (shortfall != null) return shortfall
+        return runCatching { writeMigrationBundle(onProgress); null }
+            .getOrElse { it.message ?: "the copy could not be completed" }
+    }
+
+    /**
+     * Whether there is room to write the bundle, as a sentence, or null when there is.
+     *
+     * Checked up front because the expensive part is the rootfs: finding out halfway through a
+     * multi-gigabyte copy leaves a part-written bundle and a user who has waited for nothing.
+     */
+    private fun migrationSpaceShortfall(): String? {
+        val sources = listOf(
+            File(appContext.filesDir, "distros"),
+            File(WorkspaceHostPaths.projectsRoot),
+            File(appContext.filesDir, "extensions"),
+        )
+        val raw = sources.filter { it.isDirectory }
+            .sumOf { d -> runCatching { d.walkBottomUp().filter { it.isFile }.sumOf { it.length() } }.getOrDefault(0L) }
+        if (raw <= 0L) return null
+        // A rootfs is mostly text and binaries and gzips to roughly a third, but half is reserved
+        // deliberately: over-reserving costs a warning, under-reserving costs the whole copy.
+        val needed = raw / 2
+        val target = MigrationBundle.directory()
+        runCatching { target.parentFile?.mkdirs() }
+        val free = runCatching { android.os.StatFs(target.parentFile?.absolutePath ?: "/storage/emulated/0").availableBytes }
+            .getOrDefault(0L)
+        if (free >= needed) return null
+        val mb = { b: Long -> "${b / (1024 * 1024)} MB" }
+        return "copying your environment needs about ${mb(needed)} free and there is ${mb(free)}"
+    }
+
+    /** Writes the bundle; throws on failure. Returns the directory and the parts that landed. */
+    private suspend fun writeMigrationBundle(onProgress: (String) -> Unit): Pair<File, List<String>> {
+        onProgress("Preparing migration bundle…")
+        return withContext(Dispatchers.IO) {
+            val dir = MigrationBundle.directory()
+            dir.deleteRecursively()
+            require(dir.mkdirs() || dir.isDirectory) { "cannot write to ${dir.absolutePath}" }
+            val parts = mutableListOf<String>()
+
+            File(dir, MigrationBundle.SETTINGS).writeText(SettingsBackup.export(uiPreferences))
+            parts += MigrationBundle.SETTINGS
+
+            // Reuses the same packer the "Back up environment" action uses, so a bundle's
+            // rootfs is byte-for-byte an ordinary environment backup.
+            if (distroService.selectedEnvironmentInstalled()) {
+                onProgress("Packing the Linux environment…")
+                File(dir, MigrationBundle.ROOTFS).outputStream().use { out ->
+                    distroService.packSelectedEnvironment(out) { files, bytes ->
+                        onProgress("Packing the environment… $files files (${bytes / (1024 * 1024)} MB)")
+                    }
+                }
+                parts += MigrationBundle.ROOTFS
+            }
+
+            // Projects only when they have moved to app-private storage; before that
+            // migration they are already in the shared folder and go nowhere.
+            val projects = File(WorkspaceHostPaths.projectsRoot)
+            if (projects.isDirectory && projects.absolutePath.startsWith(appContext.filesDir.absolutePath)) {
+                onProgress("Packing projects…")
+                File(dir, MigrationBundle.PROJECTS).outputStream().use { out ->
+                    RootfsArchiver.pack(projects, out) { files, _ ->
+                        onProgress("Packing projects… $files files")
+                    }
+                }
+                parts += MigrationBundle.PROJECTS
+            }
+
+            val extensions = File(appContext.filesDir, "extensions")
+            if (extensions.isDirectory) {
+                onProgress("Packing extensions…")
+                File(dir, MigrationBundle.EXTENSIONS).outputStream().use { out ->
+                    RootfsArchiver.pack(extensions, out) { files, _ ->
+                        onProgress("Packing extensions… $files files")
+                    }
+                }
+                parts += MigrationBundle.EXTENSIONS
+            }
+
+            MigrationBundle.writeManifest(appContext, dir, parts, BuildConfig.VERSION_NAME)
+            dir to parts
+        }
+    }
+
+    /**
+     * Take over a bundle another install left behind.
+     *
+     * Settings, projects and extensions are restored directly. The rootfs goes through the same
+     * pipeline an onboarding restore uses ([restoreEnvironmentOnboarding]) rather than being dropped
+     * into place: proot, the jcode user and the smoke test still have to run against it, or the
+     * environment is present but not usable.
+     */
+    fun importMigrationBundle() {
+        if (_envBackupStatus.value != null) return
+        val bundle = _migrationBundle.value ?: return
+        viewModelScope.launch {
+            _envBackupStatus.value = "Importing from ${bundle.sourcePackage}…"
+            val restored = runCatching {
+                withContext(Dispatchers.IO) {
+                    bundle.file(MigrationBundle.SETTINGS)?.let { SettingsBackup.import(uiPreferences, it.readText()) }
+
+                    bundle.file(MigrationBundle.PROJECTS)?.let {
+                        _envBackupStatus.value = "Restoring projects…"
+                        distroService.extractArchive(it, File(WorkspaceHostPaths.projectsRoot))
+                    }
+                    bundle.file(MigrationBundle.EXTENSIONS)?.let {
+                        _envBackupStatus.value = "Restoring extensions…"
+                        distroService.extractArchive(it, File(appContext.filesDir, "extensions"))
+                    }
+                    // Copied out of shared storage first: the setup pipeline consumes the tarball,
+                    // and the bundle is the user's only copy until the import has finished.
+                    bundle.file(MigrationBundle.ROOTFS)?.let { source ->
+                        val tmp = File(appContext.cacheDir, "env-migrate-${System.nanoTime()}.tar.gz")
+                        source.inputStream().use { input -> tmp.outputStream().use { input.copyTo(it, 1 shl 16) } }
+                        tmp
+                    }
+                }
+            }.getOrElse {
+                _envBackupStatus.value = null
+                emitMessage("Migration import failed: ${it.message ?: "unknown error"}")
+                return@launch
+            }
+            _envBackupStatus.value = null
+            refreshInstalledExtensions()
+            _migrationCleanup.value = MigrationCleanup(
+                sourcePackage = bundle.sourcePackage,
+                bytes = bundle.bytes,
+                oldAppInstalled = isPackageInstalled(bundle.sourcePackage),
+            )
+            _migrationBundle.value = null
+            if (restored != null) {
+                distroService.setPendingRestoreTarball(restored)
+                runAutoSetup()
+            } else {
+                emitMessage("Imported settings, projects and extensions.")
+            }
         }
     }
 
@@ -2664,10 +2903,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun installUpdate(context: android.content.Context) {
         val apkUrl = _updateInfo.value?.apkUrl ?: return
         val appContext = context.applicationContext
-        viewModelScope.launch { AppUpdateInstaller.downloadAndInstall(appContext, apkUrl) }
+        viewModelScope.launch {
+            AppUpdateInstaller.downloadAndInstall(appContext, apkUrl) { onProgress ->
+                try {
+                    prepareMigrationForUpdate { detail ->
+                        onProgress(detail)
+                        _envBackupStatus.value = detail
+                    }
+                } finally {
+                    _envBackupStatus.value = null
+                }
+            }
+        }
     }
 
     fun resetUpdateInstall() = AppUpdateInstaller.reset()
+
+    /**
+     * Install an update whose data could not be carried across.
+     *
+     * The new install starts empty and this one is left untouched, so nothing is destroyed by
+     * choosing it — but the environment does not follow, which is why it is a choice and not a
+     * fallback taken silently.
+     */
+    fun installUpdateWithoutMigration(apkPath: String) {
+        val appContext = getApplication<Application>().applicationContext
+        viewModelScope.launch { AppUpdateInstaller.installDownloaded(appContext, apkPath) }
+    }
 
     /** On returning to the foreground, clear a stuck in-app-update "Installing…" state left behind when
      *  the user dismisses the system installer without completing it (see [AppUpdateInstaller.recoverIfStuck]). */
@@ -3645,6 +3907,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             workspaceManager.refreshStorageRoots()
         }
+        // A migration bundle lives in shared storage, so it is unreadable until this moment — and on
+        // a fresh install this moment always comes AFTER the first look for one. Without re-checking
+        // here the offer never appears for the person it exists for: someone who just moved.
+        refreshMigrationBundle()
     }
 
     fun runAutoSetup() {
