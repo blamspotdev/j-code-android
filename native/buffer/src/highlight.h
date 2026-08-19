@@ -8,7 +8,7 @@
 namespace jcode {
 
 /**
- * Native port of app/src/main/java/dev/blamspot/jcode/editor/SyntaxHighlighter.kt — it must reproduce
+ * Native port of app/src/main/java/dev/jcode/editor/SyntaxHighlighter.kt — it must reproduce
  * that implementation's span output exactly (asserted by SyntaxHighlighterDifferentialTest on
  * device). Input is the buffer's UTF-8 bytes; offsets are emitted directly in byte space, so the
  * UTF-8 -> UTF-16 -> byte-offset mapping the Kotlin version pays per pass disappears.

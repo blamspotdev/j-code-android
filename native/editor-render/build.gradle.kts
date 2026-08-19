@@ -4,5 +4,5 @@ plugins {
 }
 
 android {
-    namespace = "dev.blamspot.jcode.nativeffi.editor.render"
+    namespace = "dev.jcode.nativeffi.editor.render"
 }

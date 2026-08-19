@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.blamspot.jcode.nativeffi.core"
+    namespace = "dev.jcode.nativeffi.core"
     compileSdk = 36
 
     defaultConfig {

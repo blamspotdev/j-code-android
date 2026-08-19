@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.blamspot.jcode.core.search"
+    namespace = "dev.jcode.core.search"
     compileSdk = 36
 
     defaultConfig {

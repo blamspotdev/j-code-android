@@ -26,7 +26,7 @@
  * not exist here — named-key shmget would spin forever on a failing symlink()).
  * The dir is created by ProotManager.ensureProotTmpDir before any proot spawn.
  */
-#define ASHV_KEY_SYMLINK_PATH "/data/data/dev.blamspot.jcode/files/tmp/ashv_key_%d"
+#define ASHV_KEY_SYMLINK_PATH "/data/data/dev.jcode/files/tmp/ashv_key_%d"
 #define ANDROID_SHMEM_SOCKNAME "/dev/shm/%08x"
 #define ROUND_UP(N, S) ((((N) + (S) - 1) / (S)) * (S))
 

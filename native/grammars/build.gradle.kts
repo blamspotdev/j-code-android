@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.blamspot.jcode.nativeffi.grammars"
+    namespace = "dev.jcode.nativeffi.grammars"
     compileSdk = 36
 
     defaultConfig {

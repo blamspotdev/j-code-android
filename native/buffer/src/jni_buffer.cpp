@@ -38,9 +38,9 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
     JNIEnv* env = nullptr;
     if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
 
-    jclass buffer = env->FindClass("dev/blamspot/jcode/core/buffer/Buffer");
-    jclass snapshot = env->FindClass("dev/blamspot/jcode/core/buffer/Snapshot");
-    jclass op = env->FindClass("dev/blamspot/jcode/core/buffer/NativeEditOp");
+    jclass buffer = env->FindClass("dev/jcode/core/buffer/Buffer");
+    jclass snapshot = env->FindClass("dev/jcode/core/buffer/Snapshot");
+    jclass op = env->FindClass("dev/jcode/core/buffer/NativeEditOp");
     if (!buffer || !snapshot || !op) return JNI_ERR;
 
     g_buffer_handle_field = env->GetFieldID(buffer, "nativeHandle", "J");
@@ -59,7 +59,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
 // Buffer JNI methods
 
 JNIEXPORT jlong JNICALL
-Java_dev_blamspot_jcode_core_buffer_Buffer_nativeOpenFromBytes(JNIEnv* env, jobject thiz, jbyteArray data) {
+Java_dev_jcode_core_buffer_Buffer_nativeOpenFromBytes(JNIEnv* env, jobject thiz, jbyteArray data) {
     jsize length = env->GetArrayLength(data);
     jbyte* bytes = env->GetByteArrayElements(data, nullptr);
 
@@ -79,7 +79,7 @@ Java_dev_blamspot_jcode_core_buffer_Buffer_nativeOpenFromBytes(JNIEnv* env, jobj
 // Static close-by-handle: invoked by the Kotlin Cleaner with only the primitive handle, so the
 // cleanup never needs (and never retains) the Buffer object. Mirrors PtyProcess.nativeCloseByHandle.
 JNIEXPORT void JNICALL
-Java_dev_blamspot_jcode_core_buffer_Buffer_nativeCloseByHandle(JNIEnv* env, jclass clazz, jlong handle) {
+Java_dev_jcode_core_buffer_Buffer_nativeCloseByHandle(JNIEnv* env, jclass clazz, jlong handle) {
     if (handle == 0) return;
     PieceTreeBuffer* buffer = reinterpret_cast<PieceTreeBuffer*>(handle);
     buffer->close();
@@ -87,19 +87,19 @@ Java_dev_blamspot_jcode_core_buffer_Buffer_nativeCloseByHandle(JNIEnv* env, jcla
 }
 
 JNIEXPORT jlong JNICALL
-Java_dev_blamspot_jcode_core_buffer_Buffer_nativeByteLength(JNIEnv* env, jobject thiz) {
+Java_dev_jcode_core_buffer_Buffer_nativeByteLength(JNIEnv* env, jobject thiz) {
     PieceTreeBuffer* buffer = getBuffer(env, thiz);
     return buffer ? static_cast<jlong>(buffer->byteLength()) : 0;
 }
 
 JNIEXPORT jlong JNICALL
-Java_dev_blamspot_jcode_core_buffer_Buffer_nativeLineCount(JNIEnv* env, jobject thiz) {
+Java_dev_jcode_core_buffer_Buffer_nativeLineCount(JNIEnv* env, jobject thiz) {
     PieceTreeBuffer* buffer = getBuffer(env, thiz);
     return buffer ? static_cast<jlong>(buffer->lineCount()) : 1;
 }
 
 JNIEXPORT jlong JNICALL
-Java_dev_blamspot_jcode_core_buffer_Buffer_nativeSnapshot(JNIEnv* env, jobject thiz) {
+Java_dev_jcode_core_buffer_Buffer_nativeSnapshot(JNIEnv* env, jobject thiz) {
     PieceTreeBuffer* buffer = getBuffer(env, thiz);
     if (!buffer) return 0;
 
@@ -108,7 +108,7 @@ Java_dev_blamspot_jcode_core_buffer_Buffer_nativeSnapshot(JNIEnv* env, jobject t
 }
 
 JNIEXPORT jlong JNICALL
-Java_dev_blamspot_jcode_core_buffer_Buffer_nativeApplyEdits(JNIEnv* env, jobject thiz,
+Java_dev_jcode_core_buffer_Buffer_nativeApplyEdits(JNIEnv* env, jobject thiz,
                                                     jobjectArray editOps) {
     PieceTreeBuffer* buffer = getBuffer(env, thiz);
     if (!buffer) return 0;
@@ -148,26 +148,26 @@ Java_dev_blamspot_jcode_core_buffer_Buffer_nativeApplyEdits(JNIEnv* env, jobject
 
 // Static decRef-by-handle for the Kotlin Cleaner (see Buffer.nativeCloseByHandle).
 JNIEXPORT void JNICALL
-Java_dev_blamspot_jcode_core_buffer_Snapshot_nativeCloseByHandle(JNIEnv* env, jclass clazz, jlong handle) {
+Java_dev_jcode_core_buffer_Snapshot_nativeCloseByHandle(JNIEnv* env, jclass clazz, jlong handle) {
     if (handle == 0) return;
     Snapshot* snapshot = reinterpret_cast<Snapshot*>(handle);
     snapshot->decRef();
 }
 
 JNIEXPORT jlong JNICALL
-Java_dev_blamspot_jcode_core_buffer_Snapshot_nativeByteLength(JNIEnv* env, jobject thiz) {
+Java_dev_jcode_core_buffer_Snapshot_nativeByteLength(JNIEnv* env, jobject thiz) {
     Snapshot* snapshot = getSnapshot(env, thiz);
     return snapshot ? snapshot->byteLength() : 0;
 }
 
 JNIEXPORT jlong JNICALL
-Java_dev_blamspot_jcode_core_buffer_Snapshot_nativeLineCount(JNIEnv* env, jobject thiz) {
+Java_dev_jcode_core_buffer_Snapshot_nativeLineCount(JNIEnv* env, jobject thiz) {
     Snapshot* snapshot = getSnapshot(env, thiz);
     return snapshot ? snapshot->lineCount() : 0;
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_blamspot_jcode_core_buffer_Snapshot_nativeReadRange(JNIEnv* env, jobject thiz,
+Java_dev_jcode_core_buffer_Snapshot_nativeReadRange(JNIEnv* env, jobject thiz,
                                                      jlong start, jlong end,
                                                      jbyteArray out) {
     Snapshot* snapshot = getSnapshot(env, thiz);
@@ -190,7 +190,7 @@ Java_dev_blamspot_jcode_core_buffer_Snapshot_nativeReadRange(JNIEnv* env, jobjec
 // when that exceeds its capacity. One crossing replaces 2 JNI calls + 1 allocation per line per
 // frame in the editor renderer.
 JNIEXPORT jlong JNICALL
-Java_dev_blamspot_jcode_core_buffer_Snapshot_nativeReadLines(JNIEnv* env, jobject thiz,
+Java_dev_jcode_core_buffer_Snapshot_nativeReadLines(JNIEnv* env, jobject thiz,
                                                      jlong firstLine, jint count,
                                                      jbyteArray out, jintArray outStarts,
                                                      jintArray bufferStarts) {
@@ -230,7 +230,7 @@ Java_dev_blamspot_jcode_core_buffer_Snapshot_nativeReadLines(JNIEnv* env, jobjec
 
 // (line << 32) | column — one JNI crossing and one computation for the pair.
 JNIEXPORT jlong JNICALL
-Java_dev_blamspot_jcode_core_buffer_Snapshot_nativeOffsetToLineColumn(JNIEnv* env, jobject thiz, jlong offset) {
+Java_dev_jcode_core_buffer_Snapshot_nativeOffsetToLineColumn(JNIEnv* env, jobject thiz, jlong offset) {
     Snapshot* snapshot = getSnapshot(env, thiz);
     if (!snapshot) return 0;
     auto [line, col] = snapshot->offsetToLineColumn(offset);
@@ -238,7 +238,7 @@ Java_dev_blamspot_jcode_core_buffer_Snapshot_nativeOffsetToLineColumn(JNIEnv* en
 }
 
 JNIEXPORT jlong JNICALL
-Java_dev_blamspot_jcode_core_buffer_Snapshot_nativeLineColumnToOffset(JNIEnv* env, jobject thiz,
+Java_dev_jcode_core_buffer_Snapshot_nativeLineColumnToOffset(JNIEnv* env, jobject thiz,
                                                               jlong line, jlong column) {
     Snapshot* snapshot = getSnapshot(env, thiz);
     if (!snapshot) return 0;
@@ -247,7 +247,7 @@ Java_dev_blamspot_jcode_core_buffer_Snapshot_nativeLineColumnToOffset(JNIEnv* en
 
 // (start << 32) | end of the line's byte range — one JNI crossing for lineAt.
 JNIEXPORT jlong JNICALL
-Java_dev_blamspot_jcode_core_buffer_Snapshot_nativeLineRange(JNIEnv* env, jobject thiz, jlong line) {
+Java_dev_jcode_core_buffer_Snapshot_nativeLineRange(JNIEnv* env, jobject thiz, jlong line) {
     Snapshot* snapshot = getSnapshot(env, thiz);
     if (!snapshot) return 0;
     auto [start, end] = snapshot->lineAt(line);
@@ -255,7 +255,7 @@ Java_dev_blamspot_jcode_core_buffer_Snapshot_nativeLineRange(JNIEnv* env, jobjec
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_blamspot_jcode_native_buffer_BufferNativeModule_nativeInit(JNIEnv* env, jobject thiz) {
+Java_dev_jcode_native_buffer_BufferNativeModule_nativeInit(JNIEnv* env, jobject thiz) {
     LOGI("Native buffer module initialized");
     return 1;
 }

@@ -278,8 +278,8 @@ For an Android application module, `DebugController` detects the module
    which phone a run lands on is device-local state.
 9. Only a pick that adb still lists forces `ANDROID_SERIAL`.
 
-> **Naming collision:** `dev.blamspot.jcode.core.config.BuildConfig` shares its simple name with the
-> Gradle-generated `dev.blamspot.jcode.BuildConfig`. In `:app` sources, importing the config type shadows the
+> **Naming collision:** `dev.jcode.core.config.BuildConfig` shares its simple name with the
+> Gradle-generated `dev.jcode.BuildConfig`. In `:app` sources, importing the config type shadows the
 > generated one. Qualify explicitly when both are needed.
 
 ---

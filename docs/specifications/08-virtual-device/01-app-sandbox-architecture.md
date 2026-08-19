@@ -115,13 +115,13 @@ a virtual display it asks nothing of the activity task manager.
 
 ```mermaid
 flowchart LR
-    subgraph ide["dev.blamspot.jcode (main)"]
+    subgraph ide["dev.jcode (main)"]
         page["AppSandboxPage"]
         sv["AppSandboxSurfaceView"]
         sandbox["AppSandboxSession (bind/unbind)"]
         adb["VirtualDeviceAdbService"]
     end
-    subgraph guest["dev.blamspot.jcode:guest"]
+    subgraph guest["dev.jcode:guest"]
         svc["GuestSessionService (IGuestSession)"]
         eg["EmbeddedGuest"]
         gr["GuestRuntime + hooks"]
@@ -1132,8 +1132,7 @@ a name against it in the device's log.
 
 The Settings app finds the provider by asking the package manager who owns its own uid — not
 `getPackageName()`, which inside a guest answers with the *guest's* package. That is also what makes
-one build of the app work against `dev.blamspot.jcode`, `dev.blamspot.jcode.debug` and
-`dev.blamspot.jcode.beta` without knowing
+one build of the app work against `dev.jcode`, `dev.jcode.debug` and `dev.jcode.beta` without knowing
 there is more than one.
 
 #### What each screen can honestly claim

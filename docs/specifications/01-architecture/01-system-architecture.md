@@ -80,13 +80,13 @@ The application runs in up to three processes.
 
 ```mermaid
 flowchart LR
-    subgraph P1["dev.blamspot.jcode — main process"]
+    subgraph P1["dev.jcode — main process"]
         MA["MainActivity<br/>(the whole IDE UI)"]
         BS["BackendService<br/>foregroundServiceType=specialUse"]
         PDP["ProjectsDocumentsProvider"]
     end
 
-    subgraph P2["dev.blamspot.jcode:guest — virtual device"]
+    subgraph P2["dev.jcode:guest — virtual device"]
         GB["GuestBootstrapActivity"]
         GA["GuestActivity0..3 (stubs)"]
         GS["GuestSessionService"]
@@ -104,8 +104,8 @@ flowchart LR
 
 | Process | Declared at | Contains | Why separate |
 |---|---|---|---|
-| `dev.blamspot.jcode` (main) | default | `MainActivity`, `BackendService`, `ProjectsDocumentsProvider`, `AppInstallReceiver` | — |
-| `dev.blamspot.jcode:guest` | `android:process=":guest"` on `GuestBootstrapActivity`, `GuestActivity0`–`GuestActivity3`, `GuestSessionService` (AndroidManifest.xml:96–143) | The loaded guest APK and the framework hooks that host it | The guest gets its own ART heap and framework hooks and cannot corrupt the IDE |
+| `dev.jcode` (main) | default | `MainActivity`, `BackendService`, `ProjectsDocumentsProvider`, `AppInstallReceiver` | — |
+| `dev.jcode:guest` | `android:process=":guest"` on `GuestBootstrapActivity`, `GuestActivity0`–`GuestActivity3`, `GuestSessionService` (AndroidManifest.xml:96–143) | The loaded guest APK and the framework hooks that host it | The guest gets its own ART heap and framework hooks and cannot corrupt the IDE |
 | proot children | spawned at runtime | Every distro tool | They are ordinary Linux processes under a PTY, not Android components |
 
 The `:guest` process is **not a security boundary** — it shares the app's uid. See

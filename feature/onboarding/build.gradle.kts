@@ -7,7 +7,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.blamspot.jcode.feature.onboarding"
+    namespace = "dev.jcode.feature.onboarding"
     compileSdk = 36
 
     defaultConfig {

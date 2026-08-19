@@ -7,7 +7,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.blamspot.jcode.feature.sdkmanager"
+    namespace = "dev.jcode.feature.sdkmanager"
     compileSdk = 36
 
     defaultConfig {

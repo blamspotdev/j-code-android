@@ -7,9 +7,9 @@ name: release
 # train main is currently carrying — so a release can only ever publish the version the repository
 # says it is preparing. What you choose here is which *channel* it goes out on:
 #
-#   beta   -> dev.blamspot.jcode.beta, versionName 1.5.0-beta.1, tagged v1.5.0-beta.1, marked pre-release.
+#   beta   -> dev.jcode.beta, versionName 1.5.0-beta.1, tagged v1.5.0-beta.1, marked pre-release.
 #             Installs alongside the release app; the Beta channel of the updater offers it.
-#   stable -> dev.blamspot.jcode, versionName 1.5.0,        tagged v1.5.0,        a full release.
+#   stable -> dev.jcode,      versionName 1.5.0,        tagged v1.5.0,        a full release.
 #             Publishing one also opens the next train (see version-bump.yml).
 #
 # ## Who may run this, and the secrets it needs
@@ -334,9 +334,9 @@ jobs:
         run: |
           set -eu
           if [ "$CHANNEL" = "beta" ]; then
-            installs_as="dev.blamspot.jcode.beta, alongside the release app"
+            installs_as="dev.jcode.beta, alongside the release app"
           else
-            installs_as="dev.blamspot.jcode"
+            installs_as="dev.jcode"
           fi
 
           # printf rather than a heredoc: everything here is inside an indented YAML block scalar,

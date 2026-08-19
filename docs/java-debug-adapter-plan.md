@@ -46,7 +46,7 @@ Strategy: **DAP over stdio (leg 1 gone), JDWP `dt_socket` pinned to
 
 **Rank 1 (chosen): a small custom stdio adapter on `com.microsoft.java.debug.core`
 (0.53.1).** Ship a shaded fat jar `jcode-java-dap.jar` = java-debug-**core** + a
-~200–400-line launcher `dev.blamspot.jcode.javadap.Main`:
+~200–400-line launcher `dev.jcode.javadap.Main`:
 
 ```java
 new ProtocolServer(System.in, System.out, providerContext).run();
@@ -80,7 +80,7 @@ core's handler registration proves too entangled.
 
 - **`core/distro/.../DebugEngineModels.kt`** — `java-debug` entry replaced:
   `dapAdapter=true`, `transport="stdio"`, `debugType="java"`,
-  `adapterCommand="java -Djava.net.preferIPv4Stack=true -cp \"$HOME/java-dap/jcode-java-dap.jar\" dev.blamspot.jcode.javadap.Main"`,
+  `adapterCommand="java -Djava.net.preferIPv4Stack=true -cp \"$HOME/java-dap/jcode-java-dap.jar\" dev.jcode.javadap.Main"`,
   `requiredSdks=["jdk"]`, Java-only (`.java`). Flipping `dapAdapter` false→true
   makes the fail-fast block at `DebugController.kt:90` no longer trip.
 - **`app/.../debug/DebugController.kt`** — new `"java" ->` branch in

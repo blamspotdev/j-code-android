@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.blamspot.jcode.core.treesitter"
+    namespace = "dev.jcode.core.treesitter"
     compileSdk = 36
 
     defaultConfig {

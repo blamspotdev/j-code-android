@@ -7,7 +7,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.blamspot.jcode.feature.terminal.pane"
+    namespace = "dev.jcode.feature.terminal.pane"
     compileSdk = 36
 
     defaultConfig {

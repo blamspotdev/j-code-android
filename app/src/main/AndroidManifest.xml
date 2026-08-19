@@ -25,23 +25,6 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- Lets the app hand Android a "remove the old install" request after a migration. A normal
-         permission, not a dangerous one: it grants nothing except the right to ASK — the system
-         installer still shows its own confirmation and does the removal itself. Without it that
-         request is refused outright ("does not have android.permission.REQUEST_DELETE_PACKAGES"). -->
-    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
-
-    <!-- The installs a migration bundle can have come from. Android 11 filters package queries, so
-         without naming them the app cannot tell whether the old install is still present after an
-         import — and would offer to remove an app it cannot see, or fail to offer at all. Named
-         explicitly rather than with QUERY_ALL_PACKAGES: these three are the only ones it ever asks
-         about, and the broad permission is restricted on Play for good reason. -->
-    <queries>
-        <package android:name="dev.jcode" />
-        <package android:name="dev.jcode.debug" />
-        <package android:name="dev.jcode.beta" />
-    </queries>
-
     <!-- The one dangerous permission held for the virtual device, and the only hardware a guest can
          be given for real: the microphone. Never granted by holding it — it is requested from the
          user at the moment an app on the device is switched to a real microphone in Manage

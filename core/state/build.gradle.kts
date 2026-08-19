@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.blamspot.jcode.core.state"
+    namespace = "dev.jcode.core.state"
     compileSdk = 36
 
     defaultConfig {

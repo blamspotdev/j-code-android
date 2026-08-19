@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.blamspot.jcode.nativeffi.buffer"
+    namespace = "dev.jcode.nativeffi.buffer"
     compileSdk = 36
 
     defaultConfig {

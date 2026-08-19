@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.blamspot.jcode.core.editor.completion"
+    namespace = "dev.jcode.core.editor.completion"
     compileSdk = 36
 
     defaultConfig {

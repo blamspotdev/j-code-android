@@ -7,7 +7,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.blamspot.jcode.feature.editor.pane"
+    namespace = "dev.jcode.feature.editor.pane"
     compileSdk = 36
 
     defaultConfig {

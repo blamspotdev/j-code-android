@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.blamspot.jcode.feature.lspmanager"
+    namespace = "dev.jcode.feature.lspmanager"
     compileSdk = 36
 
     defaultConfig {
