@@ -27,13 +27,6 @@ Java_dev_blamspot_jcode_core_treesitter_TsParser_nativeCreate(JNIEnv* env, jobje
 }
 
 JNIEXPORT void JNICALL
-Java_dev_blamspot_jcode_core_treesitter_TsParser_nativeClose(JNIEnv* env, jobject thiz, jlong handle) {
-    if (handle) {
-        ts_parser_delete((TSParser*)handle);
-    }
-}
-
-JNIEXPORT void JNICALL
 Java_dev_blamspot_jcode_core_treesitter_TsParser_00024Companion_nativeCloseByHandle(JNIEnv* env, jobject thiz, jlong handle) {
     if (handle) {
         ts_parser_delete((TSParser*)handle);
@@ -95,13 +88,6 @@ JNIEXPORT jlong JNICALL
 Java_dev_blamspot_jcode_core_treesitter_TsTree_nativeCopy(JNIEnv* env, jobject thiz, jlong handle) {
     if (!handle) return 0;
     return (jlong)ts_tree_copy((const TSTree*)handle);
-}
-
-JNIEXPORT void JNICALL
-Java_dev_blamspot_jcode_core_treesitter_TsTree_nativeClose(JNIEnv* env, jobject thiz, jlong handle) {
-    if (handle) {
-        ts_tree_delete((TSTree*)handle);
-    }
 }
 
 JNIEXPORT void JNICALL

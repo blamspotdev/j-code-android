@@ -47,8 +47,10 @@ class TsParser : AutoCloseable {
         if (!closed) {
             closed = true
             if (handle != 0L) {
-                nativeClose(handle)
                 handle = 0L
+                // clean() RUNS the registered action and deregisters it, so this frees the parser
+                // exactly once. Calling nativeClose as well — as this did until 1.6.2 — deleted the
+                // same TSParser twice, and the second ts_parser_delete aborted the process.
                 cleanable.clean()
             }
         }
@@ -59,7 +61,6 @@ class TsParser : AutoCloseable {
     }
 
     private external fun nativeCreate(): Long
-    private external fun nativeClose(handle: Long)
     private external fun nativeSetLanguage(handle: Long, langHandle: Long): Boolean
     private external fun nativeParseString(handle: Long, oldTree: Long, source: String): Long
     private external fun nativeParseBytes(handle: Long, oldTree: Long, source: ByteArray): Long
@@ -129,8 +130,8 @@ class TsTree internal constructor(
         if (!closed) {
             closed = true
             if (handle != 0L) {
-                nativeClose(handle)
                 handle = 0L
+                // Same single-free rule as TsParser.close above.
                 cleanable.clean()
             }
         }
@@ -142,7 +143,6 @@ class TsTree internal constructor(
 
     private external fun nativeRootNode(handle: Long): Long
     private external fun nativeCopy(handle: Long): Long
-    private external fun nativeClose(handle: Long)
     private external fun nativeEdit(handle: Long, startByte: Int, oldEndByte: Int, newEndByte: Int,
         startRow: Int, startColumn: Int, oldEndRow: Int, oldEndColumn: Int, newEndRow: Int, newEndColumn: Int)
 
