@@ -34,6 +34,8 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -41,7 +43,7 @@ import androidx.compose.material3.ScrollableTabRow
 import dev.jcode.design.AlertDialog
 import dev.jcode.design.CompactFilledButton
 import dev.jcode.design.CompactOutlinedButton
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
@@ -2209,8 +2211,13 @@ private fun StepperRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            StepperButton(JCodeIcon.Minus, "Decrease $label", filled = false, onClick = onDecrease)
-            StepperButton(JCodeIcon.Add, "Increase $label", filled = true, onClick = onIncrease)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                StepperButton(JCodeIcon.Minus, "Decrease $label", filled = false, onClick = onDecrease)
+                StepperButton(JCodeIcon.Add, "Increase $label", filled = true, onClick = onIncrease)
+            }
         }
     }
 }
@@ -2222,9 +2229,9 @@ private fun StepperRow(
  * different weights, different widths, and sitting on a text baseline inside a button that holds no
  * text. Two glyphs meant to be a matched pair looked like neither.
  *
- * The buttons keep their shapes — outlined to step down, tonal to step up, the same emphasis pairing
- * the rest of the page uses — and only what is inside them changes. The padding comes in with them,
- * since a button sized around a line of text is wider than one holding a square icon.
+ * Round, because that is the shape of a button holding one glyph and nothing else: a pill is a shape
+ * that expects a word in it, and reads as a button whose label failed to load. The emphasis pairing
+ * stays — outlined to step down, tonal to step up, as elsewhere on the page.
  *
  * They are also the only controls on this page a screen reader could not name: "-" reads as a
  * hyphen and says nothing about what it steps. Each now says which setting it moves.
@@ -2236,15 +2243,20 @@ private fun StepperButton(
     filled: Boolean,
     onClick: () -> Unit,
 ) {
-    val sizing = Modifier.defaultMinSize(minWidth = 44.dp, minHeight = 32.dp)
-    val padding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+    // Sized down from the 40dp default, and the interactive minimum relaxed with it. That minimum
+    // is there for good reason and is not worth keeping here: it pads each button out to 48dp of
+    // layout, which is most of the gap between the two, and a settings row is not a place anyone
+    // taps in a hurry.
+    val sizing = Modifier.size(34.dp)
     val glyph: @Composable () -> Unit = {
-        Icon(jcIcon(icon), contentDescription, modifier = Modifier.size(18.dp))
+        Icon(jcIcon(icon), contentDescription, modifier = Modifier.size(17.dp))
     }
-    if (filled) {
-        FilledTonalButton(onClick = onClick, modifier = sizing, contentPadding = padding) { glyph() }
-    } else {
-        OutlinedButton(onClick = onClick, modifier = sizing, contentPadding = padding) { glyph() }
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+        if (filled) {
+            FilledTonalIconButton(onClick = onClick, modifier = sizing) { glyph() }
+        } else {
+            OutlinedIconButton(onClick = onClick, modifier = sizing) { glyph() }
+        }
     }
 }
 
