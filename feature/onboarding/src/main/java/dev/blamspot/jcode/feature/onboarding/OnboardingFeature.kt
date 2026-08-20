@@ -671,14 +671,10 @@ private fun LegacyInstallCard(packageName: String, onOpen: () -> Unit) {
         ) {
             Text("Your previous JCode is still installed", fontWeight = FontWeight.SemiBold)
             Text(
-                text = "JCode has moved to a new package name, so this install sits beside " +
-                    "$packageName rather than replacing it. Nothing has been lost: that app still " +
-                    "holds its Linux environment, projects and settings, and still runs. But it is " +
-                    "a separate app, so nothing here can read them.\n\n" +
-                    "Versions from 1.6.1 hand everything over by themselves. An older one needs a " +
-                    "hand: open it, use Settings → Environment → Back up (.tar.gz), then come back " +
-                    "and choose Restore below instead of picking a distro. Your settings have their " +
-                    "own backup in Settings → Backup & restore.",
+                text = "Nothing is lost: $packageName still holds your Linux environment, projects " +
+                    "and settings. JCode's package name changed, so this is a separate app that " +
+                    "cannot read them — back them up there (Settings → Environment), then use " +
+                    "Restore below instead of picking a distro.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
