@@ -629,29 +629,11 @@ internal fun ExtensionPermissionsPage(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = "Extension settings",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            if (configurable.isNotEmpty()) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                    shape = RoundedCornerShape(20.dp),
-                ) {
-                    Text(
-                        text = "${configurable.size} with settings",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 2.dp),
-                    )
-                }
-            }
-        }
+        Text(
+            text = "Extension settings",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
         if (configurable.isEmpty()) {
             Text(
                 // Two different nothings, and telling them apart is the whole value of the line:
