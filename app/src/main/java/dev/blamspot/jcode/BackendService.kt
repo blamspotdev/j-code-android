@@ -206,9 +206,9 @@ class BackendService : Service() {
     }
 
     companion object {
-        private const val NOTIFICATION_CHANNEL_ID = "dev.jcode.backend.sessions"
+        private const val NOTIFICATION_CHANNEL_ID = "dev.blamspot.jcode.backend.sessions"
         private const val NOTIFICATION_ID = 7_601
-        private const val ACTION_STOP = "dev.jcode.backend.action.STOP"
+        private const val ACTION_STOP = "dev.blamspot.jcode.backend.action.STOP"
 
         internal fun start(context: android.content.Context) {
             ContextCompat.startForegroundService(

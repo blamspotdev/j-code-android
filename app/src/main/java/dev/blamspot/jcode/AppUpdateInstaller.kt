@@ -32,7 +32,7 @@ import java.net.URL
  * can route results back into [state] regardless of which Activity is alive.
  */
 object AppUpdateInstaller {
-    const val INSTALL_ACTION = "dev.jcode.action.APP_INSTALL_STATUS"
+    const val INSTALL_ACTION = "dev.blamspot.jcode.action.APP_INSTALL_STATUS"
 
     /** Upper bound on how long [State.Installing] may wait for a session-status broadcast before we
      *  treat the install as abandoned. Generous, because the user may be reading the system installer

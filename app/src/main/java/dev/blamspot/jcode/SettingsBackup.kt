@@ -46,7 +46,7 @@ object SettingsBackup {
         }
         return JSONObject()
             .put("format", FORMAT)
-            .put("app", "dev.jcode")
+            .put("app", "dev.blamspot.jcode")
             .put("settings", entries)
             .toString(2)
     }
