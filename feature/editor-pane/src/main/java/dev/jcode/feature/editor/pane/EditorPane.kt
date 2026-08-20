@@ -582,7 +582,7 @@ fun EditorViewHost(
                         add(ContextAction(JCodeIcon.Search, "Find text") { find(req.word) })
                     }
                     menuExtras.previewToggle?.let { toggle ->
-                        add(ContextAction(JCodeIcon.Preview, "Preview") { toggle() })
+                        add(ContextAction(JCodeIcon.Preview, menuExtras.previewLabel) { toggle() })
                     }
                     if (languageActionsEnabled) {
                         EditorLanguageAction.entries.forEach { action ->

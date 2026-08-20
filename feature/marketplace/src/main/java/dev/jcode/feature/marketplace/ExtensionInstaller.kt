@@ -487,6 +487,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             path,
             contains,
             map.str("opensInPreview")?.takeIf { it.isNotBlank() },
+            map.str("label")?.takeIf { it.isNotBlank() },
         )
     }
 

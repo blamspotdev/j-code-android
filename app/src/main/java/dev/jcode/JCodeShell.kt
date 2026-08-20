@@ -229,6 +229,7 @@ import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.languageFor
 import dev.jcode.feature.marketplace.claimsNatively
+import dev.jcode.feature.marketplace.nativeClaimFor
 import dev.jcode.feature.marketplace.tabName
 import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.onboarding.EnvironmentManagerActions
@@ -1159,14 +1160,20 @@ fun JCodeApp(
     ) {
         val fileExt = menuFileName.substringAfterLast('.', "").lowercase()
         // Markdown renders itself; anything else needs an extension that says it can draw this file.
-        val hasRenderedView = SyntaxHighlighter.isMarkdownFile(menuFileName) ||
-            (menuTab != null && installedExtensions.any { it.claimsNatively(menuTab.filePath) })
+        // The claiming extension names its own view — see NativeClaim.previewLabel for why the menu
+        // cannot: a rendered Markdown file is previewed, a layout is designed, and only the thing
+        // that draws it knows which.
+        val nativeClaim = menuTab?.let { tab ->
+            installedExtensions.firstNotNullOfOrNull { it.nativeClaimFor(tab.filePath) }
+        }
+        val hasRenderedView = SyntaxHighlighter.isMarkdownFile(menuFileName) || nativeClaim != null
         EditorMenuExtras(
             previewToggle = if (menuIsFileTab && menuTabId != null && hasRenderedView) {
                 { viewModel.toggleTabPreview(menuTabId) }
             } else {
                 null
             },
+            previewLabel = nativeClaim?.previewLabel ?: "Preview",
             onGoToLine = if (menuIsFileTab) {
                 { editorGoToLineNonce++ }
             } else {

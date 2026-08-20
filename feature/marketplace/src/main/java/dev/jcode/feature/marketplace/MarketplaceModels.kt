@@ -363,9 +363,12 @@ fun InstalledExtension.languageFor(fileName: String): LanguagePack? =
  * Both a type and a path fragment, because "an .xml file" is far too broad: a layout designer wants
  * `res/layout/…` and would be actively wrong on `AndroidManifest.xml`.
  */
-fun InstalledExtension.claimsNatively(file: File): Boolean {
-    if (nativeEntry == null || nativeClass == null) return false
-    return nativeClaims.any { it.matches(file) }
+fun InstalledExtension.claimsNatively(file: File): Boolean = nativeClaimFor(file) != null
+
+/** The rule by which this extension claims [file], or null when it does not. */
+fun InstalledExtension.nativeClaimFor(file: File): NativeClaim? {
+    if (nativeEntry == null || nativeClass == null) return null
+    return nativeClaims.firstOrNull { it.matches(file) }
 }
 
 /**
@@ -397,6 +400,14 @@ data class NativeClaim(
      * at all is the opt-in.
      */
     val opensInPreviewSetting: String? = null,
+    /**
+     * What the editor's menu calls the toggle into this view.
+     *
+     * "Preview" is right for a rendered Markdown document and wrong for a layout designer — you are
+     * not previewing it, you are editing it somewhere else. The claim knows what its view is; the
+     * menu does not, and should not have to.
+     */
+    val previewLabel: String? = null,
 ) {
     fun matches(file: File): Boolean {
         if (fileTypes.isNotEmpty() && file.extension.lowercase() !in fileTypes) return false
