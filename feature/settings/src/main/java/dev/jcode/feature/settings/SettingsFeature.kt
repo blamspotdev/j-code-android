@@ -41,6 +41,7 @@ import androidx.compose.material3.ScrollableTabRow
 import dev.jcode.design.AlertDialog
 import dev.jcode.design.CompactFilledButton
 import dev.jcode.design.CompactOutlinedButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
@@ -2208,9 +2209,42 @@ private fun StepperRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            CompactOutlinedButton(text = "-", onClick = onDecrease)
-            CompactFilledButton(text = "+", onClick = onIncrease)
+            StepperButton(JCodeIcon.Minus, "Decrease $label", filled = false, onClick = onDecrease)
+            StepperButton(JCodeIcon.Add, "Increase $label", filled = true, onClick = onIncrease)
         }
+    }
+}
+
+/**
+ * One half of a stepper.
+ *
+ * An icon rather than a typed "-" and "+", which are a hyphen and a plus sign set at text size:
+ * different weights, different widths, and sitting on a text baseline inside a button that holds no
+ * text. Two glyphs meant to be a matched pair looked like neither.
+ *
+ * The buttons keep their shapes — outlined to step down, tonal to step up, the same emphasis pairing
+ * the rest of the page uses — and only what is inside them changes. The padding comes in with them,
+ * since a button sized around a line of text is wider than one holding a square icon.
+ *
+ * They are also the only controls on this page a screen reader could not name: "-" reads as a
+ * hyphen and says nothing about what it steps. Each now says which setting it moves.
+ */
+@Composable
+private fun StepperButton(
+    icon: JCodeIcon,
+    contentDescription: String,
+    filled: Boolean,
+    onClick: () -> Unit,
+) {
+    val sizing = Modifier.defaultMinSize(minWidth = 44.dp, minHeight = 32.dp)
+    val padding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+    val glyph: @Composable () -> Unit = {
+        Icon(jcIcon(icon), contentDescription, modifier = Modifier.size(18.dp))
+    }
+    if (filled) {
+        FilledTonalButton(onClick = onClick, modifier = sizing, contentPadding = padding) { glyph() }
+    } else {
+        OutlinedButton(onClick = onClick, modifier = sizing, contentPadding = padding) { glyph() }
     }
 }
 
