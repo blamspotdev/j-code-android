@@ -383,6 +383,20 @@ data class NativeClaim(
     val pathContains: String? = null,
     /** Text the file must contain. Read from the head of the file, never the whole of it. */
     val contains: String? = null,
+    /**
+     * The extension setting that governs opening these files in the extension's view straight away.
+     *
+     * Non-null means "this file type is *primarily* the thing my view shows" — an Android layout is
+     * a layout before it is XML, so opening it as text first and making the user find a menu is the
+     * wrong default. A `.kt` file is not primarily a composable, which is why nothing declares this
+     * for Kotlin.
+     *
+     * Naming a setting is required rather than optional, so this cannot be used to take a file type
+     * over with no way back. The named setting resolving to `false` turns it off; anything else,
+     * including a manifest that forgot a default, leaves it on — the extension declaring the field
+     * at all is the opt-in.
+     */
+    val opensInPreviewSetting: String? = null,
 ) {
     fun matches(file: File): Boolean {
         if (fileTypes.isNotEmpty() && file.extension.lowercase() !in fileTypes) return false

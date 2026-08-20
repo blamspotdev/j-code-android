@@ -4318,6 +4318,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }.getOrDefault(emptyMap())
     }
 
+    /**
+     * True when an installed extension says this kind of file opens in its view rather than as text.
+     *
+     * Only for a file type that *is* the thing the view shows — see [NativeClaim.opensInPreviewSetting]
+     * — and only while the setting it names allows it. Applied when a tab is created, so a restored
+     * session keeps whichever view it was left in rather than being flipped back.
+     */
+    private fun opensInExtensionView(file: File): Boolean =
+        installedExtensions.value.any { ext ->
+            ext.nativeEntry != null && ext.nativeClass != null &&
+                ext.nativeClaims.any { claim ->
+                    val setting = claim.opensInPreviewSetting ?: return@any false
+                    claim.matches(file) && resolvedExtensionSetting(ext, setting) != "false"
+                }
+        }
+
     /** A setting's saved value, or its manifest default, or "". Used by config.* (caller-scoped). */
     private fun resolvedExtensionSetting(ext: InstalledExtension, key: String): String {
         extensionSettings.value[ext.id]?.get(key)?.let { return it }
@@ -5719,7 +5735,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 tab.editorState?.requestRevealAt(line, column)
                 trackDirty(tab)
                 prep.signature?.let { diskSignatures[stableId] = it }
-                _editorGroup.value = _editorGroup.value.withTabAdded(tab)
+                _editorGroup.value = _editorGroup.value
+                    .withTabAdded(tab.copy(previewMode = opensInExtensionView(file)))
                 queueSyntaxCheck(file)
                 lspController.documentOpened(file.path)
             }

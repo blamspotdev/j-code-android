@@ -482,7 +482,12 @@ class ExtensionInstaller internal constructor(context: Context) {
         val path = map.str("pathContains")?.takeIf { it.isNotBlank() }
         val contains = map.str("contains")?.takeIf { it.isNotBlank() }
         if (types.isEmpty() && path == null && contains == null) return null
-        return NativeClaim(types, path, contains)
+        return NativeClaim(
+            types,
+            path,
+            contains,
+            map.str("opensInPreview")?.takeIf { it.isNotBlank() },
+        )
     }
 
     private fun nativeHeader(dir: File): Map<String, Any?> =
