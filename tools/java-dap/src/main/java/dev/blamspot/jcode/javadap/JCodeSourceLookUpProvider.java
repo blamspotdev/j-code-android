@@ -13,7 +13,7 @@
  * string/char literals and text blocks are blanked first), sufficient for javac-compiled
  * sources including multiple top-level types and a non-public class carrying main().
  */
-package dev.jcode.javadap;
+package dev.blamspot.jcode.javadap;
 
 import java.io.File;
 import java.io.IOException;

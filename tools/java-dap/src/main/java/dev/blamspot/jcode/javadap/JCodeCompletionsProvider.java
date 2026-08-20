@@ -2,7 +2,7 @@
  * No-op ICompletionsProvider. Debug-console code completion is unsupported; returns an
  * empty list. Must be registered because the launch flow initializes it via getProvider().
  */
-package dev.jcode.javadap;
+package dev.blamspot.jcode.javadap;
 
 import java.util.Collections;
 import java.util.List;

@@ -67,20 +67,30 @@ All three install **side by side**. The `namespace` — the compile-time R and B
 is also `dev.blamspot.jcode`, and the Kotlin, Java, AIDL and JNI sources sit under it: at 1.6.2 the
 whole package moved off `dev.jcode`, not just the install identity.
 
-Two trees deliberately stayed behind on `dev.jcode`, because there the package name is not an
-internal detail but the identity of an artifact that ships separately:
+Two trees ship as separate artifacts, so moving them meant rebuilding those artifacts rather than
+editing a string — both were done for 1.6.2 rather than deferred:
 
-- `tools/vdevice-*` and the guest fixtures keep `dev.jcode.vdevice.*`. That string *is* the identity
-  of the apps installed inside the virtual device, named from the host by the constants in
-  `DeviceIntents`, `VirtualLauncher` and friends, and the APKs are committed prebuilt under
-  `app/src/main/assets/vdevice/`.
-- `tools/java-dap` keeps `dev.jcode.javadap`. The jar is not built here at install time — it is
-  downloaded from a pinned `java-dap-v1` release and launched by main class, so moving the package
-  without republishing the jar would break JVM debugging on every device.
+- **The virtual device's guest apps** are now `dev.blamspot.jcode.vdevice.*`. That string *is* the
+  identity of the apps installed inside the device: the host names them from `DeviceIntents`,
+  `VirtualLauncher` and friends, and the APKs are committed prebuilt under
+  `app/src/main/assets/vdevice/`. Both halves have to agree exactly — a constant that disagrees with
+  an APK's manifest fails when the launcher cannot find the app, at runtime, not at build. All six
+  (`browser`, `camera`, `files`, `hardware`, `keyboard`, `settings`) were rebuilt from
+  `tools/` with the `aapt2` + `javac` + `d8` + `zipalign` + `apksigner` pipeline each README
+  documents, and verified with `aapt2 dump packagename` against the shipped asset.
+  `VirtualLauncher`'s own ids are synthetic — they label the launcher's nodes in a uiautomator dump
+  and have no APK behind them.
+- **`tools/java-dap`** is now `dev.blamspot.jcode.javadap`. The jar is not built during a JCode
+  build; it is downloaded from a pinned release and launched by main class, so the package could
+  only move together with a republished jar. `DebugEngineModels` now fetches `java-dap-v2` and
+  launches `dev.blamspot.jcode.javadap.Main` — **that release must exist before 1.6.2 ships**, or
+  JVM debugging installs nothing.
 
-The same reasoning protects a handful of string constants in the moved code — intent actions, the
-notification channel id, the `SettingsBackup` provenance marker. They are namespaced strings that
-only have to agree with themselves, and rewriting them would change values already on disk.
+The app's own namespaced strings moved with it: the install-status action, the notification channel
+id, the `BackendService` stop action and the `SettingsBackup` provenance marker. None is an external
+contract — the install receiver is `exported="false"` and its action is set on an explicit `Intent`,
+notification channels are per-package so a renamed package has no old channel to orphan, and the
+backup marker is written but never read back.
 
 The base id is a Gradle property: `-PjcodeApplicationId=<id>` overrides `dev.blamspot.jcode`. Nothing in a
 release uses it — it exists so a build can be produced under a *different* package, which is the only

@@ -4,7 +4,7 @@
  * DebugAdapter constructor) subscribes to it immediately; Observable.never() supplies a
  * live, event-free stream. Must be registered before the ProtocolServer is constructed.
  */
-package dev.jcode.javadap;
+package dev.blamspot.jcode.javadap;
 
 import java.util.Collections;
 import java.util.List;

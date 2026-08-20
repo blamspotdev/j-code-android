@@ -4,7 +4,7 @@
  * that is needed for a plain `mainClass + classPaths` launch: its LaunchingConnector
  * injects -agentlib:jdwp, forks the debuggee JVM and returns an attached VirtualMachine.
  */
-package dev.jcode.javadap;
+package dev.blamspot.jcode.javadap;
 
 import com.microsoft.java.debug.core.adapter.IVirtualMachineManagerProvider;
 import com.sun.jdi.Bootstrap;

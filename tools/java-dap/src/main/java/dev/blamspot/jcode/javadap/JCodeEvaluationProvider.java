@@ -4,7 +4,7 @@
  * core degrades gracefully instead of NPEing. Must be registered because the breakpoint
  * event handler looks it up via getProvider(IEvaluationProvider.class).
  */
-package dev.jcode.javadap;
+package dev.blamspot.jcode.javadap;
 
 import java.util.concurrent.CompletableFuture;
 

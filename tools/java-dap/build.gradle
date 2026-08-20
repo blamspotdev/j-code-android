@@ -2,7 +2,7 @@
 // Requires Gradle 8.x (shadow 8.1.1) and a JDK 17+ to run the build.
 //
 // Build:   gradle shadowJar   (or: gradle build)
-// Output:  build/libs/jcode-java-dap.jar   (Main-Class: dev.jcode.javadap.Main)
+// Output:  build/libs/jcode-java-dap.jar   (Main-Class: dev.blamspot.jcode.javadap.Main)
 // Run:     java -jar build/libs/jcode-java-dap.jar --source-path /abs/src/root
 //          (the DAP client speaks over this process's stdin/stdout)
 
@@ -12,7 +12,7 @@ plugins {
     id 'com.github.johnrengelman.shadow' version '8.1.1'
 }
 
-group = 'dev.jcode'
+group = 'dev.blamspot.jcode'
 version = '0.1.0'
 
 java {
@@ -37,7 +37,7 @@ dependencies {
 }
 
 application {
-    mainClass = 'dev.jcode.javadap.Main'
+    mainClass = 'dev.blamspot.jcode.javadap.Main'
 }
 
 // com.sun.jdi lives in the JDK module jdk.jdi. It is a default root module at runtime
@@ -54,7 +54,7 @@ shadowJar {
     archiveClassifier = ''
     archiveVersion = ''
     manifest {
-        attributes 'Main-Class': 'dev.jcode.javadap.Main'
+        attributes 'Main-Class': 'dev.blamspot.jcode.javadap.Main'
     }
 }
 

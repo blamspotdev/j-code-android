@@ -8,7 +8,7 @@
  * entirely inside java-debug-core; the only JCode-specific piece needed to actually
  * hit a source-line breakpoint is the ISourceLookUpProvider (source file <-> FQN).
  */
-package dev.jcode.javadap;
+package dev.blamspot.jcode.javadap;
 
 import java.io.File;
 import java.io.InputStream;

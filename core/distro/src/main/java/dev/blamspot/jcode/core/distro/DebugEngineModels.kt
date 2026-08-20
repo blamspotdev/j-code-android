@@ -147,14 +147,14 @@ object DebugEngineCatalog {
             // curl (not wget) for the download: the required jdk SDK guarantees curl; wget is absent
             // from the minimal base rootfs.
             installCommand = "set -e; mkdir -p \"\$HOME/java-dap\"; " +
-                "jcode_fetch https://github.com/blamspotdev/j-code-android/releases/download/java-dap-v1/jcode-java-dap.jar " +
+                "jcode_fetch https://github.com/blamspotdev/j-code-android/releases/download/java-dap-v2/jcode-java-dap.jar " +
                 "\"\$HOME/java-dap/jcode-java-dap.jar\" 5 95 'Downloading the Java debug adapter'; " +
                 "jcode_progress 100 'Java debug adapter ready'",
             // `... | head -1` would return head's exit code (0) even when java is missing; check the
             // JVM with a real exit-code test so a JDK-less environment fails verify honestly.
             verifyCommand = "test -f \"\$HOME/java-dap/jcode-java-dap.jar\" && command -v java >/dev/null 2>&1",
             uninstallCommand = "rm -rf \"\$HOME/java-dap\"",
-            adapterCommand = "java -Djava.net.preferIPv4Stack=true -cp \"\$HOME/java-dap/jcode-java-dap.jar\" dev.jcode.javadap.Main",
+            adapterCommand = "java -Djava.net.preferIPv4Stack=true -cp \"\$HOME/java-dap/jcode-java-dap.jar\" dev.blamspot.jcode.javadap.Main",
             transport = "stdio",
             debugType = "java",
             languageIds = listOf("java"),
