@@ -89,6 +89,15 @@ interface NativeHost {
      * for the detail.
      */
     fun reportIssues(messages: List<String>)
+
+    /**
+     * Put this file's tab back to its source view.
+     *
+     * A native page *replaces* the editor, and the toggle that opened it lives in the editor's own
+     * context menu — so without this there is no way back out except closing the tab. A plugin that
+     * takes over a file has to be able to hand it back.
+     */
+    fun showSource()
 }
 
 /**
@@ -98,4 +107,4 @@ interface NativeHost {
  * a signature change, a removal, a meaning change. Purely additive changes (a new [Params] key, a
  * new interface an old plugin never implements) do not need a bump.
  */
-const val JCODE_EXT_ABI: Int = 1
+const val JCODE_EXT_ABI: Int = 2

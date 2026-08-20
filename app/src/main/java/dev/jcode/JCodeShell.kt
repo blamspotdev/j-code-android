@@ -1698,6 +1698,7 @@ fun JCodeApp(
         runTerminalCompletions = viewModel.runTerminalCompletions,
         onReadFileText = viewModel::readOpenFileText,
         onReplaceFileText = viewModel::replaceFileText,
+        onToggleTabPreview = viewModel::toggleTabPreview,
     )
     }
 
@@ -1864,6 +1865,7 @@ private fun JCodeShell(
     onReadFileText: (String) -> String?,
     /** Replace a file's text through its editor buffer, for a native extension's page. */
     onReplaceFileText: (String, String) -> Unit,
+    onToggleTabPreview: (String) -> Unit,
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
     onSaveActiveTab: () -> Unit,
@@ -3560,6 +3562,7 @@ private fun JCodeShell(
                                                 onSnackbar = { message ->
                                                     scope.launch { snackbarHostState.showSnackbar(message) }
                                                 },
+                                                onShowSource = { onToggleTabPreview(tab.id) },
                                                 readFile = onReadFileText,
                                                 writeFile = onReplaceFileText,
                                                 modifier = Modifier.fillMaxSize(),

@@ -37,6 +37,7 @@ internal fun NativeExtensionPage(
     projectDir: File?,
     dark: Boolean,
     onSnackbar: (String) -> Unit,
+    onShowSource: () -> Unit,
     readFile: (String) -> String?,
     writeFile: (String, String) -> Unit,
     modifier: Modifier = Modifier,
@@ -94,6 +95,7 @@ internal fun NativeExtensionPage(
             override fun reportIssues(messages: List<String>) {
                 WorkbenchNotices.set(noticeSource, messages.map { WorkbenchNotices.Notice(it) })
             }
+            override fun showSource() = onShowSource()
         }
     }
 
