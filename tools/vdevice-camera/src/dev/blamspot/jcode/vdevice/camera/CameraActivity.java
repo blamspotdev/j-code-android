@@ -1,4 +1,4 @@
-package dev.jcode.vdevice.camera;
+package dev.blamspot.jcode.vdevice.camera;
 
 import android.app.Activity;
 import android.content.Context;
@@ -90,7 +90,7 @@ public class CameraActivity extends Activity {
      * is returned by URI rather than by value, so it needs one the caller can actually open, and the
      * encoding of that URI is the container's business rather than this app's.
      */
-    private static final String EXTRA_DEVICE_PATH = "dev.jcode.vdevice.DEVICE_PATH";
+    private static final String EXTRA_DEVICE_PATH = "dev.blamspot.jcode.vdevice.DEVICE_PATH";
 
     // The same tones the device's other apps are built from — see the Files and Settings apps' Ui.
     // A camera is mostly viewfinder, so it takes four of them rather than the whole set: the bar is

@@ -1,4 +1,4 @@
-package dev.jcode.vdevice.camera;
+package dev.blamspot.jcode.vdevice.camera;
 
 import android.graphics.Bitmap;
 import android.graphics.Canvas;

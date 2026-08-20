@@ -7,7 +7,7 @@
      requires none of them: every one is `required="false"` in effect, because the whole point is to
      run with the hardware switched off and report that it is off. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="dev.jcode.vdevice.hwfixture">
+    package="dev.blamspot.jcode.vdevice.hwfixture">
 
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />

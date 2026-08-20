@@ -853,7 +853,7 @@ at all, and an app that chose for itself would be disagreeing with the switch so
 
 **Files** browses the device's storage and is also its picker — on a phone those are the same app,
 and making them the same app here means the screen that answers `ACTION_OPEN_DOCUMENT` is one
-somebody has actually used. It answers with a **device path** under `dev.jcode.vdevice.DEVICE_PATH`,
+somebody has actually used. It answers with a **device path** under `dev.blamspot.jcode.vdevice.DEVICE_PATH`,
 and `GuestDocuments.addressed` turns that into the `content://` URI the requester receives — a tree
 URI for a folder request, a document URI otherwise. The URI belongs to JCode's documents provider,
 whose authority and document-id encoding are the container's business; an app that guessed at them

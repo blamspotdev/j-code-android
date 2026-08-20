@@ -1,4 +1,4 @@
-package dev.jcode.vdevice.hwfixture;
+package dev.blamspot.jcode.vdevice.hwfixture;
 
 import android.app.ActionBar;
 import android.app.Activity;
@@ -577,7 +577,7 @@ public class HardwareActivity extends Activity implements SensorEventListener, L
     /**
      * What the package manager says handles {@code intent} — the device's app, or nothing.
      *
-     * The package name is what makes it readable: `dev.jcode.vdevice.browser` is the device
+     * The package name is what makes it readable: `dev.blamspot.jcode.vdevice.browser` is the device
      * answering, anything else is the phone answering, and "none" is an app that would hide its
      * button.
      */

@@ -9,7 +9,7 @@
      The icon is a framework drawable rather than one of its own, so this stays a single-dex,
      resource-free APK that plain javac + d8 + aapt2 can build. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="dev.jcode.vdevice.browser">
+    package="dev.blamspot.jcode.vdevice.browser">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />

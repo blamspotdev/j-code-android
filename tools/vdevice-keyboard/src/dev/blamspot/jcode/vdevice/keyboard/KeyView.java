@@ -1,4 +1,4 @@
-package dev.jcode.vdevice.keyboard;
+package dev.blamspot.jcode.vdevice.keyboard;
 
 import android.content.Context;
 import android.util.TypedValue;
@@ -13,7 +13,7 @@ import android.widget.TextView;
  * class, text, content description and bounds; a keyboard painted onto one big canvas would be a
  * single rectangle with nothing in it, which is precisely the state the phone's IME left an agent
  * in. As real views, every key is addressable — {@code text="a"}, {@code content-desc="Backspace"},
- * {@code resource-id="dev.jcode.vdevice.keyboard:id/key_shift"} — and lands where the dump says it
+ * {@code resource-id="dev.blamspot.jcode.vdevice.keyboard:id/key_shift"} — and lands where the dump says it
  * does, because the same bounds are what the container hit-tests a tap against.
  *
  * <p>Never focusable, which is not a detail: the field being typed into has to keep the focus for

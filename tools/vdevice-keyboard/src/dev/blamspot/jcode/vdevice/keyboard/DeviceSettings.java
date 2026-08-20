@@ -1,4 +1,4 @@
-package dev.jcode.vdevice.keyboard;
+package dev.blamspot.jcode.vdevice.keyboard;
 
 import android.content.ContentResolver;
 import android.content.Context;
@@ -15,7 +15,7 @@ import android.util.Log;
  * no privileges of its own, so a setting is something it asks for rather than something it reaches.
  *
  * <p>The authority is derived from the container's package rather than written down, because JCode
- * ships as {@code dev.jcode}, {@code dev.jcode.debug} and {@code dev.jcode.beta} and this app is
+ * ships as {@code dev.blamspot.jcode}, {@code dev.blamspot.jcode.debug} and {@code dev.blamspot.jcode.beta} and this app is
  * installed on all three.
  */
 final class DeviceSettings {
@@ -55,7 +55,7 @@ final class DeviceSettings {
         } catch (Exception e) {
             Log.w(TAG, "cannot tell which app this device is running inside", e);
         }
-        return "dev.jcode";
+        return "dev.blamspot.jcode";
     }
 
     Bundle device() {

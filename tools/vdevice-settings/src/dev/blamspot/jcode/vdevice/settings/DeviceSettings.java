@@ -1,4 +1,4 @@
-package dev.jcode.vdevice.settings;
+package dev.blamspot.jcode.vdevice.settings;
 
 import android.content.ContentResolver;
 import android.content.Context;
@@ -16,7 +16,7 @@ import android.util.Log;
  * class decided for itself would be a second opinion about the device.
  *
  * <p>The authority is derived from the container's package rather than written down, because JCode
- * ships as `dev.jcode`, `dev.jcode.debug` and `dev.jcode.beta` and this app is installed on all
+ * ships as `dev.blamspot.jcode`, `dev.blamspot.jcode.debug` and `dev.blamspot.jcode.beta` and this app is installed on all
  * three. Asking the {@link Context} which app it is running inside gets that right without this app
  * knowing there is more than one.
  */
@@ -62,7 +62,7 @@ final class DeviceSettings {
         } catch (Exception e) {
             Log.w(TAG, "cannot tell which app this device is running inside", e);
         }
-        return "dev.jcode";
+        return "dev.blamspot.jcode";
     }
 
     Bundle device() {

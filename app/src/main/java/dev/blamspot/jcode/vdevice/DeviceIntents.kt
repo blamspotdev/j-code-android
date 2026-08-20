@@ -176,9 +176,9 @@ internal object DeviceIntents {
     /** Whether the launcher should refuse to uninstall [packageName]. */
     fun isSystem(packageName: String): Boolean = packageName in SYSTEM_PACKAGES
 
-    const val CAMERA_PACKAGE = "dev.jcode.vdevice.camera"
-    const val SETTINGS_PACKAGE = "dev.jcode.vdevice.settings"
-    const val FILES_PACKAGE = "dev.jcode.vdevice.files"
+    const val CAMERA_PACKAGE = "dev.blamspot.jcode.vdevice.camera"
+    const val SETTINGS_PACKAGE = "dev.blamspot.jcode.vdevice.settings"
+    const val FILES_PACKAGE = "dev.blamspot.jcode.vdevice.files"
 
     /**
      * The extra the device's Files app answers with — a device path, which the container turns into
@@ -189,5 +189,5 @@ internal object DeviceIntents {
      * coupled to a format it cannot see change. What the picker knows is which file the person
      * chose, and that is the part it answers.
      */
-    const val EXTRA_DEVICE_PATH = "dev.jcode.vdevice.DEVICE_PATH"
+    const val EXTRA_DEVICE_PATH = "dev.blamspot.jcode.vdevice.DEVICE_PATH"
 }

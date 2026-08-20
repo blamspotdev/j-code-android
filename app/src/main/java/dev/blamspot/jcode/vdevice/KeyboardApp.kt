@@ -59,7 +59,7 @@ internal class KeyboardApp private constructor(
 
     companion object {
 
-        const val PACKAGE = "dev.jcode.vdevice.keyboard"
+        const val PACKAGE = "dev.blamspot.jcode.vdevice.keyboard"
 
         /** The one class the container talks to — see `KeyboardHost` in the app. */
         private const val HOST = "$PACKAGE.KeyboardHost"

@@ -1,4 +1,4 @@
-package dev.jcode.vdevice.camera;
+package dev.blamspot.jcode.vdevice.camera;
 
 import android.content.Context;
 import android.net.Uri;
@@ -64,6 +64,6 @@ final class DeviceScene {
         } catch (Exception e) {
             Log.w(TAG, "cannot tell which app this device is running inside", e);
         }
-        return "dev.jcode";
+        return "dev.blamspot.jcode";
     }
 }

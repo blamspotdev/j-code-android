@@ -57,10 +57,10 @@ internal object VirtualLauncher {
     private const val PLACEHOLDER = "No app installed"
 
     /** Named so a driver can tell the launcher's nodes from a guest's at a glance. */
-    private const val LAUNCHER_PACKAGE = "dev.jcode.vdevice.launcher"
-    private const val LAUNCHER_CLASS = "dev.jcode.vdevice.Launcher"
-    private const val ICON_CLASS = "dev.jcode.vdevice.LauncherIcon"
-    private const val STATUS_BAR_CLASS = "dev.jcode.vdevice.StatusBar"
+    private const val LAUNCHER_PACKAGE = "dev.blamspot.jcode.vdevice.launcher"
+    private const val LAUNCHER_CLASS = "dev.blamspot.jcode.vdevice.Launcher"
+    private const val ICON_CLASS = "dev.blamspot.jcode.vdevice.LauncherIcon"
+    private const val STATUS_BAR_CLASS = "dev.blamspot.jcode.vdevice.StatusBar"
 
     /** Reads what is installed, with each app's own icon. Parses APKs — never call it on the UI thread. */
     fun load(context: Context): List<LauncherApp> = VirtualDeviceApps.list(context)

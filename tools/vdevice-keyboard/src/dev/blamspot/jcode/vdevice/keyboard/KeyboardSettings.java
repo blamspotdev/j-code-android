@@ -1,4 +1,4 @@
-package dev.jcode.vdevice.keyboard;
+package dev.blamspot.jcode.vdevice.keyboard;
 
 import android.os.Bundle;
 

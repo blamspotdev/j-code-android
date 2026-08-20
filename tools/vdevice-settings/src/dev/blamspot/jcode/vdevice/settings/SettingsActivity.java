@@ -1,4 +1,4 @@
-package dev.jcode.vdevice.settings;
+package dev.blamspot.jcode.vdevice.settings;
 
 import android.app.Activity;
 import android.os.Bundle;

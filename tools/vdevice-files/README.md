@@ -39,7 +39,7 @@ surfaces, tinted icon chips and section labels, made from `GradientDrawable` in 
 
 ## How an answer gets back
 
-The device path goes back under `dev.jcode.vdevice.DEVICE_PATH`, and the **container** turns it into
+The device path goes back under `dev.blamspot.jcode.vdevice.DEVICE_PATH`, and the **container** turns it into
 the `content://` URI the requesting app receives — a tree URI for a folder request, a document URI
 otherwise. That split is deliberate: the URI belongs to JCode's own documents provider, whose
 authority and document-id encoding are the container's business, and an app that guessed at them

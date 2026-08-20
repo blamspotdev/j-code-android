@@ -1,4 +1,4 @@
-package dev.jcode.vdevice.files;
+package dev.blamspot.jcode.vdevice.files;
 
 import android.app.AlertDialog;
 import android.content.Intent;
@@ -66,7 +66,7 @@ public class FilesActivity extends Activity {
      *
      * <p>Public contract between the device's own picker and the device's own container.
      */
-    public static final String EXTRA_DEVICE_PATH = "dev.jcode.vdevice.DEVICE_PATH";
+    public static final String EXTRA_DEVICE_PATH = "dev.blamspot.jcode.vdevice.DEVICE_PATH";
 
     private static final int MODE_BROWSE = 0;
     private static final int MODE_PICK_FILE = 1;

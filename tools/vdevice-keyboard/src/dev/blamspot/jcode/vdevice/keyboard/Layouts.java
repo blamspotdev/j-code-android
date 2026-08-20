@@ -1,4 +1,4 @@
-package dev.jcode.vdevice.keyboard;
+package dev.blamspot.jcode.vdevice.keyboard;
 
 import android.text.InputType;
 import android.view.inputmethod.EditorInfo;

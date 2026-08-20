@@ -1,4 +1,4 @@
-package dev.jcode.vdevice.browser;
+package dev.blamspot.jcode.vdevice.browser;
 
 import android.app.Activity;
 import android.content.Intent;

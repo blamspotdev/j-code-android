@@ -10,7 +10,7 @@
      The SAF filters are what make it resolvable: an app that calls `resolveActivity` before offering
      an "attach a file" button needs something installed to find. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="dev.jcode.vdevice.files">
+    package="dev.blamspot.jcode.vdevice.files">
 
     <application
         android:label="Files"

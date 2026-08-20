@@ -1,4 +1,4 @@
-package dev.jcode.vdevice.files;
+package dev.blamspot.jcode.vdevice.files;
 
 import android.content.Context;
 

@@ -29,7 +29,7 @@ internal object VirtualDeviceApps {
     private const val BUILT_INS = "vdevice"
 
     /** The built-in browser, which is also where a guest's `ACTION_VIEW` on a URL is sent. */
-    const val BROWSER_PACKAGE = "dev.jcode.vdevice.browser"
+    const val BROWSER_PACKAGE = "dev.blamspot.jcode.vdevice.browser"
 
     /**
      * Bumped whenever the installed set changes, so the launcher redraws for an `adb install` it did

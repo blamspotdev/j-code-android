@@ -1,4 +1,4 @@
-package dev.jcode.vdevice.settings;
+package dev.blamspot.jcode.vdevice.settings;
 
 import android.content.Context;
 import android.content.res.ColorStateList;

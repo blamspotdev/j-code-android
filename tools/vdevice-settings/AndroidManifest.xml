@@ -10,7 +10,7 @@
      It changes real settings, through a provider the container publishes for it: the same ones the
      bench writes, in the same file, with the same effect on a running guest. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="dev.jcode.vdevice.settings">
+    package="dev.blamspot.jcode.vdevice.settings">
 
     <application
         android:label="Settings"

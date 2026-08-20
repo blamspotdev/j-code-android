@@ -1,4 +1,4 @@
-package dev.jcode.vdevice.glfixture;
+package dev.blamspot.jcode.vdevice.glfixture;
 
 import android.app.Activity;
 import android.graphics.Color;

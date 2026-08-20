@@ -32,8 +32,8 @@ import java.util.WeakHashMap
  */
 internal object GuestRuntime {
 
-    const val EXTRA_APK = "dev.jcode.vdevice.apk"
-    const val EXTRA_ACTIVITY = "dev.jcode.vdevice.activity"
+    const val EXTRA_APK = "dev.blamspot.jcode.vdevice.apk"
+    const val EXTRA_ACTIVITY = "dev.blamspot.jcode.vdevice.activity"
 
     /** Embedded-activity id, the `Activity.getId()` a system launch would never produce. */
     private const val EMBEDDED_ID = "jcode-embedded"
@@ -836,7 +836,7 @@ internal object GuestRuntime {
      *
      * This used to be swallowed outright, and swallowing it is what made the bug above take a log
      * pull to find: the container had already decided which of its apps answered the intent and said
-     * so — `launching dev.jcode.vdevice.files/…` — and then the app was told the device had nothing,
+     * so — `launching dev.blamspot.jcode.vdevice.files/…` — and then the app was told the device had nothing,
      * with no line anywhere between the two saying why.
      */
     private fun failed(request: Intent, cause: Throwable) {
