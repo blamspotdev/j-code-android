@@ -1174,6 +1174,9 @@ fun JCodeApp(
                 null
             },
             previewLabel = nativeClaim?.previewLabel ?: "Preview",
+            previewIcon = nativeClaim?.previewIcon
+                ?.let { contributedMenuIcon(it) }
+                ?: JCodeIcon.Preview,
             onGoToLine = if (menuIsFileTab) {
                 { editorGoToLineNonce++ }
             } else {

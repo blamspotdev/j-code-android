@@ -488,6 +488,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             contains,
             map.str("opensInPreview")?.takeIf { it.isNotBlank() },
             map.str("label")?.takeIf { it.isNotBlank() },
+            map.str("icon")?.takeIf { it.isNotBlank() },
         )
     }
 

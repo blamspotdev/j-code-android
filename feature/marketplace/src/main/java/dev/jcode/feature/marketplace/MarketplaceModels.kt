@@ -408,6 +408,14 @@ data class NativeClaim(
      * menu does not, and should not have to.
      */
     val previewLabel: String? = null,
+    /**
+     * The icon that label wears, by the same names every other contributed action uses.
+     *
+     * With this the menu item is entirely the extension's: when it appears (the match), what it
+     * says ([previewLabel]) and what it looks like. All the host still supplies is the toggle
+     * itself, which flips `EditorTab.previewMode` and so cannot live anywhere but the host.
+     */
+    val previewIcon: String? = null,
 ) {
     fun matches(file: File): Boolean {
         if (fileTypes.isNotEmpty() && file.extension.lowercase() !in fileTypes) return false
