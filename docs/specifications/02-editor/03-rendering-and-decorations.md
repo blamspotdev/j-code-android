@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | **Status** | Implemented |
-| **Modules** | `:core:editor` (package `dev.jcode.core.editor.decor`), `:core:editor-decor` (marker only) |
-| **Primary sources** | core/editor/src/main/java/dev/jcode/core/editor/Renderer.kt, core/editor/src/main/java/dev/jcode/core/editor/WrapMap.kt, core/editor/src/main/java/dev/jcode/core/editor/decor/Decoration.kt, core/editor/src/main/java/dev/jcode/core/editor/decor/DecorationSet.kt, core/editor/src/main/java/dev/jcode/core/editor/decor/ColoredSpan.kt, core/editor/src/main/java/dev/jcode/core/editor/decor/SquiggleDecoration.kt, core/editor/src/main/java/dev/jcode/core/editor/decor/DebugDecorations.kt, core/editor/src/main/java/dev/jcode/core/editor/decor/InlineDecoration.kt, core/editor/src/main/java/dev/jcode/core/editor/decor/DirtyTracker.kt |
+| **Modules** | `:core:editor` (package `dev.blamspot.jcode.core.editor.decor`), `:core:editor-decor` (marker only) |
+| **Primary sources** | core/editor/src/main/java/dev/blamspot/jcode/core/editor/Renderer.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/WrapMap.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/Decoration.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/DecorationSet.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/ColoredSpan.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/SquiggleDecoration.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/DebugDecorations.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/InlineDecoration.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/DirtyTracker.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -194,7 +194,7 @@ accessors.
 | `INFO` | `0xFF56B6C2` |
 | `HINT` | `0xFF98C379` |
 
-> This is a **different type** from `dev.jcode.core.lsp.DiagnosticSeverity`, which carries the LSP
+> This is a **different type** from `dev.blamspot.jcode.core.lsp.DiagnosticSeverity`, which carries the LSP
 > numeric value (1–4) instead. Conversion happens at the LSP→editor boundary. Do not assume they are
 > interchangeable.
 

@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:config`, `:feature:settings` |
-| **Primary sources** | core/config/src/main/java/dev/jcode/core/config/ConfigModels.kt (279 lines), core/config/src/main/java/dev/jcode/core/config/ConfigService.kt (794 lines), core/config/src/main/java/dev/jcode/core/config/schema/workspace.schema.json, core/config/src/main/java/dev/jcode/core/config/schema/project.schema.json |
+| **Primary sources** | core/config/src/main/java/dev/blamspot/jcode/core/config/ConfigModels.kt (279 lines), core/config/src/main/java/dev/blamspot/jcode/core/config/ConfigService.kt (794 lines), core/config/src/main/java/dev/blamspot/jcode/core/config/schema/workspace.schema.json, core/config/src/main/java/dev/blamspot/jcode/core/config/schema/project.schema.json |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -175,7 +175,7 @@ Serialization uses SnakeYAML-engine `Dump` with block flow style and 2-space ind
 
 ## 8. JSON Schemas
 
-`core/config/src/main/java/dev/jcode/core/config/schema/{workspace,project}.schema.json` are
+`core/config/src/main/java/dev/blamspot/jcode/core/config/schema/{workspace,project}.schema.json` are
 draft-07 documents mirroring the data classes, with types and ranges (for example `fontSize` 8–72,
 `tabSize` 1–16); the workspace schema also carries `"default"` values matching the effective
 defaults.

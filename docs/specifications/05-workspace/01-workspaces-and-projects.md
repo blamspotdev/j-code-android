@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:fs`, `:feature:explorer`, `:app` |
-| **Primary sources** | core/fs/src/main/java/dev/jcode/fs/WorkspaceManager.kt (755 lines), core/fs/src/main/java/dev/jcode/fs/WorkspaceModel.kt, core/fs/src/main/java/dev/jcode/fs/WorkspacePersistence.kt, core/fs/src/main/java/dev/jcode/fs/StorageRoots.kt, core/fs/src/main/java/dev/jcode/fs/FsContract.kt, core/fs/src/main/java/dev/jcode/fs/FsOperations.kt (494 lines), core/fs/src/main/java/dev/jcode/fs/FsImplementations.kt |
+| **Primary sources** | core/fs/src/main/java/dev/blamspot/jcode/fs/WorkspaceManager.kt (755 lines), core/fs/src/main/java/dev/blamspot/jcode/fs/WorkspaceModel.kt, core/fs/src/main/java/dev/blamspot/jcode/fs/WorkspacePersistence.kt, core/fs/src/main/java/dev/blamspot/jcode/fs/StorageRoots.kt, core/fs/src/main/java/dev/blamspot/jcode/fs/FsContract.kt, core/fs/src/main/java/dev/blamspot/jcode/fs/FsOperations.kt (494 lines), core/fs/src/main/java/dev/blamspot/jcode/fs/FsImplementations.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---

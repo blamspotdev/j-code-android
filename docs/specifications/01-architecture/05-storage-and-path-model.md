@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:fs`, `:core:distro`, `:feature:marketplace`, `:app` |
-| **Primary sources** | core/fs/src/main/java/dev/jcode/fs/StorageRoots.kt, core/distro/src/main/java/dev/jcode/core/distro/DistroModels.kt, core/distro/src/main/java/dev/jcode/core/distro/ProotManager.kt, core/distro/src/main/java/dev/jcode/core/distro/RootfsManager.kt, core/fs/src/main/java/dev/jcode/fs/FsContract.kt, app/src/main/java/dev/jcode/provider/ProjectsDocumentsProvider.kt |
+| **Primary sources** | core/fs/src/main/java/dev/blamspot/jcode/fs/StorageRoots.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/DistroModels.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/ProotManager.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/RootfsManager.kt, core/fs/src/main/java/dev/blamspot/jcode/fs/FsContract.kt, app/src/main/java/dev/blamspot/jcode/provider/ProjectsDocumentsProvider.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -53,7 +53,7 @@ duplicated in both and must stay in sync. Both files carry a comment saying so.
 ## 3. On-device layout
 
 ```
-/data/data/dev.jcode/files/                 (context.filesDir — ext4, app-private)
+/data/data/dev.blamspot.jcode/files/                 (context.filesDir — ext4, app-private)
 ├─ bin/proot/
 │   ├─ lib/
 │   │   ├─ libtalloc.so.2                   extracted from assets (mmap-only)
@@ -83,7 +83,7 @@ The proot **binary** is not here — it is a `jniLib` in `nativeLibraryDir`. See
 
 ## 4. Host ↔ guest translation
 
-`WorkspaceHostPaths` (`core/distro/src/main/java/dev/jcode/core/distro/DistroModels.kt`) is the single translator. It is
+`WorkspaceHostPaths` (`core/distro/src/main/java/dev/blamspot/jcode/core/distro/DistroModels.kt`) is the single translator. It is
 initialized once at startup with `filesDir` (the path cannot be a compile-time constant because
 `filesDir` varies by package and Android user).
 

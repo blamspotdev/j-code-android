@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:feature:settings`, `:core:design`, `:core:config` |
-| **Primary sources** | feature/settings/src/main/java/dev/jcode/feature/settings/SettingsFeature.kt (1,949 lines), core/design/src/main/java/dev/jcode/design/SettingsDefaults.kt, core/design/src/main/java/dev/jcode/design/SettingsDropdownRow.kt, core/design/src/main/java/dev/jcode/design/SettingsResettableRow.kt, core/design/src/main/java/dev/jcode/design/SettingsTextFieldRow.kt, core/design/src/main/java/dev/jcode/design/DesignSystem.kt, app/src/main/java/dev/jcode/SettingsBackup.kt |
+| **Primary sources** | feature/settings/src/main/java/dev/blamspot/jcode/feature/settings/SettingsFeature.kt (1,949 lines), core/design/src/main/java/dev/blamspot/jcode/design/SettingsDefaults.kt, core/design/src/main/java/dev/blamspot/jcode/design/SettingsDropdownRow.kt, core/design/src/main/java/dev/blamspot/jcode/design/SettingsResettableRow.kt, core/design/src/main/java/dev/blamspot/jcode/design/SettingsTextFieldRow.kt, core/design/src/main/java/dev/blamspot/jcode/design/DesignSystem.kt, app/src/main/java/dev/blamspot/jcode/SettingsBackup.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---

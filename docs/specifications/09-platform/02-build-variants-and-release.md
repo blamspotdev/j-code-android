@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | Root build, `:app`, all `:native:*` |
-| **Primary sources** | build.gradle.kts, app/build.gradle.kts, app/src/main/java/dev/jcode/AppUpdateInstaller.kt, app/src/main/java/dev/jcode/MigrationBundle.kt, settings.gradle.kts, gradle/libs.versions.toml, gradle/cargo.gradle.kts, gradle/wrapper/gradle-wrapper.properties, native/CMakeLists.txt, scripts/build-release.ps1, scripts/build-release-common.sh, scripts/build-release-linux.sh, scripts/build-release-macos.sh |
+| **Primary sources** | build.gradle.kts, app/build.gradle.kts, app/src/main/java/dev/blamspot/jcode/AppUpdateInstaller.kt, app/src/main/java/dev/blamspot/jcode/MigrationBundle.kt, settings.gradle.kts, gradle/libs.versions.toml, gradle/cargo.gradle.kts, gradle/wrapper/gradle-wrapper.properties, native/CMakeLists.txt, scripts/build-release.ps1, scripts/build-release-common.sh, scripts/build-release-linux.sh, scripts/build-release-macos.sh |
 | **Verified against** | commit `cea581c`, 2026-08-09; §4.5 device-verified 2026-08-19 |
 
 ---
@@ -59,14 +59,30 @@ There are **no product flavors**. Three identities come from build types plus a 
 
 | Build | `applicationId` | Label | Launcher icon |
 |---|---|---|---|
-| `debug` | `dev.jcode.debug` | JCode (debug) | `ic_launcher_debug` (red gradient) |
-| `release` | `dev.jcode` | JCode | `ic_launcher` |
-| `release -PjcodeIdSuffix=.beta` | `dev.jcode.beta` | JCode (beta) | `ic_launcher_beta` (purple gradient) |
+| `debug` | `dev.blamspot.jcode.debug` | JCode (debug) | `ic_launcher_debug` (red gradient) |
+| `release` | `dev.blamspot.jcode` | JCode | `ic_launcher` |
+| `release -PjcodeIdSuffix=.beta` | `dev.blamspot.jcode.beta` | JCode (beta) | `ic_launcher_beta` (purple gradient) |
 
-All three install **side by side**. The `namespace` stays `dev.jcode` (the compile-time R and
-BuildConfig package), so no source reference breaks.
+All three install **side by side**. The `namespace` — the compile-time R and BuildConfig package —
+is also `dev.blamspot.jcode`, and the Kotlin, Java, AIDL and JNI sources sit under it: at 1.6.2 the
+whole package moved off `dev.jcode`, not just the install identity.
 
-The base id is a Gradle property: `-PjcodeApplicationId=<id>` overrides `dev.jcode`. Nothing in a
+Two trees deliberately stayed behind on `dev.jcode`, because there the package name is not an
+internal detail but the identity of an artifact that ships separately:
+
+- `tools/vdevice-*` and the guest fixtures keep `dev.jcode.vdevice.*`. That string *is* the identity
+  of the apps installed inside the virtual device, named from the host by the constants in
+  `DeviceIntents`, `VirtualLauncher` and friends, and the APKs are committed prebuilt under
+  `app/src/main/assets/vdevice/`.
+- `tools/java-dap` keeps `dev.jcode.javadap`. The jar is not built here at install time — it is
+  downloaded from a pinned `java-dap-v1` release and launched by main class, so moving the package
+  without republishing the jar would break JVM debugging on every device.
+
+The same reasoning protects a handful of string constants in the moved code — intent actions, the
+notification channel id, the `SettingsBackup` provenance marker. They are namespaced strings that
+only have to agree with themselves, and rewriting them would change values already on disk.
+
+The base id is a Gradle property: `-PjcodeApplicationId=<id>` overrides `dev.blamspot.jcode`. Nothing in a
 release uses it — it exists so a build can be produced under a *different* package, which is the only
 way to exercise the migration path in §4.5 (an update that is not an update).
 
@@ -124,10 +140,10 @@ the next train.
 
 ```
 main = 1.6.2        merge, merge, merge          (jcodeVersion unchanged)
-                    publish v1.6.2-beta.1        pre-release, dev.jcode.beta
+                    publish v1.6.2-beta.1        pre-release, dev.blamspot.jcode.beta
                     merge
                     publish v1.6.2-beta.2        pre-release
-                    publish v1.6.2               release, dev.jcode
+                    publish v1.6.2               release, dev.blamspot.jcode
 main = next patch   opened automatically
 ```
 
@@ -212,8 +228,8 @@ Nothing is lost; it just needs merging by hand, and the run summary says so.
 ### 4.4 Update channels
 
 The two identities are two applications, so "is there an update?" is a different question for each,
-and `dev.jcode.beta` can never be updated *into* `dev.jcode`. `app/build.gradle.kts` derives
-`BuildConfig.UPDATE_CHANNEL` from the id suffix, and `dev.jcode.UpdateChecker` follows it:
+and `dev.blamspot.jcode.beta` can never be updated *into* `dev.blamspot.jcode`. `app/build.gradle.kts` derives
+`BuildConfig.UPDATE_CHANNEL` from the id suffix, and `dev.blamspot.jcode.UpdateChecker` follows it:
 
 | Channel | Asks GitHub for | Offers |
 |---|---|---|
@@ -223,7 +239,7 @@ and `dev.jcode.beta` can never be updated *into* `dev.jcode`. `app/build.gradle.
 A Beta build is still told when the train it was previewing ships: the final release is the highest
 version on the list, and it is reported with **no APK URL**, so the app offers the release page
 rather than an install it cannot perform. Comparison is Semantic Versioning 2.0.0 precedence —
-`1.6.2-beta.2 < 1.6.2-rc.1 < 1.6.2` — covered by `app/src/test/java/dev/jcode/UpdateCheckerTest.kt`.
+`1.6.2-beta.2 < 1.6.2-rc.1 < 1.6.2` — covered by `app/src/test/java/dev/blamspot/jcode/UpdateCheckerTest.kt`.
 
 ### 4.5 Updates that change the package
 
@@ -257,7 +273,7 @@ asks the user, because installing gives them the new version with nothing in it 
 install intact, and that trade is theirs to make. The already-downloaded APK path is carried so
 "install anyway" does not download it again.
 
-`dev.jcode.MigrationBundle` is the format: `/storage/emulated/0/JCode/migration/` holding
+`dev.blamspot.jcode.MigrationBundle` is the format: `/storage/emulated/0/JCode/migration/` holding
 `settings.json` (a `SettingsBackup` document), `rootfs.tar.gz` (byte-for-byte an ordinary environment
 backup), `projects.tar.gz`, `extensions.tar.gz`, and `manifest.json` naming the parts that landed.
 **The manifest is written last** — a bundle is found by its manifest, so an interrupted export leaves
@@ -270,8 +286,22 @@ rootfs goes through `setPendingRestoreTarball` + the normal setup pipeline rathe
 into place, so proot, the `jcode` user and the smoke test still run against it. Afterwards a dialog
 (not a snackbar — onboarding is not a screen where transient messages are read) offers to delete the
 bundle and uninstall the old app. That needs `REQUEST_DELETE_PACKAGES` and a `<queries>` block naming
-`dev.jcode`/`.debug`/`.beta`; without the latter, Android 11 package filtering reports the old install
-as absent and the offer silently degrades.
+the packages a bundle can have come *from* — `dev.jcode`/`.debug`/`.beta`, listed in
+`MigrationBundle.PREVIOUS_PACKAGES` and mirrored in the manifest; without the latter, Android 11
+package filtering reports the old install as absent and the offer silently degrades.
+
+**The release this was built for.** 1.6.2 is the release that changes the package, from `dev.jcode`
+to `dev.blamspot.jcode`. 1.6.1 is the one that makes it survivable: it shipped the export side
+above, so every 1.6.1 install hands its environment over on its own when it updates into 1.6.2.
+
+An install **older than 1.6.1** cannot — the export did not exist yet — so it updates into
+`dev.blamspot.jcode` as a second app and keeps everything. Nothing is lost, but nothing crosses
+either, so onboarding says so: when no bundle is found and one of `PREVIOUS_PACKAGES` is still
+installed, `LegacyInstallCard` explains that the old app still holds the environment and points at
+the route that version does have — its own environment backup, restored here through the distro
+step's **Restore**. `MainViewModel.legacyInstall` is refreshed by the same pass that looks for a
+bundle, including the re-check after storage access is granted, since neither is readable before
+that.
 
 ---
 
@@ -315,8 +345,8 @@ repository says it is preparing. What you choose is the channel:
 
 | Input | versionName | Tag | App id | GitHub |
 |---|---|---|---|---|
-| `beta`, label blank | `1.6.2-beta.N` (next) | `v1.6.2-beta.N` | `dev.jcode.beta` | pre-release |
-| `stable` | `1.6.2` | `v1.6.2` | `dev.jcode` | release |
+| `beta`, label blank | `1.6.2-beta.N` (next) | `v1.6.2-beta.N` | `dev.blamspot.jcode.beta` | pre-release |
+| `stable` | `1.6.2` | `v1.6.2` | `dev.blamspot.jcode` | release |
 
 It builds the Rust JNI libraries, assembles, signs with `apksigner`, verifies the signature, then
 creates the tag and the release with the APK attached.
@@ -416,7 +446,7 @@ The root `detekt` task is currently a **bootstrap placeholder** registered in `b
 5. Keep `-Wl,-z,max-page-size=16384` and `-fvisibility=hidden` on every native target.
 6. Do not change the release signing key.
 7. No module may declare its own repository (`FAIL_ON_PROJECT_REPOS`).
-8. `namespace` stays `dev.jcode` regardless of `applicationId`.
+8. `namespace` stays `dev.blamspot.jcode` regardless of `applicationId`.
 
 ---
 

@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:editor` |
-| **Primary sources** | core/editor/src/main/java/dev/jcode/core/editor/EditorState.kt, core/editor/src/main/java/dev/jcode/core/editor/UndoManager.kt |
+| **Primary sources** | core/editor/src/main/java/dev/blamspot/jcode/core/editor/EditorState.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/UndoManager.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---

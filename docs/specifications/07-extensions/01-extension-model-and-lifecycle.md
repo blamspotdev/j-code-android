@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:feature:marketplace`, `:app` |
-| **Primary sources** | feature/marketplace/src/main/java/dev/jcode/feature/marketplace/MarketplaceModels.kt, feature/marketplace/src/main/java/dev/jcode/feature/marketplace/ExtensionInstaller.kt (664 lines), feature/marketplace/src/main/java/dev/jcode/feature/marketplace/ExtensionManifestValidator.kt, feature/marketplace/src/main/java/dev/jcode/feature/marketplace/MarketplaceServiceLocator.kt, app/src/main/java/dev/jcode/workbench/marketplace/ExtensionsPanel.kt, app/src/main/java/dev/jcode/workbench/marketplace/ExtensionActivationLocal.kt |
+| **Primary sources** | feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/MarketplaceModels.kt, feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/ExtensionInstaller.kt (664 lines), feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/ExtensionManifestValidator.kt, feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/MarketplaceServiceLocator.kt, app/src/main/java/dev/blamspot/jcode/workbench/marketplace/ExtensionsPanel.kt, app/src/main/java/dev/blamspot/jcode/workbench/marketplace/ExtensionActivationLocal.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---

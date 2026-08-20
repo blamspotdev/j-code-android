@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Search: implemented. Source control: implemented as an extension, not as `:core:vcs` |
 | **Modules** | `:core:search`, `:native:ripgrep-ffi`, `:feature:search` (stub), `:feature:scm` (stub), `:core:vcs` (stub), `:app` |
-| **Primary sources** | core/search/src/main/java/dev/jcode/core/search/SearchEngine.kt (316 lines), core/search/src/main/java/dev/jcode/core/search/NativeSearch.kt, native/ripgrep-ffi/rust/src/lib.rs (241 lines), app/src/main/java/dev/jcode/workbench/SearchToolPanel.kt, app/src/main/java/dev/jcode/workbench/ScmExtensionHost.kt, feature/explorer/src/main/java/dev/jcode/feature/explorer/ExplorerScmUi.kt |
+| **Primary sources** | core/search/src/main/java/dev/blamspot/jcode/core/search/SearchEngine.kt (316 lines), core/search/src/main/java/dev/blamspot/jcode/core/search/NativeSearch.kt, native/ripgrep-ffi/rust/src/lib.rs (241 lines), app/src/main/java/dev/blamspot/jcode/workbench/SearchToolPanel.kt, app/src/main/java/dev/blamspot/jcode/workbench/ScmExtensionHost.kt, feature/explorer/src/main/java/dev/blamspot/jcode/feature/explorer/ExplorerScmUi.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -130,7 +130,7 @@ hidden-file skip.
 
 ## 6. Search UI
 
-`app/src/main/java/dev/jcode/workbench/SearchToolPanel.kt`, in the left drawer.
+`app/src/main/java/dev/blamspot/jcode/workbench/SearchToolPanel.kt`, in the left drawer.
 
 ```kotlin
 internal enum class SearchScope(val label: String, val placeholder: String) {
@@ -163,7 +163,7 @@ scroll regardless of drawer width.
 | `:core:vcs` | **Stub.** A marker object; the KDoc says "libgit2 JNI + porcelain API, Phase 9" |
 | `:native:libgit2` | **Built but unwired.** Links real libgit2, libssh2 and mbedTLS into `libgit2_ffi.so`, exposes no JNI |
 | `:feature:scm` | **Stub.** A marker object |
-| The working Git UI | An **installed extension** rendered in a WebView, hosted by `app/src/main/java/dev/jcode/workbench/ScmExtensionHost.kt` |
+| The working Git UI | An **installed extension** rendered in a WebView, hosted by `app/src/main/java/dev/blamspot/jcode/workbench/ScmExtensionHost.kt` |
 
 The Git panel therefore runs the real `git` binary inside the guest distro, driven by extension
 JavaScript over the extension bridge — not through an in-process library.

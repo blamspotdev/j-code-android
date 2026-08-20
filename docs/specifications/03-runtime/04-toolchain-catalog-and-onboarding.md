@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:distro`, `:feature:onboarding`, `:feature:sdk-manager`, `:feature:lsp-manager`, `:feature:debug`, `:app` |
-| **Primary sources** | core/distro/src/main/assets/distro/catalog.yaml (1,136 lines), core/distro/src/main/java/dev/jcode/core/distro/SdkCatalogModels.kt, core/distro/src/main/java/dev/jcode/core/distro/SdkCatalogLoader.kt, core/distro/src/main/java/dev/jcode/core/distro/LspCatalogModels.kt, core/distro/src/main/java/dev/jcode/core/distro/DebugEngineModels.kt, core/distro/src/main/java/dev/jcode/core/distro/DistroModels.kt, core/distro/src/main/java/dev/jcode/core/distro/DistroService.kt, feature/onboarding/src/main/java/dev/jcode/feature/onboarding/OnboardingFeature.kt, app/src/main/java/dev/jcode/ToolchainManagerPanel.kt |
+| **Primary sources** | core/distro/src/main/assets/distro/catalog.yaml (1,136 lines), core/distro/src/main/java/dev/blamspot/jcode/core/distro/SdkCatalogModels.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/SdkCatalogLoader.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/LspCatalogModels.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/DebugEngineModels.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/DistroModels.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/DistroService.kt, feature/onboarding/src/main/java/dev/blamspot/jcode/feature/onboarding/OnboardingFeature.kt, app/src/main/java/dev/blamspot/jcode/ToolchainManagerPanel.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---

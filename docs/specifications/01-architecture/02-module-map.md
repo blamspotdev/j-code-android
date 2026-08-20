@@ -39,7 +39,7 @@ worth knowing: the distro layer reads project configuration to resolve bind moun
 | | |
 |---|---|
 | Path | `app/` |
-| Namespace | `dev.jcode` |
+| Namespace | `dev.blamspot.jcode` |
 | Depends on | All 19 `:core:*`, all 12 `:feature:*`, all 11 `:native:*` |
 
 The integration layer. It also *contains* a large amount of feature implementation that the module
@@ -69,7 +69,7 @@ Largest files: `JCodeShell.kt` (4,999 lines), `MainViewModel.kt` (4,844).
 | `:core:lsp` | `:core:editor-decor`, `:core:term`, `:core:distro` | Implemented | LSP client, diagnostics bus |
 | `:core:resource` | — | Implemented | Memory-pressure registry, managed caches, pools, `NativeHandle` base |
 | `:core:search` | — | Implemented | Search engine over ripgrep FFI with a Kotlin fallback |
-| `:core:state` | — | **Stub** | Marker only. Session restore actually lives in `app/src/main/java/dev/jcode/SessionStore.kt` |
+| `:core:state` | — | **Stub** | Marker only. Session restore actually lives in `app/src/main/java/dev/blamspot/jcode/SessionStore.kt` |
 | `:core:term` | `:core:distro`, `:core:diag` | Implemented | PTY, VT parser, session manager, terminal view |
 | `:core:treesitter` | `:core:editor`, `:core:editor-decor`, `:core:buffer` | **Built but unwired** | Complete tree-sitter binding; no grammar is ever loaded |
 | `:core:vcs` | — | **Stub** | Marker only. SCM is implemented as a WebView-hosted extension |
@@ -89,12 +89,12 @@ Rust library is built before it compiles.
 | `:feature:lsp-manager` | `:core:distro`, `:core:design` | Implemented | Per-language-server detail page |
 | `:feature:marketplace` | `:core:distro` | Implemented (logic only) | `ExtensionInstaller`, `JextCrypto`, `VsixPackage`, `TemplateScaffolder`. No UI — `:app` renders it |
 | `:feature:onboarding` | `:core:distro`, `:core:design`, `:core:state` | Implemented | `OnboardingFeature.StepperScreen` |
-| `:feature:problems` | `:core:design` | **Stub** | Real UI is `app/src/main/java/dev/jcode/IssuesPanel.kt` |
-| `:feature:scm` | `:core:vcs`, `:core:design` | **Stub** | Real UI is the SCM extension WebView (`app/src/main/java/dev/jcode/workbench/ScmExtensionHost.kt`) |
+| `:feature:problems` | `:core:design` | **Stub** | Real UI is `app/src/main/java/dev/blamspot/jcode/IssuesPanel.kt` |
+| `:feature:scm` | `:core:vcs`, `:core:design` | **Stub** | Real UI is the SCM extension WebView (`app/src/main/java/dev/blamspot/jcode/workbench/ScmExtensionHost.kt`) |
 | `:feature:sdk-manager` | `:core:distro`, `:core:design` | Implemented | Per-SDK detail page |
-| `:feature:search` | `:core:search`, `:core:design` | **Stub** | Real UI is `app/src/main/java/dev/jcode/workbench/SearchToolPanel.kt` |
+| `:feature:search` | `:core:search`, `:core:design` | **Stub** | Real UI is `app/src/main/java/dev/blamspot/jcode/workbench/SearchToolPanel.kt` |
 | `:feature:settings` | `:core:config`, `:core:design`, `:core:distro` | Implemented | `SettingsFeature.Content` (1,949 lines) |
-| `:feature:terminal-pane` | `:core:term`, `:core:design` | **Stub** | Real UI is `app/src/main/java/dev/jcode/TerminalSessionHost.kt` + `app/src/main/java/dev/jcode/workbench/WorkbenchExtraKeys.kt` |
+| `:feature:terminal-pane` | `:core:term`, `:core:design` | **Stub** | Real UI is `app/src/main/java/dev/blamspot/jcode/TerminalSessionHost.kt` + `app/src/main/java/dev/blamspot/jcode/workbench/WorkbenchExtraKeys.kt` |
 
 ---
 
@@ -105,14 +105,14 @@ object. Their working implementations are in `:app`:
 
 | Stub module | Real implementation |
 |---|---|
-| `:feature:terminal-pane` | `app/src/main/java/dev/jcode/TerminalSessionHost.kt`, `app/src/main/java/dev/jcode/workbench/WorkbenchExtraKeys.kt` |
-| `:feature:scm` | `app/src/main/java/dev/jcode/workbench/ScmExtensionHost.kt` (WebView-hosted git UI) |
-| `:feature:problems` | `app/src/main/java/dev/jcode/IssuesPanel.kt` |
-| `:feature:search` | `app/src/main/java/dev/jcode/workbench/SearchToolPanel.kt` |
-| `:feature:debug` (UI half) | `app/src/main/java/dev/jcode/DebugSessionPanel.kt`, `app/src/main/java/dev/jcode/RunDebugPanel.kt` |
+| `:feature:terminal-pane` | `app/src/main/java/dev/blamspot/jcode/TerminalSessionHost.kt`, `app/src/main/java/dev/blamspot/jcode/workbench/WorkbenchExtraKeys.kt` |
+| `:feature:scm` | `app/src/main/java/dev/blamspot/jcode/workbench/ScmExtensionHost.kt` (WebView-hosted git UI) |
+| `:feature:problems` | `app/src/main/java/dev/blamspot/jcode/IssuesPanel.kt` |
+| `:feature:search` | `app/src/main/java/dev/blamspot/jcode/workbench/SearchToolPanel.kt` |
+| `:feature:debug` (UI half) | `app/src/main/java/dev/blamspot/jcode/DebugSessionPanel.kt`, `app/src/main/java/dev/blamspot/jcode/RunDebugPanel.kt` |
 
 `:feature:marketplace` inverts this: it holds the logic and no UI, and `:app` supplies the
-screens (`app/src/main/java/dev/jcode/workbench/marketplace/ExtensionsPanel.kt`).
+screens (`app/src/main/java/dev/blamspot/jcode/workbench/marketplace/ExtensionsPanel.kt`).
 
 ---
 
@@ -148,7 +148,7 @@ mechanism.
 - **Toolchains never ship in the APK.** Compilers, JDKs, LSPs and debug adapters install into the
   guest rootfs at runtime.
 - **Duplicate package leftovers.** `:core:vcs`, `:core:ctags`, `:core:state`, `:core:ext` each ship
-  the same marker under two package names (`dev.jcode.<x>` and `dev.jcode.core.<x>`). Harmless, but
+  the same marker under two package names (`dev.blamspot.jcode.<x>` and `dev.blamspot.jcode.core.<x>`). Harmless, but
   do not take the doubled file count as evidence of implementation.
 
 ---

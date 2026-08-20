@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:distro`, `:native:proot` |
-| **Primary sources** | core/distro/src/main/java/dev/jcode/core/distro/ProotManager.kt, core/distro/src/main/java/dev/jcode/core/distro/RootfsManager.kt, core/distro/src/main/java/dev/jcode/core/distro/RootfsDownloader.kt, core/distro/src/main/java/dev/jcode/core/distro/RootfsArchiver.kt, core/distro/src/main/java/dev/jcode/core/distro/CpuStatSampler.kt, core/distro/src/main/java/dev/jcode/core/distro/DistroService.kt (2,388 lines), core/distro/src/main/java/dev/jcode/core/distro/DistroModels.kt, core/distro/src/main/java/dev/jcode/core/distro/Arch.kt, native/proot/libandroid-shmem/ |
+| **Primary sources** | core/distro/src/main/java/dev/blamspot/jcode/core/distro/ProotManager.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/RootfsManager.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/RootfsDownloader.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/RootfsArchiver.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/CpuStatSampler.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/DistroService.kt (2,388 lines), core/distro/src/main/java/dev/blamspot/jcode/core/distro/DistroModels.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/Arch.kt, native/proot/libandroid-shmem/ |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -47,8 +47,12 @@ wrapper — every guest process is a direct child of a PTY the app owns.
 | `libtalloc-arm64-v8a.so` | asset → `filesDir/bin/proot/lib/` | Only `mmap`'d; proot links against it dynamically (`LD_LIBRARY_PATH`) |
 | `libandroid-shmem-arm64-v8a.so` | asset → `filesDir/bin/proot/lib/` | `DT_NEEDED` by proot; backs `--sysvipc` |
 
-`SUPPORT_LIBS_VERSION` (currently `2`) is bumped whenever the asset libs change, so existing installs
-re-extract them on the next runtime prep. Version 2 is the memfd-based `libandroid-shmem`.
+`SUPPORT_LIBS_VERSION` (currently `3`) is bumped whenever the asset libs change, so existing installs
+re-extract them on the next runtime prep. Version 2 is the memfd-based `libandroid-shmem`; version 3
+is that shim taking its named-key registry directory from `PROOT_TMP_DIR` at runtime instead of a
+compiled-in path. The old literal named the base `applicationId`, so on `.debug` and `.beta` — whose
+data directories carry the suffix — it pointed at a directory that does not exist, and a named-key
+`shmget` looped on a `symlink()` that could never succeed.
 
 `ensureProotTmpDir()` runs before every invocation; after the first successful prep it costs a single
 `stat` and re-preps fully if the directory was cleared. The one-time prep also deletes proot/loader

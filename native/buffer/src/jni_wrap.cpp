@@ -23,7 +23,7 @@ extern "C" {
  * tells WrapMap to run its own reference build.
  */
 JNIEXPORT jintArray JNICALL
-Java_dev_jcode_core_buffer_NativeWrap_nativeBuild(JNIEnv* env, jobject /*thiz*/,
+Java_dev_blamspot_jcode_core_buffer_NativeWrap_nativeBuild(JNIEnv* env, jobject /*thiz*/,
                                                   jlong snapshotHandle, jint charsPerRow) {
     if (snapshotHandle == 0) return nullptr;
     const Snapshot* snapshot = reinterpret_cast<const Snapshot*>(snapshotHandle);

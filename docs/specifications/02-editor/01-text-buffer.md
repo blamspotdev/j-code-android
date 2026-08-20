@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:buffer`, `:native:buffer` |
-| **Primary sources** | core/buffer/src/main/java/dev/jcode/core/buffer/Buffer.kt, core/buffer/src/main/java/dev/jcode/core/buffer/PieceTable.kt, native/buffer/src/piece_tree.cpp, native/buffer/src/jni_buffer.cpp, core/buffer/src/androidTest/java/dev/jcode/core/buffer/NativeBufferDifferentialTest.kt, core/buffer/src/test/java/dev/jcode/core/buffer/PieceTableTest.kt |
+| **Primary sources** | core/buffer/src/main/java/dev/blamspot/jcode/core/buffer/Buffer.kt, core/buffer/src/main/java/dev/blamspot/jcode/core/buffer/PieceTable.kt, native/buffer/src/piece_tree.cpp, native/buffer/src/jni_buffer.cpp, core/buffer/src/androidTest/java/dev/blamspot/jcode/core/buffer/NativeBufferDifferentialTest.kt, core/buffer/src/test/java/dev/blamspot/jcode/core/buffer/PieceTableTest.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---

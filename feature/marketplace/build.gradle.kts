@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.jcode.feature.marketplace"
+    namespace = "dev.blamspot.jcode.feature.marketplace"
     compileSdk = 36
 
     defaultConfig {

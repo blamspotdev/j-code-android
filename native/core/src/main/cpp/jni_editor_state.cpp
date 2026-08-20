@@ -40,13 +40,13 @@ extern "C" {
 // EditorState JNI methods
 
 JNIEXPORT jlong JNICALL
-Java_dev_jcode_core_editor_EditorState_nativeCreate(JNIEnv* env, jobject thiz) {
+Java_dev_blamspot_jcode_core_editor_EditorState_nativeCreate(JNIEnv* env, jobject thiz) {
     EditorState* state = new EditorState();
     return reinterpret_cast<jlong>(state);
 }
 
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_editor_EditorState_nativeDestroy(JNIEnv* env, jobject thiz) {
+Java_dev_blamspot_jcode_core_editor_EditorState_nativeDestroy(JNIEnv* env, jobject thiz) {
     EditorState* state = getEditorState(env, thiz);
     if (state) {
         delete state;
@@ -55,7 +55,7 @@ Java_dev_jcode_core_editor_EditorState_nativeDestroy(JNIEnv* env, jobject thiz) 
 }
 
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_editor_EditorState_nativeSetCarets(JNIEnv* env, jobject thiz,
+Java_dev_blamspot_jcode_core_editor_EditorState_nativeSetCarets(JNIEnv* env, jobject thiz,
                                                          jobjectArray carets) {
     EditorState* state = getEditorState(env, thiz);
     if (!state) return;
@@ -83,13 +83,13 @@ Java_dev_jcode_core_editor_EditorState_nativeSetCarets(JNIEnv* env, jobject thiz
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_dev_jcode_core_editor_EditorState_nativeGetCarets(JNIEnv* env, jobject thiz) {
+Java_dev_blamspot_jcode_core_editor_EditorState_nativeGetCarets(JNIEnv* env, jobject thiz) {
     EditorState* state = getEditorState(env, thiz);
     if (!state) return nullptr;
 
     auto carets = state->get_carets();
     
-    jclass caret_class = env->FindClass("dev/jcode/core/editor/Caret");
+    jclass caret_class = env->FindClass("dev/blamspot/jcode/core/editor/Caret");
     jmethodID constructor = env->GetMethodID(caret_class, "<init>", "(III)V");
     
     jobjectArray result = env->NewObjectArray(carets.size(), caret_class, nullptr);
@@ -107,7 +107,7 @@ Java_dev_jcode_core_editor_EditorState_nativeGetCarets(JNIEnv* env, jobject thiz
 }
 
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_editor_EditorState_nativeSetViewport(JNIEnv* env, jobject thiz,
+Java_dev_blamspot_jcode_core_editor_EditorState_nativeSetViewport(JNIEnv* env, jobject thiz,
                                                            jint scroll_y, jint scroll_x,
                                                            jint width_px, jint height_px,
                                                            jint line_height_px) {
@@ -125,7 +125,7 @@ Java_dev_jcode_core_editor_EditorState_nativeSetViewport(JNIEnv* env, jobject th
 }
 
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_editor_EditorState_nativeScrollTo(JNIEnv* env, jobject thiz,
+Java_dev_blamspot_jcode_core_editor_EditorState_nativeScrollTo(JNIEnv* env, jobject thiz,
                                                         jint line, jint column,
                                                         jint line_height_px) {
     EditorState* state = getEditorState(env, thiz);
@@ -135,7 +135,7 @@ Java_dev_jcode_core_editor_EditorState_nativeScrollTo(JNIEnv* env, jobject thiz,
 }
 
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_editor_EditorState_nativeAddFold(JNIEnv* env, jobject thiz,
+Java_dev_blamspot_jcode_core_editor_EditorState_nativeAddFold(JNIEnv* env, jobject thiz,
                                                         jint start_line, jint end_line,
                                                         jstring summary) {
     EditorState* state = getEditorState(env, thiz);
@@ -150,7 +150,7 @@ Java_dev_jcode_core_editor_EditorState_nativeAddFold(JNIEnv* env, jobject thiz,
 }
 
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_editor_EditorState_nativeRemoveFold(JNIEnv* env, jobject thiz,
+Java_dev_blamspot_jcode_core_editor_EditorState_nativeRemoveFold(JNIEnv* env, jobject thiz,
                                                           jint start_line, jint end_line) {
     EditorState* state = getEditorState(env, thiz);
     if (!state) return;
@@ -160,7 +160,7 @@ Java_dev_jcode_core_editor_EditorState_nativeRemoveFold(JNIEnv* env, jobject thi
 }
 
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_editor_EditorState_nativeToggleFold(JNIEnv* env, jobject thiz,
+Java_dev_blamspot_jcode_core_editor_EditorState_nativeToggleFold(JNIEnv* env, jobject thiz,
                                                           jint start_line, jint end_line) {
     EditorState* state = getEditorState(env, thiz);
     if (!state) return;
@@ -170,7 +170,7 @@ Java_dev_jcode_core_editor_EditorState_nativeToggleFold(JNIEnv* env, jobject thi
 }
 
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_editor_EditorState_nativeSetReadOnly(JNIEnv* env, jobject thiz,
+Java_dev_blamspot_jcode_core_editor_EditorState_nativeSetReadOnly(JNIEnv* env, jobject thiz,
                                                            jboolean read_only) {
     EditorState* state = getEditorState(env, thiz);
     if (!state) return;
@@ -179,7 +179,7 @@ Java_dev_jcode_core_editor_EditorState_nativeSetReadOnly(JNIEnv* env, jobject th
 }
 
 JNIEXPORT jboolean JNICALL
-Java_dev_jcode_core_editor_EditorState_nativeIsReadOnly(JNIEnv* env, jobject thiz) {
+Java_dev_blamspot_jcode_core_editor_EditorState_nativeIsReadOnly(JNIEnv* env, jobject thiz) {
     EditorState* state = getEditorState(env, thiz);
     if (!state) return false;
     
@@ -189,7 +189,7 @@ Java_dev_jcode_core_editor_EditorState_nativeIsReadOnly(JNIEnv* env, jobject thi
 // UndoManager JNI methods
 
 JNIEXPORT jlong JNICALL
-Java_dev_jcode_core_editor_UndoManager_nativeCreate(JNIEnv* env, jobject thiz,
+Java_dev_blamspot_jcode_core_editor_UndoManager_nativeCreate(JNIEnv* env, jobject thiz,
                                                       jint max_groups,
                                                       jint max_inverted_bytes) {
     UndoManager* manager = new UndoManager(max_groups, max_inverted_bytes);
@@ -197,7 +197,7 @@ Java_dev_jcode_core_editor_UndoManager_nativeCreate(JNIEnv* env, jobject thiz,
 }
 
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_editor_UndoManager_nativeDestroy(JNIEnv* env, jobject thiz) {
+Java_dev_blamspot_jcode_core_editor_UndoManager_nativeDestroy(JNIEnv* env, jobject thiz) {
     UndoManager* manager = getUndoManager(env, thiz);
     if (manager) {
         delete manager;
@@ -206,7 +206,7 @@ Java_dev_jcode_core_editor_UndoManager_nativeDestroy(JNIEnv* env, jobject thiz) 
 }
 
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_editor_UndoManager_nativeBeginComposing(JNIEnv* env, jobject thiz) {
+Java_dev_blamspot_jcode_core_editor_UndoManager_nativeBeginComposing(JNIEnv* env, jobject thiz) {
     UndoManager* manager = getUndoManager(env, thiz);
     if (manager) {
         manager->begin_composing();
@@ -214,7 +214,7 @@ Java_dev_jcode_core_editor_UndoManager_nativeBeginComposing(JNIEnv* env, jobject
 }
 
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_editor_UndoManager_nativeEndComposing(JNIEnv* env, jobject thiz) {
+Java_dev_blamspot_jcode_core_editor_UndoManager_nativeEndComposing(JNIEnv* env, jobject thiz) {
     UndoManager* manager = getUndoManager(env, thiz);
     if (manager) {
         manager->end_composing();
@@ -222,7 +222,7 @@ Java_dev_jcode_core_editor_UndoManager_nativeEndComposing(JNIEnv* env, jobject t
 }
 
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_editor_UndoManager_nativeFlushGroup(JNIEnv* env, jobject thiz) {
+Java_dev_blamspot_jcode_core_editor_UndoManager_nativeFlushGroup(JNIEnv* env, jobject thiz) {
     UndoManager* manager = getUndoManager(env, thiz);
     if (manager) {
         manager->flush_group();
@@ -230,7 +230,7 @@ Java_dev_jcode_core_editor_UndoManager_nativeFlushGroup(JNIEnv* env, jobject thi
 }
 
 JNIEXPORT jboolean JNICALL
-Java_dev_jcode_core_editor_UndoManager_nativeCanUndo(JNIEnv* env, jobject thiz) {
+Java_dev_blamspot_jcode_core_editor_UndoManager_nativeCanUndo(JNIEnv* env, jobject thiz) {
     UndoManager* manager = getUndoManager(env, thiz);
     if (!manager) return false;
     
@@ -238,7 +238,7 @@ Java_dev_jcode_core_editor_UndoManager_nativeCanUndo(JNIEnv* env, jobject thiz) 
 }
 
 JNIEXPORT jboolean JNICALL
-Java_dev_jcode_core_editor_UndoManager_nativeCanRedo(JNIEnv* env, jobject thiz) {
+Java_dev_blamspot_jcode_core_editor_UndoManager_nativeCanRedo(JNIEnv* env, jobject thiz) {
     UndoManager* manager = getUndoManager(env, thiz);
     if (!manager) return false;
     
@@ -246,7 +246,7 @@ Java_dev_jcode_core_editor_UndoManager_nativeCanRedo(JNIEnv* env, jobject thiz) 
 }
 
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_editor_UndoManager_nativeClear(JNIEnv* env, jobject thiz) {
+Java_dev_blamspot_jcode_core_editor_UndoManager_nativeClear(JNIEnv* env, jobject thiz) {
     UndoManager* manager = getUndoManager(env, thiz);
     if (manager) {
         manager->clear();

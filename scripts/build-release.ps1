@@ -1,7 +1,7 @@
 # Build a release APK of JCode on Windows (pwsh). Output: .\builds
 #   -Yes                             : auto-accept install prompts
 #   -Variant release|beta            : pick the build variant non-interactively (else you're prompted).
-#                                      beta = side-by-side app (dev.jcode.beta / "JCode (beta)") that
+#                                      beta = side-by-side app (dev.blamspot.jcode.beta / "JCode (beta)") that
 #                                      installs ALONGSIDE the release build instead of replacing it.
 #   -PreReleaseLabel <label>         : pre-release label appended to a beta versionName, alpha.N|beta.N|
 #                                      rc.N (default: beta.1 -> 1.5.0-beta.1). Numbered on purpose: a
@@ -107,8 +107,8 @@ if ($Variant) {
 } elseif (-not [Console]::IsInputRedirected) {
     Write-Host ''
     Say 'Which build?'
-    Write-Host '  [1] Release  - final build (dev.jcode / "JCode"), version from app/build.gradle.kts' -ForegroundColor Gray
-    Write-Host '  [2] Beta     - side-by-side testing build (dev.jcode.beta / "JCode (beta)"): installs' -ForegroundColor Gray
+    Write-Host '  [1] Release  - final build (dev.blamspot.jcode / "JCode"), version from app/build.gradle.kts' -ForegroundColor Gray
+    Write-Host '  [2] Beta     - side-by-side testing build (dev.blamspot.jcode.beta / "JCode (beta)"): installs' -ForegroundColor Gray
     Write-Host '                 ALONGSIDE the release app, own data, versionName gets a -label suffix' -ForegroundColor Gray
     $sel = Read-Host 'Select [1]'
     $IsPre = ($sel -match '^(2|p|b)')
@@ -122,7 +122,7 @@ if ($Variant) {
 $IdSuffix = if ($IsPre) { '.beta' } else { '' }
 $AppLabel = if ($IsPre) { 'JCode (beta)' } else { 'JCode' }
 $VariantTag = if ($IsPre) { 'beta' } else { 'release' }
-Say "Variant: $VariantTag$(if ($IsPre) { " -> app id dev.jcode$IdSuffix, label '$AppLabel', version label: $PreReleaseLabel" })"
+Say "Variant: $VariantTag$(if ($IsPre) { " -> app id dev.blamspot.jcode$IdSuffix, label '$AppLabel', version label: $PreReleaseLabel" })"
 
 if ($RepoRoot.Length -gt 50) {
     Warn "Repo path is $($RepoRoot.Length) chars - the native (tree-sitter) build can hit the Win32 MAX_PATH limit."
@@ -441,5 +441,5 @@ if ($Keystore) {
 $Sha = (Get-FileHash $Out -Algorithm SHA256).Hash.ToLower()
 $SizeMb = [math]::Round((Get-Item $Out).Length / 1MB, 1)
 Say "Done: $Out ($SizeMb MB, $signState)"
-if ($IdSuffix) { Say "Installs as a SEPARATE app: dev.jcode$IdSuffix ('$AppLabel') - won't overwrite the release build." }
+if ($IdSuffix) { Say "Installs as a SEPARATE app: dev.blamspot.jcode$IdSuffix ('$AppLabel') - won't overwrite the release build." }
 Say "sha256: $Sha"

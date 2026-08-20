@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:editor`, `:core:buffer`, `:core:term`, `:core:lsp`, `:core:debug`, `:core:resource`, `:core:treesitter` |
-| **Primary sources** | core/editor/src/main/java/dev/jcode/core/editor/EditorState.kt, core/buffer/src/main/java/dev/jcode/core/buffer/Buffer.kt, core/resource/src/main/java/dev/jcode/core/resource/ResourceManager.kt, core/resource/src/main/java/dev/jcode/core/resource/MemoryPressure.kt, core/resource/src/main/java/dev/jcode/core/resource/NativeHandle.kt |
+| **Primary sources** | core/editor/src/main/java/dev/blamspot/jcode/core/editor/EditorState.kt, core/buffer/src/main/java/dev/blamspot/jcode/core/buffer/Buffer.kt, core/resource/src/main/java/dev/blamspot/jcode/core/resource/ResourceManager.kt, core/resource/src/main/java/dev/blamspot/jcode/core/resource/MemoryPressure.kt, core/resource/src/main/java/dev/blamspot/jcode/core/resource/NativeHandle.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -78,7 +78,7 @@ Publishing a value that a native parser is still mutating is the classic hazard 
 The cleanup lambda must capture **only the primitive handle**, never `this`:
 
 ```kotlin
-// core/buffer/src/main/java/dev/jcode/core/buffer/Buffer.kt
+// core/buffer/src/main/java/dev/blamspot/jcode/core/buffer/Buffer.kt
 // The cleanup action must capture ONLY the primitive handle, never `this` — capturing the
 // tracked object keeps it strongly reachable and permanently defeats the Cleaner.
 val handle = nativeHandle

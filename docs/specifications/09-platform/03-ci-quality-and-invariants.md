@@ -162,12 +162,12 @@ spec is re-verified, re-check at least:
 
 | Value | Source |
 |---|---|
-| Settings keys and defaults | `core/design/src/main/java/dev/jcode/design/SettingsDefaults.kt` |
-| `EditorPageKind` | `feature/editor-pane/src/main/java/dev/jcode/feature/editor/pane/EditorTab.kt` |
-| `WorkbenchTool`, `RightPanelTab` | `app/src/main/java/dev/jcode/workbench/WorkbenchModel.kt` |
-| `WizardStepId` order | `core/distro/src/main/java/dev/jcode/core/distro/DistroModels.kt` |
+| Settings keys and defaults | `core/design/src/main/java/dev/blamspot/jcode/design/SettingsDefaults.kt` |
+| `EditorPageKind` | `feature/editor-pane/src/main/java/dev/blamspot/jcode/feature/editor/pane/EditorTab.kt` |
+| `WorkbenchTool`, `RightPanelTab` | `app/src/main/java/dev/blamspot/jcode/workbench/WorkbenchModel.kt` |
+| `WizardStepId` order | `core/distro/src/main/java/dev/blamspot/jcode/core/distro/DistroModels.kt` |
 | Catalog entry ids and categories | `core/distro/src/main/assets/distro/catalog.yaml` |
-| OSC 7711–7716 | `core/term/src/main/java/dev/jcode/core/term/VtParser.kt`, `TerminalSessionManager.kt` |
+| OSC 7711–7716 | `core/term/src/main/java/dev/blamspot/jcode/core/term/VtParser.kt`, `TerminalSessionManager.kt` |
 | Version matrix | `gradle/libs.versions.toml`, `app/build.gradle.kts` |
 
 Then update the document's **Verified against** row.
@@ -178,10 +178,10 @@ Then update the document's **Verified against** row.
 
 | Test | Kind | Covers |
 |---|---|---|
-| `core/buffer/src/test/java/dev/jcode/core/buffer/PieceTableTest.kt` | JVM unit | The Kotlin piece table |
-| `core/buffer/src/androidTest/java/dev/jcode/core/buffer/NativeBufferDifferentialTest.kt` | Instrumented | Fuzzes the C++ piece tree against the Kotlin table **and** a naive reference, through the real JNI, on device |
-| `app/src/androidTest/java/dev/jcode/NativeLibrariesSmokeTest.kt` | Instrumented | Every native library loads |
-| `app/src/androidTest/java/dev/jcode/SyntaxHighlighterDifferentialTest.kt` | Instrumented | The native tokenizer against the Kotlin one |
+| `core/buffer/src/test/java/dev/blamspot/jcode/core/buffer/PieceTableTest.kt` | JVM unit | The Kotlin piece table |
+| `core/buffer/src/androidTest/java/dev/blamspot/jcode/core/buffer/NativeBufferDifferentialTest.kt` | Instrumented | Fuzzes the C++ piece tree against the Kotlin table **and** a naive reference, through the real JNI, on device |
+| `app/src/androidTest/java/dev/blamspot/jcode/NativeLibrariesSmokeTest.kt` | Instrumented | Every native library loads |
+| `app/src/androidTest/java/dev/blamspot/jcode/SyntaxHighlighterDifferentialTest.kt` | Instrumented | The native tokenizer against the Kotlin one |
 
 > `NativeBufferDifferentialTest` **must stay green before any change to the buffer ships** — it is
 > the correctness gate for the dual-implementation design. See

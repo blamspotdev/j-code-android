@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:app`, `:feature:marketplace` |
-| **Primary sources** | app/src/main/java/dev/jcode/workbench/ExtensionWebView.kt (1,245 lines), app/src/main/java/dev/jcode/workbench/VsCodeExtensionHost.kt (270), app/src/main/assets/vscode-host/host.js (662), app/src/main/java/dev/jcode/workbench/VsixDrawerPanel.kt, app/src/main/java/dev/jcode/workbench/ScmExtensionHost.kt, app/src/main/java/dev/jcode/workbench/ExtensionDevPanel.kt, app/src/main/java/dev/jcode/workbench/ExtensionDevLog.kt, feature/marketplace/src/main/java/dev/jcode/feature/marketplace/VsixPackage.kt (278) |
+| **Primary sources** | app/src/main/java/dev/blamspot/jcode/workbench/ExtensionWebView.kt (1,245 lines), app/src/main/java/dev/blamspot/jcode/workbench/VsCodeExtensionHost.kt (270), app/src/main/assets/vscode-host/host.js (662), app/src/main/java/dev/blamspot/jcode/workbench/VsixDrawerPanel.kt, app/src/main/java/dev/blamspot/jcode/workbench/ScmExtensionHost.kt, app/src/main/java/dev/blamspot/jcode/workbench/ExtensionDevPanel.kt, app/src/main/java/dev/blamspot/jcode/workbench/ExtensionDevLog.kt, feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/VsixPackage.kt (278) |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---

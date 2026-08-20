@@ -14,7 +14,7 @@ extern "C" {
  * @brief Create a new ConfigService instance
  */
 JNIEXPORT jlong JNICALL
-Java_dev_jcode_native_core_ConfigServiceNative_nativeCreate(JNIEnv* env, jclass clazz) {
+Java_dev_blamspot_jcode_native_core_ConfigServiceNative_nativeCreate(JNIEnv* env, jclass clazz) {
     auto service = std::make_shared<ConfigService>();
     return getResourceManager().registerResource<ConfigService>(service);
 }
@@ -23,7 +23,7 @@ Java_dev_jcode_native_core_ConfigServiceNative_nativeCreate(JNIEnv* env, jclass 
  * @brief Destroy a ConfigService instance
  */
 JNIEXPORT void JNICALL
-Java_dev_jcode_native_core_ConfigServiceNative_nativeDestroy(JNIEnv* env, jclass clazz, jlong handle) {
+Java_dev_blamspot_jcode_native_core_ConfigServiceNative_nativeDestroy(JNIEnv* env, jclass clazz, jlong handle) {
     getResourceManager().release(handle);
 }
 
@@ -31,7 +31,7 @@ Java_dev_jcode_native_core_ConfigServiceNative_nativeDestroy(JNIEnv* env, jclass
  * @brief Parse YAML from a string
  */
 JNIEXPORT jboolean JNICALL
-Java_dev_jcode_native_core_ConfigServiceNative_nativeParseYaml(
+Java_dev_blamspot_jcode_native_core_ConfigServiceNative_nativeParseYaml(
     JNIEnv* env, jclass clazz, jlong handle, jstring yamlContent)
 {
     auto service = getResourceManager().getResource<ConfigService>(handle);
@@ -50,7 +50,7 @@ Java_dev_jcode_native_core_ConfigServiceNative_nativeParseYaml(
  * @brief Parse YAML from a file
  */
 JNIEXPORT jboolean JNICALL
-Java_dev_jcode_native_core_ConfigServiceNative_nativeParseYamlFile(
+Java_dev_blamspot_jcode_native_core_ConfigServiceNative_nativeParseYamlFile(
     JNIEnv* env, jclass clazz, jlong handle, jstring filePath)
 {
     auto service = getResourceManager().getResource<ConfigService>(handle);
@@ -69,7 +69,7 @@ Java_dev_jcode_native_core_ConfigServiceNative_nativeParseYamlFile(
  * @brief Serialize to YAML string
  */
 JNIEXPORT jstring JNICALL
-Java_dev_jcode_native_core_ConfigServiceNative_nativeToYaml(JNIEnv* env, jclass clazz, jlong handle) {
+Java_dev_blamspot_jcode_native_core_ConfigServiceNative_nativeToYaml(JNIEnv* env, jclass clazz, jlong handle) {
     auto service = getResourceManager().getResource<ConfigService>(handle);
     if (!service) {
         LOG_E(LOG_TAG, "Invalid ConfigService handle");
@@ -85,7 +85,7 @@ Java_dev_jcode_native_core_ConfigServiceNative_nativeToYaml(JNIEnv* env, jclass 
  * @brief Check if a path exists
  */
 JNIEXPORT jboolean JNICALL
-Java_dev_jcode_native_core_ConfigServiceNative_nativeHas(
+Java_dev_blamspot_jcode_native_core_ConfigServiceNative_nativeHas(
     JNIEnv* env, jclass clazz, jlong handle, jstring path)
 {
     auto service = getResourceManager().getResource<ConfigService>(handle);
@@ -103,7 +103,7 @@ Java_dev_jcode_native_core_ConfigServiceNative_nativeHas(
  * @brief Get a string value
  */
 JNIEXPORT jstring JNICALL
-Java_dev_jcode_native_core_ConfigServiceNative_nativeGetString(
+Java_dev_blamspot_jcode_native_core_ConfigServiceNative_nativeGetString(
     JNIEnv* env, jclass clazz, jlong handle, jstring path, jstring defaultValue)
 {
     auto service = getResourceManager().getResource<ConfigService>(handle);
@@ -125,7 +125,7 @@ Java_dev_jcode_native_core_ConfigServiceNative_nativeGetString(
  * @brief Get an integer value
  */
 JNIEXPORT jlong JNICALL
-Java_dev_jcode_native_core_ConfigServiceNative_nativeGetInteger(
+Java_dev_blamspot_jcode_native_core_ConfigServiceNative_nativeGetInteger(
     JNIEnv* env, jclass clazz, jlong handle, jstring path, jlong defaultValue)
 {
     auto service = getResourceManager().getResource<ConfigService>(handle);
@@ -144,7 +144,7 @@ Java_dev_jcode_native_core_ConfigServiceNative_nativeGetInteger(
  * @brief Get a float value
  */
 JNIEXPORT jdouble JNICALL
-Java_dev_jcode_native_core_ConfigServiceNative_nativeGetFloat(
+Java_dev_blamspot_jcode_native_core_ConfigServiceNative_nativeGetFloat(
     JNIEnv* env, jclass clazz, jlong handle, jstring path, jdouble defaultValue)
 {
     auto service = getResourceManager().getResource<ConfigService>(handle);
@@ -163,7 +163,7 @@ Java_dev_jcode_native_core_ConfigServiceNative_nativeGetFloat(
  * @brief Get a boolean value
  */
 JNIEXPORT jboolean JNICALL
-Java_dev_jcode_native_core_ConfigServiceNative_nativeGetBoolean(
+Java_dev_blamspot_jcode_native_core_ConfigServiceNative_nativeGetBoolean(
     JNIEnv* env, jclass clazz, jlong handle, jstring path, jboolean defaultValue)
 {
     auto service = getResourceManager().getResource<ConfigService>(handle);
@@ -182,7 +182,7 @@ Java_dev_jcode_native_core_ConfigServiceNative_nativeGetBoolean(
  * @brief Set a string value
  */
 JNIEXPORT void JNICALL
-Java_dev_jcode_native_core_ConfigServiceNative_nativeSetString(
+Java_dev_blamspot_jcode_native_core_ConfigServiceNative_nativeSetString(
     JNIEnv* env, jclass clazz, jlong handle, jstring path, jstring value)
 {
     auto service = getResourceManager().getResource<ConfigService>(handle);
@@ -201,7 +201,7 @@ Java_dev_jcode_native_core_ConfigServiceNative_nativeSetString(
  * @brief Set an integer value
  */
 JNIEXPORT void JNICALL
-Java_dev_jcode_native_core_ConfigServiceNative_nativeSetInteger(
+Java_dev_blamspot_jcode_native_core_ConfigServiceNative_nativeSetInteger(
     JNIEnv* env, jclass clazz, jlong handle, jstring path, jlong value)
 {
     auto service = getResourceManager().getResource<ConfigService>(handle);
@@ -219,7 +219,7 @@ Java_dev_jcode_native_core_ConfigServiceNative_nativeSetInteger(
  * @brief Set a float value
  */
 JNIEXPORT void JNICALL
-Java_dev_jcode_native_core_ConfigServiceNative_nativeSetFloat(
+Java_dev_blamspot_jcode_native_core_ConfigServiceNative_nativeSetFloat(
     JNIEnv* env, jclass clazz, jlong handle, jstring path, jdouble value)
 {
     auto service = getResourceManager().getResource<ConfigService>(handle);
@@ -237,7 +237,7 @@ Java_dev_jcode_native_core_ConfigServiceNative_nativeSetFloat(
  * @brief Set a boolean value
  */
 JNIEXPORT void JNICALL
-Java_dev_jcode_native_core_ConfigServiceNative_nativeSetBoolean(
+Java_dev_blamspot_jcode_native_core_ConfigServiceNative_nativeSetBoolean(
     JNIEnv* env, jclass clazz, jlong handle, jstring path, jboolean value)
 {
     auto service = getResourceManager().getResource<ConfigService>(handle);
@@ -255,7 +255,7 @@ Java_dev_jcode_native_core_ConfigServiceNative_nativeSetBoolean(
  * @brief Clear all configuration
  */
 JNIEXPORT void JNICALL
-Java_dev_jcode_native_core_ConfigServiceNative_nativeClear(JNIEnv* env, jclass clazz, jlong handle) {
+Java_dev_blamspot_jcode_native_core_ConfigServiceNative_nativeClear(JNIEnv* env, jclass clazz, jlong handle) {
     auto service = getResourceManager().getResource<ConfigService>(handle);
     if (service) {
         service->clear();

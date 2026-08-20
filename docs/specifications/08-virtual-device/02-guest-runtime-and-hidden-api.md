@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | **Status** | Implemented — verified on Android 13 with `targetSdk = 33` |
-| **Modules** | `:app` (`dev.jcode.vdevice`, plus `android.hardware.GuestSensorManager`) |
-| **Primary sources** | app/src/main/java/dev/jcode/vdevice/HiddenApi.kt, GuestLoader.kt, GuestContext.kt, GuestRuntime.kt, GuestHooks.kt, GuestInstrumentation.kt, GuestOverlay.kt, GuestPermissions.kt, GuestLocation.kt, GuestSensors.kt, VirtualIdentity.kt, EmbeddedWindows.kt, app/src/main/java/android/hardware/GuestSensorManager.kt |
+| **Modules** | `:app` (`dev.blamspot.jcode.vdevice`, plus `android.hardware.GuestSensorManager`) |
+| **Primary sources** | app/src/main/java/dev/blamspot/jcode/vdevice/HiddenApi.kt, GuestLoader.kt, GuestContext.kt, GuestRuntime.kt, GuestHooks.kt, GuestInstrumentation.kt, GuestOverlay.kt, GuestPermissions.kt, GuestLocation.kt, GuestSensors.kt, VirtualIdentity.kt, EmbeddedWindows.kt, app/src/main/java/android/hardware/GuestSensorManager.kt |
 | **Verified against** | device-verified on Android 13, 2026-08-13 (`tools/appcompat-fixture`, `tools/hardware-fixture`) |
 
 ---
@@ -664,7 +664,7 @@ JCode draws nothing over it.
 
 ## 8. Invariants and constraints
 
-1. None of `dev.jcode.vdevice`'s container code may run in the IDE process.
+1. None of `dev.blamspot.jcode.vdevice`'s container code may run in the IDE process.
 2. `VirtualIdentity.apply` refuses any process not ending in `:guest`.
 3. Only descriptive `Build` strings are rewritten; hardware-derived values are left alone.
 4. Every reflective access is guarded and degrades rather than crashing.

@@ -4,5 +4,5 @@ plugins {
 }
 
 android {
-    namespace = "dev.jcode.nativeffi.libgit2"
+    namespace = "dev.blamspot.jcode.nativeffi.libgit2"
 }

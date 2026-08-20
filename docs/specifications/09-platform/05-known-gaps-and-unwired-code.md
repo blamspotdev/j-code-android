@@ -31,7 +31,7 @@ Complete implementations with no live caller.
 |---|---|
 | `native/grammars` | Builds **14** grammar `.so` files at pinned upstream tags and ships them in the APK |
 | `native/tree-sitter/src/jni_treesitter.c` | ~50 real JNI exports over upstream tree-sitter |
-| `core/treesitter/src/main/java/dev/jcode/core/treesitter/TsHandles.kt` | A complete `Cleaner`-backed binding: parser, tree, node, cursor, query, language |
+| `core/treesitter/src/main/java/dev/blamspot/jcode/core/treesitter/TsHandles.kt` | A complete `Cleaner`-backed binding: parser, tree, node, cursor, query, language |
 | `TsLanguage.load(libName, funcName, …)` | A working `dlopen`/`dlsym` grammar loader |
 | `TsParseService` | Real incremental parsing: 30 ms debounce, cancel-and-replace, prefix/suffix diffing |
 
@@ -40,7 +40,7 @@ Complete implementations with no live caller.
 `TsLanguage.load(...)`. No grammar is ever `dlopen`'d. Separately,
 `HighlightSpanProducer.produce()` is an explicit stub returning an empty list.
 
-Syntax colouring actually comes from `core/buffer/src/main/java/dev/jcode/core/buffer/NativeHighlighter.kt` →
+Syntax colouring actually comes from `core/buffer/src/main/java/dev/blamspot/jcode/core/buffer/NativeHighlighter.kt` →
 `native/buffer/src/highlight.cpp`, a hand-written tokenizer with a Kotlin twin. See
 [Syntax highlighting and completion](../02-editor/05-syntax-highlighting-and-completion.md).
 
@@ -50,7 +50,7 @@ Syntax colouring actually comes from `core/buffer/src/main/java/dev/jcode/core/b
 (with yaml-cpp), plus JNI bridges. `jni_editor_state.cpp` exports
 `Java_dev_jcode_core_editor_EditorState_*` and `Java_dev_jcode_core_editor_UndoManager_*` —
 targeting the **real** Kotlin classes — and `jni_config.cpp` backs
-`dev.jcode.native.core.ConfigServiceNative`.
+`dev.blamspot.jcode.native.core.ConfigServiceNative`.
 
 Nothing binds: `core/editor` and `core/config` declare **no `external fun` at all**. Only
 `CoreNativeModule.nativeIsAvailable` and the library's `JNI_OnLoad` infrastructure are live.
@@ -71,7 +71,7 @@ Declared in `settings.gradle.kts`, depended on by `:app`, containing only a mark
 |---|---|---|
 | `:core:vcs` | "libgit2 JNI + porcelain API, Phase 9" | SCM is a WebView-hosted extension |
 | `:core:ctags` | "universal-ctags driver + index DB (Room/SQLite), Phase 8" | No symbol index exists |
-| `:core:state` | "Last-session restore, recents, breadcrumbs, Phase 17" | Session restore lives in `app/src/main/java/dev/jcode/SessionStore.kt` |
+| `:core:state` | "Last-session restore, recents, breadcrumbs, Phase 17" | Session restore lives in `app/src/main/java/dev/blamspot/jcode/SessionStore.kt` |
 | `:core:ext` | "WASM host (wasmtime JNI), extension registry, contribution dispatcher, Phase 14" | Extensions run in a WebView or a Node process |
 | `:native:editor-render` | — | No sources at all; only a stub `.so` |
 | `:native:wasmtime-ffi` | — | Its Rust crate is **4 lines** returning a version number |
@@ -83,7 +83,7 @@ depending on `:core:editor-decor` is really depending on `:core:editor`.
 ### 3.1 Duplicate package leftovers
 
 `:core:vcs`, `:core:ctags`, `:core:state` and `:core:ext` each ship the **same** marker under two
-package names (`dev.jcode.<x>` and `dev.jcode.core.<x>`). Harmless, but the doubled file count is not
+package names (`dev.blamspot.jcode.<x>` and `dev.blamspot.jcode.core.<x>`). Harmless, but the doubled file count is not
 evidence of implementation.
 
 ---
@@ -94,11 +94,11 @@ Five `:feature:*` modules are marker objects; their working implementations are 
 
 | Stub module | Real implementation |
 |---|---|
-| `:feature:terminal-pane` | `app/src/main/java/dev/jcode/TerminalSessionHost.kt`, `app/src/main/java/dev/jcode/workbench/WorkbenchExtraKeys.kt` |
-| `:feature:scm` | `app/src/main/java/dev/jcode/workbench/ScmExtensionHost.kt` |
-| `:feature:problems` | `app/src/main/java/dev/jcode/IssuesPanel.kt` |
-| `:feature:search` | `app/src/main/java/dev/jcode/workbench/SearchToolPanel.kt` |
-| `:feature:debug` (UI half) | `app/src/main/java/dev/jcode/DebugSessionPanel.kt`, `app/src/main/java/dev/jcode/RunDebugPanel.kt` |
+| `:feature:terminal-pane` | `app/src/main/java/dev/blamspot/jcode/TerminalSessionHost.kt`, `app/src/main/java/dev/blamspot/jcode/workbench/WorkbenchExtraKeys.kt` |
+| `:feature:scm` | `app/src/main/java/dev/blamspot/jcode/workbench/ScmExtensionHost.kt` |
+| `:feature:problems` | `app/src/main/java/dev/blamspot/jcode/IssuesPanel.kt` |
+| `:feature:search` | `app/src/main/java/dev/blamspot/jcode/workbench/SearchToolPanel.kt` |
+| `:feature:debug` (UI half) | `app/src/main/java/dev/blamspot/jcode/DebugSessionPanel.kt`, `app/src/main/java/dev/blamspot/jcode/RunDebugPanel.kt` |
 
 `:feature:marketplace` inverts this — it holds the logic and no UI; `:app` supplies the screens.
 
@@ -108,7 +108,7 @@ Five `:feature:*` modules are marker objects; their working implementations are 
 
 ### 5.1 Editor ↔ language server
 
-Wired, via `dev.jcode.lsp.LspController` — diagnostics, completions, Go to Definition, Find
+Wired, via `dev.blamspot.jcode.lsp.LspController` — diagnostics, completions, Go to Definition, Find
 References, Rename Symbol and Format Document all reach a running server. See
 [LSP client](../04-language-services/01-lsp-client.md). What remains:
 
@@ -173,7 +173,7 @@ identity. (Moot while tree-sitter is unwired.)
 | `kotlinx-serialization-json` | `core/debug/build.gradle.kts` | Never used; parsing is `org.json` |
 | BouncyCastle | `core/vcs/build.gradle.kts` | The module is a stub |
 | Room, Hilt, DataStore | `core/ctags`, `core/state`, `core/ext` | Those modules are stubs |
-| `Layer.MINIMAP` | `core/editor/src/main/java/dev/jcode/core/editor/decor/Decoration.kt` | There is no minimap |
+| `Layer.MINIMAP` | `core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/Decoration.kt` | There is no minimap |
 | `EffectiveEditorConfig.minimap = true` | `core/config` | Same |
 | `supportedDistros` | `SdkCatalogEntry` | Supported by the model; no catalog entry uses it |
 | `ThemeBundle.fontFamily` | `core/design` | No built-in bundle sets it |

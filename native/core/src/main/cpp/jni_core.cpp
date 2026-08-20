@@ -42,7 +42,7 @@ JNIEXPORT void JNICALL JNI_OnUnload(JavaVM* vm, void* reserved) {
  * @brief Check if native library is available
  */
 JNIEXPORT jboolean JNICALL
-Java_dev_jcode_native_core_CoreNativeModule_nativeIsAvailable(JNIEnv* env, jclass clazz) {
+Java_dev_blamspot_jcode_native_core_CoreNativeModule_nativeIsAvailable(JNIEnv* env, jclass clazz) {
     return JNI_TRUE;
 }
 

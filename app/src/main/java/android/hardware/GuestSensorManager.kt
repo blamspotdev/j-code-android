@@ -5,12 +5,12 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
-import dev.jcode.vdevice.HardwareMode
-import dev.jcode.vdevice.HardwareSample
-import dev.jcode.vdevice.SimulatedHardware
-import dev.jcode.vdevice.TAG
-import dev.jcode.vdevice.VirtualDevicePolicy
-import dev.jcode.vdevice.VirtualHardware
+import dev.blamspot.jcode.vdevice.HardwareMode
+import dev.blamspot.jcode.vdevice.HardwareSample
+import dev.blamspot.jcode.vdevice.SimulatedHardware
+import dev.blamspot.jcode.vdevice.TAG
+import dev.blamspot.jcode.vdevice.VirtualDevicePolicy
+import dev.blamspot.jcode.vdevice.VirtualHardware
 
 /** The sampling period is honoured within these bounds; a simulated device is not worth 400 Hz. */
 private const val MIN_PERIOD_MS = 20L
