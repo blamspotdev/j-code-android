@@ -65,6 +65,7 @@ import dev.jcode.feature.marketplace.ExtensionActivation
 import dev.jcode.feature.marketplace.ExtensionDeps
 import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
+import dev.jcode.feature.marketplace.choosesActivation
 import dev.jcode.feature.marketplace.hasWebUi
 import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.isUpdateAvailable
@@ -647,9 +648,14 @@ internal fun ExtensionPermissionsPage(
 }
 
 /**
- * One extension on the Extension Settings page: a defined card with its icon, name, a metadata line
- * (description · version · VSIX), and its activation-status pill; expands to its settings and
- * permissions.
+ * One extension on the Extension Settings page: a defined card with its icon, name and a metadata
+ * line (description · version · VSIX), expanding to whatever that extension actually lets you
+ * decide — its own declared settings, its permissions, and, where the kind of extension permits a
+ * choice, when it activates.
+ *
+ * For some extensions that comes to nothing. A Dev Pack with no declared settings has no decisions
+ * to offer at all, so it does not expand: a chevron promising a panel that opens onto a divider and
+ * blank space reads as something failing to load.
  */
 @Composable
 private fun ExtensionSettingsCard(
@@ -658,6 +664,14 @@ private fun ExtensionSettingsCard(
 ) {
     var expanded by rememberSaveable("ext-settings-${ext.id}") { mutableStateOf(false) }
     val mode = LocalExtensionActivation.current.modeFor(ext.id)
+    val declaredSettings = LocalExtensionSettingsUi.current.groups
+        .firstOrNull { it.extensionId == ext.id }?.specs.orEmpty()
+    // Every row the expanded half can hold. Kept beside the rows themselves, because the two
+    // disagreeing is precisely the bug: a card that opens onto nothing, or one that hides something.
+    val hasDetails = declaredSettings.isNotEmpty() ||
+        ext.type.choosesActivation ||
+        ext.apiCapabilities.isNotEmpty() ||
+        ext.hasWebUi
     val subtitle = remember(ext) {
         buildList {
             ext.description.takeIf { it.isNotBlank() }?.let { add(it) }
@@ -675,7 +689,8 @@ private fun ExtensionSettingsCard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                modifier = Modifier.fillMaxWidth()
+                    .then(if (hasDetails) Modifier.clickable { expanded = !expanded } else Modifier),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(11.dp),
             ) {
@@ -698,15 +713,17 @@ private fun ExtensionSettingsCard(
                         )
                     }
                 }
-                ActivationPill(mode)
-                Icon(
-                    imageVector = jcIcon(if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown),
-                    contentDescription = if (expanded) "Collapse ${ext.name}" else "Expand ${ext.name}",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
-                )
+                if (ext.type.choosesActivation) ActivationPill(mode)
+                if (hasDetails) {
+                    Icon(
+                        imageVector = jcIcon(if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown),
+                        contentDescription = if (expanded) "Collapse ${ext.name}" else "Expand ${ext.name}",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
-            AnimatedVisibility(visible = expanded) {
+            AnimatedVisibility(visible = expanded && hasDetails) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                     ExtensionSettingsControls(extensionId = ext.id)
@@ -720,7 +737,7 @@ private fun ExtensionSettingsCard(
                             Text("Configure Git…")
                         }
                     }
-                    ActivationSelector(extensionId = ext.id)
+                    if (ext.type.choosesActivation) ActivationSelector(extensionId = ext.id)
                     if (ext.apiCapabilities.isNotEmpty()) {
                         CapabilityToggles(extensionId = ext.id, capabilities = ext.apiCapabilities)
                     }

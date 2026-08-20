@@ -55,6 +55,44 @@ enum class ExtensionActivation {
     }
 }
 
+/**
+ * Whether this kind of extension lets the user say when it runs.
+ *
+ * The kinds that put a surface in the workbench — a manager panel, a source-control view — can be
+ * left running from launch, woken when they are needed, or switched off entirely, and which of those
+ * you want depends on what the extension costs you while it sits there.
+ *
+ * The rest contribute to files: highlighting, completions, formatting, templates. There is nothing
+ * for them to do until a file they understand is open and nothing they cost while none is, so the
+ * question has one sensible answer. Asking it anyway is not a choice, it is only a way to get it
+ * wrong — and a Dev Pack switched off by mistake looks like the editor forgetting how to colour
+ * Kotlin, not like a setting.
+ *
+ * [ExtensionType.Unknown] counts as one of the latter. A package whose `type` is missing or
+ * unrecognised gets no workbench surface either, since every surface is keyed on the same field.
+ */
+val ExtensionType.choosesActivation: Boolean
+    get() = when (this) {
+        ExtensionType.App, ExtensionType.DbManager, ExtensionType.Scm, ExtensionType.Vm -> true
+        ExtensionType.Templates, ExtensionType.Language, ExtensionType.Formatter,
+        ExtensionType.Unknown,
+        -> false
+    }
+
+/**
+ * The mode actually in force, which is not always the one on disk.
+ *
+ * An extension that cannot choose reads as [ExtensionActivation.Default] whatever is stored against
+ * it. Without that, a mode saved before this rule existed — or by a package that has since changed
+ * type — would leave a Dev Pack switched off with nothing in the UI to switch it back on.
+ */
+fun InstalledExtension.activationIn(modes: Map<String, ExtensionActivation>): ExtensionActivation =
+    if (type.choosesActivation) modes[id] ?: ExtensionActivation.Default else ExtensionActivation.Default
+
+/** Whether this extension's contributions are allowed to apply at all. */
+fun InstalledExtension.enabledIn(modes: Map<String, ExtensionActivation>): Boolean =
+    activationIn(modes) != ExtensionActivation.Manual
+
 /** Things an extension requires or suggests be installed (ids): toolchains, language servers, debug
  *  engines (dbg), and other extensions. */
 data class ExtensionDeps(

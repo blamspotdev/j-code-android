@@ -246,6 +246,8 @@ import dev.jcode.workbench.dialog.NewItemDialog
 import dev.jcode.workbench.dialog.PostCloneDialog
 import dev.jcode.workbench.dialog.OpenFolderTypeDialog
 import dev.jcode.feature.marketplace.ExtensionActivation
+import dev.jcode.feature.marketplace.activationIn
+import dev.jcode.feature.marketplace.enabledIn
 import dev.jcode.workbench.marketplace.ExtensionActivationSetting
 import dev.jcode.workbench.marketplace.ExtensionCapabilitySetting
 import dev.jcode.workbench.marketplace.ExtensionKeepAliveSetting
@@ -435,9 +437,15 @@ fun JCodeApp(
     // so the per-extension activation mode actually gates highlighting/completions/formatting.
     val activeLanguageExtensions by viewModel.activeLanguageExtensions.collectAsStateWithLifecycle()
     val extensionActivations by viewModel.extensionActivations.collectAsStateWithLifecycle()
-    val extensionActivationSetting = remember(extensionActivations) {
+    val extensionActivationSetting = remember(extensionActivations, installedExtensions) {
         ExtensionActivationSetting(
-            modeFor = { id -> extensionActivations[id] ?: ExtensionActivation.Default },
+            // Resolved through the extension rather than straight out of the map, so every reader
+            // of this local sees the mode that is really in force — see `activationIn`.
+            modeFor = { id ->
+                installedExtensions.firstOrNull { it.id == id }
+                    ?.activationIn(extensionActivations)
+                    ?: extensionActivations[id] ?: ExtensionActivation.Default
+            },
             onChange = viewModel::setExtensionActivation,
         )
     }
@@ -1233,7 +1241,7 @@ fun JCodeApp(
     val scmHostExt = remember(installedExtensions, extensionActivations, suspendedBackgroundExts) {
         installedExtensions.firstOrNull {
             it.type == ExtensionType.Scm && it.hasWebUi && it.contributes.explorerDecorations &&
-                (extensionActivations[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual &&
+                it.enabledIn(extensionActivations) &&
                 it.id !in suspendedBackgroundExts
         }
     }

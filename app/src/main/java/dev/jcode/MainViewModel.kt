@@ -81,6 +81,7 @@ import dev.jcode.feature.editor.pane.EditorPageKind
 import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.feature.marketplace.BundledExtensionSpec
 import dev.jcode.feature.marketplace.ExtensionActivation
+import dev.jcode.feature.marketplace.enabledIn
 import dev.jcode.feature.marketplace.ExtensionDeps
 import dev.jcode.feature.marketplace.ExtensionInstaller
 import dev.jcode.feature.marketplace.ExtensionType
@@ -2149,7 +2150,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *  Drives language-pack resolution for highlighting/completions/formatting so Manual truly disables. */
     val activeLanguageExtensions: StateFlow<List<InstalledExtension>> =
         combine(installedExtensions, extensionActivations) { exts, modes ->
-            exts.filter { (modes[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual }
+            exts.filter { it.enabledIn(modes) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private fun parseActivations(json: String?): Map<String, ExtensionActivation> {
@@ -3126,7 +3127,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *  a preset's required files. */
     val contributedRunConfigPresets: StateFlow<List<ProjectRunner.ExtensionRunPreset>> =
         combine(installedExtensions, extensionActivations, distroService.sdkCatalogState) { exts, acts, sdk ->
-            exts.filter { (acts[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual }
+            exts.filter { it.enabledIn(acts) }
                 .filter { ext -> ext.requires.sdks.all { it in sdk.installedEntryIds } }
                 .flatMap { ext -> ext.contributes.runConfigPresets.map { ProjectRunner.ExtensionRunPreset(ext.name, it) } }
         }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
@@ -3137,7 +3138,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         sdk: dev.jcode.core.distro.SdkCatalogState,
         surface: (dev.jcode.feature.marketplace.ExtensionContributions) -> List<dev.jcode.feature.marketplace.ContributedAction>,
     ): List<ShellContribution> =
-        exts.filter { (acts[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual }
+        exts.filter { it.enabledIn(acts) }
             .filter { ext -> ext.requires.sdks.all { it in sdk.installedEntryIds } }
             .flatMap { ext ->
                 surface(ext.contributes).map { ShellContribution(ext.id, it.id, it.label, it.icon, it.fileExtensions, it.targets) }
