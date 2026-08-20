@@ -424,7 +424,7 @@ A custom `View` mirroring `EditorView`'s structure:
   `TerminalSessionManager.onNestedShellOpen` both use `open;<token>;<label>` — the base64 cwd/user
   fields do not exist. The KDoc is stale; see
   [Shell integration protocol](02-shell-integration-protocol.md) for the live format.
-- `:feature:terminal-pane` is a stub; the terminal UI host lives in
+- `:feature:terminal-pane` was a marker-only stub, removed at 1.6.2; the terminal UI host lives in
   `app/src/main/java/dev/blamspot/jcode/TerminalSessionHost.kt`.
 - `VtParser` rolls its own `Cleaner` rather than using `:core:resource`'s `NativeHandle`.
 

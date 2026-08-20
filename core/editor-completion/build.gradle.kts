@@ -31,5 +31,4 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
     implementation(project(":core:editor"))
-    implementation(project(":core:editor-decor"))
 }

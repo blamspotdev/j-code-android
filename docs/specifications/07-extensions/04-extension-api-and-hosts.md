@@ -318,7 +318,7 @@ raw form because only the presenting layer knows which of its own icons it can m
 - The `.vsix` surface is the webview slice only — `languages`, `debug`, `tasks` and `scm` throw.
 - `engines.vscode` is not enforced, so an extension targeting a much newer VS Code imports and then
   fails at its first unimplemented call.
-- `:core:ext` (the intended WASM host and contribution dispatcher) is a stub, as is
+- `:core:ext` (the intended WASM host and contribution dispatcher) was removed at 1.6.2, as was
   `:native:wasmtime-ffi`; there is no WASM extension runtime.
 
 ---

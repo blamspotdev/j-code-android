@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Status** | Implemented |
-| **Modules** | `:core:editor` (package `dev.blamspot.jcode.core.editor.decor`), `:core:editor-decor` (marker only) |
+| **Modules** | `:core:editor` (package `dev.blamspot.jcode.core.editor.decor`) |
 | **Primary sources** | core/editor/src/main/java/dev/blamspot/jcode/core/editor/Renderer.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/WrapMap.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/Decoration.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/DecorationSet.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/ColoredSpan.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/SquiggleDecoration.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/DebugDecorations.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/InlineDecoration.kt, core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/DirtyTracker.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
@@ -247,8 +247,8 @@ advances and drawn glyphs disagree and the caret drifts.
 ## 9. Known gaps
 
 - `Layer.MINIMAP` is defined; there is no minimap.
-- `:core:editor-decor` is a module whose only content is a marker object — the decoration types all
-  live in `:core:editor`'s `decor` package. Modules depending on `:core:editor-decor` are really
+- `:core:editor-decor` was a module boundary whose only content was a marker object; it was removed
+  at 1.6.2. The decoration types live in `:core:editor`'s `decor` package, which is what modules
   depending on `:core:editor`.
 - `ColoredSpan`'s KDoc says it is "produced by tree-sitter's `HighlightSpanProducer`". That producer
   is a stub; spans actually come from `NativeHighlighter`. See

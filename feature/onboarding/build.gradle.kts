@@ -38,5 +38,4 @@ dependencies {
     ksp(libs.hilt.compiler)
     implementation(project(":core:distro"))
     implementation(project(":core:design"))
-    implementation(project(":core:state"))
 }

@@ -173,12 +173,6 @@ Java_dev_blamspot_jcode_core_treesitter_TsNode_nativeEndRow(JNIEnv* env, jobject
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_blamspot_jcode_core_treesitter_TsNode_nativeEndColumn(JNIEnv* env, jobject thiz, jlong handle) {
-    if (!handle) return 0;
-    return (jint)ts_node_end_point(*(TSNode*)handle).column;
-}
-
-JNIEXPORT jint JNICALL
 Java_dev_blamspot_jcode_core_treesitter_TsNode_nativeChildCount(JNIEnv* env, jobject thiz, jlong handle) {
     if (!handle) return 0;
     return (jint)ts_node_child_count(*(TSNode*)handle);

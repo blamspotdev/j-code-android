@@ -255,7 +255,8 @@ Signed marketplace packages are always `dev = false` and are not debuggable.
   settings schema validation.
 - Theme and icon bundles are not yet a contribution point, though the design system would support
   them.
-- `:core:ext` — the intended WASM host and contribution dispatcher — is a stub; everything here runs
+- `:core:ext` — the intended WASM host and contribution dispatcher — was a marker-only stub and was
+  removed at 1.6.2; everything here runs
   in a WebView or a Node process instead.
 
 ---

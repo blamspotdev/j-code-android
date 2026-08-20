@@ -44,13 +44,3 @@ data class ProjectTemplate(
     /** An empty template creates only the folder; there is nothing to run. */
     val isEmpty: Boolean get() = recipe.isEmpty()
 }
-
-/** The bundled first-party template extension (descriptor + its templates). */
-data class TemplateExtension(
-    val id: String,
-    val name: String,
-    val publisher: String?,
-    val version: String?,
-    val description: String,
-    val templates: List<ProjectTemplate>,
-)

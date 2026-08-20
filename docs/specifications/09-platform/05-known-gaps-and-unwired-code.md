@@ -63,44 +63,33 @@ is present in the shipped APK and unreachable.
 
 ---
 
-## 3. Stub modules
+## 3. Stub modules — removed at 1.6.2
 
-Declared in `settings.gradle.kts`, depended on by `:app`, containing only a marker object.
+Nine modules were declared in `settings.gradle.kts` and depended on by `:app` while containing
+nothing but a marker object. They are gone; `:app` no longer depends on anything empty, and the
+module count went from 45 to 36. What each one *claimed* to be, and where that job is really done:
 
-| Module | Marker says | Reality |
+| Removed module | Marker claimed | Where the work actually happens |
 |---|---|---|
-| `:core:vcs` | "libgit2 JNI + porcelain API, Phase 9" | SCM is a WebView-hosted extension |
-| `:core:ctags` | "universal-ctags driver + index DB (Room/SQLite), Phase 8" | No symbol index exists |
-| `:core:state` | "Last-session restore, recents, breadcrumbs, Phase 17" | Session restore lives in `app/src/main/java/dev/blamspot/jcode/SessionStore.kt` |
-| `:core:ext` | "WASM host (wasmtime JNI), extension registry, contribution dispatcher, Phase 14" | Extensions run in a WebView or a Node process |
-| `:native:editor-render` | — | No sources at all; only a stub `.so` |
-| `:native:wasmtime-ffi` | — | Its Rust crate is **4 lines** returning a version number |
+| `:core:vcs` | libgit2 JNI + porcelain API | SCM is a WebView-hosted extension |
+| `:core:ctags` | universal-ctags driver + index DB | No symbol index exists |
+| `:core:state` | Last-session restore, recents | `app/src/main/java/dev/blamspot/jcode/SessionStore.kt` |
+| `:core:ext` | WASM host, extension registry | Extensions run in a WebView or a Node process |
+| `:core:editor-decor` | The decoration framework | The types live in `:core:editor`'s `decor` package |
+| `:feature:terminal-pane` | The terminal pane | `TerminalSessionHost.kt`, `workbench/WorkbenchExtraKeys.kt` |
+| `:feature:scm` | Source control UI | `workbench/ScmExtensionHost.kt` |
+| `:feature:problems` | The problems pane | `IssuesPanel.kt` |
+| `:feature:search` | Search UI | `workbench/SearchToolPanel.kt` |
 
-`:core:editor-decor` is a fourth kind: a module boundary whose only content is a documentation
-marker. The decoration types physically live in `:core:editor`'s `decor` package, so anything
-depending on `:core:editor-decor` is really depending on `:core:editor`.
+Two module boundaries that look similar are **not** stubs and stay: `:native:proot` carries the
+proot binary, its ELF loaders and the mmap-only support libraries, and `:native:grammars` is a
+CMake target. Neither has Kotlin sources and neither needs any.
 
-### 3.1 Duplicate package leftovers
+`:feature:debug` keeps `DebugEngineManagerFeature`; only its two marker objects went. `:feature:marketplace`
+inverts the usual split — it holds logic and no UI, and `:app` supplies the screens.
 
-`:core:vcs`, `:core:ctags`, `:core:state` and `:core:ext` each ship the **same** marker under two
-package names (`dev.blamspot.jcode.<x>` and `dev.blamspot.jcode.core.<x>`). Harmless, but the doubled file count is not
-evidence of implementation.
-
----
-
-## 4. Stub feature modules with the real UI in `:app`
-
-Five `:feature:*` modules are marker objects; their working implementations are in `:app`:
-
-| Stub module | Real implementation |
-|---|---|
-| `:feature:terminal-pane` | `app/src/main/java/dev/blamspot/jcode/TerminalSessionHost.kt`, `app/src/main/java/dev/blamspot/jcode/workbench/WorkbenchExtraKeys.kt` |
-| `:feature:scm` | `app/src/main/java/dev/blamspot/jcode/workbench/ScmExtensionHost.kt` |
-| `:feature:problems` | `app/src/main/java/dev/blamspot/jcode/IssuesPanel.kt` |
-| `:feature:search` | `app/src/main/java/dev/blamspot/jcode/workbench/SearchToolPanel.kt` |
-| `:feature:debug` (UI half) | `app/src/main/java/dev/blamspot/jcode/DebugSessionPanel.kt`, `app/src/main/java/dev/blamspot/jcode/RunDebugPanel.kt` |
-
-`:feature:marketplace` inverts this — it holds the logic and no UI; `:app` supplies the screens.
+Still stubs, deliberately, because each ships an `.so` the smoke test loads: `:native:editor-render`
+(a stub `.so`, no sources) and `:native:wasmtime-ffi` (a four-line Rust crate returning a version).
 
 ---
 
@@ -171,15 +160,12 @@ identity. (Moot while tree-sitter is unwired.)
 | Declaration | Where | Reality |
 |---|---|---|
 | `kotlinx-serialization-json` | `core/debug/build.gradle.kts` | Never used; parsing is `org.json` |
-| BouncyCastle | `core/vcs/build.gradle.kts` | The module is a stub |
-| Room, Hilt, DataStore | `core/ctags`, `core/state`, `core/ext` | Those modules are stubs |
 | `Layer.MINIMAP` | `core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/Decoration.kt` | There is no minimap |
 | `EffectiveEditorConfig.minimap = true` | `core/config` | Same |
 | `supportedDistros` | `SdkCatalogEntry` | Supported by the model; no catalog entry uses it |
 | `ThemeBundle.fontFamily` | `core/design` | No built-in bundle sets it |
 | `Buffer.nativeOpenFromFd` | `core/buffer` | JNI export exists; no caller |
 | `JCodePosture` | `core/adaptive` | Computed; no layout branches on `TableTop` or `Book` |
-| `EditorGroupManager` splits | `:feature:editor-pane` | Model supports splits; no split-pane UI |
 | Multi-caret | `EditorState.carets` is a list | The input layer creates one caret |
 
 ---

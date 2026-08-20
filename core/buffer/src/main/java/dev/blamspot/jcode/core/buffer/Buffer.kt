@@ -399,14 +399,6 @@ class LineWindow internal constructor(
     }
 }
 
-/** A reference to a line in a snapshot, holding its text and range. */
-data class LineRef(
-    val lineIndex: Int,
-    val byteStart: Int,
-    val byteEnd: Int,
-    val text: String,
-)
-
 /** Edit operation within a transaction. */
 sealed class EditOp {
     data class Insert(val offset: Int, val text: String) : EditOp()

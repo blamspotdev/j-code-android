@@ -298,8 +298,7 @@ class TsNode internal constructor(
         private external fun nativeStartRow(handle: Long): Int
         private external fun nativeStartColumn(handle: Long): Int
         private external fun nativeEndRow(handle: Long): Int
-        private external fun nativeEndColumn(handle: Long): Int
-    }
+        }
 }
 
 /**

@@ -5320,11 +5320,6 @@ private fun SidebarSectionCard(
     }
 }
 
-private data class SidebarSectionSpec(
-    val title: String,
-    val lines: List<String>,
-)
-
 @Composable
 private fun InspectorSidebar(
     selectedProject: Project?,

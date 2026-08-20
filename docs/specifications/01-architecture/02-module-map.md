@@ -49,37 +49,32 @@ Largest files: `JCodeShell.kt` (4,999 lines), `MainViewModel.kt` (4,844).
 
 ---
 
-## 4. `:core:*` — 19 modules
+## 4. `:core:*` — 14 modules
 
 | Module | Depends on | Status | Responsibility |
 |---|---|---|---|
 | `:core:adaptive` | — | Implemented | `WindowInfo` window-size/orientation classes |
 | `:core:buffer` | `:native:buffer` | Implemented | Text buffer, piece table, snapshots, native tokenizer facade |
 | `:core:config` | — | Implemented | Workspace/project YAML, merge to effective config, `run.yaml` |
-| `:core:ctags` | — | **Stub** | Marker only. Intended: universal-ctags driver + Room index |
 | `:core:diag` | — | Implemented | Opt-in `DiagnosticLog`: redacted rotating file, own-process logcat tee, crash capture |
 | `:core:debug` | `:core:term`, `:core:distro` | Implemented | DAP client |
 | `:core:design` | `:core:diag` | Implemented | Design system, theme/icon bundles, settings widgets, command registry |
 | `:core:distro` | `:core:config` | Implemented | proot, rootfs, toolchain catalog, ADB stack. Largest core module |
 | `:core:editor` | `:core:buffer`, `:core:resource` | Implemented | `EditorState`, `EditorView`, `Renderer`, `UndoManager`, `WrapMap`, decorations |
-| `:core:editor-completion` | `:core:editor`, `:core:editor-decor` | Implemented | Completion model, snippet engine, completion popup |
-| `:core:editor-decor` | `:core:editor` | **Documentation only** | A single marker object; the decoration types physically live in `:core:editor` |
-| `:core:ext` | — | **Stub** | Marker only. Intended: WASM host + extension registry |
+| `:core:editor-completion` | `:core:editor` | Implemented | Completion model, snippet engine, completion popup |
 | `:core:fs` | `:core:design` | Implemented | `Fs` abstraction (POSIX + SAF), workspace/project Room DB, file operations |
-| `:core:lsp` | `:core:editor-decor`, `:core:term`, `:core:distro` | Implemented | LSP client, diagnostics bus |
+| `:core:lsp` | `:core:term`, `:core:distro` | Implemented | LSP client, diagnostics bus |
 | `:core:resource` | — | Implemented | Memory-pressure registry, managed caches, pools, `NativeHandle` base |
 | `:core:search` | — | Implemented | Search engine over ripgrep FFI with a Kotlin fallback |
-| `:core:state` | — | **Stub** | Marker only. Session restore actually lives in `app/src/main/java/dev/blamspot/jcode/SessionStore.kt` |
 | `:core:term` | `:core:distro`, `:core:diag` | Implemented | PTY, VT parser, session manager, terminal view |
-| `:core:treesitter` | `:core:editor`, `:core:editor-decor`, `:core:buffer` | **Built but unwired** | Complete tree-sitter binding; no grammar is ever loaded |
-| `:core:vcs` | — | **Stub** | Marker only. SCM is implemented as a WebView-hosted extension |
+| `:core:treesitter` | `:core:editor`, `:core:buffer` | **Built but unwired** | Complete tree-sitter binding; no grammar is ever loaded |
 
 `:core:search` declares Gradle task dependencies on `:native:ripgrep-ffi:cargoBuild*JniLibs` so the
 Rust library is built before it compiles.
 
 ---
 
-## 5. `:feature:*` — 12 modules
+## 5. `:feature:*` — 8 modules
 
 | Module | Depends on | Status | Entry point |
 |---|---|---|---|
@@ -88,27 +83,20 @@ Rust library is built before it compiles.
 | `:feature:explorer` | `:core:fs`, `:core:design` | Implemented | `ExplorerView`, `TreeViewModel`, `ExplorerScmUi` |
 | `:feature:lsp-manager` | `:core:distro`, `:core:design` | Implemented | Per-language-server detail page |
 | `:feature:marketplace` | `:core:distro` | Implemented (logic only) | `ExtensionInstaller`, `JextCrypto`, `VsixPackage`, `TemplateScaffolder`. No UI — `:app` renders it |
-| `:feature:onboarding` | `:core:distro`, `:core:design`, `:core:state` | Implemented | `OnboardingFeature.StepperScreen` |
-| `:feature:problems` | `:core:design` | **Stub** | Real UI is `app/src/main/java/dev/blamspot/jcode/IssuesPanel.kt` |
-| `:feature:scm` | `:core:vcs`, `:core:design` | **Stub** | Real UI is the SCM extension WebView (`app/src/main/java/dev/blamspot/jcode/workbench/ScmExtensionHost.kt`) |
+| `:feature:onboarding` | `:core:distro`, `:core:design` | Implemented | `OnboardingFeature.StepperScreen` |
 | `:feature:sdk-manager` | `:core:distro`, `:core:design` | Implemented | Per-SDK detail page |
-| `:feature:search` | `:core:search`, `:core:design` | **Stub** | Real UI is `app/src/main/java/dev/blamspot/jcode/workbench/SearchToolPanel.kt` |
 | `:feature:settings` | `:core:config`, `:core:design`, `:core:distro` | Implemented | `SettingsFeature.Content` (1,949 lines) |
-| `:feature:terminal-pane` | `:core:term`, `:core:design` | **Stub** | Real UI is `app/src/main/java/dev/blamspot/jcode/TerminalSessionHost.kt` + `app/src/main/java/dev/blamspot/jcode/workbench/WorkbenchExtraKeys.kt` |
 
 ---
 
 ## 6. Where the feature code actually lives
 
-Five `:feature:*` modules are declared, depended on by `:app`, and contain nothing but a marker
-object. Their working implementations are in `:app`:
+Four such `:feature:*` stubs were removed at 1.6.2 (`terminal-pane`, `scm`, `problems`, `search`) —
+see [Known gaps](../09-platform/05-known-gaps-and-unwired-code.md) for where each one's work is done.
+One split of this shape remains, because the module still holds real code alongside its UI half:
 
 | Stub module | Real implementation |
 |---|---|
-| `:feature:terminal-pane` | `app/src/main/java/dev/blamspot/jcode/TerminalSessionHost.kt`, `app/src/main/java/dev/blamspot/jcode/workbench/WorkbenchExtraKeys.kt` |
-| `:feature:scm` | `app/src/main/java/dev/blamspot/jcode/workbench/ScmExtensionHost.kt` (WebView-hosted git UI) |
-| `:feature:problems` | `app/src/main/java/dev/blamspot/jcode/IssuesPanel.kt` |
-| `:feature:search` | `app/src/main/java/dev/blamspot/jcode/workbench/SearchToolPanel.kt` |
 | `:feature:debug` (UI half) | `app/src/main/java/dev/blamspot/jcode/DebugSessionPanel.kt`, `app/src/main/java/dev/blamspot/jcode/RunDebugPanel.kt` |
 
 `:feature:marketplace` inverts this: it holds the logic and no UI, and `:app` supplies the
@@ -147,20 +135,18 @@ mechanism.
   do not add sora-editor or an off-the-shelf terminal widget.
 - **Toolchains never ship in the APK.** Compilers, JDKs, LSPs and debug adapters install into the
   guest rootfs at runtime.
-- **Duplicate package leftovers.** `:core:vcs`, `:core:ctags`, `:core:state`, `:core:ext` each ship
-  the same marker under two package names (`dev.blamspot.jcode.<x>` and `dev.blamspot.jcode.core.<x>`). Harmless, but
-  do not take the doubled file count as evidence of implementation.
+- **A module boundary is not evidence of implementation.** Nine marker-only modules were removed at
+  1.6.2; before that, `:app` depended on several modules containing a single empty object. If a
+  module has no sources, it does no work — check before assuming a boundary means a subsystem.
 
 ---
 
 ## 9. Known gaps
 
-- Stub modules: `:core:vcs`, `:core:ctags`, `:core:state`, `:core:ext`, `:feature:scm`,
-  `:feature:problems`, `:feature:search`, `:feature:terminal-pane`, `:feature:debug` (UI half),
-  `:native:editor-render`, `:native:wasmtime-ffi`.
+- Stub modules: `:feature:debug` (UI half), `:native:editor-render`, `:native:wasmtime-ffi`. The
+  nine marker-only `:core:*`/`:feature:*` stubs were removed at 1.6.2 (45 modules down to 36).
 - Built-but-unwired: `:core:treesitter`, `:native:grammars`, `:native:libgit2`, the editor/undo/config
   halves of `:native:core`.
-- `:core:editor-decor` exists as a module boundary that carries no code.
 - Full inventory with reasons: [Known gaps and unwired code](../09-platform/05-known-gaps-and-unwired-code.md).
 
 ---
