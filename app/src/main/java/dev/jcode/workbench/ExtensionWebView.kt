@@ -46,7 +46,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.jcode.design.JCodeTheme
+import dev.jcode.design.LocalExtensionFontSizeSetting
+import dev.jcode.design.SettingsDefaults
 import dev.jcode.feature.marketplace.InstalledExtension
+import dev.jcode.feature.marketplace.tabName
 import dev.jcode.feature.marketplace.VsixCommand
 import dev.jcode.feature.marketplace.VsixPackage
 import dev.jcode.feature.marketplace.webUiFile
@@ -501,11 +504,45 @@ internal class VsixSession private constructor(
     var failure by mutableStateOf<String?>(null)
         private set
 
+    /**
+     * The workbench bridge, held so host requests can reach it too.
+     *
+     * It arrives as an argument to [start], but the calls that need it come from the extension at
+     * any time — opening a file, showing a notice, following a sign-in link — not just while
+     * starting up.
+     */
+    private var api: (suspend (envelopeJson: String) -> String)? = null
+
+    /**
+     * The `--jc-*` ramp the page is drawn with, kept so a surface created later starts in the theme
+     * that is on screen now rather than the one that was current when the session began.
+     */
+    internal var themeRampCss: String = ""
+
+    /**
+     * How large the extension draws its own text, as a percentage. Kept for the same reason as
+     * [themeRampCss] — surfaces come and go at the extension's whim, and one opened later has to
+     * start at the size the others are already at.
+     */
+    internal var textZoomPercent: Int = SettingsDefaults.EXTENSION_FONT_SCALE
+
     /** One webview the extension has open, mounted wherever it belongs. */
     inner class Surface(val handle: String, val webView: WebView) {
         var hasPage by mutableStateOf(false)
             internal set
         internal var loadedStamp: Int? = null
+
+        /**
+         * Messages the extension sent before the page could receive them.
+         *
+         * The two sides are both local, so the extension answers in single-digit milliseconds —
+         * faster than the page finishes loading the scripts that will listen. A page that opens its
+         * RPC from an early inline script and wires the receiving end a few modules later (Codex
+         * does) would otherwise lose the reply to its first call and wait forever. Held until the
+         * page has loaded, then delivered in order.
+         */
+        internal val queued = ArrayDeque<String>()
+        internal var loaded = false
     }
 
     private val surfaces = mutableStateMapOf<String, Surface>()
@@ -559,7 +596,7 @@ internal class VsixSession private constructor(
             // is how "Open Session in Editor" and the Agent Manager reach the main screen.
             "webview/panelCreated" -> {
                 val handle = params.optString("handle").takeIf { it.isNotBlank() } ?: return
-                val title = params.optString("title").ifBlank { extension.name }
+                val title = params.optString("title").ifBlank { extension.tabName }
                 scope.launch {
                     surfaceFor(handle)
                     rememberPanelTitle(handle, title)
@@ -571,7 +608,7 @@ internal class VsixSession private constructor(
             "webview/reveal" -> {
                 val handle = params.optString("handle").takeIf { it.isNotBlank() } ?: return
                 if (handle != viewHandle) {
-                    scope.launch { onOpenPanel(handle, panelTitles[handle] ?: extension.name) }
+                    scope.launch { onOpenPanel(handle, panelTitles[handle] ?: extension.tabName) }
                 }
             }
             "webview/disposed" -> {
@@ -595,12 +632,98 @@ internal class VsixSession private constructor(
                         else -> payload.toString()
                     },
                 )
-                scope.launch {
-                    surfaces[handle]?.webView
-                        ?.evaluateJavascript("window.__jcodeDeliver && window.__jcodeDeliver($json)", null)
-                }
+                scope.launch { deliverToPage(handle, json) }
                 host.reply(params.optInt("__requestId"), null)
             }
+
+            // --- what the VS Code API asks of the editor ------------------------------------------
+            //
+            // These are the other half of the shim: the host implements the API surface, and each
+            // call that needs the editor rather than the runtime lands here. Answering matters as
+            // much as acting — the extension awaits these, so an unanswered one strands it.
+
+            // Notices. Items make it a question, and the only honest way to ask one on a snackbar is
+            // not to pretend: the message is shown and "no item chosen" is reported, which is what
+            // VS Code reports when a notification is dismissed.
+            "window/message" -> {
+                scope.launch { workbench("workbench.notify", JSONObject().put("message", params.optString("message"))) }
+                host.reply(params.optInt("__requestId"), null)
+            }
+
+            "window/showTextDocument" -> scope.launch {
+                val error = workbench(
+                    "workbench.openFile",
+                    JSONObject()
+                        .put("path", params.optString("path"))
+                        .put("line", params.optInt("line"))
+                        .put("column", params.optInt("column")),
+                )
+                host.reply(params.optInt("__requestId"), null, error)
+            }
+
+            "env/openExternal" -> scope.launch {
+                // Sign-in runs through here: the extension hands over an OAuth URL and waits to be
+                // told it opened. Refusing it is refusing to let the user log in.
+                val error = workbench("workbench.openUrl", JSONObject().put("url", params.optString("uri")))
+                host.reply(params.optInt("__requestId"), null, error)
+            }
+
+            "env/clipboardRead" -> host.reply(params.optInt("__requestId"), clipboardText())
+            "env/clipboardWrite" -> {
+                writeClipboard(params.optString("text"))
+                host.reply(params.optInt("__requestId"), null)
+            }
+
+            // Credentials the extension asked JCode to keep — an API key, a refresh token. Stored in
+            // app-private storage, per extension, which is the same protection the extension's own
+            // files get; a `.vsix` already runs its own code in the runtime, so this grants it
+            // nothing it could not do for itself, and losing them on every restart breaks sign-in.
+            "secrets/get" -> host.reply(params.optInt("__requestId"), secrets().optString(params.optString("key")).takeIf { it.isNotEmpty() })
+            "secrets/store" -> {
+                updateSecrets { it.put(params.optString("key"), params.optString("value")) }
+                host.reply(params.optInt("__requestId"), null)
+            }
+            "secrets/delete" -> {
+                updateSecrets { it.remove(params.optString("key")) }
+                host.reply(params.optInt("__requestId"), null)
+            }
+
+            // The extension's own output channel, folded into JCode's Output pane under its name so
+            // the extension's logs are somewhere the user can actually read them.
+            "output/append" -> ExtensionDevLog.log(
+                ExtensionDevLogEntry.Kind.Console,
+                extension.id,
+                "[${params.optString("name")}] ${params.optString("text").trimEnd()}",
+            )
+            "output/replace", "output/clear", "output/show" -> Unit
+
+            // A command JCode has no built-in for. `setContext` is the common one and is genuinely
+            // nothing to do here — JCode has no when-clause context to set — so it is answered rather
+            // than refused; an extension that treats a rejection as fatal would otherwise die on it.
+            "commands/execute" -> host.reply(params.optInt("__requestId"), null)
+            "commands/registered", "webview/providerRegistered" -> Unit
+
+            // A setting the extension changed on its own behalf. Kept in the same store its
+            // `contributes.configuration` defaults are read from, so it survives a restart.
+            "config/update" -> scope.launch {
+                val error = workbench(
+                    "config.set",
+                    JSONObject().put("key", params.optString("key")).put("value", params.opt("value")),
+                )
+                host.reply(params.optInt("__requestId"), null, error)
+            }
+
+            // A terminal the extension opened. Real: JCode has terminals, and "run this in a
+            // terminal" is the whole point of the button an extension puts it behind.
+            "terminal/create" -> scope.launch {
+                VsixTerminals.create(params.optString("id"), params.optString("name"), params.optString("cwd"))
+            }
+            "terminal/sendText" -> scope.launch {
+                VsixTerminals.sendText(params.optString("id"), params.optString("text"), params.optBoolean("newline", true))
+            }
+            "terminal/show" -> scope.launch { VsixTerminals.show(params.optString("id")) }
+            "terminal/hide", "terminal/dispose" -> scope.launch { VsixTerminals.dispose(params.optString("id")) }
+
             else -> {
                 ExtensionDevLog.log(ExtensionDevLogEntry.Kind.Event, extension.id, "$method $params")
                 // Anything else the extension asks for is not implemented yet, but it must still be
@@ -609,6 +732,96 @@ internal class VsixSession private constructor(
                     host.reply(params.optInt("__requestId"), null, "$method is not implemented by JCode")
                 }
             }
+        }
+    }
+
+    /** Call a workbench API route; null when it succeeded, else the reason it did not. */
+    private suspend fun workbench(type: String, payload: JSONObject): String? {
+        val request = api ?: return "the workbench bridge is not available"
+        val envelope = JSONObject().put("type", type).put("payload", payload).toString()
+        val reply = runCatching { JSONObject(request(envelope)) }.getOrElse { return it.message ?: "$type failed" }
+        return reply.optString("error").takeIf { it.isNotBlank() }
+    }
+
+    // --- secret storage ---------------------------------------------------------------------
+
+    private val secretsFile: File
+        get() = File(context.filesDir, "vsix-secrets/${extension.id.replace(Regex("[^A-Za-z0-9._-]"), "_")}.json")
+
+    private fun secrets(): JSONObject =
+        runCatching { JSONObject(secretsFile.readText()) }.getOrDefault(JSONObject())
+
+    private fun updateSecrets(change: (JSONObject) -> Unit) {
+        val store = secrets().also(change)
+        runCatching {
+            secretsFile.parentFile?.mkdirs()
+            secretsFile.writeText(store.toString())
+        }
+    }
+
+    private fun clipboardText(): String {
+        val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+        return manager?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+    }
+
+    private fun writeClipboard(text: String) {
+        val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+        manager?.setPrimaryClip(android.content.ClipData.newPlainText(extension.name, text))
+    }
+
+    /** The live ramp as a stylesheet, overriding the asset's defaults for this render. */
+    private fun themeStyle(): String =
+        themeRampCss.takeIf { it.isNotBlank() }?.let { "<style>$it</style>" }.orEmpty()
+
+    /**
+     * Adopt [rampCss] as the theme.
+     *
+     * Applied to every page already open rather than only to the next one: switching theme with an
+     * extension on screen should recolour it, and its page is built by the extension — reloading to
+     * repaint would throw away whatever the user was in the middle of.
+     */
+    fun applyTextZoom(percent: Int) {
+        if (percent == textZoomPercent) return
+        textZoomPercent = percent
+        // Every page already open, not just the next one. An extension's page is built by the
+        // extension, so reloading it to resize would throw away whatever the user was in the middle
+        // of — the same bargain [applyTheme] makes below.
+        surfaces.values.forEach { it.webView.settings.textZoom = percent }
+    }
+
+    fun applyTheme(rampCss: String, backgroundArgb: Int, dark: Boolean) {
+        if (rampCss == themeRampCss) return
+        themeRampCss = rampCss
+        val js = vsixThemeRampJs(rampCss)
+        surfaces.values.forEach { surface ->
+            surface.webView.setBackgroundColor(backgroundArgb)
+            surface.webView.evaluateJavascript(js, null)
+        }
+        scope.launch { runCatching { host.setTheme(dark = dark) } }
+    }
+
+    /**
+     * Hand a message to the page, or hold it until the page can take one.
+     *
+     * See [Surface.queued] for why holding is necessary: both sides are local, so a reply can beat
+     * the page's own scripts into existence.
+     */
+    private fun deliverToPage(handle: String, json: String) {
+        val surface = surfaces[handle] ?: return
+        if (!surface.loaded) {
+            surface.queued += json
+            return
+        }
+        surface.webView.evaluateJavascript("window.__jcodeDeliver && window.__jcodeDeliver($json)", null)
+    }
+
+    /** The page finished loading: deliver everything the extension said while it could not listen. */
+    private fun onPageLoaded(handle: String) {
+        val surface = surfaces[handle] ?: return
+        surface.loaded = true
+        while (surface.queued.isNotEmpty()) {
+            val json = surface.queued.removeFirst()
+            surface.webView.evaluateJavascript("window.__jcodeDeliver && window.__jcodeDeliver($json)", null)
         }
     }
 
@@ -622,7 +835,13 @@ internal class VsixSession private constructor(
 
     /** The surface for [handle], creating its WebView on first use. Main thread only. */
     private fun surfaceFor(handle: String): Surface = surfaces.getOrPut(handle) {
-        Surface(handle, newWebView(context, extension, backgroundArgb, handle, ::onPageMessage))
+        Surface(
+            handle,
+            newWebView(
+                context, extension, backgroundArgb, textZoomPercent, handle,
+                ::onPageMessage, ::onPageLoaded,
+            ),
+        )
     }
 
     private fun closeSurface(handle: String) {
@@ -642,12 +861,16 @@ internal class VsixSession private constructor(
      */
     private fun render(handle: String, html: String) {
         if (html.isBlank() || handle.isBlank()) return
-        val document = vsixBootstrap(projectName, projectPath) + html
+        val document = vsixBootstrap(context, projectName, projectPath) + themeStyle() + html
         val stamp = html.hashCode()
         scope.launch {
             val surface = surfaceFor(handle)
             if (surface.loadedStamp == stamp) return@launch
             surface.loadedStamp = stamp
+            // A new document has none of the previous page's listeners; anything the extension sends
+            // from here waits for it to load.
+            surface.loaded = false
+            surface.queued.clear()
             surface.webView.loadDataWithBaseURL("$VSIX_RESOURCE_ORIGIN/", document, "text/html", "utf-8", null)
             surface.hasPage = true
         }
@@ -657,6 +880,7 @@ internal class VsixSession private constructor(
         apiRequest: suspend (envelopeJson: String) -> String,
         isDarkTheme: Boolean,
     ) {
+        api = apiRequest
         // Resolved before the host is spawned, not after: the project is the host's HOME, and an
         // extension reads workspaceFolders to decide what it is working on, so the wrong answer here
         // is the difference between it loading the project and asking the user to pick one.
@@ -720,6 +944,8 @@ internal class VsixSession private constructor(
             apiRequest: suspend (envelopeJson: String) -> String,
             backgroundArgb: Int,
             isDarkTheme: Boolean,
+            themeRampCss: String,
+            textZoomPercent: Int,
             onOpenPanel: (handle: String, title: String) -> Unit,
         ): VsixSession {
             val appContext = context.applicationContext
@@ -738,7 +964,10 @@ internal class VsixSession private constructor(
                 context = appContext,
                 backgroundArgb = backgroundArgb,
                 onOpenPanel = onOpenPanel,
-            )
+            ).also {
+                it.themeRampCss = themeRampCss
+                it.textZoomPercent = textZoomPercent
+            }
             scope.launch { session.start(apiRequest, isDarkTheme) }
             return session
         }
@@ -753,12 +982,17 @@ internal class VsixSession private constructor(
             context: Context,
             extension: InstalledExtension,
             backgroundArgb: Int,
+            textZoomPercent: Int,
             handle: String,
             onPageMessage: (handle: String, payload: String) -> Unit,
+            onPageLoaded: (handle: String) -> Unit,
         ): WebView = NoFullscreenWebView(context).apply {
             setBackgroundColor(backgroundArgb)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            // Text only, so a layout built on fixed-size boxes still holds together, and so it works
+            // on a stylesheet this app has never seen — which is every extension's.
+            settings.textZoom = textZoomPercent
             @Suppress("DEPRECATION")
             settings.allowFileAccess = true
             // Honour the viewport meta the bootstrap injects, which declares an explicit
@@ -779,6 +1013,7 @@ internal class VsixSession private constructor(
                     // Dynamic units (dvh) are rejected outright by these engines whatever the viewport
                     // is, so the repair pass still runs — it no-ops where unneeded.
                     view.evaluateJavascript(VIEWPORT_SIZE_JS, null)
+                    onPageLoaded(handle)
                 }
 
                 override fun shouldInterceptRequest(
@@ -855,6 +1090,8 @@ internal object VsixViewHolder {
         apiRequest: suspend (envelopeJson: String) -> String,
         backgroundArgb: Int,
         isDarkTheme: Boolean,
+        themeRampCss: String,
+        textZoomPercent: Int,
         onOpenPanel: (handle: String, title: String) -> Unit,
     ): VsixSession {
         sessions[extension.id]?.let { existing ->
@@ -871,6 +1108,8 @@ internal object VsixViewHolder {
             apiRequest = apiRequest,
             backgroundArgb = backgroundArgb,
             isDarkTheme = isDarkTheme,
+            themeRampCss = themeRampCss,
+            textZoomPercent = textZoomPercent,
             onOpenPanel = onOpenPanel,
         ).also { sessions[extension.id] = it }
     }
@@ -893,8 +1132,14 @@ internal fun VsixExtensionView(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val backgroundArgb = MaterialTheme.colorScheme.background.toArgb()
-    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val colorScheme = MaterialTheme.colorScheme
+    val semantic = JCodeTheme.semanticColors
+    val backgroundArgb = colorScheme.background.toArgb()
+    val isDarkTheme = colorScheme.background.luminance() < 0.5f
+    val themeRampCss = remember(colorScheme, semantic) { vsixThemeRampCss(colorScheme, semantic) }
+    // Deliberately not a key of the `remember` below: changing the text size should resize the
+    // extension, not restart it and lose whatever it was doing.
+    val extensionFontScale = LocalExtensionFontSizeSetting.current.percent
     val session = remember(extension.id, extension.version) {
         VsixViewHolder.getOrStart(
             context = context,
@@ -903,9 +1148,17 @@ internal fun VsixExtensionView(
             apiRequest = onApiRequest,
             backgroundArgb = backgroundArgb,
             isDarkTheme = isDarkTheme,
+            themeRampCss = themeRampCss,
+            textZoomPercent = extensionFontScale,
             onOpenPanel = onOpenPanel,
         )
     }
+    // Follow the theme while the extension is on screen. The session outlives this composable, so a
+    // switch made elsewhere is picked up here rather than at the next start.
+    LaunchedEffect(session, themeRampCss, backgroundArgb, isDarkTheme) {
+        session.applyTheme(themeRampCss, backgroundArgb, isDarkTheme)
+    }
+    LaunchedEffect(session, extensionFontScale) { session.applyTextZoom(extensionFontScale) }
 
     session.failure?.let {
         ExtensionNotice(it, modifier)
@@ -992,7 +1245,7 @@ internal fun PersistentWebViewHost(webView: WebView, modifier: Modifier = Modifi
  * available in JS, so it is applied from there as pixels and republished as a variable for anything
  * sizing itself in viewport units.
  */
-private fun vsixBootstrap(projectName: String?, projectPath: String?): String {
+private fun vsixBootstrap(context: Context, projectName: String?, projectPath: String?): String {
     // A VS Code webview is handed its workspace through page config, not through the extension API —
     // the page cannot call vscode.workspace itself. Telling only the extension host which project is
     // open therefore leaves the UI to fall back to whatever it last persisted, which is how it ends
@@ -1039,33 +1292,32 @@ private fun vsixBootstrap(projectName: String?, projectPath: String?): String {
   }
 })();
 </script>
-""" + VSIX_BOOTSTRAP
+""" + vsixChrome(vsixThemeCss(context))
 }
 
-private val VSIX_BOOTSTRAP = """
+/**
+ * The palette a VS Code webview expects, read once from assets.
+ *
+ * An extension's stylesheet is written entirely against `--vscode-*`, and a missing one does not
+ * degrade — the declaration is invalid, so the property inherits instead. That is not a small
+ * effect: Codex colours its primary button's label with `--vscode-dropdown-background`, so the one
+ * token nobody had defined made the label the same colour as the button under it. It referenced 259
+ * others JCode did not supply.
+ */
+private var themeCssCache: String? = null
+
+private fun vsixThemeCss(context: Context): String = themeCssCache ?: runCatching {
+    context.assets.open("vscode-host/webview-theme.css").use { it.readBytes().toString(Charsets.UTF_8) }
+}.getOrDefault("").also { themeCssCache = it }
+
+private fun vsixChrome(themeCss: String) = """
 <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1, user-scalable=no">
 <style>
 html,body{margin:0;padding:0;overflow:hidden}
-/* VS Code hands a webview its theme as --vscode-* variables. An extension's styling resolves
-   against those, so without them it draws in a washed-out fallback. Only the variables are
-   supplied — the extension owns what it does with them. */
-:root{
-  --vscode-editor-background:#14151d; --vscode-editor-foreground:#d5d9e0;
-  --vscode-sideBar-background:#101118; --vscode-sideBar-foreground:#c8cdd6;
-  --vscode-panel-background:#14151d; --vscode-panel-border:#2a2d3c;
-  --vscode-button-background:#3d5afe; --vscode-button-foreground:#ffffff;
-  --vscode-button-hoverBackground:#4d68ff; --vscode-button-secondaryBackground:#2a2d3c;
-  --vscode-button-secondaryForeground:#d5d9e0;
-  --vscode-input-background:#1c1e29; --vscode-input-foreground:#d5d9e0;
-  --vscode-input-border:#2a2d3c; --vscode-input-placeholderForeground:#8b93a3;
-  --vscode-focusBorder:#3d5afe; --vscode-errorForeground:#d06262;
-  --vscode-descriptionForeground:#8b93a3; --vscode-textLink-foreground:#7f9cff;
-  --vscode-foreground:#d5d9e0; --vscode-widget-border:#2a2d3c;
-  --vscode-list-hoverBackground:#1c1e29; --vscode-list-activeSelectionBackground:#2a2d3c;
-  --vscode-editorWidget-background:#181a24; --vscode-editorWidget-border:#2a2d3c;
-  --vscode-editor-font-family:monospace; --vscode-font-family:system-ui,sans-serif;
-  --vscode-font-size:13px; --vscode-font-weight:400;
-}
+/* VS Code hands a webview its theme as --vscode-* variables and an extension's styling resolves
+   entirely against them. The palette is vscode-host/webview-theme.css; only the variables are
+   supplied, and the extension owns what it does with them. */
+$themeCss
 </style>
 <script>
 (function () {
@@ -1095,7 +1347,10 @@ html,body{margin:0;padding:0;overflow:hidden}
   window.__jcodeDeliver = function (json) {
     var data;
     try { data = JSON.parse(json); } catch (e) { data = json; }
-    window.dispatchEvent(new MessageEvent('message', { data: data }));
+    // origin and source are not decoration. A VS Code webview message carries the webview's own
+    // origin, and a page that checks it drops anything arriving without one — silently, which is
+    // exactly how Codex's renderer sat waiting for a handshake that had already been answered.
+    window.dispatchEvent(new MessageEvent('message', { data: data, origin: location.origin, source: window }));
   };
 })();
 </script>
@@ -1111,7 +1366,12 @@ html,body{margin:0;padding:0;overflow:hidden}
  * exists here), but the intent can: a faint tint reads far closer to nothing than to solid. So the
  * faint ones are dropped and the strong ones kept.
  *
- * Appended rather than edited in place: same selector, same specificity, later in the sheet.
+ * Appended rather than edited in place: same selector, same specificity, later in the sheet — and
+ * wrapped in the negation of the same query the sheet used, so it applies only on the engines it was
+ * written for. Without that guard it is actively destructive on a current WebView, which resolves
+ * `color-mix()` correctly and then has the result overwritten with `transparent`: Codex's stylesheet
+ * defines `--color-border` and other design tokens on `:root` this way, so the whole theme lost its
+ * colours rather than one wash being wrong.
  */
 private fun tintOverridesFor(css: String): String {
     val supportsBlock = Regex("""@supports\s*\(color:\s*color-mix\([^)]*\)\)\s*\{((?:[^{}]|\{[^{}]*\})*)\}""")
@@ -1130,11 +1390,15 @@ private fun tintOverridesFor(css: String): String {
             }
         }
     }
-    return overrides.toString()
+    if (overrides.isEmpty()) return ""
+    return "@supports not ($COLOR_MIX_PROBE){$overrides}"
 }
 
 /** Above this, a tint is a real fill and is left alone; below it, it was meant to be barely there. */
 private const val FAINT_TINT_CEILING = 60f
+
+/** The capability the overrides stand in for. Only where this is absent should they apply. */
+private const val COLOR_MIX_PROBE = "color: color-mix(in oklab, red 50%, transparent)"
 
 /** Serve a file from the extension's install directory for [VSIX_RESOURCE_ORIGIN] requests. */
 private fun serveExtensionResource(extensionDir: File, url: Uri): android.webkit.WebResourceResponse? {
@@ -1305,5 +1569,112 @@ internal fun extensionThemeJs(
         "--jcode-warning" to hex(semantic.warning),
     )
     val sets = vars.joinToString("") { (k, v) -> "r.setProperty('$k','$v');" }
+    return "(function(){try{var r=document.documentElement.style;$sets}catch(e){}})()"
+}
+
+/**
+ * The `--jc-*` ramp the `--vscode-*` palette resolves through, taken from the theme now on screen.
+ *
+ * A VS Code webview is handed its host editor's colours; JCode's are whichever bundle the user
+ * picked, so an imported extension is drawn in that rather than in one hard-coded palette. Only the
+ * ramp is emitted — every VS Code token is expressed against it in `webview-theme.css`, so ~20
+ * colours here decide all 286.
+ *
+ * Derived from the roles a theme bundle actually sets (background/surface/surfaceVariant and their
+ * `on-` pairs, primary, and the semantic three). The bundles leave `outline` and the
+ * `surfaceContainer*` roles unset, so those come back as Material's own greys rather than anything
+ * belonging to the theme — steps between the roles that ARE set are mixed here instead.
+ */
+internal fun vsixThemeRampCss(
+    colorScheme: androidx.compose.material3.ColorScheme,
+    semantic: dev.jcode.design.JCodeSemanticColors,
+): String {
+    val bg = colorScheme.background
+    val fg = colorScheme.onBackground
+    val variant = colorScheme.surfaceVariant
+    val muted = colorScheme.onSurfaceVariant
+
+    fun hex(c: Color): String = String.format("#%06X", 0xFFFFFF and c.toArgb())
+    fun mix(a: Color, b: Color, amount: Float) = Color(
+        red = a.red + (b.red - a.red) * amount,
+        green = a.green + (b.green - a.green) * amount,
+        blue = a.blue + (b.blue - a.blue) * amount,
+    )
+    fun rgba(c: Color, alpha: String) =
+        "rgba(${(c.red * 255).toInt()},${(c.green * 255).toInt()},${(c.blue * 255).toInt()},$alpha)"
+
+    val ramp = listOf(
+        // Surfaces. `surface` is the bundles' second plane — darker than the canvas on a dark theme
+        // and lighter on a light one — which is the role a sidebar wants either way.
+        "bg" to hex(bg),
+        "bg-deep" to hex(colorScheme.surface),
+        "bg-raised" to hex(mix(bg, variant, 0.5f)),
+        "surface" to hex(variant),
+        "surface-hi" to hex(mix(variant, fg, 0.10f)),
+        "border" to hex(mix(variant, fg, 0.12f)),
+        "border-hi" to hex(mix(variant, fg, 0.30f)),
+        // Text.
+        "fg" to hex(fg),
+        "fg-muted" to hex(muted),
+        "fg-dim" to hex(mix(muted, bg, 0.35f)),
+        // Accent. `onPrimary` matters more than it looks: Codex paints its primary button's label
+        // with it, so a wrong value here is an unreadable button rather than an off shade.
+        "accent" to hex(colorScheme.primary),
+        "accent-hi" to hex(mix(colorScheme.primary, fg, 0.15f)),
+        "on-accent" to hex(colorScheme.onPrimary),
+        "link" to hex(colorScheme.primary),
+        "link-hi" to hex(mix(colorScheme.primary, fg, 0.25f)),
+        // Status.
+        "error" to hex(colorScheme.error),
+        "warn" to hex(semantic.warning),
+        "info" to hex(semantic.info),
+        "ok" to hex(semantic.success),
+        "purple" to hex(colorScheme.tertiary),
+        "orange" to hex(mix(semantic.warning, colorScheme.error, 0.35f)),
+        "cyan" to hex(semantic.info),
+        // Overlays. Mixed from the foreground rather than fixed to white, so a wash still darkens
+        // rather than disappears when the theme is a light one.
+        "shadow" to rgba(Color.Black, ".36"),
+        "wash" to rgba(fg, ".05"),
+        "wash-2" to rgba(fg, ".09"),
+        "wash-3" to rgba(fg, ".06"),
+        "wash-faint" to rgba(fg, ".03"),
+        "guide" to hex(mix(bg, fg, 0.10f)),
+        "guide-hi" to hex(mix(bg, fg, 0.18f)),
+        "accent-faint" to rgba(colorScheme.primary, ".12"),
+        "accent-soft" to rgba(colorScheme.primary, ".16"),
+        "accent-mid" to rgba(colorScheme.primary, ".18"),
+        "accent-strong" to rgba(colorScheme.primary, ".20"),
+        "accent-select" to rgba(colorScheme.primary, ".32"),
+        "accent-bracket" to rgba(colorScheme.primary, ".22"),
+        "ok-soft" to rgba(semantic.success, ".18"),
+        "ok-faint" to rgba(semantic.success, ".10"),
+        "ok-gutter" to rgba(semantic.success, ".14"),
+        "ok-mid" to rgba(semantic.success, ".16"),
+        "error-soft" to rgba(colorScheme.error, ".20"),
+        "error-faint" to rgba(colorScheme.error, ".11"),
+        "error-gutter" to rgba(colorScheme.error, ".15"),
+        "warn-soft" to rgba(semantic.warning, ".42"),
+        "warn-faint" to rgba(semantic.warning, ".22"),
+        "scroll" to rgba(muted, ".28"),
+        "scroll-hi" to rgba(muted, ".42"),
+        "scroll-active" to rgba(muted, ".56"),
+        "error-bg" to hex(mix(bg, colorScheme.error, 0.18f)),
+        "warn-bg" to hex(mix(bg, semantic.warning, 0.18f)),
+        "info-bg" to hex(mix(bg, semantic.info, 0.18f)),
+        "separator" to rgba(colorScheme.onPrimary, ".28"),
+        "preformat" to hex(colorScheme.tertiary),
+    )
+    return ramp.joinToString(separator = "", prefix = ":root{", postfix = "}") { (k, v) -> "--jc-$k:$v;" }
+}
+
+/** The same ramp applied to a page already on screen, so a theme switch does not need a reload. */
+internal fun vsixThemeRampJs(rampCss: String): String {
+    val declarations = rampCss.substringAfter('{').substringBeforeLast('}')
+    val sets = declarations.split(';').filter { it.isNotBlank() }.joinToString("") {
+        val name = it.substringBefore(':').trim()
+        val value = it.substringAfter(':').trim()
+        "r.setProperty('$name','$value');"
+    }
     return "(function(){try{var r=document.documentElement.style;$sets}catch(e){}})()"
 }

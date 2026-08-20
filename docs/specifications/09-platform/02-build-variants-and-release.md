@@ -4,8 +4,8 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | Root build, `:app`, all `:native:*` |
-| **Primary sources** | build.gradle.kts, app/build.gradle.kts, settings.gradle.kts, gradle/libs.versions.toml, gradle/cargo.gradle.kts, gradle/wrapper/gradle-wrapper.properties, native/CMakeLists.txt, scripts/build-release.ps1, scripts/build-release-common.sh, scripts/build-release-linux.sh, scripts/build-release-macos.sh |
-| **Verified against** | commit `cea581c`, 2026-08-09 |
+| **Primary sources** | build.gradle.kts, app/build.gradle.kts, app/src/main/java/dev/jcode/AppUpdateInstaller.kt, app/src/main/java/dev/jcode/MigrationBundle.kt, settings.gradle.kts, gradle/libs.versions.toml, gradle/cargo.gradle.kts, gradle/wrapper/gradle-wrapper.properties, native/CMakeLists.txt, scripts/build-release.ps1, scripts/build-release-common.sh, scripts/build-release-linux.sh, scripts/build-release-macos.sh |
+| **Verified against** | commit `cea581c`, 2026-08-09; §4.5 device-verified 2026-08-19 |
 
 ---
 
@@ -65,6 +65,10 @@ There are **no product flavors**. Three identities come from build types plus a 
 
 All three install **side by side**. The `namespace` stays `dev.jcode` (the compile-time R and
 BuildConfig package), so no source reference breaks.
+
+The base id is a Gradle property: `-PjcodeApplicationId=<id>` overrides `dev.jcode`. Nothing in a
+release uses it — it exists so a build can be produced under a *different* package, which is the only
+way to exercise the migration path in §4.5 (an update that is not an update).
 
 Each identity gets its own private data — Linux rootfs, settings, sessions — because the package
 differs. Only the legacy shared `/storage/emulated/0/JCode` projects folder was common; post-migration
@@ -220,6 +224,54 @@ A Beta build is still told when the train it was previewing ships: the final rel
 version on the list, and it is reported with **no APK URL**, so the app offers the release page
 rather than an install it cannot perform. Comparison is Semantic Versioning 2.0.0 precedence —
 `1.6.1-beta.2 < 1.6.1-rc.1 < 1.6.1` — covered by `app/src/test/java/dev/jcode/UpdateCheckerTest.kt`.
+
+### 4.5 Updates that change the package
+
+Android keys an installed app by its `applicationId`. An APK carrying a different one is not an
+update: the system installs it as a second app with an empty data directory and leaves the existing
+install untouched. Everything that matters — the Linux rootfs, the projects moved to app-private
+storage, imported extensions, settings, sessions — lives under `/data/data/<old package>/`, which the
+new package cannot read.
+
+The updater detects this from the artifact itself rather than from a flag on the release:
+`AppUpdateInstaller.packageOf` reads the downloaded APK with `getPackageArchiveInfo` and compares it
+to `context.packageName`. A flag has to be set by hand for the one release that needs it and can
+silently disagree with the APK; this cannot. Ordinary updates — the overwhelming majority — see
+matching packages and install exactly as before.
+
+When they differ, the sequence between download and install is:
+
+| Phase | State | What happens |
+|---|---|---|
+| 1 | `Downloading` | as usual |
+| 2 | `PreparingMigration` | `MainViewModel.prepareMigrationForUpdate` writes a bundle to shared storage, reporting what it is packing through the environment status the workbench already shows |
+| 3 | `Installing` | the APK goes to `PackageInstaller` |
+
+Step 2 is its own state because it is the slow one: a rootfs is measured in gigabytes, so an update
+that normally takes seconds takes minutes, and silence there reads as a hang. Free space is checked
+first (`StatFs`, reserving half the uncompressed size) so a doomed multi-gigabyte copy is refused
+before it starts rather than halfway through.
+
+If the copy cannot be made, the update is **not** abandoned — `MigrationUnavailable(reason, apkPath)`
+asks the user, because installing gives them the new version with nothing in it while leaving this
+install intact, and that trade is theirs to make. The already-downloaded APK path is carried so
+"install anyway" does not download it again.
+
+`dev.jcode.MigrationBundle` is the format: `/storage/emulated/0/JCode/migration/` holding
+`settings.json` (a `SettingsBackup` document), `rootfs.tar.gz` (byte-for-byte an ordinary environment
+backup), `projects.tar.gz`, `extensions.tar.gz`, and `manifest.json` naming the parts that landed.
+**The manifest is written last** — a bundle is found by its manifest, so an interrupted export leaves
+nothing that presents itself as importable. `find()` ignores a bundle written by the running package,
+so an export is never offered back to its author.
+
+The new install picks it up during onboarding, where the import **replaces** the distro-selection
+step rather than sitting beside it: the bundle already answers the question that step asks. The
+rootfs goes through `setPendingRestoreTarball` + the normal setup pipeline rather than being dropped
+into place, so proot, the `jcode` user and the smoke test still run against it. Afterwards a dialog
+(not a snackbar — onboarding is not a screen where transient messages are read) offers to delete the
+bundle and uninstall the old app. That needs `REQUEST_DELETE_PACKAGES` and a `<queries>` block naming
+`dev.jcode`/`.debug`/`.beta`; without the latter, Android 11 package filtering reports the old install
+as absent and the offer silently degrades.
 
 ---
 

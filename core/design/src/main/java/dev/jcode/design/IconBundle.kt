@@ -60,6 +60,7 @@ import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Radar
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Search
@@ -86,7 +87,7 @@ enum class JCodeIcon {
     Run, Stop, Terminal,
     Files, Folder, OpenFolder, NewFolder, NewFile,
     Sdk, Lsp, Scm, Settings, Search, Extensions, Sources, Destinations, Code, Database, Vm,
-    Add, Close, Refresh, Paste, Collapse, MoreVert, Save, Undo, Redo, Discard,
+    Add, Minus, Close, Refresh, Paste, Collapse, MoreVert, Save, Undo, Redo, Discard,
     Continue, Rerun, StepInto, StepOver, StepOut,
     Output, Logs, Problems, Radar, Debug, Tasks, Chat, Cursor,
     Browser, DevTools, Image,
@@ -155,6 +156,7 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.DevTools to Icons.Rounded.DeveloperMode,
         JCodeIcon.Image to Icons.Rounded.Image,
         JCodeIcon.Add to Icons.Rounded.Add,
+        JCodeIcon.Minus to Icons.Rounded.Remove,
         JCodeIcon.Close to Icons.Rounded.Close,
         JCodeIcon.Refresh to Icons.Rounded.Refresh,
         JCodeIcon.Paste to Icons.Rounded.ContentPaste,

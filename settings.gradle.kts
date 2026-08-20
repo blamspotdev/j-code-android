@@ -41,6 +41,7 @@ include(":core:vcs")
 include(":core:search")
 include(":core:config")
 include(":core:ext")
+include(":core:ext-api")
 include(":core:state")
 include(":core:diag")
 

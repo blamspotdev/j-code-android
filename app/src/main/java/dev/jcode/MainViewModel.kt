@@ -25,6 +25,8 @@ import dev.jcode.core.editor.Caret
 import dev.jcode.core.buffer.EditTx
 import dev.jcode.core.config.EffectiveConfig
 import dev.jcode.core.distro.DistroProfile
+import dev.jcode.core.distro.RootfsArchiver
+import dev.jcode.core.distro.WorkspaceHostPaths
 import dev.jcode.core.distro.DebugEngineAction
 import dev.jcode.core.distro.DebugEngineCatalog
 import dev.jcode.core.distro.LspCatalogAction
@@ -79,6 +81,7 @@ import dev.jcode.feature.editor.pane.EditorPageKind
 import dev.jcode.feature.editor.pane.EditorTab
 import dev.jcode.feature.marketplace.BundledExtensionSpec
 import dev.jcode.feature.marketplace.ExtensionActivation
+import dev.jcode.feature.marketplace.enabledIn
 import dev.jcode.feature.marketplace.ExtensionDeps
 import dev.jcode.feature.marketplace.ExtensionInstaller
 import dev.jcode.feature.marketplace.ExtensionType
@@ -423,6 +426,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun importVsix(uri: android.net.Uri) {
         viewModelScope.launch {
             val installedBefore = _installedExtensions.value.map { it.id }.toSet()
+            // Extensions that bundle their own runtime run to hundreds of megabytes, and unpacking one
+            // takes long enough that a silent wait reads as a hang. Say it started before doing it.
+            emitMessage("Importing extension… large packages take a while.")
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val tmp = File.createTempFile("import", ".vsix", appContext.cacheDir)
@@ -430,7 +436,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         appContext.contentResolver.openInputStream(uri)?.use { input ->
                             tmp.outputStream().use { input.copyTo(it) }
                         } ?: error("cannot open the selected file")
-                        extensionInstaller.installLocalVsix(tmp, BuildConfig.VERSION_NAME).getOrThrow()
+                        extensionInstaller.installLocalVsix(tmp).getOrThrow()
                     } finally {
                         tmp.delete()
                     }
@@ -846,6 +852,243 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             distroService.setPendingRestoreTarball(tmp)
             runAutoSetup()
+        }
+    }
+
+    /**
+     * What a finished import left behind: the bundle in shared storage, and the install it came
+     * from. Held rather than announced once, because the import happens during onboarding where a
+     * transient message would go unread — the offer has to survive until the user reaches a screen
+     * that can show it.
+     */
+    data class MigrationCleanup(val sourcePackage: String, val bytes: Long, val oldAppInstalled: Boolean)
+
+    private val _migrationCleanup = MutableStateFlow<MigrationCleanup?>(null)
+    val migrationCleanup: StateFlow<MigrationCleanup?> = _migrationCleanup.asStateFlow()
+
+    fun dismissMigrationCleanup() {
+        _migrationCleanup.value = null
+    }
+
+    /**
+     * Delete the bundle now that its contents live here.
+     *
+     * Safe to do without asking twice: the install it came from still holds everything, so this
+     * removes a copy rather than the last one. Uninstalling that install is a separate step, and
+     * Android puts its own confirmation in front of it.
+     */
+    fun cleanUpAfterMigration() {
+        val pending = _migrationCleanup.value ?: return
+        _migrationCleanup.value = null
+        viewModelScope.launch {
+            val freed = withContext(Dispatchers.IO) {
+                val dir = MigrationBundle.directory()
+                val size = runCatching { dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() } }.getOrDefault(0L)
+                runCatching { dir.deleteRecursively() }
+                size
+            }
+            _migrationBundle.value = null
+            emitMessage("Removed the migration bundle (${freed / (1024 * 1024)} MB).")
+            if (pending.oldAppInstalled) requestUninstall(pending.sourcePackage)
+        }
+    }
+
+    /**
+     * Ask Android to uninstall [packageName]. It shows its own confirmation and does the work; an
+     * app cannot remove another one on its own, and should not be able to.
+     */
+    fun requestUninstall(packageName: String) {
+        runCatching {
+            appContext.startActivity(
+                android.content.Intent(android.content.Intent.ACTION_DELETE)
+                    .setData(Uri.parse("package:$packageName"))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }.onFailure { _messages.tryEmit("Could not open the uninstaller for $packageName.") }
+    }
+
+    /** A migration bundle waiting to be imported, refreshed on demand. See [MigrationBundle]. */
+    private val _migrationBundle = MutableStateFlow<MigrationBundle.Found?>(null)
+    val migrationBundle: StateFlow<MigrationBundle.Found?> = _migrationBundle.asStateFlow()
+
+    private fun isPackageInstalled(packageName: String): Boolean = runCatching {
+        appContext.packageManager.getPackageInfo(packageName, 0) != null
+    }.getOrDefault(false)
+
+    fun refreshMigrationBundle() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _migrationBundle.value = runCatching { MigrationBundle.find(appContext) }.getOrNull()
+        }
+    }
+
+    /**
+     * Write this install's rootfs, projects, extensions and settings to shared storage so a
+     * differently-packaged build can pick them up. See [MigrationBundle] for why that is the only
+     * way across.
+     *
+     * The parts are written first and the manifest last, so an export that is interrupted — and at
+     * 2.5 GB that is a real possibility — leaves nothing that presents itself as importable.
+     */
+    fun exportMigrationBundle() {
+        if (_envBackupStatus.value != null) return
+        viewModelScope.launch {
+            val result = runCatching { writeMigrationBundle { _envBackupStatus.value = it } }
+            _envBackupStatus.value = null
+            result
+                .onSuccess { (dir, parts) ->
+                    emitMessage("Migration bundle written to ${dir.absolutePath} (${parts.size} parts).")
+                }
+                .onFailure { emitMessage("Migration export failed: ${it.message ?: "unknown error"}") }
+        }
+    }
+
+    /**
+     * Copy this install out for an update that changes the package, reporting progress through
+     * [onProgress]. Returns null when the bundle is complete, or why it is not.
+     *
+     * Called by the updater between downloading an APK and installing it — see
+     * [AppUpdateInstaller.downloadAndInstall]. Failures are returned rather than thrown because the
+     * update is still installable without the data, and that is the user's call to make.
+     */
+    suspend fun prepareMigrationForUpdate(onProgress: (String) -> Unit): String? {
+        val shortfall = withContext(Dispatchers.IO) { migrationSpaceShortfall() }
+        if (shortfall != null) return shortfall
+        return runCatching { writeMigrationBundle(onProgress); null }
+            .getOrElse { it.message ?: "the copy could not be completed" }
+    }
+
+    /**
+     * Whether there is room to write the bundle, as a sentence, or null when there is.
+     *
+     * Checked up front because the expensive part is the rootfs: finding out halfway through a
+     * multi-gigabyte copy leaves a part-written bundle and a user who has waited for nothing.
+     */
+    private fun migrationSpaceShortfall(): String? {
+        val sources = listOf(
+            File(appContext.filesDir, "distros"),
+            File(WorkspaceHostPaths.projectsRoot),
+            File(appContext.filesDir, "extensions"),
+        )
+        val raw = sources.filter { it.isDirectory }
+            .sumOf { d -> runCatching { d.walkBottomUp().filter { it.isFile }.sumOf { it.length() } }.getOrDefault(0L) }
+        if (raw <= 0L) return null
+        // A rootfs is mostly text and binaries and gzips to roughly a third, but half is reserved
+        // deliberately: over-reserving costs a warning, under-reserving costs the whole copy.
+        val needed = raw / 2
+        val target = MigrationBundle.directory()
+        runCatching { target.parentFile?.mkdirs() }
+        val free = runCatching { android.os.StatFs(target.parentFile?.absolutePath ?: "/storage/emulated/0").availableBytes }
+            .getOrDefault(0L)
+        if (free >= needed) return null
+        val mb = { b: Long -> "${b / (1024 * 1024)} MB" }
+        return "copying your environment needs about ${mb(needed)} free and there is ${mb(free)}"
+    }
+
+    /** Writes the bundle; throws on failure. Returns the directory and the parts that landed. */
+    private suspend fun writeMigrationBundle(onProgress: (String) -> Unit): Pair<File, List<String>> {
+        onProgress("Preparing migration bundle…")
+        return withContext(Dispatchers.IO) {
+            val dir = MigrationBundle.directory()
+            dir.deleteRecursively()
+            require(dir.mkdirs() || dir.isDirectory) { "cannot write to ${dir.absolutePath}" }
+            val parts = mutableListOf<String>()
+
+            File(dir, MigrationBundle.SETTINGS).writeText(SettingsBackup.export(uiPreferences))
+            parts += MigrationBundle.SETTINGS
+
+            // Reuses the same packer the "Back up environment" action uses, so a bundle's
+            // rootfs is byte-for-byte an ordinary environment backup.
+            if (distroService.selectedEnvironmentInstalled()) {
+                onProgress("Packing the Linux environment…")
+                File(dir, MigrationBundle.ROOTFS).outputStream().use { out ->
+                    distroService.packSelectedEnvironment(out) { files, bytes ->
+                        onProgress("Packing the environment… $files files (${bytes / (1024 * 1024)} MB)")
+                    }
+                }
+                parts += MigrationBundle.ROOTFS
+            }
+
+            // Projects only when they have moved to app-private storage; before that
+            // migration they are already in the shared folder and go nowhere.
+            val projects = File(WorkspaceHostPaths.projectsRoot)
+            if (projects.isDirectory && projects.absolutePath.startsWith(appContext.filesDir.absolutePath)) {
+                onProgress("Packing projects…")
+                File(dir, MigrationBundle.PROJECTS).outputStream().use { out ->
+                    RootfsArchiver.pack(projects, out) { files, _ ->
+                        onProgress("Packing projects… $files files")
+                    }
+                }
+                parts += MigrationBundle.PROJECTS
+            }
+
+            val extensions = File(appContext.filesDir, "extensions")
+            if (extensions.isDirectory) {
+                onProgress("Packing extensions…")
+                File(dir, MigrationBundle.EXTENSIONS).outputStream().use { out ->
+                    RootfsArchiver.pack(extensions, out) { files, _ ->
+                        onProgress("Packing extensions… $files files")
+                    }
+                }
+                parts += MigrationBundle.EXTENSIONS
+            }
+
+            MigrationBundle.writeManifest(appContext, dir, parts, BuildConfig.VERSION_NAME)
+            dir to parts
+        }
+    }
+
+    /**
+     * Take over a bundle another install left behind.
+     *
+     * Settings, projects and extensions are restored directly. The rootfs goes through the same
+     * pipeline an onboarding restore uses ([restoreEnvironmentOnboarding]) rather than being dropped
+     * into place: proot, the jcode user and the smoke test still have to run against it, or the
+     * environment is present but not usable.
+     */
+    fun importMigrationBundle() {
+        if (_envBackupStatus.value != null) return
+        val bundle = _migrationBundle.value ?: return
+        viewModelScope.launch {
+            _envBackupStatus.value = "Importing from ${bundle.sourcePackage}…"
+            val restored = runCatching {
+                withContext(Dispatchers.IO) {
+                    bundle.file(MigrationBundle.SETTINGS)?.let { SettingsBackup.import(uiPreferences, it.readText()) }
+
+                    bundle.file(MigrationBundle.PROJECTS)?.let {
+                        _envBackupStatus.value = "Restoring projects…"
+                        distroService.extractArchive(it, File(WorkspaceHostPaths.projectsRoot))
+                    }
+                    bundle.file(MigrationBundle.EXTENSIONS)?.let {
+                        _envBackupStatus.value = "Restoring extensions…"
+                        distroService.extractArchive(it, File(appContext.filesDir, "extensions"))
+                    }
+                    // Copied out of shared storage first: the setup pipeline consumes the tarball,
+                    // and the bundle is the user's only copy until the import has finished.
+                    bundle.file(MigrationBundle.ROOTFS)?.let { source ->
+                        val tmp = File(appContext.cacheDir, "env-migrate-${System.nanoTime()}.tar.gz")
+                        source.inputStream().use { input -> tmp.outputStream().use { input.copyTo(it, 1 shl 16) } }
+                        tmp
+                    }
+                }
+            }.getOrElse {
+                _envBackupStatus.value = null
+                emitMessage("Migration import failed: ${it.message ?: "unknown error"}")
+                return@launch
+            }
+            _envBackupStatus.value = null
+            refreshInstalledExtensions()
+            _migrationCleanup.value = MigrationCleanup(
+                sourcePackage = bundle.sourcePackage,
+                bytes = bundle.bytes,
+                oldAppInstalled = isPackageInstalled(bundle.sourcePackage),
+            )
+            _migrationBundle.value = null
+            if (restored != null) {
+                distroService.setPendingRestoreTarball(restored)
+                runAutoSetup()
+            } else {
+                emitMessage("Imported settings, projects and extensions.")
+            }
         }
     }
 
@@ -1612,6 +1855,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Text scale for imported .vsix extension webviews, as a percentage. See
+     *  [dev.jcode.design.ExtensionFontSizeSetting] for why this is a scale and not a size. */
+    private val extensionFontScaleKey = intPreferencesKey("extension_font_scale")
+    val extensionFontScale: StateFlow<Int> = uiPreferences.data
+        .map { prefs -> (prefs[extensionFontScaleKey] ?: SettingsDefaults.EXTENSION_FONT_SCALE).coerceIn(50, 300) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.EXTENSION_FONT_SCALE)
+
+    fun setExtensionFontScale(percent: Int) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[extensionFontScaleKey] = percent.coerceIn(50, 300) }
+        }
+    }
+
     private val terminalFontSizeGlobalKey = floatPreferencesKey("terminal_font_size_global")
 
     /** App-level (Global settings) terminal font size, in sp. Unlike the editor's, this has no
@@ -1907,7 +2163,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *  Drives language-pack resolution for highlighting/completions/formatting so Manual truly disables. */
     val activeLanguageExtensions: StateFlow<List<InstalledExtension>> =
         combine(installedExtensions, extensionActivations) { exts, modes ->
-            exts.filter { (modes[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual }
+            exts.filter { it.enabledIn(modes) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private fun parseActivations(json: String?): Map<String, ExtensionActivation> {
@@ -2108,7 +2364,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (release == null) { _messages.tryEmit("No .vsix release found for this source"); return@launch }
             _marketplaceBusy.value = true
             try {
-                extensionInstaller.installVsixFromUrl(release.vsixAssetUrl, BuildConfig.VERSION_NAME)
+                extensionInstaller.installVsixFromUrl(release.vsixAssetUrl)
                     .onSuccess { result ->
                         recordExtensionSource(result.extension.id, sourceUrl)
                         _messages.tryEmit("Installed ${result.extension.name} ${result.manifest.version}")
@@ -2661,10 +2917,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun installUpdate(context: android.content.Context) {
         val apkUrl = _updateInfo.value?.apkUrl ?: return
         val appContext = context.applicationContext
-        viewModelScope.launch { AppUpdateInstaller.downloadAndInstall(appContext, apkUrl) }
+        viewModelScope.launch {
+            AppUpdateInstaller.downloadAndInstall(appContext, apkUrl) {
+                try {
+                    prepareMigrationForUpdate { detail -> _envBackupStatus.value = detail }
+                } finally {
+                    _envBackupStatus.value = null
+                }
+            }
+        }
     }
 
     fun resetUpdateInstall() = AppUpdateInstaller.reset()
+
+    /**
+     * Install an update whose data could not be carried across.
+     *
+     * The new install starts empty and this one is left untouched, so nothing is destroyed by
+     * choosing it — but the environment does not follow, which is why it is a choice and not a
+     * fallback taken silently.
+     */
+    fun installUpdateWithoutMigration(apkPath: String) {
+        val appContext = getApplication<Application>().applicationContext
+        viewModelScope.launch { AppUpdateInstaller.installDownloaded(appContext, apkPath) }
+    }
 
     /** On returning to the foreground, clear a stuck in-app-update "Installing…" state left behind when
      *  the user dismisses the system installer without completing it (see [AppUpdateInstaller.recoverIfStuck]). */
@@ -2864,7 +3140,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *  a preset's required files. */
     val contributedRunConfigPresets: StateFlow<List<ProjectRunner.ExtensionRunPreset>> =
         combine(installedExtensions, extensionActivations, distroService.sdkCatalogState) { exts, acts, sdk ->
-            exts.filter { (acts[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual }
+            exts.filter { it.enabledIn(acts) }
                 .filter { ext -> ext.requires.sdks.all { it in sdk.installedEntryIds } }
                 .flatMap { ext -> ext.contributes.runConfigPresets.map { ProjectRunner.ExtensionRunPreset(ext.name, it) } }
         }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
@@ -2875,7 +3151,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         sdk: dev.jcode.core.distro.SdkCatalogState,
         surface: (dev.jcode.feature.marketplace.ExtensionContributions) -> List<dev.jcode.feature.marketplace.ContributedAction>,
     ): List<ShellContribution> =
-        exts.filter { (acts[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual }
+        exts.filter { it.enabledIn(acts) }
             .filter { ext -> ext.requires.sdks.all { it in sdk.installedEntryIds } }
             .flatMap { ext ->
                 surface(ext.contributes).map { ShellContribution(ext.id, it.id, it.label, it.icon, it.fileExtensions, it.targets) }
@@ -3642,6 +3918,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             workspaceManager.refreshStorageRoots()
         }
+        // A migration bundle lives in shared storage, so it is unreadable until this moment — and on
+        // a fresh install this moment always comes AFTER the first look for one. Without re-checking
+        // here the offer never appears for the person it exists for: someone who just moved.
+        refreshMigrationBundle()
     }
 
     fun runAutoSetup() {
@@ -4051,6 +4331,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }.getOrDefault(emptyMap())
     }
+
+    /**
+     * True when an installed extension says this kind of file opens in its view rather than as text.
+     *
+     * Only for a file type that *is* the thing the view shows — see [NativeClaim.opensInPreviewSetting]
+     * — and only while the setting it names allows it. Applied when a tab is created, so a restored
+     * session keeps whichever view it was left in rather than being flipped back.
+     */
+    private fun opensInExtensionView(file: File): Boolean =
+        installedExtensions.value.any { ext ->
+            ext.nativeEntry != null && ext.nativeClass != null &&
+                ext.nativeClaims.any { claim ->
+                    val setting = claim.opensInPreviewSetting ?: return@any false
+                    claim.matches(file) && resolvedExtensionSetting(ext, setting) != "false"
+                }
+        }
 
     /** A setting's saved value, or its manifest default, or "". Used by config.* (caller-scoped). */
     private fun resolvedExtensionSetting(ext: InstalledExtension, key: String): String {
@@ -5026,6 +5322,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         requestSyncOpenFilesFromDisk()
     }
 
+    /**
+     * A file's current text as a native extension should see it: the **editor's** copy when the file
+     * is open, the disk's otherwise.
+     *
+     * The distinction is the whole point. A designer handed the disk copy of a file with unsaved
+     * edits would render something the user is not looking at, and their next visual edit would
+     * write that stale text back over what they had typed.
+     */
+    fun readOpenFileText(path: String): String? {
+        val tab = _editorGroup.value.tabs.firstOrNull { it.filePath.path == path && it.editorState != null }
+        tab?.editorState?.let { state ->
+            val snapshot = state.snapshot.value
+            return runCatching { String(snapshot.readRange(0, snapshot.byteLength), Charsets.UTF_8) }.getOrNull()
+        }
+        return runCatching { File(path).takeIf { it.isFile }?.readText() }.getOrNull()
+    }
+
+    /**
+     * Replace a file's text through the open editor buffer, so one visual edit is one edit.
+     *
+     * Deliberately NOT a disk write: going through the buffer is what keeps the source view, the
+     * dirty marker, undo and Save all describing the same document. Writing the file directly would
+     * leave the open buffer holding the pre-edit text, and the user's next keystroke would save that
+     * over the change they just made in the designer.
+     *
+     * A file that is not open has no buffer to route through and is written directly — there is
+     * nothing to get out of step with.
+     */
+    fun replaceFileText(path: String, text: String) {
+        val tab = _editorGroup.value.tabs.firstOrNull { it.filePath.path == path && it.editorState != null }
+        val state = tab?.editorState
+        if (state == null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { File(path).writeText(text) }
+                    .onFailure { emitMessage("Could not write ${File(path).name}: ${it.message ?: "error"}") }
+            }
+            return
+        }
+        // As an edit, not a load. `replaceAll` is the open/revert path: it leaves the buffer clean
+        // and clears undo, so routing a designer edit through it left the tab showing no unsaved
+        // marker for a change that very much was unsaved — and threw away the editor's history.
+        viewModelScope.launch { state.replaceAllAsEdit(text) }
+    }
+
     /** Flip a file tab between the source editor and its rendered preview (Markdown). */
     fun toggleTabPreview(tabId: String) {
         val current = _editorGroup.value.tabs.firstOrNull { it.id == tabId } ?: return
@@ -5409,7 +5749,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 tab.editorState?.requestRevealAt(line, column)
                 trackDirty(tab)
                 prep.signature?.let { diskSignatures[stableId] = it }
-                _editorGroup.value = _editorGroup.value.withTabAdded(tab)
+                _editorGroup.value = _editorGroup.value
+                    .withTabAdded(tab.copy(previewMode = opensInExtensionView(file)))
                 queueSyntaxCheck(file)
                 lspController.documentOpened(file.path)
             }

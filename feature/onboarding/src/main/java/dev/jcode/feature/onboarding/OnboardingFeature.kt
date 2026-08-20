@@ -82,6 +82,8 @@ object OnboardingFeature {
         onStorageAccessGranted: () -> Unit,
         onDismiss: (() -> Unit)? = null,
         onRestoreEnvironment: (() -> Unit)? = null,
+        onImportMigration: (() -> Unit)? = null,
+        migrationSummary: String? = null,
     ) {
         // Full-bleed backdrop first, insets padding inside: otherwise the workbench behind the
         // onboarding shows through the status/navigation-bar strips (visible in landscape).
@@ -109,6 +111,8 @@ object OnboardingFeature {
                     showStorageStep = true,
                     onStorageAccessGranted = onStorageAccessGranted,
                     onRestoreEnvironment = onRestoreEnvironment,
+                    onImportMigration = onImportMigration,
+                    migrationSummary = migrationSummary,
                 )
             }
         }
@@ -218,6 +222,8 @@ private fun StepperScreen(
     showStorageStep: Boolean = false,
     onStorageAccessGranted: () -> Unit = {},
     onRestoreEnvironment: (() -> Unit)? = null,
+    onImportMigration: (() -> Unit)? = null,
+    migrationSummary: String? = null,
     installedEnvironments: List<EnvironmentInfo> = emptyList(),
     onSwitchEnvironment: (String) -> Unit = {},
     onDeleteEnvironment: (String) -> Unit = {},
@@ -262,6 +268,16 @@ private fun StepperScreen(
     val distroStepEnabled = !showStorageStep || storageGranted
 
     val distroStepNumber = if (showStorageStep) 2 else 1
+    // A bundle left by a previous install answers the same question this step asks — which
+    // environment to set up — with the user's own, so it takes the step's place rather than adding
+    // a fourth button to it. Choosing a fresh distro is still one tap away.
+    var setUpFresh by remember { mutableStateOf(false) }
+    val importing = onImportMigration != null && migrationSummary != null && !setUpFresh
+    val idleLabel = if (importing) {
+        "Waiting for you to start the import."
+    } else {
+        "Waiting for you to choose a distro."
+    }
     val selectionSteps: LazyListScope.() -> Unit = {
         if (installedEnvironments.isNotEmpty()) {
             item {
@@ -288,17 +304,29 @@ private fun StepperScreen(
         }
         if (showWizard) {
             item {
-                DistroSelectionCard(
-                    number = distroStepNumber,
-                    environmentState = environmentState,
-                    running = running,
-                    completed = completed,
-                    enabled = distroStepEnabled,
-                    onSelectDistro = onSelectDistro,
-                    onAutoSetup = onAutoSetup,
-                    onRefresh = onRefresh,
-                    onRestoreEnvironment = onRestoreEnvironment,
-                )
+                if (importing) {
+                    MigrationImportCard(
+                        number = distroStepNumber,
+                        summary = migrationSummary.orEmpty(),
+                        running = running,
+                        completed = completed,
+                        enabled = distroStepEnabled,
+                        onImport = { onImportMigration?.invoke() },
+                        onSetUpFresh = { setUpFresh = true },
+                    )
+                } else {
+                    DistroSelectionCard(
+                        number = distroStepNumber,
+                        environmentState = environmentState,
+                        running = running,
+                        completed = completed,
+                        enabled = distroStepEnabled,
+                        onSelectDistro = onSelectDistro,
+                        onAutoSetup = onAutoSetup,
+                        onRefresh = onRefresh,
+                        onRestoreEnvironment = onRestoreEnvironment,
+                    )
+                }
             }
         } else {
             item {
@@ -354,6 +382,7 @@ private fun StepperScreen(
                                 logsExpanded = logsExpanded,
                                 onToggleLogs = { logsExpanded = !logsExpanded },
                                 onDismiss = onDismiss,
+                                idleLabel = idleLabel,
                                 modifier = Modifier.weight(1f),
                                 fillLog = true,
                             )
@@ -377,12 +406,62 @@ private fun StepperScreen(
                                     logsExpanded = logsExpanded,
                                     onToggleLogs = { logsExpanded = !logsExpanded },
                                     onDismiss = onDismiss,
+                                    idleLabel = idleLabel,
                                 )
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+/** Stands in for the distro step when the previous install left a bundle in shared storage: it
+ *  already holds an environment, so downloading a fresh one would throw the user's away. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MigrationImportCard(
+    number: Int,
+    summary: String,
+    running: Boolean,
+    completed: Boolean,
+    enabled: Boolean,
+    onImport: () -> Unit,
+    onSetUpFresh: () -> Unit,
+) {
+    val interactive = enabled && !running && !completed
+    StepCard(
+        number = number,
+        active = interactive,
+    ) {
+        Text(
+            text = when {
+                completed -> "Your previous environment is set up."
+                enabled -> "Your previous install left its Linux environment, projects, extensions " +
+                    "and settings behind. Importing them puts JCode back where it was."
+                else -> "Allow storage access above to continue."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilledTonalButton(onClick = onImport, enabled = interactive) {
+                Text("Import")
+            }
+            OutlinedButton(onClick = onSetUpFresh, enabled = interactive) {
+                Text("Set up fresh instead")
+            }
+        }
+        if (interactive) {
+            Text(
+                text = summary,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -406,7 +485,6 @@ private fun DistroSelectionCard(
     val interactive = enabled && !running && !completed
     StepCard(
         number = number,
-        title = "Select a distro",
         active = interactive,
     ) {
         Text(
@@ -476,12 +554,12 @@ private fun ConfigureStepCard(
     logsExpanded: Boolean,
     onToggleLogs: () -> Unit,
     onDismiss: (() -> Unit)?,
+    idleLabel: String,
     modifier: Modifier = Modifier,
     fillLog: Boolean = false,
 ) {
     StepCard(
         number = number,
-        title = "Configuring Environment...",
         active = running || completed,
         modifier = modifier,
         fillHeight = fillLog,
@@ -491,7 +569,7 @@ private fun ConfigureStepCard(
             is DistroWizardProgress.Completed -> autoSetupProgress.detail
             is DistroWizardProgress.Failed -> autoSetupProgress.error
             is DistroWizardProgress.AllDone -> autoSetupProgress.summary
-            DistroWizardProgress.Idle -> "Waiting for you to choose a distro."
+            DistroWizardProgress.Idle -> idleLabel
         }
         Row(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -817,7 +895,6 @@ private fun StorageAccessCard(
     }
     StepCard(
         number = number,
-        title = "Allow storage access",
         active = !granted,
     ) {
         Text(
@@ -867,7 +944,6 @@ private fun StorageAccessCard(
 @Composable
 private fun StepCard(
     number: Int,
-    title: String,
     active: Boolean,
     modifier: Modifier = Modifier,
     fillHeight: Boolean = false,

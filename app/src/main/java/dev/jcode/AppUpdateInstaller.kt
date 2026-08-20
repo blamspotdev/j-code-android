@@ -42,7 +42,25 @@ object AppUpdateInstaller {
     sealed interface State {
         data object Idle : State
         data class Downloading(val percent: Int) : State
+
+        /**
+         * Copying this install's data out before an update that changes the package.
+         *
+         * Its own phase because it is the slow one — the Linux environment is measured in gigabytes,
+         * so an update that would otherwise take seconds takes minutes, and a progress bar that said
+         * nothing during it would look like a hang. What it is currently copying is reported by
+         * whoever does the copying, which has somewhere to show it; this is only the phase.
+         */
+        data object PreparingMigration : State
         data object Installing : State
+
+        /**
+         * The data could not be copied — no room, or the export died part-way. The update itself is
+         * still installable, so this is a question rather than a failure: install anyway and start
+         * clean, or stop and keep what is here. [apkPath] is the already-downloaded update, kept so
+         * answering "install anyway" does not download it again.
+         */
+        data class MigrationUnavailable(val reason: String, val apkPath: String) : State
 
         /** The user hasn't allowed this app to install unknown apps — send them to that setting. */
         data object NeedsUnknownSourcePermission : State
@@ -55,7 +73,9 @@ object AppUpdateInstaller {
 
     fun reset() {
         val s = _state.value
-        if (s is State.Success || s is State.Failed || s is State.NeedsUnknownSourcePermission) {
+        if (s is State.Success || s is State.Failed || s is State.NeedsUnknownSourcePermission ||
+            s is State.MigrationUnavailable
+        ) {
             _state.value = State.Idle
         }
     }
@@ -75,8 +95,29 @@ object AppUpdateInstaller {
         }
     }
 
-    /** Download [apkUrl] and hand it to the system installer, publishing progress via [state]. */
-    suspend fun downloadAndInstall(context: Context, apkUrl: String) {
+    /**
+     * The package an APK on disk will install as, or null if it cannot be read.
+     *
+     * This is what decides whether an update needs a migration, and it is read from the artifact
+     * about to be installed rather than from a flag on the release. A flag has to be set by hand for
+     * the one release that needs it and can silently disagree with the APK; this cannot.
+     */
+    fun packageOf(context: Context, apk: File): String? =
+        runCatching { context.packageManager.getPackageArchiveInfo(apk.absolutePath, 0)?.packageName }.getOrNull()
+
+    /**
+     * Install [apkUrl], carrying this install's data across first when the update changes the package.
+     *
+     * [prepareMigration] does that copy, returning null on success or a reason on failure. It is
+     * passed in rather than called directly because the copy needs the distro service and the
+     * settings store, and this object is reachable from a broadcast receiver with nothing but a
+     * Context.
+     */
+    suspend fun downloadAndInstall(
+        context: Context,
+        apkUrl: String,
+        prepareMigration: (suspend () -> String?)? = null,
+    ) {
         val app = context.applicationContext
         if (!canInstall(app)) {
             _state.value = State.NeedsUnknownSourcePermission
@@ -89,6 +130,37 @@ object AppUpdateInstaller {
             _state.value = State.Failed(e.message ?: "Download failed")
             return
         }
+        // An update that installs under a different package is not an update: Android gives it an
+        // empty data directory and leaves this install untouched. Everything the user has must go out
+        // to shared storage first, because nothing can read it afterwards.
+        val incoming = packageOf(app, apk)
+        if (prepareMigration != null && incoming != null && incoming != app.packageName) {
+            _state.value = State.PreparingMigration
+            val failure = try {
+                prepareMigration()
+            } catch (e: Exception) {
+                e.message ?: "the copy could not be completed"
+            }
+            if (failure != null) {
+                _state.value = State.MigrationUnavailable(failure, apk.absolutePath)
+                return
+            }
+        }
+        install(app, apk)
+    }
+
+    /** Install an APK already on disk, skipping the migration question. */
+    suspend fun installDownloaded(context: Context, apkPath: String) {
+        val app = context.applicationContext
+        val apk = File(apkPath)
+        if (!apk.isFile) {
+            _state.value = State.Failed("The downloaded update is no longer available.")
+            return
+        }
+        install(app, apk)
+    }
+
+    private suspend fun install(app: Context, apk: File) {
         try {
             _state.value = State.Installing
             withContext(Dispatchers.IO) { commit(app, apk) }

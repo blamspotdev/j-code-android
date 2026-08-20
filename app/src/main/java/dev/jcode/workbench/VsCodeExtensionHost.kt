@@ -242,7 +242,12 @@ class VsCodeExtensionHost(
                 val linked = runCatching {
                     android.system.Os.link(child.absolutePath, target.absolutePath); true
                 }.getOrDefault(false)
-                if (!linked) child.copyTo(target, overwrite = true)
+                if (!linked) {
+                    child.copyTo(target, overwrite = true)
+                    // A link carries the mode with it; a copy does not. An extension that ships its own
+                    // executable is spawned from this staged path, so the bit is put back by hand.
+                    if (child.canExecute()) target.setExecutable(true, false)
+                }
             }
         }
     }

@@ -397,6 +397,41 @@ class EditorView @JvmOverloads constructor(
         return (rows * lineHeightPx(state) - vp.heightPx).coerceAtLeast(0)
     }
 
+    /**
+     * Ctrl and the wheel, reported as a step: +1 bigger, -1 smaller.
+     *
+     * The view does not own the font size — it is a setting, scoped and persisted — so it says what
+     * happened and the workbench decides what that means. Null while nothing is listening, which is
+     * also how an embedded editor opts out of being zoomable.
+     */
+    var onFontSizeStep: ((Int) -> Unit)? = null
+
+    /**
+     * A physical wheel.
+     *
+     * Android delivers wheel notches as ACTION_SCROLL generic-motion events rather than as touch
+     * gestures, so nothing in the touch path ever sees them: before this, a wheel over the editor
+     * fell through to whatever Compose container was behind it and scrolled the *panel* instead of
+     * the document. Ctrl held turns the same notch into a font-size step, which is what every other
+     * editor does with it.
+     */
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (event.action == MotionEvent.ACTION_SCROLL) {
+            val vscroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+            if (vscroll != 0f) {
+                val step = if (vscroll > 0) 1 else -1
+                if (event.metaState and KeyEvent.META_CTRL_ON != 0) {
+                    onFontSizeStep?.invoke(step) ?: return super.onGenericMotionEvent(event)
+                } else {
+                    // Three lines a notch, the same as the terminal and as a desktop editor.
+                    scrollLines(-step * 3)
+                }
+                return true
+            }
+        }
+        return super.onGenericMotionEvent(event)
+    }
+
     /** Scroll the viewport by [lines] text lines (positive = toward the end of the file). Drives
      *  external scroll bindings (e.g. volume keys); no-op when no state is attached. */
     fun scrollLines(lines: Int) {

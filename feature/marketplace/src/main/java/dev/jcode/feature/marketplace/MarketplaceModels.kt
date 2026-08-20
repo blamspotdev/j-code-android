@@ -55,6 +55,44 @@ enum class ExtensionActivation {
     }
 }
 
+/**
+ * Whether this kind of extension lets the user say when it runs.
+ *
+ * The kinds that put a surface in the workbench — a manager panel, a source-control view — can be
+ * left running from launch, woken when they are needed, or switched off entirely, and which of those
+ * you want depends on what the extension costs you while it sits there.
+ *
+ * The rest contribute to files: highlighting, completions, formatting, templates. There is nothing
+ * for them to do until a file they understand is open and nothing they cost while none is, so the
+ * question has one sensible answer. Asking it anyway is not a choice, it is only a way to get it
+ * wrong — and a Dev Pack switched off by mistake looks like the editor forgetting how to colour
+ * Kotlin, not like a setting.
+ *
+ * [ExtensionType.Unknown] counts as one of the latter. A package whose `type` is missing or
+ * unrecognised gets no workbench surface either, since every surface is keyed on the same field.
+ */
+val ExtensionType.choosesActivation: Boolean
+    get() = when (this) {
+        ExtensionType.App, ExtensionType.DbManager, ExtensionType.Scm, ExtensionType.Vm -> true
+        ExtensionType.Templates, ExtensionType.Language, ExtensionType.Formatter,
+        ExtensionType.Unknown,
+        -> false
+    }
+
+/**
+ * The mode actually in force, which is not always the one on disk.
+ *
+ * An extension that cannot choose reads as [ExtensionActivation.Default] whatever is stored against
+ * it. Without that, a mode saved before this rule existed — or by a package that has since changed
+ * type — would leave a Dev Pack switched off with nothing in the UI to switch it back on.
+ */
+fun InstalledExtension.activationIn(modes: Map<String, ExtensionActivation>): ExtensionActivation =
+    if (type.choosesActivation) modes[id] ?: ExtensionActivation.Default else ExtensionActivation.Default
+
+/** Whether this extension's contributions are allowed to apply at all. */
+fun InstalledExtension.enabledIn(modes: Map<String, ExtensionActivation>): Boolean =
+    activationIn(modes) != ExtensionActivation.Manual
+
 /** Things an extension requires or suggests be installed (ids): toolchains, language servers, debug
  *  engines (dbg), and other extensions. */
 data class ExtensionDeps(
@@ -311,6 +349,20 @@ data class InstalledExtension(
     val iconFile: File? = null,
     /** Relative path (from [dir]) to the extension's web-frontend HTML entry, e.g. "www/index.html". */
     val webUiEntry: String? = null,
+    /**
+     * Relative path (from [dir]) to a **native** UI payload — an APK the extension ships, loaded
+     * into JCode's own process on demand. Null for the ordinary WebView-frontend kind.
+     *
+     * An APK rather than a bare dex because a dex has no resource table: a plugin with its own
+     * drawables or strings needs `addAssetPath`, and that takes an archive.
+     */
+    val nativeEntry: String? = null,
+    /** Fully-qualified class in [nativeEntry] implementing `JCodeNativeExtension`. */
+    val nativeClass: String? = null,
+    /** Extension-API version [nativeEntry] was built against; must equal JCode's `JCODE_EXT_ABI`. */
+    val nativeAbi: Int = 0,
+    /** What this extension's native UI will draw. Any rule matching is enough. */
+    val nativeClaims: List<NativeClaim> = emptyList(),
     /** Lowest JCode extension-API version this extension needs (0 = legacy exec-only bridge). */
     val apiMinVersion: Int = 0,
     /** Capability families this extension declares it uses (e.g. "exec", "fs", "workbench"). */
@@ -325,11 +377,104 @@ data class InstalledExtension(
     /** True for an UNSIGNED extension sideloaded via Developer options — the only kind that is
      *  "debuggable" (surfaced in the Extension Dev tools). Signed/marketplace extensions are false. */
     val dev: Boolean = false,
+    /** Short name for a tab, when the extension declared one. See [InstalledExtension.tabName]. */
+    val shortName: String? = null,
 )
+
+/**
+ * What to put on this extension's tab.
+ *
+ * [name] is the marketplace display name and is written to sell the extension, not to fit beside
+ * five other tabs — "Codex – OpenAI's coding agent" is wider than the rest of the strip. Where the
+ * extension declared a short name for its own view container, that is used instead, matching what
+ * VS Code labels the activity bar with.
+ */
+val InstalledExtension.tabName: String get() = shortName?.takeIf { it.isNotBlank() } ?: name
 
 /** The first bundled language that claims [fileName] (by file extension), or null. */
 fun InstalledExtension.languageFor(fileName: String): LanguagePack? =
     languages.firstOrNull { it.matchesFile(fileName) }
+
+/**
+ * True when this extension ships native UI that claims [file].
+ *
+ * Both a type and a path fragment, because "an .xml file" is far too broad: a layout designer wants
+ * `res/layout/…` and would be actively wrong on `AndroidManifest.xml`.
+ */
+fun InstalledExtension.claimsNatively(file: File): Boolean = nativeClaimFor(file) != null
+
+/** The rule by which this extension claims [file], or null when it does not. */
+fun InstalledExtension.nativeClaimFor(file: File): NativeClaim? {
+    if (nativeEntry == null || nativeClass == null) return null
+    return nativeClaims.firstOrNull { it.matches(file) }
+}
+
+/**
+ * One rule for a file a native extension will draw.
+ *
+ * A file type alone is far too broad: a layout designer wants `res/layout/…` and would be actively
+ * wrong on `AndroidManifest.xml`. Where a *path* cannot separate them — a Kotlin file holding
+ * composable UI looks exactly like one that does not — [contains] asks the file itself, which is the
+ * only thing that actually knows.
+ */
+data class NativeClaim(
+    /** Lower-case, dotless file extensions (e.g. "xml"). Empty matches any extension. */
+    val fileTypes: List<String> = emptyList(),
+    /** Path fragment the file must contain, with forward slashes. */
+    val pathContains: String? = null,
+    /** Text the file must contain. Read from the head of the file, never the whole of it. */
+    val contains: String? = null,
+    /**
+     * The extension setting that governs opening these files in the extension's view straight away.
+     *
+     * Non-null means "this file type is *primarily* the thing my view shows" — an Android layout is
+     * a layout before it is XML, so opening it as text first and making the user find a menu is the
+     * wrong default. A `.kt` file is not primarily a composable, which is why nothing declares this
+     * for Kotlin.
+     *
+     * Naming a setting is required rather than optional, so this cannot be used to take a file type
+     * over with no way back. The named setting resolving to `false` turns it off; anything else,
+     * including a manifest that forgot a default, leaves it on — the extension declaring the field
+     * at all is the opt-in.
+     */
+    val opensInPreviewSetting: String? = null,
+    /**
+     * What the editor's menu calls the toggle into this view.
+     *
+     * "Preview" is right for a rendered Markdown document and wrong for a layout designer — you are
+     * not previewing it, you are editing it somewhere else. The claim knows what its view is; the
+     * menu does not, and should not have to.
+     */
+    val previewLabel: String? = null,
+    /**
+     * The icon that label wears, by the same names every other contributed action uses.
+     *
+     * With this the menu item is entirely the extension's: when it appears (the match), what it
+     * says ([previewLabel]) and what it looks like. All the host still supplies is the toggle
+     * itself, which flips `EditorTab.previewMode` and so cannot live anywhere but the host.
+     */
+    val previewIcon: String? = null,
+) {
+    fun matches(file: File): Boolean {
+        if (fileTypes.isNotEmpty() && file.extension.lowercase() !in fileTypes) return false
+        pathContains?.let {
+            if (!file.path.replace(File.separatorChar, '/').contains(it)) return false
+        }
+        val needle = contains ?: return true
+        // Bounded, because this runs when a tab is opened and the file could be anything. A
+        // declaration that decides whether a file is UI is at the top of it or is not there.
+        return runCatching {
+            file.takeIf { it.isFile && it.length() > 0 }
+                ?.inputStream()?.use { stream ->
+                    val buffer = ByteArray(CLAIM_HEAD_BYTES)
+                    val read = stream.read(buffer)
+                    read > 0 && String(buffer, 0, read).contains(needle)
+                } ?: false
+        }.getOrDefault(false)
+    }
+}
+
+private const val CLAIM_HEAD_BYTES = 64 * 1024
 
 /** True if this extension ships a web-frontend ("Manage" / DB-manager) UI that resolves on disk. */
 /** True when the extension has a UI to show. A `.vsix` builds its own at runtime, so it has one

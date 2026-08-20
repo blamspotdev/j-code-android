@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +33,12 @@ import dev.jcode.design.ManagerListRow
 import dev.jcode.design.ManagerNoticeCard
 import dev.jcode.design.ManagerFilterChip
 import dev.jcode.design.ManagerPanelHeader
+
+/** How this panel names itself in the Issues pane. */
+private const val NOTICE_SOURCE = "Toolchains"
+
+/** How much of a failed run's log travels with its message. */
+private const val DETAIL_LINES = 60
 
 /** What a unified toolchain row is: which catalog it came from decides its detail route. */
 private enum class ToolchainKind(val chip: String, val section: String) {
@@ -68,6 +75,8 @@ internal fun ToolchainManagerPanel(
     modifier: Modifier = Modifier,
     /** Percent + phase of the running install, so the row shows it without opening the detail page. */
     progress: CatalogProgress? = null,
+    /** Reveal the Issues pane, where this panel's failures are listed. */
+    onShowIssues: () -> Unit = {},
 ) {
     val environmentReady = environmentState.distroInstalled == true && environmentState.jcodeUserReady == true
     var query by remember { mutableStateOf("") }
@@ -163,11 +172,26 @@ internal fun ToolchainManagerPanel(
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        // Reported to the Issues pane rather than drawn here: a failure is worth keeping after the
+        // user has moved on to another tool, and the list is what this panel is for. Each message is
+        // carried with the log of the run it came out of — what a catalog puts in errorMessage is the
+        // first line the script printed, which names the outcome ("Install failed.") far more often
+        // than the cause. The tail rather than all 240 kept lines: a failure explains itself at the
+        // end, and the beginning is the previous action.
+        val notices = listOfNotNull(
+            sdkState.errorMessage?.let { WorkbenchNotices.Notice(it, sdkState.logLines.takeLast(DETAIL_LINES)) },
+            lspState.errorMessage?.let { WorkbenchNotices.Notice(it, lspState.logLines.takeLast(DETAIL_LINES)) },
+            debugState.errorMessage?.let { WorkbenchNotices.Notice(it, debugState.logLines.takeLast(DETAIL_LINES)) },
+        )
+        LaunchedEffect(notices) { WorkbenchNotices.set(NOTICE_SOURCE, notices) }
+
         ManagerPanelHeader(
             title = "Toolchains",
             installedCount = installedTotal,
             onRefresh = onRefreshAll,
             busy = busy,
+            noticeCount = notices.size,
+            onNotice = onShowIssues,
             searchActive = searchActive,
             onToggleSearch = { searchActive = !searchActive; if (!searchActive) query = "" },
             query = query,
@@ -201,9 +225,6 @@ internal fun ToolchainManagerPanel(
                 message = "Set up the Linux environment in Settings before installing.",
             )
         }
-        listOfNotNull(sdkState.errorMessage, lspState.errorMessage, debugState.errorMessage)
-            .distinct()
-            .forEach { ManagerNoticeCard(title = "Toolchains notice", message = it) }
 
         val visibleKinds = ToolchainKind.entries.filter { !rows[it].isNullOrEmpty() }
         if (visibleKinds.isEmpty()) {

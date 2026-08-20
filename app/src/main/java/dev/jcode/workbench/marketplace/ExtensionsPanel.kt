@@ -51,6 +51,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.jcIcon
+import dev.jcode.design.ExtensionSettingsUi
 import dev.jcode.design.LocalExtensionSettingsUi
 import dev.jcode.design.ManagerDetailScreen
 import dev.jcode.design.ManagerItemStatus
@@ -65,6 +66,7 @@ import dev.jcode.feature.marketplace.ExtensionActivation
 import dev.jcode.feature.marketplace.ExtensionDeps
 import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
+import dev.jcode.feature.marketplace.choosesActivation
 import dev.jcode.feature.marketplace.hasWebUi
 import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.marketplace.isUpdateAvailable
@@ -592,12 +594,34 @@ internal fun ExtensionDetailPage(
  * activation mode, API-capability grants, and keep-alive. Replaces the per-extension section that used
  * to live in App Settings.
  */
+/**
+ * Whether this extension puts anything on the settings page.
+ *
+ * Four things can appear under one: settings it declared in its manifest, an activation mode where
+ * its kind is allowed one, its Extension-API capabilities, and — for anything with a web frontend —
+ * whether that frontend keeps running in the background. Most Dev Packs have none of them.
+ *
+ * Read by the page to decide whether to list the extension and by the card to decide whether to
+ * expand, which have to agree: a card listed and unopenable is as odd as a card that opens onto
+ * nothing.
+ */
+private fun InstalledExtension.hasSettings(ui: ExtensionSettingsUi): Boolean =
+    ui.groups.firstOrNull { it.extensionId == id }?.specs?.isNotEmpty() == true ||
+        type.choosesActivation ||
+        apiCapabilities.isNotEmpty() ||
+        hasWebUi
+
 @Composable
 internal fun ExtensionPermissionsPage(
     installed: List<InstalledExtension>,
     onOpenConfig: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    // Only the extensions with something to change. A Dev Pack that contributes nothing but
+    // highlighting has no decisions to offer, and a page of cards that do nothing when you touch
+    // them makes the ones that do harder to find.
+    val ui = LocalExtensionSettingsUi.current
+    val configurable = installed.filter { it.hasSettings(ui) }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -605,37 +629,25 @@ internal fun ExtensionPermissionsPage(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        Text(
+            text = "Extension settings",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (configurable.isEmpty()) {
             Text(
-                text = "Extension settings",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            if (installed.isNotEmpty()) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                    shape = RoundedCornerShape(20.dp),
-                ) {
-                    Text(
-                        text = "${installed.size} installed",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 2.dp),
-                    )
-                }
-            }
-        }
-        if (installed.isEmpty()) {
-            Text(
-                text = "No extensions installed yet.",
+                // Two different nothings, and telling them apart is the whole value of the line:
+                // one means install something, the other means there is nothing to do here.
+                text = if (installed.isEmpty()) {
+                    "No extensions installed yet."
+                } else {
+                    "None of your ${installed.size} extensions has anything to configure."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            val byType = installed.groupBy { it.type }
+            val byType = configurable.groupBy { it.type }
             EXTENSION_TYPE_ORDER.forEach { type ->
                 val exts = byType[type]?.sortedBy { it.name.lowercase() }.orEmpty()
                 if (exts.isEmpty()) return@forEach
@@ -647,9 +659,12 @@ internal fun ExtensionPermissionsPage(
 }
 
 /**
- * One extension on the Extension Settings page: a defined card with its icon, name, a metadata line
- * (description · version · VSIX), and its activation-status pill; expands to its settings and
- * permissions.
+ * One extension on the Extension Settings page: a defined card with its icon, name and a metadata
+ * line (description · version · VSIX), expanding to whatever that extension lets you decide — its
+ * own declared settings, its permissions, and, where its kind permits a choice, when it activates.
+ *
+ * Always expands to something, because the page lists no extension for which it would not: see
+ * [hasSettings].
  */
 @Composable
 private fun ExtensionSettingsCard(
@@ -698,7 +713,7 @@ private fun ExtensionSettingsCard(
                         )
                     }
                 }
-                ActivationPill(mode)
+                if (ext.type.choosesActivation) ActivationPill(mode)
                 Icon(
                     imageVector = jcIcon(if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown),
                     contentDescription = if (expanded) "Collapse ${ext.name}" else "Expand ${ext.name}",
@@ -720,7 +735,7 @@ private fun ExtensionSettingsCard(
                             Text("Configure Git…")
                         }
                     }
-                    ActivationSelector(extensionId = ext.id)
+                    if (ext.type.choosesActivation) ActivationSelector(extensionId = ext.id)
                     if (ext.apiCapabilities.isNotEmpty()) {
                         CapabilityToggles(extensionId = ext.id, capabilities = ext.apiCapabilities)
                     }

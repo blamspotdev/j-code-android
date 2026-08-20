@@ -208,6 +208,8 @@ import dev.jcode.core.diag.DiagnosticLog
 import dev.jcode.design.DiagnosticsSetting
 import dev.jcode.design.LocalDiagnosticsSetting
 import dev.jcode.design.LocalEditorFontSizeSetting
+import dev.jcode.design.ExtensionFontSizeSetting
+import dev.jcode.design.LocalExtensionFontSizeSetting
 import dev.jcode.design.LocalTerminalFontSizeSetting
 import dev.jcode.design.TerminalFontSizeSetting
 import dev.jcode.design.LocalEditorWordWrapSetting
@@ -228,6 +230,9 @@ import dev.jcode.feature.explorer.ExplorerViewMode
 import dev.jcode.feature.marketplace.ExtensionType
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.languageFor
+import dev.jcode.feature.marketplace.claimsNatively
+import dev.jcode.feature.marketplace.nativeClaimFor
+import dev.jcode.feature.marketplace.tabName
 import dev.jcode.feature.marketplace.MarketplaceEntry
 import dev.jcode.feature.onboarding.EnvironmentManagerActions
 import dev.jcode.feature.onboarding.LocalEnvironmentManager
@@ -243,6 +248,8 @@ import dev.jcode.workbench.dialog.NewItemDialog
 import dev.jcode.workbench.dialog.PostCloneDialog
 import dev.jcode.workbench.dialog.OpenFolderTypeDialog
 import dev.jcode.feature.marketplace.ExtensionActivation
+import dev.jcode.feature.marketplace.activationIn
+import dev.jcode.feature.marketplace.enabledIn
 import dev.jcode.workbench.marketplace.ExtensionActivationSetting
 import dev.jcode.workbench.marketplace.ExtensionCapabilitySetting
 import dev.jcode.workbench.marketplace.ExtensionKeepAliveSetting
@@ -343,6 +350,7 @@ import dev.jcode.workbench.WorkbenchIconActionButton
 import dev.jcode.workbench.ExtensionDrawerActions
 import dev.jcode.workbench.VsixDrawerContent
 import dev.jcode.workbench.VsixPanelPage
+import dev.jcode.workbench.VsixTerminals
 import dev.jcode.workbench.VsixViewHolder
 import dev.jcode.workbench.hasClipboardImage
 import dev.jcode.workbench.ScmBackgroundHost
@@ -359,6 +367,7 @@ import dev.jcode.workbench.WorkbenchExtraKeysBar
 import dev.jcode.workbench.WorkbenchSnackbarHost
 import dev.jcode.workbench.BottomStatusBarSlot
 import dev.jcode.workbench.RightPanelSelection
+import dev.jcode.ext.NativeExtensionPage
 import dev.jcode.workbench.RightPanelTab
 import dev.jcode.workbench.WorkbenchManagerActions
 import dev.jcode.workbench.WorkbenchRunActions
@@ -430,9 +439,15 @@ fun JCodeApp(
     // so the per-extension activation mode actually gates highlighting/completions/formatting.
     val activeLanguageExtensions by viewModel.activeLanguageExtensions.collectAsStateWithLifecycle()
     val extensionActivations by viewModel.extensionActivations.collectAsStateWithLifecycle()
-    val extensionActivationSetting = remember(extensionActivations) {
+    val extensionActivationSetting = remember(extensionActivations, installedExtensions) {
         ExtensionActivationSetting(
-            modeFor = { id -> extensionActivations[id] ?: ExtensionActivation.Default },
+            // Resolved through the extension rather than straight out of the map, so every reader
+            // of this local sees the mode that is really in force — see `activationIn`.
+            modeFor = { id ->
+                installedExtensions.firstOrNull { it.id == id }
+                    ?.activationIn(extensionActivations)
+                    ?: extensionActivations[id] ?: ExtensionActivation.Default
+            },
             onChange = viewModel::setExtensionActivation,
         )
     }
@@ -617,6 +632,7 @@ fun JCodeApp(
                 if (updateInfo?.apkUrl != null) viewModel.installUpdate(updateContext) else openReleasePage()
             },
             installing = updateInstallState is AppUpdateInstaller.State.Downloading ||
+                updateInstallState is AppUpdateInstaller.State.PreparingMigration ||
                 updateInstallState is AppUpdateInstaller.State.Installing,
             installProgress = (updateInstallState as? AppUpdateInstaller.State.Downloading)?.percent ?: 0,
         )
@@ -640,6 +656,10 @@ fun JCodeApp(
     val terminalFontSizeGlobal by viewModel.terminalFontSizeGlobal.collectAsStateWithLifecycle()
     val terminalFontSizeSetting = remember(terminalFontSizeGlobal) {
         TerminalFontSizeSetting(value = terminalFontSizeGlobal, onChange = viewModel::setTerminalFontSizeGlobal)
+    }
+    val extensionFontScale by viewModel.extensionFontScale.collectAsStateWithLifecycle()
+    val extensionFontSizeSetting = remember(extensionFontScale) {
+        ExtensionFontSizeSetting(percent = extensionFontScale, onChange = viewModel::setExtensionFontScale)
     }
     val pendingReloadList by viewModel.pendingReload.collectAsStateWithLifecycle()
     val pendingReloadUi = remember(pendingReloadList) {
@@ -723,6 +743,66 @@ fun JCodeApp(
                 TextButton(onClick = { showVsixImportInfo = false; vsixPicker.launch("*/*") }) { Text("Choose .vsix") }
             },
             dismissButton = { TextButton(onClick = { showVsixImportInfo = false }) { Text("Cancel") } },
+        )
+    }
+    // Offered once an import has finished, and as a dialog rather than a message: the import runs
+    // during onboarding, so anything transient is shown to a screen the user is not reading yet.
+    val migrationCleanup by viewModel.migrationCleanup.collectAsStateWithLifecycle()
+    migrationCleanup?.let { cleanup ->
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissMigrationCleanup() },
+            title = { Text("Finish moving from ${cleanup.sourcePackage}") },
+            text = {
+                Text(
+                    buildString {
+                        append("Your environment, projects, extensions and settings are now here.\n\n")
+                        append("The ${cleanup.bytes / (1024 * 1024)} MB migration bundle in the shared JCode folder ")
+                        append("is a copy and can go — ")
+                        if (cleanup.oldAppInstalled) {
+                            append("the old app still has everything until you remove it.\n\n")
+                            append("Removing it frees the rest of the space it is using. Android will ask you ")
+                            append("to confirm the uninstall itself.")
+                        } else {
+                            append("nothing else needs it.")
+                        }
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.cleanUpAfterMigration() }) {
+                    Text(if (cleanup.oldAppInstalled) "Clean up and uninstall" else "Remove the bundle")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissMigrationCleanup() }) { Text("Keep for now") }
+            },
+        )
+    }
+    // This update installs under a different package, so Android gives it an empty data directory and
+    // the environment has to be copied across — and that copy could not be made. The update is still
+    // installable; what it cannot do is bring anything with it, so the choice is the user's.
+    (updateInstallState as? AppUpdateInstaller.State.MigrationUnavailable)?.let { blocked ->
+        AlertDialog(
+            onDismissRequest = { viewModel.resetUpdateInstall() },
+            title = { Text("Update without your environment?") },
+            text = {
+                Text(
+                    "This update installs as a new app, so your Linux environment, projects, " +
+                        "extensions and settings have to be copied across first — and " +
+                        "${blocked.reason}.\n\n" +
+                        "Installing now gives you the new version with nothing in it. This one is " +
+                        "left as it is, so you can free up space and update again instead.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.resetUpdateInstall()
+                    viewModel.installUpdateWithoutMigration(blocked.apkPath)
+                }) { Text("Install anyway") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.resetUpdateInstall() }) { Text("Not now") }
+            },
         )
     }
     val cursorDragHorizontalLevel by viewModel.editorCursorDragHorizontalLevel.collectAsStateWithLifecycle()
@@ -1086,14 +1166,31 @@ fun JCodeApp(
     // is passed down as params and reacted to there (find carries a nonce so the same word re-seeds).
     var editorGoToLineNonce by remember { mutableStateOf(0) }
     var editorFindRequest by remember { mutableStateOf<Pair<Int, String>?>(null) }
-    val editorMenuExtras = remember(viewModel, menuTabId, menuIsFileTab, menuFileName, contributedContextActions) {
+    // Rebuilt when the installed set changes too: whether this file has a rendered view depends on
+    // whether an extension claims it, and installing the Android pack must light the toggle up
+    // without reopening the file.
+    val editorMenuExtras = remember(
+        viewModel, menuTabId, menuIsFileTab, menuFileName, contributedContextActions, installedExtensions,
+    ) {
         val fileExt = menuFileName.substringAfterLast('.', "").lowercase()
+        // Markdown renders itself; anything else needs an extension that says it can draw this file.
+        // The claiming extension names its own view — see NativeClaim.previewLabel for why the menu
+        // cannot: a rendered Markdown file is previewed, a layout is designed, and only the thing
+        // that draws it knows which.
+        val nativeClaim = menuTab?.let { tab ->
+            installedExtensions.firstNotNullOfOrNull { it.nativeClaimFor(tab.filePath) }
+        }
+        val hasRenderedView = SyntaxHighlighter.isMarkdownFile(menuFileName) || nativeClaim != null
         EditorMenuExtras(
-            previewToggle = if (menuIsFileTab && menuTabId != null && SyntaxHighlighter.isMarkdownFile(menuFileName)) {
+            previewToggle = if (menuIsFileTab && menuTabId != null && hasRenderedView) {
                 { viewModel.toggleTabPreview(menuTabId) }
             } else {
                 null
             },
+            previewLabel = nativeClaim?.previewLabel ?: "Preview",
+            previewIcon = nativeClaim?.previewIcon
+                ?.let { contributedMenuIcon(it) }
+                ?: JCodeIcon.Preview,
             onGoToLine = if (menuIsFileTab) {
                 { editorGoToLineNonce++ }
             } else {
@@ -1150,7 +1247,7 @@ fun JCodeApp(
     val scmHostExt = remember(installedExtensions, extensionActivations, suspendedBackgroundExts) {
         installedExtensions.firstOrNull {
             it.type == ExtensionType.Scm && it.hasWebUi && it.contributes.explorerDecorations &&
-                (extensionActivations[it.id] ?: ExtensionActivation.Default) != ExtensionActivation.Manual &&
+                it.enabledIn(extensionActivations) &&
                 it.id !in suspendedBackgroundExts
         }
     }
@@ -1316,7 +1413,15 @@ fun JCodeApp(
         ActivityResultContracts.GetContent(),
     ) { uri -> if (uri != null) viewModel.restoreEnvironmentOnboarding(uri) }
     val systemPackagesUpdating by viewModel.systemPackagesUpdating.collectAsStateWithLifecycle()
-    val environmentBackupActions = remember(systemPackagesUpdating) {
+    // A bundle another install left in shared storage, looked for once per launch — the only thing
+    // that carries data across a package rename (see MigrationBundle).
+    val migrationBundle by viewModel.migrationBundle.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { viewModel.refreshMigrationBundle() }
+    val migrationSummary = migrationBundle?.let {
+        "Found a ${it.bytes / (1024 * 1024)} MB bundle from ${it.sourcePackage} " +
+            "(${it.versionName}) holding ${it.parts.size} parts."
+    }
+    val environmentBackupActions = remember(systemPackagesUpdating, migrationSummary) {
         EnvironmentBackupActions(
             onBackup = {
                 val id = viewModel.distroService.selectedEnvironment().id
@@ -1325,6 +1430,9 @@ fun JCodeApp(
             onRestore = { envRestoreLauncher.launch("*/*") },
             onUpdatePackages = { viewModel.updateSystemPackages() },
             updatingPackages = systemPackagesUpdating,
+            onExportMigration = { viewModel.exportMigrationBundle() },
+            onImportMigration = { viewModel.importMigrationBundle() },
+            migrationSummary = migrationSummary,
         )
     }
     val adbBridgeState by viewModel.adbBridge.state.collectAsStateWithLifecycle()
@@ -1476,6 +1584,7 @@ fun JCodeApp(
         LocalEditorFontSizeSetting provides editorFontSizeSetting,
         LocalEditorWordWrapSetting provides editorWordWrapSetting,
         LocalTerminalFontSizeSetting provides terminalFontSizeSetting,
+        LocalExtensionFontSizeSetting provides extensionFontSizeSetting,
         LocalDiagnosticsSetting provides diagnosticsSetting,
         LocalDeveloperSetting provides developerSetting,
         LocalRightDrawerSetting provides rightDrawerSetting,
@@ -1612,6 +1721,9 @@ fun JCodeApp(
         bringEditorToFront = viewModel.bringEditorToFront,
         volumeKeyAction = viewModel.volumeKeyAction,
         runTerminalCompletions = viewModel.runTerminalCompletions,
+        onReadFileText = viewModel::readOpenFileText,
+        onReplaceFileText = viewModel::replaceFileText,
+        onToggleTabPreview = viewModel::toggleTabPreview,
     )
     }
 
@@ -1732,6 +1844,8 @@ fun JCodeApp(
             onStorageAccessGranted = { viewModel.onStorageAccessGranted() },
             onDismiss = { viewModel.deferFirstRunEnvironmentSetup() },
             onRestoreEnvironment = { envRestoreOnboardingLauncher.launch("*/*") },
+            onImportMigration = { viewModel.importMigrationBundle() },
+            migrationSummary = migrationSummary,
         )
     }
 
@@ -1772,6 +1886,11 @@ private fun JCodeShell(
     onExportProject: (Project) -> Unit,
     onOpenFile: (dev.jcode.fs.FsNode) -> Unit,
     onOpenPathAtLine: (String) -> Unit,
+    /** A file's text as the editor holds it, for a native extension's page. */
+    onReadFileText: (String) -> String?,
+    /** Replace a file's text through its editor buffer, for a native extension's page. */
+    onReplaceFileText: (String, String) -> Unit,
+    onToggleTabPreview: (String) -> Unit,
     onSelectEditorTab: (String) -> Unit,
     onCloseEditorTab: (String) -> Unit,
     onSaveActiveTab: () -> Unit,
@@ -1977,6 +2096,17 @@ private fun JCodeShell(
     val rightPanelTab = (rightPanelSelection as? RightPanelSelection.Builtin)?.tab
     fun selectRightPanel(selection: RightPanelSelection) { rightPanelKey = selection.asKey() }
     fun selectRightPanelTab(tab: RightPanelTab) = selectRightPanel(RightPanelSelection.Builtin(tab))
+    // The Issues pane is this scope's, not that of the caller who built the bundle, so the reveal is
+    // attached here: a manager panel reports a failure by pointing at the pane instead of bannering
+    // it, and needs a way to bring the pane forward.
+    val panelActions = remember(managerActions) {
+        managerActions.copy(
+            onShowIssues = {
+                selectRightPanelTab(RightPanelTab.Problems)
+                rightSidebarVisible = true
+            },
+        )
+    }
     // Turning Developer options off must fully retire the Ext Dev tab — including the landscape
     // persistent sidebar, which renders the selection directly (no portrait clamp). Reset it so the
     // panel (and its auto-reload loop) stop composing everywhere.
@@ -2208,6 +2338,7 @@ private fun JCodeShell(
     fun createTerminalSession() {
         spawnTerminalSession()
     }
+
 
     // Relocate an interactive sub-shell (OSC 7715 from the guest wrapper) into its own temporary tab,
     // focused and linked to its parent so exiting/closing it returns focus to the parent. A no-op if the
@@ -2524,6 +2655,45 @@ private fun JCodeShell(
         terminalSessionIds = emptyList()
         terminalTitles.clear()
         selectedTerminalSessionId = ""
+    }
+
+    // A `.vsix` extension calling vscode.window.createTerminal / sendText / show. The extension host
+    // is a background process that outlives this composition and cannot reach it, so its requests
+    // queue in VsixTerminals and are carried out here — see that object for why these are real
+    // terminals rather than a stand-in. Declared after the helpers above because it calls them.
+    LaunchedEffect(Unit) {
+        snapshotFlow { VsixTerminals.signal.value }.collect {
+            for (request in VsixTerminals.drain()) {
+                when (request) {
+                    is VsixTerminals.Request.Create -> {
+                        val session = spawnTerminalSession(label = request.name) ?: continue
+                        VsixTerminals.sessions[request.id] = session.id
+                        terminalTitles[session.id] = request.name
+                        selectRightPanelTab(RightPanelTab.Terminal)
+                        rightSidebarVisible = true
+                        // Start where the extension asked, when the guest can see that directory.
+                        if (request.cwd.isNotBlank()) {
+                            terminalSessionManager.sendInput(session.id, "cd '${request.cwd.replace("'", "'\\''")}'\n")
+                        }
+                    }
+                    is VsixTerminals.Request.SendText -> {
+                        val id = VsixTerminals.sessions[request.id] ?: continue
+                        terminalSessionManager.sendInput(id, request.text + if (request.newline) "\n" else "")
+                    }
+                    is VsixTerminals.Request.Show -> {
+                        val id = VsixTerminals.sessions[request.id]?.takeIf { it in terminalSessionIds } ?: continue
+                        selectedTerminalSessionId = id
+                        terminalSessionManager.switchSession(id)
+                        selectRightPanelTab(RightPanelTab.Terminal)
+                        rightSidebarVisible = true
+                    }
+                    is VsixTerminals.Request.Dispose -> {
+                        val id = VsixTerminals.sessions.remove(request.id) ?: continue
+                        if (id in terminalSessionIds) closeTerminalSession(id)
+                    }
+                }
+            }
+        }
     }
 
     // Set when the user explicitly closes the project: suppresses the convenience auto-start so the
@@ -2965,7 +3135,7 @@ private fun JCodeShell(
                 onOpenProjectConfig = onOpenProjectConfig,
                 onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                 onAutoSetup = onAutoSetup,
-                managerActions = managerActions,
+                managerActions = panelActions,
                 runActions = runActions,
                 runningProjectId = runningProjectId,
                 runningRunName = runningRunName,
@@ -3399,16 +3569,38 @@ private fun JCodeShell(
                                     }
                                 }
                                 EditorPageKind.None -> if (tab.previewMode && tab.editorState != null) {
+                                    // "Preview" is per file type, not one renderer: an extension that
+                                    // ships native UI claiming this file (a layout designer for
+                                    // res/layout/*.xml) takes the toggle; everything else is Markdown.
+                                    val nativeOwner = installedExtensions.firstOrNull {
+                                        it.claimsNatively(tab.filePath)
+                                    }
                                     // Key by tab id so switching between two previewed files (same call
                                     // site) recreates the WebView instead of reusing the previous content.
                                     key(tab.id) {
-                                        MarkdownPreviewPage(
-                                            tab = tab,
-                                            dark = editorDark,
-                                            languagePacks = activeLanguageExtensions,
-                                            mermaidScript = mermaidScriptFile,
-                                            modifier = Modifier.fillMaxSize(),
-                                        )
+                                        if (nativeOwner != null) {
+                                            NativeExtensionPage(
+                                                extension = nativeOwner,
+                                                file = tab.filePath,
+                                                projectDir = selectedProject?.let { File(it.location) },
+                                                dark = editorDark,
+                                                onSnackbar = { message ->
+                                                    scope.launch { snackbarHostState.showSnackbar(message) }
+                                                },
+                                                onShowSource = { onToggleTabPreview(tab.id) },
+                                                readFile = onReadFileText,
+                                                writeFile = onReplaceFileText,
+                                                modifier = Modifier.fillMaxSize(),
+                                            )
+                                        } else {
+                                            MarkdownPreviewPage(
+                                                tab = tab,
+                                                dark = editorDark,
+                                                languagePacks = activeLanguageExtensions,
+                                                mermaidScript = mermaidScriptFile,
+                                                modifier = Modifier.fillMaxSize(),
+                                            )
+                                        }
                                     }
                                 } else {
                                     Unit
@@ -3457,7 +3649,7 @@ private fun JCodeShell(
                             onOpenProjectConfig = onOpenProjectConfig,
                             onOpenEnvironmentWizard = onOpenEnvironmentWizard,
                             onAutoSetup = onAutoSetup,
-                            managerActions = managerActions,
+                            managerActions = panelActions,
                             runActions = runActions,
                             runningProjectId = runningProjectId,
                             runningRunName = runningRunName,
@@ -3866,6 +4058,7 @@ private fun WorkspacePanel(
                         onOpenDebugDetail = managerActions.onOpenDebugEngineDetail,
                         modifier = Modifier.fillMaxSize(),
                         progress = LocalCatalogProgress.current,
+                        onShowIssues = managerActions.onShowIssues,
                     )
 
                     WorkbenchTool.DbManager -> DbManagerPanel(
@@ -3980,8 +4173,15 @@ private fun EditorWorkspace(
             } else {
                 val dbg = LocalDebugEditorState.current
                 val dbgSession = LocalDebugSession.current
+                // Ctrl and the wheel over the editor steps the global font size, the same setting
+                // the Settings screen and the pinch gesture already drive — one size, three ways to
+                // reach it, rather than a zoom that only the editor knows about.
+                val fontSizeSetting = LocalEditorFontSizeSetting.current
                 EditorPane(
                     group = editorGroup,
+                    onFontSizeStep = { step ->
+                        fontSizeSetting.onChange((fontSizeSetting.value + step).coerceIn(8f, 72f))
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
@@ -4316,11 +4516,12 @@ private fun WorkbenchRightSidebar(
                                 onClick = { onSelected(RightPanelSelection.Builtin(tab)) },
                             )
                         }
-                    // An imported .vsix gets a tab of its own, under its own name — a VS Code
-                    // extension exists to show a view, and this is where it belongs.
+                    // An imported .vsix gets a tab of its own, under the short name it declared for
+                    // its view container — a VS Code extension exists to show a view, and this is
+                    // where it belongs. See InstalledExtension.tabName for why not the display name.
                     vsixExtensions.forEach { ext ->
                         RightPanelTabItem(
-                            label = ext.name,
+                            label = ext.tabName,
                             icon = JCodeIcon.Extensions,
                             selected = selected == RightPanelSelection.Extension(ext.id),
                             onClick = { onSelected(RightPanelSelection.Extension(ext.id)) },

@@ -28,6 +28,9 @@ object SettingsDefaults {
     const val EDITOR_FONT_SIZE = 14f
     const val EDITOR_WORD_WRAP = false
     const val TERMINAL_FONT_SIZE = 13f
+
+    /** Percent, because an extension's text size is its own choice and this scales it. */
+    const val EXTENSION_FONT_SCALE = 100
     const val DEVELOPER_OPTIONS = false
 
     // Diagnostics is opt-in: nothing is recorded until the user turns it on to chase a problem.

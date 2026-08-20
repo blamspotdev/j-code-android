@@ -241,6 +241,15 @@ class EnvironmentBackupActions(
     val onRestore: () -> Unit = {},
     val onUpdatePackages: () -> Unit = {},
     val updatingPackages: Boolean = false,
+    /**
+     * Migration between two differently-packaged installs: [onExportMigration] writes this install's
+     * environment, projects, extensions and settings to shared storage, and [onImportMigration]
+     * takes over a bundle another install left there. [migrationSummary] describes that bundle when
+     * one is waiting, and is null when there is nothing to import.
+     */
+    val onExportMigration: () -> Unit = {},
+    val onImportMigration: () -> Unit = {},
+    val migrationSummary: String? = null,
 )
 
 val LocalEnvironmentBackup = compositionLocalOf { EnvironmentBackupActions() }

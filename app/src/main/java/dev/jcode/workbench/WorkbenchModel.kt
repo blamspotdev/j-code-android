@@ -204,6 +204,8 @@ internal data class WorkbenchManagerActions(
         { _, _ -> """{"ok":false,"error":"extension API unavailable"}""" },
     /** Host events pushed to the live extension WebView as `JCode._onEvent(name, json)`. */
     val extensionEvents: kotlinx.coroutines.flow.SharedFlow<Pair<String, String>>? = null,
+    /** Reveal the Issues pane — where a manager panel's failures are listed rather than bannered. */
+    val onShowIssues: () -> Unit = {},
 )
 
 internal enum class WorkbenchTool(

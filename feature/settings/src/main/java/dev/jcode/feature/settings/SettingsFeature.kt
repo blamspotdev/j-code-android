@@ -34,6 +34,8 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -41,6 +43,7 @@ import androidx.compose.material3.ScrollableTabRow
 import dev.jcode.design.AlertDialog
 import dev.jcode.design.CompactFilledButton
 import dev.jcode.design.CompactOutlinedButton
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
@@ -87,6 +90,7 @@ import dev.jcode.design.LocalFontSettings
 import dev.jcode.design.LocalEditorDragMovesCursor
 import dev.jcode.design.LocalDiagnosticsSetting
 import dev.jcode.design.LocalEditorFontSizeSetting
+import dev.jcode.design.LocalExtensionFontSizeSetting
 import dev.jcode.design.LocalTerminalFontSizeSetting
 import dev.jcode.design.LocalEditorWordWrapSetting
 import dev.jcode.design.LocalExtraKeysSetting
@@ -417,6 +421,24 @@ object SettingsFeature {
                     onIncrease = { terminalFontSizeSetting.onChange((terminalFontSizeSetting.value + 1f).coerceAtMost(40f)) },
                     modified = terminalFontSizeSetting.value != SettingsDefaults.TERMINAL_FONT_SIZE,
                     onReset = { terminalFontSizeSetting.onChange(SettingsDefaults.TERMINAL_FONT_SIZE) },
+                )
+            }
+
+            SettingsCard(
+                title = "Extensions",
+                description = "Text size inside imported .vsix extensions. A scale rather than a " +
+                    "size, because each extension styles its own page.",
+                keywords = "extension extensions vsix font size text scale zoom bigger smaller " +
+                    "readable webview marketplace imported",
+            ) {
+                val extensionFontSize = LocalExtensionFontSizeSetting.current
+                StepperRow(
+                    label = "Font size",
+                    value = "${extensionFontSize.percent}%",
+                    onDecrease = { extensionFontSize.onChange((extensionFontSize.percent - 10).coerceAtLeast(50)) },
+                    onIncrease = { extensionFontSize.onChange((extensionFontSize.percent + 10).coerceAtMost(300)) },
+                    modified = extensionFontSize.percent != SettingsDefaults.EXTENSION_FONT_SCALE,
+                    onReset = { extensionFontSize.onChange(SettingsDefaults.EXTENSION_FONT_SCALE) },
                 )
             }
 
@@ -904,6 +926,17 @@ object SettingsFeature {
                     CompactFilledButton(text = "Manage environments", onClick = onOpenEnvironmentWizard)
                     CompactOutlinedButton(text = "Refresh checks", onClick = onRefreshEnvironment)
                 }
+                LocalEnvironmentBackup.current.migrationSummary?.let { summary ->
+                    Text(
+                        text = summary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    CompactFilledButton(
+                        text = "Import from previous install",
+                        onClick = LocalEnvironmentBackup.current.onImportMigration,
+                    )
+                }
                 if (environmentState.distroInstalled == true) {
                     val envBackup = LocalEnvironmentBackup.current
                     Text(
@@ -916,6 +949,20 @@ object SettingsFeature {
                         CompactFilledButton(text = "Back up (.tar.gz)", onClick = envBackup.onBackup)
                         CompactOutlinedButton(text = "Restore…", onClick = envBackup.onRestore)
                     }
+                    // Moving to an install with a different package name. Android gives that install
+                    // its own data directory and no way to read this one's, so everything has to go
+                    // out through shared storage first — see MigrationBundle.
+                    Text(
+                        text = "Moving to a differently-named build? Write the environment, projects, " +
+                            "extensions and settings to the shared JCode folder, then import them " +
+                            "from the new install.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    CompactOutlinedButton(
+                        text = "Export for migration",
+                        onClick = envBackup.onExportMigration,
+                    )
                     Text(
                         text = "Refresh package lists and upgrade installed packages " +
                             "(apt-get update && upgrade). Runs in the Setup terminal — can be slow and use data.",
@@ -2164,8 +2211,59 @@ private fun StepperRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            CompactOutlinedButton(text = "-", onClick = onDecrease)
-            CompactFilledButton(text = "+", onClick = onIncrease)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                StepperButton(JCodeIcon.Minus, "Decrease $label", filled = false, onClick = onDecrease)
+                StepperButton(JCodeIcon.Add, "Increase $label", filled = true, onClick = onIncrease)
+            }
+        }
+    }
+}
+
+/**
+ * One half of a stepper.
+ *
+ * An icon rather than a typed "-" and "+", which are a hyphen and a plus sign set at text size:
+ * different weights, different widths, and sitting on a text baseline inside a button that holds no
+ * text. Two glyphs meant to be a matched pair looked like neither.
+ *
+ * Round, because that is the shape of a button holding one glyph and nothing else: a pill is a shape
+ * that expects a word in it, and reads as a button whose label failed to load. The emphasis pairing
+ * stays — outlined to step down, tonal to step up, as elsewhere on the page.
+ *
+ * They are also the only controls on this page a screen reader could not name: "-" reads as a
+ * hyphen and says nothing about what it steps. Each now says which setting it moves.
+ */
+@Composable
+private fun StepperButton(
+    icon: JCodeIcon,
+    contentDescription: String,
+    filled: Boolean,
+    onClick: () -> Unit,
+) {
+    // Sized down from the 40dp default, and the interactive minimum relaxed with it. That minimum
+    // is there for good reason and is not worth keeping here: it pads each button out to 48dp of
+    // layout, which is most of the gap between the two, and a settings row is not a place anyone
+    // taps in a hurry.
+    val sizing = Modifier.size(34.dp)
+    val glyph: @Composable () -> Unit = {
+        Icon(jcIcon(icon), contentDescription, modifier = Modifier.size(17.dp))
+    }
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+        if (filled) {
+            FilledTonalIconButton(onClick = onClick, modifier = sizing) { glyph() }
+        } else {
+            OutlinedIconButton(
+                onClick = onClick,
+                modifier = sizing,
+                // Stated rather than defaulted. An outlined icon button draws its border from the
+                // content colour, which in a dark theme is near-white and shouts across a page of
+                // quiet rows. `outline` is what every switch on this page already draws its own
+                // border with, and these sit in the same column as those switches.
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            ) { glyph() }
         }
     }
 }

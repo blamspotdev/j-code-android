@@ -78,6 +78,7 @@ fun SettingsDropdownRow(
                         .clip(RoundedCornerShape(8.dp))
                         .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
                         .clickable { open = true }
+                        .handCursor()
                         .padding(horizontal = 12.dp, vertical = 8.dp)
                         .widthIn(min = 72.dp),
                     verticalAlignment = Alignment.CenterVertically,
