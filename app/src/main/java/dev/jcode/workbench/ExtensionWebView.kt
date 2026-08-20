@@ -46,6 +46,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.jcode.design.JCodeTheme
+import dev.jcode.design.LocalExtensionFontSizeSetting
+import dev.jcode.design.SettingsDefaults
 import dev.jcode.feature.marketplace.InstalledExtension
 import dev.jcode.feature.marketplace.tabName
 import dev.jcode.feature.marketplace.VsixCommand
@@ -517,6 +519,13 @@ internal class VsixSession private constructor(
      */
     internal var themeRampCss: String = ""
 
+    /**
+     * How large the extension draws its own text, as a percentage. Kept for the same reason as
+     * [themeRampCss] — surfaces come and go at the extension's whim, and one opened later has to
+     * start at the size the others are already at.
+     */
+    internal var textZoomPercent: Int = SettingsDefaults.EXTENSION_FONT_SCALE
+
     /** One webview the extension has open, mounted wherever it belongs. */
     inner class Surface(val handle: String, val webView: WebView) {
         var hasPage by mutableStateOf(false)
@@ -771,6 +780,15 @@ internal class VsixSession private constructor(
      * extension on screen should recolour it, and its page is built by the extension — reloading to
      * repaint would throw away whatever the user was in the middle of.
      */
+    fun applyTextZoom(percent: Int) {
+        if (percent == textZoomPercent) return
+        textZoomPercent = percent
+        // Every page already open, not just the next one. An extension's page is built by the
+        // extension, so reloading it to resize would throw away whatever the user was in the middle
+        // of — the same bargain [applyTheme] makes below.
+        surfaces.values.forEach { it.webView.settings.textZoom = percent }
+    }
+
     fun applyTheme(rampCss: String, backgroundArgb: Int, dark: Boolean) {
         if (rampCss == themeRampCss) return
         themeRampCss = rampCss
@@ -817,7 +835,13 @@ internal class VsixSession private constructor(
 
     /** The surface for [handle], creating its WebView on first use. Main thread only. */
     private fun surfaceFor(handle: String): Surface = surfaces.getOrPut(handle) {
-        Surface(handle, newWebView(context, extension, backgroundArgb, handle, ::onPageMessage, ::onPageLoaded))
+        Surface(
+            handle,
+            newWebView(
+                context, extension, backgroundArgb, textZoomPercent, handle,
+                ::onPageMessage, ::onPageLoaded,
+            ),
+        )
     }
 
     private fun closeSurface(handle: String) {
@@ -921,6 +945,7 @@ internal class VsixSession private constructor(
             backgroundArgb: Int,
             isDarkTheme: Boolean,
             themeRampCss: String,
+            textZoomPercent: Int,
             onOpenPanel: (handle: String, title: String) -> Unit,
         ): VsixSession {
             val appContext = context.applicationContext
@@ -939,7 +964,10 @@ internal class VsixSession private constructor(
                 context = appContext,
                 backgroundArgb = backgroundArgb,
                 onOpenPanel = onOpenPanel,
-            ).also { it.themeRampCss = themeRampCss }
+            ).also {
+                it.themeRampCss = themeRampCss
+                it.textZoomPercent = textZoomPercent
+            }
             scope.launch { session.start(apiRequest, isDarkTheme) }
             return session
         }
@@ -954,6 +982,7 @@ internal class VsixSession private constructor(
             context: Context,
             extension: InstalledExtension,
             backgroundArgb: Int,
+            textZoomPercent: Int,
             handle: String,
             onPageMessage: (handle: String, payload: String) -> Unit,
             onPageLoaded: (handle: String) -> Unit,
@@ -961,6 +990,9 @@ internal class VsixSession private constructor(
             setBackgroundColor(backgroundArgb)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            // Text only, so a layout built on fixed-size boxes still holds together, and so it works
+            // on a stylesheet this app has never seen — which is every extension's.
+            settings.textZoom = textZoomPercent
             @Suppress("DEPRECATION")
             settings.allowFileAccess = true
             // Honour the viewport meta the bootstrap injects, which declares an explicit
@@ -1059,6 +1091,7 @@ internal object VsixViewHolder {
         backgroundArgb: Int,
         isDarkTheme: Boolean,
         themeRampCss: String,
+        textZoomPercent: Int,
         onOpenPanel: (handle: String, title: String) -> Unit,
     ): VsixSession {
         sessions[extension.id]?.let { existing ->
@@ -1076,6 +1109,7 @@ internal object VsixViewHolder {
             backgroundArgb = backgroundArgb,
             isDarkTheme = isDarkTheme,
             themeRampCss = themeRampCss,
+            textZoomPercent = textZoomPercent,
             onOpenPanel = onOpenPanel,
         ).also { sessions[extension.id] = it }
     }
@@ -1103,6 +1137,9 @@ internal fun VsixExtensionView(
     val backgroundArgb = colorScheme.background.toArgb()
     val isDarkTheme = colorScheme.background.luminance() < 0.5f
     val themeRampCss = remember(colorScheme, semantic) { vsixThemeRampCss(colorScheme, semantic) }
+    // Deliberately not a key of the `remember` below: changing the text size should resize the
+    // extension, not restart it and lose whatever it was doing.
+    val extensionFontScale = LocalExtensionFontSizeSetting.current.percent
     val session = remember(extension.id, extension.version) {
         VsixViewHolder.getOrStart(
             context = context,
@@ -1112,6 +1149,7 @@ internal fun VsixExtensionView(
             backgroundArgb = backgroundArgb,
             isDarkTheme = isDarkTheme,
             themeRampCss = themeRampCss,
+            textZoomPercent = extensionFontScale,
             onOpenPanel = onOpenPanel,
         )
     }
@@ -1120,6 +1158,7 @@ internal fun VsixExtensionView(
     LaunchedEffect(session, themeRampCss, backgroundArgb, isDarkTheme) {
         session.applyTheme(themeRampCss, backgroundArgb, isDarkTheme)
     }
+    LaunchedEffect(session, extensionFontScale) { session.applyTextZoom(extensionFontScale) }
 
     session.failure?.let {
         ExtensionNotice(it, modifier)

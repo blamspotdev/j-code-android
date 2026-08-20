@@ -208,6 +208,8 @@ import dev.jcode.core.diag.DiagnosticLog
 import dev.jcode.design.DiagnosticsSetting
 import dev.jcode.design.LocalDiagnosticsSetting
 import dev.jcode.design.LocalEditorFontSizeSetting
+import dev.jcode.design.ExtensionFontSizeSetting
+import dev.jcode.design.LocalExtensionFontSizeSetting
 import dev.jcode.design.LocalTerminalFontSizeSetting
 import dev.jcode.design.TerminalFontSizeSetting
 import dev.jcode.design.LocalEditorWordWrapSetting
@@ -654,6 +656,10 @@ fun JCodeApp(
     val terminalFontSizeGlobal by viewModel.terminalFontSizeGlobal.collectAsStateWithLifecycle()
     val terminalFontSizeSetting = remember(terminalFontSizeGlobal) {
         TerminalFontSizeSetting(value = terminalFontSizeGlobal, onChange = viewModel::setTerminalFontSizeGlobal)
+    }
+    val extensionFontScale by viewModel.extensionFontScale.collectAsStateWithLifecycle()
+    val extensionFontSizeSetting = remember(extensionFontScale) {
+        ExtensionFontSizeSetting(percent = extensionFontScale, onChange = viewModel::setExtensionFontScale)
     }
     val pendingReloadList by viewModel.pendingReload.collectAsStateWithLifecycle()
     val pendingReloadUi = remember(pendingReloadList) {
@@ -1578,6 +1584,7 @@ fun JCodeApp(
         LocalEditorFontSizeSetting provides editorFontSizeSetting,
         LocalEditorWordWrapSetting provides editorWordWrapSetting,
         LocalTerminalFontSizeSetting provides terminalFontSizeSetting,
+        LocalExtensionFontSizeSetting provides extensionFontSizeSetting,
         LocalDiagnosticsSetting provides diagnosticsSetting,
         LocalDeveloperSetting provides developerSetting,
         LocalRightDrawerSetting provides rightDrawerSetting,

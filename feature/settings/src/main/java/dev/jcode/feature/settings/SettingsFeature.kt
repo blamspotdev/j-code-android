@@ -87,6 +87,7 @@ import dev.jcode.design.LocalFontSettings
 import dev.jcode.design.LocalEditorDragMovesCursor
 import dev.jcode.design.LocalDiagnosticsSetting
 import dev.jcode.design.LocalEditorFontSizeSetting
+import dev.jcode.design.LocalExtensionFontSizeSetting
 import dev.jcode.design.LocalTerminalFontSizeSetting
 import dev.jcode.design.LocalEditorWordWrapSetting
 import dev.jcode.design.LocalExtraKeysSetting
@@ -417,6 +418,24 @@ object SettingsFeature {
                     onIncrease = { terminalFontSizeSetting.onChange((terminalFontSizeSetting.value + 1f).coerceAtMost(40f)) },
                     modified = terminalFontSizeSetting.value != SettingsDefaults.TERMINAL_FONT_SIZE,
                     onReset = { terminalFontSizeSetting.onChange(SettingsDefaults.TERMINAL_FONT_SIZE) },
+                )
+            }
+
+            SettingsCard(
+                title = "Extensions",
+                description = "Text size inside imported .vsix extensions. A scale rather than a " +
+                    "size, because each extension styles its own page.",
+                keywords = "extension extensions vsix font size text scale zoom bigger smaller " +
+                    "readable webview marketplace imported",
+            ) {
+                val extensionFontSize = LocalExtensionFontSizeSetting.current
+                StepperRow(
+                    label = "Font size",
+                    value = "${extensionFontSize.percent}%",
+                    onDecrease = { extensionFontSize.onChange((extensionFontSize.percent - 10).coerceAtLeast(50)) },
+                    onIncrease = { extensionFontSize.onChange((extensionFontSize.percent + 10).coerceAtMost(300)) },
+                    modified = extensionFontSize.percent != SettingsDefaults.EXTENSION_FONT_SCALE,
+                    onReset = { extensionFontSize.onChange(SettingsDefaults.EXTENSION_FONT_SCALE) },
                 )
             }
 

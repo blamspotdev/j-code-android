@@ -1855,6 +1855,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Text scale for imported .vsix extension webviews, as a percentage. See
+     *  [dev.jcode.design.ExtensionFontSizeSetting] for why this is a scale and not a size. */
+    private val extensionFontScaleKey = intPreferencesKey("extension_font_scale")
+    val extensionFontScale: StateFlow<Int> = uiPreferences.data
+        .map { prefs -> (prefs[extensionFontScaleKey] ?: SettingsDefaults.EXTENSION_FONT_SCALE).coerceIn(50, 300) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.EXTENSION_FONT_SCALE)
+
+    fun setExtensionFontScale(percent: Int) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[extensionFontScaleKey] = percent.coerceIn(50, 300) }
+        }
+    }
+
     private val terminalFontSizeGlobalKey = floatPreferencesKey("terminal_font_size_global")
 
     /** App-level (Global settings) terminal font size, in sp. Unlike the editor's, this has no
