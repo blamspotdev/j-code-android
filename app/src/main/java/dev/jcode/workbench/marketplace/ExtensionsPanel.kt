@@ -51,6 +51,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.jcode.design.JCodeIcon
 import dev.jcode.design.jcIcon
+import dev.jcode.design.ExtensionSettingsUi
 import dev.jcode.design.LocalExtensionSettingsUi
 import dev.jcode.design.ManagerDetailScreen
 import dev.jcode.design.ManagerItemStatus
@@ -593,12 +594,34 @@ internal fun ExtensionDetailPage(
  * activation mode, API-capability grants, and keep-alive. Replaces the per-extension section that used
  * to live in App Settings.
  */
+/**
+ * Whether this extension puts anything on the settings page.
+ *
+ * Four things can appear under one: settings it declared in its manifest, an activation mode where
+ * its kind is allowed one, its Extension-API capabilities, and — for anything with a web frontend —
+ * whether that frontend keeps running in the background. Most Dev Packs have none of them.
+ *
+ * Read by the page to decide whether to list the extension and by the card to decide whether to
+ * expand, which have to agree: a card listed and unopenable is as odd as a card that opens onto
+ * nothing.
+ */
+private fun InstalledExtension.hasSettings(ui: ExtensionSettingsUi): Boolean =
+    ui.groups.firstOrNull { it.extensionId == id }?.specs?.isNotEmpty() == true ||
+        type.choosesActivation ||
+        apiCapabilities.isNotEmpty() ||
+        hasWebUi
+
 @Composable
 internal fun ExtensionPermissionsPage(
     installed: List<InstalledExtension>,
     onOpenConfig: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    // Only the extensions with something to change. A Dev Pack that contributes nothing but
+    // highlighting has no decisions to offer, and a page of cards that do nothing when you touch
+    // them makes the ones that do harder to find.
+    val ui = LocalExtensionSettingsUi.current
+    val configurable = installed.filter { it.hasSettings(ui) }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -615,13 +638,13 @@ internal fun ExtensionPermissionsPage(
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
-            if (installed.isNotEmpty()) {
+            if (configurable.isNotEmpty()) {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                     shape = RoundedCornerShape(20.dp),
                 ) {
                     Text(
-                        text = "${installed.size} installed",
+                        text = "${configurable.size} with settings",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 9.dp, vertical = 2.dp),
@@ -629,14 +652,20 @@ internal fun ExtensionPermissionsPage(
                 }
             }
         }
-        if (installed.isEmpty()) {
+        if (configurable.isEmpty()) {
             Text(
-                text = "No extensions installed yet.",
+                // Two different nothings, and telling them apart is the whole value of the line:
+                // one means install something, the other means there is nothing to do here.
+                text = if (installed.isEmpty()) {
+                    "No extensions installed yet."
+                } else {
+                    "None of your ${installed.size} extensions has anything to configure."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            val byType = installed.groupBy { it.type }
+            val byType = configurable.groupBy { it.type }
             EXTENSION_TYPE_ORDER.forEach { type ->
                 val exts = byType[type]?.sortedBy { it.name.lowercase() }.orEmpty()
                 if (exts.isEmpty()) return@forEach
@@ -649,13 +678,11 @@ internal fun ExtensionPermissionsPage(
 
 /**
  * One extension on the Extension Settings page: a defined card with its icon, name and a metadata
- * line (description · version · VSIX), expanding to whatever that extension actually lets you
- * decide — its own declared settings, its permissions, and, where the kind of extension permits a
- * choice, when it activates.
+ * line (description · version · VSIX), expanding to whatever that extension lets you decide — its
+ * own declared settings, its permissions, and, where its kind permits a choice, when it activates.
  *
- * For some extensions that comes to nothing. A Dev Pack with no declared settings has no decisions
- * to offer at all, so it does not expand: a chevron promising a panel that opens onto a divider and
- * blank space reads as something failing to load.
+ * Always expands to something, because the page lists no extension for which it would not: see
+ * [hasSettings].
  */
 @Composable
 private fun ExtensionSettingsCard(
@@ -664,14 +691,6 @@ private fun ExtensionSettingsCard(
 ) {
     var expanded by rememberSaveable("ext-settings-${ext.id}") { mutableStateOf(false) }
     val mode = LocalExtensionActivation.current.modeFor(ext.id)
-    val declaredSettings = LocalExtensionSettingsUi.current.groups
-        .firstOrNull { it.extensionId == ext.id }?.specs.orEmpty()
-    // Every row the expanded half can hold. Kept beside the rows themselves, because the two
-    // disagreeing is precisely the bug: a card that opens onto nothing, or one that hides something.
-    val hasDetails = declaredSettings.isNotEmpty() ||
-        ext.type.choosesActivation ||
-        ext.apiCapabilities.isNotEmpty() ||
-        ext.hasWebUi
     val subtitle = remember(ext) {
         buildList {
             ext.description.takeIf { it.isNotBlank() }?.let { add(it) }
@@ -689,8 +708,7 @@ private fun ExtensionSettingsCard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth()
-                    .then(if (hasDetails) Modifier.clickable { expanded = !expanded } else Modifier),
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(11.dp),
             ) {
@@ -714,16 +732,14 @@ private fun ExtensionSettingsCard(
                     }
                 }
                 if (ext.type.choosesActivation) ActivationPill(mode)
-                if (hasDetails) {
-                    Icon(
-                        imageVector = jcIcon(if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown),
-                        contentDescription = if (expanded) "Collapse ${ext.name}" else "Expand ${ext.name}",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
+                Icon(
+                    imageVector = jcIcon(if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown),
+                    contentDescription = if (expanded) "Collapse ${ext.name}" else "Expand ${ext.name}",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
             }
-            AnimatedVisibility(visible = expanded && hasDetails) {
+            AnimatedVisibility(visible = expanded) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                     ExtensionSettingsControls(extensionId = ext.id)
