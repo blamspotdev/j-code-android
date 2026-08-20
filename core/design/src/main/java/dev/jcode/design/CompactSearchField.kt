@@ -90,7 +90,8 @@ fun CompactSearchField(
                     contentDescription = "Clear search",
                     modifier = Modifier
                         .size(18.dp)
-                        .clickable { onQueryChange("") },
+                        .clickable { onQueryChange("") }
+                        .handCursor(),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }

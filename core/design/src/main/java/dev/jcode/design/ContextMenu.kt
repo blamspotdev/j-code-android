@@ -92,7 +92,9 @@ fun CompactContextMenu(
                 modifier = Modifier
                     .fillMaxWidth()
                     .then(
-                        if (action.enabled) Modifier.clickable { onDismissRequest(); action.onClick() }
+                        if (action.enabled) {
+                            Modifier.clickable { onDismissRequest(); action.onClick() }.handCursor()
+                        }
                         else Modifier
                     )
                     .padding(horizontal = 12.dp, vertical = 8.dp),

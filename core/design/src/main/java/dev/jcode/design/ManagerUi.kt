@@ -230,7 +230,8 @@ fun ManagerFilterChip(
         },
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick),
+            .clickable(onClick = onClick)
+            .handCursor(),
     ) {
         Text(
             text = label,
@@ -307,6 +308,7 @@ fun ManagerListRow(
         modifier = modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
+            .handCursor()
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -759,6 +761,7 @@ private fun VersionDropdown(
             Row(
                 modifier = Modifier
                     .clickable(enabled = enabled && !loading && versions.isNotEmpty()) { expanded = true }
+                    .handCursor()
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),

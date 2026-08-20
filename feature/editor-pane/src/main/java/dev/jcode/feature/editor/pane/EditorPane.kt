@@ -106,6 +106,8 @@ fun EditorPane(
     stoppedLineFor: (EditorTab) -> Int? = { null },
     onToggleBreakpoint: (EditorTab, Int) -> Unit = { _, _ -> },
     evaluateInDebugFrame: ((String, (String?) -> Unit) -> Unit)? = null,
+    /** Ctrl and the wheel over the editor: +1 a step bigger, -1 smaller. */
+    onFontSizeStep: ((Int) -> Unit)? = null,
     pageContent: @Composable (EditorTab) -> Unit = {},
 ) {
     Column(modifier = modifier.clipToBounds()) {
@@ -146,6 +148,7 @@ fun EditorPane(
                         stoppedLine = stoppedLineFor(activeTab),
                         onToggleBreakpoint = { line -> onToggleBreakpoint(activeTab, line) },
                         evaluateInDebugFrame = evaluateInDebugFrame,
+                        onFontSizeStep = onFontSizeStep,
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
@@ -363,6 +366,8 @@ fun EditorViewHost(
     stoppedLine: Int? = null,
     onToggleBreakpoint: (Int) -> Unit = {},
     evaluateInDebugFrame: ((String, (String?) -> Unit) -> Unit)? = null,
+    /** Ctrl and the wheel: +1 a step bigger, -1 smaller. Null leaves the editor un-zoomable. */
+    onFontSizeStep: ((Int) -> Unit)? = null,
 ) {
     val density = LocalDensity.current
     var view by remember { mutableStateOf<EditorView?>(null) }
@@ -452,6 +457,7 @@ fun EditorViewHost(
         AndroidView(
             factory = { context ->
                 EditorView(context).apply {
+                    this.onFontSizeStep = onFontSizeStep
                     setEditorTypeface(editorTypeface)
                     attach(editorState)
                     onContextRequest = { menu = it }

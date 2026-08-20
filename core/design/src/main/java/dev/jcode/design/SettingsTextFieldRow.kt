@@ -66,6 +66,7 @@ fun SettingsTextFieldRow(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .textCursor()
                     .heightIn(min = if (singleLine) 40.dp else 96.dp)
                     .padding(horizontal = 10.dp, vertical = if (singleLine) 0.dp else 8.dp),
                 contentAlignment = if (singleLine) Alignment.CenterStart else Alignment.TopStart,

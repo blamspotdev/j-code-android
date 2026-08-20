@@ -4148,8 +4148,15 @@ private fun EditorWorkspace(
             } else {
                 val dbg = LocalDebugEditorState.current
                 val dbgSession = LocalDebugSession.current
+                // Ctrl and the wheel over the editor steps the global font size, the same setting
+                // the Settings screen and the pinch gesture already drive — one size, three ways to
+                // reach it, rather than a zoom that only the editor knows about.
+                val fontSizeSetting = LocalEditorFontSizeSetting.current
                 EditorPane(
                     group = editorGroup,
+                    onFontSizeStep = { step ->
+                        fontSizeSetting.onChange((fontSizeSetting.value + step).coerceIn(8f, 72f))
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
