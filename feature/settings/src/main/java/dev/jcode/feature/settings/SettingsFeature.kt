@@ -2255,7 +2255,15 @@ private fun StepperButton(
         if (filled) {
             FilledTonalIconButton(onClick = onClick, modifier = sizing) { glyph() }
         } else {
-            OutlinedIconButton(onClick = onClick, modifier = sizing) { glyph() }
+            OutlinedIconButton(
+                onClick = onClick,
+                modifier = sizing,
+                // Stated rather than defaulted. An outlined icon button draws its border from the
+                // content colour, which in a dark theme is near-white and shouts across a page of
+                // quiet rows. `outline` is what every switch on this page already draws its own
+                // border with, and these sit in the same column as those switches.
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            ) { glyph() }
         }
     }
 }
