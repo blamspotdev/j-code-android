@@ -305,7 +305,13 @@ class DebugSession(
                 scope.launch { runCatching { _threads.value = threadsNow() } }
             }
             "continued" -> { _stopped.value = null; _state.value = DebugState.RUNNING }
-            "output" -> onOutput?.invoke(body.optString("category", "console"), body.optString("output", ""))
+            "output" -> {
+                // "telemetry" is adapter analytics, not program output — js-debug emits a stream of
+                // js-debug/dap/operation and js-debug/cdp/operation events that otherwise bury the
+                // debuggee's own console in the Debug panel. VS Code doesn't show these either.
+                val category = body.optString("category", "console")
+                if (category != "telemetry") onOutput?.invoke(category, body.optString("output", ""))
+            }
             "terminated", "exited" -> { _state.value = DebugState.TERMINATED; onTerminated?.invoke() }
             "thread" -> scope.launch { runCatching { _threads.value = threadsNow() } }
         }

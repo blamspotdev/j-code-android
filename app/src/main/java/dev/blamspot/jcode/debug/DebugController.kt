@@ -33,8 +33,16 @@ data class VariableRow(val name: String, val value: String, val type: String?, v
  */
 class DebugController(
     private val distroService: DistroService,
-    private val scope: CoroutineScope,
+    parentScope: CoroutineScope,
 ) {
+    // Every DAP request writes to the adapter's transport, and for a TCP adapter (js-debug) that is a
+    // socket write — illegal on Android's main thread. The caller passes viewModelScope, which is
+    // Dispatchers.Main, so requests raised from here (stackTrace/scopes/variables after a `stopped`
+    // event, step/continue) threw NetworkOnMainThreadException inside the transport's catch-all and
+    // were silently dropped: js-debug paused correctly but the call stack and variables stayed empty.
+    // Keep the caller's lifecycle (cancellation still cascades) but do the work off the main thread.
+    private val scope = CoroutineScope(parentScope.coroutineContext + Dispatchers.IO)
+
     private var session: DebugSession? = null
     /** The session that owns the current stopped thread (root, or a js-debug child) — step/continue target. */
     private var activeSession: DebugSession? = null
@@ -727,7 +735,13 @@ private class ProcessTransport(private val process: Process) : DapTransport {
 
     override fun read(buffer: ByteArray): Int = try { input.read(buffer) } catch (e: Exception) { -1 }
     override fun write(bytes: ByteArray) {
-        try { output.write(bytes); output.flush() } catch (_: Exception) {}
+        // Never swallow silently: a dropped write looks exactly like an adapter that stopped
+        // answering, and the request then just times out 30s later with no clue why.
+        try {
+            output.write(bytes); output.flush()
+        } catch (e: Exception) {
+            android.util.Log.w("JCodeDAP-adapter", "DAP write failed", e)
+        }
     }
     override fun close() {
         runCatching { process.destroy() }
@@ -752,7 +766,13 @@ private class TcpTransport private constructor(
 
     override fun read(buffer: ByteArray): Int = try { input.read(buffer) } catch (e: Exception) { -1 }
     override fun write(bytes: ByteArray) {
-        try { output.write(bytes); output.flush() } catch (_: Exception) {}
+        // Never swallow silently: a dropped write looks exactly like an adapter that stopped
+        // answering, and the request then just times out 30s later with no clue why.
+        try {
+            output.write(bytes); output.flush()
+        } catch (e: Exception) {
+            android.util.Log.w("JCodeDAP-adapter", "DAP write failed", e)
+        }
     }
     override fun close() {
         runCatching { socket.close() }
@@ -780,6 +800,7 @@ private class TcpTransport private constructor(
             drain(process.inputStream, "out")
             drain(process.errorStream, "err")
             val deadline = System.currentTimeMillis() + timeoutMs
+            var lastConnectError: Throwable? = null
             while (System.currentTimeMillis() < deadline) {
                 if (!process.isAlive) {
                     val code = runCatching { process.exitValue() }.getOrNull()
@@ -790,15 +811,18 @@ private class TcpTransport private constructor(
                     )
                     return null
                 }
-                val sock = runCatching {
+                val attempt = runCatching {
                     java.net.Socket().apply { connect(java.net.InetSocketAddress(host, port), 1000) }
-                }.getOrNull()
-                if (sock != null) return TcpTransport(sock, process)
+                }
+                attempt.getOrNull()?.let { return TcpTransport(it, process) }
+                lastConnectError = attempt.exceptionOrNull()
                 Thread.sleep(200)
             }
+            val reason = lastConnectError?.let { "${it::class.java.simpleName}: ${it.message}" } ?: "none"
             android.util.Log.e(
                 "JCodeDAP-adapter",
-                "adapter never became reachable on $host:$port within ${timeoutMs}ms; output:\n" +
+                "adapter never became reachable on $host:$port within ${timeoutMs}ms " +
+                    "(last connect error: $reason); output:\n" +
                     tail.joinToString("\n"),
             )
             // Best-effort teardown of the still-running adapter. NOTE: a TCP adapter that we never
@@ -823,7 +847,13 @@ private class SocketTransport private constructor(private val socket: java.net.S
 
     override fun read(buffer: ByteArray): Int = try { input.read(buffer) } catch (e: Exception) { -1 }
     override fun write(bytes: ByteArray) {
-        try { output.write(bytes); output.flush() } catch (_: Exception) {}
+        // Never swallow silently: a dropped write looks exactly like an adapter that stopped
+        // answering, and the request then just times out 30s later with no clue why.
+        try {
+            output.write(bytes); output.flush()
+        } catch (e: Exception) {
+            android.util.Log.w("JCodeDAP-adapter", "DAP write failed", e)
+        }
     }
     override fun close() {
         runCatching { socket.close() }
