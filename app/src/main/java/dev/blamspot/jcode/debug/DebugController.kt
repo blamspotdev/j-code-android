@@ -164,19 +164,65 @@ class DebugController(
         }
     }
 
+    /**
+     * The `site-packages` of the virtualenv a Run config built for this project, or null when there
+     * is none yet.
+     *
+     * A project's dependencies are almost never importable from the system interpreter: `/workspace`
+     * is a noexec FUSE mount, so a venv cannot live beside the source and every run recipe stages to
+     * `$HOME/.jcode-run/<name>…` on ext4 and builds the venv *there* (see `ProjectRunner`). Debugging
+     * against the bare system interpreter therefore ran the right file in the wrong environment and
+     * died on the first third-party import — `ModuleNotFoundError: No module named 'flask'` on a
+     * project whose Run worked seconds earlier.
+     *
+     * This returns the package directory rather than the venv's `bin/python` because the venv is
+     * built without system site-packages and so has no `debugpy` of its own; handing debugpy that
+     * interpreter makes the debuggee die with "No module named debugpy" and the session times out
+     * waiting for it. Keeping the system interpreter (which has debugpy) and putting these packages
+     * on `PYTHONPATH` gives both halves. The venv is created by that same `python3`, so the ABI
+     * matches. The glob covers the per-terminal suffixes recipes append (`-web`, `-server`, …).
+     */
+    private suspend fun stagedVenvSitePackages(distroProjectDir: String): String? {
+        val name = distroProjectDir.trimEnd('/').substringAfterLast('/')
+        if (name.isBlank()) return null
+        val result = runCatching {
+            distroService.exec(
+                // Both homes explicitly, as root: `exec` defaults to the `jcode` user but run
+                // terminals are root, so a venv a Run built sits in /root/.jcode-run — which is
+                // mode 700 and unreadable as `jcode`. This only ever lists paths.
+                command = "ls -d /root/.jcode-run/$name*/.venv/lib/python*/site-packages " +
+                    "/home/*/.jcode-run/$name*/.venv/lib/python*/site-packages 2>/dev/null | head -1",
+                workdir = distroProjectDir,
+                timeoutMs = 10_000L,
+                user = "root",
+            )
+        }.getOrNull() ?: return null
+        return result.stdout.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }
+    }
+
     /** Per-language launch preparation: interpreted langs run the source directly; compiled/served
      *  langs need a build or a TCP adapter. Runs off the main thread (a .NET build blocks). */
     private suspend fun prepareLaunch(engine: DebugEngineEntry, hostPath: String, projectDir: String): LaunchPlan {
         val distroCwd = hostToDistro(projectDir)
         return when (engine.debugType) {
-            "python" -> LaunchPlan(
-                distroCwd = distroCwd,
-                config = baseConfig("python", distroCwd).apply {
-                    put("program", hostToDistro(hostPath)); put("justMyCode", false); put("redirectOutput", true)
-                },
-                adapterCommand = engine.adapterCommand,
-                tcpPort = null,
-            )
+            "python" -> {
+                // Debug the project against the dependencies Run installed for it, or every
+                // third-party import fails here. See [stagedVenvSitePackages].
+                val venvPackages = stagedVenvSitePackages(distroCwd)
+                LaunchPlan(
+                    distroCwd = distroCwd,
+                    config = baseConfig("python", distroCwd).apply {
+                        put("program", hostToDistro(hostPath)); put("justMyCode", false); put("redirectOutput", true)
+                        venvPackages?.let { put("env", JSONObject().put("PYTHONPATH", it)) }
+                    },
+                    adapterCommand = engine.adapterCommand,
+                    tcpPort = null,
+                    // Those packages sit in the run user's home, which is mode 700, so the debuggee
+                    // has to be that user to read them at all. Run already executes the app as root,
+                    // so this is parity with Run rather than a new privilege.
+                    user = if (venvPackages != null) "root" else null,
+                )
+            }
             "coreclr" -> prepareDotnet(engine, hostPath, projectDir)
             "java" -> prepareJvm(engine, hostPath, projectDir)
             "pwa-node" -> {
