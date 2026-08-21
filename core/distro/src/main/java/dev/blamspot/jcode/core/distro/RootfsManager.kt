@@ -196,6 +196,14 @@ class RootfsManager(
                         is DownloadProgress.Completed -> {
                             result = true
                             android.util.Log.d("RootfsManager", "downloadDirect: completed, size=${progress.bytesDownloaded}")
+                            // Say it out loud. This archive is about to be extracted and its binaries
+                            // run under proot, so whether anything vouched for it belongs in the log
+                            // the user is already watching — not buried behind a blank hash field.
+                            onProgress?.invoke(
+                                null,
+                                if (progress.verified) "checksum verified (sha256 ${progress.sha256.take(12)}…)"
+                                else "downloaded WITHOUT a checksum — the manifest carried none (sha256 ${progress.sha256.take(12)}…)",
+                            )
                         }
                         is DownloadProgress.Failed -> {
                             android.util.Log.e("RootfsManager", "downloadDirect: failed - ${progress.error}")

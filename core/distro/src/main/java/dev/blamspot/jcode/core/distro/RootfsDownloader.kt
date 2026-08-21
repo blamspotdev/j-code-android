@@ -101,7 +101,10 @@ class RootfsDownloader(
             }
         }
         
-        // Verify SHA256 if provided
+        // A rootfs is extracted and then *executed* under proot, so a mismatch is not a warning —
+        // the file is deleted and the download fails. What a blank hash means is reported rather
+        // than skipped silently: `verified` travels with the result so the caller can say so in the
+        // setup log, which is the only place a user could ever notice.
         val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
         if (entry.sha256.isNotBlank() && actualHash != entry.sha256) {
             targetFile.delete()
@@ -111,11 +114,13 @@ class RootfsDownloader(
             ))
             return@flow
         }
-        
+
         emit(DownloadProgress.Completed(
             name = entry.name,
             file = targetFile,
             bytesDownloaded = bytesDownloaded,
+            verified = entry.sha256.isNotBlank(),
+            sha256 = actualHash,
         ))
     }.flowOn(Dispatchers.IO)
     
@@ -201,6 +206,10 @@ sealed interface DownloadProgress {
         val name: String,
         val file: File,
         val bytesDownloaded: Long,
+        /** True when the manifest carried a checksum and the download matched it. */
+        val verified: Boolean = false,
+        /** The hash actually computed, so an unverified download can still be pinned later. */
+        val sha256: String = "",
     ) : DownloadProgress
     data class Failed(val name: String, val error: String) : DownloadProgress
 }
@@ -215,9 +224,17 @@ data class RootfsManifest(
     
     companion object {
         /**
-         * Default manifest using existing online rootfs sources.
-         * These are publicly available minimal rootfs images that can be used
-         * immediately without setting up custom hosting infrastructure.
+         * The fallback manifest, used only when the served one cannot be fetched.
+         *
+         * **These entries carry no checksum, so downloads through this path are unverified**, and
+         * `RootfsManager` says so in the setup log. They are blank on purpose rather than by
+         * oversight: one URL is a third-party repository's `master` branch and the other is an
+         * Ubuntu release directory that is updated in place, so any hash pinned here would go stale
+         * on somebody else's schedule and break first-run setup for everyone with a mismatch.
+         *
+         * The served manifest is where checksums belong — it can be updated in step with whatever
+         * it points at. The fix for this gap is therefore to keep that manifest reachable and
+         * populated, not to pin a moving target here.
          */
         fun default(): RootfsManifest = RootfsManifest(
             entries = listOf(

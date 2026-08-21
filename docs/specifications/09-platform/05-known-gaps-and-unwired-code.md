@@ -21,45 +21,24 @@ specification.
 
 ---
 
-## 2. Built but unwired
+## 2. Built but unwired — removed at 1.6.2
 
-Complete implementations with no live caller.
+Three complete-looking native stacks shipped in every APK with no reachable caller. All are gone;
+git history holds them if any is ever wanted back.
 
-### 2.1 The tree-sitter stack
+| Removed | Was shipping | Why it could not run |
+|---|---|---|
+| `:native:libgit2` | **1.3 MB/ABI** — libgit2 + libssh2 + mbedTLS, statically linked | The CMake target was `jcode_add_stub_library`: **zero JNI functions**. Using it meant writing the entire JNI surface first |
+| `:native:core` | **629 KB/ABI** — a C++ `EditorState`, `UndoManager` and `ConfigService` with yaml-cpp | `core/editor` and `core/config` declare **no `external fun` at all**, and `CoreNativeModule` itself had no callers. All 35 symbols unreachable |
+| `:core:treesitter` + `:native:tree-sitter` + `:native:grammars` | 111 KB/ABI | Nothing referenced the binding, `HighlightSpanProducer.produce()` was a stub, and — the detail that settles it — `native/grammars` had **no `externalNativeBuild` block**, so its CMakeLists never ran and the 14 grammars were never built or shipped. The binding had nothing to bind to |
 
-| Piece | State |
-|---|---|
-| `native/grammars` | Builds **14** grammar `.so` files at pinned upstream tags and ships them in the APK |
-| `native/tree-sitter/src/jni_treesitter.c` | ~50 real JNI exports over upstream tree-sitter |
-| `core/treesitter/src/main/java/dev/blamspot/jcode/core/treesitter/TsHandles.kt` | A complete `Cleaner`-backed binding: parser, tree, node, cursor, query, language |
-| `TsLanguage.load(libName, funcName, …)` | A working `dlopen`/`dlsym` grammar loader |
-| `TsParseService` | Real incremental parsing: 30 ms debounce, cancel-and-replace, prefix/suffix diffing |
+That last row corrects a claim this document used to make: the grammars did **not** ship in the APK.
 
-**Where the chain breaks:** `LanguageRegistry.registerDefaultLanguages()` calls
-`TsLanguage.create(id, extensions)` — which yields `nativeHandle = 0` — and **never** calls
-`TsLanguage.load(...)`. No grammar is ever `dlopen`'d. Separately,
-`HighlightSpanProducer.produce()` is an explicit stub returning an empty list.
-
-Syntax colouring actually comes from `core/buffer/src/main/java/dev/blamspot/jcode/core/buffer/NativeHighlighter.kt` →
-`native/buffer/src/highlight.cpp`, a hand-written tokenizer with a Kotlin twin. See
+Syntax colouring always came from `core/buffer/.../NativeHighlighter.kt` → `native/buffer/src/highlight.cpp`,
+a hand-written tokenizer with a Kotlin twin, and still does. See
 [Syntax highlighting and completion](../02-editor/05-syntax-highlighting-and-completion.md).
 
-### 2.2 `:native:core`'s editor engine
-
-`native/core/src/main/cpp/` contains a complete C++ `EditorState`, `UndoManager` and `ConfigService`
-(with yaml-cpp), plus JNI bridges. `jni_editor_state.cpp` exports
-`Java_dev_jcode_core_editor_EditorState_*` and `Java_dev_jcode_core_editor_UndoManager_*` —
-targeting the **real** Kotlin classes — and `jni_config.cpp` backs
-`dev.blamspot.jcode.native.core.ConfigServiceNative`.
-
-Nothing binds: `core/editor` and `core/config` declare **no `external fun` at all**. Only
-`CoreNativeModule.nativeIsAvailable` and the library's `JNI_OnLoad` infrastructure are live.
-
-### 2.3 `:native:libgit2`
-
-Statically links real libgit2, libssh2 and mbedTLS (all `WHOLE_ARCHIVE`) into `libgit2_ffi.so`, but
-exposes **no JNI functions** — the CMake target is `jcode_add_stub_library`. The crypto and Git code
-is present in the shipped APK and unreachable.
+Removing these took the debug APK from 90.2 MB to 86.1 MB and the module count from 36 to 31.
 
 ---
 
@@ -133,38 +112,50 @@ Device-verified findings:
 
 ## 6. Latent defects
 
-Real bugs found while writing these specifications. They are not hypothetical.
+### 6.1 `MemoryPressure.LOW` was unreachable — **fixed at 1.6.2**
 
-### 6.1 `MemoryPressure.LOW` is unreachable
+`fromTrimLevel` tested `level < 40 -> BACKGROUND` before `level < 10 -> LOW`, so `LOW` could never
+be returned. Worse than the dead branch: all three `RUNNING_*` levels fall under 40, so
+`TRIM_MEMORY_RUNNING_CRITICAL` — the most urgent signal Android sends, when the app is closest to
+being killed — trimmed 30% instead of 90%.
 
-`fromTrimLevel` tests `level < 40 → BACKGROUND`, then `level < 60 → MODERATE`, then
-`level < 10 → LOW`. Any level below 10 already matched the first branch, so `LOW` is never returned,
-and levels ≥ 60 fall through to `CRITICAL`. Android's real trim constants are not monotonic with
-severity (`RUNNING_LOW = 10` is numerically below `BACKGROUND = 40`), which is what makes this easy
-to get wrong.
+The trap is that the constants are **two families and are not ordered by severity**: `RUNNING_*` is
+5/10/15 (app foreground, system starving) and `UI_HIDDEN`/`BACKGROUND`/`MODERATE`/`COMPLETE` is
+20/40/60/80 (app backgrounded, moving down the LRU). The mapping now matches each constant exactly
+and never by range, and `MemoryPressureTest` pins every level.
 
-### 6.2 Rootfs downloads are unverified on the fallback path
+This was live, not theoretical: `ExtensionIcon` registers its icon cache with `ResourceManager`, so
+the wrong ratio really was applied. (An earlier revision of §9 claimed nothing registers — that was
+already stale.)
 
-The built-in default manifest entries carry `sha256 = ""`, so integrity verification engages only
-when a served manifest supplies a hash.
+### 6.2 Rootfs downloads are unverified on the fallback path — **surfaced at 1.6.2**
 
-### 6.3 `TsParseService` document keying
+The served manifest supplies checksums; the built-in fallback entries carry `sha256 = ""`, and
+verification simply did not engage. A rootfs is extracted and its binaries executed under proot, and
+one of the two fallback URLs is a **third-party repository's `master` branch**, so this mattered.
 
-Per-document state is keyed on `editorState.hashCode().toString()`, which is not a guaranteed-unique
-identity. (Moot while tree-sitter is unwired.)
+Pinning hashes here was considered and rejected: both fallback URLs are moving targets somebody else
+controls, so a pinned hash would go stale on their schedule and break first-run setup for everyone
+with a mismatch. Instead the outcome now travels with the result — `DownloadProgress.Completed`
+carries `verified` and the hash actually computed, and `RootfsManager` writes either
+"checksum verified" or "downloaded WITHOUT a checksum" into the setup log the user is already
+watching. A mismatch against a checksum that *is* present still deletes the file and fails.
+
+**The real fix remains to keep the served manifest reachable and populated**, which is the only
+place a checksum can be updated in step with what it points at.
 
 ---
 
 ## 7. Declared but unused
 
+Cleared at 1.6.2: the unused `kotlinx-serialization-json` dependency, `ThemeBundle.fontFamily`, and
+`Layer.MINIMAP` together with the whole minimap setting — a Settings toggle described as "useful on
+tablets and desktop windows" that was wired through config to nothing, because no minimap renderer
+has ever existed. `Buffer.nativeOpenFromFd` was already gone. What is left:
+
 | Declaration | Where | Reality |
 |---|---|---|
-| `kotlinx-serialization-json` | `core/debug/build.gradle.kts` | Never used; parsing is `org.json` |
-| `Layer.MINIMAP` | `core/editor/src/main/java/dev/blamspot/jcode/core/editor/decor/Decoration.kt` | There is no minimap |
-| `EffectiveEditorConfig.minimap = true` | `core/config` | Same |
 | `supportedDistros` | `SdkCatalogEntry` | Supported by the model; no catalog entry uses it |
-| `ThemeBundle.fontFamily` | `core/design` | No built-in bundle sets it |
-| `Buffer.nativeOpenFromFd` | `core/buffer` | JNI export exists; no caller |
 | `JCodePosture` | `core/adaptive` | Computed; no layout branches on `TableTop` or `Book` |
 | Multi-caret | `EditorState.carets` is a list | The input layer creates one caret |
 
@@ -177,9 +168,7 @@ identity. (Moot while tree-sitter is unwired.)
 | `AGENTS.md` | Says the SDK catalog has **14** entries across 6 categories; it has **22** across 8. Points at `plans/JCode_Plan 2.md` and `plans/JCode_Verification 2.md`, which do not exist here (`plans/` is gitignored) |
 | `VtParser.drainOsc` KDoc | Documents the OSC 7715 payload as `open;<token>;<b64label>;<b64cwd>;<b64user>`; the live format is `open;<token>;<label>` |
 | `LspSession` KDoc | Says servers run "via `proot-distro login`"; JCode spawns proot directly and has no `proot-distro` dependency |
-| `ColoredSpan` KDoc | Credits "tree-sitter's `HighlightSpanProducer`" as its producer; that producer is a stub |
 | `EffectiveDistroConfig.id` | Defaults to `"ubuntu"`, which is not a real distro id (`ubuntu-24.04` / `ubuntu-26.04` are) |
-| `minsdk-33-targetsdk-28` (memory note filename) | The targetSdk-28 pin is long gone; both are 33 |
 
 ---
 
@@ -189,16 +178,17 @@ identity. (Moot while tree-sitter is unwired.)
   the module layering would place in `:feature:*`.
 - `DistroService.kt` (2,388 lines) mixes orchestration, catalog execution, apt self-heal and user
   management.
-- Native wrappers (`Buffer`, `VtParser`, `TsParser`, `PtyProcess`) each roll their own `Cleaner`
-  rather than extending `:core:resource`'s `NativeHandle`, and nothing registers with
-  `ResourceManager` — so memory-pressure trimming has nothing to trim.
+- Native wrappers (`Buffer`, `VtParser`, `PtyProcess`) each roll their own `Cleaner`. `NativeHandle`,
+  the base class they might have shared, was removed at 1.6.2 — it had no users and released twice.
+  `ExtensionIcon` does register its cache with `ResourceManager`, so trimming is live (see §6.1).
 - Two distinct `DiagnosticSeverity` types (`core.lsp` and `core.editor.decor`) are converted at the
   boundary.
 - The only CI workflow is the no-host-root guard; `detekt` is a placeholder task.
 - Test coverage is narrow: the buffer and the highlighter have differential tests; the terminal, LSP,
   DAP, config merge and extension installer have none.
-- A few source lines in `JCodeShell.kt`, `ExplorerView.kt` and `SettingsFeature.kt` contain literal
-  control bytes where `//` was intended, which makes tooling treat those files as binary.
+- Literal control bytes in source are gone as of 1.6.2. The last three were real VT sequences in
+  `TerminalView.kt`, now written `[…` — they worked either way, but a raw ESC is invisible in
+  every editor and diff that will ever show the line.
 
 ---
 
