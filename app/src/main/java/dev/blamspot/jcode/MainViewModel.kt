@@ -5654,7 +5654,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val name = tab.filePath.name
         val lang = activeLanguageExtensions.value.firstNotNullOfOrNull { ext -> ext.languageFor(name) }
         viewModelScope.launch {
-            if (formatWithLanguageServer(tab)) return@launch
+            if (formatWithLanguageServer(tab)) {
+                emitMessage("Formatted ${tab.title}")
+                return@launch
+            }
             val snap = state.snapshot.value
             val original = snap.readRangeAsUtf16(0, snap.byteLength)
             val formatted = dev.blamspot.jcode.editor.CodeFormatter.format(original, lang)
@@ -5679,7 +5682,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val edits = lspController.formatting(path, editor.tabSize, editor.insertSpaces)
         if (edits.isEmpty()) return false
         applyEditsToBuffer(state, edits)
-        emitMessage("Formatted ${tab.title}")
+        return true
+    }
+
+    /**
+     * Format [tab] in place, saying nothing. Returns true if the buffer changed.
+     *
+     * The same server-then-built-in order the explicit command uses, minus the messages: on save
+     * the user asked to save, not to be told about formatting, and a toast per write would be
+     * noise. Caret position is preserved by offset — good enough for a reformat, and much better
+     * than the alternative of dumping the user at the top of the file on every save.
+     */
+    private suspend fun formatTabQuietly(tab: EditorTab): Boolean {
+        val state = tab.editorState ?: return false
+        if (formatWithLanguageServer(tab)) return true
+        val lang = activeLanguageExtensions.value
+            .firstNotNullOfOrNull { ext -> ext.languageFor(tab.filePath.name) }
+        val snap = state.snapshot.value
+        val original = snap.readRangeAsUtf16(0, snap.byteLength)
+        val formatted = dev.blamspot.jcode.editor.CodeFormatter.format(original, lang)
+        if (formatted == original) return false
+        val caret = state.carets.value.firstOrNull()?.head ?: 0
+        state.applyEdit(EditTx.replace(0, snap.byteLength, formatted))
+        val newLen = state.snapshot.value.byteLength
+        val clamped = caret.coerceIn(0, newLen)
+        state.setSelection(listOf(Caret(clamped, clamped)))
         return true
     }
 
@@ -5698,6 +5725,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (file.path.isBlank()) {
             emitMessage("Can't save \"${tab.title}\": unsupported file source")
             return false
+        }
+        // `editor.formatOnSave` — a documented .jcode key that until 1.6.2 parsed, merged and
+        // serialised without anything ever reading it. Runs before the snapshot below is captured,
+        // so what gets written is the formatted text rather than the next save's problem.
+        //
+        // Failure here must never cost the user their save: a formatter that throws, or a language
+        // server that misbehaves, leaves the buffer as it was and the write goes ahead regardless.
+        if (effectiveConfig.value.editor.formatOnSave) {
+            runCatching { formatTabQuietly(tab) }
         }
         // Snapshots are immutable, so capturing the reference now lets us both write its bytes and
         // detect whether newer edits landed during the write (so we don't clear a stale dirty).

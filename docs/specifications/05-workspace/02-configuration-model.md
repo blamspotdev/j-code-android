@@ -90,8 +90,8 @@ All of the above (nullable), plus:
 
 | Block | Fields |
 |---|---|
-| `EditorConfig` | `fontSize: Float?`, `tabSize: Int?`, `insertSpaces: Boolean?`, `wordWrap: Boolean?`, `minimap: Boolean?`, `formatOnSave: Boolean?`, `ligatures: Boolean?`, `aggressiveAutocorrectKill: Boolean?`, `tabColoring: String?` |
-| `FilesConfig` | `exclude: List<String>`, `watcherExclude: List<String>` |
+| `EditorConfig` | `fontSize: Float?`, `tabSize: Int?`, `insertSpaces: Boolean?`, `wordWrap: Boolean?`, `formatOnSave: Boolean?`, `ligatures: Boolean?`, `tabColoring: String?` |
+| `FilesConfig` | `exclude: List<String>` |
 | `ExplorerConfig` | `viewMode: String?` — `"Tree"` or `"List"` |
 | `SearchConfig` | `exclude: List<String>` |
 | `GitConfig` | `autoFetch: Boolean?` |
@@ -108,8 +108,8 @@ All of the above (nullable), plus:
 
 | Effective block | Defaults |
 |---|---|
-| `EffectiveEditorConfig` | `fontSize = 14f`, `tabSize = 4`, `insertSpaces = true`, `wordWrap = false`, `minimap = true`, `formatOnSave = false`, `ligatures = true`, `aggressiveAutocorrectKill = false`, `tabColoring = null` |
-| `EffectiveFilesConfig` | `exclude = ["**/node_modules/**", "**/.git/**", "**/build/**"]`, `watcherExclude = ["**/.git/objects/**", "**/.git/subtree-cache/**"]` |
+| `EffectiveEditorConfig` | `fontSize = 14f`, `tabSize = 4`, `insertSpaces = true`, `wordWrap = false`, `formatOnSave = false`, `ligatures = true`, `tabColoring = null` |
+| `EffectiveFilesConfig` | `exclude = ["**/node_modules/**", "**/.git/**", "**/build/**"]` |
 | `EffectiveExplorerConfig` | `viewMode = "Tree"` |
 | `EffectiveSearchConfig` | `exclude = ["**/node_modules/**", "**/.git/**"]` |
 | `EffectiveGitConfig` | `autoFetch = true` |
@@ -225,7 +225,12 @@ cancelled and reinstalled on each `bindLocalConfigFiles`. All state is exposed a
 - `EffectiveDistroConfig.id` defaults to the literal `"ubuntu"`, which is not a real distro id — the
   live ids are `ubuntu-24.04` and `ubuntu-26.04`. The bottom bar now reports actual environment
   state rather than this value.
-- `EffectiveEditorConfig.minimap` defaults to `true` but there is no minimap.
+- Three keys that parsed, merged and serialised while nothing read them were resolved at 1.6.2.
+  `formatOnSave` is now honoured — `saveTabAwait` formats before it captures the snapshot it
+  writes, preferring a language server and falling back to the built-in formatter, and a formatter
+  that throws leaves the buffer alone rather than costing the user the save. `minimap`,
+  `aggressiveAutocorrectKill` and `watcherExclude` were removed: a documented key that does nothing
+  is worse than an absent one, because it reads as a feature that is broken.
 - The two JSON schemas are maintained by hand alongside the Kotlin models with nothing enforcing
   agreement.
 

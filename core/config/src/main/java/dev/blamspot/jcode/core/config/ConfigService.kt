@@ -359,7 +359,6 @@ class ConfigService {
                 wordWrap = map.boolean("wordWrap"),
                 formatOnSave = map.boolean("formatOnSave"),
                 ligatures = map.boolean("ligatures"),
-                aggressiveAutocorrectKill = map.boolean("aggressiveAutocorrectKill"),
                 tabColoring = map.string("tabColoring"),
             )
         )
@@ -370,7 +369,6 @@ class ConfigService {
 
     private fun parseFilesConfig(map: Map<String, Any?>): FilesConfig = FilesConfig(
         exclude = map.stringList("exclude"),
-        watcherExclude = map.stringList("watcherExclude"),
     )
 
     private fun parseExplorerConfig(map: Map<String, Any?>): ExplorerConfig = ExplorerConfig(
@@ -485,10 +483,6 @@ class ConfigService {
             wordWrap = prjEditor?.wordWrap ?: wsEditor?.wordWrap ?: defaults.editor.wordWrap ?: false,
             formatOnSave = prjEditor?.formatOnSave ?: wsEditor?.formatOnSave ?: defaults.editor.formatOnSave ?: false,
             ligatures = prjEditor?.ligatures ?: wsEditor?.ligatures ?: defaults.editor.ligatures ?: true,
-            aggressiveAutocorrectKill = prjEditor?.aggressiveAutocorrectKill
-                ?: wsEditor?.aggressiveAutocorrectKill
-                ?: defaults.editor.aggressiveAutocorrectKill
-                ?: false,
             // null here = no .jcode override at any scope; the app-level default is applied downstream.
             tabColoring = prjEditor?.tabColoring ?: wsEditor?.tabColoring,
         )
@@ -497,7 +491,6 @@ class ConfigService {
         val prjFiles = project?.files
         val files = EffectiveFilesConfig(
             exclude = prjFiles?.exclude ?: wsFiles?.exclude ?: defaults.files.exclude,
-            watcherExclude = prjFiles?.watcherExclude ?: wsFiles?.watcherExclude ?: defaults.files.watcherExclude,
         )
 
         val wsExplorer = workspace?.explorer
@@ -661,7 +654,6 @@ private fun EditorConfig.nullIfEmpty(): EditorConfig? {
         wordWrap == null &&
         formatOnSave == null &&
         ligatures == null &&
-        aggressiveAutocorrectKill == null &&
         tabColoring == null
     ) {
         null
@@ -671,7 +663,7 @@ private fun EditorConfig.nullIfEmpty(): EditorConfig? {
 }
 
 private fun FilesConfig.nullIfEmpty(): FilesConfig? {
-    return if (exclude.isEmpty() && watcherExclude.isEmpty()) null else this
+    return if (exclude.isEmpty()) null else this
 }
 
 private fun ExplorerConfig.nullIfEmpty(): ExplorerConfig? {
@@ -709,7 +701,6 @@ private fun EditorConfig.toYamlMap(): Map<String, Any?> = linkedMapOf<String, An
     wordWrap?.let { this["wordWrap"] = it }
     formatOnSave?.let { this["formatOnSave"] = it }
     ligatures?.let { this["ligatures"] = it }
-    aggressiveAutocorrectKill?.let { this["aggressiveAutocorrectKill"] = it }
     tabColoring?.let { this["tabColoring"] = it }
 }
 
@@ -718,7 +709,6 @@ private fun Map<String, String>.toStringYamlMap(): Map<String, Any?> =
 
 private fun FilesConfig.toYamlMap(): Map<String, Any?> = linkedMapOf<String, Any?>().apply {
     if (exclude.isNotEmpty()) this["exclude"] = exclude
-    if (watcherExclude.isNotEmpty()) this["watcherExclude"] = watcherExclude
 }
 
 private fun ExplorerConfig.toYamlMap(): Map<String, Any?> = linkedMapOf<String, Any?>().apply {

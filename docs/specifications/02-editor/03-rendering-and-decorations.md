@@ -246,7 +246,7 @@ advances and drawn glyphs disagree and the caret drifts.
 
 ## 9. Known gaps
 
-- `Layer.MINIMAP` is defined; there is no minimap.
+- There is no minimap. `Layer.MINIMAP` and the Settings toggle that fed it were removed at 1.6.2.
 - `:core:editor-decor` was a module boundary whose only content was a marker object; it was removed
   at 1.6.2. The decoration types live in `:core:editor`'s `decor` package, which is what modules
   depending on `:core:editor`.

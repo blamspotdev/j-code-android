@@ -117,8 +117,6 @@ data class EditorConfig(
     @SerialName("ligatures")
     val ligatures: Boolean? = null,
 
-    @SerialName("aggressiveAutocorrectKill")
-    val aggressiveAutocorrectKill: Boolean? = null,
 
     /** Editor tab coloring mode ([TabColoring] name); null inherits the app-level default. */
     @SerialName("tabColoring")
@@ -130,8 +128,6 @@ data class FilesConfig(
     @SerialName("exclude")
     val exclude: List<String> = emptyList(),
 
-    @SerialName("watcherExclude")
-    val watcherExclude: List<String> = emptyList(),
 )
 
 @Serializable
@@ -230,14 +226,12 @@ data class EffectiveEditorConfig(
     val wordWrap: Boolean = false,
     val formatOnSave: Boolean = false,
     val ligatures: Boolean = true,
-    val aggressiveAutocorrectKill: Boolean = false,
     /** [TabColoring] name from workspace/project .jcode; null means "inherit the app-level default". */
     val tabColoring: String? = null,
 )
 
 data class EffectiveFilesConfig(
     val exclude: List<String> = listOf("**/node_modules/**", "**/.git/**", "**/build/**"),
-    val watcherExclude: List<String> = listOf("**/.git/objects/**", "**/.git/subtree-cache/**"),
 )
 
 data class EffectiveExplorerConfig(
