@@ -23,6 +23,10 @@ data class OutputLine(val text: String, val kind: OutputKind)
 object OutputLog {
     private const val MAX_LINES = 2000
 
+    /** The OSC introducer + code of JCode's shell-integration marker, as it appears in an
+     *  echoed command line. Must stay in step with the `printf` the run launcher appends. */
+    private const val SHELL_INTEGRATION_OSC = "]7713;"
+
     private val lock = Any()
     private val buf = ArrayDeque<OutputLine>()
     private val partial = HashMap<String, StringBuilder>() // per-session incomplete line
@@ -67,13 +71,13 @@ object OutputLog {
             sb.append(chunk)
             var nl = sb.indexOf("\n")
             while (nl >= 0) {
-                addLine(OutputLine(cleanLine(sb.substring(0, nl)), OutputKind.Stdout))
+                addCaptured(sb.substring(0, nl))
                 sb.delete(0, nl + 1)
                 nl = sb.indexOf("\n")
             }
             // A long line that only uses carriage returns (progress bars) would never flush; cap it.
             if (sb.length > 4096) {
-                addLine(OutputLine(cleanLine(sb.toString()), OutputKind.Stdout))
+                addCaptured(sb.toString())
                 sb.setLength(0)
             }
         }
@@ -83,6 +87,26 @@ object OutputLog {
     fun clear() {
         synchronized(lock) { buf.clear(); partial.clear() }
         scheduleFlush()
+    }
+
+    /**
+     * Clean one teed PTY line and keep it unless it is JCode talking to itself.
+     *
+     * Every run command is sent with a `printf` of [SHELL_INTEGRATION_OSC] appended so the run can
+     * unbind on the command's real exit code. A PTY echoes what it is handed, and the shell echoes
+     * it a second time behind its prompt, so that plumbing landed in the log twice — five lines of
+     * machinery around two lines of program output, with the thing the user came for at the bottom.
+     *
+     * It survives [cleanLine] because it is not an escape yet: the shell has not run the `printf`,
+     * so the `ESC` is still its four-character source form, which no ANSI stripper can recognise.
+     * (The OSC the printf eventually emits *is* a real escape and is already gone by here.) Matching
+     * the marker catches both copies; a program printing this JCode-private OSC code is not a real
+     * case.
+     */
+    private fun addCaptured(raw: String) {
+        val line = cleanLine(raw)
+        if (line.contains(SHELL_INTEGRATION_OSC)) return
+        addLine(OutputLine(line, OutputKind.Stdout))
     }
 
     private fun addLine(line: OutputLine) {
