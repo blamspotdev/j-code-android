@@ -3,7 +3,9 @@ package dev.blamspot.jcode.workbench
 import androidx.compose.runtime.compositionLocalOf
 import dev.blamspot.jcode.core.config.BuildConfig
 import dev.blamspot.jcode.core.config.RunConfig
+import dev.blamspot.jcode.core.debug.DapEvaluation
 import dev.blamspot.jcode.core.debug.DapStackFrame
+import dev.blamspot.jcode.core.debug.DapVariable
 import dev.blamspot.jcode.core.debug.DebugState
 import dev.blamspot.jcode.core.distro.DebugEngineCatalogState
 import dev.blamspot.jcode.debug.VariableRow
@@ -117,9 +119,14 @@ internal data class DebugSessionUi(
     val onStepOver: () -> Unit = {},
     val onStepInto: () -> Unit = {},
     val onStepOut: () -> Unit = {},
+    /** Interrupt a running debuggee (DAP `pause`); no-op for an adapter that does not support it. */
+    val onPause: () -> Unit = {},
     val onStop: () -> Unit = {},
-    /** Evaluate an expression in the stopped frame (DAP hover); null result = no value. */
-    val onEvaluate: (String, (String?) -> Unit) -> Unit = { _, cb -> cb(null) },
+    /** Evaluate an expression in the stopped frame (DAP hover); null result = no value. The result
+     *  carries the children handle, so a structured value can be expanded instead of flattened. */
+    val onEvaluate: (String, (DapEvaluation?) -> Unit) -> Unit = { _, cb -> cb(null) },
+    /** Children of an expandable value (DAP `variables`), for the inspector's tree. */
+    val onExpandVariable: (Int, (List<DapVariable>) -> Unit) -> Unit = { _, cb -> cb(emptyList()) },
 )
 
 internal val LocalDebugSession = compositionLocalOf { DebugSessionUi() }

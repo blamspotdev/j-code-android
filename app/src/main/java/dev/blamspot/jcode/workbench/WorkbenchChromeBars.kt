@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import dev.blamspot.jcode.MainViewModel
 import dev.blamspot.jcode.design.CompactContextMenu
 import dev.blamspot.jcode.design.ContextAction
+import dev.blamspot.jcode.core.debug.DebugState
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.LocalEditorSaveActions
 import dev.blamspot.jcode.design.jcIcon
@@ -304,30 +305,58 @@ internal fun WorkbenchTopBar(
             if (selectedProject != null) {
                 var runMenuOpen by remember { mutableStateOf(false) }
                 val hasMultipleRuns = runConfigNames.size > 1
+                // A debug session owns this button while it lasts: paused offers Continue, running
+                // offers Pause. Otherwise it is the plain Run/Stop control. Without this the header
+                // kept offering "Run" at a breakpoint — the one thing you cannot do from there — and
+                // the only way to resume was to go find the Run panel.
+                val debug = LocalDebugSession.current
+                val paused = debug.state == DebugState.STOPPED
+                val debugging = paused || debug.state == DebugState.RUNNING
                 Box {
                     WorkbenchIconActionButton(
-                        icon = if (isRunning) jcIcon(JCodeIcon.Stop) else jcIcon(JCodeIcon.Run),
-                        contentDescription = if (isRunning) "Stop" else "Run",
+                        icon = when {
+                            paused -> jcIcon(JCodeIcon.Continue)
+                            debug.state == DebugState.RUNNING -> jcIcon(JCodeIcon.Pause)
+                            isRunning -> jcIcon(JCodeIcon.Stop)
+                            else -> jcIcon(JCodeIcon.Run)
+                        },
+                        contentDescription = when {
+                            paused -> "Continue"
+                            debug.state == DebugState.RUNNING -> "Pause"
+                            isRunning -> "Stop"
+                            else -> "Run"
+                        },
                         onClick = {
                             when {
+                                paused -> debug.onContinue()
+                                debug.state == DebugState.RUNNING -> debug.onPause()
                                 isRunning -> onStop()
                                 hasMultipleRuns -> runMenuOpen = true
                                 else -> onRun()
                             }
                         },
-                        active = isRunning,
+                        active = isRunning || debugging,
                         onLongClick = { runMenuOpen = true },
                     )
                     CompactContextMenu(
                         expanded = runMenuOpen,
                         onDismissRequest = { runMenuOpen = false },
                         quickActions = listOf(
-                            // Step/continue need a debug engine (none yet); shown but disabled.
-                            ContextAction(JCodeIcon.Continue, "Continue", enabled = false) {},
-                            ContextAction(JCodeIcon.Rerun, "Rerun") { onRerun() },
-                            ContextAction(JCodeIcon.StepInto, "Step Into", enabled = false) {},
-                            ContextAction(JCodeIcon.StepOver, "Step Over", enabled = false) {},
-                            ContextAction(JCodeIcon.StepOut, "Step Out", enabled = false) {},
+                            // The session controls, live only while it is paused — stepping a running
+                            // debuggee is not a thing, and these were dead placeholders before the
+                            // debugger existed.
+                            ContextAction(JCodeIcon.Continue, "Continue", enabled = paused) { debug.onContinue() },
+                            ContextAction(JCodeIcon.Pause, "Pause", enabled = debug.state == DebugState.RUNNING) {
+                                debug.onPause()
+                            },
+                            ContextAction(JCodeIcon.StepOver, "Step Over", enabled = paused) { debug.onStepOver() },
+                            ContextAction(JCodeIcon.StepInto, "Step Into", enabled = paused) { debug.onStepInto() },
+                            ContextAction(JCodeIcon.StepOut, "Step Out", enabled = paused) { debug.onStepOut() },
+                            if (debugging) {
+                                ContextAction(JCodeIcon.Stop, "Stop debugging") { debug.onStop() }
+                            } else {
+                                ContextAction(JCodeIcon.Rerun, "Rerun") { onRerun() }
+                            },
                         ),
                         // Each run config as its own row — tap to launch that one.
                         listActions = runConfigNames.mapIndexed { index, name ->

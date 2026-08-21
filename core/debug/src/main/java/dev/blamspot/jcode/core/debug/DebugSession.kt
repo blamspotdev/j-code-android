@@ -155,13 +155,23 @@ class DebugSession(
     suspend fun variables(variablesReference: Int): List<DapVariable> =
         parseVariables(sendRequest("variables", JSONObject().put("variablesReference", variablesReference)))
 
-    suspend fun evaluate(expression: String, frameId: Int?, context: String = "repl"): String {
+    /**
+     * Evaluate [expression] and return its rendered value *and* the reference the adapter hands back
+     * for structured results. Discarding that reference is what made an inspected object a dead
+     * string: `variablesReference > 0` is the adapter saying "this has children, ask me for them"
+     * — the same handle [variables] takes.
+     */
+    suspend fun evaluate(expression: String, frameId: Int?, context: String = "repl"): DapEvaluation {
         val body = sendRequest("evaluate", JSONObject().apply {
             put("expression", expression)
             if (frameId != null) put("frameId", frameId)
             put("context", context)
         })
-        return body.optString("result", "")
+        return DapEvaluation(
+            result = body.optString("result", ""),
+            type = body.optString("type").takeIf { it.isNotBlank() },
+            variablesReference = body.optInt("variablesReference", 0),
+        )
     }
 
     private fun clearStopped() { _stopped.value = null; _state.value = DebugState.RUNNING }
@@ -377,6 +387,10 @@ data class DapThread(val id: Int, val name: String)
 data class DapStackFrame(val id: Int, val name: String, val sourcePath: String?, val line: Int, val column: Int)
 data class DapScope(val name: String, val variablesReference: Int, val expensive: Boolean)
 data class DapVariable(val name: String, val value: String, val type: String?, val variablesReference: Int) {
+    val expandable: Boolean get() = variablesReference > 0
+}
+/** An `evaluate` response: what to show, and the handle to its children when it has any. */
+data class DapEvaluation(val result: String, val type: String?, val variablesReference: Int) {
     val expandable: Boolean get() = variablesReference > 0
 }
 data class DapBreakpoint(val id: Int, val verified: Boolean, val line: Int)

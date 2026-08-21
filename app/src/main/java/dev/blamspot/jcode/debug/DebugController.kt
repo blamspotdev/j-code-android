@@ -1,6 +1,8 @@
 package dev.blamspot.jcode.debug
 
+import dev.blamspot.jcode.core.debug.DapEvaluation
 import dev.blamspot.jcode.core.debug.DapStackFrame
+import dev.blamspot.jcode.core.debug.DapVariable
 import dev.blamspot.jcode.core.debug.DapTransport
 import dev.blamspot.jcode.core.debug.DebugSession
 import dev.blamspot.jcode.core.debug.DebugState
@@ -516,6 +518,10 @@ class DebugController(
     }
 
     fun resume() = withThread { s, t -> s.continueThread(t) }
+
+    /** Interrupt a running debuggee (DAP `pause`). Optional in the protocol — an adapter that does
+     *  not implement it simply reports an error, which [DebugSession.pause] already swallows. */
+    fun pause() = withThread { s, t -> s.pause(t) }
     fun stepOver() = withThread { s, t -> s.next(t) }
     fun stepInto() = withThread { s, t -> s.stepIn(t) }
     fun stepOut() = withThread { s, t -> s.stepOut(t) }
@@ -523,9 +529,10 @@ class DebugController(
     /**
      * Evaluate [expression] in the top stopped frame (DAP `evaluate`, context "hover") and deliver the
      * result — or null if there is no stopped frame or the expression has no value — on the main thread.
-     * Backs the editor's long-press variable inspection.
+     * Backs the editor's variable inspection; the result carries the children handle when the value is
+     * structured, so the inspector can expand it rather than showing a flattened `toString()`.
      */
-    fun evaluate(expression: String, onResult: (String?) -> Unit) {
+    fun evaluate(expression: String, onResult: (DapEvaluation?) -> Unit) {
         val s = activeSession ?: session
         val frameId = _callStack.value.firstOrNull()?.id
         if (s == null || frameId == null || _state.value != DebugState.STOPPED) {
@@ -535,8 +542,24 @@ class DebugController(
         scope.launch {
             val value = runCatching { s.evaluate(expression, frameId, "hover") }
                 .getOrNull()
-                ?.takeIf { it.isNotBlank() }
+                ?.takeIf { it.result.isNotBlank() || it.expandable }
             withContext(Dispatchers.Main) { onResult(value) }
+        }
+    }
+
+    /**
+     * Children of an expandable value (DAP `variables`), for the inspector's tree. Empty on any
+     * failure — a node that cannot be expanded should render as a leaf, not as an error.
+     */
+    fun variables(reference: Int, onResult: (List<DapVariable>) -> Unit) {
+        val s = activeSession ?: session
+        if (s == null || reference <= 0 || _state.value != DebugState.STOPPED) {
+            onResult(emptyList())
+            return
+        }
+        scope.launch {
+            val rows = runCatching { s.variables(reference) }.getOrDefault(emptyList())
+            withContext(Dispatchers.Main) { onResult(rows) }
         }
     }
 

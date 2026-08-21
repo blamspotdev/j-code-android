@@ -932,8 +932,10 @@ fun JCodeApp(
             onStepOver = viewModel::debugStepOver,
             onStepInto = viewModel::debugStepInto,
             onStepOut = viewModel::debugStepOut,
+            onPause = viewModel::debugPause,
             onStop = viewModel::debugStop,
             onEvaluate = viewModel::debugEvaluate,
+            onExpandVariable = viewModel::debugVariables,
         )
     }
     StatusBarKeyboardController(enabled = hideStatusBarWithKeyboard)
@@ -4202,7 +4204,26 @@ private fun EditorWorkspace(
                     stoppedLineFor = { tab -> if (dbg.stoppedPath == tab.filePath.path) dbg.stoppedLine else null },
                     onToggleBreakpoint = { tab, line -> dbg.onToggleBreakpoint(tab.filePath.path, line) },
                     // Long-press variable inspection is live only while the debugger is paused.
-                    evaluateInDebugFrame = if (dbgSession.state == DebugState.STOPPED) dbgSession.onEvaluate else null,
+                    // The editor module has no debug dependency, so the DAP shapes are mapped to its
+                    // own [InspectedValue] here rather than leaking the protocol down into it.
+                    evaluateInDebugFrame = if (dbgSession.state == DebugState.STOPPED) {
+                        { expression, deliver ->
+                            dbgSession.onEvaluate(expression) { evaluated ->
+                                deliver(evaluated?.asInspected(expression))
+                            }
+                        }
+                    } else {
+                        null
+                    },
+                    expandInDebugFrame = if (dbgSession.state == DebugState.STOPPED) {
+                        { reference, deliver ->
+                            dbgSession.onExpandVariable(reference) { rows ->
+                                deliver(rows.map { it.asInspected() })
+                            }
+                        }
+                    } else {
+                        null
+                    },
                     pageContent = editorPageContent,
                 )
             }
@@ -4220,6 +4241,24 @@ private fun EditorWorkspace(
         }
     }
 }
+
+/** DAP evaluate result → the editor's protocol-free inspection model. */
+private fun dev.blamspot.jcode.core.debug.DapEvaluation.asInspected(name: String) =
+    dev.blamspot.jcode.feature.editor.pane.InspectedValue(
+        name = name,
+        value = result,
+        type = type,
+        reference = variablesReference,
+    )
+
+/** DAP variable → the editor's protocol-free inspection model. */
+private fun dev.blamspot.jcode.core.debug.DapVariable.asInspected() =
+    dev.blamspot.jcode.feature.editor.pane.InspectedValue(
+        name = name,
+        value = value,
+        type = type,
+        reference = variablesReference,
+    )
 
 /**
  * Recents + folder actions for the empty-editor "no project" state. Provided by [JCodeApp] and read by

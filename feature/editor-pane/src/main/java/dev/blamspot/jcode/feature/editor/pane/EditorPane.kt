@@ -105,7 +105,9 @@ fun EditorPane(
     breakpointLinesFor: (EditorTab) -> Set<Int> = { emptySet() },
     stoppedLineFor: (EditorTab) -> Int? = { null },
     onToggleBreakpoint: (EditorTab, Int) -> Unit = { _, _ -> },
-    evaluateInDebugFrame: ((String, (String?) -> Unit) -> Unit)? = null,
+    evaluateInDebugFrame: ((String, (InspectedValue?) -> Unit) -> Unit)? = null,
+    /** Children of an expandable inspected value, by its opaque [InspectedValue.reference]. */
+    expandInDebugFrame: ((Int, (List<InspectedValue>) -> Unit) -> Unit)? = null,
     /** Ctrl and the wheel over the editor: +1 a step bigger, -1 smaller. */
     onFontSizeStep: ((Int) -> Unit)? = null,
     pageContent: @Composable (EditorTab) -> Unit = {},
@@ -148,6 +150,7 @@ fun EditorPane(
                         stoppedLine = stoppedLineFor(activeTab),
                         onToggleBreakpoint = { line -> onToggleBreakpoint(activeTab, line) },
                         evaluateInDebugFrame = evaluateInDebugFrame,
+                        expandInDebugFrame = expandInDebugFrame,
                         onFontSizeStep = onFontSizeStep,
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -365,7 +368,9 @@ fun EditorViewHost(
     breakpointLines: Set<Int> = emptySet(),
     stoppedLine: Int? = null,
     onToggleBreakpoint: (Int) -> Unit = {},
-    evaluateInDebugFrame: ((String, (String?) -> Unit) -> Unit)? = null,
+    evaluateInDebugFrame: ((String, (InspectedValue?) -> Unit) -> Unit)? = null,
+    /** Children of an expandable inspected value, by its opaque [InspectedValue.reference]. */
+    expandInDebugFrame: ((Int, (List<InspectedValue>) -> Unit) -> Unit)? = null,
     /** Ctrl and the wheel: +1 a step bigger, -1 smaller. Null leaves the editor un-zoomable. */
     onFontSizeStep: ((Int) -> Unit)? = null,
 ) {
@@ -378,8 +383,8 @@ fun EditorViewHost(
     // a non-null evaluator). Consuming the press suppresses selection + the context menu.
     val wordLongPressHandler: ((String, Float, Float) -> Boolean)? = evaluateInDebugFrame?.let { eval ->
         { word, x, y ->
-            eval(word) { value ->
-                if (value != null) inspection = VariableInspection(word, value, x, y)
+            eval(word) { resolved ->
+                if (resolved != null) inspection = VariableInspection(word, resolved, x, y)
             }
             true
         }
@@ -558,7 +563,11 @@ fun EditorViewHost(
         }
 
         inspection?.let { insp ->
-            VariableInspectPopup(inspection = insp, onDismiss = { inspection = null })
+            VariableInspectPopup(
+                inspection = insp,
+                expand = expandInDebugFrame,
+                onDismiss = { inspection = null },
+            )
         }
 
         menu?.let { req ->
@@ -601,68 +610,6 @@ fun EditorViewHost(
 
     DisposableEffect(editorState) {
         onDispose { /* EditorState lifecycle managed by EditorTab */ }
-    }
-}
-
-/** A resolved long-press variable inspection: the word, its evaluated value, and the press position. */
-private data class VariableInspection(val word: String, val value: String, val xPx: Float, val yPx: Float)
-
-/**
- * Small floating "name = value" card shown when a variable is long-pressed while the debugger is
- * stopped. Anchored at the press position (view-relative px), flipping above when out of room —
- * the same positioning scheme as the completion window.
- */
-@Composable
-private fun VariableInspectPopup(inspection: VariableInspection, onDismiss: () -> Unit) {
-    val positionProvider = remember(inspection.xPx, inspection.yPx) {
-        object : PopupPositionProvider {
-            override fun calculatePosition(
-                anchorBounds: IntRect,
-                windowSize: IntSize,
-                layoutDirection: LayoutDirection,
-                popupContentSize: IntSize,
-            ): IntOffset {
-                val x = (anchorBounds.left + inspection.xPx.toInt())
-                    .coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
-                val below = anchorBounds.top + inspection.yPx.toInt() + 24
-                val y = if (below + popupContentSize.height <= windowSize.height) {
-                    below
-                } else {
-                    (anchorBounds.top + inspection.yPx.toInt() - popupContentSize.height - 12).coerceAtLeast(0)
-                }
-                return IntOffset(x, y)
-            }
-        }
-    }
-    Popup(
-        popupPositionProvider = positionProvider,
-        properties = PopupProperties(focusable = false, dismissOnBackPress = true, dismissOnClickOutside = true),
-        onDismissRequest = onDismiss,
-    ) {
-        Surface(
-            shape = RoundedCornerShape(8.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shadowElevation = 8.dp,
-            modifier = Modifier.widthIn(min = 120.dp, max = 420.dp),
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-                Text(
-                    text = inspection.word,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = inspection.value,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 12,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
     }
 }
 

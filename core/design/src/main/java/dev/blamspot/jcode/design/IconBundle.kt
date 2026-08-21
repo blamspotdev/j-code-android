@@ -3,6 +3,7 @@ package dev.blamspot.jcode.design
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -88,7 +89,7 @@ enum class JCodeIcon {
     Files, Folder, OpenFolder, NewFolder, NewFile,
     Sdk, Lsp, Scm, Settings, Search, Extensions, Sources, Destinations, Code, Database, Vm,
     Add, Minus, Close, Refresh, Paste, Collapse, MoreVert, Save, Undo, Redo, Discard,
-    Continue, Rerun, StepInto, StepOver, StepOut,
+    Continue, Pause, Rerun, StepInto, StepOver, StepOut,
     Output, Logs, Problems, Radar, Debug, Tasks, Chat, Cursor,
     Browser, DevTools, Image,
     DropDown, ChevronDown, ChevronUp, ChevronRight, ArrowUp, ArrowBack, ArrowForward, MenuToggle, Help,
@@ -165,6 +166,7 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.Redo to Icons.AutoMirrored.Rounded.Redo,
         JCodeIcon.Discard to Icons.Rounded.SettingsBackupRestore,
         JCodeIcon.Continue to Icons.Rounded.PlayArrow,
+        JCodeIcon.Pause to Icons.Rounded.Pause,
         JCodeIcon.Rerun to Icons.Rounded.RestartAlt,
         JCodeIcon.StepInto to Icons.Rounded.ArrowDownward,
         JCodeIcon.StepOver to Icons.AutoMirrored.Rounded.Redo,

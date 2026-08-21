@@ -2500,9 +2500,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun debugStepOver() = debugController.stepOver()
     fun debugStepInto() = debugController.stepInto()
     fun debugStepOut() = debugController.stepOut()
+    fun debugPause() = debugController.pause()
     fun debugStop() = debugController.stop()
-    fun debugEvaluate(expression: String, onResult: (String?) -> Unit) =
-        debugController.evaluate(expression, onResult)
+    fun debugEvaluate(
+        expression: String,
+        onResult: (dev.blamspot.jcode.core.debug.DapEvaluation?) -> Unit,
+    ) = debugController.evaluate(expression, onResult)
+    fun debugVariables(
+        reference: Int,
+        onResult: (List<dev.blamspot.jcode.core.debug.DapVariable>) -> Unit,
+    ) = debugController.variables(reference, onResult)
 
     // ---- Issues (diagnostics bus) producers ----
 
