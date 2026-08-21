@@ -75,7 +75,9 @@ internal fun WorkbenchIconActionButton(
         Modifier
     }
 
-    JcTooltip(contentDescription) {
+    // Long-press belongs to the button when it has a menu: the label must not also claim it, or one
+    // press puts a tooltip and a menu on screen together.
+    JcTooltip(contentDescription, ownsLongPress = onLongClick != null) {
         Box {
         Surface(
             modifier = Modifier

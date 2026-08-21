@@ -61,12 +61,17 @@ private fun belowAnchorPositionProvider(spacingPx: Int): PopupPositionProvider =
  * by [TooltipBox]'s built-in handling (which is instant and anchors above): the pointer pass is
  * observe-only, so the wrapped button still receives its own clicks — a touch long-press that opened
  * the label is the one case whose release is swallowed, so reading a tooltip never also taps.
+ *
+ * Set [ownsLongPress] when the wrapped control already does something on long-press. Otherwise both
+ * fire at once: the control opens its menu *and* this opens a label over the top of it, leaving two
+ * competing overlays on screen from one gesture.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun JcTooltip(
     label: String,
     modifier: Modifier = Modifier,
+    ownsLongPress: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val state = rememberTooltipState()
@@ -86,7 +91,7 @@ fun JcTooltip(
         enableUserInput = false,
     ) {
         Box(
-            modifier = Modifier.pointerInput(state) {
+            modifier = Modifier.pointerInput(state, ownsLongPress) {
                 awaitPointerEventScope {
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -103,13 +108,16 @@ fun JcTooltip(
                             }
                             PointerEventType.Press -> {
                                 showJob?.cancel()
-                                if (touch) {
+                                // Any fresh press clears a label that is still up. Without this a
+                                // tooltip whose Exit/Release never arrived — the pointer was taken by
+                                // a popup opening over it, say — outlives its gesture and is still
+                                // sitting there, stale and now mis-anchored, during the next one.
+                                if (state.isVisible) state.dismiss()
+                                if (touch && !ownsLongPress) {
                                     showJob = scope.launch {
                                         delay(TOOLTIP_SHOW_DELAY_MS)
                                         state.show(MutatePriority.PreventUserInput)
                                     }
-                                } else if (state.isVisible) {
-                                    state.dismiss()
                                 }
                             }
                             PointerEventType.Exit -> {
