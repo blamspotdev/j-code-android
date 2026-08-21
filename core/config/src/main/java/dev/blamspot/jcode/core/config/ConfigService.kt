@@ -357,7 +357,6 @@ class ConfigService {
                 tabSize = map.int("tabSize"),
                 insertSpaces = map.boolean("insertSpaces"),
                 wordWrap = map.boolean("wordWrap"),
-                minimap = map.boolean("minimap"),
                 formatOnSave = map.boolean("formatOnSave"),
                 ligatures = map.boolean("ligatures"),
                 aggressiveAutocorrectKill = map.boolean("aggressiveAutocorrectKill"),
@@ -484,7 +483,6 @@ class ConfigService {
             tabSize = prjEditor?.tabSize ?: wsEditor?.tabSize ?: defaults.editor.tabSize ?: 4,
             insertSpaces = prjEditor?.insertSpaces ?: wsEditor?.insertSpaces ?: defaults.editor.insertSpaces ?: true,
             wordWrap = prjEditor?.wordWrap ?: wsEditor?.wordWrap ?: defaults.editor.wordWrap ?: false,
-            minimap = prjEditor?.minimap ?: wsEditor?.minimap ?: defaults.editor.minimap ?: true,
             formatOnSave = prjEditor?.formatOnSave ?: wsEditor?.formatOnSave ?: defaults.editor.formatOnSave ?: false,
             ligatures = prjEditor?.ligatures ?: wsEditor?.ligatures ?: defaults.editor.ligatures ?: true,
             aggressiveAutocorrectKill = prjEditor?.aggressiveAutocorrectKill
@@ -661,7 +659,6 @@ private fun EditorConfig.nullIfEmpty(): EditorConfig? {
         tabSize == null &&
         insertSpaces == null &&
         wordWrap == null &&
-        minimap == null &&
         formatOnSave == null &&
         ligatures == null &&
         aggressiveAutocorrectKill == null &&
@@ -710,7 +707,6 @@ private fun EditorConfig.toYamlMap(): Map<String, Any?> = linkedMapOf<String, An
     tabSize?.let { this["tabSize"] = it }
     insertSpaces?.let { this["insertSpaces"] = it }
     wordWrap?.let { this["wordWrap"] = it }
-    minimap?.let { this["minimap"] = it }
     formatOnSave?.let { this["formatOnSave"] = it }
     ligatures?.let { this["ligatures"] = it }
     aggressiveAutocorrectKill?.let { this["aggressiveAutocorrectKill"] = it }

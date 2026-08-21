@@ -14,7 +14,6 @@ object Layer {
     const val INLAY = 700
     const val CARET = 800
     const val GUTTER = 900
-    const val MINIMAP = 1000
     const val POPUP = 1100
 }
 

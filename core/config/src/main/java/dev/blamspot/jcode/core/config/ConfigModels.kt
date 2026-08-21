@@ -110,8 +110,6 @@ data class EditorConfig(
     @SerialName("wordWrap")
     val wordWrap: Boolean? = null,
 
-    @SerialName("minimap")
-    val minimap: Boolean? = null,
 
     @SerialName("formatOnSave")
     val formatOnSave: Boolean? = null,
@@ -230,7 +228,6 @@ data class EffectiveEditorConfig(
     val tabSize: Int = 4,
     val insertSpaces: Boolean = true,
     val wordWrap: Boolean = false,
-    val minimap: Boolean = true,
     val formatOnSave: Boolean = false,
     val ligatures: Boolean = true,
     val aggressiveAutocorrectKill: Boolean = false,

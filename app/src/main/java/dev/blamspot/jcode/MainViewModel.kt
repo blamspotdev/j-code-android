@@ -3674,13 +3674,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateEditorMinimap(scope: ConfigScope, enabled: Boolean?) {
-        viewModelScope.launch {
-            if (!ensureScopeAvailable(scope)) return@launch
-            configService.updateEditorConfig(scope) { it.copy(minimap = enabled) }
-        }
-    }
-
     fun updateEditorLigatures(scope: ConfigScope, enabled: Boolean?) {
         viewModelScope.launch {
             if (!ensureScopeAvailable(scope)) return@launch

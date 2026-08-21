@@ -56,7 +56,6 @@ data class ThemeBundle(
     val light: ColorScheme,
     val darkSemantic: JCodeSemanticColors,
     val lightSemantic: JCodeSemanticColors,
-    val fontFamily: FontFamily? = null,
 ) {
     fun colorScheme(darkTheme: Boolean): ColorScheme = if (darkTheme) dark else light
     fun semanticColors(darkTheme: Boolean): JCodeSemanticColors = if (darkTheme) darkSemantic else lightSemantic

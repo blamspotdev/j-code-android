@@ -167,7 +167,6 @@ object SettingsFeature {
         // A null value clears the override from the scope's .jcode (see MainViewModel).
         onUpdateFontSize: (ConfigScope, Float?) -> Unit,
         onUpdateTabSize: (ConfigScope, Int?) -> Unit,
-        onUpdateMinimap: (ConfigScope, Boolean?) -> Unit,
         onUpdateTabColoring: (ConfigScope, String?) -> Unit,
         onUpdateLigatures: (ConfigScope, Boolean?) -> Unit,
         onUpdateExplorerViewMode: (ConfigScope, String?) -> Unit,
@@ -224,7 +223,6 @@ object SettingsFeature {
 
         val fontSize = scopedEditor?.fontSize ?: effectiveConfig.editor.fontSize
         val tabSize = scopedEditor?.tabSize ?: effectiveConfig.editor.tabSize
-        val minimap = scopedEditor?.minimap ?: effectiveConfig.editor.minimap
         val ligatures = scopedEditor?.ligatures ?: effectiveConfig.editor.ligatures
 
         val scopedExplorer = when (selectedScope) {
@@ -1475,7 +1473,7 @@ object SettingsFeature {
             SettingsCard(
                 title = "Editor behavior",
                 description = "These controls write back to YAML and update the open editor immediately.",
-                keywords = "editor behavior font size tab size minimap ligatures indent tab coloring color accent",
+                keywords = "editor behavior font size tab size ligatures indent tab coloring color accent",
             ) {
                 StepperRow(
                     label = "Font size",
@@ -1494,14 +1492,6 @@ object SettingsFeature {
                     optionLabel = { "$it spaces" },
                     modified = scopedEditor?.tabSize != null,
                     onReset = { onUpdateTabSize(selectedScope, null) },
-                )
-                ToggleRow(
-                    label = "Minimap",
-                    supporting = "Useful on tablets and desktop windows. Keep it optional on smaller widths.",
-                    checked = minimap,
-                    onCheckedChange = { onUpdateMinimap(selectedScope, it) },
-                    modified = scopedEditor?.minimap != null,
-                    onReset = { onUpdateMinimap(selectedScope, null) },
                 )
                 ToggleRow(
                     label = "Ligatures",

@@ -1005,8 +1005,8 @@ class TerminalView @JvmOverloads constructor(
 
         val bytes = when {
             // Ctrl+Left/Right -> word-wise cursor motion (xterm modifier form).
-            isCtrl && keyCode == KeyEvent.KEYCODE_DPAD_LEFT -> "[1;5D".toByteArray()
-            isCtrl && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT -> "[1;5C".toByteArray()
+            isCtrl && keyCode == KeyEvent.KEYCODE_DPAD_LEFT -> "\u001B[1;5D".toByteArray()
+            isCtrl && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT -> "\u001B[1;5C".toByteArray()
             // Alt+arrow keys (TUI navigation in vim, mc, etc.)
             isAlt && keyCode == KeyEvent.KEYCODE_DPAD_UP -> "\u001B\u001B[A".toByteArray()
             isAlt && keyCode == KeyEvent.KEYCODE_DPAD_DOWN -> "\u001B\u001B[B".toByteArray()
@@ -1026,7 +1026,7 @@ class TerminalView @JvmOverloads constructor(
             keyCode == KeyEvent.KEYCODE_DPAD_DOWN -> (if (appCursor) "\u001BOB" else "\u001B[B").toByteArray()
             keyCode == KeyEvent.KEYCODE_DPAD_RIGHT -> (if (appCursor) "\u001BOC" else "\u001B[C").toByteArray()
             keyCode == KeyEvent.KEYCODE_DPAD_LEFT -> (if (appCursor) "\u001BOD" else "\u001B[D").toByteArray()
-            isShift && keyCode == KeyEvent.KEYCODE_TAB -> "[Z".toByteArray()
+            isShift && keyCode == KeyEvent.KEYCODE_TAB -> "\u001B[Z".toByteArray()
             keyCode == KeyEvent.KEYCODE_TAB -> byteArrayOf(0x09)
             keyCode == KeyEvent.KEYCODE_ESCAPE -> byteArrayOf(0x1B)
             // Function keys (F1-F12)
