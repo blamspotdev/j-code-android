@@ -44,6 +44,10 @@ class ProotManager(private val context: Context) {
     private val fakeProcDir: File
         get() = File(appContext.filesDir, "tmp/proot-fakeproc")
 
+    /** Backing store for the guest's /dev/shm — see the bind in [buildProotCommand]. */
+    private val devShmDir: File
+        get() = File(appContext.filesDir, "tmp/proot-shm")
+
     /** Absolute path to the lib directory (for LD_LIBRARY_PATH) */
     val libtallocPath: String
         get() = libtallocDir.absolutePath
@@ -333,6 +337,15 @@ class ProotManager(private val context: Context) {
         
         // Common bind mounts for Android compatibility
         args.addAll(listOf("-b", "/dev"))
+        // Android's /dev has no `shm`, and we bind it in wholesale above — so the guest had no
+        // /dev/shm at all and every POSIX named semaphore (sem_open) failed with ENOENT. That is not
+        // an exotic corner: CoreCLR's debugger rendezvous, Python's multiprocessing, Chromium and
+        // PostgreSQL all rely on it. Backing it with an app-private directory is enough — sem_open
+        // only needs a writable directory that supports MAP_SHARED, which ext4 does; it does not
+        // have to be tmpfs. Declared after `-b /dev` so the more-specific path wins.
+        if (devShmDir.exists() || devShmDir.mkdirs()) {
+            args.addAll(listOf("-b", "${devShmDir.absolutePath}:/dev/shm"))
+        }
         args.addAll(listOf("-b", "/proc"))
         args.addAll(listOf("-b", "/sys"))
 

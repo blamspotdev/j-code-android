@@ -375,8 +375,12 @@ class DebugController(
                 .put("PATH", dotnetPath))
         }
         // netcoredbg must run as root (where /root/.dotnet lives) with DOTNET_ROOT set, or CoreCLR
-        // hosting of the debuggee fails.
-        val adapterCommand = "export DOTNET_ROOT=/root/.dotnet; exec ${engine.adapterCommand}"
+        // hosting of the debuggee fails. It also needs the GC cap for ITSELF, not just for the build
+        // and the debuggee: netcoredbg hosts its own CoreCLR (to run ManagedPart.dll), so without the
+        // cap it hits the same 256 GiB reservation under proot and dies — leaving no adapter process
+        // at all, no debuggee, and a session stuck on "Running" with nothing in the console.
+        val adapterCommand = "export DOTNET_ROOT=/root/.dotnet DOTNET_GCHeapHardLimit=$gcHeapLimit; " +
+            "exec ${engine.adapterCommand}"
         return LaunchPlan(distroDir, config, adapterCommand, tcpPort = null, user = "root", adapterPath = "/root/.dotnet")
     }
 
@@ -746,6 +750,15 @@ private class ProcessTransport(private val process: Process) : DapTransport {
     override fun close() {
         runCatching { process.destroy() }
     }
+
+    // Linux reports a signal-killed child as 128 + signal, which is how a segfaulting adapter
+    // (netcoredbg under proot does exactly this) becomes an actionable message instead of a timeout.
+    override fun terminationDetail(): String? = runCatching {
+        // EOF on the pipe races the child being reaped, so give it a moment before asking.
+        if (!process.waitFor(1, java.util.concurrent.TimeUnit.SECONDS)) return@runCatching null
+        val code = process.exitValue()
+        if (code > 128) "crashed with signal ${code - 128}" else "exit code $code"
+    }.getOrNull()
 }
 
 /**

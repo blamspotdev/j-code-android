@@ -202,10 +202,21 @@ class DebugSession(
             val n = t.read(buffer)
             when {
                 n > 0 -> { acc += buffer.copyOf(n); acc = process(acc) }
-                n < 0 -> break
+                // EOF: the adapter is gone. Fail everything in flight now — otherwise a crashed
+                // adapter looks exactly like a slow one and surfaces as "Timed out waiting for
+                // 30000 ms", which says nothing about what actually happened.
+                n < 0 -> { failPending(t.terminationDetail()); break }
                 else -> delay(10)
             }
         }
+    }
+
+    private fun failPending(detail: String?) {
+        if (pending.isEmpty()) return
+        val why = detail?.let { " ($it)" } ?: ""
+        val error = DebugException("The debug adapter exited before answering$why.")
+        pending.values.forEach { it.completeExceptionally(error) }
+        pending.clear()
     }
 
     /**
@@ -412,4 +423,10 @@ interface DapTransport {
     fun read(buffer: ByteArray): Int
     fun write(bytes: ByteArray)
     fun close()
+
+    /**
+     * Why the adapter is gone, if it is — e.g. "crashed with signal 11". Used to explain an EOF
+     * instead of letting the in-flight request sit until its 30s timeout and report nothing useful.
+     */
+    fun terminationDetail(): String? = null
 }
