@@ -87,6 +87,15 @@ class DebugController(
         val request: String = "launch",
     )
 
+    /**
+     * Why a C# session dies, in the user's words. Established on-device rather than guessed: under proot
+     * a process may only ptrace its OWN children — PTRACE_ATTACH to any other pid returns ESRCH even
+     * though the pid exists. That kills both of netcoredbg's routes. Attach reports
+     * CORDBG_E_DEBUG_COMPONENT_MISSING because dbgshim cannot read the target at all, and launch, which
+     * does spawn its own child, still exits without answering (its own --interpreter=cli segfaults the
+     * same way, with JCode out of the picture) on net8.0, net9.0 and net10.0 alike. Building and RUNNING
+     * .NET works fine, so point there instead of leaving a bare adapter error on screen.
+     */
     /** Start debugging [hostPath] (its language picks the engine) with the current [bps] breakpoints. */
     fun startDebug(hostPath: String, projectDir: String, bps: Map<String, Set<Int>>) {
         stop()
@@ -156,7 +165,16 @@ class DebugController(
         s.onStartDebugging = { request, config -> spawnChild(request, config) }
         // While preparing we hold STARTING; ignore the fresh session's initial DISCONNECTED so the
         // panel doesn't flicker back to the launch row between build and adapter start.
-        scope.launch { s.state.collect { if (!(it == DebugState.DISCONNECTED && _state.value == DebugState.STARTING)) _state.value = it } }
+        scope.launch {
+            var explained = false
+            s.state.collect {
+                if (!(it == DebugState.DISCONNECTED && _state.value == DebugState.STARTING)) _state.value = it
+                if (it == DebugState.ERROR && !explained && engine.debugType == "coreclr") {
+                    explained = true
+                    pushOutput(PROOT_CORECLR_LIMITATION)
+                }
+            }
+        }
         scope.launch { s.stopped.collect { st -> if (st != null) onStopped(s, st) else clearStoppedView() } }
 
         val distroBreakpoints = distroBps() // DAP lines are 1-based; applied on `initialized`
@@ -713,6 +731,12 @@ class DebugController(
         dev.blamspot.jcode.core.distro.WorkspaceHostPaths.hostToGuest(p).replace("\\", "/")
 
     private companion object {
+        const val PROOT_CORECLR_LIMITATION =
+            "C# debugging isn't available in this environment.\n" +
+                "The .NET debugger drives the program through ptrace, and the Linux sandbox\n" +
+                "only permits that on a process's own children, so netcoredbg can neither\n" +
+                "attach nor complete its own launch.\n" +
+                "Building and running .NET projects works normally; use Run instead.\n"
         const val KOTLIN_EXT = ".kt"
         const val JAVA_ENGINE_ID = "java-debug"
     }

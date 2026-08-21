@@ -205,18 +205,33 @@ class DebugSession(
                 // EOF: the adapter is gone. Fail everything in flight now — otherwise a crashed
                 // adapter looks exactly like a slow one and surfaces as "Timed out waiting for
                 // 30000 ms", which says nothing about what actually happened.
-                n < 0 -> { failPending(t.terminationDetail()); break }
+                n < 0 -> { onAdapterGone(t.terminationDetail()); break }
                 else -> delay(10)
             }
         }
     }
 
-    private fun failPending(detail: String?) {
-        if (pending.isEmpty()) return
+    /**
+     * The adapter's output closed. Anything in flight can never be answered, and — just as important —
+     * a session whose adapter is gone is over, however healthy it looked a moment ago. Without this a
+     * mid-session crash left the UI sitting on "Running" indefinitely with nothing in the console.
+     * A normal exit is already TERMINATED by the `terminated` event, so this only reports real deaths.
+     */
+    private fun onAdapterGone(detail: String?) {
         val why = detail?.let { " ($it)" } ?: ""
-        val error = DebugException("The debug adapter exited before answering$why.")
-        pending.values.forEach { it.completeExceptionally(error) }
-        pending.clear()
+        val message = "The debug adapter exited before answering$why."
+        val state = _state.value
+        val live = state != DebugState.TERMINATED && state != DebugState.DISCONNECTED &&
+            state != DebugState.ERROR
+        if (pending.isNotEmpty()) {
+            // Whoever is awaiting a reply reports it; don't say the same thing twice.
+            val error = DebugException(message)
+            pending.values.forEach { it.completeExceptionally(error) }
+            pending.clear()
+        } else if (live) {
+            onOutput?.invoke("stderr", message + "\n")
+        }
+        if (live) _state.value = DebugState.ERROR
     }
 
     /**
