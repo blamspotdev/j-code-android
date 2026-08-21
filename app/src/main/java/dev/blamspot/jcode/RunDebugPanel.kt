@@ -189,7 +189,6 @@ private fun ProjectRunBuildDetail(
     // Detected (unsaved) configs have nothing to delete — only saved lists show a Delete action.
     val runsDeletable = saved.runs.isNotEmpty()
     val buildsDeletable = saved.builds.isNotEmpty()
-    val debugActive = debugUi.state != DebugState.DISCONNECTED && debugUi.state != DebugState.TERMINATED
     var showAddRun by remember { mutableStateOf(false) }
     var showAddBuild by remember { mutableStateOf(false) }
     val runPresets = LocalRunConfigPresets.current
@@ -226,10 +225,11 @@ private fun ProjectRunBuildDetail(
                 )
             }
             AddRow("Add run config", onClick = { showAddRun = true })
-            if (debugActive) {
-                Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.10f), shape = RoundedCornerShape(8.dp)) {
-                    DebugSessionPanel(ui = debugUi, modifier = Modifier.padding(8.dp))
-                }
+            // Always shown: DebugSessionPanel renders the "Debug <file>" launch row when no session is
+            // running, and that row is the only way to debug the active file. Gating it on an active
+            // session made it unreachable — you needed a session to get the button that starts one.
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.10f), shape = RoundedCornerShape(8.dp)) {
+                DebugSessionPanel(ui = debugUi, modifier = Modifier.padding(8.dp))
             }
         }
         Segment.Build -> {

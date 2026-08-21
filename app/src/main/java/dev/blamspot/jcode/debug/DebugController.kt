@@ -121,6 +121,10 @@ class DebugController(
 
     private fun beginSession(engine: DebugEngineEntry, plan: LaunchPlan, hostPath: String) {
         val transportFactory: (String) -> DapTransport? = { command ->
+            android.util.Log.d(
+                "JCodeDAP-adapter",
+                "spawn user=${plan.user ?: "<default>"} cwd=${plan.distroCwd} cmd=$command",
+            )
             val proc = distroService.spawnStdioProcess(
                 command, workdir = plan.distroCwd, userOverride = plan.user, extraPath = plan.adapterPath,
             )
@@ -227,6 +231,7 @@ class DebugController(
             }
             "coreclr" -> prepareDotnet(engine, hostPath, projectDir)
             "java" -> prepareJvm(engine, hostPath, projectDir)
+            "lldb" -> prepareNative(engine, hostPath, projectDir)
             "pwa-node" -> {
                 val port = randomDebugPort()
                 LaunchPlan(
@@ -256,6 +261,69 @@ class DebugController(
                 tcpPort = null,
             )
         }
+    }
+
+    /**
+     * Compile the source and point lldb at the binary it produced.
+     *
+     * lldb debugs a *program*; handing it a `.c` gets "doesn't contain any 'objfile'", which is what
+     * every C/C++/Rust session did before this — the generic launch path passed the source through as
+     * `program`, an assumption that only holds for Python, where the source really is the program.
+     * Java and .NET already build first ([prepareJava], [prepareDotnet]); this is the same step for
+     * native code.
+     *
+     * `-g` is the point: without DWARF there is nothing to map a breakpoint back to a line with. `-O0`
+     * keeps the mapping honest, since optimised code reorders and folds away the statements you set
+     * breakpoints on.
+     */
+    private suspend fun prepareNative(engine: DebugEngineEntry, hostPath: String, projectDir: String): LaunchPlan {
+        val srcFile = java.io.File(hostPath)
+        val srcDistro = hostToDistro(hostPath)
+        val outDir = "/tmp/jcode-native"
+        val outBin = "$outDir/${srcFile.nameWithoutExtension}"
+        // A header is not a translation unit; compiling one produces no program to run. Say so rather
+        // than letting the compiler emit something obscure about precompiled headers.
+        val compile = when (val ext = srcFile.extension.lowercase()) {
+            "c" -> "cc -g -O0 -o '$outBin' '$srcDistro'"
+            "cpp", "cc", "cxx" -> "c++ -g -O0 -o '$outBin' '$srcDistro'"
+            "rs" -> "rustc -g -o '$outBin' '$srcDistro'"
+            else -> throw dev.blamspot.jcode.core.debug.DebugException(
+                "Can't debug a .$ext on its own — open the .c/.cpp/.rs that defines main().",
+            )
+        }
+        pushOutput("Compiling ${srcFile.name}…\n")
+        val build = distroService.exec(
+            command = "mkdir -p '$outDir' && rm -f '$outBin' && $compile",
+            workdir = hostToDistro(projectDir),
+            timeoutMs = 300_000L,
+            onLine = { pushOutput(it + "\n") },
+        )
+        if (!build.succeeded) {
+            // The compiler's own diagnostics are already in the console via onLine; this is the summary.
+            throw dev.blamspot.jcode.core.debug.DebugException(
+                build.stderr.lineSequence().firstOrNull { it.isNotBlank() }
+                    ?: "Compile failed (exit ${build.exitCode ?: build.internalError}).",
+            )
+        }
+        pushOutput("Launching ${srcFile.nameWithoutExtension} under ${engine.name}…\n")
+        val distroCwd = hostToDistro(projectDir)
+        return LaunchPlan(
+            distroCwd = distroCwd,
+            config = baseConfig(engine.debugType, distroCwd).apply {
+                put("program", outBin)
+                put("args", JSONArray())
+                // lldb resolves breakpoints back to the source through DWARF, which records the path
+                // the compiler saw — the guest path, which is what the editor's breakpoints use too.
+                put("stopOnEntry", false)
+            },
+            adapterCommand = engine.adapterCommand,
+            tcpPort = null,
+            // lldb-dap must run as root. It debugs through ptrace, and proot only grants that to its
+            // fake-root (-0) user: spawned as the unprivileged runtime user, lldb-server starts but
+            // never attaches to the inferior, so `launch` never answers and the session times out
+            // after 30s with no output at all from the adapter.
+            user = "root",
+        )
     }
 
     /** Build the enclosing .csproj and point netcoredbg at the produced DLL (source alone won't launch). */
@@ -644,9 +712,16 @@ private class ProcessTransport(private val process: Process) : DapTransport {
     private val output = process.outputStream
 
     init {
-        // Drain the adapter's stderr so its pipe never fills and blocks the adapter.
+        // Drain the adapter's stderr so its pipe never fills and blocks the adapter — and log what it
+        // says. Discarding it left a stdio adapter that fails at startup completely mute: the session
+        // just timed out after 30s with nothing to go on, while the TCP path had logged its adapter's
+        // output all along.
         Thread {
-            runCatching { process.errorStream.bufferedReader().forEachLine { } }
+            runCatching {
+                process.errorStream.bufferedReader().forEachLine { line ->
+                    android.util.Log.d("JCodeDAP-adapter", "[err] $line")
+                }
+            }
         }.apply { isDaemon = true }.start()
     }
 
