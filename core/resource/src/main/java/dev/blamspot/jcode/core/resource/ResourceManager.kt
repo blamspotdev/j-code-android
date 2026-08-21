@@ -23,7 +23,6 @@ class ResourceManager @Inject constructor(
 ) : ComponentCallbacks2 {
 
     private val caches = CopyOnWriteArrayList<ManagedCache>()
-    private val pools = CopyOnWriteArrayList<ResourcePool<*>>()
     private val _pressure = MutableStateFlow(MemoryPressure.NORMAL)
 
     /** Current memory pressure level */
@@ -48,20 +47,6 @@ class ResourceManager @Inject constructor(
     }
 
     /**
-     * Register a resource pool for automatic draining under memory pressure.
-     */
-    fun registerPool(pool: ResourcePool<*>) {
-        pools.add(pool)
-    }
-
-    /**
-     * Unregister a resource pool.
-     */
-    fun unregisterPool(pool: ResourcePool<*>) {
-        pools.remove(pool)
-    }
-
-    /**
      * Create and register a new LRU cache in one call.
      */
     fun <K, V> managedCache(
@@ -74,32 +59,27 @@ class ResourceManager @Inject constructor(
         return cache
     }
 
-    /**
-     * Create and register a new resource pool in one call.
-     */
-    fun <T : Any> managedPool(
-        name: String,
-        maxSize: Int,
-        factory: () -> T,
-        reset: (T) -> Unit = {},
-        destroy: (T) -> Unit = {},
-    ): ResourcePool<T> {
-        val pool = ResourcePool(name, maxSize, factory, reset, destroy)
-        registerPool(pool)
-        return pool
-    }
-
     // --- ComponentCallbacks2 ---
 
     override fun onTrimMemory(level: Int) {
         val newPressure = MemoryPressure.fromTrimLevel(level)
-        val oldPressure = _pressure.value
-
-        if (newPressure.ordinal > oldPressure.ordinal) {
-            _pressure.value = newPressure
-        }
-
+        // Reported, not high-water. This used to only ever move up — `if (new.ordinal >
+        // old.ordinal)` — so one CRITICAL callback pinned the flow at CRITICAL for the life of the
+        // process and anything reading it stayed degraded forever. Android never sends a
+        // "pressure relieved" callback, so recovery has to come from [onAppForegrounded].
+        _pressure.value = newPressure
         applyTrimming(newPressure)
+    }
+
+    /**
+     * The app is interactive again — clear the pressure reading.
+     *
+     * `ComponentCallbacks2` has no "you are fine now" callback: the system tells you it is running
+     * out and then goes quiet. Without this the flow would keep reporting whatever the worst moment
+     * was, long after the app was back in front of the user. Called from `MainActivity.onResume`.
+     */
+    fun onAppForegrounded() {
+        _pressure.value = MemoryPressure.NORMAL
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -123,16 +103,14 @@ class ResourceManager @Inject constructor(
 
     private fun applyTrimming(pressure: MemoryPressure) {
         val ratio = pressure.trimRatio
+        if (ratio <= 0f) return
+        // Worth a line in logcat: an OOM report is much easier to read when you can see whether the
+        // app was asked to give memory back, and how much anything actually held at the time.
+        android.util.Log.d(
+            "ResourceManager",
+            "trim $pressure (ratio=$ratio) over ${caches.size} cache(s): " +
+                caches.joinToString { "${it.name}=${it.size}" },
+        )
         caches.forEach { it.trim(ratio) }
-        pools.forEach { it.trim(ratio) }
-    }
-
-    /**
-     * Release all managed resources. Called on app shutdown.
-     */
-    fun shutdown() {
-        caches.forEach { it.clear() }
-        pools.forEach { it.drain() }
-        context.unregisterComponentCallbacks(this)
     }
 }

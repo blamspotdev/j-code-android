@@ -33,11 +33,12 @@ class LruManagedCache<K, V>(
     private val sizeOf: (K, V) -> Int = { _, _ -> 1 },
 ) : ManagedCache {
 
-    private val map = object : LinkedHashMap<K, V>(16, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean {
-            return currentSize > maxSize
-        }
-    }
+    // accessOrder = true, so iteration starts at the least-recently-used entry — that is the only
+    // thing this needs from LinkedHashMap. `removeEldestEntry` is deliberately NOT overridden:
+    // entries it drops are removed behind `currentSize`'s back, and since `put` already calls
+    // `trimToSize`, the two paths raced and only one of them did the arithmetic. `currentSize` then
+    // drifted above the real total and the cache evicted far more than it held.
+    private val map = LinkedHashMap<K, V>(16, 0.75f, true)
 
     @Volatile
     private var currentSize = 0
@@ -75,6 +76,14 @@ class LruManagedCache<K, V>(
         }
     }
 
+    /**
+     * Evict down to `(1 - ratio)` of **maxSize**, not of the current size.
+     *
+     * That distinction matters under pressure: a cache holding a tenth of its budget is already
+     * cheap and gets left alone, while a full one is cut to a fixed ceiling no matter how it got
+     * there. Trimming a ratio of the *current* size would punish the small cache and barely touch
+     * the big one.
+     */
     override fun trim(ratio: Float) {
         val targetSize = (maxSize * (1.0f - ratio)).toInt().coerceAtLeast(0)
         synchronized(map) {

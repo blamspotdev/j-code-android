@@ -11,7 +11,10 @@ import dev.blamspot.jcode.ext.api.JCodeNativeExtension
 import dev.blamspot.jcode.feature.marketplace.InstalledExtension
 import dev.blamspot.jcode.vdevice.HiddenApi
 import java.io.File
+import dev.blamspot.jcode.core.resource.ManagedCache
+import dev.blamspot.jcode.core.resource.ResourceManagerLocator
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.ceil
 
 /**
  * Loads an extension's **native** UI — an APK it ships — into JCode's own process, on first use.
@@ -50,6 +53,44 @@ internal object NativeExtensionLoader {
 
     private val cache = ConcurrentHashMap<String, Loaded>()
 
+    /**
+     * Lets the OS reclaim loaded plugins under memory pressure.
+     *
+     * By far the heaviest thing this app caches: every entry is a whole APK resident in-process —
+     * a `DexClassLoader`, an `AssetManager` holding the archive open, and a `Context`. Dropping an
+     * entry is safe rather than clever: a page already on screen holds its instance directly, so
+     * eviction costs a reload on the *next* open and nothing else. Kept out of the map means the
+     * loader and its resources can actually be collected once no page refers to them.
+     */
+    private object LoadedPlugins : ManagedCache {
+        override val name = "NativeExtensionLoader"
+        override val size: Int get() = cache.size
+
+        /** Nominal: one entry per installed native extension, so this is a ceiling, not a target. */
+        override val maxSize = 8
+
+        override fun trim(ratio: Float) {
+            if (ratio <= 0f) return
+            val drop = ceil(cache.size * ratio).toInt().coerceAtMost(cache.size)
+            if (drop <= 0) return
+            cache.keys.take(drop).forEach { cache.remove(it) }
+        }
+
+        override fun clear() = cache.clear()
+    }
+
+    @Volatile
+    private var registered = false
+
+    private fun registerForTrimming(context: Context) {
+        if (registered) return
+        synchronized(this) {
+            if (registered) return
+            runCatching { ResourceManagerLocator.resourceManager(context).registerCache(LoadedPlugins) }
+            registered = true
+        }
+    }
+
     /** Drop a plugin — on uninstall or update, so the next open picks up the new archive. */
     fun evict(extensionId: String) {
         cache.remove(extensionId)
@@ -67,6 +108,7 @@ internal object NativeExtensionLoader {
      */
     @Throws(LoadFailure::class)
     fun resolve(host: Context, extension: InstalledExtension): Pair<JCodeNativeExtension, Context> {
+        registerForTrimming(host)
         cache[extension.id]?.let { return it.instance to it.context }
 
         val entry = extension.nativeEntry

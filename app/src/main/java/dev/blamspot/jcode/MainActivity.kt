@@ -132,6 +132,9 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.refreshEnvironment()
+        // ComponentCallbacks2 announces trouble and then goes quiet — there is no "recovered"
+        // callback — so being interactive again is the only honest signal that the squeeze is over.
+        viewModel.resourceManager.onAppForegrounded()
     }
 
     override fun onStop() {

@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:editor`, `:core:buffer`, `:core:term`, `:core:lsp`, `:core:debug`, `:core:resource`, `:core:treesitter` |
-| **Primary sources** | core/editor/src/main/java/dev/blamspot/jcode/core/editor/EditorState.kt, core/buffer/src/main/java/dev/blamspot/jcode/core/buffer/Buffer.kt, core/resource/src/main/java/dev/blamspot/jcode/core/resource/ResourceManager.kt, core/resource/src/main/java/dev/blamspot/jcode/core/resource/MemoryPressure.kt, core/resource/src/main/java/dev/blamspot/jcode/core/resource/NativeHandle.kt |
+| **Primary sources** | core/editor/src/main/java/dev/blamspot/jcode/core/editor/EditorState.kt, core/buffer/src/main/java/dev/blamspot/jcode/core/buffer/Buffer.kt, core/resource/src/main/java/dev/blamspot/jcode/core/resource/ResourceManager.kt, core/resource/src/main/java/dev/blamspot/jcode/core/resource/MemoryPressure.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -110,13 +110,24 @@ caches and pools attach to.
 
 | Type | Role |
 |---|---|
-| `ResourceManager` | Registry + `pressure: StateFlow<MemoryPressure>`; `managedCache(...)` / `managedPool(...)` create and self-register |
+| `ResourceManager` | Registry + `pressure: StateFlow<MemoryPressure>`; `managedCache(...)` creates and self-registers. `onAppForegrounded()` clears the pressure reading |
 | `ManagedCache` / `LruManagedCache` | `LinkedHashMap(accessOrder = true)` with a caller-supplied `sizeOf(K, V): Int` cost function, so eviction is by cost, not entry count. All operations `synchronized(map)` |
-| `ResourcePool<T>` | `ConcurrentLinkedQueue` with `acquire` / `release` / `drain` / `trim(ratio)` |
-| `NativeHandle` | Abstract `AutoCloseable` base for JNI pointers and fds; `Cleaner`-backed with an `AtomicBoolean` single-release guard |
 | `MemoryPressure` | Enum carrying a trim ratio |
 
-### 4.1 Pressure levels
+### 4.1 What registers
+
+Trimming only reclaims what has attached itself, so the list matters more than the mechanism:
+
+| Registrant | Holds | Why it is worth trimming |
+|---|---|---|
+| `ExtensionIconCache` | Decoded icon `ImageBitmap`s, bounded at 64 | Replaced an unbounded map that pinned every icon ever decoded |
+| `NativeExtensionLoader.LoadedPlugins` | One loaded extension APK per entry — a `DexClassLoader`, an `AssetManager` holding the archive open, and a `Context` | The heaviest thing the app caches. Eviction is safe rather than clever: a page already on screen holds its instance directly, so it costs a reload on the *next* open and nothing else |
+
+Deliberately not registered: `WorkspaceManager.nodeMetaCache` is one small pair per project and
+bounded in practice by how many projects exist, so attaching it would mean a new module dependency
+for a few kilobytes.
+
+### 4.2 Pressure levels
 
 | Level | `trimRatio` |
 |---|---|
@@ -155,25 +166,40 @@ callback at the same level keeps trimming.
 | `Cleaner` lambda captures `this` | Silent native leak for the process lifetime |
 | `nativeHandle` field renamed | `NoSuchFieldError` / crash on first snapshot |
 | Blocking call on `viewModelScope`'s default `Dispatchers.Main` | UI freeze during rootfs download, extraction, or `waitFor()` |
-| `close()` and `Cleaner` both racing a handle | Prevented by the `AtomicBoolean` guard in `NativeHandle` and by `Cleanable.clean()` being idempotent |
+| `close()` and `Cleaner` both racing a handle | Each wrapper registers a **capture-free** action over a copied handle and lets `Cleanable.clean()` be the single free path. `clean()` *runs* the action as well as deregistering it, so calling it alongside a manual free is a double free — which is exactly how `TsParser`/`TsTree` used to abort the process |
 
 ---
 
 ## 7. Known gaps
 
-- **The native wrappers bypass `ResourceManager`.** `Buffer`, `VtParser`, `TsParser` and
-  `PtyProcess` each declare their own private `Cleaner` rather than extending `NativeHandle` or
-  registering with `ResourceManager`. Nothing currently registers as a `ManagedCache` or
-  `ResourcePool` either, so `applyTrimming` has nothing to trim in practice.
-- **`MemoryPressure.LOW` is unreachable.** `fromTrimLevel` tests
-  `level < TRIM_MEMORY_BACKGROUND (40) → BACKGROUND`, then
-  `level < TRIM_MEMORY_MODERATE (60) → MODERATE`, then
-  `level < TRIM_MEMORY_RUNNING_LOW (10) → LOW`. Any level below 10 already matched the first
-  branch, so `LOW` is never returned; levels ≥ 60 fall through to `CRITICAL`. Android's real trim
-  constants are not monotonic with severity (`RUNNING_LOW = 10` is numerically below
-  `BACKGROUND = 40`), which is what makes this easy to get wrong.
-- `TsParseService` keys its per-document state on `editorState.hashCode().toString()`, which is not
-  a guaranteed-unique identity.
+Four defects here were fixed at 1.6.2; what they were is kept because each is easy to reintroduce.
+
+- **The trim mapping read ranges over constants that are not ordered by severity.** Android's levels
+  are two families — `RUNNING_*` at 5/10/15 (foreground, system starving) and
+  `UI_HIDDEN`/`BACKGROUND`/`MODERATE`/`COMPLETE` at 20/40/60/80 — so testing `level < 40` first
+  swallowed all three `RUNNING_*` levels and `RUNNING_CRITICAL` trimmed 30% instead of 90%. `LOW`
+  sat behind `level < 10` and could never be returned. Each constant is now matched exactly.
+- **`pressure` only ever moved up.** One `CRITICAL` callback pinned the flow for the life of the
+  process. It now reports the last level, and `onAppForegrounded()` (from `MainActivity.onResume`)
+  clears it — `ComponentCallbacks2` has no "recovered" callback of its own.
+- **`LruManagedCache` had two eviction paths and one of them was silent.** `removeEldestEntry`
+  dropped entries without touching `currentSize` while `put` also called `trimToSize`, so the
+  counter drifted above the real total and the cache over-evicted. `trimToSize` is now the only
+  path.
+- **`ResourcePool` and `NativeHandle` are gone.** Both were unused and both were broken —
+  `acquire()` never decremented `currentSize`, so after `maxSize` releases the pool destroyed every
+  object instead of pooling it; `NativeHandle` released twice and registered a `Cleaner` action
+  capturing `this`, so its safety net could never fire.
+
+Remaining, and honest:
+
+- **The native wrappers still bypass `ResourceManager`.** `Buffer`, `VtParser` and `PtyProcess` each
+  declare their own private `Cleaner`. That is correct as written — the capture-free form — just not
+  shared.
+- **WebViews are the largest thing still unmanaged.** `ScmWebViewHolder` and `VsixViewHolder` hold
+  live `WebView`s per extension, which dwarf every registered cache. They are deliberately not
+  trimmed: destroying one that is on screen blanks the user's panel, and this area has a history of
+  blank-panel bugs. Wiring it needs a way to know which holders are currently composed.
 
 ---
 
