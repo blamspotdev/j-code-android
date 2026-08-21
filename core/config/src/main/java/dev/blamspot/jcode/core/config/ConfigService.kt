@@ -82,6 +82,12 @@ class ConfigService {
     // change re-publishes the effective config and live-updates open editors with no scope override.
     private var globalEditorFontSize: Float = 14f
 
+    // Same idea for word wrap. Bottoming the merge out at a literal `false` instead was what made
+    // [EffectiveEditorConfig.wordWrap] unreadable — a caller who used it would have overridden the
+    // Global toggle with `false` for everyone without a .jcode key, so open editors were fed the
+    // Global setting *around* the config and a `wordWrap` override at any scope did nothing.
+    private var globalEditorWordWrap: Boolean = false
+
     private val _effectiveConfig = MutableStateFlow(computeEffective(null, null))
     val effectiveConfig: StateFlow<EffectiveConfig> = _effectiveConfig.asStateFlow()
 
@@ -90,6 +96,13 @@ class ConfigService {
         val coerced = size.coerceIn(8f, 72f)
         if (coerced == globalEditorFontSize) return
         globalEditorFontSize = coerced
+        publishEffective()
+    }
+
+    /** Set the Global-settings word-wrap default and re-publish if it changed. */
+    fun setGlobalEditorWordWrap(enabled: Boolean) {
+        if (enabled == globalEditorWordWrap) return
+        globalEditorWordWrap = enabled
         publishEffective()
     }
 
@@ -480,7 +493,8 @@ class ConfigService {
             fontSize = prjEditor?.fontSize ?: wsEditor?.fontSize ?: defaults.editor.fontSize ?: globalEditorFontSize,
             tabSize = prjEditor?.tabSize ?: wsEditor?.tabSize ?: defaults.editor.tabSize ?: 4,
             insertSpaces = prjEditor?.insertSpaces ?: wsEditor?.insertSpaces ?: defaults.editor.insertSpaces ?: true,
-            wordWrap = prjEditor?.wordWrap ?: wsEditor?.wordWrap ?: defaults.editor.wordWrap ?: false,
+            wordWrap = prjEditor?.wordWrap ?: wsEditor?.wordWrap ?: defaults.editor.wordWrap
+                ?: globalEditorWordWrap,
             formatOnSave = prjEditor?.formatOnSave ?: wsEditor?.formatOnSave ?: defaults.editor.formatOnSave ?: false,
             ligatures = prjEditor?.ligatures ?: wsEditor?.ligatures ?: defaults.editor.ligatures ?: true,
             // null here = no .jcode override at any scope; the app-level default is applied downstream.

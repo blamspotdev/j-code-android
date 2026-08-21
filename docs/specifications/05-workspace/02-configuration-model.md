@@ -108,7 +108,7 @@ All of the above (nullable), plus:
 
 | Effective block | Defaults |
 |---|---|
-| `EffectiveEditorConfig` | `fontSize = 14f`, `tabSize = 4`, `insertSpaces = true`, `wordWrap = false`, `formatOnSave = false`, `ligatures = true`, `tabColoring = null` |
+| `EffectiveEditorConfig` | `fontSize = 14f`, `tabSize = 4`, `insertSpaces = true`, `wordWrap = ` Global setting, `formatOnSave = false`, `ligatures = true`, `tabColoring = null` |
 | `EffectiveFilesConfig` | `exclude = ["**/node_modules/**", "**/.git/**", "**/build/**"]` |
 | `EffectiveExplorerConfig` | `viewMode = "Tree"` |
 | `EffectiveSearchConfig` | `exclude = ["**/node_modules/**", "**/.git/**"]` |
@@ -133,9 +133,15 @@ built-in defaults  →  workspace config  →  project config   ⇒  EffectiveCo
 `computeEffective(workspace, project)` performs the merge field by field: a non-null project value
 wins, else a non-null workspace value, else the default.
 
-`editor.fontSize` has an extra layer: `setGlobalEditorFontSize(size)` folds the app-level Settings
-default in **beneath** workspace and project, so the global preference acts as the base rather than
-an override.
+`editor.fontSize` and `editor.wordWrap` have an extra layer: `setGlobalEditorFontSize(size)` and
+`setGlobalEditorWordWrap(enabled)` fold the app-level Settings default in **beneath** workspace and
+project, so the global preference acts as the base rather than an override.
+
+Until 1.6.2 only `fontSize` had it. `wordWrap` bottomed out at a literal `false`, which meant the
+merged value could not be read: doing so would have forced wrap off for every user who had the
+Global toggle on and no `.jcode` key. Open editors were therefore fed the Global setting *around*
+the config, and a `wordWrap` override at workspace or project scope was parsed, merged, written back
+— and never applied.
 
 ---
 

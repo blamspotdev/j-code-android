@@ -3032,6 +3032,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             editorFontSizeGlobal.collect { configService.setGlobalEditorFontSize(it) }
         }
+        viewModelScope.launch {
+            editorWordWrap.collect { configService.setGlobalEditorWordWrap(it) }
+        }
 
         // The ONLY thing that starts diagnostic recording: it follows the user's opt-in and stops
         // the moment they switch it back off.
@@ -3048,8 +3051,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            combine(effectiveConfig, editorWordWrap) { config, wrap -> config to wrap }
-                .collectLatest { (config, wrap) -> applyEffectiveConfigToOpenTabs(config, wrap) }
+            effectiveConfig.collectLatest { applyEffectiveConfigToOpenTabs(it) }
         }
 
         viewModelScope.launch {
@@ -6017,20 +6019,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return hasLocalProject
     }
 
-    private fun applyEffectiveConfigToOpenTabs(config: EffectiveConfig, wordWrap: Boolean = editorWordWrap.value) {
+    private fun applyEffectiveConfigToOpenTabs(config: EffectiveConfig) {
         _editorGroup.value.tabs.forEach { tab ->
-            applyConfigToTab(tab, config, wordWrap)
+            applyConfigToTab(tab, config)
         }
     }
 
-    private fun applyConfigToTab(tab: EditorTab, config: EffectiveConfig, wordWrap: Boolean = editorWordWrap.value) {
+    private fun applyConfigToTab(tab: EditorTab, config: EffectiveConfig) {
         val editorState = tab.editorState ?: return
         editorState.updateRenderConfig { current ->
             current.copy(
                 fontSizeSp = config.editor.fontSize,
                 tabWidth = config.editor.tabSize,
                 ligatures = config.editor.ligatures,
-                wordWrap = wordWrap,
+                wordWrap = config.editor.wordWrap,
             )
         }
     }
