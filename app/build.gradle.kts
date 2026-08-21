@@ -198,7 +198,6 @@ dependencies {
     implementation(project(":core:buffer"))
     implementation(project(":core:editor"))
     implementation(project(":core:editor-completion"))
-    implementation(project(":core:treesitter"))
     implementation(project(":core:term"))
     implementation(project(":core:distro"))
     implementation(project(":core:lsp"))
@@ -219,16 +218,12 @@ dependencies {
     implementation(project(":feature:onboarding"))
 
     // Native modules
-    implementation(project(":native:core"))
     implementation(project(":native:buffer"))
     implementation(project(":native:editor-render"))
-    implementation(project(":native:tree-sitter"))
-    implementation(project(":native:libgit2"))
     implementation(project(":native:ripgrep-ffi"))
     implementation(project(":native:pty"))
     implementation(project(":native:vt"))
     implementation(project(":native:wasmtime-ffi"))
-    implementation(project(":native:grammars"))
     implementation(project(":native:proot"))
 
     // Debug

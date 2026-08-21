@@ -6,7 +6,6 @@ import dev.blamspot.jcode.core.search.SearchEngine
 import dev.blamspot.jcode.core.search.SearchOptions
 import dev.blamspot.jcode.core.term.PtyProcess
 import dev.blamspot.jcode.core.term.VtParser
-import dev.blamspot.jcode.core.treesitter.TsParser
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -21,13 +20,9 @@ import java.io.File
  * Loading proves very little on its own: JCode binds JNI implicitly, by symbol name, so an entry
  * point that no longer matches its Kotlin declaration links fine and fails at the first *call*.
  * `dlopen` succeeding is exactly what that failure looks like right up until something calls it.
- * These four are the libraries no other instrumented test reaches — buffer and the editor core are
+ * These three are the libraries no other instrumented test reaches — buffer and the editor core are
  * already covered by the differential fuzz tests in `:core:buffer` and `:core:editor`.
- *
- * [treeSitterParserClosesExactlyOnce] is also a regression test: `TsParser.close` and
- * `TsTree.close` used to call `nativeClose` *and* `Cleanable.clean()`, which runs the registered
- * action rather than merely dropping it — so both deleted the same native handle twice and the
- * second `ts_parser_delete` aborted the process.
+
  */
 @RunWith(AndroidJUnit4::class)
 class NativeCallSmokeTest {
@@ -82,13 +77,5 @@ class NativeCallSmokeTest {
         } finally {
             dir.deleteRecursively()
         }
-    }
-
-    @Test
-    fun treeSitterParserClosesExactlyOnce() {
-        val parser = TsParser()
-        parser.close()
-        // Idempotent, and neither call may reach the native delete a second time.
-        parser.close()
     }
 }
