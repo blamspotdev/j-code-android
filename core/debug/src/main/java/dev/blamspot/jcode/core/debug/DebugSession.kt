@@ -171,6 +171,7 @@ class DebugSession(
             result = body.optString("result", ""),
             type = body.optString("type").takeIf { it.isNotBlank() },
             variablesReference = body.optInt("variablesReference", 0),
+            indexedVariables = body.optInt("indexedVariables", 0),
         )
     }
 
@@ -408,6 +409,7 @@ class DebugSession(
                 value = v.optString("value", ""),
                 type = if (v.has("type")) v.optString("type") else null,
                 variablesReference = v.optInt("variablesReference", 0),
+                indexedVariables = v.optInt("indexedVariables", 0),
             )
         }
     }
@@ -418,11 +420,24 @@ enum class DebugState { DISCONNECTED, STARTING, INITIALIZING, RUNNING, STOPPED, 
 data class DapThread(val id: Int, val name: String)
 data class DapStackFrame(val id: Int, val name: String, val sourcePath: String?, val line: Int, val column: Int)
 data class DapScope(val name: String, val variablesReference: Int, val expensive: Boolean)
-data class DapVariable(val name: String, val value: String, val type: String?, val variablesReference: Int) {
+data class DapVariable(
+    val name: String,
+    val value: String,
+    val type: String?,
+    val variablesReference: Int,
+    /** DAP `indexedVariables`: element count for an array/list, 0 when the value has none. */
+    val indexedVariables: Int = 0,
+) {
     val expandable: Boolean get() = variablesReference > 0
 }
 /** An `evaluate` response: what to show, and the handle to its children when it has any. */
-data class DapEvaluation(val result: String, val type: String?, val variablesReference: Int) {
+data class DapEvaluation(
+    val result: String,
+    val type: String?,
+    val variablesReference: Int,
+    /** DAP `indexedVariables`: element count for an array/list, 0 when the value has none. */
+    val indexedVariables: Int = 0,
+) {
     val expandable: Boolean get() = variablesReference > 0
 }
 data class DapBreakpoint(val id: Int, val verified: Boolean, val line: Int)

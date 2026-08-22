@@ -53,8 +53,53 @@ data class InspectedValue(
     val value: String,
     val type: String? = null,
     val reference: Int = 0,
+    /** How many elements, when the adapter says this is an indexed value (array/list). 0 otherwise. */
+    val elementCount: Int = 0,
 ) {
     val expandable: Boolean get() = reference > 0
+
+    /**
+     * What to actually show for the value.
+     *
+     * Adapters render a container as its own type — netcoredbg gives a `List<int>` the value
+     * `{System.Collections.Generic.List<int>}` — which is pure duplication: the type already sits
+     * beside the name, so the value line says nothing about the contents. When the adapter reports an
+     * element count, prefer the size. Arrays that already carry their dimension (`{int[4]}`) keep it
+     * and only lose the braces, since the dimension IS the useful part.
+     */
+    /**
+     * The text inside `{...}` when the value is nothing but a wrapped bare token, else null.
+     *
+     * A real composite value — Python's `{'a': 1}`, a JSON blob — carries quotes/colons/commas/spaces
+     * and deliberately fails this test, so it is never rewritten.
+     */
+    private val braceInner: String?
+        get() = value.trim().takeIf { it.length > 2 && it.startsWith("{") && it.endsWith("}") }
+            ?.drop(1)?.dropLast(1)
+            ?.takeIf { inner -> inner.none { it.isWhitespace() || it in "'\":,;=" } }
+
+    /**
+     * True when the adapter rendered the value as nothing but the type it already reports — a
+     * `List<int>` whose value is `{System.Collections.Generic.List<int>}`. Says nothing about the
+     * contents, so the host takes it as the cue to go find a size.
+     */
+    val valueEchoesType: Boolean get() = braceInner?.let { type == null || it == type } == true
+
+    /**
+     * What to actually show for the value: the element count for a container that would otherwise
+     * repeat its own type, the bare dimension for an array (`{int[4]}` → `int[4]`, where the
+     * dimension IS the useful part), and anything else exactly as the adapter rendered it.
+     */
+    val displayValue: String
+        get() {
+            val inner = braceInner
+            return when {
+                elementCount > 0 && valueEchoesType ->
+                    if (elementCount == 1) "1 item" else "$elementCount items"
+                inner != null -> inner
+                else -> value
+            }
+        }
 }
 
 /** A resolved long-press variable inspection: the word and its value. */
@@ -112,7 +157,7 @@ internal fun VariableInspectHeader(
             }
         }
         Text(
-            text = resolved.value,
+            text = resolved.displayValue,
             style = MaterialTheme.typography.bodySmall,
             fontFamily = FontFamily.Monospace,
             color = MaterialTheme.colorScheme.onSurface,
@@ -191,7 +236,7 @@ internal fun VariableDetailDialog(
                         .padding(8.dp),
                 ) {
                     Text(
-                        text = root.value,
+                        text = root.displayValue,
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -287,7 +332,7 @@ private fun VariableTreeRow(row: TreeRow, onToggle: () -> Unit) {
             modifier = Modifier.padding(start = 4.dp),
         )
         Text(
-            text = row.value.value,
+            text = row.value.displayValue,
             style = MaterialTheme.typography.bodySmall,
             fontFamily = FontFamily.Monospace,
             maxLines = 1,
