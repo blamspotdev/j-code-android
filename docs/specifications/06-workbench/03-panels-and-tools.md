@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:app`, `:core:design` |
-| **Primary sources** | app/src/main/java/dev/jcode/workbench/WorkbenchModel.kt, app/src/main/java/dev/jcode/workbench/WorkbenchPanels.kt, app/src/main/java/dev/jcode/CommandPalette.kt, app/src/main/java/dev/jcode/PaletteCommandsUi.kt, core/design/src/main/java/dev/jcode/design/CommandPaletteSettings.kt, core/design/src/main/java/dev/jcode/design/DesignSystem.kt, core/design/src/main/java/dev/jcode/design/ExtraKeys.kt, core/design/src/main/java/dev/jcode/design/VolumeKeysSetting.kt, app/src/main/java/dev/jcode/IssuesPanel.kt, app/src/main/java/dev/jcode/OutputLog.kt, app/src/main/java/dev/jcode/TaskManagerPanel.kt, app/src/main/java/dev/jcode/ToolchainManagerPanel.kt, app/src/main/java/dev/jcode/workbench/DevToolsPanel.kt |
+| **Primary sources** | app/src/main/java/dev/blamspot/jcode/workbench/WorkbenchModel.kt, app/src/main/java/dev/blamspot/jcode/workbench/WorkbenchPanels.kt, app/src/main/java/dev/blamspot/jcode/CommandPalette.kt, app/src/main/java/dev/blamspot/jcode/PaletteCommandsUi.kt, core/design/src/main/java/dev/blamspot/jcode/design/CommandPaletteSettings.kt, core/design/src/main/java/dev/blamspot/jcode/design/DesignSystem.kt, core/design/src/main/java/dev/blamspot/jcode/design/ExtraKeys.kt, core/design/src/main/java/dev/blamspot/jcode/design/VolumeKeysSetting.kt, app/src/main/java/dev/blamspot/jcode/IssuesPanel.kt, app/src/main/java/dev/blamspot/jcode/OutputLog.kt, app/src/main/java/dev/blamspot/jcode/TaskManagerPanel.kt, app/src/main/java/dev/blamspot/jcode/ToolchainManagerPanel.kt, app/src/main/java/dev/blamspot/jcode/workbench/DevToolsPanel.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -84,13 +84,13 @@ falls back to the default when the named built-in is not currently offered.
 
 | Panel | File | Notes |
 |---|---|---|
-| Issues | `app/src/main/java/dev/jcode/IssuesPanel.kt` | Fed by `DiagnosticsBus`; drives the status-bar count and in-gutter squiggles |
-| Output | `app/src/main/java/dev/jcode/OutputLog.kt` | Fed by `TerminalSessionManager.onOutput`, a raw byte tee from run terminals |
-| Tasks | `app/src/main/java/dev/jcode/TaskManagerPanel.kt` | Backend sessions plus a live `/proc` listing |
-| Toolchains | `app/src/main/java/dev/jcode/ToolchainManagerPanel.kt` | SDK, LSP and debug-engine catalogs merged |
-| DevTools | `app/src/main/java/dev/jcode/workbench/DevToolsPanel.kt` | For `BuiltinBrowser` |
-| Ext Dev | `app/src/main/java/dev/jcode/workbench/ExtensionDevPanel.kt`, `ExtensionDevLog.kt` | Unsigned sideloads only; the extension's `console` output lands here, **not** in logcat |
-| Terminal host | `app/src/main/java/dev/jcode/TerminalSessionHost.kt` | Session tabs, nested `↳` sub-shell tabs |
+| Issues | `app/src/main/java/dev/blamspot/jcode/IssuesPanel.kt` | Fed by `DiagnosticsBus`; drives the status-bar count and in-gutter squiggles |
+| Output | `app/src/main/java/dev/blamspot/jcode/OutputLog.kt` | Fed by `TerminalSessionManager.onOutput`, a raw byte tee from run terminals |
+| Tasks | `app/src/main/java/dev/blamspot/jcode/TaskManagerPanel.kt` | Backend sessions plus a live `/proc` listing |
+| Toolchains | `app/src/main/java/dev/blamspot/jcode/ToolchainManagerPanel.kt` | SDK, LSP and debug-engine catalogs merged |
+| DevTools | `app/src/main/java/dev/blamspot/jcode/workbench/DevToolsPanel.kt` | For `BuiltinBrowser` |
+| Ext Dev | `app/src/main/java/dev/blamspot/jcode/workbench/ExtensionDevPanel.kt`, `ExtensionDevLog.kt` | Unsigned sideloads only; the extension's `console` output lands here, **not** in logcat |
+| Terminal host | `app/src/main/java/dev/blamspot/jcode/TerminalSessionHost.kt` | Session tabs, nested `↳` sub-shell tabs |
 
 **Source Control refreshes only while it is on screen.** The SCM extension re-reads the working tree
 when the app raises its `filesChanged` hint, but the app only ever raised it for changes *it* made —

@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | **Status** | Implemented — device-verified on Android 13 |
-| **Modules** | `:app` (`dev.jcode.vdevice`) |
-| **Primary sources** | app/src/main/java/dev/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualStorage.kt, VirtualStorageProvider.kt, GuestDocuments.kt, GuestResults.kt, DeviceIntents.kt, GuestNetwork.kt, HiddenSeams.kt, VirtualSettingsProvider.kt, GuestSurfaces.kt, SimulatedHardware.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
+| **Modules** | `:app` (`dev.blamspot.jcode.vdevice`) |
+| **Primary sources** | app/src/main/java/dev/blamspot/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualStorage.kt, VirtualStorageProvider.kt, GuestDocuments.kt, GuestResults.kt, DeviceIntents.kt, GuestNetwork.kt, HiddenSeams.kt, VirtualSettingsProvider.kt, GuestSurfaces.kt, SimulatedHardware.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/blamspot/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/blamspot/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
 | **Verified against** | device-verified on Android 13, 2026-08-15 |
 
 ---
@@ -115,13 +115,13 @@ a virtual display it asks nothing of the activity task manager.
 
 ```mermaid
 flowchart LR
-    subgraph ide["dev.jcode (main)"]
+    subgraph ide["dev.blamspot.jcode (main)"]
         page["AppSandboxPage"]
         sv["AppSandboxSurfaceView"]
         sandbox["AppSandboxSession (bind/unbind)"]
         adb["VirtualDeviceAdbService"]
     end
-    subgraph guest["dev.jcode:guest"]
+    subgraph guest["dev.blamspot.jcode:guest"]
         svc["GuestSessionService (IGuestSession)"]
         eg["EmbeddedGuest"]
         gr["GuestRuntime + hooks"]
@@ -853,7 +853,7 @@ at all, and an app that chose for itself would be disagreeing with the switch so
 
 **Files** browses the device's storage and is also its picker — on a phone those are the same app,
 and making them the same app here means the screen that answers `ACTION_OPEN_DOCUMENT` is one
-somebody has actually used. It answers with a **device path** under `dev.jcode.vdevice.DEVICE_PATH`,
+somebody has actually used. It answers with a **device path** under `dev.blamspot.jcode.vdevice.DEVICE_PATH`,
 and `GuestDocuments.addressed` turns that into the `content://` URI the requester receives — a tree
 URI for a folder request, a document URI otherwise. The URI belongs to JCode's documents provider,
 whose authority and document-id encoding are the container's business; an app that guessed at them
@@ -1132,7 +1132,7 @@ a name against it in the device's log.
 
 The Settings app finds the provider by asking the package manager who owns its own uid — not
 `getPackageName()`, which inside a guest answers with the *guest's* package. That is also what makes
-one build of the app work against `dev.jcode`, `dev.jcode.debug` and `dev.jcode.beta` without knowing
+one build of the app work against `dev.blamspot.jcode`, `dev.blamspot.jcode.debug` and `dev.blamspot.jcode.beta` without knowing
 there is more than one.
 
 #### What each screen can honestly claim

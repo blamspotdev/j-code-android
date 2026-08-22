@@ -13,9 +13,12 @@ JCode modifications (both marked `JCode modification` in shmem.c):
    `fstat`, replacing ashmem/`ASharedMemory`. Opening `/dev/ashmem` is SELinux-denied for apps
    targeting SDK >= 29 and the device node is gone from modern kernels; memfd needs no device,
    no ioctls, and no libandroid/libcutils dependency.
-2. **Named-key registry path.** `ASHV_KEY_SYMLINK_PATH` points at
-   `/data/data/dev.jcode/files/tmp/` (the Termux build hardcoded a com.termux path that does
-   not exist here, making named-key `shmget` spin forever).
+2. **Named-key registry path.** The registry symlinks go in `$PROOT_TMP_DIR`, read at runtime
+   (the Termux build hardcoded a com.termux path that does not exist here, making named-key
+   `shmget` spin forever). `ProotManager` exports that variable on every spawn and creates the
+   directory first, so the path follows the install — which a compiled-in one cannot, since
+   `.debug` and `.beta` have their own data directories. `ASHV_KEY_DIR_FALLBACK` covers a proot
+   started without the variable.
 
 Rebuild (NDK r27c, from this directory):
 
@@ -28,5 +31,5 @@ $NDK/toolchains/llvm/prebuilt/<host>/bin/aarch64-linux-android33-clang \
 ```
 
 After changing the binary, bump `SUPPORT_LIBS_VERSION` in
-`core/distro/src/main/java/dev/jcode/core/distro/ProotManager.kt` so existing installs
+`core/distro/src/main/java/dev/blamspot/jcode/core/distro/ProotManager.kt` so existing installs
 re-extract it.

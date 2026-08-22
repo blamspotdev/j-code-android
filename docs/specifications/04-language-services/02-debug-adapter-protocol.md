@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented — device-verified for Python (debugpy) and Java; other adapters have known issues |
 | **Modules** | `:core:debug`, `:core:distro` (engine catalog), `:feature:debug`, `:app` |
-| **Primary sources** | core/debug/src/main/java/dev/jcode/core/debug/DebugSession.kt (395 lines), core/distro/src/main/java/dev/jcode/core/distro/DebugEngineModels.kt, app/src/main/java/dev/jcode/debug/DebugController.kt (702 lines), app/src/main/java/dev/jcode/DebugSessionPanel.kt, tools/java-dap/ |
+| **Primary sources** | core/debug/src/main/java/dev/blamspot/jcode/core/debug/DebugSession.kt (395 lines), core/distro/src/main/java/dev/blamspot/jcode/core/distro/DebugEngineModels.kt, app/src/main/java/dev/blamspot/jcode/debug/DebugController.kt (702 lines), app/src/main/java/dev/blamspot/jcode/DebugSessionPanel.kt, tools/java-dap/ |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -220,8 +220,8 @@ Device-verified findings:
 - **netcoredbg**: attach stalls.
 - **java-debug**: functional through `tools/java-dap` for Android attach; the general JVM launch path
   is thin.
-- `:feature:debug`'s `DebugFeature` is a stub; the real UI is `app/src/main/java/dev/jcode/DebugSessionPanel.kt` and
-  `app/src/main/java/dev/jcode/RunDebugPanel.kt`.
+- `:feature:debug`'s `DebugFeature` is a stub; the real UI is `app/src/main/java/dev/blamspot/jcode/DebugSessionPanel.kt` and
+  `app/src/main/java/dev/blamspot/jcode/RunDebugPanel.kt`.
 - `kotlinx-serialization-json` is declared in `core/debug/build.gradle.kts` and unused — parsing is
   `org.json`.
 - `stackTrace` is capped at 50 frames with no paging.

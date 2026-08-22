@@ -18,7 +18,7 @@ Requires Gradle 8.x + a JDK 17+:
 
 ```
 gradle shadowJar
-# → build/libs/jcode-java-dap.jar   (Main-Class: dev.jcode.javadap.Main)
+# → build/libs/jcode-java-dap.jar   (Main-Class: dev.blamspot.jcode.javadap.Main)
 ```
 
 This is a **standalone** Gradle build, intentionally kept out of the Android

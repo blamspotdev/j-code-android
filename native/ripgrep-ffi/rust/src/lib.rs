@@ -11,7 +11,7 @@ use jni::objects::{JClass, JObject, JObjectArray, JString, JValue};
 use jni::sys::jint;
 use jni::JNIEnv;
 
-// Must mirror NativeSearch.kt (dev.jcode.core.search).
+// Must mirror NativeSearch.kt (dev.blamspot.jcode.core.search).
 const FLAG_REGEX: jint = 1;
 const FLAG_CASE_SENSITIVE: jint = 2;
 const FLAG_WHOLE_WORD: jint = 4;
@@ -22,7 +22,7 @@ const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 /// Distinguishes the real cargo-built library from the CMake stub (which lacks this symbol):
 /// the Kotlin side probes it after loadLibrary and falls back to the in-process search if absent.
 #[no_mangle]
-pub extern "system" fn Java_dev_jcode_core_search_NativeSearch_nativeProbe(
+pub extern "system" fn Java_dev_blamspot_jcode_core_search_NativeSearch_nativeProbe(
     _env: JNIEnv,
     _class: JClass,
 ) -> jint {
@@ -32,7 +32,7 @@ pub extern "system" fn Java_dev_jcode_core_search_NativeSearch_nativeProbe(
 /// Walks `root` (gitignore-aware) and streams every match to `sink.onMatch(...)`.
 /// Stops early when the sink returns false or `max_results` is reached. Returns matches emitted.
 #[no_mangle]
-pub extern "system" fn Java_dev_jcode_core_search_NativeSearch_nativeSearch(
+pub extern "system" fn Java_dev_blamspot_jcode_core_search_NativeSearch_nativeSearch(
     mut env: JNIEnv,
     _class: JClass,
     root: JString,

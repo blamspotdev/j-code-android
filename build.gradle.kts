@@ -49,15 +49,11 @@ private val configuredCmakeVersion = System.getenv("ANDROID_HOME")
         }
     }
     ?: desiredCmakeVersion
-// :native:core configures itself (its JNI output feeds merged_native_libs directly, not the
-// generated/jniLibs convention) but must agree with everyone else on the cmake to run.
 extra["jcodeCmakeVersion"] = configuredCmakeVersion
 
 private val nativeModuleIds = mapOf(
     ":native:buffer" to "buffer",
     ":native:editor-render" to "editor-render",
-    ":native:tree-sitter" to "tree-sitter",
-    ":native:libgit2" to "libgit2",
     ":native:ripgrep-ffi" to "ripgrep-ffi",
     ":native:pty" to "pty",
     ":native:vt" to "vt",

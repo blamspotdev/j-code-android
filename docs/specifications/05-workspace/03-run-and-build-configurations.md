@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:config`, `:app` |
-| **Primary sources** | core/config/src/main/java/dev/jcode/core/config/RunConfig.kt, app/src/main/java/dev/jcode/run/ProjectRunner.kt, app/src/main/java/dev/jcode/run/RunConfigPage.kt, app/src/main/java/dev/jcode/run/BuildConfigPage.kt, app/src/main/java/dev/jcode/RunDebugPanel.kt, app/src/main/java/dev/jcode/debug/DebugController.kt, core/design/src/main/java/dev/jcode/design/DesignSystem.kt (`AndroidRunTargets`) |
+| **Primary sources** | core/config/src/main/java/dev/blamspot/jcode/core/config/RunConfig.kt, app/src/main/java/dev/blamspot/jcode/run/ProjectRunner.kt, app/src/main/java/dev/blamspot/jcode/run/RunConfigPage.kt, app/src/main/java/dev/blamspot/jcode/run/BuildConfigPage.kt, app/src/main/java/dev/blamspot/jcode/RunDebugPanel.kt, app/src/main/java/dev/blamspot/jcode/debug/DebugController.kt, core/design/src/main/java/dev/blamspot/jcode/design/DesignSystem.kt (`AndroidRunTargets`) |
 | **Verified against** | commit `4d87b40`, 2026-08-14 |
 
 ---
@@ -259,9 +259,9 @@ For an Android application module, `DebugController` detects the module
 
 | Screen | File | Tab kind |
 |---|---|---|
-| Run configuration editor | `app/src/main/java/dev/jcode/run/RunConfigPage.kt` | `EditorPageKind.RunConfig` |
-| Build configuration editor | `app/src/main/java/dev/jcode/run/BuildConfigPage.kt` | `EditorPageKind.BuildConfig` |
-| Run & Debug drawer tool | `app/src/main/java/dev/jcode/RunDebugPanel.kt` | `WorkbenchTool.RunDebug` |
+| Run configuration editor | `app/src/main/java/dev/blamspot/jcode/run/RunConfigPage.kt` | `EditorPageKind.RunConfig` |
+| Build configuration editor | `app/src/main/java/dev/blamspot/jcode/run/BuildConfigPage.kt` | `EditorPageKind.BuildConfig` |
+| Run & Debug drawer tool | `app/src/main/java/dev/blamspot/jcode/RunDebugPanel.kt` | `WorkbenchTool.RunDebug` |
 
 ---
 
@@ -278,8 +278,8 @@ For an Android application module, `DebugController` detects the module
    which phone a run lands on is device-local state.
 9. Only a pick that adb still lists forces `ANDROID_SERIAL`.
 
-> **Naming collision:** `dev.jcode.core.config.BuildConfig` shares its simple name with the
-> Gradle-generated `dev.jcode.BuildConfig`. In `:app` sources, importing the config type shadows the
+> **Naming collision:** `dev.blamspot.jcode.core.config.BuildConfig` shares its simple name with the
+> Gradle-generated `dev.blamspot.jcode.BuildConfig`. In `:app` sources, importing the config type shadows the
 > generated one. Qualify explicitly when both are needed.
 
 ---

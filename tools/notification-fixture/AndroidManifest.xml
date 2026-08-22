@@ -24,8 +24,8 @@
             android:name=".NotifyReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="dev.jcode.notifyfixture.REPLY" />
-                <action android:name="dev.jcode.notifyfixture.DISMISS" />
+                <action android:name="dev.blamspot.jcode.notifyfixture.REPLY" />
+                <action android:name="dev.blamspot.jcode.notifyfixture.DISMISS" />
             </intent-filter>
         </receiver>
     </application>

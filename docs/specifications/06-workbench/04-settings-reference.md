@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:feature:settings`, `:core:design`, `:core:config` |
-| **Primary sources** | feature/settings/src/main/java/dev/jcode/feature/settings/SettingsFeature.kt (1,949 lines), core/design/src/main/java/dev/jcode/design/SettingsDefaults.kt, core/design/src/main/java/dev/jcode/design/SettingsDropdownRow.kt, core/design/src/main/java/dev/jcode/design/SettingsResettableRow.kt, core/design/src/main/java/dev/jcode/design/SettingsTextFieldRow.kt, core/design/src/main/java/dev/jcode/design/DesignSystem.kt, app/src/main/java/dev/jcode/SettingsBackup.kt |
+| **Primary sources** | feature/settings/src/main/java/dev/blamspot/jcode/feature/settings/SettingsFeature.kt (1,949 lines), core/design/src/main/java/dev/blamspot/jcode/design/SettingsDefaults.kt, core/design/src/main/java/dev/blamspot/jcode/design/SettingsDropdownRow.kt, core/design/src/main/java/dev/blamspot/jcode/design/SettingsResettableRow.kt, core/design/src/main/java/dev/blamspot/jcode/design/SettingsTextFieldRow.kt, core/design/src/main/java/dev/blamspot/jcode/design/DesignSystem.kt, app/src/main/java/dev/blamspot/jcode/SettingsBackup.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -210,6 +210,27 @@ produces a `tar.gz` of the rootfs via `RootfsArchiver`.
 
 - Some enum member names are historical, kept for persistence compatibility rather than clarity.
 - The ENV VAR tab sits in the scope strip but is not a scope, which can read as one.
+
+### 11.1 Wiring audit, 1.6.2
+
+Every control on this screen was traced from its row through to something that acts on the value —
+55 persisted preference keys, 43 settings `CompositionLocal`s and the scoped `EditorConfig` block.
+All but one are wired. Two things are worth recording because they made the audit harder than it
+looks, and will do so again:
+
+- **A setting is not dead just because its flow has no reader.** `restoreLastSession` looks unused
+  until you notice `restoreSessionOnLaunch` reads `restoreLastSessionKey` — the raw preference key —
+  rather than the `StateFlow`. Volume keys are the same: the Settings screen reads
+  `LocalVolumeKeysSetting`, while the behaviour reads `viewModel.volumeUpAction` in `MainActivity`.
+- **A `CompositionLocal` whose only reader is `SettingsFeature` is the shape to look for**, but nine
+  of them match that and eight are legitimate — either the row *is* the feature (backup and update
+  actions), or the value reaches behaviour by a second path (word wrap through `applyConfigToTab`,
+  fonts through `MonoFontCatalog.resolve`, tab colouring through `effectiveTabColoring`,
+  diagnostics through `DiagnosticLog.configure`).
+
+The one that was genuinely dead was the minimap toggle, removed along with `Layer.MINIMAP`. In the
+scoped config, `formatOnSave` was wired up and `aggressiveAutocorrectKill` and `watcherExclude` were
+removed — see [Configuration model](../05-workspace/02-configuration-model.md).
 
 ---
 

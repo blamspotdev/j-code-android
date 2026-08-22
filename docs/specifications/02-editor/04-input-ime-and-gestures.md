@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:editor` |
-| **Primary sources** | core/editor/src/main/java/dev/jcode/core/editor/EditorView.kt (1,657 lines), core/editor/src/main/java/dev/jcode/core/editor/WrapMap.kt |
+| **Primary sources** | core/editor/src/main/java/dev/blamspot/jcode/core/editor/EditorView.kt (1,657 lines), core/editor/src/main/java/dev/blamspot/jcode/core/editor/WrapMap.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---

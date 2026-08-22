@@ -155,13 +155,13 @@ ELF loader.
 
 | Kotlin class | Library | Loaded by | Native source |
 |---|---|---|---|
-| `dev.jcode.core.buffer.Buffer`, `.Snapshot` | `jcodebuffer` | `System.loadLibrary("jcodebuffer")` in `Buffer` | `native/buffer/src/piece_tree.cpp`, `jni_buffer.cpp` |
-| `dev.jcode.core.buffer.NativeHighlighter` | `jcodebuffer` | `runCatching { System.loadLibrary("jcodebuffer") }` | `native/buffer/src/highlight.cpp`, `jni_highlight.cpp` |
-| `dev.jcode.core.term.PtyProcess` | `pty` | `System.loadLibrary("pty")` | `native/pty/src/pty.cpp`, `jni_pty.cpp` |
-| `dev.jcode.core.term.VtParser` | `jcode_vt` | `System.loadLibrary("jcode_vt")` | `native/vt/src/vt_parser.c`, `jni_vt.c` |
-| `dev.jcode.core.treesitter.Ts*` | `treesitter` | `runCatching { System.loadLibrary("treesitter") }` | `native/tree-sitter/src/jni_treesitter.c` |
-| `dev.jcode.core.search.NativeSearch` | `ripgrep_ffi` | `System.loadLibrary("ripgrep_ffi")` | `native/ripgrep-ffi/rust/src/lib.rs` (or CMake stub) |
-| `dev.jcode.native.core.*` | `jcode_core` | `CoreNativeModule` | `native/core/src/main/cpp/*.cpp` |
+| `dev.blamspot.jcode.core.buffer.Buffer`, `.Snapshot` | `jcodebuffer` | `System.loadLibrary("jcodebuffer")` in `Buffer` | `native/buffer/src/piece_tree.cpp`, `jni_buffer.cpp` |
+| `dev.blamspot.jcode.core.buffer.NativeHighlighter` | `jcodebuffer` | `runCatching { System.loadLibrary("jcodebuffer") }` | `native/buffer/src/highlight.cpp`, `jni_highlight.cpp` |
+| `dev.blamspot.jcode.core.term.PtyProcess` | `pty` | `System.loadLibrary("pty")` | `native/pty/src/pty.cpp`, `jni_pty.cpp` |
+| `dev.blamspot.jcode.core.term.VtParser` | `jcode_vt` | `System.loadLibrary("jcode_vt")` | `native/vt/src/vt_parser.c`, `jni_vt.c` |
+| `dev.blamspot.jcode.core.treesitter.Ts*` | `treesitter` | `runCatching { System.loadLibrary("treesitter") }` | `native/tree-sitter/src/jni_treesitter.c` |
+| `dev.blamspot.jcode.core.search.NativeSearch` | `ripgrep_ffi` | `System.loadLibrary("ripgrep_ffi")` | `native/ripgrep-ffi/rust/src/lib.rs` (or CMake stub) |
+| `dev.blamspot.jcode.native.core.*` | `jcode_core` | `CoreNativeModule` | `native/core/src/main/cpp/*.cpp` |
 
 Each `:native:*` module also ships a `*NativeModule.kt` marker with a `loadLibrary()` helper and a
 `nativeInit` export, used to force-load and probe a library independently of the consumer class.
@@ -229,7 +229,7 @@ the JVM.
 - **`:native:core`'s editor/undo/config engine is orphaned.** `jni_editor_state.cpp` exports
   `Java_dev_jcode_core_editor_EditorState_*` and `Java_dev_jcode_core_editor_UndoManager_*` —
   targeting the *real* Kotlin classes — but `core/editor` declares no `external fun` at all, so
-  nothing binds. `jni_config.cpp` similarly backs `dev.jcode.native.core.ConfigServiceNative`,
+  nothing binds. `jni_config.cpp` similarly backs `dev.blamspot.jcode.native.core.ConfigServiceNative`,
   which nothing references. Only `CoreNativeModule.nativeIsAvailable` and the library's
   `JNI_OnLoad` infrastructure are live.
 - **`:native:grammars` output is never loaded.** `TsLanguage.nativeLoad` works, but no code path

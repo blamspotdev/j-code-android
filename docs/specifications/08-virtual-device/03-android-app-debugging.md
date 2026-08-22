@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:app`, `:core:debug`, `:core:distro`, `tools/java-dap` |
-| **Primary sources** | app/src/main/java/dev/jcode/debug/AndroidAppProject.kt, app/src/main/java/dev/jcode/debug/AndroidDebugAttach.kt (157 lines), app/src/main/java/dev/jcode/debug/DebugController.kt (702 lines), core/distro/src/main/java/dev/jcode/core/distro/adb/AdbHostClient.kt, tools/java-dap/ |
+| **Primary sources** | app/src/main/java/dev/blamspot/jcode/debug/AndroidAppProject.kt, app/src/main/java/dev/blamspot/jcode/debug/AndroidDebugAttach.kt (157 lines), app/src/main/java/dev/blamspot/jcode/debug/DebugController.kt (702 lines), core/distro/src/main/java/dev/blamspot/jcode/core/distro/adb/AdbHostClient.kt, tools/java-dap/ |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---

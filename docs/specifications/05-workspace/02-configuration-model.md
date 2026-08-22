@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:config`, `:feature:settings` |
-| **Primary sources** | core/config/src/main/java/dev/jcode/core/config/ConfigModels.kt (279 lines), core/config/src/main/java/dev/jcode/core/config/ConfigService.kt (794 lines), core/config/src/main/java/dev/jcode/core/config/schema/workspace.schema.json, core/config/src/main/java/dev/jcode/core/config/schema/project.schema.json |
+| **Primary sources** | core/config/src/main/java/dev/blamspot/jcode/core/config/ConfigModels.kt (279 lines), core/config/src/main/java/dev/blamspot/jcode/core/config/ConfigService.kt (794 lines), core/config/src/main/java/dev/blamspot/jcode/core/config/schema/workspace.schema.json, core/config/src/main/java/dev/blamspot/jcode/core/config/schema/project.schema.json |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -90,8 +90,8 @@ All of the above (nullable), plus:
 
 | Block | Fields |
 |---|---|
-| `EditorConfig` | `fontSize: Float?`, `tabSize: Int?`, `insertSpaces: Boolean?`, `wordWrap: Boolean?`, `minimap: Boolean?`, `formatOnSave: Boolean?`, `ligatures: Boolean?`, `aggressiveAutocorrectKill: Boolean?`, `tabColoring: String?` |
-| `FilesConfig` | `exclude: List<String>`, `watcherExclude: List<String>` |
+| `EditorConfig` | `fontSize: Float?`, `tabSize: Int?`, `insertSpaces: Boolean?`, `wordWrap: Boolean?`, `formatOnSave: Boolean?`, `ligatures: Boolean?`, `tabColoring: String?` |
+| `FilesConfig` | `exclude: List<String>` |
 | `ExplorerConfig` | `viewMode: String?` — `"Tree"` or `"List"` |
 | `SearchConfig` | `exclude: List<String>` |
 | `GitConfig` | `autoFetch: Boolean?` |
@@ -108,8 +108,8 @@ All of the above (nullable), plus:
 
 | Effective block | Defaults |
 |---|---|
-| `EffectiveEditorConfig` | `fontSize = 14f`, `tabSize = 4`, `insertSpaces = true`, `wordWrap = false`, `minimap = true`, `formatOnSave = false`, `ligatures = true`, `aggressiveAutocorrectKill = false`, `tabColoring = null` |
-| `EffectiveFilesConfig` | `exclude = ["**/node_modules/**", "**/.git/**", "**/build/**"]`, `watcherExclude = ["**/.git/objects/**", "**/.git/subtree-cache/**"]` |
+| `EffectiveEditorConfig` | `fontSize = 14f`, `tabSize = 4`, `insertSpaces = true`, `wordWrap = ` Global setting, `formatOnSave = false`, `ligatures = true`, `tabColoring = null` |
+| `EffectiveFilesConfig` | `exclude = ["**/node_modules/**", "**/.git/**", "**/build/**"]` |
 | `EffectiveExplorerConfig` | `viewMode = "Tree"` |
 | `EffectiveSearchConfig` | `exclude = ["**/node_modules/**", "**/.git/**"]` |
 | `EffectiveGitConfig` | `autoFetch = true` |
@@ -133,9 +133,15 @@ built-in defaults  →  workspace config  →  project config   ⇒  EffectiveCo
 `computeEffective(workspace, project)` performs the merge field by field: a non-null project value
 wins, else a non-null workspace value, else the default.
 
-`editor.fontSize` has an extra layer: `setGlobalEditorFontSize(size)` folds the app-level Settings
-default in **beneath** workspace and project, so the global preference acts as the base rather than
-an override.
+`editor.fontSize` and `editor.wordWrap` have an extra layer: `setGlobalEditorFontSize(size)` and
+`setGlobalEditorWordWrap(enabled)` fold the app-level Settings default in **beneath** workspace and
+project, so the global preference acts as the base rather than an override.
+
+Until 1.6.2 only `fontSize` had it. `wordWrap` bottomed out at a literal `false`, which meant the
+merged value could not be read: doing so would have forced wrap off for every user who had the
+Global toggle on and no `.jcode` key. Open editors were therefore fed the Global setting *around*
+the config, and a `wordWrap` override at workspace or project scope was parsed, merged, written back
+— and never applied.
 
 ---
 
@@ -175,7 +181,7 @@ Serialization uses SnakeYAML-engine `Dump` with block flow style and 2-space ind
 
 ## 8. JSON Schemas
 
-`core/config/src/main/java/dev/jcode/core/config/schema/{workspace,project}.schema.json` are
+`core/config/src/main/java/dev/blamspot/jcode/core/config/schema/{workspace,project}.schema.json` are
 draft-07 documents mirroring the data classes, with types and ranges (for example `fontSize` 8–72,
 `tabSize` 1–16); the workspace schema also carries `"default"` values matching the effective
 defaults.
@@ -225,7 +231,12 @@ cancelled and reinstalled on each `bindLocalConfigFiles`. All state is exposed a
 - `EffectiveDistroConfig.id` defaults to the literal `"ubuntu"`, which is not a real distro id — the
   live ids are `ubuntu-24.04` and `ubuntu-26.04`. The bottom bar now reports actual environment
   state rather than this value.
-- `EffectiveEditorConfig.minimap` defaults to `true` but there is no minimap.
+- Three keys that parsed, merged and serialised while nothing read them were resolved at 1.6.2.
+  `formatOnSave` is now honoured — `saveTabAwait` formats before it captures the snapshot it
+  writes, preferring a language server and falling back to the built-in formatter, and a formatter
+  that throws leaves the buffer alone rather than costing the user the save. `minimap`,
+  `aggressiveAutocorrectKill` and `watcherExclude` were removed: a documented key that does nothing
+  is worse than an absent one, because it reads as a feature that is broken.
 - The two JSON schemas are maintained by hand alongside the Kotlin models with nothing enforcing
   agreement.
 

@@ -80,7 +80,7 @@ adb -H 127.0.0.1 -P 5038 shell uiautomator dump /sdcard/ui.xml
 ```
 
 Character keys carry their own letter as both `text` and `content-desc`; the rest carry a name and a
-declared id — `dev.jcode.vdevice.keyboard:id/key_shift`, `key_backspace`, `key_action`, `key_space`,
+declared id — `dev.blamspot.jcode.vdevice.keyboard:id/key_shift`, `key_backspace`, `key_action`, `key_space`,
 `key_page`, `key_hide`.
 
 The container also answers `ime`:

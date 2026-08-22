@@ -21,7 +21,7 @@ static Pty* getPty(JNIEnv* env, jobject thiz) {
 extern "C" {
 
 JNIEXPORT jlong JNICALL
-Java_dev_jcode_core_term_PtyProcess_nativeCreate(JNIEnv* env, jobject thiz,
+Java_dev_blamspot_jcode_core_term_PtyProcess_nativeCreate(JNIEnv* env, jobject thiz,
                                                    jstring exe, jobjectArray argv,
                                                    jobjectArray envp, jstring cwd,
                                                    jint cols, jint rows) {
@@ -67,7 +67,7 @@ Java_dev_jcode_core_term_PtyProcess_nativeCreate(JNIEnv* env, jobject thiz,
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_PtyProcess_nativeRead(JNIEnv* env, jobject thiz,
+Java_dev_blamspot_jcode_core_term_PtyProcess_nativeRead(JNIEnv* env, jobject thiz,
                                                  jbyteArray buffer, jint offset, jint length) {
     Pty* pty = getPty(env, thiz);
     if (!pty) return -1;
@@ -84,7 +84,7 @@ Java_dev_jcode_core_term_PtyProcess_nativeRead(JNIEnv* env, jobject thiz,
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_PtyProcess_nativeGetMasterFd(JNIEnv* env, jobject thiz) {
+Java_dev_blamspot_jcode_core_term_PtyProcess_nativeGetMasterFd(JNIEnv* env, jobject thiz) {
     Pty* pty = getPty(env, thiz);
     return pty ? pty->masterFd() : -1;
 }
@@ -94,7 +94,7 @@ Java_dev_jcode_core_term_PtyProcess_nativeGetMasterFd(JNIEnv* env, jobject thiz)
 // already blocked in the kernel holds its own reference to the file description, and callers
 // bound the wait with a timeout and re-check session state on every wakeup.
 JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_PtyProcess_nativePoll(JNIEnv* env, jclass clazz, jint fd, jint timeoutMs) {
+Java_dev_blamspot_jcode_core_term_PtyProcess_nativePoll(JNIEnv* env, jclass clazz, jint fd, jint timeoutMs) {
     if (fd < 0) return -1;
     struct pollfd pfd;
     pfd.fd = fd;
@@ -107,7 +107,7 @@ Java_dev_jcode_core_term_PtyProcess_nativePoll(JNIEnv* env, jclass clazz, jint f
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_PtyProcess_nativeWrite(JNIEnv* env, jobject thiz,
+Java_dev_blamspot_jcode_core_term_PtyProcess_nativeWrite(JNIEnv* env, jobject thiz,
                                                   jbyteArray data, jint offset, jint length) {
     Pty* pty = getPty(env, thiz);
     if (!pty) return -1;
@@ -120,7 +120,7 @@ Java_dev_jcode_core_term_PtyProcess_nativeWrite(JNIEnv* env, jobject thiz,
 }
 
 JNIEXPORT jboolean JNICALL
-Java_dev_jcode_core_term_PtyProcess_nativeResize(JNIEnv* env, jobject thiz,
+Java_dev_blamspot_jcode_core_term_PtyProcess_nativeResize(JNIEnv* env, jobject thiz,
                                                    jint cols, jint rows) {
     Pty* pty = getPty(env, thiz);
     if (!pty) return JNI_FALSE;
@@ -128,21 +128,21 @@ Java_dev_jcode_core_term_PtyProcess_nativeResize(JNIEnv* env, jobject thiz,
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_jcode_core_term_PtyProcess_nativeWaitForExit(JNIEnv* env, jobject thiz) {
+Java_dev_blamspot_jcode_core_term_PtyProcess_nativeWaitForExit(JNIEnv* env, jobject thiz) {
     Pty* pty = getPty(env, thiz);
     if (!pty) return -1;
     return pty->waitForExit();
 }
 
 JNIEXPORT jboolean JNICALL
-Java_dev_jcode_core_term_PtyProcess_nativeIsOpen(JNIEnv* env, jobject thiz) {
+Java_dev_blamspot_jcode_core_term_PtyProcess_nativeIsOpen(JNIEnv* env, jobject thiz) {
     Pty* pty = getPty(env, thiz);
     if (!pty) return JNI_FALSE;
     return pty->isOpen() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_term_PtyProcess_nativeCloseByHandle(JNIEnv* env, jclass clazz, jlong handle) {
+Java_dev_blamspot_jcode_core_term_PtyProcess_nativeCloseByHandle(JNIEnv* env, jclass clazz, jlong handle) {
     if (handle == 0) return;
     Pty* pty = reinterpret_cast<Pty*>(handle);
     pty->close();
@@ -150,7 +150,7 @@ Java_dev_jcode_core_term_PtyProcess_nativeCloseByHandle(JNIEnv* env, jclass claz
 }
 
 JNIEXPORT jint JNICALL
-Java_dev_jcode_native_pty_PtyNativeModule_nativeInit(JNIEnv* env, jobject thiz) {
+Java_dev_blamspot_jcode_native_pty_PtyNativeModule_nativeInit(JNIEnv* env, jobject thiz) {
     LOGI("Native PTY module initialized");
     return 1;
 }

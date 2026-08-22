@@ -24,9 +24,22 @@
  * JCode modification: named-key registry symlinks live in the app's own tmp dir
  * (the Termux build hardcoded /data/data/com.termux/files/usr/tmp/, which does
  * not exist here — named-key shmget would spin forever on a failing symlink()).
- * The dir is created by ProotManager.ensureProotTmpDir before any proot spawn.
+ *
+ * The directory comes from PROOT_TMP_DIR rather than being compiled in. ProotManager.runtimeEnv
+ * exports it on every proot spawn and ensureProotTmpDir creates it and checks it is writable first,
+ * so it is always the tmp dir of the install actually running. A fixed path cannot be: the app
+ * installs as dev.blamspot.jcode, .debug or .beta, each with its own data directory, so one literal
+ * is right for at most one of the three — which is exactly how this was broken before. The literal
+ * below survives only as a fallback for a proot started without the variable.
  */
-#define ASHV_KEY_SYMLINK_PATH "/data/data/dev.jcode/files/tmp/ashv_key_%d"
+#define ASHV_KEY_DIR_FALLBACK "/data/data/dev.blamspot.jcode/files/tmp/proot"
+
+static const char* ashv_key_dir(void)
+{
+	const char* dir = getenv("PROOT_TMP_DIR");
+	return (dir != NULL && dir[0] == '/') ? dir : ASHV_KEY_DIR_FALLBACK;
+}
+
 #define ANDROID_SHMEM_SOCKNAME "/dev/shm/%08x"
 #define ROUND_UP(N, S) ((((N) + (S) - 1) / (S)) * (S))
 
@@ -339,7 +352,7 @@ int shmget(key_t key, size_t size, int flags)
 		// (3) If connected and opened, done. If connection refused
 		//     take ownership of the key and create the symlink.
 		// (4) If no symlink, create it.
-		sprintf(symlink_path, ASHV_KEY_SYMLINK_PATH, key);
+		snprintf(symlink_path, sizeof(symlink_path), "%s/ashv_key_%d", ashv_key_dir(), key);
 		char path_buffer[256];
 		char num_buffer[64];
 		while (true) {

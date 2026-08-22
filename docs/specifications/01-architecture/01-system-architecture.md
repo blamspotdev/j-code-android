@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:app` and every `:core:*` / `:feature:*` / `:native:*` module |
-| **Primary sources** | app/src/main/AndroidManifest.xml, app/build.gradle.kts, build.gradle.kts, settings.gradle.kts, app/src/main/java/dev/jcode/MainActivity.kt, app/src/main/java/dev/jcode/BackendService.kt |
+| **Primary sources** | app/src/main/AndroidManifest.xml, app/build.gradle.kts, build.gradle.kts, settings.gradle.kts, app/src/main/java/dev/blamspot/jcode/MainActivity.kt, app/src/main/java/dev/blamspot/jcode/BackendService.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -80,13 +80,13 @@ The application runs in up to three processes.
 
 ```mermaid
 flowchart LR
-    subgraph P1["dev.jcode — main process"]
+    subgraph P1["dev.blamspot.jcode — main process"]
         MA["MainActivity<br/>(the whole IDE UI)"]
         BS["BackendService<br/>foregroundServiceType=specialUse"]
         PDP["ProjectsDocumentsProvider"]
     end
 
-    subgraph P2["dev.jcode:guest — virtual device"]
+    subgraph P2["dev.blamspot.jcode:guest — virtual device"]
         GB["GuestBootstrapActivity"]
         GA["GuestActivity0..3 (stubs)"]
         GS["GuestSessionService"]
@@ -104,8 +104,8 @@ flowchart LR
 
 | Process | Declared at | Contains | Why separate |
 |---|---|---|---|
-| `dev.jcode` (main) | default | `MainActivity`, `BackendService`, `ProjectsDocumentsProvider`, `AppInstallReceiver` | — |
-| `dev.jcode:guest` | `android:process=":guest"` on `GuestBootstrapActivity`, `GuestActivity0`–`GuestActivity3`, `GuestSessionService` (AndroidManifest.xml:96–143) | The loaded guest APK and the framework hooks that host it | The guest gets its own ART heap and framework hooks and cannot corrupt the IDE |
+| `dev.blamspot.jcode` (main) | default | `MainActivity`, `BackendService`, `ProjectsDocumentsProvider`, `AppInstallReceiver` | — |
+| `dev.blamspot.jcode:guest` | `android:process=":guest"` on `GuestBootstrapActivity`, `GuestActivity0`–`GuestActivity3`, `GuestSessionService` (AndroidManifest.xml:96–143) | The loaded guest APK and the framework hooks that host it | The guest gets its own ART heap and framework hooks and cannot corrupt the IDE |
 | proot children | spawned at runtime | Every distro tool | They are ordinary Linux processes under a PTY, not Android components |
 
 The `:guest` process is **not a security boundary** — it shares the app's uid. See
@@ -114,7 +114,7 @@ The `:guest` process is **not a security boundary** — it shares the app's uid.
 `BackendService` is a `specialUse` foreground service with subtype
 `interactive_terminal_and_build_runner` and `android:stopWithTask="false"`, so terminal sessions,
 language servers, debug adapters, and build jobs survive backgrounding. It is driven by
-`SessionRegistry` (`app/src/main/java/dev/jcode/backend/SessionRegistry.kt`), whose
+`SessionRegistry` (`app/src/main/java/dev/blamspot/jcode/backend/SessionRegistry.kt`), whose
 `BackendSessionKind` enum is `TERMINAL`, `LANGUAGE_SERVER`, `DEBUG_ADAPTER`, `JOB`.
 
 ### 2.3 The three execution domains

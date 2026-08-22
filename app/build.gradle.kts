@@ -57,13 +57,12 @@ val jcodeVersionCode: Int = runCatching {
 // label so it installs ALONGSIDE the normal release app instead of replacing it (the release script
 // passes ".beta" for a Beta build). Its private data (Linux rootfs, settings, sessions) is isolated
 // under the suffixed package; only the shared /storage/emulated/0/JCode projects folder is common.
-// Empty (the default) keeps the normal dev.jcode / "JCode" release identity. namespace is unchanged
-// (compile-time R/BuildConfig package), so no source references break.
+// Empty (the default) keeps the normal dev.blamspot.jcode / "JCode" release identity.
 val jcodeIdSuffix: String =
     (project.findProperty("jcodeIdSuffix") as? String)?.trim().orEmpty()
 
 /**
- * Which GitHub release channel this build follows — see [dev.jcode.UpdateChecker].
+ * Which GitHub release channel this build follows — see [dev.blamspot.jcode.UpdateChecker].
  *
  * Read off the id suffix rather than declared separately, because the two cannot be allowed to
  * disagree: the channel decides which APK the updater downloads, and an APK from the other channel
@@ -76,17 +75,21 @@ val jcodeUpdateChannel: String = if (jcodeIdSuffix == ".beta") "beta" else "stab
  * The base applicationId, overridable with `-PjcodeApplicationId`.
  *
  * Android keys an installed app by its package, so changing this is never an update — it is a
- * second app with an empty data directory. The migration path exists for exactly that (see
- * [dev.jcode.MigrationBundle]), and this override is how it is exercised: building an APK under a
- * different id is the only way to produce the "update that changes the package" the updater has to
- * detect and handle.
+ * second app with an empty data directory. That is what happened at 1.6.2, when the app moved from
+ * `dev.jcode` to `dev.blamspot.jcode`; the migration path exists for exactly that (see
+ * [dev.blamspot.jcode.MigrationBundle]), and 1.6.1 shipped the export side of it so the release
+ * before the rename could hand its environment over.
+ *
+ * The override is how that path stays exercisable: building an APK under a different id — most
+ * usefully the old `-PjcodeApplicationId=dev.jcode` — is the only way to produce the "update that
+ * changes the package" the updater has to detect and handle.
  */
 val jcodeApplicationId: String =
     (project.findProperty("jcodeApplicationId") as? String)?.trim()?.takeIf { it.isNotBlank() }
-        ?: "dev.jcode"
+        ?: "dev.blamspot.jcode"
 
 android {
-    namespace = "dev.jcode"
+    namespace = "dev.blamspot.jcode"
     compileSdk = 36
 
     defaultConfig {
@@ -113,7 +116,7 @@ android {
 
     buildTypes {
         debug {
-            // Dev builds install as a separate app (dev.jcode.debug / "JCode (debug)") so an
+            // Dev builds install as a separate app (dev.blamspot.jcode.debug / "JCode (debug)") so an
             // `installDebug` never overwrites an installed release or beta build.
             applicationIdSuffix = ".debug"
             manifestPlaceholders["appLabel"] = "JCode (debug)"
@@ -126,7 +129,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // Side-by-side Beta: a distinct applicationId (dev.jcode.beta) + launcher label
+            // Side-by-side Beta: a distinct applicationId (dev.blamspot.jcode.beta) + launcher label
             // ("JCode (beta)") so the Beta APK never overwrites an installed release build.
             if (jcodeIdSuffix.isNotEmpty()) {
                 applicationIdSuffix = jcodeIdSuffix
@@ -194,29 +197,19 @@ dependencies {
     implementation(project(":core:fs"))
     implementation(project(":core:buffer"))
     implementation(project(":core:editor"))
-    implementation(project(":core:editor-decor"))
     implementation(project(":core:editor-completion"))
-    implementation(project(":core:treesitter"))
     implementation(project(":core:term"))
     implementation(project(":core:distro"))
     implementation(project(":core:lsp"))
-    implementation(project(":core:ctags"))
     implementation(project(":core:debug"))
-    implementation(project(":core:vcs"))
     implementation(project(":core:search"))
     implementation(project(":core:config"))
-    implementation(project(":core:ext"))
     implementation(project(":core:ext-api"))
-    implementation(project(":core:state"))
     implementation(project(":core:diag"))
 
     // Feature modules
     implementation(project(":feature:explorer"))
     implementation(project(":feature:editor-pane"))
-    implementation(project(":feature:terminal-pane"))
-    implementation(project(":feature:problems"))
-    implementation(project(":feature:scm"))
-    implementation(project(":feature:search"))
     implementation(project(":feature:debug"))
     implementation(project(":feature:settings"))
     implementation(project(":feature:sdk-manager"))
@@ -225,16 +218,12 @@ dependencies {
     implementation(project(":feature:onboarding"))
 
     // Native modules
-    implementation(project(":native:core"))
     implementation(project(":native:buffer"))
     implementation(project(":native:editor-render"))
-    implementation(project(":native:tree-sitter"))
-    implementation(project(":native:libgit2"))
     implementation(project(":native:ripgrep-ffi"))
     implementation(project(":native:pty"))
     implementation(project(":native:vt"))
     implementation(project(":native:wasmtime-ffi"))
-    implementation(project(":native:grammars"))
     implementation(project(":native:proot"))
 
     // Debug

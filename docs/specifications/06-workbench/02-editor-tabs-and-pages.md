@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:feature:editor-pane`, `:core:design`, `:app` |
-| **Primary sources** | feature/editor-pane/src/main/java/dev/jcode/feature/editor/pane/EditorTab.kt, feature/editor-pane/src/main/java/dev/jcode/feature/editor/pane/EditorPane.kt, feature/editor-pane/src/main/java/dev/jcode/feature/editor/pane/EditorMenuExtras.kt, core/design/src/main/java/dev/jcode/design/TabColoring.kt, core/design/src/main/java/dev/jcode/design/TabMaxSize.kt, core/design/src/main/java/dev/jcode/design/TabColorDialog.kt, app/src/main/java/dev/jcode/workbench/MarkdownPreviewPage.kt, app/src/main/java/dev/jcode/workbench/ImageViewerPage.kt, app/src/main/java/dev/jcode/workbench/BrowserPage.kt |
+| **Primary sources** | feature/editor-pane/src/main/java/dev/blamspot/jcode/feature/editor/pane/EditorTab.kt, feature/editor-pane/src/main/java/dev/blamspot/jcode/feature/editor/pane/EditorPane.kt, feature/editor-pane/src/main/java/dev/blamspot/jcode/feature/editor/pane/EditorMenuExtras.kt, core/design/src/main/java/dev/blamspot/jcode/design/TabColoring.kt, core/design/src/main/java/dev/blamspot/jcode/design/TabMaxSize.kt, core/design/src/main/java/dev/blamspot/jcode/design/TabColorDialog.kt, app/src/main/java/dev/blamspot/jcode/workbench/MarkdownPreviewPage.kt, app/src/main/java/dev/blamspot/jcode/workbench/ImageViewerPage.kt, app/src/main/java/dev/blamspot/jcode/workbench/BrowserPage.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---

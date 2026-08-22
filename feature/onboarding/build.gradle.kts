@@ -7,7 +7,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.jcode.feature.onboarding"
+    namespace = "dev.blamspot.jcode.feature.onboarding"
     compileSdk = 36
 
     defaultConfig {
@@ -38,5 +38,4 @@ dependencies {
     ksp(libs.hilt.compiler)
     implementation(project(":core:distro"))
     implementation(project(":core:design"))
-    implementation(project(":core:state"))
 }

@@ -12,7 +12,7 @@
      whatever app is running and hands it the focused field's own InputConnection — the same object a
      real IME is given — so the editing is the platform's, not a re-implementation of it. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="dev.jcode.vdevice.keyboard">
+    package="dev.blamspot.jcode.vdevice.keyboard">
 
     <application
         android:label="Keyboard"
