@@ -20,7 +20,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,6 +39,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.blamspot.jcode.design.AlertDialog
 import dev.blamspot.jcode.design.CompactOutlinedButton
+import dev.blamspot.jcode.design.CompactFilledButton
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.jcIcon
 import kotlinx.coroutines.launch
@@ -284,7 +284,8 @@ internal fun VariableDetailDialog(
         },
         confirmButton = {
             // Same copy as the peek's, so the two never disagree about what this value is.
-            TextButton(
+            CompactFilledButton(
+                text = if (copying) "Copying…" else "Copy",
                 enabled = !copying,
                 onClick = {
                     copying = true
@@ -293,9 +294,9 @@ internal fun VariableDetailDialog(
                         copying = false
                     }
                 },
-            ) { Text(if (copying) "Copying…" else "Copy") }
+            )
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        dismissButton = { CompactOutlinedButton(text = "Close", onClick = onDismiss) },
     )
 }
 

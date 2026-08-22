@@ -36,7 +36,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -609,7 +608,7 @@ private fun GuestCaveatDialog(message: String, onDismiss: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        confirmButton = { CompactFilledButton(text = "Close", onClick = onDismiss) },
     )
 }
 
@@ -825,7 +824,7 @@ private fun AppDetailsDialog(
     val facts = remember(app.apkPath, stored) { appFacts(context, app, stored) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        confirmButton = { CompactFilledButton(text = "Close", onClick = onDismiss) },
         title = { Text(app.label) },
         text = {
             Column(

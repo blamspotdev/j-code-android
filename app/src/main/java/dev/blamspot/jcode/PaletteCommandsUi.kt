@@ -30,13 +30,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import dev.blamspot.jcode.design.AlertDialog
+import dev.blamspot.jcode.design.CompactFilledButton
+import dev.blamspot.jcode.design.CompactOutlinedButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -144,10 +145,10 @@ internal fun GoToLineDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = ::confirm, enabled = parsed != null) { Text("Go") }
+            CompactFilledButton(text = "Go", onClick = ::confirm, enabled = parsed != null)
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            CompactOutlinedButton(text = "Cancel", onClick = onDismiss)
         },
     )
 }
@@ -296,10 +297,10 @@ internal fun ColorSampleDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Done") }
+            CompactFilledButton(text = "Done", onClick = onDismiss)
         },
         dismissButton = {
-            TextButton(onClick = onPickAgain) { Text("Pick again") }
+            CompactOutlinedButton(text = "Pick again", onClick = onPickAgain)
         },
     )
 }

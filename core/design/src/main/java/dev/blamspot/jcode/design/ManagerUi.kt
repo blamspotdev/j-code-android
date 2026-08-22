@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -498,6 +499,32 @@ fun CompactOutlinedButton(
             )
             Spacer(Modifier.size(6.dp))
         }
+        Text(text, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+/**
+ * The compact button for an action that destroys something — Delete, Discard, Kill.
+ *
+ * Outlined rather than filled: a destructive action should read as available, not as the one to
+ * reach for, and the error colour carries the warning without the weight of a filled button. Pair it
+ * with a [CompactFilledButton] for the safe choice.
+ */
+@Composable
+fun CompactDestructiveButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.defaultMinSize(minHeight = 32.dp),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+    ) {
         Text(text, style = MaterialTheme.typography.labelMedium)
     }
 }

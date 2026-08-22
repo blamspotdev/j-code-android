@@ -31,6 +31,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import dev.blamspot.jcode.design.AlertDialog
+import dev.blamspot.jcode.design.CompactDestructiveButton
+import dev.blamspot.jcode.design.CompactFilledButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -822,14 +824,16 @@ private fun InstalledEnvironmentsCard(
                         "(SDKs, language servers, packages) will be deleted. This cannot be undone.",
                 )
             },
+            // Destructive "Remove" sits away from the rightmost (reflexive-tap) slot, which Material
+            // gives to the dismiss button.
             confirmButton = {
-                TextButton(onClick = {
+                CompactDestructiveButton(text = "Remove", onClick = {
                     onDelete(deleteId)
                     pendingDelete = null
-                }) { Text("Remove", color = MaterialTheme.colorScheme.error) }
+                })
             },
             dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) { Text("Cancel") }
+                CompactFilledButton(text = "Cancel", onClick = { pendingDelete = null })
             },
         )
     }

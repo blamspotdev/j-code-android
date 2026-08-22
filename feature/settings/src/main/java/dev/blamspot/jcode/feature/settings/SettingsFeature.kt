@@ -46,7 +46,6 @@ import dev.blamspot.jcode.design.CompactOutlinedButton
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -2014,16 +2013,15 @@ private fun DiagnosticLogDialog(lines: List<String>, onDismiss: () -> Unit) {
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        confirmButton = { CompactFilledButton(text = "Close", onClick = onDismiss) },
         dismissButton = {
-            TextButton(
+            CompactOutlinedButton(
+                text = "Copy",
                 onClick = {
                     clipboard.setText(AnnotatedString(buildString { lines.forEach { appendLine(it) } }))
                 },
                 enabled = lines.isNotEmpty(),
-            ) {
-                Text("Copy")
-            }
+            )
         },
     )
 }
@@ -2164,9 +2162,13 @@ private fun EnvVarDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(name, value) }, enabled = nameValid && !duplicate) { Text("Save") }
+            CompactFilledButton(
+                text = "Save",
+                onClick = { onSave(name, value) },
+                enabled = nameValid && !duplicate,
+            )
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { CompactOutlinedButton(text = "Cancel", onClick = onDismiss) },
     )
 }
 

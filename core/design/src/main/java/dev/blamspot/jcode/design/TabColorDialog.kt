@@ -14,7 +14,6 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -22,7 +21,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
 /**
@@ -75,16 +73,14 @@ fun TabColorDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onPick(randomTabColor()) }) { Text("Random") }
+            CompactFilledButton(text = "Random", onClick = { onPick(randomTabColor()) })
         },
         dismissButton = {
-            Row {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (current != null) {
-                    TextButton(onClick = onClear) {
-                        Text("Clear", color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
-                    }
+                    CompactDestructiveButton(text = "Clear", onClick = onClear)
                 }
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+                CompactOutlinedButton(text = "Cancel", onClick = onDismiss)
             }
         },
     )

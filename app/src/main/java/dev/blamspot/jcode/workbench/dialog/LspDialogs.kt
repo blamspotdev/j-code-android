@@ -10,10 +10,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import dev.blamspot.jcode.design.AlertDialog
+import dev.blamspot.jcode.design.CompactFilledButton
+import dev.blamspot.jcode.design.CompactOutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,7 +56,7 @@ internal fun LspLocationPickerDialog(
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        confirmButton = { CompactFilledButton(text = "Close", onClick = onDismiss) },
     )
 }
 
@@ -118,8 +119,8 @@ internal fun LspRenameDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(name) }, enabled = canConfirm) { Text("Rename") }
+            CompactFilledButton(text = "Rename", onClick = { onConfirm(name) }, enabled = canConfirm)
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { CompactOutlinedButton(text = "Cancel", onClick = onDismiss) },
     )
 }

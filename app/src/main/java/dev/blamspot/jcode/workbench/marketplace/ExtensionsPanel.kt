@@ -24,6 +24,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.foundation.verticalScroll
 import dev.blamspot.jcode.design.AlertDialog
+import dev.blamspot.jcode.design.CompactFilledButton
+import dev.blamspot.jcode.design.CompactOutlinedButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -1177,8 +1179,10 @@ private fun DependencyDialog(
                 SuggestedGroup(entry.suggests, available, installedIds, busy, onInstall)
             }
         },
-        confirmButton = { TextButton(onClick = onProceed, enabled = !busy) { Text("Install ${entry.name}") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = {
+            CompactFilledButton(text = "Install ${entry.name}", onClick = onProceed, enabled = !busy)
+        },
+        dismissButton = { CompactOutlinedButton(text = "Cancel", onClick = onDismiss) },
     )
 }
 

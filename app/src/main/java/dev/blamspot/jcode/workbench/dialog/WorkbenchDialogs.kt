@@ -17,6 +17,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import dev.blamspot.jcode.design.AlertDialog
+import dev.blamspot.jcode.design.CompactFilledButton
+import dev.blamspot.jcode.design.CompactOutlinedButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -27,7 +29,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -89,14 +90,10 @@ internal fun OpenFolderTypeDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(isWorkspace) }) {
-                Text("Open")
-            }
+            CompactFilledButton(text = "Open", onClick = { onConfirm(isWorkspace) })
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
+            CompactOutlinedButton(text = "Cancel", onClick = onDismiss)
         },
     )
 }
@@ -184,8 +181,8 @@ internal fun PostCloneDialog(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
-        confirmButton = { TextButton(onClick = onOpen) { Text("Open folder") } },
-        dismissButton = { TextButton(onClick = onAdd) { Text("Add to workspace") } },
+        confirmButton = { CompactFilledButton(text = "Open folder", onClick = onOpen) },
+        dismissButton = { CompactOutlinedButton(text = "Add to workspace", onClick = onAdd) },
     )
 }
 
@@ -346,7 +343,8 @@ internal fun NewItemDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            CompactFilledButton(
+                text = if (step == 0 && hasInputs) "Next" else "Create",
                 onClick = {
                     if (step == 0 && hasInputs) {
                         step = 1
@@ -362,14 +360,13 @@ internal fun NewItemDialog(
                     }
                 },
                 enabled = name.isNotBlank(),
-            ) {
-                Text(if (step == 0 && hasInputs) "Next" else "Create")
-            }
+            )
         },
         dismissButton = {
-            TextButton(onClick = { if (step == 1) step = 0 else onDismiss() }) {
-                Text(if (step == 1) "Back" else "Cancel")
-            }
+            CompactOutlinedButton(
+                text = if (step == 1) "Back" else "Cancel",
+                onClick = { if (step == 1) step = 0 else onDismiss() },
+            )
         },
     )
 }

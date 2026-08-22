@@ -27,13 +27,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import dev.blamspot.jcode.design.AlertDialog
+import dev.blamspot.jcode.design.CompactDestructiveButton
+import dev.blamspot.jcode.design.CompactFilledButton
+import dev.blamspot.jcode.design.CompactOutlinedButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -443,8 +445,10 @@ fun ExplorerView(
                         "If the project is under git, you can restore it there.",
                 )
             },
+            // Destructive "Delete" is kept out of the rightmost (reflexive-tap) slot; Material puts
+            // the dismiss button to its left, so Cancel lands there and Delete stays the far action.
             confirmButton = {
-                TextButton(onClick = {
+                CompactDestructiveButton(text = "Delete", onClick = {
                     val node = target.node
                     showDeleteConfirm = null
                     scope.launch {
@@ -455,10 +459,10 @@ fun ExplorerView(
                             onSnackbar?.invoke("Deleted '${node.name}'")
                         }.onFailure { onSnackbar?.invoke("Delete failed: ${it.message}") }
                     }
-                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                })
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = null }) { Text("Cancel") }
+                CompactFilledButton(text = "Cancel", onClick = { showDeleteConfirm = null })
             },
         )
     }
@@ -952,21 +956,18 @@ private fun CreateRenameDialog(
             )
         },
         confirmButton = {
-            TextButton(
+            CompactFilledButton(
+                text = "OK",
                 onClick = {
                     if (textState.text.isNotBlank()) {
                         onConfirm(textState.text)
                     }
                 },
                 enabled = textState.text.isNotBlank(),
-            ) {
-                Text("OK")
-            }
+            )
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
+            CompactOutlinedButton(text = "Cancel", onClick = onDismiss)
         },
     )
 }

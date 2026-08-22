@@ -3,6 +3,9 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import dev.blamspot.jcode.core.editor.EditorLanguageAction
 import dev.blamspot.jcode.core.editor.decor.Layer
 import dev.blamspot.jcode.design.CompactContextMenu
+import dev.blamspot.jcode.design.CompactDestructiveButton
+import dev.blamspot.jcode.design.CompactFilledButton
+import dev.blamspot.jcode.design.CompactOutlinedButton
 import dev.blamspot.jcode.design.ContextAction
 import dev.blamspot.jcode.design.EditorSaveActions
 import dev.blamspot.jcode.core.editor.completion.CompletionSource
@@ -114,7 +117,6 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -716,9 +718,14 @@ fun JCodeApp(
                 )
             },
             confirmButton = {
-                TextButton(onClick = { showSideloadWarning = false; jextPicker.launch("*/*") }) { Text("Choose .jext") }
+                CompactFilledButton(
+                    text = "Choose .jext",
+                    onClick = { showSideloadWarning = false; jextPicker.launch("*/*") },
+                )
             },
-            dismissButton = { TextButton(onClick = { showSideloadWarning = false }) { Text("Cancel") } },
+            dismissButton = {
+                CompactOutlinedButton(text = "Cancel", onClick = { showSideloadWarning = false })
+            },
         )
     }
     if (showVsixImportInfo) {
@@ -741,9 +748,14 @@ fun JCodeApp(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showVsixImportInfo = false; vsixPicker.launch("*/*") }) { Text("Choose .vsix") }
+                CompactFilledButton(
+                    text = "Choose .vsix",
+                    onClick = { showVsixImportInfo = false; vsixPicker.launch("*/*") },
+                )
             },
-            dismissButton = { TextButton(onClick = { showVsixImportInfo = false }) { Text("Cancel") } },
+            dismissButton = {
+                CompactOutlinedButton(text = "Cancel", onClick = { showVsixImportInfo = false })
+            },
         )
     }
     // Offered once an import has finished, and as a dialog rather than a message: the import runs
@@ -770,12 +782,16 @@ fun JCodeApp(
                 )
             },
             confirmButton = {
-                TextButton(onClick = { viewModel.cleanUpAfterMigration() }) {
-                    Text(if (cleanup.oldAppInstalled) "Clean up and uninstall" else "Remove the bundle")
-                }
+                CompactFilledButton(
+                    text = if (cleanup.oldAppInstalled) "Clean up and uninstall" else "Remove the bundle",
+                    onClick = { viewModel.cleanUpAfterMigration() },
+                )
             },
             dismissButton = {
-                TextButton(onClick = { viewModel.dismissMigrationCleanup() }) { Text("Keep for now") }
+                CompactOutlinedButton(
+                    text = "Keep for now",
+                    onClick = { viewModel.dismissMigrationCleanup() },
+                )
             },
         )
     }
@@ -796,13 +812,16 @@ fun JCodeApp(
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    viewModel.resetUpdateInstall()
-                    viewModel.installUpdateWithoutMigration(blocked.apkPath)
-                }) { Text("Install anyway") }
+                CompactFilledButton(
+                    text = "Install anyway",
+                    onClick = {
+                        viewModel.resetUpdateInstall()
+                        viewModel.installUpdateWithoutMigration(blocked.apkPath)
+                    },
+                )
             },
             dismissButton = {
-                TextButton(onClick = { viewModel.resetUpdateInstall() }) { Text("Not now") }
+                CompactOutlinedButton(text = "Not now", onClick = { viewModel.resetUpdateInstall() })
             },
         )
     }
@@ -1811,10 +1830,11 @@ fun JCodeApp(
             // Same slot order as TerminalRunningDialog: the destructive action stays out of the
             // rightmost (reflexive-tap) position, "Cancel" is the safe default at the end.
             confirmButton = {
-                TextButton(onClick = { viewModel.confirmEnvironmentSwitch() }) {
-                    Text("Restart", color = MaterialTheme.colorScheme.error)
-                }
-                TextButton(onClick = { viewModel.cancelEnvironmentSwitch() }) { Text("Cancel") }
+                CompactDestructiveButton(
+                    text = "Restart",
+                    onClick = { viewModel.confirmEnvironmentSwitch() },
+                )
+                CompactFilledButton(text = "Cancel", onClick = { viewModel.cancelEnvironmentSwitch() })
             },
             dismissButton = {},
         )
@@ -2787,12 +2807,13 @@ private fun JCodeShell(
                 )
             },
             confirmButton = {
-                TextButton(onClick = { pendingCloseTarget = null; performClose(target) }) {
-                    Text("Close anyway")
-                }
+                CompactFilledButton(
+                    text = "Close anyway",
+                    onClick = { pendingCloseTarget = null; performClose(target) },
+                )
             },
             dismissButton = {
-                TextButton(onClick = { pendingCloseTarget = null }) { Text("Cancel") }
+                CompactOutlinedButton(text = "Cancel", onClick = { pendingCloseTarget = null })
             },
         )
     }
@@ -4868,17 +4889,15 @@ private fun UnsavedChangesDialog(
         // Destructive "Discard" is kept out of the rightmost (reflexive-tap) slot; "Save" is the safe
         // primary at the end.
         confirmButton = {
-            TextButton(onClick = onDiscard) {
-                Text("Discard", color = MaterialTheme.colorScheme.error)
-            }
+            CompactDestructiveButton(text = "Discard", onClick = onDiscard)
             if (thirdLabel != null && onThird != null) {
-                TextButton(onClick = onThird) { Text(thirdLabel) }
+                CompactOutlinedButton(text = thirdLabel, onClick = onThird)
             }
-            TextButton(onClick = onSave) { Text("Save") }
+            CompactFilledButton(text = "Save", onClick = onSave)
         },
         dismissButton = {
             onCancel?.let { cancel ->
-                TextButton(onClick = cancel) { Text("Cancel") }
+                CompactOutlinedButton(text = "Cancel", onClick = cancel)
             }
         },
     )
@@ -4910,11 +4929,13 @@ private fun TerminalRunningDialog(
         // Destructive "Kill" is kept out of the rightmost (reflexive-tap) slot; "Cancel" is the safe
         // default at the end.
         confirmButton = {
-            TextButton(onClick = onKill) {
-                Text("Kill", color = MaterialTheme.colorScheme.error)
-            }
-            TextButton(onClick = onCloseUnbusy, enabled = closeUnbusyEnabled) { Text("Close Unbusy") }
-            TextButton(onClick = onCancel) { Text("Cancel") }
+            CompactDestructiveButton(text = "Kill", onClick = onKill)
+            CompactOutlinedButton(
+                text = "Close Unbusy",
+                onClick = onCloseUnbusy,
+                enabled = closeUnbusyEnabled,
+            )
+            CompactFilledButton(text = "Cancel", onClick = onCancel)
         },
         dismissButton = {},
     )
@@ -5564,22 +5585,24 @@ private fun WorkbenchBackHandler(
             text = {
                 Text("Still running:\n" + items.joinToString("\n") { "•  $it" })
             },
+            // Destructive "Terminate & exit" is kept out of the rightmost (reflexive-tap) slot, the
+            // same way the unsaved-changes and running-process prompts order theirs.
             confirmButton = {
-                TextButton(onClick = { exitPromptItems = null; activity?.moveTaskToBack(true) }) {
-                    Text("Run in background")
-                }
-                TextButton(
+                CompactDestructiveButton(
+                    text = "Terminate & exit",
                     onClick = {
                         exitPromptItems = null
                         onTerminateAll()
                         activity?.finish()
                     },
-                ) {
-                    Text("Terminate & exit", color = MaterialTheme.colorScheme.error)
-                }
+                )
+                CompactFilledButton(
+                    text = "Run in background",
+                    onClick = { exitPromptItems = null; activity?.moveTaskToBack(true) },
+                )
             },
             dismissButton = {
-                TextButton(onClick = { exitPromptItems = null }) { Text("Cancel") }
+                CompactOutlinedButton(text = "Cancel", onClick = { exitPromptItems = null })
             },
         )
     }
