@@ -305,10 +305,12 @@ internal fun WorkbenchTopBar(
             if (selectedProject != null) {
                 var runMenuOpen by remember { mutableStateOf(false) }
                 val hasMultipleRuns = runConfigNames.size > 1
-                // A debug session owns this button while it lasts: paused offers Continue, running
-                // offers Pause. Otherwise it is the plain Run/Stop control. Without this the header
-                // kept offering "Run" at a breakpoint — the one thing you cannot do from there — and
-                // the only way to resume was to go find the Run panel.
+                // A debug session owns this button while it lasts, but it stays a three-state control:
+                // Run to start, Continue at a breakpoint, Stop while anything is live. Pause is
+                // deliberately not here — it belongs with the stepping controls in this button's
+                // long-press menu and the Run panel, and putting it in the header meant the one
+                // obvious control could not end a session. Without the Continue state the header kept
+                // offering "Run" at a breakpoint, the one thing you cannot do from there.
                 val debug = LocalDebugSession.current
                 val paused = debug.state == DebugState.STOPPED
                 val debugging = paused || debug.state == DebugState.RUNNING
@@ -316,20 +318,19 @@ internal fun WorkbenchTopBar(
                     WorkbenchIconActionButton(
                         icon = when {
                             paused -> jcIcon(JCodeIcon.Continue)
-                            debug.state == DebugState.RUNNING -> jcIcon(JCodeIcon.Pause)
-                            isRunning -> jcIcon(JCodeIcon.Stop)
+                            debugging || isRunning -> jcIcon(JCodeIcon.Stop)
                             else -> jcIcon(JCodeIcon.Run)
                         },
                         contentDescription = when {
                             paused -> "Continue"
-                            debug.state == DebugState.RUNNING -> "Pause"
+                            debugging -> "Stop debugging"
                             isRunning -> "Stop"
                             else -> "Run"
                         },
                         onClick = {
                             when {
                                 paused -> debug.onContinue()
-                                debug.state == DebugState.RUNNING -> debug.onPause()
+                                debugging -> debug.onStop()
                                 isRunning -> onStop()
                                 hasMultipleRuns -> runMenuOpen = true
                                 else -> onRun()
