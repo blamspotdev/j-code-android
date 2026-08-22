@@ -2485,7 +2485,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Start debugging the given host file with a matching debug engine (debugpy for .py, …). */
     fun startDebug(hostPath: String) {
-        debugController.startDebug(hostPath, deriveProjectDir(hostPath), _breakpoints.value)
+        // The adapter compiles and reads source off disk, so unsaved buffers are written first and
+        // awaited — stepping through a file the editor has already moved past is worse than a pause
+        // before the session starts. startDebugForConfig routes through here too, so every way of
+        // starting a debug session saves. A buffer that cannot be written reports that itself; the
+        // session still starts, because one unsavable scratch file must not block debugging.
+        viewModelScope.launch {
+            saveAllDirtyAwait()
+            debugController.startDebug(hostPath, deriveProjectDir(hostPath), _breakpoints.value)
+        }
     }
 
     private fun deriveProjectDir(hostPath: String): String {

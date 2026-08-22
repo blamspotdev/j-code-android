@@ -2519,9 +2519,11 @@ private fun JCodeShell(
         }
     }
 
+    val editorSaveActionsLocal = LocalEditorSaveActions.current
+
     // Build & Run the selected project: spawn a dedicated terminal in the right drawer, stream the
     // compile/run output into it, then open the device browser once the server is reachable.
-    fun handleRun(project: Project, config: RunConfig) {
+    fun handleRun(project: Project, config: RunConfig, saved: Boolean = false) {
         if (!terminalReady) {
             scope.launch { snackbarHostState.showSnackbar("Finish environment setup before running.") }
             return
@@ -2529,6 +2531,23 @@ private fun JCodeShell(
         val plan = ProjectRunner.runConfigToPlan(config)
         if (plan.terminals.isEmpty()) {
             scope.launch { snackbarHostState.showSnackbar("'${config.name}' has no terminals. Tap Configure to set it up.") }
+            return
+        }
+        // Everything a run touches is read off disk, so unsaved buffers go there first — building
+        // yesterday's bytes while the editor shows today's is the most confusing kind of wrong
+        // answer. The writes are awaited, not raced, and then this re-enters with [saved] set.
+        //
+        // Whether anything IS dirty is left to the save itself, which reads the live tab list: the
+        // `editorGroup` in scope here belongs to the composition that built this lambda, and Compose
+        // hands a memoised lambda back on later passes, so a check here sees the tabs as they were
+        // before the edit. A buffer that cannot be written (no path, IO error) says so itself and
+        // the run still goes ahead — the failure is already on screen, and blocking every run over
+        // one unsavable scratch file would be worse.
+        if (!saved) {
+            scope.launch {
+                editorSaveActionsLocal.onSaveAllAwait()
+                handleRun(project, config, saved = true)
+            }
             return
         }
         selectRightPanelTab(RightPanelTab.Terminal)
@@ -2615,13 +2634,21 @@ private fun JCodeShell(
     }
 
     /** Run a build task in its own terminal (fire-and-forget — not tracked as a run). */
-    fun handleBuild(project: Project, config: RunBuildConfig) {
+    fun handleBuild(project: Project, config: RunBuildConfig, saved: Boolean = false) {
         if (!terminalReady) {
             scope.launch { snackbarHostState.showSnackbar("Finish environment setup before building.") }
             return
         }
         if (config.command.isBlank()) {
             scope.launch { snackbarHostState.showSnackbar("'${config.name}' has no command. Tap Configure to set it up.") }
+            return
+        }
+        // A build compiles what is on disk exactly as a run does, so it saves on the same terms.
+        if (!saved) {
+            scope.launch {
+                editorSaveActionsLocal.onSaveAllAwait()
+                handleBuild(project, config, saved = true)
+            }
             return
         }
         selectRightPanelTab(RightPanelTab.Terminal)
@@ -2732,7 +2759,6 @@ private fun JCodeShell(
     val perf = LocalPerformanceSettings.current
     val debugSessionUiLocal = LocalDebugSession.current
     val extensionDrawerActionsLocal = LocalExtensionDrawerActions.current
-    val editorSaveActionsLocal = LocalEditorSaveActions.current
     var pendingCloseTarget by remember { mutableStateOf<CloseTarget?>(null) }
     var pendingUnsavedSwitch by remember { mutableStateOf<CloseTarget?>(null) }
 
