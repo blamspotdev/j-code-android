@@ -588,6 +588,7 @@ fun EditorViewHost(
                         VariableInspectHeader(
                             inspection = insp,
                             onInspect = { menu = null; inspection = null; inspectDetail = insp.resolved },
+                            onCopied = { menu = null; inspection = null },
                         )
                     }
                 },

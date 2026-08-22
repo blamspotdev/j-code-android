@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -59,15 +60,6 @@ data class InspectedValue(
     val expandable: Boolean get() = reference > 0
 
     /**
-     * What to actually show for the value.
-     *
-     * Adapters render a container as its own type — netcoredbg gives a `List<int>` the value
-     * `{System.Collections.Generic.List<int>}` — which is pure duplication: the type already sits
-     * beside the name, so the value line says nothing about the contents. When the adapter reports an
-     * element count, prefer the size. Arrays that already carry their dimension (`{int[4]}`) keep it
-     * and only lose the braces, since the dimension IS the useful part.
-     */
-    /**
      * The text inside `{...}` when the value is nothing but a wrapped bare token, else null.
      *
      * A real composite value — Python's `{'a': 1}`, a JSON blob — carries quotes/colons/commas/spaces
@@ -117,15 +109,17 @@ private const val PEEK_MAX_LINES = 8
  * sits above the normal editor actions so a long-press on a variable gives one card: the value at a
  * glance, plus everything you'd otherwise reach from the context menu.
  *
- * It stays a *peek*: the value up to [PEEK_MAX_LINES], and — when there is more, a longer value or an
- * object with fields behind a reference — an "Inspect object" row that opens the full [VariableDetailDialog]
- * rather than silently clipping.
+ * It stays a *peek*: the value up to [PEEK_MAX_LINES]. Inspect opens the full [VariableDetailDialog]
+ * and appears only when there is more than the peek could show — a longer value, or an object whose
+ * fields live behind a reference — rather than silently clipping. Copy value is always offered.
  */
 @Composable
 internal fun VariableInspectHeader(
     inspection: VariableInspection,
     onInspect: () -> Unit,
+    onCopied: () -> Unit,
 ) {
+    val clipboard = LocalClipboardManager.current
     val resolved = inspection.resolved
     val lineCount = remember(resolved.value) { resolved.value.count { it == '\n' } + 1 }
     val clipped = lineCount > PEEK_MAX_LINES || resolved.value.length > 400
@@ -165,28 +159,42 @@ internal fun VariableInspectHeader(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 2.dp),
         )
-        if (hasMore) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onInspect)
-                    .padding(top = 8.dp, bottom = 2.dp),
-            ) {
-                Icon(
-                    imageVector = jcIcon(JCodeIcon.Search),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp),
-                )
-                Text(
-                    text = if (resolved.expandable) "Inspect object" else "Show full value",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.padding(top = 4.dp),
+        ) {
+            // Inspect only when there is something the peek could not show; Copy value always, since
+            // reading a value off the screen and retyping it is the thing a peek most invites.
+            if (hasMore) {
+                PeekButton(JCodeIcon.Search, "Inspect", onInspect)
+            }
+            PeekButton(JCodeIcon.Copy, "Copy value") {
+                // The raw value, not the peek's rendering: "3 items" describes a list, it isn't one.
+                clipboard.setText(AnnotatedString(resolved.value))
+                onCopied()
             }
         }
+    }
+}
+
+/** One action button in the peek header. Compact so the pair reads as a toolbar, not a dialog. */
+@Composable
+private fun PeekButton(icon: JCodeIcon, label: String, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+    ) {
+        Icon(
+            imageVector = jcIcon(icon),
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.padding(start = 6.dp),
+        )
     }
 }
 
