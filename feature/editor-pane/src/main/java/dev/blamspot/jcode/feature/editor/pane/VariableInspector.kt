@@ -27,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,6 +42,7 @@ import dev.blamspot.jcode.design.AlertDialog
 import dev.blamspot.jcode.design.CompactOutlinedButton
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.jcIcon
+import kotlinx.coroutines.launch
 
 /**
  * One value the debugger resolved, in editor-local terms.
@@ -116,10 +118,13 @@ private const val PEEK_MAX_LINES = 8
 @Composable
 internal fun VariableInspectHeader(
     inspection: VariableInspection,
+    expand: ChildExpander?,
     onInspect: () -> Unit,
     onCopied: () -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    var copying by remember(inspection) { mutableStateOf(false) }
     val resolved = inspection.resolved
     val lineCount = remember(resolved.value) { resolved.value.count { it == '\n' } + 1 }
     val clipped = lineCount > PEEK_MAX_LINES || resolved.value.length > 400
@@ -169,11 +174,22 @@ internal fun VariableInspectHeader(
             if (hasMore) {
                 CompactOutlinedButton(text = "Inspect", onClick = onInspect, icon = JCodeIcon.Search)
             }
-            CompactOutlinedButton(text = "Copy value", icon = JCodeIcon.Copy, onClick = {
-                // The raw value, not the peek's rendering: "3 items" describes a list, it isn't one.
-                clipboard.setText(AnnotatedString(resolved.value))
-                onCopied()
-            })
+            // A container copies as JSON — walking it costs a round-trip per level, hence the
+            // wait — and a scalar as its own text. Never the peek's rendering: "3 items" describes
+            // a list, it isn't one.
+            CompactOutlinedButton(
+                text = if (copying) "Copying…" else "Copy value",
+                icon = JCodeIcon.Copy,
+                enabled = !copying,
+                onClick = {
+                    copying = true
+                    scope.launch {
+                        clipboard.setText(AnnotatedString(resolved.toJson(expand)))
+                        copying = false
+                        onCopied()
+                    }
+                },
+            )
         }
     }
 }
@@ -189,10 +205,12 @@ internal fun VariableInspectHeader(
 @Composable
 internal fun VariableDetailDialog(
     root: InspectedValue,
-    expand: ((Int, (List<InspectedValue>) -> Unit) -> Unit)?,
+    expand: ChildExpander?,
     onDismiss: () -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    var copying by remember(root) { mutableStateOf(false) }
     // reference -> children, populated on first expand. Absent = not fetched yet.
     val childrenByRef = remember { mutableStateMapOf<Int, List<InspectedValue>>() }
     val openRefs = remember { mutableStateMapOf<Int, Boolean>() }
@@ -265,7 +283,17 @@ internal fun VariableDetailDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { clipboard.setText(AnnotatedString(root.value)) }) { Text("Copy") }
+            // Same copy as the peek's, so the two never disagree about what this value is.
+            TextButton(
+                enabled = !copying,
+                onClick = {
+                    copying = true
+                    scope.launch {
+                        clipboard.setText(AnnotatedString(root.toJson(expand)))
+                        copying = false
+                    }
+                },
+            ) { Text(if (copying) "Copying…" else "Copy") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )

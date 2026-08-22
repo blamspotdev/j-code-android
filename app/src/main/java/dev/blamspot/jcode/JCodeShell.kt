@@ -224,6 +224,7 @@ import dev.blamspot.jcode.feature.editor.pane.EditorMenuExtras
 import dev.blamspot.jcode.feature.editor.pane.EditorPageKind
 import dev.blamspot.jcode.feature.editor.pane.EditorPane
 import dev.blamspot.jcode.feature.editor.pane.EditorTab
+import dev.blamspot.jcode.feature.editor.pane.elementCountOf
 import dev.blamspot.jcode.feature.editor.pane.LocalEditorMenuExtras
 import dev.blamspot.jcode.feature.explorer.ExplorerFeature
 import dev.blamspot.jcode.feature.explorer.ExplorerViewMode
@@ -4217,7 +4218,8 @@ private fun EditorWorkspace(
                                 // useless without it.
                                 if (base != null && base.expandable && base.elementCount == 0 && base.valueEchoesType) {
                                     dbgSession.onExpandVariable(base.reference) { rows ->
-                                        deliver(base.copy(elementCount = elementCountOf(rows)))
+                                        val children = rows.map { it.asInspected() }
+                                        deliver(base.copy(elementCount = elementCountOf(children)))
                                     }
                                 } else {
                                     deliver(base)
@@ -4263,22 +4265,6 @@ private fun dev.blamspot.jcode.core.debug.DapEvaluation.asInspected(name: String
         reference = variablesReference,
         elementCount = indexedVariables,
     )
-
-/**
- * How many elements a container holds, read from its children: the number of indexed entries
- * (`[0]`, `[1]`, ...) if the adapter lists them, else a size field. C#'s `List<T>` exposes `_size`
- * and `Count`; `Capacity` is deliberately not a candidate - it is the buffer, not the contents. 0
- * when the children say nothing about a size, which is the right answer for a plain struct.
- */
-private fun elementCountOf(rows: List<dev.blamspot.jcode.core.debug.DapVariable>): Int {
-    val indexed = rows.count { row ->
-        row.name.length > 2 && row.name.startsWith("[") && row.name.endsWith("]") &&
-            row.name.drop(1).dropLast(1).all { it.isDigit() }
-    }
-    if (indexed > 0) return indexed
-    val sizeNames = setOf("count", "length", "size", "_size", "_count")
-    return rows.firstOrNull { it.name.lowercase() in sizeNames }?.value?.trim()?.toIntOrNull() ?: 0
-}
 
 /** DAP variable → the editor's protocol-free inspection model. */
 private fun dev.blamspot.jcode.core.debug.DapVariable.asInspected() =
