@@ -51,8 +51,23 @@ fun CompactContextMenu(
     quickActions: List<ContextAction> = emptyList(),
     listActions: List<ContextAction> = emptyList(),
     offset: DpOffset = DpOffset(0.dp, 0.dp),
+    /**
+     * An optional block above the actions — e.g. the debugger's variable peek. It renders inside the
+     * same menu surface so a long-press yields one consistent card rather than a floating popover
+     * stacked over the context menu. A divider separates it from the actions below.
+     */
+    header: (@Composable () -> Unit)? = null,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismissRequest, offset = offset) {
+        if (header != null) {
+            header()
+            if (quickActions.isNotEmpty() || listActions.isNotEmpty()) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                )
+            }
+        }
         if (quickActions.isNotEmpty()) {
             Row(
                 modifier = Modifier.padding(horizontal = 4.dp),

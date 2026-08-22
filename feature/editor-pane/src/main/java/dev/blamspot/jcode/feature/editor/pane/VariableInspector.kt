@@ -19,7 +19,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -37,14 +36,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntRect
-import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupPositionProvider
-import androidx.compose.ui.window.PopupProperties
 import dev.blamspot.jcode.design.AlertDialog
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.jcIcon
@@ -65,109 +57,89 @@ data class InspectedValue(
     val expandable: Boolean get() = reference > 0
 }
 
-/** A resolved long-press variable inspection: the word, its value, and the press position. */
+/** A resolved long-press variable inspection: the word and its value. */
 internal data class VariableInspection(
     val word: String,
     val resolved: InspectedValue,
-    val xPx: Float,
-    val yPx: Float,
 )
 
-/** Lines past this and the peek card stops being a peek. */
+/** Lines past this and the peek stops being a peek. */
 private const val PEEK_MAX_LINES = 8
 
 /**
- * The small "name = value" card shown when a variable is long-pressed while the debugger is stopped.
+ * The debugger's variable peek, rendered as the header of the editor's long-press menu (see
+ * [dev.blamspot.jcode.design.CompactContextMenu]'s `header` slot) rather than a floating card. It
+ * sits above the normal editor actions so a long-press on a variable gives one card: the value at a
+ * glance, plus everything you'd otherwise reach from the context menu.
  *
- * It stays a *peek*: a glance at the value without losing your place in the file. Anything it cannot
- * show — a value longer than [PEEK_MAX_LINES], or an object whose fields live behind a reference — is
- * one tap from the full view rather than silently clipped, which is what an ellipsis with nothing
- * behind it used to be.
+ * It stays a *peek*: the value up to [PEEK_MAX_LINES], and — when there is more, a longer value or an
+ * object with fields behind a reference — an "Inspect object" row that opens the full [VariableDetailDialog]
+ * rather than silently clipping.
  */
 @Composable
-internal fun VariableInspectPopup(
+internal fun VariableInspectHeader(
     inspection: VariableInspection,
-    expand: ((Int, (List<InspectedValue>) -> Unit) -> Unit)?,
-    onDismiss: () -> Unit,
+    onInspect: () -> Unit,
 ) {
-    var detail by remember(inspection) { mutableStateOf(false) }
     val resolved = inspection.resolved
     val lineCount = remember(resolved.value) { resolved.value.count { it == '\n' } + 1 }
     val clipped = lineCount > PEEK_MAX_LINES || resolved.value.length > 400
     val hasMore = clipped || resolved.expandable
 
-    if (detail) {
-        VariableDetailDialog(root = resolved, expand = expand, onDismiss = onDismiss)
-        return
-    }
-
-    val positionProvider = remember(inspection.xPx, inspection.yPx) {
-        object : PopupPositionProvider {
-            override fun calculatePosition(
-                anchorBounds: IntRect,
-                windowSize: IntSize,
-                layoutDirection: LayoutDirection,
-                popupContentSize: IntSize,
-            ): IntOffset {
-                val x = (anchorBounds.left + inspection.xPx.toInt())
-                    .coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
-                val below = anchorBounds.top + inspection.yPx.toInt() + 24
-                val y = if (below + popupContentSize.height <= windowSize.height) {
-                    below
-                } else {
-                    (anchorBounds.top + inspection.yPx.toInt() - popupContentSize.height - 12).coerceAtLeast(0)
-                }
-                return IntOffset(x, y)
-            }
-        }
-    }
-    Popup(
-        popupPositionProvider = positionProvider,
-        properties = PopupProperties(focusable = false, dismissOnBackPress = true, dismissOnClickOutside = true),
-        onDismissRequest = onDismiss,
+    Column(
+        modifier = Modifier
+            .widthIn(min = 180.dp, max = 420.dp)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
-        Surface(
-            shape = RoundedCornerShape(8.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shadowElevation = 8.dp,
-            modifier = Modifier.widthIn(min = 120.dp, max = 420.dp),
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = inspection.word,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    resolved.type?.let { t ->
-                        Text(
-                            text = "  $t",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = inspection.word,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            resolved.type?.let { t ->
                 Text(
-                    text = resolved.value,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = PEEK_MAX_LINES,
+                    text = "  $t",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (hasMore) {
-                    TextButton(onClick = { detail = true }, modifier = Modifier.padding(top = 2.dp)) {
-                        Text(
-                            text = if (resolved.expandable) "Inspect object" else "Show full value",
-                            style = MaterialTheme.typography.labelMedium,
-                        )
-                    }
-                }
+            }
+        }
+        Text(
+            text = resolved.value,
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = PEEK_MAX_LINES,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+        if (hasMore) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onInspect)
+                    .padding(top = 8.dp, bottom = 2.dp),
+            ) {
+                Icon(
+                    imageVector = jcIcon(JCodeIcon.Search),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    text = if (resolved.expandable) "Inspect object" else "Show full value",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
             }
         }
     }
@@ -182,7 +154,7 @@ internal fun VariableInspectPopup(
  * cyclic object graph would not terminate at all.
  */
 @Composable
-private fun VariableDetailDialog(
+internal fun VariableDetailDialog(
     root: InspectedValue,
     expand: ((Int, (List<InspectedValue>) -> Unit) -> Unit)?,
     onDismiss: () -> Unit,

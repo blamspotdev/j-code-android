@@ -379,14 +379,18 @@ fun EditorViewHost(
     var menu by remember { mutableStateOf<EditorContextRequest?>(null) }
     var completionAnchor by remember { mutableStateOf<CompletionAnchor?>(null) }
     var inspection by remember { mutableStateOf<VariableInspection?>(null) }
-    // Long-press variable inspection is active only while a debug session is stopped (the host passes
-    // a non-null evaluator). Consuming the press suppresses selection + the context menu.
+    var inspectDetail by remember { mutableStateOf<InspectedValue?>(null) }
+    // Variable inspection is active only while a debug session is stopped (the host passes a non-null
+    // evaluator). Rather than consuming the press, it lets the normal path run — the word gets selected
+    // (highlighted) and the context menu opens — and resolves the value alongside; when it arrives it
+    // shows as that menu's header, so one long-press yields the peek AND the editor actions together.
     val wordLongPressHandler: ((String, Float, Float) -> Boolean)? = evaluateInDebugFrame?.let { eval ->
-        { word, x, y ->
+        { word, _, _ ->
+            inspection = null
             eval(word) { resolved ->
-                if (resolved != null) inspection = VariableInspection(word, resolved, x, y)
+                if (resolved != null) inspection = VariableInspection(word, resolved)
             }
-            true
+            false
         }
     }
     val completionSource = LocalCompletionSource.current
@@ -402,8 +406,8 @@ fun EditorViewHost(
     // A completion popup belongs to its file; clear it when the active editor (tab) changes.
     LaunchedEffect(editorState) { completionAnchor = null }
 
-    // An inspection popup belongs to the stopped debug frame; clear it on tab switch or resume.
-    LaunchedEffect(editorState, evaluateInDebugFrame == null) { inspection = null }
+    // An inspection belongs to the stopped debug frame; clear it on tab switch or resume.
+    LaunchedEffect(editorState, evaluateInDebugFrame == null) { inspection = null; inspectDetail = null }
 
     // The editor is a custom Canvas view and doesn't inherit MaterialTheme, so derive its colors from
     // the active theme bundle here: content background follows the app background (true black under the
@@ -562,11 +566,12 @@ fun EditorViewHost(
             )
         }
 
-        inspection?.let { insp ->
-            VariableInspectPopup(
-                inspection = insp,
+        // Opened from the menu header's "Inspect object" — the full value + field tree.
+        inspectDetail?.let { root ->
+            VariableDetailDialog(
+                root = root,
                 expand = expandInDebugFrame,
-                onDismiss = { inspection = null },
+                onDismiss = { inspectDetail = null },
             )
         }
 
@@ -574,8 +579,18 @@ fun EditorViewHost(
             val offset = with(density) { DpOffset(req.xPx.toDp(), req.yPx.toDp()) }
             CompactContextMenu(
                 expanded = true,
-                onDismissRequest = { menu = null },
+                onDismissRequest = { menu = null; inspection = null },
                 offset = offset,
+                // Show the resolved value as a header, but only for the word this menu is for — a
+                // stale resolution from a previous long-press must not leak into a different word.
+                header = inspection?.takeIf { it.word == req.word }?.let { insp ->
+                    {
+                        VariableInspectHeader(
+                            inspection = insp,
+                            onInspect = { menu = null; inspection = null; inspectDetail = insp.resolved },
+                        )
+                    }
+                },
                 quickActions = listOf(
                     ContextAction(JCodeIcon.Copy, "Copy") { view?.copySelection() },
                     ContextAction(JCodeIcon.Cut, "Cut") { view?.cutSelection() },
