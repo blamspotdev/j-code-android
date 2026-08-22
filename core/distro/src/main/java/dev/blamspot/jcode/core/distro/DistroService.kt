@@ -749,7 +749,7 @@ class DistroService(
         lock.withLock {
             val distroId = _environmentState.value.runtime.selectedDistro.id
             _debugCatalogState.value = _debugCatalogState.value.copy(
-                entries = DebugEngineCatalog.BUILT_IN,
+                entries = DebugEngineCatalog.all,
                 installedEntryIds = readInstalledDebugEntries(distroId),
                 runningEntryId = null,
                 runningAction = null,
@@ -854,7 +854,7 @@ class DistroService(
         try {
             lock.withLock {
                 val distroId = _environmentState.value.runtime.selectedDistro.id
-                val entries = DebugEngineCatalog.BUILT_IN
+                val entries = DebugEngineCatalog.all
                 _debugCatalogState.value = _debugCatalogState.value.copy(
                     entries = entries, checking = true, selectedDistroId = distroId, errorMessage = null,
                 )

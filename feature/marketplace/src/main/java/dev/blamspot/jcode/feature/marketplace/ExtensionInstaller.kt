@@ -618,6 +618,29 @@ class ExtensionInstaller internal constructor(context: Context) {
                 kind = RunPresetKind.from(p.str("kind")),
             )
         }
+        val debugEngines = map.listOfAny("debugEngines").mapNotNull { item ->
+            val e = (item as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
+            val id = e.str("id")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+            val adapter = e.str("adapterCommand")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+            dev.blamspot.jcode.core.distro.DebugEngineEntry(
+                id = id,
+                category = e.str("category") ?: "Extension",
+                name = e.str("name") ?: id,
+                description = e.str("description").orEmpty(),
+                installCommand = e.str("installCommand").orEmpty(),
+                verifyCommand = e.str("verifyCommand").orEmpty(),
+                uninstallCommand = e.str("uninstallCommand").orEmpty(),
+                adapterCommand = adapter,
+                transport = e.str("transport")?.takeIf { it == "tcp" } ?: "stdio",
+                debugType = e.str("debugType").orEmpty(),
+                updateCheckCommand = e.str("updateCheckCommand").orEmpty(),
+                languageIds = e.strList("languageIds"),
+                extensions = e.listOfAny("extensions")
+                    .mapNotNull { it?.toString()?.trim()?.lowercase()?.takeIf(String::isNotBlank) }
+                    .map { if (it.startsWith(".")) it else ".$it" },
+                requiredSdks = e.strList("requiredSdks"),
+            )
+        }
         return ExtensionContributions(
             editorStartActions = actions("editorStartActions"),
             drawerActions = actions("drawerActions"),
@@ -625,6 +648,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             explorerContextActions = actions("explorerContextActions"),
             explorerDecorations = map["explorerDecorations"] == true || map.str("explorerDecorations") == "true",
             runConfigPresets = runPresets,
+            debugEngines = debugEngines,
         )
     }
 

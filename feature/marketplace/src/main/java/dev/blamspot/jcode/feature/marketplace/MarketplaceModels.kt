@@ -171,10 +171,21 @@ data class ExtensionContributions(
     val explorerContextActions: List<ContributedAction> = emptyList(),
     val explorerDecorations: Boolean = false,
     val runConfigPresets: List<RunConfigPreset> = emptyList(),
+    /**
+     * Debug adapters this extension brings with it, offered by the Debug Engine manager while the
+     * extension is installed.
+     *
+     * A language's adapter belongs to that language's Dev Pack, not to JCode: the IDE is generic and
+     * should not ship a JVM debugger to someone who only writes Python. Commands may use
+     * `{{extensionDir}}` for the extension's own install directory, which the host substitutes — an
+     * adapter the pack bundles installs by copying rather than downloading.
+     */
+    val debugEngines: List<dev.blamspot.jcode.core.distro.DebugEngineEntry> = emptyList(),
 ) {
     val isEmpty: Boolean
         get() = editorStartActions.isEmpty() && drawerActions.isEmpty() && editorContextActions.isEmpty() &&
-            explorerContextActions.isEmpty() && !explorerDecorations && runConfigPresets.isEmpty()
+            explorerContextActions.isEmpty() && !explorerDecorations && runConfigPresets.isEmpty() &&
+            debugEngines.isEmpty()
 
     companion object {
         val EMPTY = ExtensionContributions()

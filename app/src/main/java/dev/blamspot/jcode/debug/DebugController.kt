@@ -722,7 +722,7 @@ class DebugController(
 
     private fun engineForFile(hostPath: String, projectDir: String? = null): DebugEngineEntry? {
         val ext = "." + hostPath.substringAfterLast('.', "")
-        DebugEngineCatalog.BUILT_IN.firstOrNull { ext in it.extensions }?.let { return it }
+        DebugEngineCatalog.all.firstOrNull { ext in it.extensions }?.let { return it }
         // Kotlin ships no engine of its own. In an Android app it compiles to JVM bytecode that the
         // java-debug adapter debugs over ART's JDWP, so .kt resolves there — and only there, since
         // outside an Android project nothing would be running to attach to.

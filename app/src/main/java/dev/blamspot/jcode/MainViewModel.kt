@@ -119,6 +119,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -287,7 +288,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Extensions currently installed under the app's install root (templates + language packs). */
     private val _installedExtensions = MutableStateFlow<List<InstalledExtension>>(emptyList())
-    val installedExtensions: StateFlow<List<InstalledExtension>> = _installedExtensions.asStateFlow()
+    val installedExtensions: StateFlow<List<InstalledExtension>> = _installedExtensions
+        .onEach(::publishContributedDebugEngines)
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyList())
 
     /** Extensions available in the remote marketplace index (populated on demand). The public,
      *  UI-facing list is [marketplaceEntries] below — it folds in custom-source update entries and so
@@ -3181,6 +3184,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         combine(installedExtensions, extensionActivations, distroService.sdkCatalogState) { exts, acts, sdk ->
             availableContributions(exts, acts, sdk) { it.explorerContextActions }
         }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+    /**
+     * Republish the debug adapters installed extensions bring, so the Debug Engine manager and the
+     * DAP launcher both see them.
+     *
+     * Keyed on installed, not on activation: an adapter is catalogue data, not a running plugin, and
+     * a pack set to Manual should still offer its debugger rather than hiding it. `{{extensionDir}}`
+     * resolves here, where the install directory is known, so a pack can ship its adapter and install
+     * it by copying instead of downloading.
+     */
+    private fun publishContributedDebugEngines(exts: List<InstalledExtension>) {
+        val engines = exts.flatMap { ext ->
+            val dir = ext.dir.absolutePath
+            ext.contributes.debugEngines.map { engine ->
+                fun resolve(command: String) = command.replace("{{extensionDir}}", dir)
+                engine.copy(
+                    installCommand = resolve(engine.installCommand),
+                    verifyCommand = resolve(engine.verifyCommand),
+                    uninstallCommand = resolve(engine.uninstallCommand),
+                    adapterCommand = resolve(engine.adapterCommand),
+                    updateCheckCommand = resolve(engine.updateCheckCommand),
+                )
+            }
+        }
+        val ids = engines.map { it.id }.toSet()
+        if (ids == contributedDebugEngineIds) return
+        contributedDebugEngineIds = ids
+        dev.blamspot.jcode.core.distro.DebugEngineCatalog.setContributed(engines)
+        // The manager renders a snapshot taken when the catalogue was last refreshed, so installing
+        // a pack would otherwise leave its debugger invisible until something else forced a reload.
+        // Only on an actual change: the probe runs verify commands in the distro.
+        viewModelScope.launch { distroService.refreshDebugEngineCatalog() }
+    }
+
+    /** What [publishContributedDebugEngines] last published, so an unchanged list costs no probe. */
+    private var contributedDebugEngineIds: Set<String>? = null
 
     /** Build/run presets active extensions contribute (required toolchains met), offered in the Run
      *  panel's Add pickers — each in the segment its `kind` names — when the project contains all of

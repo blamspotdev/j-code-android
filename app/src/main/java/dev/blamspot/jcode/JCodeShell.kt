@@ -5365,11 +5365,6 @@ private fun outputColor(kind: OutputKind) = when (kind) {
     OutputKind.Info -> MaterialTheme.colorScheme.onSurfaceVariant
     OutputKind.Stdout -> MaterialTheme.colorScheme.onSurface
 }
-    append(windowInfo.heightClass.name.lowercase())
-    if (windowInfo.hasPhysicalKeyboard) {
-        append(" / keyboard")
-    }
-}
 
 private fun explorerViewModeOf(value: String): ExplorerViewMode =
     ExplorerViewMode.entries.firstOrNull { it.name.equals(value, ignoreCase = true) } ?: ExplorerViewMode.Tree

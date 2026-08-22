@@ -50,7 +50,14 @@ data class DebugEngineCatalogState(
     val errorMessage: String? = null,
 )
 
-/** Built-in debug adapters offered by the Debug Engine Manager. */
+/**
+ * The debug adapters the Debug Engine manager offers: the ones JCode ships, plus the ones installed
+ * extensions bring.
+ *
+ * An adapter for one language belongs to that language's Dev Pack rather than to the IDE — JCode is
+ * generic, and a Python-only user has no use for a JVM debugger. [BUILT_IN] is what is left after
+ * that: adapters that serve languages with no pack of their own, or that several packs share.
+ */
 object DebugEngineCatalog {
     val BUILT_IN: List<DebugEngineEntry> = listOf(
         DebugEngineEntry(
@@ -138,30 +145,30 @@ object DebugEngineCatalog {
             extensions = listOf(".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"),
             requiredSdks = listOf("nodejs"),
         ),
-        DebugEngineEntry(
-            id = "java-debug",
-            category = "JVM",
-            name = "Java (JDWP/JDI)",
-            description = "JVM debug adapter (Microsoft java-debug core, DAP over stdio). Breakpoints, " +
-                "stepping, call stack, and variables for javac-compiled Java. Needs a JDK.",
-            // curl (not wget) for the download: the required jdk SDK guarantees curl; wget is absent
-            // from the minimal base rootfs.
-            installCommand = "set -e; mkdir -p \"\$HOME/java-dap\"; " +
-                "jcode_fetch https://github.com/blamspotdev/j-code-android/releases/download/java-dap-v2/jcode-java-dap.jar " +
-                "\"\$HOME/java-dap/jcode-java-dap.jar\" 5 95 'Downloading the Java debug adapter'; " +
-                "jcode_progress 100 'Java debug adapter ready'",
-            // `... | head -1` would return head's exit code (0) even when java is missing; check the
-            // JVM with a real exit-code test so a JDK-less environment fails verify honestly.
-            verifyCommand = "test -f \"\$HOME/java-dap/jcode-java-dap.jar\" && command -v java >/dev/null 2>&1",
-            uninstallCommand = "rm -rf \"\$HOME/java-dap\"",
-            adapterCommand = "java -Djava.net.preferIPv4Stack=true -cp \"\$HOME/java-dap/jcode-java-dap.jar\" dev.blamspot.jcode.javadap.Main",
-            transport = "stdio",
-            debugType = "java",
-            languageIds = listOf("java"),
-            extensions = listOf(".java"),
-            requiredSdks = listOf("jdk"),
-        ),
     )
 
-    fun findById(id: String): DebugEngineEntry? = BUILT_IN.firstOrNull { it.id == id }
+    /**
+     * Adapters contributed by the currently-installed extensions, republished by the host whenever
+     * that set changes.
+     *
+     * Held here rather than passed around because the consumers are spread across modules that must
+     * not depend on the marketplace — the install machinery in `:core:distro`, the launcher in
+     * `:core:debug` — and all of them already reach for this catalog.
+     */
+    @Volatile
+    var contributed: List<DebugEngineEntry> = emptyList()
+        private set
+
+    /** Called by the host when the installed-extension set changes. */
+    fun setContributed(entries: List<DebugEngineEntry>) {
+        // An extension must not shadow a shipped adapter: ids are the install key, and two entries
+        // claiming one id would race over the same directory.
+        val builtInIds = BUILT_IN.mapTo(mutableSetOf()) { it.id }
+        contributed = entries.filterNot { it.id in builtInIds }.distinctBy { it.id }
+    }
+
+    /** Everything on offer right now. */
+    val all: List<DebugEngineEntry> get() = BUILT_IN + contributed
+
+    fun findById(id: String): DebugEngineEntry? = all.firstOrNull { it.id == id }
 }
