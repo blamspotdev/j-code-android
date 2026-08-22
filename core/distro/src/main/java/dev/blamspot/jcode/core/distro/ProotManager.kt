@@ -329,6 +329,19 @@ class ProotManager(private val context: Context) {
 
         // Root directory
         args.addAll(listOf("-r", rootfsPath.absolutePath))
+
+        // App storage, visible at its own host path. /proc/<pid>/maps is written by the KERNEL, so it
+        // reports real host paths — a guest library shows up as
+        // /data/user/0/<pkg>/files/distros/<id>/rootfs/root/... — and anything that reads a module
+        // path back out of /proc and re-opens it gets a path proot resolves against the guest root,
+        // where it does not exist. That is exactly how C# debugging failed: dbgshim locates
+        // libmscordbi.so next to the debuggee's libcoreclr.so, learns that path from /proc/maps,
+        // cannot open it, and returns CORDBG_E_DEBUG_COMPONENT_MISSING (netcoredbg then dereferences
+        // the null interface it was handed and dies). One bind of filesDir covers every path the
+        // guest can see — the rootfs AND the workspace both live under it — so a module loaded from
+        // either resolves to the same file from inside.
+        val filesRoot = appContext.filesDir.absolutePath
+        args.addAll(listOf("-b", "$filesRoot:$filesRoot"))
         
         // Bind mounts
         for (bind in binds) {

@@ -379,10 +379,30 @@ class DebugController(
         if (!build.succeeded) {
             throw dev.blamspot.jcode.core.debug.DebugException("dotnet build failed (exit ${build.exitCode ?: build.internalError}).")
         }
-        val dll = findBuiltDll(csprojDir, build.stdout)
+        val builtDll = findBuiltDll(csprojDir, build.stdout)
             ?: throw dev.blamspot.jcode.core.debug.DebugException("Build succeeded but no output DLL was found.")
+        // Stage the build output onto ext4 before debugging. /workspace is a noexec FUSE mount and
+        // netcoredbg cannot debug a program launched from it — the identical binary, project and
+        // breakpoints hit from ext4 and fail from /workspace. The PDB still records the original
+        // /workspace source path, so breakpoints keep binding against the files the editor shows.
+        // Same reasoning, and the same destination filesystem, as ProjectRunner's run staging.
+        val stageDir = "/root/.jcode-debug/" + csprojDir.name.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val outDir = builtDll.substringBeforeLast('/')
+        val dll = stageDir + "/" + builtDll.substringAfterLast('/')
+        val staged = distroService.exec(
+            command = "rm -rf '$stageDir' && mkdir -p '$stageDir' && cp -r '$outDir'/. '$stageDir'/",
+            workdir = distroDir,
+            env = env,
+            timeoutMs = 120_000L,
+            user = "root",
+        )
+        if (!staged.succeeded) {
+            throw dev.blamspot.jcode.core.debug.DebugException(
+                "Couldn't stage the build output for debugging (exit ${staged.exitCode ?: staged.internalError}).",
+            )
+        }
         pushOutput("Launching $dll under netcoredbg…\n")
-        val config = baseConfig("coreclr", distroDir).apply {
+        val config = baseConfig("coreclr", stageDir).apply {
             put("program", dll)
             put("stopAtEntry", false)
             put("justMyCode", false)
@@ -399,7 +419,10 @@ class DebugController(
         // at all, no debuggee, and a session stuck on "Running" with nothing in the console.
         val adapterCommand = "export DOTNET_ROOT=/root/.dotnet DOTNET_GCHeapHardLimit=$gcHeapLimit; " +
             "exec ${engine.adapterCommand}"
-        return LaunchPlan(distroDir, config, adapterCommand, tcpPort = null, user = "root", adapterPath = "/root/.dotnet")
+        // netcoredbg itself also runs from the staged directory, not the project: the adapter
+        // inherits its working directory and the debuggee is launched relative to it, and the
+        // whole session only works when that side sits on ext4 too.
+        return LaunchPlan(stageDir, config, adapterCommand, tcpPort = null, user = "root", adapterPath = "/root/.dotnet")
     }
 
     /** Walk up from the source file to [projectDir] for a .csproj, else search a few levels down. */
