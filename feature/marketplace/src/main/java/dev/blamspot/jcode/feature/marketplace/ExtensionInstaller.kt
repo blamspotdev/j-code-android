@@ -387,7 +387,7 @@ class ExtensionInstaller internal constructor(context: Context) {
         // A "dev pack" may bundle both languages and templates regardless of its primary type;
         // parse whatever it declares (missing sections resolve to empty).
         val templates = map.listOfAny("templates").mapNotNull { raw -> loadTemplate(dir, raw?.toString()) }
-        val languages = parseLanguages(map)
+        val languages = parseLanguages(map, dir)
         val settings = map.listOfAny("settings").mapNotNull { raw ->
             val s = (raw as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
             val key = s.str("key") ?: return@mapNotNull null
@@ -424,7 +424,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             settings = settings,
             requires = parseDeps(map["requires"]),
             suggests = parseDeps(map["suggests"]),
-            contributes = parseContributions(map["contributes"]),
+            contributes = parseContributions(map["contributes"], dir),
             dev = File(dir, DEV_MARKER).exists(),
             shortName = vsixTabName(dir),
         )
@@ -513,14 +513,20 @@ class ExtensionInstaller internal constructor(context: Context) {
 
     private fun loadTemplate(extensionDir: File, id: String?): ProjectTemplate? {
         if (id.isNullOrBlank()) return null
-        val file = File(extensionDir, "templates/$id/template.yaml").takeIf { it.isFile } ?: return null
+        val templateDir = File(extensionDir, "templates/$id")
+        val file = File(templateDir, "template.yaml").takeIf { it.isFile } ?: return null
         val map = runCatching { parseYamlMapping(file.readText()) }.getOrNull() ?: return null
         val recipe = map.listOfAny("recipe").mapNotNull { raw ->
             val step = (raw as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
-            val run = step.str("run") ?: return@mapNotNull null
+            // A step is a script beside the template, or shell inline. One of the two must be there;
+            // a step that is neither is a typo, and running nothing silently would hide it.
+            val script = step.str("script")?.takeIf { s -> File(templateDir, s).isFile }
+            val run = step.str("run")
+            if (script == null && run == null) return@mapNotNull null
             TemplateRecipeStep(
                 label = step.str("label") ?: "Run",
-                run = run.trim(),
+                run = run?.trim().orEmpty(),
+                script = script,
                 workdir = step.str("workdir"),
             )
         }
@@ -537,6 +543,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             )
         }
         return ProjectTemplate(
+            dir = templateDir,
             id = map.str("id") ?: id,
             name = map.str("name") ?: id,
             description = map.str("description") ?: "",
@@ -572,7 +579,73 @@ class ExtensionInstaller internal constructor(context: Context) {
         )
     }
 
-    private fun parseContributions(raw: Any?): ExtensionContributions {
+    /**
+     * One entry of a header list: the thing itself, or the id of a file that holds it.
+     *
+     * `templates:` has always named ids and loaded `templates/<id>/template.yaml`; this is the same
+     * move for the other lists, so `extension.yaml` can be a header — what the extension is and what
+     * it brings — while the substance sits in files of its own. An inline map still works, because a
+     * two-line language rule does not need a directory.
+     */
+    private fun entryMap(dir: File, raw: Any?, folder: String, fileName: String): Map<String, Any?>? =
+        when (raw) {
+            is Map<*, *> -> raw.toStringKeyMap()
+            is String -> raw.takeIf { it.isNotBlank() }
+                ?.let { id -> File(dir, "$folder/$id/$fileName").takeIf { it.isFile } to id }
+                ?.let { (file, id) ->
+                    val parsed = file?.let { f -> runCatching { parseYamlMapping(f.readText()) }.getOrNull() }
+                    // The id came from the header, so a file that omits it is still identified.
+                    parsed?.let { if (it["id"] == null) it + ("id" to id) else it }
+                }
+            else -> null
+        }
+
+    /** A path as one shell word. Extension directories are app-controlled, but a quote in a name
+     *  would still break the command it lands in. */
+    private fun shellQuote(text: String): String = "'" + text.replace("'", "'\\''") + "'"
+
+    /** The directory an id-referenced entry was loaded from, for resolving its scripts. */
+    private fun entryDir(dir: File, raw: Any?, folder: String): File? =
+        (raw as? String)?.takeIf { it.isNotBlank() }?.let { File(dir, "$folder/$it") }
+
+    /**
+     * A shell command, from `<name>Command`/`command` inline or a `.sh` named by `<name>Script`/
+     * `script` beside the entry.
+     *
+     * A script runs as a file rather than as text pulled into a string: the extension directory is
+     * bound into the runtime at the same absolute path, so the shell reports a real filename and
+     * line when something in it fails.
+     */
+    private fun commandOf(
+        map: Map<String, Any?>,
+        owner: File?,
+        commandKey: String = "command",
+        scriptKey: String = "script",
+    ): String {
+        val script = map.str(scriptKey)?.takeIf { it.isNotBlank() }
+        if (script != null && owner != null) {
+            val file = File(owner, script)
+            if (file.isFile) return "sh " + shellQuote(file.absolutePath)
+        }
+        return map.str(commandKey)?.trim().orEmpty()
+    }
+
+    /**
+     * A run preset's command, with a script step told where it is running.
+     *
+     * A preset's `{{projectDir}}`/`{{file}}`/`{{dir}}` are filled in at launch, not at parse time —
+     * they depend on the project and the open file. A script cannot have them substituted into it
+     * and still be the file that runs, so they are handed over as environment variables whose values
+     * are the same placeholders: the launcher substitutes them on its way past, exactly as it does
+     * for an inline command.
+     */
+    private fun presetCommand(map: Map<String, Any?>, owner: File?): String {
+        val resolved = commandOf(map, owner)
+        if (!resolved.startsWith("sh ")) return resolved
+        return "JCODE_PROJECT_DIR='{{projectDir}}' JCODE_FILE='{{file}}' JCODE_DIR='{{dir}}' " + resolved
+    }
+
+    private fun parseContributions(raw: Any?, dir: File): ExtensionContributions {
         val map = (raw as? Map<*, *>)?.toStringKeyMap() ?: return ExtensionContributions.EMPTY
         fun actions(key: String): List<ContributedAction> =
             map.listOfAny(key).mapNotNull { item ->
@@ -589,7 +662,8 @@ class ExtensionInstaller internal constructor(context: Context) {
                 )
             }
         val runPresets = map.listOfAny("runConfigPresets").mapNotNull { item ->
-            val p = (item as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
+            val p = entryMap(dir, item, "presets", "preset.yaml") ?: return@mapNotNull null
+            val presetDir = entryDir(dir, item, "presets")
             val id = p.str("id")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
             // `requires` is the list of globs that must ALL be present; accept a single `match` string
             // as shorthand for a one-file preset.
@@ -600,10 +674,10 @@ class ExtensionInstaller internal constructor(context: Context) {
             // shorthand (labelled by `terminalLabel`).
             val terminals = p.listOfAny("terminals").mapNotNull { t ->
                 val tm = (t as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
-                val cmd = tm.str("command")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+                val cmd = presetCommand(tm, presetDir).takeIf(String::isNotBlank) ?: return@mapNotNull null
                 RunPresetTerminal(label = tm.str("label") ?: "Run", command = cmd)
             }.ifEmpty {
-                p.str("command")?.takeIf(String::isNotBlank)
+                presetCommand(p, presetDir).takeIf(String::isNotBlank)
                     ?.let { listOf(RunPresetTerminal(p.str("terminalLabel") ?: "Run", it)) }
                     .orEmpty()
             }
@@ -619,21 +693,23 @@ class ExtensionInstaller internal constructor(context: Context) {
             )
         }
         val debugEngines = map.listOfAny("debugEngines").mapNotNull { item ->
-            val e = (item as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
+            val e = entryMap(dir, item, "engines", "engine.yaml") ?: return@mapNotNull null
+            val engineDir = entryDir(dir, item, "engines")
             val id = e.str("id")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
-            val adapter = e.str("adapterCommand")?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+            val adapter = commandOf(e, engineDir, "adapterCommand", "adapterScript")
+                .takeIf(String::isNotBlank) ?: return@mapNotNull null
             dev.blamspot.jcode.core.distro.DebugEngineEntry(
                 id = id,
                 category = e.str("category") ?: "Extension",
                 name = e.str("name") ?: id,
                 description = e.str("description").orEmpty(),
-                installCommand = e.str("installCommand").orEmpty(),
-                verifyCommand = e.str("verifyCommand").orEmpty(),
-                uninstallCommand = e.str("uninstallCommand").orEmpty(),
+                installCommand = commandOf(e, engineDir, "installCommand", "installScript"),
+                verifyCommand = commandOf(e, engineDir, "verifyCommand", "verifyScript"),
+                uninstallCommand = commandOf(e, engineDir, "uninstallCommand", "uninstallScript"),
                 adapterCommand = adapter,
                 transport = e.str("transport")?.takeIf { it == "tcp" } ?: "stdio",
                 debugType = e.str("debugType").orEmpty(),
-                updateCheckCommand = e.str("updateCheckCommand").orEmpty(),
+                updateCheckCommand = commandOf(e, engineDir, "updateCheckCommand", "updateCheckScript"),
                 languageIds = e.strList("languageIds"),
                 extensions = e.listOfAny("extensions")
                     .mapNotNull { it?.toString()?.trim()?.lowercase()?.takeIf(String::isNotBlank) }
@@ -654,9 +730,9 @@ class ExtensionInstaller internal constructor(context: Context) {
 
     // A `type: language` extension may declare a single `language:` block (legacy) or a `languages:`
     // array (a pack bundling several languages, e.g. HTML/XML/YAML). Both yield a list of packs.
-    private fun parseLanguages(map: Map<String, Any?>): List<LanguagePack> {
+    private fun parseLanguages(map: Map<String, Any?>, dir: File): List<LanguagePack> {
         val multi = map.listOfAny("languages").mapNotNull { raw ->
-            (raw as? Map<*, *>)?.toStringKeyMap()?.let(::parseOneLanguage)
+            entryMap(dir, raw, "languages", "language.yaml")?.let(::parseOneLanguage)
         }
         if (multi.isNotEmpty()) return multi
         val single = (map["language"] as? Map<*, *>)?.toStringKeyMap()?.let(::parseOneLanguage)

@@ -1,9 +1,18 @@
 package dev.blamspot.jcode.feature.marketplace
 
-/** One ordered step of a template's scaffold recipe, executed on-device. */
+/**
+ * One ordered step of a template's scaffold recipe, executed on-device.
+ *
+ * Either [run] (the shell inline in `template.yaml`) or [script] (a `.sh` beside it). A step that
+ * writes a build file is mostly a heredoc, and a heredoc reads as shell rather than as YAML — so a
+ * template of any size keeps its scaffolding in files a shell linter can see and an editor can
+ * colour, and `template.yaml` stays a list of what happens in what order.
+ */
 data class TemplateRecipeStep(
     val label: String,
-    val run: String,
+    val run: String = "",
+    /** Path to a `.sh`, relative to the template's own directory. Takes precedence over [run]. */
+    val script: String? = null,
     /** Optional working directory for this step (placeholders resolved before exec). */
     val workdir: String? = null,
 )
@@ -40,6 +49,14 @@ data class ProjectTemplate(
     /** User-configurable inputs collected before scaffolding; empty for fixed templates. */
     val inputs: List<TemplateInput> = emptyList(),
     val recipe: List<TemplateRecipeStep> = emptyList(),
+    /**
+     * The template's own directory (`<extension>/templates/<id>`), against which a step's
+     * [TemplateRecipeStep.script] resolves. Null for a template that declares no scripts.
+     *
+     * A path rather than the file's text: the extension directory is bound into the runtime at the
+     * same absolute path, so a script step runs the real file and a failure names it.
+     */
+    val dir: java.io.File? = null,
 ) {
     /** An empty template creates only the folder; there is nothing to run. */
     val isEmpty: Boolean get() = recipe.isEmpty()

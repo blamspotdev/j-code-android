@@ -1,5 +1,7 @@
 package dev.blamspot.jcode.feature.marketplace
 
+import java.io.File
+
 import dev.blamspot.jcode.core.distro.DistroService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -114,8 +116,20 @@ class TemplateScaffolder internal constructor(
             return fail(prepResult.internalError ?: "Failed to prepare staging directory.")
         }
 
+        // A script step gets the same values the inline form gets as `{{tokens}}`, but as environment
+        // variables — a file cannot have text substituted into it and still be the file that runs.
+        val env = buildMap {
+            put("JCODE_PROJECT_DIR", request.projectDir)
+            put("JCODE_PROJECT_NAME", request.projectName)
+            put("JCODE_STAGING_DIR", staging)
+            template.dir?.let { put("JCODE_TEMPLATE_DIR", it.absolutePath) }
+            template.inputs.forEach { input ->
+                put("JCODE_INPUT_" + envSuffix(input.id), request.inputs[input.id] ?: input.defaultValue)
+            }
+        }
+
         steps.forEachIndexed { index, step ->
-            val resolvedRun = step.run.resolve(replacements)
+            val resolvedRun = scriptInvocation(template, step, env) ?: step.run.resolve(replacements)
             val stepWorkdir = step.workdir?.resolve(replacements)
             // proot's working-directory flag is a literal path and does not shell-expand `$HOME`,
             // so embed the `cd` in the command (where the shell expands it) and keep proot's cwd at
@@ -164,6 +178,29 @@ class TemplateScaffolder internal constructor(
             logLines = (_state.value.logLines + line).takeLast(LOG_LIMIT),
         )
     }
+
+    /**
+     * The command that runs a step's `.sh`, or null when the step is inline shell.
+     *
+     * Exported one per line rather than as a `VAR=… sh …` prefix so a value containing a newline
+     * (a multi-line text input) cannot run off the end of the command.
+     */
+    private fun scriptInvocation(
+        template: ProjectTemplate,
+        step: TemplateRecipeStep,
+        env: Map<String, String>,
+    ): String? {
+        val script = step.script ?: return null
+        val dir = template.dir ?: return null
+        val exports = env.entries.joinToString("\n") { (key, value) -> "export $key=" + shellQuote(value) }
+        return exports + "\nsh " + shellQuote(File(dir, script).absolutePath)
+    }
+
+    /** An input id as an environment-variable suffix: `minSdk` -> `MINSDK`. */
+    private fun envSuffix(id: String): String =
+        id.map { if (it.isLetterOrDigit()) it.uppercaseChar() else '_' }.joinToString("")
+
+    private fun shellQuote(text: String): String = "'" + text.replace("'", "'\\''") + "'"
 
     private fun String.resolve(replacements: Map<String, String>): String {
         var result = this
