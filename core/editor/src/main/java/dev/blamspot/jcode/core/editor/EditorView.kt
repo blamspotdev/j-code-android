@@ -32,7 +32,8 @@ data class EditorContextRequest(
     val xPx: Float,
     val yPx: Float,
     val word: String,
-    /** Byte offset the press landed on — the position language-server actions resolve against. */
+    /** Byte offset the press landed on (the end of the buffer when it landed past the last line)
+     *  — the position language-server actions resolve against. */
     val offset: Int,
 )
 
@@ -275,8 +276,13 @@ class EditorView @JvmOverloads constructor(
 
             override fun onLongPress(e: MotionEvent) {
                 if (gutterLineAt(e.x, e.y) != null) return
-                val offset = offsetAt(e.x, e.y) ?: return
-                val word = wordAt(offset)
+                val state = editorState ?: return
+                // A press past the last row lands on no text, but the menu's document-wide actions
+                // (Paste, Select all, Go to line...) still apply there, so it opens anchored at the end
+                // of the buffer with no word - and, like a press on blank space inside the document,
+                // leaves the caret and any selection alone.
+                val offset = offsetAt(e.x, e.y)
+                val word = offset?.let { wordAt(it) }
                 if (word != null && onWordLongPress?.invoke(word.third, e.x, e.y) == true) {
                     performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                     return
@@ -284,12 +290,18 @@ class EditorView @JvmOverloads constructor(
                 // A press INSIDE an active selection keeps it (so the menu's Copy/Cut act on a
                 // handle-adjusted range instead of resetting it to the pressed word).
                 val range = selectionRange()
-                val insideSelection = range != null && offset in range.first..range.second
+                val insideSelection = offset != null && range != null && offset in range.first..range.second
                 if (!insideSelection && word != null) {
-                    runBlocking { editorState?.setSelection(listOf(Caret(word.first, word.second))) }
+                    runBlocking { state.setSelection(listOf(Caret(word.first, word.second))) }
                 }
                 performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                onContextRequest?.invoke(EditorContextRequest(e.x, e.y, word?.third ?: "", offset))
+                onContextRequest?.invoke(
+                    EditorContextRequest(
+                        e.x, e.y,
+                        word?.third ?: "",
+                        offset ?: state.snapshot.value.byteLength,
+                    ),
+                )
             }
         },
     )
