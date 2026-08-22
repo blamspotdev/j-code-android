@@ -34,7 +34,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.blamspot.jcode.core.buffer.EditTx
 import dev.blamspot.jcode.core.distro.DistroEnvironmentState
+import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
 import dev.blamspot.jcode.core.lsp.LspModule
 import dev.blamspot.jcode.feature.editor.pane.EditorTab
@@ -101,9 +103,9 @@ internal fun WorkbenchStatusBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(20.dp)
-                .padding(horizontal = 8.dp),
+                .padding(horizontal = Space.sm),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.ms),
         ) {
             StatusCell("branch: $branch")
             StatusCell(
@@ -191,7 +193,7 @@ private fun StatusCell(
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.xs),
         modifier = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier,
     ) {
         if (icon != null) {
@@ -221,7 +223,7 @@ private fun EncodingCell(encoding: String) {
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(
                 text = { Text("UTF-8") },
-                leadingIcon = { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                leadingIcon = { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(IconSize.sm)) },
                 onClick = { menu = false },
             )
             DropdownMenuItem(
@@ -246,7 +248,7 @@ private fun LineEndingCell(current: String, editorState: dev.blamspot.jcode.core
                     text = { Text(target) },
                     leadingIcon = {
                         if (target == current) {
-                            Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(IconSize.sm))
                         }
                     },
                     onClick = {

@@ -36,8 +36,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.blamspot.jcode.design.CompactContextMenu
 import dev.blamspot.jcode.design.ContextAction
+import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.JcTooltip
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
 import dev.blamspot.jcode.fs.Project
 import dev.blamspot.jcode.fs.Workspace
@@ -58,8 +61,8 @@ internal fun WorkspaceEmptyState(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
+            .padding(Space.xl),
+        verticalArrangement = Arrangement.spacedBy(Space.md, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
@@ -67,7 +70,7 @@ internal fun WorkspaceEmptyState(
                 .size(56.dp)
                 .background(
                     color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(Radius.xxxl),
                 ),
             contentAlignment = Alignment.Center,
         ) {
@@ -88,7 +91,7 @@ internal fun WorkspaceEmptyState(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
             WorkbenchActionButton(text = "New Folder", onClick = onCreateProject, active = true)
             WorkbenchActionButton(text = "Open Folder", onClick = onOpenExternalFolder)
         }
@@ -111,8 +114,8 @@ internal fun ProjectRoster(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 3.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+            .padding(horizontal = Space.ms, vertical = Space.xs),
+        verticalArrangement = Arrangement.spacedBy(Space.xs),
     ) {
         Text(
             text = "PROJECTS",
@@ -120,14 +123,14 @@ internal fun ProjectRoster(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
             projects.forEach { project ->
                 val selected = project.id == selectedProjectId
                 val isWorkspace = project.nodeType == WorkspaceNodeType.Workspace
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(Radius.lg))
                         .clickable { onOpenProject(project) },
                     color = if (selected) {
                         MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
@@ -138,13 +141,13 @@ internal fun ProjectRoster(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = 8.dp, top = 4.dp, bottom = 4.dp),
+                            .padding(start = Space.sm, top = Space.xs, bottom = Space.xs),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(Space.sm),
                     ) {
                         Surface(
                             modifier = Modifier.size(24.dp),
-                            shape = RoundedCornerShape(8.dp),
+                            shape = RoundedCornerShape(Radius.lg),
                             color = if (selected) {
                                 MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
                             } else {
@@ -155,7 +158,7 @@ internal fun ProjectRoster(
                                 Icon(
                                     imageVector = if (isWorkspace) jcIcon(JCodeIcon.Files) else jcIcon(JCodeIcon.Code),
                                     contentDescription = null,
-                                    modifier = Modifier.size(15.dp),
+                                    modifier = Modifier.size(IconSize.sm),
                                     tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
@@ -174,7 +177,7 @@ internal fun ProjectRoster(
                                     Icon(
                                         imageVector = jcIcon(JCodeIcon.MoreVert),
                                         contentDescription = "Project actions",
-                                        modifier = Modifier.size(18.dp),
+                                        modifier = Modifier.size(IconSize.md),
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
@@ -238,12 +241,12 @@ internal fun WelcomeCard(
     Column(
         modifier = modifier
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f))
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(Space.md),
+        verticalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Text(title, fontWeight = FontWeight.SemiBold)

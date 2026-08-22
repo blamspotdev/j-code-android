@@ -41,6 +41,8 @@ import dev.blamspot.jcode.design.AlertDialog
 import dev.blamspot.jcode.design.CompactOutlinedButton
 import dev.blamspot.jcode.design.CompactFilledButton
 import dev.blamspot.jcode.design.JCodeIcon
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
 import kotlinx.coroutines.launch
 
@@ -133,7 +135,7 @@ internal fun VariableInspectHeader(
     Column(
         modifier = Modifier
             .widthIn(min = 180.dp, max = 420.dp)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = Space.md, vertical = Space.sm),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -162,12 +164,12 @@ internal fun VariableInspectHeader(
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = PEEK_MAX_LINES,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 2.dp),
+            modifier = Modifier.padding(top = Space.xxs),
         )
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            modifier = Modifier.padding(top = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.xs),
+            modifier = Modifier.padding(top = Space.xs),
         ) {
             // Inspect only when there is something the peek could not show; Copy value always, since
             // reading a value off the screen and retyping it is the thing a peek most invites.
@@ -237,9 +239,9 @@ internal fun VariableDetailDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = if (root.expandable) 140.dp else 380.dp)
-                        .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(Radius.md))
                         .verticalScroll(rememberScrollState())
-                        .padding(8.dp),
+                        .padding(Space.sm),
                 ) {
                     Text(
                         text = root.displayValue,
@@ -259,12 +261,12 @@ internal fun VariableDetailDialog(
                         text = "Fields",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
+                        modifier = Modifier.padding(top = Space.ms, bottom = Space.xxs),
                     )
                     val rows = flatten(root.reference, childrenByRef, openRefs, depth = 0)
                     LazyColumn(
                         modifier = Modifier.heightIn(max = 220.dp),
-                        verticalArrangement = Arrangement.spacedBy(1.dp),
+                        verticalArrangement = Arrangement.spacedBy(Space.hairline),
                     ) {
                         items(rows, key = { it.key }) { row ->
                             VariableTreeRow(
@@ -326,7 +328,7 @@ private fun VariableTreeRow(row: TreeRow, onToggle: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .then(if (row.value.expandable) Modifier.clickable(onClick = onToggle) else Modifier)
-            .padding(start = (row.depth * 14).dp, top = 2.dp, bottom = 2.dp),
+            .padding(start = (row.depth * 14).dp, top = Space.xxs, bottom = Space.xxs),
     ) {
         if (row.value.expandable) {
             Icon(
@@ -346,7 +348,7 @@ private fun VariableTreeRow(row: TreeRow, onToggle: () -> Unit) {
             color = MaterialTheme.colorScheme.primary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(start = 4.dp),
+            modifier = Modifier.padding(start = Space.xs),
         )
         Text(
             text = row.value.displayValue,
@@ -354,7 +356,7 @@ private fun VariableTreeRow(row: TreeRow, onToggle: () -> Unit) {
             fontFamily = FontFamily.Monospace,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(start = 8.dp),
+            modifier = Modifier.padding(start = Space.sm),
         )
     }
 }

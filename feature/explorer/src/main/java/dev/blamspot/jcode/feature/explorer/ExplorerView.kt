@@ -1,5 +1,6 @@
 package dev.blamspot.jcode.feature.explorer
 import dev.blamspot.jcode.design.JCodeIcon
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
 
 import android.content.Context
@@ -47,10 +48,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draganddrop.DragAndDropEvent
-import androidx.compose.ui.draganddrop.DragAndDropTarget
-import androidx.compose.ui.draganddrop.mimeTypes
-import androidx.compose.ui.draganddrop.toAndroidDragEvent
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -64,7 +61,7 @@ import dev.blamspot.jcode.design.ContextAction
 import dev.blamspot.jcode.design.JCodeTheme
 import dev.blamspot.jcode.design.JcTooltip
 import dev.blamspot.jcode.design.DenseRow
-import dev.blamspot.jcode.design.LocalIconSize
+import dev.blamspot.jcode.design.IconSize
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.blamspot.jcode.fs.Fs
 import dev.blamspot.jcode.fs.FsKind
@@ -522,7 +519,7 @@ private fun RowOverflowMenu(
                     imageVector = jcIcon(JCodeIcon.MoreVert),
                     contentDescription = "More actions",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(IconSize.md),
                 )
             }
         }
@@ -572,7 +569,7 @@ private fun ExplorerBreadcrumb(
         modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(scrollState)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .padding(horizontal = Space.sm, vertical = Space.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (entries.size > 1) {
@@ -582,7 +579,7 @@ private fun ExplorerBreadcrumb(
                         imageVector = jcIcon(JCodeIcon.ArrowUp),
                         contentDescription = "Up one level",
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(IconSize.md),
                     )
                 }
             }
@@ -594,7 +591,7 @@ private fun ExplorerBreadcrumb(
                     text = "›",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 2.dp),
+                    modifier = Modifier.padding(horizontal = Space.xxs),
                 )
             }
             Text(
@@ -607,7 +604,7 @@ private fun ExplorerBreadcrumb(
                 },
                 modifier = Modifier
                     .clickable { onNavigate(entry) }
-                    .padding(vertical = 2.dp),
+                    .padding(vertical = Space.xxs),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -629,7 +626,7 @@ private fun TreeViewContent(
 ) {
     if (isLoading && rows.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(modifier = Modifier.padding(16.dp))
+            CircularProgressIndicator(modifier = Modifier.padding(Space.lg))
         }
         return
     }
@@ -656,7 +653,7 @@ private fun TreeViewContent(
 
 @Composable
 private fun EmptyExplorerHint() {
-    Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+    Box(modifier = Modifier.fillMaxSize().padding(Space.xxl), contentAlignment = Alignment.Center) {
         Text(
             text = "No files yet.\nUse the New File / New Folder buttons above.",
             style = MaterialTheme.typography.bodySmall,
@@ -680,7 +677,7 @@ private fun TreeRowItem(
     onClick: () -> Unit,
     onAction: (TreeRow, RowAction) -> Unit,
 ) {
-    val iconSize = LocalIconSize.current
+    val iconSize = IconSize.md
     val indent = (row.depth * 16).dp
 
     if (row.isPlaceholder) {
@@ -786,7 +783,7 @@ private fun ListViewContent(
 ) {
     if (isLoading && rows.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(modifier = Modifier.padding(16.dp))
+            CircularProgressIndicator(modifier = Modifier.padding(Space.lg))
         }
         return
     }
@@ -798,7 +795,7 @@ private fun ListViewContent(
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         items(rows, key = { it.id }) { row ->
             var menuExpanded by remember { mutableStateOf(false) }
-            val iconSize = LocalIconSize.current
+            val iconSize = IconSize.md
             DenseRow(
                 modifier = Modifier
                     .combinedClickable(
@@ -894,7 +891,7 @@ private fun ExplorerToolbar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 2.dp),
+            .padding(horizontal = Space.xs, vertical = Space.xxs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ToolbarIcon(jcIcon(JCodeIcon.NewFile), "New File", onCreateFile)
@@ -920,7 +917,7 @@ private fun ToolbarIcon(
             Icon(
                 imageVector = icon,
                 contentDescription = description,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(IconSize.md),
                 tint = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
             )
         }
@@ -983,7 +980,7 @@ private fun RowVcsBadges(row: TreeRow) {
                 text = "S",
                 color = MaterialTheme.colorScheme.tertiary,
                 style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(horizontal = 2.dp),
+                modifier = Modifier.padding(horizontal = Space.xxs),
             )
         }
     }
@@ -992,7 +989,7 @@ private fun RowVcsBadges(row: TreeRow) {
             text = status,
             color = vcsStatusColor(status),
             style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 2.dp),
+            modifier = Modifier.padding(horizontal = Space.xxs),
         )
     }
 }
@@ -1006,37 +1003,4 @@ private fun vcsStatusColor(status: String): Color = when (status.firstOrNull()) 
     'D', 'U' -> MaterialTheme.colorScheme.error
     'R', 'C' -> MaterialTheme.colorScheme.primary
     else -> MaterialTheme.colorScheme.onSurfaceVariant
-}
-
-// --- Drag and Drop Scaffold ---
-
-/**
- * Placeholder drag-and-drop target for the explorer.
- * Accepts URI list drops from outside the app and can be wired to copy files via SAF.
- */
-@Composable
-fun rememberExplorerDropTarget(
-    onDrop: (List<android.net.Uri>) -> Unit,
-): DragAndDropTarget {
-    return remember(onDrop) {
-        object : DragAndDropTarget {
-            override fun onDrop(event: DragAndDropEvent): Boolean {
-                val uris = event
-                    .mimeTypes()
-                    .filter { it == "text/uri-list" }
-                    .flatMap { mimeType ->
-                        event.toAndroidDragEvent().clipData?.let { clipData ->
-                            (0 until clipData.itemCount).map { i ->
-                                clipData.getItemAt(i).uri
-                            }
-                        }.orEmpty()
-                    }
-                if (uris.isNotEmpty()) {
-                    onDrop(uris)
-                    return true
-                }
-                return false
-            }
-        }
-    }
 }

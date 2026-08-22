@@ -47,22 +47,22 @@ fun CompactSearchField(
         LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
     }
     Surface(
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(Radius.xl),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        border = BorderStroke(StrokeWidth.thin, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
         modifier = modifier.fillMaxWidth(),
     ) {
         Row(
             modifier = Modifier
                 .heightIn(min = 36.dp)
-                .padding(horizontal = 8.dp),
+                .padding(horizontal = Space.sm),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Icon(
                 LocalIconBundle.current[JCodeIcon.Search],
                 contentDescription = null,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(IconSize.sm),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Box(modifier = Modifier.weight(1f)) {

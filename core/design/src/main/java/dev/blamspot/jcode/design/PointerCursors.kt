@@ -1,7 +1,6 @@
 package dev.blamspot.jcode.design
 
 import android.view.PointerIcon as AndroidPointerIcon
-import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -40,11 +39,4 @@ fun Modifier.resizeCursor(horizontal: Boolean): Modifier = composed {
         AndroidPointerIcon.TYPE_VERTICAL_DOUBLE_ARROW
     }
     pointerHoverIcon(PointerIcon(AndroidPointerIcon.getSystemIcon(context, type)))
-}
-
-/** For a surface being dragged from, as opposed to one merely draggable. */
-@Composable
-fun grabbingCursor(): PointerIcon {
-    val context = LocalContext.current
-    return PointerIcon(AndroidPointerIcon.getSystemIcon(context, AndroidPointerIcon.TYPE_GRABBING))
 }

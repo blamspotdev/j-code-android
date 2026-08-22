@@ -28,8 +28,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.blamspot.jcode.core.debug.DebugState
+import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.JcTooltip
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
 import dev.blamspot.jcode.workbench.DebugSessionUi
 
@@ -41,11 +44,11 @@ import dev.blamspot.jcode.workbench.DebugSessionUi
 @Composable
 internal fun DebugSessionPanel(ui: DebugSessionUi, modifier: Modifier = Modifier) {
     val active = ui.state != DebugState.DISCONNECTED && ui.state != DebugState.TERMINATED
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Space.s)) {
         Row(
-            modifier = Modifier.padding(start = 2.dp),
+            modifier = Modifier.padding(start = Space.xxs),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             Icon(jcIcon(JCodeIcon.Debug), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Text("Debug", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
@@ -71,12 +74,12 @@ private fun DebugLaunchRow(ui: DebugSessionUi) {
         target != null && ui.canDebug -> {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f),
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(Radius.lg),
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(start = 10.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
+                    modifier = Modifier.fillMaxWidth().padding(start = Space.ms, end = Space.xxs, top = Space.xxs, bottom = Space.xxs),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Space.xs),
                 ) {
                     Text(
                         text = "Debug $target",
@@ -116,9 +119,9 @@ private fun DebugLaunchRow(ui: DebugSessionUi) {
 private fun DebugToolbar(ui: DebugSessionUi) {
     val stopped = ui.state == DebugState.STOPPED
     Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 2.dp),
+        modifier = Modifier.fillMaxWidth().padding(start = Space.xxs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.xxs),
     ) {
         DebugAction(JCodeIcon.Continue, "Continue", enabled = stopped, tint = MaterialTheme.colorScheme.primary, onClick = ui.onContinue)
         DebugAction(JCodeIcon.StepOver, "Step over", enabled = stopped, onClick = ui.onStepOver)
@@ -137,7 +140,7 @@ private fun DebugAction(icon: JCodeIcon, label: String, enabled: Boolean, tint: 
                 imageVector = jcIcon(icon),
                 contentDescription = label,
                 tint = if (enabled) tint else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(IconSize.lg),
             )
         }
     }
@@ -150,7 +153,7 @@ private fun SectionLabel(text: String) {
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 4.dp, top = 2.dp),
+        modifier = Modifier.padding(start = Space.xs, top = Space.xxs),
     )
 }
 
@@ -163,8 +166,8 @@ private fun CallStackList(ui: DebugSessionUi) {
         ui.callStack.forEach { frame ->
             val where = frame.sourcePath?.substringAfterLast('/')?.let { "$it:${frame.line}" } ?: ""
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Space.xs, vertical = Space.xxs),
+                horizontalArrangement = Arrangement.spacedBy(Space.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -200,12 +203,12 @@ private fun VariablesList(ui: DebugSessionUi) {
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(start = 4.dp, top = 4.dp, bottom = 1.dp),
+                    modifier = Modifier.padding(start = Space.xs, top = Space.xs, bottom = Space.hairline),
                 )
             } else {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 1.dp, bottom = 1.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth().padding(start = Space.lg, end = Space.xs, top = Space.hairline, bottom = Space.hairline),
+                    horizontalArrangement = Arrangement.spacedBy(Space.s),
                 ) {
                     Text(
                         text = row.name,
@@ -243,7 +246,7 @@ internal fun DebugConsoleLines(
             .fillMaxWidth()
             .then(heightModifier)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = Space.sm, vertical = Space.s),
     ) {
         lines.takeLast(200).forEach { line ->
             Text(
@@ -266,17 +269,17 @@ internal fun DebugConsoleLines(
 internal fun DebugConsoleSidebarContent(modifier: Modifier = Modifier) {
     val ui = dev.blamspot.jcode.workbench.LocalDebugSession.current
     val active = ui.state != DebugState.DISCONNECTED && ui.state != DebugState.TERMINATED
-    Column(modifier = modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 6.dp)) {
+    Column(modifier = modifier.fillMaxSize().padding(horizontal = Space.sm, vertical = Space.s)) {
         if (!active && ui.output.isEmpty()) {
             Text(
                 "Start a debug session to see its console output here.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(6.dp),
+                modifier = Modifier.padding(Space.s),
             )
             return@Column
         }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
             Text(
                 text = ui.debugTargetName?.let { "Debug: $it" } ?: "Debug",
                 style = MaterialTheme.typography.labelMedium,
@@ -304,11 +307,11 @@ private fun DebugStateChip(state: DebugState) {
     Surface(
         color = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
         else MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
-        shape = RoundedCornerShape(6.dp),
+        shape = RoundedCornerShape(Radius.md),
     ) {
         Text(
             text = label,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            modifier = Modifier.padding(horizontal = Space.sm, vertical = Space.xs),
             style = MaterialTheme.typography.labelSmall,
             color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,

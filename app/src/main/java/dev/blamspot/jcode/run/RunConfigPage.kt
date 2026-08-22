@@ -19,11 +19,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.dp
 import dev.blamspot.jcode.core.config.RunConfig
 import dev.blamspot.jcode.core.config.RunConfigTerminal
 import dev.blamspot.jcode.design.CompactFilledButton
 import dev.blamspot.jcode.design.SettingsTextFieldRow
+import dev.blamspot.jcode.design.Space
 
 /**
  * Structured editor for a project's run configuration (`.jcode/run.yaml`), opened as an in-editor
@@ -58,8 +58,8 @@ fun RunConfigPage(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(Space.lg),
+        verticalArrangement = Arrangement.spacedBy(Space.lg),
     ) {
         Text("Build & Run configuration", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
         Text(

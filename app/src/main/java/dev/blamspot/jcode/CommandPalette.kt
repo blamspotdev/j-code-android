@@ -34,7 +34,10 @@ import androidx.compose.ui.window.Dialog
 import dev.blamspot.jcode.design.CommandRegistry
 import dev.blamspot.jcode.design.CommandSpec
 import dev.blamspot.jcode.design.CompactSearchField
+import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
 
 /**
@@ -70,8 +73,8 @@ internal fun CommandPalette(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = Space.md, vertical = Space.ms),
+            verticalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             CompactSearchField(
                 query = query,
@@ -88,7 +91,7 @@ internal fun CommandPalette(
                     text = "No matching commands",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                    modifier = Modifier.padding(horizontal = Space.sm, vertical = Space.ms),
                 )
             } else {
                 // Cap the list so the sheet/dialog stays compact instead of filling the screen.
@@ -112,7 +115,7 @@ internal fun CommandPalette(
         Dialog(onDismissRequest = onDismiss) {
             Surface(
                 modifier = Modifier.widthIn(max = 520.dp),
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(Radius.xxxl),
                 color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 3.dp,
             ) {
@@ -130,15 +133,15 @@ private fun CommandRow(command: CommandSpec, onClick: () -> Unit) {
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .heightIn(min = 40.dp)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .padding(horizontal = Space.sm, vertical = Space.xs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.ms),
     ) {
         Icon(
             imageVector = jcIcon(command.icon ?: JCodeIcon.CommandPalette),
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.size(IconSize.md),
         )
         Text(
             text = command.title,

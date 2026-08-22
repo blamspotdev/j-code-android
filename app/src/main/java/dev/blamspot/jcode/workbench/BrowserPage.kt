@@ -78,7 +78,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import dev.blamspot.jcode.R
 import dev.blamspot.jcode.design.CompactContextMenu
 import dev.blamspot.jcode.design.ContextAction
+import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
 import dev.blamspot.jcode.run.ProjectRunner
 import java.text.DateFormat
@@ -205,23 +208,23 @@ fun BrowserPage(modifier: Modifier = Modifier) {
         // screen with the editor, the tab strip and the workbench header — nearly sixty density-
         // independent pixels of frame around a page that is the entire point of the tab.
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 3.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Space.xs, vertical = Space.xs),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(1.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.hairline),
         ) {
             IconButton(
                 onClick = { webView?.goBack() },
                 enabled = BuiltinBrowser.canGoBack.value,
                 modifier = Modifier.size(30.dp),
             ) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", modifier = Modifier.size(17.dp))
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", modifier = Modifier.size(IconSize.md))
             }
             IconButton(
                 onClick = { webView?.goForward() },
                 enabled = BuiltinBrowser.canGoForward.value,
                 modifier = Modifier.size(30.dp),
             ) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = "Forward", modifier = Modifier.size(17.dp))
+                Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = "Forward", modifier = Modifier.size(IconSize.md))
             }
             IconButton(
                 onClick = { if (BuiltinBrowser.loading.value) webView?.stopLoading() else webView?.reload() },
@@ -230,12 +233,12 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                 Icon(
                     if (BuiltinBrowser.loading.value) Icons.Rounded.Close else Icons.Rounded.Refresh,
                     contentDescription = if (BuiltinBrowser.loading.value) "Stop" else "Reload",
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(IconSize.sm),
                 )
             }
             Surface(
                 modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(7.dp),
+                shape = RoundedCornerShape(Radius.lg),
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -249,7 +252,7 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                                 jcIcon(trust.icon),
                                 contentDescription = "Site information: ${trust.summary}",
                                 tint = trust.tint(),
-                                modifier = Modifier.size(14.dp),
+                                modifier = Modifier.size(IconSize.xs),
                             )
                         }
                         SiteInfoPanel(
@@ -270,7 +273,7 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
                         keyboardActions = KeyboardActions(onGo = { go(address) }),
-                        modifier = Modifier.weight(1f).padding(end = 8.dp, top = 6.dp, bottom = 6.dp),
+                        modifier = Modifier.weight(1f).padding(end = Space.sm, top = Space.s, bottom = Space.s),
                     )
                 }
             }
@@ -279,7 +282,7 @@ fun BrowserPage(modifier: Modifier = Modifier) {
                     Icon(
                         jcIcon(JCodeIcon.MoreVert),
                         contentDescription = "More browser options",
-                        modifier = Modifier.size(17.dp),
+                        modifier = Modifier.size(IconSize.md),
                     )
                 }
                 BrowserMenu(
@@ -547,28 +550,28 @@ private fun SiteInfoPanel(
     }
 
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp).width(260.dp)) {
+        Column(modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.sm).width(260.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BuiltinBrowser.favicon.value?.let { icon ->
                     Image(
                         bitmap = icon.asImageBitmap(),
                         contentDescription = null,
-                        modifier = Modifier.size(16.dp).padding(end = 6.dp),
+                        modifier = Modifier.size(16.dp).padding(end = Space.s),
                     )
                 }
                 Text(host, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Row(
-                modifier = Modifier.padding(top = 8.dp),
+                modifier = Modifier.padding(top = Space.sm),
                 verticalAlignment = Alignment.Top,
             ) {
                 Icon(
                     jcIcon(trust.icon),
                     contentDescription = null,
                     tint = trust.tint(),
-                    modifier = Modifier.size(15.dp).padding(top = 2.dp),
+                    modifier = Modifier.size(IconSize.sm).padding(top = Space.xxs),
                 )
-                Column(modifier = Modifier.padding(start = 8.dp)) {
+                Column(modifier = Modifier.padding(start = Space.sm)) {
                     Text(
                         trust.summary.replaceFirstChar { it.uppercase() },
                         style = MaterialTheme.typography.bodyMedium,
@@ -587,7 +590,7 @@ private fun SiteInfoPanel(
                 SiteInfoRow("Issued by", cert.issuedBy?.oName?.ifBlank { "—" } ?: "—")
                 SiteInfoRow("Expires", cert.validNotAfterDate?.let { DateFormat.getDateInstance().format(it) } ?: "—")
             }
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = Space.sm))
             SiteInfoRow("Cookies", if (cookies == 0) "None" else "$cookies for this site")
             SiteInfoRow("Site data", storage ?: "Reading…")
             TextButton(
@@ -612,7 +615,7 @@ private fun SiteInfoPanel(
                     onDismiss()
                 },
                 enabled = trust != SiteTrust.Blank,
-                modifier = Modifier.padding(top = 2.dp),
+                modifier = Modifier.padding(top = Space.xxs),
             ) {
                 Text("Clear this site's data", style = MaterialTheme.typography.bodySmall)
             }
@@ -622,7 +625,7 @@ private fun SiteInfoPanel(
 
 @Composable
 private fun SiteInfoRow(label: String, value: String) {
-    Row(modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+    Row(modifier = Modifier.fillMaxWidth().padding(top = Space.s)) {
         Text(
             label,
             style = MaterialTheme.typography.bodySmall,

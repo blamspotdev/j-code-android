@@ -63,15 +63,15 @@ fun CompactContextMenu(
             header()
             if (quickActions.isNotEmpty() || listActions.isNotEmpty()) {
                 HorizontalDivider(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.padding(horizontal = Space.sm, vertical = Space.xxs),
                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
                 )
             }
         }
         if (quickActions.isNotEmpty()) {
             Row(
-                modifier = Modifier.padding(horizontal = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                modifier = Modifier.padding(horizontal = Space.xs),
+                horizontalArrangement = Arrangement.spacedBy(Space.xxs),
             ) {
                 quickActions.forEach { action ->
                     JcTooltip(action.label) {
@@ -96,7 +96,7 @@ fun CompactContextMenu(
             }
             if (listActions.isNotEmpty()) {
                 HorizontalDivider(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.padding(horizontal = Space.sm, vertical = Space.xxs),
                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
                 )
             }
@@ -112,8 +112,8 @@ fun CompactContextMenu(
                         }
                         else Modifier
                     )
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    .padding(horizontal = Space.md, vertical = Space.sm),
+                horizontalArrangement = Arrangement.spacedBy(Space.ms),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
@@ -141,7 +141,7 @@ fun CompactContextMenu(
                         imageVector = Icons.Rounded.Check,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(IconSize.sm),
                     )
                 }
             }

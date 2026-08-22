@@ -29,7 +29,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JcTooltip
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
 
 /**
@@ -82,7 +85,7 @@ internal fun WorkbenchIconActionButton(
         Surface(
             modifier = Modifier
                 .size(32.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .clip(RoundedCornerShape(Radius.xl))
                 .then(
                     if (onLongClick != null) {
                         Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
@@ -90,14 +93,14 @@ internal fun WorkbenchIconActionButton(
                         Modifier.clickable(onClick = onClick)
                     }
                 ),
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(Radius.xl),
             color = containerColor,
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = icon,
                     contentDescription = contentDescription,
-                    modifier = Modifier.size(16.dp).then(shimmerModifier),
+                    modifier = Modifier.size(IconSize.sm).then(shimmerModifier),
                     tint = contentColor,
                 )
             }
@@ -134,15 +137,15 @@ internal fun WorkbenchActionButton(
 
     Surface(
         modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(Radius.xl))
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(Radius.xl),
         color = containerColor,
     ) {
         Box(
             modifier = Modifier
                 .height(32.dp)
-                .padding(horizontal = 10.dp),
+                .padding(horizontal = Space.ms),
             contentAlignment = Alignment.Center,
         ) {
             Text(
@@ -163,9 +166,9 @@ internal fun SidebarToolButton(
 ) {
     Surface(
         modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(Radius.xl))
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(Radius.xl),
         color = if (selected) {
             MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
         } else {
@@ -173,14 +176,14 @@ internal fun SidebarToolButton(
         },
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+            modifier = Modifier.padding(horizontal = Space.ms, vertical = Space.sm),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Icon(
                 imageVector = jcIcon(tool.icon),
                 contentDescription = tool.label,
-                modifier = Modifier.size(14.dp),
+                modifier = Modifier.size(IconSize.xs),
                 tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(

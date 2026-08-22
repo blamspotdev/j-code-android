@@ -51,6 +51,9 @@ import dev.blamspot.jcode.design.CompactContextMenu
 import dev.blamspot.jcode.design.CompactSearchField
 import dev.blamspot.jcode.design.ContextAction
 import dev.blamspot.jcode.design.JCodeIcon
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
+import dev.blamspot.jcode.design.StrokeWidth
 import dev.blamspot.jcode.design.jcIcon
 import dev.blamspot.jcode.design.LocalCutoutSetting
 import dev.blamspot.jcode.design.LocalMarkdownPreviewSetting
@@ -407,18 +410,18 @@ private fun FindBar(
     BackHandler(enabled = true, onBack = onClose)
     Surface(
         modifier = modifier
-            .padding(8.dp)
+            .padding(Space.sm)
             .fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 3.dp,
         shadowElevation = 4.dp,
-        shape = RoundedCornerShape(10.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shape = RoundedCornerShape(Radius.xl),
+        border = BorderStroke(StrokeWidth.thin, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = Space.sm, vertical = Space.s),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             CompactSearchField(
                 query = query,

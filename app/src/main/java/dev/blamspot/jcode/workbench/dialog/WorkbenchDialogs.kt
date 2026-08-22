@@ -51,6 +51,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.blamspot.jcode.ImportPhase
 import dev.blamspot.jcode.ImportProgress
 import dev.blamspot.jcode.MainViewModel
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.feature.marketplace.ProjectTemplate
 import dev.blamspot.jcode.feature.marketplace.TemplateInput
 import kotlinx.coroutines.flow.StateFlow
@@ -67,7 +69,7 @@ internal fun OpenFolderTypeDialog(
         onDismissRequest = onDismiss,
         title = { Text("Set folder type") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Space.md)) {
                 Text(
                     "\"$folderName\" has no .jcode config yet. Is it a Project or a Workspace?",
                     style = MaterialTheme.typography.bodyMedium,
@@ -120,13 +122,13 @@ internal fun ImportProgressDialog(progress: ImportProgress) {
         properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
     ) {
         Surface(
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(Radius.xxxl),
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 6.dp,
         ) {
             Column(
-                modifier = Modifier.widthIn(min = 280.dp, max = 360.dp).padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.widthIn(min = 280.dp, max = 360.dp).padding(Space.xl),
+                verticalArrangement = Arrangement.spacedBy(Space.md),
             ) {
                 Text(
                     text = if (progress.phase == ImportPhase.Scanning) "Scanning folder" else "Importing folder",
@@ -296,7 +298,7 @@ internal fun NewItemDialog(
             if (step == 1 && selectedTemplate != null) {
                 Column(
                     modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(Space.lg),
                 ) {
                     Text(
                         "Configure this project, then create it.",
@@ -315,10 +317,10 @@ internal fun NewItemDialog(
             } else if (isLandscape) {
                 // Two columns side by side so the (tall) template list doesn't overflow the short
                 // landscape dialog height.
-                Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Space.xl)) {
                     Column(
                         modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(Space.md),
                     ) {
                         primarySection()
                     }
@@ -327,7 +329,7 @@ internal fun NewItemDialog(
                             .weight(1f)
                             .heightIn(max = 260.dp)
                             .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(Space.sm),
                     ) {
                         detailSection()
                     }
@@ -335,7 +337,7 @@ internal fun NewItemDialog(
             } else {
                 Column(
                     modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(Space.md),
                 ) {
                     primarySection()
                     detailSection()
@@ -378,7 +380,7 @@ private fun TemplateInputField(
     value: String,
     onValue: (String) -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
         Text(input.label, style = MaterialTheme.typography.labelLarge)
         if (input.type == "select" && options.isNotEmpty()) {
             var expanded by remember { mutableStateOf(false) }
@@ -422,7 +424,7 @@ private fun TypeOption(
 ) {
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(Radius.xl))
             .clickable(onClick = onSelect),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -442,13 +444,13 @@ private fun TemplateOption(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(Radius.xl))
             .clickable(onClick = onSelect)
-            .padding(end = 4.dp),
+            .padding(end = Space.xs),
         verticalAlignment = Alignment.Top,
     ) {
         RadioButton(selected = selected, onClick = onSelect)
-        Column(modifier = Modifier.padding(top = 12.dp)) {
+        Column(modifier = Modifier.padding(top = Space.md)) {
             Text(template.name, style = MaterialTheme.typography.bodyLarge)
             if (template.description.isNotBlank()) {
                 Text(

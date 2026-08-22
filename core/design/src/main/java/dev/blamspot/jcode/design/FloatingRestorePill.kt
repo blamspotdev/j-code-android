@@ -31,7 +31,7 @@ fun FloatingRestorePill(
     Box(
         modifier = modifier
             .size(44.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(Radius.xxxl))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
@@ -40,7 +40,7 @@ fun FloatingRestorePill(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier.size(IconSize.lg),
         )
     }
 }

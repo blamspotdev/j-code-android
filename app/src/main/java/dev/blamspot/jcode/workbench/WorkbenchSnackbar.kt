@@ -16,6 +16,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
+import dev.blamspot.jcode.design.StrokeWidth
 
 /**
  * The app's snackbar host, themed to match JCode panels — a rounded `surfaceContainerHighest` card
@@ -27,24 +30,24 @@ import androidx.compose.ui.unit.dp
 fun WorkbenchSnackbarHost(hostState: SnackbarHostState, modifier: Modifier = Modifier) {
     SnackbarHost(hostState, modifier) { data ->
         Surface(
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(Radius.xxl),
             color = MaterialTheme.colorScheme.surfaceContainerHighest,
             contentColor = MaterialTheme.colorScheme.onSurface,
             tonalElevation = 3.dp,
             shadowElevation = 8.dp,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
-            modifier = Modifier.padding(horizontal = 12.dp).widthIn(max = 560.dp),
+            border = BorderStroke(StrokeWidth.thin, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+            modifier = Modifier.padding(horizontal = Space.md).widthIn(max = 560.dp),
         ) {
             Row(
-                modifier = Modifier.padding(start = 16.dp, end = 6.dp),
+                modifier = Modifier.padding(start = Space.lg, end = Space.s),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(Space.sm),
             ) {
                 Text(
                     text = data.visuals.message,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f, fill = false).padding(vertical = 12.dp),
+                    modifier = Modifier.weight(1f, fill = false).padding(vertical = Space.md),
                 )
                 data.visuals.actionLabel?.let { label ->
                     TextButton(onClick = { data.performAction() }) {

@@ -44,6 +44,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.graphics.luminance
+import dev.blamspot.jcode.design.IconSize
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.editor.TokenPalette
 import dev.blamspot.jcode.feature.marketplace.LanguagePack
 import dev.blamspot.jcode.lsp.SemanticToken
@@ -127,7 +130,7 @@ fun DevtoolsSidebarContent(modifier: Modifier = Modifier) {
                         .weight(1f)
                         .fillMaxHeight()
                         .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(0.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Space.none),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     DevToolsPane.entries.forEach { p ->
@@ -143,7 +146,7 @@ fun DevtoolsSidebarContent(modifier: Modifier = Modifier) {
                                     },
                                 )
                                 .fillMaxHeight()
-                                .padding(horizontal = 12.dp),
+                                .padding(horizontal = Space.md),
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
@@ -210,7 +213,7 @@ private fun PaneMenuButton(pane: DevToolsPane) {
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
                 .clickable { open = true }
-                .padding(horizontal = 8.dp, vertical = 8.dp)
+                .padding(horizontal = Space.sm, vertical = Space.sm)
                 .size(18.dp),
         )
         val actions = when (pane) {
@@ -328,7 +331,7 @@ private fun ConsolePane(onOpenSource: (String, Int) -> Unit, modifier: Modifier 
                         "run it in the page.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.ms),
                 )
             }
         } else {
@@ -336,7 +339,7 @@ private fun ConsolePane(onOpenSource: (String, Int) -> Unit, modifier: Modifier 
         }
         item {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 2.dp, bottom = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = Space.xs, end = Space.sm, top = Space.xxs, bottom = Space.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // The same marker every other row has, because this is one of them.
@@ -462,7 +465,7 @@ private fun ConsoleRowView(
                 onClick = { if (expandable) expanded = !expanded },
                 onLongClick = { clipboard.setText(AnnotatedString(entry.message)) },
             )
-            .padding(vertical = 3.dp),
+            .padding(vertical = Space.xs),
     ) {
         // No rail. The marker and the tint already say what kind of line this is, and a third
         // statement of the same fact down the left edge was a stripe on every row of a log whose
@@ -480,7 +483,7 @@ private fun ConsoleRowView(
                 textAlign = TextAlign.Center,
                 // A narrow gutter. There is one character in it, and the 28dp it used to cost was
                 // 28dp off the front of every line on a panel a phone can spare about forty for.
-                modifier = Modifier.padding(start = 4.dp).width(14.dp),
+                modifier = Modifier.padding(start = Space.xs).width(14.dp),
             )
             Text(
                 text = entry.message,
@@ -497,7 +500,7 @@ private fun ConsoleRowView(
                 // Measured, not guessed: only a line with something hidden earns a chevron, and the
                 // collapsed pass is the only thing that knows whether there was.
                 onTextLayout = { if (!expanded) overflows = it.hasVisualOverflow },
-                modifier = Modifier.weight(1f).padding(end = 6.dp),
+                modifier = Modifier.weight(1f).padding(end = Space.s),
             )
             if (row.count > 1) {
                 Text(
@@ -507,12 +510,12 @@ private fun ConsoleRowView(
                     fontSize = fontSize * 0.85f,
                     lineHeight = leading,
                     modifier = Modifier
-                        .padding(end = 6.dp)
+                        .padding(end = Space.s)
                         .background(
                             MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f),
-                            RoundedCornerShape(6.dp),
+                            RoundedCornerShape(Radius.md),
                         )
-                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                        .padding(horizontal = Space.s, vertical = Space.hairline),
                 )
             }
             if (expandable) {
@@ -535,7 +538,7 @@ private fun ConsoleRowView(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
-                    .padding(start = 18.dp, top = 1.dp, end = 8.dp)
+                    .padding(start = Space.xl, top = Space.hairline, end = Space.sm)
                     .clickable { onOpenSource(entry.source, entry.line) },
             )
         }
@@ -641,7 +644,7 @@ private fun SourcesPane(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { open(source, 0) }
-                                .padding(horizontal = 10.dp, vertical = 7.dp),
+                                .padding(horizontal = Space.ms, vertical = Space.sm),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
@@ -656,9 +659,9 @@ private fun SourcesPane(
                                 modifier = Modifier
                                     .background(
                                         MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                                        RoundedCornerShape(4.dp),
+                                        RoundedCornerShape(Radius.sm),
                                     )
-                                    .padding(horizontal = 4.dp, vertical = 1.dp),
+                                    .padding(horizontal = Space.xs, vertical = Space.hairline),
                             )
                             Text(
                                 text = source.label,
@@ -667,7 +670,7 @@ private fun SourcesPane(
                                 fontSize = 11.5.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f).padding(start = 8.dp),
+                                modifier = Modifier.weight(1f).padding(start = Space.sm),
                             )
                         }
                     }
@@ -675,7 +678,7 @@ private fun SourcesPane(
             }
         } else {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 5.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Space.sm, vertical = Space.s),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -684,7 +687,7 @@ private fun SourcesPane(
                     style = MaterialTheme.typography.labelMedium,
                     modifier = Modifier
                         .clickable { selected = null }
-                        .padding(end = 10.dp, top = 2.dp, bottom = 2.dp),
+                        .padding(end = Space.ms, top = Space.xxs, bottom = Space.xxs),
                 )
                 Text(
                     text = chosen.label,
@@ -708,7 +711,7 @@ private fun SourcesPane(
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier
                             .clickable { prettyPrinted = !prettyPrinted }
-                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                            .padding(horizontal = Space.sm, vertical = Space.xxs),
                     )
                 }
             }
@@ -853,7 +856,7 @@ private fun ApplicationPane(modifier: Modifier = Modifier) {
 private fun QuotaBar(survey: AppSurvey) {
     if (survey.usage < 0 || survey.quota <= 0) return
     val fraction = (survey.usage.toFloat() / survey.quota).coerceIn(0f, 1f)
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.sm)) {
         Text(
             text = "${formatBytes(survey.usage)} used of ${formatBytes(survey.quota)}",
             style = MaterialTheme.typography.labelMedium,
@@ -862,7 +865,7 @@ private fun QuotaBar(survey: AppSurvey) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 5.dp)
+                .padding(top = Space.s)
                 .height(3.dp)
                 .background(MaterialTheme.colorScheme.surfaceVariant),
         ) {
@@ -907,7 +910,7 @@ private fun StoredSection(
                 text = "Nothing stored here.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 30.dp, bottom = 8.dp),
+                modifier = Modifier.padding(start = 30.dp, bottom = Space.sm),
             )
             return@DetailSection
         }
@@ -916,11 +919,11 @@ private fun StoredSection(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onOpen(row) }
-                    .padding(start = 30.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                    .padding(start = 30.dp, end = Space.sm, top = Space.xs, bottom = Space.xs),
                 verticalAlignment = Alignment.Top,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
                         Text(
                             text = row.key,
                             color = MaterialTheme.colorScheme.onSurface,
@@ -958,7 +961,7 @@ private fun StoredSection(
                     lineHeight = 15.sp,
                     modifier = Modifier
                         .clickable { deleteEntry(row, pageUrl) { onChanged() } }
-                        .padding(start = 10.dp),
+                        .padding(start = Space.ms),
                 )
             }
         }
@@ -985,15 +988,15 @@ private fun StoredValueDetail(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onBack)
-                .padding(horizontal = 8.dp, vertical = 8.dp),
+                .padding(horizontal = Space.sm, vertical = Space.sm),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Icon(
                 imageVector = jcIcon(JCodeIcon.ArrowBack),
                 contentDescription = "Back to storage",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(IconSize.sm),
             )
             Text(
                 text = entry.key,
@@ -1007,7 +1010,7 @@ private fun StoredValueDetail(
                 text = "Delete",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.clickable(onClick = onDelete).padding(horizontal = 6.dp, vertical = 2.dp),
+                modifier = Modifier.clickable(onClick = onDelete).padding(horizontal = Space.s, vertical = Space.xxs),
             )
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
@@ -1034,7 +1037,7 @@ private fun IndexedDbSection(databases: List<IdbDatabase>) {
             return@DetailSection
         }
         databases.forEach { db ->
-            Column(modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = 10.dp, bottom = 6.dp)) {
+            Column(modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = Space.ms, bottom = Space.s)) {
                 Text(
                     text = "${db.name} · v${db.version}",
                     color = MaterialTheme.colorScheme.onSurface,
@@ -1054,7 +1057,7 @@ private fun IndexedDbSection(databases: List<IdbDatabase>) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
-                        modifier = Modifier.padding(start = 10.dp),
+                        modifier = Modifier.padding(start = Space.ms),
                     )
                 }
             }
@@ -1070,7 +1073,7 @@ private fun CacheSection(caches: List<CacheBucket>) {
             return@DetailSection
         }
         caches.forEach { bucket ->
-            Column(modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = 10.dp, bottom = 6.dp)) {
+            Column(modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = Space.ms, bottom = Space.s)) {
                 Text(
                     text = "${bucket.name} · ${bucket.count} entries",
                     color = MaterialTheme.colorScheme.onSurface,
@@ -1085,7 +1088,7 @@ private fun CacheSection(caches: List<CacheBucket>) {
                         fontSize = 10.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(start = 10.dp),
+                        modifier = Modifier.padding(start = Space.ms),
                     )
                 }
                 if (bucket.count > bucket.urls.size) {
@@ -1093,7 +1096,7 @@ private fun CacheSection(caches: List<CacheBucket>) {
                         text = "… and ${bucket.count - bucket.urls.size} more",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 10.sp,
-                        modifier = Modifier.padding(start = 10.dp),
+                        modifier = Modifier.padding(start = Space.ms),
                     )
                 }
             }
@@ -1109,8 +1112,8 @@ private fun WorkerSection(workers: List<WorkerInfo>) {
             return@DetailSection
         }
         workers.forEach { w ->
-            Column(modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = 10.dp, bottom = 8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = Space.ms, bottom = Space.sm)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
                     Text(
                         text = w.state,
                         color = if (w.state == "activated") {
@@ -1127,7 +1130,7 @@ private fun WorkerSection(workers: List<WorkerInfo>) {
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier
                             .clickable { BuiltinBrowser.controller?.eval(unregisterWorkerJs(w.scope)) {} }
-                            .padding(vertical = 2.dp),
+                            .padding(vertical = Space.xxs),
                     )
                 }
                 Text(
@@ -1153,7 +1156,7 @@ private fun ManifestSection(url: String, manifest: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontFamily = FontFamily.Monospace,
             fontSize = 10.sp,
-            modifier = Modifier.padding(start = 30.dp, end = 10.dp, bottom = 4.dp),
+            modifier = Modifier.padding(start = 30.dp, end = Space.ms, bottom = Space.xs),
         )
         if (manifest.isBlank()) {
             SectionNote("Declared, but could not be read — it may be cross-origin.")
@@ -1169,7 +1172,7 @@ private fun SectionNote(text: String) {
         text = text,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 30.dp, end = 10.dp, bottom = 8.dp),
+        modifier = Modifier.padding(start = 30.dp, end = Space.ms, bottom = Space.sm),
     )
 }
 
@@ -1411,8 +1414,8 @@ private fun NetworkPane(modifier: Modifier = Modifier) {
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                .padding(horizontal = Space.ms, vertical = Space.s),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             NETWORK_FILTERS.forEachIndexed { i, (label, kinds) ->
                 val n = if (kinds == null) entries.size else entries.count { it.kind in kinds }
@@ -1449,9 +1452,9 @@ private fun NetworkRow(e: BrowserNetworkEntry, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 5.dp),
+            .padding(horizontal = Space.ms, vertical = Space.s),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.sm), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = statusLabel(e),
                 color = statusColor(e),
@@ -1506,15 +1509,15 @@ private fun NetworkDetail(e: BrowserNetworkEntry, onBack: () -> Unit, modifier: 
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onBack)
-                .padding(horizontal = 8.dp, vertical = 8.dp),
+                .padding(horizontal = Space.sm, vertical = Space.sm),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Icon(
                 imageVector = jcIcon(JCodeIcon.ArrowBack),
                 contentDescription = "Back to requests",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(IconSize.sm),
             )
             Text(
                 text = shortName(e.url),
@@ -1557,7 +1560,7 @@ private fun NetworkDetail(e: BrowserNetworkEntry, onBack: () -> Unit, modifier: 
                         "more to show here.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = Space.md, vertical = Space.sm),
                 )
                 return@Column
             }
@@ -1586,7 +1589,7 @@ private fun NetworkDetail(e: BrowserNetworkEntry, onBack: () -> Unit, modifier: 
                         "capture limit.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = Space.md, vertical = Space.sm),
                 )
             }
         }
@@ -1608,15 +1611,15 @@ private fun DetailSection(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable { expanded = !expanded }
-                .padding(start = 10.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                .padding(start = Space.ms, end = Space.sm, top = Space.sm, bottom = Space.sm),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Icon(
                 imageVector = jcIcon(if (expanded) JCodeIcon.ChevronDown else JCodeIcon.ChevronRight),
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(14.dp),
+                modifier = Modifier.size(IconSize.xs),
             )
             Text(
                 text = title,
@@ -1634,7 +1637,7 @@ private fun DetailSection(
                     text = actionLabel,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable(onClick = onAction).padding(horizontal = 4.dp, vertical = 2.dp),
+                    modifier = Modifier.clickable(onClick = onAction).padding(horizontal = Space.xs, vertical = Space.xxs),
                 )
             }
         }
@@ -1648,14 +1651,14 @@ private fun DetailPairs(
     pairs: List<Pair<String, String>>,
     clipboard: androidx.compose.ui.platform.ClipboardManager,
 ) {
-    Column(modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = 10.dp, bottom = 6.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = Space.ms, bottom = Space.s)) {
         pairs.forEach { (k, v) ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { clipboard.setText(AnnotatedString(v)) }
-                    .padding(vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    .padding(vertical = Space.xxs),
+                horizontalArrangement = Arrangement.spacedBy(Space.s),
             ) {
                 Text(
                     text = k,
@@ -1685,14 +1688,14 @@ private fun DetailBody(
     // Pretty-printed when it parses as JSON, which is what most of these are and none of which is
     // readable as one long line on a phone-width panel.
     val text = remember(raw) { prettyJson(raw) }
-    Column(modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = 10.dp, bottom = 8.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(start = 30.dp, end = Space.ms, bottom = Space.sm)) {
         Text(
             text = "Copy",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier
                 .clickable { clipboard.setText(AnnotatedString(raw)) }
-                .padding(vertical = 2.dp),
+                .padding(vertical = Space.xxs),
         )
         Text(
             text = text,
@@ -1797,15 +1800,15 @@ private fun ElementsPane(
     val pretty = remember(dom) { prettyHtml(dom) }
     Column(modifier = modifier.fillMaxSize()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Space.sm, vertical = Space.s),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             Text(
                 text = "Refresh snapshot",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.clickable { refresh() }.padding(horizontal = 8.dp, vertical = 4.dp),
+                modifier = Modifier.clickable { refresh() }.padding(horizontal = Space.sm, vertical = Space.xs),
             )
             Text(
                 "read-only DOM at the moment you refresh",
@@ -1953,7 +1956,7 @@ private fun CodeListing(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 10.sp,
                     textAlign = TextAlign.End,
-                    modifier = Modifier.width(42.dp).padding(end = 8.dp),
+                    modifier = Modifier.width(42.dp).padding(end = Space.sm),
                 )
                 Text(
                     text = line,
@@ -1965,7 +1968,7 @@ private fun CodeListing(
                     // console's jump-to-line lands nowhere in particular.
                     softWrap = false,
                     maxLines = 1,
-                    modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()).padding(end = 10.dp),
+                    modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()).padding(end = Space.ms),
                 )
             }
         }
@@ -1974,7 +1977,7 @@ private fun CodeListing(
 
 @Composable
 private fun EmptyHint(text: String) {
-    Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+    Box(modifier = Modifier.fillMaxSize().padding(Space.xxl), contentAlignment = Alignment.Center) {
         Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

@@ -47,6 +47,7 @@ import dev.blamspot.jcode.design.CompactOutlinedButton
 import dev.blamspot.jcode.design.ManagerSectionCard
 import dev.blamspot.jcode.design.ManagerSummaryRow
 import dev.blamspot.jcode.design.SettingsTextFieldRow
+import dev.blamspot.jcode.design.Space
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 
@@ -122,19 +123,19 @@ internal fun AndroidDevicePage(
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(Space.lg),
+        verticalArrangement = Arrangement.spacedBy(Space.lg),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.md)) {
             Icon(
                 imageVector = Icons.Rounded.PhoneAndroid,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(28.dp),
             )
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.s)) {
                 Text("Android device", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.ms)) {
                     Text(
                         text = "ADB bridge",
                         style = MaterialTheme.typography.bodyMedium,
@@ -313,7 +314,7 @@ internal fun AndroidDevicePage(
                 placeholder = "127.0.0.1:5555",
                 monospace = true,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(Space.sm), modifier = Modifier.fillMaxWidth()) {
                 CompactFilledButton(
                     text = "Apply",
                     onClick = {
@@ -356,7 +357,7 @@ private fun AdbStatusChip(text: String, active: Boolean) {
     ) {
         Text(
             text = text,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            modifier = Modifier.padding(horizontal = Space.ms, vertical = Space.s),
             style = MaterialTheme.typography.labelSmall,
             color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -39,11 +39,15 @@ import dev.blamspot.jcode.ProviderRelease
 import dev.blamspot.jcode.ProviderReleaseFetcher
 import dev.blamspot.jcode.design.CompactFilledButton
 import dev.blamspot.jcode.design.CompactOutlinedButton
+import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.ManagerGroupHeader
 import dev.blamspot.jcode.design.ManagerItemStatus
 import dev.blamspot.jcode.design.ManagerStatusChip
 import dev.blamspot.jcode.design.ManagerSummaryRow
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
+import dev.blamspot.jcode.design.StrokeWidth
 import dev.blamspot.jcode.design.jcIcon
 import dev.blamspot.jcode.feature.marketplace.ExtensionType
 import dev.blamspot.jcode.feature.marketplace.InstalledExtension
@@ -84,12 +88,12 @@ internal fun ExtensionSourcesPage(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(Space.md),
+        verticalArrangement = Arrangement.spacedBy(Space.ms),
     ) {
         ManagerGroupHeader("Add a source")
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             CompactUrlField(
@@ -102,7 +106,7 @@ internal fun ExtensionSourcesPage(
             CompactFilledButton(text = "Add", onClick = submit, enabled = newUrl.isNotBlank())
         }
         Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
@@ -130,7 +134,7 @@ internal fun ExtensionSourcesPage(
                         Icon(
                             imageVector = jcIcon(JCodeIcon.Refresh),
                             contentDescription = "Refresh sources",
-                            modifier = Modifier.size(17.dp),
+                            modifier = Modifier.size(IconSize.md),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
@@ -191,16 +195,16 @@ private fun SourceCard(
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.16f),
-        shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        shape = RoundedCornerShape(Radius.xxl),
+        border = BorderStroke(StrokeWidth.hairline, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(Space.md),
+            verticalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(11.dp),
+                horizontalArrangement = Arrangement.spacedBy(Space.md),
             ) {
                 val extensionName = installedFromSource?.name ?: release?.displayName
                 if (installedFromSource != null || release?.iconUrl != null) {
@@ -214,14 +218,14 @@ private fun SourceCard(
                 } else {
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(Radius.xl),
                         modifier = Modifier.size(38.dp),
                     ) {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = jcIcon(JCodeIcon.Sources),
                                 contentDescription = null,
-                                modifier = Modifier.size(20.dp),
+                                modifier = Modifier.size(IconSize.lg),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -229,7 +233,7 @@ private fun SourceCard(
                 }
                 Column(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(1.dp),
+                    verticalArrangement = Arrangement.spacedBy(Space.hairline),
                 ) {
                     Text(
                         text = repo,
@@ -262,7 +266,7 @@ private fun SourceCard(
             }
 
             Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(Space.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (release != null) {
@@ -287,15 +291,15 @@ private fun CompactUrlField(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(Radius.xl),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        border = BorderStroke(StrokeWidth.thin, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
         modifier = modifier,
     ) {
         Box(
             modifier = Modifier
                 .heightIn(min = 36.dp)
-                .padding(horizontal = 10.dp),
+                .padding(horizontal = Space.ms),
             contentAlignment = Alignment.CenterStart,
         ) {
             if (value.isEmpty()) {

@@ -51,7 +51,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
+import dev.blamspot.jcode.design.StrokeWidth
 import dev.blamspot.jcode.design.jcIcon
 import dev.blamspot.jcode.design.ExtensionSettingsUi
 import dev.blamspot.jcode.design.LocalExtensionSettingsUi
@@ -106,8 +110,8 @@ internal fun ExtensionsPanel(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(Space.ms),
+        verticalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
         ManagerPanelHeader(
             title = "Extensions",
@@ -131,13 +135,13 @@ internal fun ExtensionsPanel(
         if (pendingReloadNames.isNotEmpty()) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(Radius.lg),
                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
             ) {
                 Row(
-                    modifier = Modifier.padding(start = 12.dp, end = 4.dp),
+                    modifier = Modifier.padding(start = Space.md, end = Space.xs),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Space.xs),
                 ) {
                     Text(
                         text = if (pendingReloadNames.size == 1) {
@@ -149,11 +153,11 @@ internal fun ExtensionsPanel(
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+                        modifier = Modifier.weight(1f).padding(vertical = Space.sm),
                     )
                     TextButton(
                         onClick = onReloadPending,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                        contentPadding = PaddingValues(horizontal = Space.ms, vertical = Space.xxs),
                     ) {
                         Text("Reload", style = MaterialTheme.typography.labelMedium)
                     }
@@ -174,7 +178,7 @@ internal fun ExtensionsPanel(
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier.padding(Space.md),
                 )
             } else {
                 Column {
@@ -230,8 +234,8 @@ internal fun DbManagerPanel(
     val dbExtensions = installed.filter { it.type == ExtensionType.DbManager && it.hasWebUi }
     if (dbExtensions.isEmpty()) {
         Column(
-            modifier = modifier.fillMaxSize().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = modifier.fillMaxSize().padding(Space.md),
+            verticalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             Text("DB Managers", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(
@@ -257,7 +261,7 @@ internal fun DbManagerPanel(
                 "DB Managers",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 6.dp),
+                modifier = Modifier.padding(start = Space.md, top = Space.md, end = Space.md, bottom = Space.s),
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
             dbExtensions.forEachIndexed { index, ext ->
@@ -266,12 +270,12 @@ internal fun DbManagerPanel(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { selectedId = ext.id }
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                        .padding(horizontal = Space.md, vertical = Space.ms),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Space.ms),
                 ) {
                     ExtensionIcon(type = ext.type, name = ext.name, iconFile = ext.iconFile, size = 30.dp)
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.hairline)) {
                         Text(
                             ext.name,
                             style = MaterialTheme.typography.bodyMedium,
@@ -304,9 +308,9 @@ internal fun DbManagerPanel(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { selectedId = null }
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                        .padding(horizontal = Space.sm, vertical = Space.sm),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Space.s),
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -406,14 +410,14 @@ private fun PanelEmptyState(
     modifier: Modifier = Modifier,
     action: (@Composable () -> Unit)? = null,
 ) {
-    Box(modifier = modifier.fillMaxSize().padding(20.dp), contentAlignment = Alignment.Center) {
+    Box(modifier = modifier.fillMaxSize().padding(Space.xl), contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(Space.ms),
         ) {
             Surface(
                 modifier = Modifier.size(48.dp),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(Radius.xxxl),
                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
             ) {
                 Box(contentAlignment = Alignment.Center) {
@@ -452,8 +456,8 @@ internal fun VmPanel(
     val ext = installed.firstOrNull { it.type == ExtensionType.Vm && it.hasWebUi }
     if (ext == null) {
         Column(
-            modifier = modifier.fillMaxSize().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = modifier.fillMaxSize().padding(Space.md),
+            verticalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             Text("VM Manager", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(
@@ -628,8 +632,8 @@ internal fun ExtensionPermissionsPage(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(Space.md),
+        verticalArrangement = Arrangement.spacedBy(Space.ms),
     ) {
         Text(
             text = "Extension settings",
@@ -684,20 +688,20 @@ private fun ExtensionSettingsCard(
     }
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.16f),
-        shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        shape = RoundedCornerShape(Radius.xxl),
+        border = BorderStroke(StrokeWidth.hairline, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(Space.md),
+            verticalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(11.dp),
+                horizontalArrangement = Arrangement.spacedBy(Space.md),
             ) {
                 ExtensionIcon(type = ext.type, name = ext.name, iconFile = ext.iconFile, size = 38.dp)
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.hairline)) {
                     Text(
                         text = ext.name,
                         style = MaterialTheme.typography.bodyMedium,
@@ -720,11 +724,11 @@ private fun ExtensionSettingsCard(
                     imageVector = jcIcon(if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown),
                     contentDescription = if (expanded) "Collapse ${ext.name}" else "Expand ${ext.name}",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(IconSize.md),
                 )
             }
             AnimatedVisibility(visible = expanded) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                     ExtensionSettingsControls(extensionId = ext.id)
                     if (ext.type == ExtensionType.Scm && ext.hasWebUi) {
@@ -758,11 +762,11 @@ private fun ActivationPill(mode: ExtensionActivation) {
         ExtensionActivation.OnDemand -> "On-demand" to MaterialTheme.colorScheme.primary
         ExtensionActivation.Manual -> "Manual" to MaterialTheme.colorScheme.onSurfaceVariant
     }
-    Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(20.dp)) {
+    Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(Radius.sheet)) {
         Row(
-            modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+            modifier = Modifier.padding(horizontal = Space.ms, vertical = Space.xs),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(color))
             Text(text = label, style = MaterialTheme.typography.labelSmall, color = color, maxLines = 1)
@@ -841,7 +845,7 @@ private fun ExtensionSettingsControls(extensionId: String) {
                     onSelect = { ui.onChange(extensionId, spec.key, it) },
                     optionLabel = { it.replaceFirstChar { c -> c.uppercaseChar() } },
                 )
-            } else Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            } else Column(verticalArrangement = Arrangement.spacedBy(Space.xxs)) {
                 Text(spec.label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                 spec.description?.takeIf { it.isNotBlank() }?.let {
                     Text(
@@ -1008,14 +1012,14 @@ private fun marketStatus(entry: MarketplaceEntry?, installed: InstalledExtension
 private fun RemovedNotice(text: String) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(Radius.lg),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
     ) {
         Text(
             text = text,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = Space.md, vertical = Space.sm),
         )
     }
 }
@@ -1031,9 +1035,9 @@ private fun VsixBadge() {
             .border(
                 width = 1.dp,
                 color = MaterialTheme.colorScheme.outlineVariant,
-                shape = RoundedCornerShape(4.dp),
+                shape = RoundedCornerShape(Radius.sm),
             )
-            .padding(horizontal = 5.dp, vertical = 1.dp),
+            .padding(horizontal = Space.s, vertical = Space.hairline),
     )
 }
 
@@ -1107,7 +1111,7 @@ private fun buildExtensionRows(
 
 @Composable
 private fun SampleBlock(sample: CodeSample) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+    Column(verticalArrangement = Arrangement.spacedBy(Space.xs), modifier = Modifier.fillMaxWidth()) {
         Text(sample.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
         sample.description?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1118,7 +1122,7 @@ private fun SampleBlock(sample: CodeSample) {
                 style = MaterialTheme.typography.bodySmall,
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(8.dp),
+                modifier = Modifier.padding(Space.sm),
             )
         }
     }
@@ -1166,7 +1170,7 @@ private fun DependencyDialog(
         onDismissRequest = onDismiss,
         title = { Text("Install ${entry.name}") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Space.md)) {
                 if (!entry.requires.isEmpty) {
                     Text(
                         "Required items are installed automatically; if any of them fails, the " +
@@ -1255,7 +1259,7 @@ private fun DependencyRow(
             .fillMaxWidth()
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(name, style = MaterialTheme.typography.bodyMedium)
@@ -1267,7 +1271,7 @@ private fun DependencyRow(
                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(IconSize.md),
             )
         }
     }

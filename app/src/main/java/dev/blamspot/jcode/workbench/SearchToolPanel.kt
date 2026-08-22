@@ -45,9 +45,13 @@ import androidx.compose.ui.unit.dp
 import dev.blamspot.jcode.core.search.SearchMatch
 import dev.blamspot.jcode.core.search.SearchModule
 import dev.blamspot.jcode.core.search.SearchOptions
+import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.LocalIconBundle
 import dev.blamspot.jcode.design.ManagerFilterChip
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
+import dev.blamspot.jcode.design.StrokeWidth
 import dev.blamspot.jcode.feature.editor.pane.EditorTab
 import dev.blamspot.jcode.fs.FsPath
 import dev.blamspot.jcode.fs.Project
@@ -75,20 +79,20 @@ private fun SearchScopeSelector(
 ) {
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(Radius.lg))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f))
-            .padding(2.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+            .padding(Space.xxs),
+        horizontalArrangement = Arrangement.spacedBy(Space.xxs),
     ) {
         SearchScope.entries.forEach { s ->
             val sel = s == selected
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(RoundedCornerShape(Radius.md))
                     .background(if (sel) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else Color.Transparent)
                     .clickable { onSelect(s) }
-                    .padding(vertical = 5.dp),
+                    .padding(vertical = Space.s),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -208,8 +212,8 @@ internal fun SearchToolPanel(
 
     Column(modifier = modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.sm),
+            verticalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             SearchField(
                 query = query,
@@ -219,7 +223,7 @@ internal fun SearchToolPanel(
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(Space.s),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 ManagerFilterChip(selected = caseSensitive, label = "Aa") { caseSensitive = !caseSensitive }
@@ -239,7 +243,7 @@ internal fun SearchToolPanel(
         val fileCount = grouped.size
 
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.s),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val plus = if (truncated) "+" else ""
@@ -276,7 +280,7 @@ internal fun SearchToolPanel(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 4.dp),
+                                .padding(horizontal = Space.md, vertical = Space.xs),
                         )
                     }
                     items(matches, key = { "${path}:${it.lineNumber}:${it.columnStart}" }) { match ->
@@ -295,8 +299,8 @@ private fun FileNameRow(match: SearchMatch, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = Space.md, vertical = Space.xs),
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -324,8 +328,8 @@ private fun MatchRow(match: SearchMatch, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(start = 24.dp, end = 12.dp, top = 3.dp, bottom = 3.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(start = Space.xxl, end = Space.md, top = Space.xs, bottom = Space.xs),
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
         Text(
             text = "${match.lineNumber + 1}",
@@ -353,20 +357,20 @@ private fun SearchField(
     placeholder: String,
 ) {
     Surface(
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(Radius.xl),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        border = BorderStroke(StrokeWidth.thin, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
-            modifier = Modifier.heightIn(min = 36.dp).padding(horizontal = 8.dp),
+            modifier = Modifier.heightIn(min = 36.dp).padding(horizontal = Space.sm),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Icon(
                 LocalIconBundle.current[JCodeIcon.Search],
                 contentDescription = null,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(IconSize.sm),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Box(modifier = Modifier.weight(1f)) {
@@ -394,7 +398,7 @@ private fun SearchField(
                 Icon(
                     LocalIconBundle.current[JCodeIcon.Close],
                     contentDescription = "Clear search",
-                    modifier = Modifier.size(16.dp).clickable { onQueryChange("") },
+                    modifier = Modifier.size(IconSize.sm).clickable { onQueryChange("") },
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -409,7 +413,7 @@ private fun SearchHint(text: String, modifier: Modifier = Modifier) {
             text = text,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(24.dp),
+            modifier = Modifier.padding(Space.xxl),
         )
     }
 }

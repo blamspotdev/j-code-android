@@ -12,8 +12,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import dev.blamspot.jcode.WorkbenchNotices
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.ext.api.JCodeNativeExtension
 import dev.blamspot.jcode.ext.api.NativeHost
 import dev.blamspot.jcode.feature.marketplace.InstalledExtension
@@ -68,8 +68,8 @@ internal fun NativeExtensionPage(
     val loaded = resolved.getOrNull()
     if (loaded == null) {
         Column(
-            modifier = modifier.fillMaxSize().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = modifier.fillMaxSize().padding(Space.lg),
+            verticalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Text(
                 text = "${extension.name} could not be loaded",

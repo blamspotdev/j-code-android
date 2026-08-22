@@ -17,10 +17,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import dev.blamspot.jcode.core.config.BuildConfig
 import dev.blamspot.jcode.design.CompactFilledButton
 import dev.blamspot.jcode.design.SettingsTextFieldRow
+import dev.blamspot.jcode.design.Space
 
 /**
  * Structured editor for one of a project's build tasks (part of `.jcode/run.yaml`), opened as an
@@ -42,8 +42,8 @@ fun BuildConfigPage(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(Space.lg),
+        verticalArrangement = Arrangement.spacedBy(Space.lg),
     ) {
         Text("Build configuration", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
         Text(

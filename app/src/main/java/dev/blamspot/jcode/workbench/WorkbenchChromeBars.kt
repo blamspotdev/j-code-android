@@ -25,13 +25,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import dev.blamspot.jcode.MainViewModel
 import dev.blamspot.jcode.design.CompactContextMenu
 import dev.blamspot.jcode.design.ContextAction
 import dev.blamspot.jcode.core.debug.DebugState
+import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.LocalEditorSaveActions
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
 import dev.blamspot.jcode.feature.editor.pane.EditorTab
 import dev.blamspot.jcode.fs.Project
@@ -70,13 +72,13 @@ internal fun WorkspaceHeader(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+            .padding(horizontal = Space.ms, vertical = Space.xs),
+        verticalArrangement = Arrangement.spacedBy(Space.xs),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             // In the persistent (landscape) layout, the editor top-bar's sidebar toggle sits under
             // this panel, so surface a collapse control in the panel header itself.
@@ -98,16 +100,16 @@ internal fun WorkspaceHeader(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(Radius.lg))
                         .then(
                             if (hasCloseAction) Modifier.clickable { menuExpanded = true } else Modifier,
                         )
-                        .padding(vertical = 2.dp),
-                    verticalArrangement = Arrangement.spacedBy(1.dp),
+                        .padding(vertical = Space.xxs),
+                    verticalArrangement = Arrangement.spacedBy(Space.hairline),
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(Space.xxs),
                     ) {
                         Text(
                             text = workspace?.name ?: "Default Workspace",
@@ -120,7 +122,7 @@ internal fun WorkspaceHeader(
                             Icon(
                                 imageVector = jcIcon(JCodeIcon.DropDown),
                                 contentDescription = null,
-                                modifier = Modifier.size(16.dp),
+                                modifier = Modifier.size(IconSize.sm),
                                 tint = MaterialTheme.colorScheme.primary,
                             )
                         }
@@ -176,7 +178,7 @@ internal fun WorkspaceHeader(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             // "DB Managers", "SCM" and "VM" only show once a matching client extension is installed.
             WorkbenchTool.entries
@@ -230,9 +232,9 @@ internal fun WorkbenchTopBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+                .padding(horizontal = Space.ms, vertical = Space.s),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             WorkbenchIconActionButton(
                 icon = jcIcon(JCodeIcon.MenuToggle),
@@ -243,7 +245,7 @@ internal fun WorkbenchTopBar(
 
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(1.dp),
+                verticalArrangement = Arrangement.spacedBy(Space.hairline),
             ) {
                 val heading = activeTab?.title ?: selectedProject?.name ?: "JCode"
                 Text(

@@ -60,9 +60,9 @@ fun SettingsDropdownRow(
         Row(
             modifier = modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.md),
         ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
                 Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                 supporting?.takeIf { it.isNotBlank() }?.let {
                     Text(
@@ -75,14 +75,14 @@ fun SettingsDropdownRow(
             Box {
                 Row(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(Radius.lg))
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Radius.lg))
                         .clickable { open = true }
                         .handCursor()
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .padding(horizontal = Space.md, vertical = Space.sm)
                         .widthIn(min = 72.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Space.s),
                 ) {
                     Text(
                         text = optionLabel(selected),
@@ -96,7 +96,7 @@ fun SettingsDropdownRow(
                         imageVector = jcIcon(JCodeIcon.ChevronDown),
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(IconSize.md),
                     )
                 }
                 DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
@@ -108,7 +108,7 @@ fun SettingsDropdownRow(
                                     Icon(
                                         imageVector = Icons.Rounded.Check,
                                         contentDescription = null,
-                                        modifier = Modifier.size(18.dp),
+                                        modifier = Modifier.size(IconSize.md),
                                         tint = MaterialTheme.colorScheme.primary,
                                     )
                                 }

@@ -40,9 +40,9 @@ fun TabColorDialog(
         onDismissRequest = onDismiss,
         title = { Text("Tab color") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
                 TabColorPalette.chunked(5).forEach { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
                         row.forEach { color ->
                             val selected = current != null && color.toArgbHex() == current.toArgbHex()
                             Box(
@@ -63,7 +63,7 @@ fun TabColorDialog(
                                         imageVector = Icons.Rounded.Check,
                                         contentDescription = null,
                                         tint = if (color.luminance() > 0.5f) Color.Black else Color.White,
-                                        modifier = Modifier.size(20.dp),
+                                        modifier = Modifier.size(IconSize.lg),
                                     )
                                 }
                             }
@@ -76,7 +76,7 @@ fun TabColorDialog(
             CompactFilledButton(text = "Random", onClick = { onPick(randomTabColor()) })
         },
         dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
                 if (current != null) {
                     CompactDestructiveButton(text = "Clear", onClick = onClear)
                 }

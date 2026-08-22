@@ -11,9 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -32,8 +30,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.HorizontalDivider
@@ -80,7 +76,11 @@ import dev.blamspot.jcode.core.config.ProjectConfig
 import dev.blamspot.jcode.core.config.WorkspaceConfig
 import dev.blamspot.jcode.design.IconBundle
 import dev.blamspot.jcode.design.IconBundleRegistry
+import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
+import dev.blamspot.jcode.design.StrokeWidth
 import dev.blamspot.jcode.design.jcIcon
 import dev.blamspot.jcode.design.BottomBarVisibility
 import dev.blamspot.jcode.design.ExtraKeysVisibility
@@ -258,8 +258,8 @@ object SettingsFeature {
             modifier = modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(Space.md),
+            verticalArrangement = Arrangement.spacedBy(Space.ms),
         ) {
             // Material underline tabs, left-packed. ScrollableTabRow's own divider only spans the
             // tab content, so it is suppressed and a full-width one is drawn behind the row.
@@ -804,7 +804,7 @@ object SettingsFeature {
                                 text = "Outdated",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                modifier = Modifier.padding(horizontal = Space.ms, vertical = Space.xs),
                             )
                         }
                     } else if (engineMajor > 0) {
@@ -826,7 +826,7 @@ object SettingsFeature {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
                 CompactFilledButton(
                     text = "Get latest WebView",
                     onClick = {
@@ -919,7 +919,7 @@ object SettingsFeature {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
                     CompactFilledButton(text = "Manage environments", onClick = onOpenEnvironmentWizard)
                     CompactOutlinedButton(text = "Refresh checks", onClick = onRefreshEnvironment)
                 }
@@ -942,7 +942,7 @@ object SettingsFeature {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
                         CompactFilledButton(text = "Back up (.tar.gz)", onClick = envBackup.onBackup)
                         CompactOutlinedButton(text = "Restore…", onClick = envBackup.onRestore)
                     }
@@ -1100,7 +1100,7 @@ object SettingsFeature {
                                 text = "Update: v${appUpdate.latestVersion}",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onPrimary,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                modifier = Modifier.padding(horizontal = Space.ms, vertical = Space.xs),
                             )
                         }
                     } else if (appUpdate.latestVersion != null) {
@@ -1139,7 +1139,7 @@ object SettingsFeature {
                 keywords = "backup restore export import settings preferences file save load transfer migrate json device",
             ) {
                 val backup = LocalSettingsBackup.current
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
                     CompactFilledButton(text = "Export settings…", onClick = backup.onExport)
                     CompactOutlinedButton(text = "Import settings…", onClick = backup.onImport)
                 }
@@ -1207,7 +1207,7 @@ object SettingsFeature {
                     SummaryRow(label = "Recorded", value = formatLogSize(diagnostics.sizeBytes))
                     SummaryRow(label = "Location", value = diagnostics.location.ifBlank { "Starting…" })
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
                     CompactFilledButton(
                         text = "View",
                         onClick = { showLog = true },
@@ -1450,7 +1450,7 @@ object SettingsFeature {
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 2.dp),
+                    modifier = Modifier.padding(start = Space.xxs),
                 )
             }
 
@@ -1529,7 +1529,7 @@ object SettingsFeature {
                     modified = scopedExplorer?.viewMode != null,
                     onReset = { onUpdateExplorerViewMode(selectedScope, null) },
                 ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
                         listOf("Tree", "List").forEach { option ->
                             val selected = explorerViewMode == option
                             if (selected) {
@@ -1558,7 +1558,7 @@ object SettingsFeature {
                 description = "Open the backing config files directly when you want full control.",
                 keywords = "yaml files config workspace project open backing edit",
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
                     CompactFilledButton(text = "Open workspace YAML", onClick = onOpenWorkspaceConfig)
                     CompactOutlinedButton(
                         text = "Open project YAML",
@@ -1665,22 +1665,22 @@ private fun matchesSettingsQuery(query: String, vararg haystacks: String): Boole
 private fun SettingsSearchField(query: String, onQueryChange: (String) -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(Radius.xl),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 40.dp)
-                .padding(horizontal = 10.dp),
+                .padding(horizontal = Space.ms),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             Icon(
                 imageVector = Icons.Rounded.Search,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(IconSize.md),
             )
             Box(modifier = Modifier.weight(1f)) {
                 if (query.isEmpty()) {
@@ -1719,9 +1719,9 @@ private fun SettingsNoResults(query: String) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 28.dp),
+            .padding(vertical = Space.xxl),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(Space.xs),
     ) {
         Text(
             text = "No settings match “$query”",
@@ -1779,7 +1779,7 @@ private fun ColumnScope.SettingsGroup(
             .fillMaxWidth()
             .onGloballyPositioned { settingsGroupOffsets[stateKey] = it.positionInParent().y }
             .clickable { expanded = !expanded }
-            .padding(top = 6.dp, start = 2.dp, end = 2.dp),
+            .padding(top = Space.s, start = Space.xxs, end = Space.xxs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -1793,13 +1793,13 @@ private fun ColumnScope.SettingsGroup(
             imageVector = jcIcon(if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown),
             contentDescription = if (expanded) "Collapse $title" else "Expand $title",
             tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.size(IconSize.md),
         )
     }
     // AnimatedVisibility stacks its children like a Box, so the cards need their own Column to keep
     // the page's 10dp rhythm instead of drawing on top of each other.
     AnimatedVisibility(visible = expanded) {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { content() }
+        Column(verticalArrangement = Arrangement.spacedBy(Space.ms)) { content() }
     }
 }
 
@@ -1815,14 +1815,14 @@ private fun SettingsCard(
     LocalSettingsMatchSink.current.count++
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.16f),
-        shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        shape = RoundedCornerShape(Radius.xxl),
+        border = BorderStroke(StrokeWidth.hairline, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(Space.md),
+            verticalArrangement = Arrangement.spacedBy(Space.ms),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
                 Text(
                     text = title,
                     style = MaterialTheme.typography.bodyMedium,
@@ -1852,12 +1852,12 @@ private fun WarningCard(
     LocalSettingsMatchSink.current.count++
     Surface(
         color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f),
-        shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f)),
+        shape = RoundedCornerShape(Radius.xxl),
+        border = BorderStroke(StrokeWidth.hairline, MaterialTheme.colorScheme.error.copy(alpha = 0.35f)),
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(Space.md),
+            verticalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Text(
                 text = title,
@@ -1885,18 +1885,18 @@ private fun BundleRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(Radius.lg))
             .clickable(onClick = onClick)
-            .padding(vertical = 6.dp, horizontal = 4.dp),
+            .padding(vertical = Space.s, horizontal = Space.xs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.ms),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.xxs)) {
             swatch.take(4).forEach { color ->
                 Box(
                     modifier = Modifier
                         .size(14.dp)
-                        .clip(RoundedCornerShape(3.dp))
+                        .clip(RoundedCornerShape(Radius.sm))
                         .background(color),
                 )
             }
@@ -1918,7 +1918,7 @@ private fun BundleRow(
                 imageVector = Icons.Rounded.Check,
                 contentDescription = "Selected",
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(IconSize.md),
             )
         }
     }
@@ -1934,19 +1934,19 @@ private fun IconBundleRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(Radius.lg))
             .clickable(onClick = onClick)
-            .padding(vertical = 6.dp, horizontal = 4.dp),
+            .padding(vertical = Space.s, horizontal = Space.xs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.ms),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
             sample.forEach { slot ->
                 Icon(
                     imageVector = bundle[slot],
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(IconSize.sm),
                 )
             }
         }
@@ -1965,7 +1965,7 @@ private fun IconBundleRow(
                 imageVector = Icons.Rounded.Check,
                 contentDescription = "Selected",
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(IconSize.md),
             )
         }
     }
@@ -2054,14 +2054,14 @@ private fun EnvVarEditor(settings: EnvVarSettings) {
     var editTarget by remember { mutableStateOf<String?>(null) }
     var adding by remember { mutableStateOf(false) }
 
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(Space.ms)) {
         // A plain heading, not a SettingsGroup: this tab is one section and has no search field.
         Text(
             text = "Environment variables",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(top = 6.dp, start = 2.dp),
+            modifier = Modifier.padding(top = Space.s, start = Space.xxs),
         )
         Text(
             text = "Exported into every terminal and Build & Run session (e.g. API keys, GOPRIVATE, " +
@@ -2075,7 +2075,7 @@ private fun EnvVarEditor(settings: EnvVarSettings) {
                 text = "No variables yet. Tap “Add variable” to create one.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 8.dp),
+                modifier = Modifier.padding(vertical = Space.sm),
             )
         } else {
             entries.forEach { (name, value) ->
@@ -2083,7 +2083,7 @@ private fun EnvVarEditor(settings: EnvVarSettings) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(Space.sm),
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
@@ -2137,7 +2137,7 @@ private fun EnvVarDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (editingName == null) "Add variable" else "Edit variable") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it.trim() },
@@ -2186,7 +2186,7 @@ private fun StepperRow(
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
@@ -2204,7 +2204,7 @@ private fun StepperRow(
                 )
             }
             Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(Space.xs),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 StepperButton(JCodeIcon.Minus, "Decrease $label", filled = false, onClick = onDecrease)
@@ -2241,7 +2241,7 @@ private fun StepperButton(
     // taps in a hurry.
     val sizing = Modifier.size(34.dp)
     val glyph: @Composable () -> Unit = {
-        Icon(jcIcon(icon), contentDescription, modifier = Modifier.size(17.dp))
+        Icon(jcIcon(icon), contentDescription, modifier = Modifier.size(IconSize.md))
     }
     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
         if (filled) {
@@ -2254,7 +2254,7 @@ private fun StepperButton(
                 // content colour, which in a dark theme is near-white and shouts across a page of
                 // quiet rows. `outline` is what every switch on this page already draws its own
                 // border with, and these sit in the same column as those switches.
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                border = BorderStroke(StrokeWidth.thin, MaterialTheme.colorScheme.outline),
             ) { glyph() }
         }
     }
@@ -2269,7 +2269,7 @@ private fun OptionRow(
     content: @Composable () -> Unit,
 ) {
     SettingsResettableRow(modified = modified, onReset = onReset) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
             Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
             Text(
                 text = supporting,
@@ -2292,11 +2292,11 @@ private fun SettingsActionRow(
     busy: Boolean = false,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = Space.ms),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.md),
     ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
             Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
             Text(
                 text = supporting,
@@ -2304,26 +2304,12 @@ private fun SettingsActionRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        // Not CompactFilledButton only because this one carries a spinner beside its label; the
-        // metrics are copied from it so it sits at the same height as every other settings button.
-        FilledTonalButton(
+        CompactFilledButton(
+            text = buttonLabel,
             onClick = onClick,
-            enabled = enabled && !busy,
-            modifier = Modifier.defaultMinSize(minHeight = 32.dp),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-        ) {
-            // The label stays put and the spinner takes the leading slot, so the button keeps its
-            // width and the row does not jump the moment it is pressed.
-            if (busy) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(14.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                )
-                Spacer(Modifier.width(8.dp))
-            }
-            Text(buttonLabel, style = MaterialTheme.typography.labelMedium)
-        }
+            enabled = enabled,
+            busy = busy,
+        )
     }
 }
 
@@ -2340,9 +2326,9 @@ private fun ToggleRow(
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.md),
         ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
                 Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                 Text(
                     text = supporting,

@@ -10,6 +10,9 @@ import dev.blamspot.jcode.design.ContextAction
 import dev.blamspot.jcode.design.EditorSaveActions
 import dev.blamspot.jcode.core.editor.completion.CompletionSource
 import dev.blamspot.jcode.core.editor.completion.LocalCompletionSource
+import dev.blamspot.jcode.design.IconSize
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.editor.languagePackCompletionItems
 import dev.blamspot.jcode.design.LocalEditorSaveActions
 import dev.blamspot.jcode.design.JCodeIcon
@@ -346,7 +349,6 @@ import dev.blamspot.jcode.workbench.TerminalInstance
 import dev.blamspot.jcode.workbench.WorkbenchTopBar
 import dev.blamspot.jcode.workbench.WorkspaceHeader
 import dev.blamspot.jcode.workbench.ProjectRoster
-import dev.blamspot.jcode.workbench.WelcomeCard
 import dev.blamspot.jcode.workbench.WorkspaceEmptyState
 import dev.blamspot.jcode.workbench.WorkbenchActionButton
 import dev.blamspot.jcode.workbench.WorkbenchIconActionButton
@@ -3890,7 +3892,7 @@ private fun JCodeShell(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(bottom = 8.dp),
+                .padding(bottom = Space.sm),
         )
     }
 }
@@ -4296,7 +4298,7 @@ private fun EditorWorkspace(
                 onClick = { chrome.onSetChromeHidden(false) },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(4.dp),
+                    .padding(Space.xs),
             )
         }
         }
@@ -4385,13 +4387,13 @@ private fun EditorEmptyHint(
 ) {
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         Column(
-            modifier = Modifier.padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(Space.xxl),
+            verticalArrangement = Arrangement.spacedBy(Space.md),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Surface(
                 modifier = Modifier.size(56.dp),
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(Radius.xxxl),
                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
             ) {
                 Box(contentAlignment = Alignment.Center) {
@@ -4422,12 +4424,12 @@ private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modi
                 .widthIn(max = 460.dp)
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(Space.xxl),
+            verticalArrangement = Arrangement.spacedBy(Space.md),
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(Space.ms),
             ) {
                 Icon(
                     imageVector = jcIcon(JCodeIcon.Files),
@@ -4436,7 +4438,7 @@ private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modi
                 )
                 Text("Open a project", fontWeight = FontWeight.SemiBold)
             }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.sm), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
                 WorkbenchActionButton(text = "New Folder", onClick = actions.onNewProject, active = true)
                 WorkbenchActionButton(text = "Open Folder", onClick = actions.onOpenFolder)
                 actions.startActions.forEach { action ->
@@ -4473,27 +4475,27 @@ private fun RecentRow(recent: RecentEntity, onOpen: () -> Unit, onExport: () -> 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(Radius.lg))
             .clickable(onClick = onOpen),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.16f),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 8.dp, top = 6.dp, bottom = 6.dp),
+                .padding(start = Space.sm, top = Space.s, bottom = Space.s),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             Surface(
                 modifier = Modifier.size(24.dp),
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(Radius.lg),
                 color = MaterialTheme.colorScheme.surfaceVariant,
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = jcIcon(JCodeIcon.Code),
                         contentDescription = null,
-                        modifier = Modifier.size(15.dp),
+                        modifier = Modifier.size(IconSize.sm),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -4520,7 +4522,7 @@ private fun RecentRow(recent: RecentEntity, onOpen: () -> Unit, onExport: () -> 
                         Icon(
                             imageVector = jcIcon(JCodeIcon.MoreVert),
                             contentDescription = "Recent project actions",
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(IconSize.md),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
@@ -4593,8 +4595,8 @@ private fun WorkbenchRightSidebar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(40.dp)
-                    .padding(end = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    .padding(end = Space.xs),
+                horizontalArrangement = Arrangement.spacedBy(Space.xs),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // Tabs scroll within their own weighted area so the trailing actions below stay
@@ -4606,7 +4608,7 @@ private fun WorkbenchRightSidebar(
                         .weight(1f)
                         .fillMaxHeight()
                         .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(0.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Space.none),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     val devMode = LocalDeveloperSetting.current.enabled
@@ -4722,7 +4724,7 @@ private fun WorkspaceSplitHandle(onDrag: (Float) -> Unit, onDragStopped: () -> U
         Box(
             modifier = Modifier
                 .size(width = 4.dp, height = 40.dp)
-                .clip(RoundedCornerShape(2.dp))
+                .clip(RoundedCornerShape(Radius.xs))
                 .background(MaterialTheme.colorScheme.outline),
         )
     }
@@ -4747,14 +4749,14 @@ private fun RightPanelTabItem(
                 if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
             )
             .fillMaxHeight()
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = Space.md),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.s),
     ) {
         Icon(
             imageVector = jcIcon(icon),
             contentDescription = null,
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.size(IconSize.md),
             tint = tint,
         )
         Text(text = label, style = MaterialTheme.typography.labelMedium, color = tint)
@@ -5022,7 +5024,7 @@ private fun TerminalSidebarContent(
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState())
                     .height(30.dp),
-                horizontalArrangement = Arrangement.spacedBy(0.dp),
+                horizontalArrangement = Arrangement.spacedBy(Space.none),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 orderedSessionIds.forEach { sessionId ->
@@ -5043,9 +5045,9 @@ private fun TerminalSidebarContent(
                                     else MaterialTheme.colorScheme.surface
                                 )
                                 .height(30.dp)
-                                .padding(horizontal = 10.dp),
+                                .padding(horizontal = Space.ms),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(Space.xs),
                         ) {
                             // Pinned terminal shows a leading pin instead of a "×" (close via long-press).
                             if (isPinned) {
@@ -5053,7 +5055,7 @@ private fun TerminalSidebarContent(
                                     imageVector = jcIcon(JCodeIcon.Pin),
                                     contentDescription = "Pinned",
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(12.dp),
+                                    modifier = Modifier.size(IconSize.xxs),
                                 )
                             }
                             if (isRelocated && !isPinned) {
@@ -5142,7 +5144,7 @@ private fun TerminalSidebarContent(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(16.dp),
+                    .padding(Space.lg),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
@@ -5271,7 +5273,7 @@ private fun TerminalSidebarContent(
             ) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(Space.sm),
                 ) {
                     Icon(
                         imageVector = jcIcon(JCodeIcon.Terminal),
@@ -5313,7 +5315,7 @@ private fun OutputSidebarContent(
                 text = "Build logs and tool output will appear here.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(12.dp),
+                modifier = Modifier.padding(Space.md),
             )
         } else {
             val listState = rememberLazyListState()
@@ -5331,7 +5333,7 @@ private fun OutputSidebarContent(
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp),
+                contentPadding = PaddingValues(start = Space.md, end = Space.md, top = Space.sm, bottom = Space.md),
             ) {
                 items(lines) { line ->
                     Text(
@@ -5345,7 +5347,7 @@ private fun OutputSidebarContent(
             }
         }
         if (lines.isNotEmpty()) {
-            Box(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
+            Box(modifier = Modifier.align(Alignment.TopEnd).padding(Space.xs)) {
                 WorkbenchIconActionButton(
                     icon = jcIcon(JCodeIcon.Clear),
                     contentDescription = "Clear output",
@@ -5363,144 +5365,6 @@ private fun outputColor(kind: OutputKind) = when (kind) {
     OutputKind.Info -> MaterialTheme.colorScheme.onSurfaceVariant
     OutputKind.Stdout -> MaterialTheme.colorScheme.onSurface
 }
-
-@Composable
-private fun SidebarSessionChip(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    Surface(
-        modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(10.dp),
-        color = if (selected) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-        } else {
-            MaterialTheme.colorScheme.surface.copy(alpha = 0.75f)
-        },
-    ) {
-        Text(
-            text = label,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-            style = MaterialTheme.typography.labelMedium,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun SidebarSectionCard(
-    title: String,
-    lines: List<String>,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(title, fontWeight = FontWeight.SemiBold)
-            lines.forEach { line ->
-                Text(
-                    text = line,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun InspectorSidebar(
-    selectedProject: Project?,
-    activeTab: EditorTab?,
-    editorGroup: EditorGroup,
-    effectiveConfig: EffectiveConfig,
-    windowInfo: JCodeWindowInfo,
-    selectedTool: WorkbenchTool,
-    onShowCommandPalette: () -> Unit,
-    onCreateProject: () -> Unit,
-    onOpenExternalFolder: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier,
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-    ) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            item {
-                WelcomeCard(
-                    title = "Workspace snapshot",
-                    icon = jcIcon(JCodeIcon.Code),
-                    lines = listOf(
-                        "Mode: ${deviceModeLabel(windowInfo)}",
-                        "Tool: ${selectedTool.label}",
-                        "Open tabs: ${editorGroup.tabs.size}",
-                    ),
-                )
-            }
-            item {
-                WelcomeCard(
-                    title = "Editor defaults",
-                    icon = jcIcon(JCodeIcon.Settings),
-                    lines = listOf(
-                        "Font: ${effectiveConfig.editor.fontSize.toInt()} sp",
-                        "Tabs: ${effectiveConfig.editor.tabSize} spaces",
-                        "Distro: ${effectiveConfig.distro.id}",
-                    ),
-                )
-            }
-            item {
-                WelcomeCard(
-                    title = "Active context",
-                    icon = jcIcon(JCodeIcon.Destinations),
-                    lines = listOf(
-                        "Project: ${selectedProject?.name ?: "None"}",
-                        "Bind target: ${selectedProject?.distroBindTarget ?: "--"}",
-                        "File: ${activeTab?.title ?: "No file open"}",
-                    ),
-                )
-            }
-            item {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f))
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Icon(jcIcon(JCodeIcon.Help), contentDescription = null)
-                        Text("Quick actions", fontWeight = FontWeight.SemiBold)
-                    }
-                    WorkbenchActionButton(text = "Command Palette", onClick = onShowCommandPalette, active = true)
-                    WorkbenchActionButton(text = "New Folder", onClick = onCreateProject)
-                    WorkbenchActionButton(text = "Open Folder", onClick = onOpenExternalFolder)
-                }
-            }
-        }
-    }
-}
-
-private fun deviceModeLabel(windowInfo: JCodeWindowInfo): String = buildString {
-    append(windowInfo.widthClass.name.lowercase())
-    append(" / ")
     append(windowInfo.heightClass.name.lowercase())
     if (windowInfo.hasPhysicalKeyboard) {
         append(" / keyboard")

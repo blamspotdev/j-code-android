@@ -36,6 +36,8 @@ import dev.blamspot.jcode.core.lsp.DiagnosticSeverity
 import dev.blamspot.jcode.core.lsp.LspModule
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.LocalIconBundle
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.workbench.LocalIssueActions
 
 /**
@@ -56,7 +58,7 @@ internal fun IssuesSidebarContent(modifier: Modifier = Modifier) {
     val notices = noticesBySource.toSortedMap()
 
     if (files.isEmpty() && notices.isEmpty()) {
-        Column(modifier = modifier.fillMaxSize().padding(12.dp)) {
+        Column(modifier = modifier.fillMaxSize().padding(Space.md)) {
             Text(
                 "No issues detected.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -66,19 +68,19 @@ internal fun IssuesSidebarContent(modifier: Modifier = Modifier) {
                 "Configuration errors and on-save syntax checks appear here.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                modifier = Modifier.padding(top = 4.dp),
+                modifier = Modifier.padding(top = Space.xs),
             )
         }
         return
     }
 
-    LazyColumn(modifier = modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 4.dp)) {
+    LazyColumn(modifier = modifier.fillMaxSize().padding(horizontal = Space.s, vertical = Space.xs)) {
         notices.forEach { (source, messages) ->
             item(key = "notice-hdr:$source") {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.fillMaxWidth().padding(start = 4.dp, top = 8.dp, bottom = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Space.s),
+                    modifier = Modifier.fillMaxWidth().padding(start = Space.xs, top = Space.sm, bottom = Space.xxs),
                 ) {
                     Text(
                         text = source,
@@ -106,11 +108,11 @@ internal fun IssuesSidebarContent(modifier: Modifier = Modifier) {
                 val first = diags.first()
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Space.s),
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { actions.onOpen(path, first.startLine, first.startCol) }
-                        .padding(start = 4.dp, top = 8.dp, bottom = 2.dp),
+                        .padding(start = Space.xs, top = Space.sm, bottom = Space.xxs),
                 ) {
                     Text(
                         text = path.substringAfterLast('/'),
@@ -138,11 +140,11 @@ internal fun IssuesSidebarContent(modifier: Modifier = Modifier) {
                 val d = diags[i]
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { actions.onOpen(path, d.startLine, d.startCol) }
-                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                        .padding(horizontal = Space.sm, vertical = Space.s),
                 ) {
                     Box(
                         modifier = Modifier
@@ -183,15 +185,15 @@ private fun NoticeRow(notice: WorkbenchNotices.Notice) {
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
             modifier = Modifier
                 .fillMaxWidth()
                 .then(if (hasDetail) Modifier.clickable { expanded = !expanded } else Modifier)
-                .padding(horizontal = 8.dp, vertical = 5.dp),
+                .padding(horizontal = Space.sm, vertical = Space.s),
         ) {
             Box(
                 modifier = Modifier
-                    .padding(top = 5.dp)
+                    .padding(top = Space.s)
                     .size(8.dp)
                     .background(MaterialTheme.colorScheme.error, CircleShape),
             )
@@ -207,7 +209,7 @@ private fun NoticeRow(notice: WorkbenchNotices.Notice) {
                         if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown,
                     ],
                     contentDescription = if (expanded) "Hide details" else "Show details",
-                    modifier = Modifier.padding(top = 2.dp).size(16.dp),
+                    modifier = Modifier.padding(top = Space.xxs).size(16.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -215,17 +217,17 @@ private fun NoticeRow(notice: WorkbenchNotices.Notice) {
         if (expanded) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                shape = RoundedCornerShape(6.dp),
+                shape = RoundedCornerShape(Radius.md),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 20.dp, end = 8.dp, bottom = 6.dp),
+                    .padding(start = Space.xl, end = Space.sm, bottom = Space.s),
             ) {
                 // Horizontally scrollable rather than wrapped: these are command lines and tool
                 // output, where a wrapped line stops looking like the thing that was actually run.
                 Column(
                     modifier = Modifier
                         .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                        .padding(horizontal = Space.sm, vertical = Space.s),
                 ) {
                     notice.detail.forEach { line ->
                         Text(

@@ -32,6 +32,7 @@ import dev.blamspot.jcode.design.CompactOutlinedButton
 import dev.blamspot.jcode.design.ManagerNoticeCard
 import dev.blamspot.jcode.design.ManagerSectionCard
 import dev.blamspot.jcode.design.SettingsDropdownRow
+import dev.blamspot.jcode.design.Space
 
 /** One permission an app declares, as the sheet needs to show it. */
 private class Declared(
@@ -70,16 +71,16 @@ internal fun AppPermissionsSheet(
 
     Surface(modifier = modifier, color = MaterialTheme.colorScheme.surface) {
         Column(
-            modifier = Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.verticalScroll(rememberScrollState()).padding(Space.lg),
+            verticalArrangement = Arrangement.spacedBy(Space.lg),
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(Space.md),
             ) {
                 Column(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(Space.s),
                 ) {
                     Text(
                         text = "Permissions",
@@ -149,11 +150,11 @@ internal fun AppPermissionsSheet(
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Space.md),
                 ) {
                     Column(
                         modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(Space.xs),
                     ) {
                         Text(
                             text = "Runs in background",

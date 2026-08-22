@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.lsp.LspLocationEntry
 import dev.blamspot.jcode.lsp.LspLocationPicker
 
@@ -66,7 +67,7 @@ private fun LocationRow(entry: LspLocationEntry, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(vertical = 6.dp),
+            .padding(vertical = Space.s),
     ) {
         Row(modifier = Modifier.fillMaxWidth()) {
             Text(

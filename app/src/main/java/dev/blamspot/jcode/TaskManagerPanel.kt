@@ -32,15 +32,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import dev.blamspot.jcode.core.debug.DebugState
 import dev.blamspot.jcode.core.distro.AppProcesses
 import dev.blamspot.jcode.core.term.TerminalSessionManager
+import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.JcTooltip
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
 import dev.blamspot.jcode.vdevice.AppSandbox
 import dev.blamspot.jcode.workbench.LocalDebugSession
@@ -113,8 +114,8 @@ internal fun TaskManagerSidebarContent(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+            .padding(horizontal = Space.sm, vertical = Space.s),
+        verticalArrangement = Arrangement.spacedBy(Space.s),
     ) {
         val debugActive = debug.state != DebugState.DISCONNECTED && debug.state != DebugState.TERMINATED
         val hasSessions = terminalSessionIds.isNotEmpty() || runningProjectName != null || debugActive
@@ -130,7 +131,7 @@ internal fun TaskManagerSidebarContent(
                 "Nothing running — terminals, Build & Run, and debug sessions appear here.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 4.dp),
+                modifier = Modifier.padding(horizontal = Space.xs),
             )
         }
         terminalSessionIds.forEach { id ->
@@ -221,7 +222,7 @@ private fun TaskSectionLabel(text: String) {
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 4.dp, top = 4.dp),
+        modifier = Modifier.padding(start = Space.xs, top = Space.xs),
     )
 }
 
@@ -240,9 +241,9 @@ private fun TaskRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 10.dp, top = 2.dp, bottom = 2.dp, end = 2.dp),
+                .padding(start = Space.ms, top = Space.xxs, bottom = Space.xxs, end = Space.xxs),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -266,7 +267,7 @@ private fun TaskRow(
                         imageVector = jcIcon(JCodeIcon.Stop),
                         contentDescription = actionDescription,
                         tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier.size(IconSize.lg),
                     )
                 }
             }
@@ -297,9 +298,9 @@ private fun BackgroundExtensionRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 10.dp, top = 2.dp, bottom = 2.dp, end = 2.dp),
+                .padding(start = Space.ms, top = Space.xxs, bottom = Space.xxs, end = Space.xxs),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -324,7 +325,7 @@ private fun BackgroundExtensionRow(
                             imageVector = jcIcon(JCodeIcon.Run),
                             contentDescription = "Start extension",
                             tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp),
+                            modifier = Modifier.size(IconSize.lg),
                         )
                     }
                 }
@@ -335,7 +336,7 @@ private fun BackgroundExtensionRow(
                             imageVector = jcIcon(JCodeIcon.Stop),
                             contentDescription = "Stop extension",
                             tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(20.dp),
+                            modifier = Modifier.size(IconSize.lg),
                         )
                     }
                 }
@@ -358,8 +359,8 @@ private fun HostMemoryRow(mem: HostMemory) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(5.dp),
+                .padding(horizontal = Space.ms, vertical = Space.s),
+            verticalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -392,9 +393,9 @@ private fun ProcessRow(proc: AppProcesses.Process, isSelf: Boolean, onKill: () -
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 10.dp, top = 1.dp, bottom = 1.dp, end = 2.dp),
+            .padding(start = Space.ms, top = Space.hairline, bottom = Space.hairline, end = Space.xxs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
         Text(
             text = if (isSelf) "${proc.name} (app)" else proc.name,
@@ -423,7 +424,7 @@ private fun ProcessRow(proc: AppProcesses.Process, isSelf: Boolean, onKill: () -
                     imageVector = jcIcon(JCodeIcon.Stop),
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f),
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(IconSize.md),
                 )
             }
         } else {
@@ -433,7 +434,7 @@ private fun ProcessRow(proc: AppProcesses.Process, isSelf: Boolean, onKill: () -
                         imageVector = jcIcon(JCodeIcon.Stop),
                         contentDescription = "Kill process",
                         tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(IconSize.md),
                     )
                 }
             }

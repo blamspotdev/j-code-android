@@ -22,7 +22,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import dev.blamspot.jcode.core.distro.CatalogProgress
 import dev.blamspot.jcode.core.distro.DebugEngineCatalogState
 import dev.blamspot.jcode.core.distro.DistroEnvironmentState
@@ -33,6 +32,7 @@ import dev.blamspot.jcode.design.ManagerListRow
 import dev.blamspot.jcode.design.ManagerNoticeCard
 import dev.blamspot.jcode.design.ManagerFilterChip
 import dev.blamspot.jcode.design.ManagerPanelHeader
+import dev.blamspot.jcode.design.Space
 
 /** How this panel names itself in the Issues pane. */
 private const val NOTICE_SOURCE = "Toolchains"
@@ -169,8 +169,8 @@ internal fun ToolchainManagerPanel(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(Space.ms),
+        verticalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
         // Reported to the Issues pane rather than drawn here: a failure is worth keeping after the
         // user has moved on to another tool, and the list is what this panel is for. Each message is
@@ -203,7 +203,7 @@ internal fun ToolchainManagerPanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             ManagerFilterChip(
                 selected = filter == null,
@@ -236,7 +236,7 @@ internal fun ToolchainManagerPanel(
                     text = if (query.isBlank()) "Nothing available." else "Nothing matches “$query”.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier.padding(Space.md),
                 )
             }
         }
@@ -247,7 +247,7 @@ internal fun ToolchainManagerPanel(
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 2.dp, top = 2.dp),
+                modifier = Modifier.padding(start = Space.xxs, top = Space.xxs),
             )
             Surface(
                 modifier = Modifier.fillMaxWidth(),

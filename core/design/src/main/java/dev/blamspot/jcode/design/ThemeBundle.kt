@@ -4,42 +4,7 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
-
-/**
- * Extra semantic colors that Material's [ColorScheme] does not model (it only carries `error`).
- * Provided per theme bundle so success/warning/info stay consistent and themeable instead of being
- * hardcoded at call sites.
- */
-@Immutable
-data class JCodeSemanticColors(
-    val success: Color,
-    val onSuccess: Color,
-    val warning: Color,
-    val onWarning: Color,
-    val info: Color,
-    val onInfo: Color,
-)
-
-/** Single spacing scale so padding/gaps are consistent instead of ad-hoc per screen. */
-@Immutable
-data class JCodeSpacing(
-    val xs: Dp = 4.dp,
-    val sm: Dp = 8.dp,
-    val md: Dp = 12.dp,
-    val lg: Dp = 16.dp,
-    val xl: Dp = 24.dp,
-)
-
-val LocalSpacing = staticCompositionLocalOf { JCodeSpacing() }
-
-val LocalSemanticColors = staticCompositionLocalOf {
-    ThemeBundleRegistry.default.darkSemantic
-}
 
 /**
  * A selectable look: a Material color scheme for dark and light, matching semantic colors, and an

@@ -1,6 +1,7 @@
 package dev.blamspot.jcode.workbench
 
 import android.graphics.BitmapFactory
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.humanSize
 import android.net.Uri
 import android.util.Base64
@@ -21,7 +22,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -72,8 +72,8 @@ fun ImageViewerPage(source: String, name: String, modifier: Modifier = Modifier)
 
     Column(modifier = modifier.fillMaxSize()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.sm),
+            horizontalArrangement = Arrangement.spacedBy(Space.md),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -97,7 +97,7 @@ fun ImageViewerPage(source: String, name: String, modifier: Modifier = Modifier)
                     load.error!!,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(24.dp),
+                    modifier = Modifier.padding(Space.xxl),
                 )
                 html == null -> Text(
                     load.info,

@@ -47,7 +47,7 @@ fun SettingsTextFieldRow(
     monospace: Boolean = false,
 ) {
     var wasFocused by remember { mutableStateOf(false) }
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
         Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
         supporting?.takeIf { it.isNotBlank() }?.let {
             Text(
@@ -59,8 +59,8 @@ fun SettingsTextFieldRow(
         Surface(
             // Matches the manager panels' search/filter field so form inputs read as proper boxes.
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
-            shape = RoundedCornerShape(10.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+            shape = RoundedCornerShape(Radius.xl),
+            border = BorderStroke(StrokeWidth.thin, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Box(
@@ -68,7 +68,7 @@ fun SettingsTextFieldRow(
                     .fillMaxWidth()
                     .textCursor()
                     .heightIn(min = if (singleLine) 40.dp else 96.dp)
-                    .padding(horizontal = 10.dp, vertical = if (singleLine) 0.dp else 8.dp),
+                    .padding(horizontal = Space.ms, vertical = if (singleLine) 0.dp else 8.dp),
                 contentAlignment = if (singleLine) Alignment.CenterStart else Alignment.TopStart,
             ) {
                 if (value.isEmpty() && placeholder.isNotEmpty()) {

@@ -52,8 +52,10 @@ import dev.blamspot.jcode.design.ManagerFilterChip
 import dev.blamspot.jcode.design.ManagerNoticeCard
 import dev.blamspot.jcode.design.ManagerSectionCard
 import dev.blamspot.jcode.design.ManagerSummaryRow
+import dev.blamspot.jcode.design.Radius
 import dev.blamspot.jcode.design.SettingsDropdownRow
 import dev.blamspot.jcode.design.SettingsTextFieldRow
+import dev.blamspot.jcode.design.Space
 import java.util.Locale
 import kotlin.math.cos
 import kotlinx.coroutines.delay
@@ -129,8 +131,8 @@ internal fun VirtualHardwarePage(modifier: Modifier = Modifier) {
 
     Surface(modifier = modifier, color = MaterialTheme.colorScheme.surface) {
         Column(
-            modifier = Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.verticalScroll(rememberScrollState()).padding(Space.lg),
+            verticalArrangement = Arrangement.spacedBy(Space.lg),
         ) {
             Header(opened = opened, onBack = { opened = null })
             val travelling = settings.locationMode != LocationMode.Fixed && settings.routeStartedAt > 0L
@@ -166,7 +168,7 @@ private fun Header(opened: VirtualHardware?, onBack: () -> Unit) {
         // Top-aligned: centring puts the arrow beside the middle of a three-line description rather
         // than beside the title it goes back from.
         verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
         if (opened != null) {
             IconButton(onClick = onBack, modifier = Modifier.size(34.dp)) {
@@ -178,7 +180,7 @@ private fun Header(opened: VirtualHardware?, onBack: () -> Unit) {
                 )
             }
         }
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(Space.s)) {
             Text(
                 text = opened?.label ?: "Hardware",
                 style = MaterialTheme.typography.titleMedium,
@@ -202,8 +204,8 @@ private fun HardwareGrid(revision: Int, now: HardwareSample, onOpen: (VirtualHar
     // Weights rather than a width fraction: two halves plus the gap between them is wider than the
     // row, so a fraction wraps every tile onto a line of its own.
     FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
+        verticalArrangement = Arrangement.spacedBy(Space.sm),
         maxItemsInEachRow = TILE_COLUMNS,
     ) {
         VirtualHardware.entries.forEach { hardware ->
@@ -236,13 +238,13 @@ private fun Tile(
     Surface(
         modifier = modifier
             .height(TILE_HEIGHT)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(Radius.xl))
             .clickable(onClick = onClick),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (mode == HardwareMode.Off) 0.10f else 0.22f),
     ) {
         Column(
-            modifier = Modifier.padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier.padding(Space.ms),
+            verticalArrangement = Arrangement.spacedBy(Space.xxs),
         ) {
             Text(
                 text = hardware.label,
@@ -483,11 +485,11 @@ private fun RadioRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = Space.md, vertical = Space.sm),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.ms),
     ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.hairline)) {
             Text(
                 text = name,
                 style = MaterialTheme.typography.bodyMedium,
@@ -735,7 +737,7 @@ private fun TrailTools(
         title = trail.name,
         description = trail.summary,
     ) {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
             TRAILS.forEach { option ->
                 ManagerFilterChip(selected = option.id == trail.id, label = option.place) {
                     VirtualDevicePolicy.setTrail(context, option.id)
@@ -824,7 +826,7 @@ private fun TrailMap(
     val device = MaterialTheme.colorScheme.error
     val background = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.22f)
 
-    Canvas(modifier = modifier.clip(RoundedCornerShape(10.dp)).background(background)) {
+    Canvas(modifier = modifier.clip(RoundedCornerShape(Radius.xl)).background(background)) {
         val points = trail.points
         if (points.size < 2) return@Canvas
         val midLatitude = cos(Math.toRadians(points.sumOf { it.latitude } / points.size))
@@ -889,7 +891,7 @@ private fun MotionTools(settings: HardwareSettings, travelling: Boolean) {
                 ""
             },
     ) {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
             POSES.forEach { pose ->
                 ManagerFilterChip(
                     selected = settings.pitch == pose.pitch && settings.roll == pose.roll,
@@ -1113,7 +1115,7 @@ private fun Amount(
     onCommit: (Float) -> Unit,
 ) {
     var dragged by remember(value) { mutableStateOf(value) }
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(Space.xxs)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,

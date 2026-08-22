@@ -16,6 +16,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
 import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -196,15 +198,15 @@ internal fun ColorPickOverlay(
             // sample the chip's own pixels; the whole chip cancels, matching its Cancel affordance.
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 14.dp)
+                .padding(top = Space.lg)
                 .pointerInput(Unit) { detectTapGestures { onCancel() } },
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(Radius.sheet),
             color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.92f),
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.sm),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(Space.ms),
             ) {
                 Text(
                     text = "Tap anywhere to sample a color",
@@ -264,12 +266,12 @@ internal fun ColorSampleDialog(
         onDismissRequest = onDismiss,
         title = { Text("Sampled Color") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Space.ms)) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(44.dp)
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(Radius.xl))
                         .background(Color(argb)),
                 )
                 rows.forEach { (label, value) ->

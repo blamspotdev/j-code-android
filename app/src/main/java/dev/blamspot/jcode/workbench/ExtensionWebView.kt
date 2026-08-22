@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -48,6 +47,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.blamspot.jcode.design.JCodeTheme
 import dev.blamspot.jcode.design.LocalExtensionFontSizeSetting
 import dev.blamspot.jcode.design.SettingsDefaults
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.feature.marketplace.InstalledExtension
 import dev.blamspot.jcode.feature.marketplace.tabName
 import dev.blamspot.jcode.feature.marketplace.VsixCommand
@@ -1448,7 +1448,7 @@ private fun ExtensionNotice(text: String, modifier: Modifier = Modifier) {
             text = text,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(24.dp),
+            modifier = Modifier.padding(Space.xxl),
         )
     }
 }

@@ -40,21 +40,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Size
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntRect
-import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupPositionProvider
-import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import dev.blamspot.jcode.core.editor.CompletionAnchor
@@ -75,6 +63,7 @@ import dev.blamspot.jcode.design.LocalChromeControls
 import dev.blamspot.jcode.design.LocalEditorTabColors
 import dev.blamspot.jcode.design.LocalTabMaxSize
 import dev.blamspot.jcode.design.MiddleEllipsisText
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.TabColorDialog
 import dev.blamspot.jcode.design.tabColorToHex
 import dev.blamspot.jcode.design.ExtraKey
@@ -164,7 +153,7 @@ fun EditorPane(
                 modifier = Modifier.weight(1f, fill = true),
                 contentAlignment = Alignment.Center,
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
                     Text(
                         text = "No file open",
                         style = MaterialTheme.typography.bodyMedium,
@@ -200,7 +189,7 @@ private fun TabStrip(
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
                 .height(36.dp),
-            horizontalArrangement = Arrangement.spacedBy(0.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.none),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             group.tabs.forEach { tab ->
@@ -256,9 +245,9 @@ private fun TabItem(
                 // Tab-color accent: a thin bar along the top edge (Settings → Tabs → Tab coloring).
                 .drawBehind { accent?.let { drawRect(it, size = Size(size.width, 3.dp.toPx())) } }
                 .height(36.dp)
-                .padding(horizontal = 12.dp),
+                .padding(horizontal = Space.md),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             // A pinned tab shows a leading pin instead of a close "×": it sorts to the front and is
             // protected from accidental close (close it via the long-press menu).
@@ -283,7 +272,7 @@ private fun TabItem(
             if (tab.isDirty || showClose) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Space.xxs),
                 ) {
                     if (tab.isDirty) {
                         JcTooltip("Unsaved changes") {

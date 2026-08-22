@@ -153,9 +153,9 @@ fun ExtraKeysRow(
                     .fillMaxWidth()
                     .height(38.dp)
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 4.dp),
+                    .padding(horizontal = Space.xs),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                horizontalArrangement = Arrangement.spacedBy(Space.xxs),
             ) {
                 keys.forEach { key ->
                     val active = (key == ExtraKey.Ctrl && state.ctrl) ||
@@ -212,14 +212,14 @@ private fun ExtraKeyChip(label: String, active: Boolean, onClick: () -> Unit, gl
     else MaterialTheme.colorScheme.onSurfaceVariant
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(Radius.md))
             .background(
                 if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
                 else androidx.compose.ui.graphics.Color.Transparent,
             )
             .clickable(onClick = onClick)
             .widthIn(min = 44.dp)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
+            .padding(horizontal = Space.ms, vertical = Space.sm),
         contentAlignment = Alignment.Center,
     ) {
         Text(

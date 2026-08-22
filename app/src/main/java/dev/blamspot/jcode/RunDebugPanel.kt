@@ -1,10 +1,12 @@
 package dev.blamspot.jcode
+import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.JcTooltip
 import dev.blamspot.jcode.design.ManagerFilterChip
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -51,7 +53,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import dev.blamspot.jcode.core.config.BuildConfig
 import dev.blamspot.jcode.core.config.RunConfig
-import dev.blamspot.jcode.core.debug.DebugState
 import dev.blamspot.jcode.design.AndroidRunTarget
 import dev.blamspot.jcode.design.CompactOutlinedButton
 import dev.blamspot.jcode.design.JCodeDialogDefaults
@@ -107,17 +108,17 @@ internal fun RunPanel(
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+            .padding(Space.ms),
+        verticalArrangement = Arrangement.spacedBy(Space.s),
     ) {
         Row(
-            modifier = Modifier.padding(start = 2.dp, top = 2.dp),
+            modifier = Modifier.padding(start = Space.xxs, top = Space.xxs),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             if (inUserWorkspace && activeProject != null) {
                 IconButton(onClick = { pickedId = null }, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to projects", modifier = Modifier.size(20.dp))
+                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to projects", modifier = Modifier.size(IconSize.lg))
                 }
             }
             // No leading icon: the drawer's own "Run" tab chip already carries one directly above.
@@ -228,8 +229,8 @@ private fun ProjectRunBuildDetail(
             // Always shown: DebugSessionPanel renders the "Debug <file>" launch row when no session is
             // running, and that row is the only way to debug the active file. Gating it on an active
             // session made it unreachable — you needed a session to get the button that starts one.
-            Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.10f), shape = RoundedCornerShape(8.dp)) {
-                DebugSessionPanel(ui = debugUi, modifier = Modifier.padding(8.dp))
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.10f), shape = RoundedCornerShape(Radius.lg)) {
+                DebugSessionPanel(ui = debugUi, modifier = Modifier.padding(Space.sm))
             }
         }
         Segment.Build -> {
@@ -330,19 +331,19 @@ private fun AddConfigDialog(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier.width(JCodeDialogDefaults.width()),
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(Radius.xxxl),
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 6.dp,
         ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(modifier = Modifier.padding(Space.lg), verticalArrangement = Arrangement.spacedBy(Space.ms)) {
                 val list = groups
                 val single = list?.singleOrNull()
                 val shown = single ?: list?.firstOrNull { it.name == openGroup }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
                     // A collapsed single group has nowhere to go back to, so it keeps the plain title.
                     if (shown != null && single == null) {
                         IconButton(onClick = { openGroup = null }, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", modifier = Modifier.size(20.dp))
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", modifier = Modifier.size(IconSize.lg))
                         }
                     }
                     Text(
@@ -391,7 +392,7 @@ private fun AddConfigDialog(
 private fun PickerList(maxHeight: androidx.compose.ui.unit.Dp, content: @Composable () -> Unit) {
     Column(
         modifier = Modifier.heightIn(max = maxHeight).verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(Space.s),
     ) { content() }
 }
 
@@ -402,27 +403,27 @@ private fun ChoiceRow(
     onClick: () -> Unit,
     trailing: ImageVector = Icons.Rounded.Add,
 ) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(10.dp)) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(Radius.xl)) {
         Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick)
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.xl)).clickable(onClick = onClick)
+                .padding(horizontal = Space.ms, vertical = Space.sm),
+            horizontalArrangement = Arrangement.spacedBy(Space.ms),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.hairline)) {
                 Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (subtitle.isNotBlank()) {
                     Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            Icon(trailing, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+            Icon(trailing, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(IconSize.md))
         }
     }
 }
 
 @Composable
 private fun SegmentedToggle(selected: Segment, onSelect: (Segment) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
         Segment.entries.forEach { seg ->
             ManagerFilterChip(selected = seg == selected, label = seg.name) { onSelect(seg) }
         }
@@ -441,7 +442,7 @@ private fun ProjectPickRow(project: Project, running: Boolean, onClick: () -> Un
             modifier = Modifier.weight(1f),
         )
         if (running) RunStatusChip("Running", active = true)
-        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(IconSize.lg))
     }
 }
 
@@ -469,14 +470,14 @@ private fun RunConfigRow(
         running -> "Running"
         else -> "Idle"
     }
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(Radius.lg)) {
         Column {
             // Row 1: full-width name + compact action icons (the status chip moves to row 2 so the
             // name gets the whole width and stops truncating).
             Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 10.dp, top = 2.dp, end = 2.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = Space.ms, top = Space.xxs, end = Space.xxs),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(1.dp),
+                horizontalArrangement = Arrangement.spacedBy(Space.hairline),
             ) {
                 Text(config.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 if (running && runUrl != null) {
@@ -495,9 +496,9 @@ private fun RunConfigRow(
             }
             // Row 2: thin status + port line.
             Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, bottom = 6.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = Space.ms, end = Space.ms, bottom = Space.s),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(Space.sm),
             ) {
                 RunStatusChip(status, active = running)
                 Text(subline, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
@@ -508,11 +509,11 @@ private fun RunConfigRow(
 
 @Composable
 private fun BuildConfigRow(config: BuildConfig, deletable: Boolean, onBuild: () -> Unit, onConfigure: () -> Unit, onDelete: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(Radius.lg)) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 10.dp, top = 2.dp, bottom = 2.dp, end = 2.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = Space.ms, top = Space.xxs, bottom = Space.xxs, end = Space.xxs),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(1.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.hairline),
         ) {
             Text(config.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             IconAction(jcIcon(JCodeIcon.Run), "Build", MaterialTheme.colorScheme.primary, onBuild, enabled = config.command.isNotBlank())
@@ -542,9 +543,9 @@ private fun AndroidTargetRow(project: Project) {
             imageVector = if (current?.isVirtual == true) Icons.Rounded.Smartphone else Icons.Rounded.PhoneAndroid,
             contentDescription = null,
             tint = if (current?.isOnline == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.size(IconSize.md),
         )
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.hairline)) {
             Text(
                 text = current?.label ?: "No device",
                 style = MaterialTheme.typography.bodyMedium,
@@ -570,7 +571,7 @@ private fun AndroidTargetRow(project: Project) {
             targets.available.size > 1 -> RunStatusChip("${targets.available.size} devices", active = current.isOnline)
             else -> RunStatusChip(current.state, active = current.isOnline)
         }
-        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(IconSize.md))
     }
 
     if (showPicker) {
@@ -598,11 +599,11 @@ private fun AndroidTargetDialog(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier.width(JCodeDialogDefaults.width()),
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(Radius.xxxl),
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 6.dp,
         ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(modifier = Modifier.padding(Space.lg), verticalArrangement = Arrangement.spacedBy(Space.ms)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "Run on",
@@ -630,20 +631,20 @@ private fun AndroidTargetDialog(
 
 @Composable
 private fun TargetChoiceRow(target: AndroidRunTarget, chosen: Boolean, onClick: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(10.dp)) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(Radius.xl)) {
         Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick)
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.xl)).clickable(onClick = onClick)
+                .padding(horizontal = Space.ms, vertical = Space.sm),
+            horizontalArrangement = Arrangement.spacedBy(Space.ms),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
                 imageVector = if (target.isVirtual) Icons.Rounded.Smartphone else Icons.Rounded.PhoneAndroid,
                 contentDescription = null,
                 tint = if (target.isOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(IconSize.md),
             )
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.hairline)) {
                 Text(target.label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
                     // adb's own word for the state, so an offline or unauthorized device says so in the
@@ -656,7 +657,7 @@ private fun TargetChoiceRow(target: AndroidRunTarget, chosen: Boolean, onClick: 
                 )
             }
             if (chosen) {
-                Icon(Icons.Rounded.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                Icon(Icons.Rounded.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(IconSize.md))
             }
         }
     }
@@ -674,7 +675,7 @@ private fun VirtualDeviceRow() {
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(18.dp),
         )
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.hairline)) {
             Text("Device sandbox", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1)
             Text(
                 text = "Run a built APK in a tab — no install, no ADB",
@@ -691,12 +692,12 @@ private fun VirtualDeviceRow() {
 /** The panel's standard tappable row: same surface, radius and density as the manager list rows. */
 @Composable
 private fun PanelRow(onClick: () -> Unit, content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(Radius.lg)) {
         Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick)
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.lg)).clickable(onClick = onClick)
+                .padding(horizontal = Space.ms, vertical = Space.sm),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) { content() }
     }
 }
@@ -704,11 +705,11 @@ private fun PanelRow(onClick: () -> Unit, content: @Composable androidx.compose.
 @Composable
 private fun AddRow(label: String, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(vertical = 6.dp, horizontal = 8.dp),
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.lg)).clickable(onClick = onClick).padding(vertical = Space.s, horizontal = Space.sm),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
-        Icon(Icons.Rounded.Add, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+        Icon(Icons.Rounded.Add, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(IconSize.md))
         Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
     }
 }
@@ -743,11 +744,11 @@ private fun HintText(text: String) {
 private fun RunStatusChip(text: String, active: Boolean) {
     Surface(
         color = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
-        shape = RoundedCornerShape(6.dp),
+        shape = RoundedCornerShape(Radius.md),
     ) {
         Text(
             text = text,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            modifier = Modifier.padding(horizontal = Space.sm, vertical = Space.xs),
             style = MaterialTheme.typography.labelSmall,
             color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,

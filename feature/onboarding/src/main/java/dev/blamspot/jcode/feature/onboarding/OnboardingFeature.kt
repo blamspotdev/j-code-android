@@ -71,6 +71,8 @@ import dev.blamspot.jcode.core.distro.DistroProfile
 import dev.blamspot.jcode.core.distro.DistroWizardProgress
 import dev.blamspot.jcode.core.distro.EnvironmentInfo
 import dev.blamspot.jcode.core.distro.WizardStepId
+import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.Space
 
 object OnboardingFeature {
 
@@ -111,7 +113,7 @@ object OnboardingFeature {
                     modifier = Modifier
                         .widthIn(max = 840.dp)
                         .fillMaxSize(),
-                    shape = RoundedCornerShape(0.dp),
+                    shape = RoundedCornerShape(Radius.none),
                     showStorageStep = true,
                     onStorageAccessGranted = onStorageAccessGranted,
                     onRestoreEnvironment = onRestoreEnvironment,
@@ -144,7 +146,7 @@ object OnboardingFeature {
                 modifier = Modifier
                     .fillMaxSize()
                     .safeDrawingPadding()
-                    .padding(32.dp),
+                    .padding(Space.xxxl),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
@@ -203,7 +205,7 @@ object OnboardingFeature {
             onRefresh = onRefresh,
             onDismiss = null,
             modifier = Modifier.fillMaxSize(),
-            shape = RoundedCornerShape(0.dp),
+            shape = RoundedCornerShape(Radius.none),
             // Surface the storage step here too so existing installs (which never see the
             // first-run screen again) still get a path to grant shared-storage access.
             showStorageStep = remember { !hasStorageAccess() },
@@ -379,15 +381,15 @@ private fun StepperScreen(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight(),
-                            contentPadding = PaddingValues(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(14.dp),
+                            contentPadding = PaddingValues(Space.lg),
+                            verticalArrangement = Arrangement.spacedBy(Space.lg),
                             content = selectionSteps,
                         )
                         Column(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight()
-                                .padding(top = 16.dp, end = 16.dp, bottom = 16.dp),
+                                .padding(top = Space.lg, end = Space.lg, bottom = Space.lg),
                         ) {
                             ConfigureStepCard(
                                 number = distroStepNumber + 1,
@@ -407,8 +409,8 @@ private fun StepperScreen(
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        contentPadding = PaddingValues(Space.lg),
+                        verticalArrangement = Arrangement.spacedBy(Space.lg),
                     ) {
                         selectionSteps()
                         if (showWizard) {
@@ -462,8 +464,8 @@ private fun MigrationImportCard(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+            verticalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             FilledTonalButton(onClick = onImport, enabled = interactive) {
                 Text("Import")
@@ -513,15 +515,15 @@ private fun DistroSelectionCard(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         val availableDistros = environmentState.availableDistros.ifEmpty { DistroProfile.defaults() }
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
             availableDistros.forEach { profile ->
                 val selected = environmentState.runtime.selectedDistro == profile
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(Radius.xl))
                         .clickable(enabled = interactive) { onSelectDistro(profile) }
-                        .padding(vertical = 2.dp),
+                        .padding(vertical = Space.xxs),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     RadioButton(
@@ -535,8 +537,8 @@ private fun DistroSelectionCard(
         }
         // FlowRow so the "Use <distro>" + Refresh buttons wrap instead of squishing on narrow portrait.
         FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+            verticalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             FilledTonalButton(onClick = onAutoSetup, enabled = interactive) {
                 Text("Use ${environmentState.runtime.selectedDistro.label}")
@@ -588,7 +590,7 @@ private fun ConfigureStepCard(
             DistroWizardProgress.Idle -> idleLabel
         }
         Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.ms),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             when {
@@ -611,7 +613,7 @@ private fun ConfigureStepCard(
         if (runningProgress != null &&
             (runningProgress.progressPercent != null || runningProgress.progressDetail != null)
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
                 val percent = runningProgress.progressPercent
                 if (percent != null) {
                     LinearProgressIndicator(
@@ -662,14 +664,14 @@ private fun ConfigureStepCard(
 @Composable
 private fun LegacyInstallCard(packageName: String, onOpen: () -> Unit) {
     Surface(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(Radius.sheet),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(Space.lg),
+            verticalArrangement = Arrangement.spacedBy(Space.ms),
         ) {
             Text("Your previous JCode is still installed", fontWeight = FontWeight.SemiBold)
             Text(
@@ -704,14 +706,14 @@ private fun WebEngineHintCard() {
     // Chromium 108 shipped dvh; below ~110 whole sites render blank rather than merely dated.
     if (major !in 1 until 110) return
     Surface(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(Radius.sheet),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(Space.lg),
+            verticalArrangement = Arrangement.spacedBy(Space.ms),
         ) {
             Text("Browser engine is outdated", fontWeight = FontWeight.SemiBold)
             Text(
@@ -749,14 +751,14 @@ private fun WebEngineHintCard() {
 @Composable
 private fun AddEnvironmentCard(onAdd: () -> Unit) {
     Surface(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(Radius.sheet),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(Space.lg),
+            verticalArrangement = Arrangement.spacedBy(Space.ms),
         ) {
             Text("Add an environment", fontWeight = FontWeight.SemiBold)
             Text(
@@ -781,14 +783,14 @@ private fun InstalledEnvironmentsCard(
     var pendingDelete by rememberSaveable { mutableStateOf<String?>(null) }
 
     Surface(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(Radius.sheet),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(Space.lg),
+            verticalArrangement = Arrangement.spacedBy(Space.ms),
         ) {
             Text("Installed environments", fontWeight = FontWeight.SemiBold)
             Text(
@@ -797,7 +799,7 @@ private fun InstalledEnvironmentsCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Space.s)) {
                 environments.forEach { env ->
                     EnvironmentRow(
                         env = env,
@@ -849,7 +851,7 @@ private fun EnvironmentRow(
     onDelete: () -> Unit,
 ) {
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(Radius.xxl),
         color = if (env.isActive) {
             MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
         } else {
@@ -859,11 +861,11 @@ private fun EnvironmentRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(Radius.xxl))
                 .clickable(enabled = enabled && !env.isActive, onClick = onSwitch)
-                .padding(horizontal = 8.dp, vertical = 4.dp),
+                .padding(horizontal = Space.sm, vertical = Space.xs),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             RadioButton(
                 selected = env.isActive,
@@ -872,7 +874,7 @@ private fun EnvironmentRow(
             )
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+                verticalArrangement = Arrangement.spacedBy(Space.xxs),
             ) {
                 Text(
                     env.label,
@@ -905,13 +907,13 @@ private fun Header() {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 18.dp),
+            .padding(horizontal = Space.xl, vertical = Space.xl),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Top,
     ) {
         Column(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(Space.xs),
         ) {
             Text("Environment setup", fontWeight = FontWeight.SemiBold)
             Text(
@@ -958,7 +960,7 @@ private fun StorageAccessCard(
         )
         if (granted) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(Space.ms),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("✓", color = JCodeTheme.semanticColors.success, fontWeight = FontWeight.Bold)
@@ -1003,7 +1005,7 @@ private fun StepCard(
 ) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(Radius.sheet),
         color = if (active) {
             MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
         } else {
@@ -1014,12 +1016,12 @@ private fun StepCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .then(if (fillHeight) Modifier.fillMaxHeight() else Modifier)
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                .padding(Space.lg),
+            horizontalArrangement = Arrangement.spacedBy(Space.lg),
             verticalAlignment = Alignment.Top,
         ) {
             Surface(
-                shape = RoundedCornerShape(999.dp),
+                shape = RoundedCornerShape(Radius.pill),
                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
             ) {
                 Box(
@@ -1034,7 +1036,7 @@ private fun StepCard(
                 modifier = Modifier
                     .weight(1f)
                     .then(if (fillHeight) Modifier.fillMaxHeight() else Modifier),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(Space.ms),
                 content = content,
             )
         }
@@ -1052,7 +1054,7 @@ private fun ActivityLogCard(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(Radius.xxxl),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f),
     ) {
         Column(
@@ -1063,11 +1065,11 @@ private fun ActivityLogCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .padding(horizontal = Space.lg, vertical = Space.ms),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(Space.xxs)) {
                     Text("Setup log", fontWeight = FontWeight.SemiBold)
                     Text(
                         text = runningStep?.key ?: "Waiting for progress",
@@ -1092,8 +1094,8 @@ private fun ActivityLogCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .then(if (fixedLogHeight) Modifier.height(320.dp) else Modifier.weight(1f))
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                        .padding(horizontal = Space.lg, vertical = Space.ms),
+                    verticalArrangement = Arrangement.spacedBy(Space.xs),
                 ) {
                     if (activityLog.isEmpty()) {
                         item {

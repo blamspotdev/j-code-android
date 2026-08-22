@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import dev.blamspot.jcode.design.Space
 
 /**
  * Completion window composable that shows completion items in a popup.
@@ -138,7 +139,7 @@ private fun CompletionItemRow(
                 else Color.Transparent
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = Space.md, vertical = Space.s),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Kind icon/badge
@@ -150,7 +151,7 @@ private fun CompletionItemRow(
             fontWeight = FontWeight.Bold,
             modifier = Modifier
                 .width(24.dp)
-                .padding(end = 4.dp),
+                .padding(end = Space.xs),
         )
 
         // Label
@@ -173,7 +174,7 @@ private fun CompletionItemRow(
                 fontSize = 11.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 8.dp),
+                modifier = Modifier.padding(start = Space.sm),
             )
         }
     }

@@ -69,6 +69,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.blamspot.jcode.core.distro.WorkspaceHostPaths
+import dev.blamspot.jcode.design.IconSize
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.humanSize
 import dev.blamspot.jcode.design.CompactFilledButton
 import dev.blamspot.jcode.design.CompactOutlinedButton
@@ -446,8 +448,8 @@ private fun HomeChrome(
 ) {
     Box(modifier = modifier) {
         Row(
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = Space.xl),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             CompactOutlinedButton(text = "Install an app", onClick = onInstall)
             // Reachable with nothing running, because a route or an attitude is usually set up
@@ -476,14 +478,14 @@ private fun ScreenFallback(
     onDismiss: () -> Unit,
 ) {
     Surface(
-        modifier = Modifier.padding(24.dp).widthIn(max = 420.dp),
+        modifier = Modifier.padding(Space.xxl).widthIn(max = 420.dp),
         color = MaterialTheme.colorScheme.surface,
         shape = MaterialTheme.shapes.medium,
         tonalElevation = 3.dp,
     ) {
         Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(Space.xl),
+            verticalArrangement = Arrangement.spacedBy(Space.ms),
         ) {
             Text(
                 text = "Could not run the app on this device",
@@ -495,7 +497,7 @@ private fun ScreenFallback(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
                 CompactOutlinedButton(text = "Try again", onClick = onRetry, modifier = Modifier.weight(1f))
                 CompactOutlinedButton(text = "Clear", onClick = onDismiss, modifier = Modifier.weight(1f))
             }
@@ -647,9 +649,9 @@ private fun DeviceToolbar(
     onStop: () -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = Space.xs, vertical = Space.xxs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.xxs),
     ) {
         ToolbarAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onBack)
         ToolbarAction(Icons.Rounded.Keyboard, "Keyboard", onKeyboard)
@@ -680,7 +682,7 @@ private fun ToolbarAction(
     tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
 ) {
     IconButton(onClick = onClick, modifier = Modifier.size(34.dp)) {
-        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(19.dp))
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(IconSize.lg))
     }
 }
 
@@ -705,11 +707,11 @@ private fun InstallSheet(
     val projectsRoot = remember { WorkspaceHostPaths.projectsRoot }
     Surface(modifier = modifier, color = MaterialTheme.colorScheme.surface) {
         Column(
-            modifier = Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.verticalScroll(rememberScrollState()).padding(Space.lg),
+            verticalArrangement = Arrangement.spacedBy(Space.lg),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.md)) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.s)) {
                     Text("Install an app", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(
                         text = "Put a freshly built APK on ${VirtualIdentity.MODEL} — no install on " +
@@ -829,10 +831,10 @@ private fun AppDetailsDialog(
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(Space.sm),
             ) {
                 facts.forEach { (name, value) ->
-                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Space.hairline)) {
                         Text(
                             text = name,
                             style = MaterialTheme.typography.labelSmall,

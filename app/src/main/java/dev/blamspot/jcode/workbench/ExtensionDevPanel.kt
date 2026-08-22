@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.blamspot.jcode.design.JCodeTheme
+import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.feature.marketplace.ExtensionManifestValidator
 import dev.blamspot.jcode.feature.marketplace.InstalledExtension
 import dev.blamspot.jcode.feature.marketplace.ManifestIssue
@@ -135,7 +136,7 @@ fun ExtensionDevSidebarContent(modifier: Modifier = Modifier) {
 @Composable
 private fun InspectorPane(ext: InstalledExtension, modifier: Modifier = Modifier) {
     val c = ext.contributes
-    Column(modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
+    Column(modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(Space.md)) {
         Field("id", ext.id)
         Field("version", ext.version ?: "—")
         Field("type", ext.type.name)
@@ -162,7 +163,7 @@ private fun InspectorPane(ext: InstalledExtension, modifier: Modifier = Modifier
         } else {
             contribs.forEach {
                 Text(it, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(vertical = 1.dp))
+                    modifier = Modifier.padding(vertical = Space.hairline))
             }
         }
     }
@@ -178,14 +179,14 @@ private fun ValidatorPane(ext: InstalledExtension, hostApiVersion: Int, modifier
     }
     if (issues.isEmpty()) {
         Box(modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxSize().padding(Space.xxl), contentAlignment = Alignment.Center) {
                 Text("No problems found ✓", style = MaterialTheme.typography.bodyMedium,
                     color = JCodeTheme.semanticColors.success)
             }
         }
         return
     }
-    LazyColumn(modifier = modifier.fillMaxSize().padding(vertical = 4.dp)) {
+    LazyColumn(modifier = modifier.fillMaxSize().padding(vertical = Space.xs)) {
         items(issues) { issue ->
             val color = when (issue.severity) {
                 ManifestIssue.Severity.Error -> MaterialTheme.colorScheme.error
@@ -198,8 +199,8 @@ private fun ValidatorPane(ext: InstalledExtension, hostApiVersion: Int, modifier
                 ManifestIssue.Severity.Info -> "INFO"
             }
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Space.ms, vertical = Space.xs),
+                horizontalArrangement = Arrangement.spacedBy(Space.sm),
             ) {
                 Text(tag, color = color, fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Column(Modifier.weight(1f)) {
@@ -247,7 +248,7 @@ private fun LogPane(extId: String, modifier: Modifier = Modifier) {
                 color = color,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 12.sp,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Space.ms, vertical = Space.xxs),
             )
         }
     }
@@ -255,9 +256,9 @@ private fun LogPane(extId: String, modifier: Modifier = Modifier) {
 
 @Composable
 private fun Field(label: String, value: String) {
-    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = Space.xxs), horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
         Text("$label:", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 1.dp))
+            modifier = Modifier.padding(top = Space.hairline))
         Text(value, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f))
     }
@@ -266,7 +267,7 @@ private fun Field(label: String, value: String) {
 @Composable
 private fun SectionLabel(text: String) {
     Text(text, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 10.dp, bottom = 2.dp))
+        color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = Space.ms, bottom = Space.xxs))
 }
 
 @Composable
@@ -278,7 +279,7 @@ private fun DevTab(label: String, selected: Boolean, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .background(if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
             .fillMaxHeight()
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = Space.md),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -295,13 +296,13 @@ private fun ActionText(label: String, onClick: () -> Unit) {
         text = label,
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.clickable(onClick = onClick).padding(horizontal = 6.dp, vertical = 4.dp),
+        modifier = Modifier.clickable(onClick = onClick).padding(horizontal = Space.s, vertical = Space.xs),
     )
 }
 
 @Composable
 private fun EmptyDevHint(text: String) {
-    Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+    Box(modifier = Modifier.fillMaxSize().padding(Space.xxl), contentAlignment = Alignment.Center) {
         Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
