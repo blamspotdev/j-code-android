@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -39,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.blamspot.jcode.design.AlertDialog
+import dev.blamspot.jcode.design.CompactOutlinedButton
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.jcIcon
 
@@ -167,34 +167,14 @@ internal fun VariableInspectHeader(
             // Inspect only when there is something the peek could not show; Copy value always, since
             // reading a value off the screen and retyping it is the thing a peek most invites.
             if (hasMore) {
-                PeekButton(JCodeIcon.Search, "Inspect", onInspect)
+                CompactOutlinedButton(text = "Inspect", onClick = onInspect, icon = JCodeIcon.Search)
             }
-            PeekButton(JCodeIcon.Copy, "Copy value") {
+            CompactOutlinedButton(text = "Copy value", icon = JCodeIcon.Copy, onClick = {
                 // The raw value, not the peek's rendering: "3 items" describes a list, it isn't one.
                 clipboard.setText(AnnotatedString(resolved.value))
                 onCopied()
-            }
+            })
         }
-    }
-}
-
-/** One action button in the peek header. Compact so the pair reads as a toolbar, not a dialog. */
-@Composable
-private fun PeekButton(icon: JCodeIcon, label: String, onClick: () -> Unit) {
-    TextButton(
-        onClick = onClick,
-        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-    ) {
-        Icon(
-            imageVector = jcIcon(icon),
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.padding(start = 6.dp),
-        )
     }
 }
 

@@ -481,6 +481,8 @@ fun CompactOutlinedButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    /** Optional leading icon, for a button whose verb reads faster with one. */
+    icon: JCodeIcon? = null,
 ) {
     OutlinedButton(
         onClick = onClick,
@@ -488,6 +490,14 @@ fun CompactOutlinedButton(
         modifier = modifier.defaultMinSize(minHeight = 32.dp),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
     ) {
+        if (icon != null) {
+            Icon(
+                imageVector = jcIcon(icon),
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.size(6.dp))
+        }
         Text(text, style = MaterialTheme.typography.labelMedium)
     }
 }
