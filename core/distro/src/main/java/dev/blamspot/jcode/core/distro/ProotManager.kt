@@ -340,8 +340,20 @@ class ProotManager(private val context: Context) {
         // the null interface it was handed and dies). One bind of filesDir covers every path the
         // guest can see — the rootfs AND the workspace both live under it — so a module loaded from
         // either resolves to the same file from inside.
+        // Bind under BOTH path forms. filesDir canonicalizes to /data/user/0/<pkg>/..., but the SAME
+        // storage is also reachable as /data/data/<pkg>/... (same inode), and which form a debuggee's
+        // /proc/<pid>/maps reports is not something we control. C# debugging launched from the app
+        // resolved libmscordbi.so via the /data/data form while filesDir gave /data/user/0, so the
+        // self-bind missed and dbgshim reported COMPONENT_MISSING. Binding both makes either resolve.
         val filesRoot = appContext.filesDir.absolutePath
-        args.addAll(listOf("-b", "$filesRoot:$filesRoot"))
+        val altRoot = when {
+            filesRoot.startsWith("/data/user/0/") -> filesRoot.replaceFirst("/data/user/0/", "/data/data/")
+            filesRoot.startsWith("/data/data/") -> filesRoot.replaceFirst("/data/data/", "/data/user/0/")
+            else -> null
+        }
+        for (root in listOfNotNull(filesRoot, altRoot).distinct()) {
+            args.addAll(listOf("-b", "$root:$root"))
+        }
         
         // Bind mounts
         for (bind in binds) {

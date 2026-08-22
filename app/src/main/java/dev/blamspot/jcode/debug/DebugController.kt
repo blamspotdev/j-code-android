@@ -165,16 +165,7 @@ class DebugController(
         s.onStartDebugging = { request, config -> spawnChild(request, config) }
         // While preparing we hold STARTING; ignore the fresh session's initial DISCONNECTED so the
         // panel doesn't flicker back to the launch row between build and adapter start.
-        scope.launch {
-            var explained = false
-            s.state.collect {
-                if (!(it == DebugState.DISCONNECTED && _state.value == DebugState.STARTING)) _state.value = it
-                if (it == DebugState.ERROR && !explained && engine.debugType == "coreclr") {
-                    explained = true
-                    pushOutput(PROOT_CORECLR_LIMITATION)
-                }
-            }
-        }
+        scope.launch { s.state.collect { if (!(it == DebugState.DISCONNECTED && _state.value == DebugState.STARTING)) _state.value = it } }
         scope.launch { s.stopped.collect { st -> if (st != null) onStopped(s, st) else clearStoppedView() } }
 
         val distroBreakpoints = distroBps() // DAP lines are 1-based; applied on `initialized`
@@ -754,12 +745,6 @@ class DebugController(
         dev.blamspot.jcode.core.distro.WorkspaceHostPaths.hostToGuest(p).replace("\\", "/")
 
     private companion object {
-        const val PROOT_CORECLR_LIMITATION =
-            "C# debugging isn't available in this environment.\n" +
-                "The .NET debugger drives the program through ptrace, and the Linux sandbox\n" +
-                "only permits that on a process's own children, so netcoredbg can neither\n" +
-                "attach nor complete its own launch.\n" +
-                "Building and running .NET projects works normally; use Run instead.\n"
         const val KOTLIN_EXT = ".kt"
         const val JAVA_ENGINE_ID = "java-debug"
     }
