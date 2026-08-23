@@ -159,8 +159,9 @@ internal class NativeHostBridge(
         }
     }
 
-    override fun setConfig(key: String, value: String) =
-        send("config.set", JSONObject().put("key", key).put("value", value))
+    override suspend fun setConfig(key: String, value: String) {
+        call("config.set", JSONObject().put("key", key).put("value", value))
+    }
 
     override fun onEvent(listener: (name: String, json: String) -> Unit): AutoCloseable {
         val job = scope.launch {

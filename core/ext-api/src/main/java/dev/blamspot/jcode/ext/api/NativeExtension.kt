@@ -209,7 +209,14 @@ interface NativeHost {
 
     /** Every declared setting, resolved: the user's value where set, the manifest default otherwise. */
     suspend fun config(): Map<String, String>
-    fun setConfig(key: String, value: String)
+    /**
+     * Write one setting, and wait for it to land.
+     *
+     * Suspending because a plugin that sets a value and then reads the settings back — which is what
+     * anything that configures itself does — would otherwise race its own write and read what was
+     * there before.
+     */
+    suspend fun setConfig(key: String, value: String)
 
     /**
      * Workbench events this plugin cares about — `config` when its settings change, `filesChanged`
