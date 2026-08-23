@@ -3644,6 +3644,11 @@ private fun JCodeShell(
                                                 onShowSource = { onToggleTabPreview(tab.id) },
                                                 readFile = onReadFileText,
                                                 writeFile = onReplaceFileText,
+                                                request = { envelope ->
+                                                    managerActions.onExtensionApiRequest(nativeOwner.id, envelope)
+                                                },
+                                                events = managerActions.extensionEvents
+                                                    ?: kotlinx.coroutines.flow.emptyFlow(),
                                                 modifier = Modifier.fillMaxSize(),
                                             )
                                         } else {

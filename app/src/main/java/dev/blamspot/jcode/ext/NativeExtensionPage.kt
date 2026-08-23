@@ -10,12 +10,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import dev.blamspot.jcode.WorkbenchNotices
 import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.ext.api.JCodeNativeExtension
-import dev.blamspot.jcode.ext.api.NativeHost
 import dev.blamspot.jcode.feature.marketplace.InstalledExtension
 import java.io.File
 
@@ -40,6 +40,10 @@ internal fun NativeExtensionPage(
     onShowSource: () -> Unit,
     readFile: (String) -> String?,
     writeFile: (String, String) -> Unit,
+    /** Sends one extension-API envelope for this extension and returns the reply. */
+    request: suspend (String) -> String,
+    /** The workbench's extension events, already shared with the WebView hosts. */
+    events: kotlinx.coroutines.flow.Flow<Pair<String, String>>,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -86,17 +90,21 @@ internal fun NativeExtensionPage(
     }
 
     val (plugin: JCodeNativeExtension, _) = loaded
-    val host = remember(file.path) {
-        object : NativeHost {
-            override fun readFile(path: String): String? = readFile(path)
-            override fun writeFile(path: String, text: String) = writeFile(path, text)
-            override fun projectDir(): String? = projectDir?.absolutePath
-            override fun snackbar(message: String) = onSnackbar(message)
-            override fun reportIssues(messages: List<String>) {
+    val scope = rememberCoroutineScope()
+    val host = remember(file.path, scope) {
+        NativeHostBridge(
+            scope = scope,
+            request = request,
+            events = events,
+            readFileText = readFile,
+            writeFileText = writeFile,
+            projectDirPath = { projectDir?.absolutePath },
+            onSnackbar = onSnackbar,
+            onIssues = { messages ->
                 WorkbenchNotices.set(noticeSource, messages.map { WorkbenchNotices.Notice(it) })
-            }
-            override fun showSource() = onShowSource()
-        }
+            },
+            onShowSource = onShowSource,
+        )
     }
 
     val params = remember(file.path, projectDir?.path, dark) {

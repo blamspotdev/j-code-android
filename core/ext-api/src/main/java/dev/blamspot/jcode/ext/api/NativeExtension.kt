@@ -98,7 +98,112 @@ interface NativeHost {
      * takes over a file has to be able to hand it back.
      */
     fun showSource()
+
+    // --- the runtime -------------------------------------------------------------------------
+
+    /**
+     * Run a command in the Linux runtime and wait for it.
+     *
+     * The only way a plugin reaches real tooling — git, a compiler, a formatter. [workdir] is a
+     * guest path (what a project's `distroBindTarget` resolves to), not a host one.
+     */
+    suspend fun exec(
+        command: String,
+        workdir: String? = null,
+        timeoutMs: Long = 60_000L,
+        env: Map<String, String> = emptyMap(),
+    ): NativeExecResult
+
+    // --- the workbench -----------------------------------------------------------------------
+
+    /** The open project: its name, its guest path, and the workspace holding it. */
+    suspend fun projectInfo(): NativeProjectInfo?
+
+    /** Every project root in the open workspace, as guest paths. */
+    suspend fun workspaceFolders(): List<String>
+
+    /** Open a file in the editor, optionally at a 1-based line. */
+    fun openFile(path: String, line: Int? = null)
+
+    /** Open a folder as the active project, or add it to the open workspace. */
+    fun openFolder(path: String)
+    fun addFolder(path: String)
+
+    /** Hand a URL to the device — a sign-in page, a repository, a docs link. */
+    fun openUrl(url: String)
+
+    /** Show or hide one of this extension's own pages by id. */
+    fun openView(id: String)
+    fun closeView(id: String)
+
+    /**
+     * Per-file badges in the Explorer, for an extension that declares `explorerDecorations`.
+     *
+     * Replaces this extension's whole set; an empty list clears them. Paths are relative to [root].
+     */
+    fun setExplorerDecorations(root: String, decorations: List<NativeDecoration>)
+
+    /** Paths the Explorer should grey out or hide as ignored, relative to the open project. */
+    fun setHiddenInjected(paths: List<String>)
+
+    /**
+     * The Explorer context-menu tap waiting for this extension, consumed by reading it.
+     *
+     * A tap can land before the plugin is ready, so the workbench holds the most recent one rather
+     * than dropping it.
+     */
+    suspend fun pendingContextAction(): NativeContextAction?
+
+    // --- this extension's settings -------------------------------------------------------------
+    //
+    // Anything that answers is suspend; anything that merely tells the workbench something is not.
+    // The workbench answers on its own dispatcher, and a plugin that blocked the composition waiting
+    // for it would freeze the frame it was drawing.
+
+    /** Every declared setting, resolved: the user's value where set, the manifest default otherwise. */
+    suspend fun config(): Map<String, String>
+    fun setConfig(key: String, value: String)
+
+    /**
+     * Workbench events this plugin cares about — `config` when its settings change, `filesChanged`
+     * when the workspace does, `explorerAction` when a contributed context action is tapped.
+     *
+     * Close the returned handle to stop listening; a plugin that leaks one keeps its composition
+     * alive after its tab is gone.
+     */
+    fun onEvent(listener: (name: String, json: String) -> Unit): AutoCloseable
 }
+
+/** What a command left behind. [error] is set when it could not be run at all. */
+data class NativeExecResult(
+    val stdout: String = "",
+    val stderr: String = "",
+    val exitCode: Int = -1,
+    val error: String? = null,
+) {
+    val ok: Boolean get() = error == null && exitCode == 0
+
+    /** stdout and stderr as one block, trailing whitespace trimmed — what a log line wants. */
+    val output: String get() = (stdout + stderr).trimEnd()
+}
+
+/** The open project, as the workbench sees it. */
+data class NativeProjectInfo(
+    val name: String,
+    /** Guest path the project is mounted at, or null for a project with no runtime path. */
+    val path: String?,
+    val workspace: String?,
+)
+
+/** One Explorer badge: a repo-relative path and the status letter to draw against it. */
+data class NativeDecoration(val path: String, val status: String)
+
+/** An Explorer context-menu tap addressed to this extension. */
+data class NativeContextAction(
+    val actionId: String,
+    val path: String,
+    val isDirectory: Boolean,
+)
 
 /**
  * The version of this contract that JCode implements.
@@ -107,9 +212,15 @@ interface NativeHost {
  * a signature change, a removal, a meaning change. Purely additive changes (a new [Params] key, a
  * new interface an old plugin never implements) do not need a bump.
  *
- * 3 is the package move: this contract lived at `dev.jcode.ext.api` until 1.6.2. Nothing in it
+ * 3 was the package move: this contract lived at `dev.jcode.ext.api` until 1.6.2. Nothing in it
  * changed shape, but the names did, so an extension built against 2 no longer implements the
  * interface it thinks it does. Without the bump that surfaces as "does not implement
  * JCodeNativeExtension", which reads like the extension is broken rather than merely old.
+ *
+ * 4 opens [NativeHost] onto the runtime and the workbench. Until now a native plugin could read a
+ * file, write it back, and say something — enough for a designer that only transforms the buffer it
+ * was given, and nothing like enough for a plugin that has to run git and put badges in the
+ * Explorer. The methods added are the ones the WebView bridge has always offered; a plugin should
+ * not have to be a web page to reach them.
  */
-const val JCODE_EXT_ABI: Int = 3
+const val JCODE_EXT_ABI: Int = 4
