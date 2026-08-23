@@ -175,9 +175,10 @@ internal object NativeExtensionLoader {
             .newInstance()
         val added = HiddenApi.method(AssetManager::class.java, "addAssetPath", String::class.java)
             ?.invoke(assets, apk.absolutePath) as? Int
-        if (added == null || added == 0) {
-            // Without its own table the plugin still runs; only its own @drawable/@string break, and
-            // they break as "resource not found" deep inside its UI. Say so once, here.
+        // A bare .dex has no resource table by definition, so failing to attach one is the expected
+        // outcome rather than a problem to report. For an archive it IS a problem: the plugin still
+        // runs, but its own @drawable/@string break as "resource not found" deep inside its UI.
+        if ((added == null || added == 0) && !apk.name.endsWith(".dex", ignoreCase = true)) {
             Log.w(TAG, "addAssetPath failed for ${apk.name}; the plugin's own resources will not resolve")
         }
         @Suppress("DEPRECATION")

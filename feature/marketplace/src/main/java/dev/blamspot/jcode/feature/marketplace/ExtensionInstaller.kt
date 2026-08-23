@@ -504,8 +504,19 @@ class ExtensionInstaller internal constructor(context: Context) {
     // signature here: install-time is the wrong place, because an extension may legitimately be
     // sideloaded unsigned for development and only its *native* half is refused. The loader makes
     // that call, where it can say so to the user (see NativeExtensionLoader.resolve).
-    private fun nativeEntry(dir: File): String? =
-        nativeHeader(dir).str("apk")?.takeIf { it.isNotBlank() && File(dir, it).isFile }
+    /**
+     * The native payload the header names: `dex` for a plugin that owns no resources, `apk` for one
+     * that does.
+     *
+     * Both load the same way — a DexClassLoader takes either — so the choice is only whether there
+     * is a resource table to attach. A plugin that builds its UI in code needs none, and an APK just
+     * to carry an empty one is an archive for nothing.
+     */
+    private fun nativeEntry(dir: File): String? {
+        val header = nativeHeader(dir)
+        return listOfNotNull(header.str("dex"), header.str("apk"))
+            .firstOrNull { it.isNotBlank() && File(dir, it).isFile }
+    }
 
     // The icon path the header declares (images.icon), else a conventional location; null if absent.
     private fun findIconFile(dir: File): File? {
