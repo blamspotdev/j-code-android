@@ -8,13 +8,17 @@ import android.os.Bundle
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.InterceptPlatformTextInput
+import androidx.compose.ui.platform.PlatformTextInputMethodRequest
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.blamspot.jcode.adaptive.rememberJCodeWindowInfo
@@ -160,6 +164,40 @@ private fun JCodeRoot(viewModel: MainViewModel) {
         themeBundle = themeBundle,
         iconBundle = iconBundle,
     ) {
-        JCodeApp(viewModel = viewModel, modifier = Modifier)
+        WithoutExtractedIme {
+            JCodeApp(viewModel = viewModel, modifier = Modifier)
+        }
     }
+}
+
+/**
+ * Keep the keyboard out of extract mode, everywhere in the app.
+ *
+ * In landscape an IME covers the screen and edits a copy of the text in a window of its own unless
+ * the editor asks it not to. That is wrong for every field JCode has — a commit message wants the
+ * diff still visible behind it, a find field wants its results, a merge wants both versions — and it
+ * is a property of the app, not of any one screen, so it is set once here rather than remembered at
+ * each field.
+ *
+ * The flag lives on the `EditorInfo` that `onCreateInputConnection` fills in. JCode's own editor,
+ * terminal and browser are Views and override that method directly; Compose builds the object
+ * itself, and this interceptor is the supported way to reach it. `createInputConnection` has to run
+ * first — it is what populates the object being amended.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun WithoutExtractedIme(content: @Composable () -> Unit) {
+    InterceptPlatformTextInput(
+        interceptor = { request, nextHandler ->
+            val patched = PlatformTextInputMethodRequest { outAttrs ->
+                val connection = request.createInputConnection(outAttrs)
+                outAttrs.imeOptions = outAttrs.imeOptions or
+                    EditorInfo.IME_FLAG_NO_EXTRACT_UI or
+                    EditorInfo.IME_FLAG_NO_FULLSCREEN
+                connection
+            }
+            nextHandler.startInputMethod(patched)
+        },
+        content = content,
+    )
 }
