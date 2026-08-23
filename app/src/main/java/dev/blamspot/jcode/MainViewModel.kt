@@ -4308,7 +4308,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .getOrDefault(view.substringAfterLast(':'))
                 .trimEnd('/')
                 .substringAfterLast('/')
-            listOf(kind, subject).filter { it.isNotBlank() }.joinToString(" · ")
+            // A subject that already opens with its own kind says it once: a stash route named
+            // "stash@{0}" was rendering as "Stash · stash@{0}", which reads as a stutter rather
+            // than as a name.
+            when {
+                subject.isBlank() -> kind
+                subject.startsWith(kind, ignoreCase = true) -> subject
+                else -> "$kind · $subject"
+            }
         }
     }
 
