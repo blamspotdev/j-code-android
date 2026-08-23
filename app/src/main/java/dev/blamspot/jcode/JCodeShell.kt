@@ -4170,6 +4170,7 @@ private fun WorkspacePanel(
                         onExec = managerActions.onExtensionExec,
                         onApiRequest = managerActions.onExtensionApiRequest,
                         events = managerActions.extensionEvents,
+                        onSnackbar = onSnackbar,
                         modifier = Modifier.fillMaxSize(),
                     )
 

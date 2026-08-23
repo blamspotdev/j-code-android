@@ -129,6 +129,23 @@ interface NativeHost {
      * The only way a plugin reaches real tooling — git, a compiler, a formatter. [workdir] is a
      * guest path (what a project's `distroBindTarget` resolves to), not a host one.
      */
+    /**
+     * Start a long-lived process the workbench supervises, under a name it is known by.
+     *
+     * Not [exec]: that waits for the command to finish, and a database server does not finish. A
+     * process forked and left behind instead would be reaped — Android kills processes an app has
+     * forked past its phantom-process cap — so it has to be something the workbench owns.
+     *
+     * Starting one already running is not an error; the [id] is the identity.
+     */
+    suspend fun serviceStart(id: String, command: String): Boolean = false
+
+    /** Whether the service named [id] is running right now. */
+    suspend fun serviceRunning(id: String): Boolean = false
+
+    /** Stop it. Stopping one that is not running is not an error. */
+    suspend fun serviceStop(id: String) = Unit
+
     suspend fun exec(
         command: String,
         workdir: String? = null,
@@ -258,4 +275,4 @@ data class NativeContextAction(
  * default, so calling code is unchanged — but a default is a second JVM signature, and a plugin
  * compiled against the one-argument method would not find it here, which is what the number is for.
  */
-const val JCODE_EXT_ABI: Int = 6
+const val JCODE_EXT_ABI: Int = 7

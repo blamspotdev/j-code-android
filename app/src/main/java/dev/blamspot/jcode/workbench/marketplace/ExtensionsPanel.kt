@@ -86,6 +86,7 @@ import dev.blamspot.jcode.workbench.ExtensionWebViewPage
 import dev.blamspot.jcode.workbench.ScmHostWebView
 import dev.blamspot.jcode.workbench.ScmWebViewHolder
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.emptyFlow
 import java.io.File
 
 @Composable
@@ -231,9 +232,15 @@ internal fun DbManagerPanel(
     onExec: suspend (command: String, timeoutMs: Long) -> String,
     onApiRequest: suspend (extensionId: String, envelopeJson: String) -> String,
     events: SharedFlow<Pair<String, String>>?,
+    /** Where a word from a native client goes — the app's own snackbar, action and all. */
+    onSnackbar: (String, String?, (() -> Unit)?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val dbExtensions = installed.filter { it.type == ExtensionType.DbManager && it.hasWebUi }
+    // Native or web: a client that draws itself in Compose has no web UI to look for, and filtering
+    // on one would hide it entirely.
+    val dbExtensions = installed.filter {
+        it.type == ExtensionType.DbManager && (it.hasWebUi || it.nativeEntry != null)
+    }
     if (dbExtensions.isEmpty()) {
         Column(
             modifier = modifier.fillMaxSize().padding(Space.md),
@@ -324,13 +331,32 @@ internal fun DbManagerPanel(
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
             }
             key(selected.id) {
-                ExtensionWebViewPage(
-                    extension = selected,
-                    onExec = onExec,
-                    onApiRequest = { envelope -> onApiRequest(selected.id, envelope) },
-                    events = events,
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                )
+                if (selected.nativeEntry != null) {
+                    dev.blamspot.jcode.ext.NativeExtensionPage(
+                        extension = selected,
+                        file = null,
+                        // The plugin asks the workbench for the project itself; a host File here
+                        // would be the wrong path for anything it runs in the runtime.
+                        projectDir = null,
+                        view = dev.blamspot.jcode.ext.api.JCodeNativeExtension.Params.SURFACE_PANEL,
+                        dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
+                        onSnackbar = onSnackbar,
+                        onShowSource = {},
+                        readFile = { null },
+                        writeFile = { _, _ -> },
+                        request = { envelope -> onApiRequest(selected.id, envelope) },
+                        events = events ?: emptyFlow(),
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                    )
+                } else {
+                    ExtensionWebViewPage(
+                        extension = selected,
+                        onExec = onExec,
+                        onApiRequest = { envelope -> onApiRequest(selected.id, envelope) },
+                        events = events,
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                    )
+                }
             }
         }
     }

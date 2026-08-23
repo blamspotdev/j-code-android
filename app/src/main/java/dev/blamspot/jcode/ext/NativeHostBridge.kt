@@ -62,6 +62,16 @@ internal class NativeHostBridge(
 
     // --- the runtime -------------------------------------------------------------------------------
 
+    override suspend fun serviceStart(id: String, command: String): Boolean =
+        call("service.start", JSONObject().put("id", id).put("command", command)) != null
+
+    override suspend fun serviceRunning(id: String): Boolean =
+        call("service.status", JSONObject().put("id", id))?.optBoolean("running") == true
+
+    override suspend fun serviceStop(id: String) {
+        call("service.stop", JSONObject().put("id", id))
+    }
+
     override suspend fun exec(
         command: String,
         workdir: String?,
