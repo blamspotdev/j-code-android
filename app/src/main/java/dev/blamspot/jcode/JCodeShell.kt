@@ -3590,22 +3590,50 @@ private fun JCodeShell(
                                     val appId = rest.substringBefore("#")
                                     val view = rest.substringAfter("#", "")
                                     installedExtensions.firstOrNull { it.id == appId }?.let { ext ->
-                                        // Key by id+view so each extension app/view gets its own WebView.
+                                        // Key by id+view so each extension app/view gets its own host.
                                         key(ext.id, view) {
-                                            ExtensionWebViewPage(
-                                                extension = ext,
-                                                onExec = managerActions.onExtensionExec,
-                                                onApiRequest = { envelope ->
-                                                    managerActions.onExtensionApiRequest(ext.id, envelope)
-                                                },
-                                                events = managerActions.extensionEvents,
-                                                route = view,
-                                                spawnProcess = managerActions.onSpawnRuntimeProcess,
-                                                onOpenPanel = { handle, title ->
-                                                    managerActions.onOpenVsixPanel(ext.id, handle, title)
-                                                },
-                                                modifier = Modifier.fillMaxSize(),
-                                            )
+                                            if (ext.nativeEntry != null) {
+                                                // Native wins wherever it exists, the same rule the
+                                                // drawer follows: an extension that draws one surface
+                                                // natively and the next in a WebView would be two
+                                                // extensions wearing one name.
+                                                NativeExtensionPage(
+                                                    extension = ext,
+                                                    file = null,
+                                                    // The plugin asks the workbench for the project
+                                                    // itself; a host File here would be the wrong one.
+                                                    projectDir = null,
+                                                    view = view,
+                                                    dark = editorDark,
+                                                    onSnackbar = { message ->
+                                                        scope.launch { snackbarHostState.showSnackbar(message) }
+                                                    },
+                                                    onShowSource = {},
+                                                    readFile = onReadFileText,
+                                                    writeFile = onReplaceFileText,
+                                                    request = { envelope ->
+                                                        managerActions.onExtensionApiRequest(ext.id, envelope)
+                                                    },
+                                                    events = managerActions.extensionEvents
+                                                        ?: kotlinx.coroutines.flow.emptyFlow(),
+                                                    modifier = Modifier.fillMaxSize(),
+                                                )
+                                            } else {
+                                                ExtensionWebViewPage(
+                                                    extension = ext,
+                                                    onExec = managerActions.onExtensionExec,
+                                                    onApiRequest = { envelope ->
+                                                        managerActions.onExtensionApiRequest(ext.id, envelope)
+                                                    },
+                                                    events = managerActions.extensionEvents,
+                                                    route = view,
+                                                    spawnProcess = managerActions.onSpawnRuntimeProcess,
+                                                    onOpenPanel = { handle, title ->
+                                                        managerActions.onOpenVsixPanel(ext.id, handle, title)
+                                                    },
+                                                    modifier = Modifier.fillMaxSize(),
+                                                )
+                                            }
                                         }
                                     }
                                 }
