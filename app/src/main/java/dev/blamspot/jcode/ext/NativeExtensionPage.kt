@@ -33,8 +33,14 @@ import java.io.File
 @Composable
 internal fun NativeExtensionPage(
     extension: InstalledExtension,
-    file: File,
+    /** The file this surface was opened for; null for a surface that is not about one file. */
+    file: File?,
     projectDir: File?,
+    /**
+     * Which of the plugin's surfaces to draw — [JCodeNativeExtension.Params.SURFACE_PANEL] for the
+     * drawer, a plugin-defined route for one of its pages, null for the file-claim page.
+     */
+    view: String? = null,
     dark: Boolean,
     onSnackbar: (String) -> Unit,
     onShowSource: () -> Unit,
@@ -91,7 +97,7 @@ internal fun NativeExtensionPage(
 
     val (plugin: JCodeNativeExtension, _) = loaded
     val scope = rememberCoroutineScope()
-    val host = remember(file.path, scope) {
+    val host = remember(file?.path, view, scope) {
         NativeHostBridge(
             scope = scope,
             request = request,
@@ -107,11 +113,12 @@ internal fun NativeExtensionPage(
         )
     }
 
-    val params = remember(file.path, projectDir?.path, dark) {
+    val params = remember(file?.path, projectDir?.path, dark, view) {
         buildMap {
-            put(JCodeNativeExtension.Params.FILE, file.absolutePath)
+            file?.let { put(JCodeNativeExtension.Params.FILE, it.absolutePath) }
             projectDir?.let { put(JCodeNativeExtension.Params.PROJECT_DIR, it.absolutePath) }
             put(JCodeNativeExtension.Params.THEME, if (dark) "dark" else "light")
+            view?.let { put(JCodeNativeExtension.Params.VIEW, it) }
         }
     }
 

@@ -43,6 +43,20 @@ interface JCodeNativeExtension {
 
         /** "dark" or "light" — the workbench theme, so a plugin can match it without guessing. */
         const val THEME = "theme"
+
+        /**
+         * Which of the plugin's own surfaces to draw: [SURFACE_PANEL] for the left drawer, or a
+         * route the plugin defines for a page of its own.
+         *
+         * A plugin is not always one screen. The source-control extension is a drawer panel *and* a
+         * handful of editor pages — sign-in, repository management, a diff — and they share its
+         * state, so they are one plugin drawing different things rather than several plugins.
+         * Absent means the file-claim surface: a page opened for [FILE].
+         */
+        const val VIEW = "view"
+
+        /** The value of [VIEW] for a plugin drawn in the left drawer. */
+        const val SURFACE_PANEL = "panel"
     }
 }
 

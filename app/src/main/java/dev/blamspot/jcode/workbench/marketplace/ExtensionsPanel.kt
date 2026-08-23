@@ -45,6 +45,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -352,6 +353,31 @@ internal fun ScmPanel(
     projectKey: Any? = null,
     modifier: Modifier = Modifier,
 ) {
+    // A native SCM draws itself into the drawer through the same contract a native editor page uses;
+    // it needs no persistent WebView because its state is Compose state, kept by the panel's own
+    // composition. Preferred over a web one when both are installed.
+    val nativeExt = installed.firstOrNull { it.type == ExtensionType.Scm && it.nativeEntry != null }
+    if (nativeExt != null) {
+        key(nativeExt.id, projectKey) {
+            dev.blamspot.jcode.ext.NativeExtensionPage(
+                extension = nativeExt,
+                file = null,
+                // The plugin asks the workbench for the project itself (host.projectInfo), which is
+                // the guest path it needs for exec; a host File here would be the wrong one.
+                projectDir = null,
+                view = dev.blamspot.jcode.ext.api.JCodeNativeExtension.Params.SURFACE_PANEL,
+                dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
+                onSnackbar = {},
+                onShowSource = {},
+                readFile = { null },
+                writeFile = { _, _ -> },
+                request = { envelope -> onApiRequest(nativeExt.id, envelope) },
+                events = events ?: kotlinx.coroutines.flow.emptyFlow(),
+                modifier = modifier.fillMaxSize(),
+            )
+        }
+        return
+    }
     val ext = installed.firstOrNull { it.type == ExtensionType.Scm && it.hasWebUi }
     if (ext == null) {
         PanelEmptyState(
