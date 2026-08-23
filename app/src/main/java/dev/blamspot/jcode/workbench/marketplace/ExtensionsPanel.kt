@@ -67,6 +67,7 @@ import dev.blamspot.jcode.design.ManagerPanelHeader
 import dev.blamspot.jcode.design.ManagerGroupHeader
 import dev.blamspot.jcode.design.ManagerSectionCard
 import dev.blamspot.jcode.design.SettingsDropdownRow
+import dev.blamspot.jcode.design.SettingsAutocompleteRow
 import dev.blamspot.jcode.design.SettingsTextFieldRow
 import dev.blamspot.jcode.feature.marketplace.CodeSample
 import dev.blamspot.jcode.feature.marketplace.ExtensionActivation
@@ -897,6 +898,27 @@ private fun ExtensionSettingsControls(extensionId: String) {
                         )
                     }
                 }
+            }
+
+            "autocomplete" -> {
+                var text by remember(extensionId, spec.key) { mutableStateOf(current) }
+                LaunchedEffect(current) { if (current != text) text = current }
+                // Keyed on every one of this extension's values, because the command interpolates
+                // them: choosing a different tool must re-ask rather than go on offering the last
+                // tool's models. A fresh lambda identity is what makes the field fetch again.
+                val siblingValues = group.specs.map { ui.valueOf(extensionId, it.key) }
+                val load: suspend () -> List<String> = remember(extensionId, spec.key, siblingValues) {
+                    { ui.suggest(extensionId, spec.key) }
+                }
+                SettingsAutocompleteRow(
+                    label = spec.label,
+                    supporting = spec.description,
+                    value = text,
+                    onValueChange = { text = it },
+                    placeholder = spec.default,
+                    loadSuggestions = load,
+                    onCommit = { if (text != current) ui.onChange(extensionId, spec.key, text) },
+                )
             }
 
             else -> {

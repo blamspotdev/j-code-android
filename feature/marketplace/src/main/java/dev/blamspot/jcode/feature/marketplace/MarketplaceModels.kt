@@ -314,6 +314,8 @@ enum class SettingType {
     Enum,
     /** Free-form integer. */
     Int,
+    /** Free-form text, offered a list of suggestions the extension computes. */
+    Autocomplete,
     /** Free-form text. The default when a type is missing or unrecognized. */
     Str;
 
@@ -322,6 +324,7 @@ enum class SettingType {
             "bool", "boolean", "toggle" -> Bool
             "enum", "select", "choice" -> Enum
             "int", "integer", "number" -> Int
+            "autocomplete", "suggest", "combo" -> Autocomplete
             else -> Str
         }
     }
@@ -337,6 +340,15 @@ data class ExtensionSetting(
     /** Allowed values for [SettingType.Enum]. */
     val options: List<String> = emptyList(),
     val description: String? = null,
+    /**
+     * For [SettingType.Autocomplete]: a shell command whose output lines are offered as suggestions.
+     *
+     * Run in the Linux runtime when the field appears. `{{key}}` is replaced with the current value of
+     * another setting of the same extension, and `{{extensionDir}}` with the extension's own
+     * directory, so a manifest can point at a script it ships rather than spell the lookup out here —
+     * which is the point: what a tool's models are called is the extension's business, not JCode's.
+     */
+    val suggestCommand: String? = null,
 )
 
 /** An extension that has been downloaded and unpacked under the app's install root. */

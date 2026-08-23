@@ -151,6 +151,21 @@ const val MAX_EXPLORER_DECORATIONS = 20_000
 private const val PROCESS_LIMIT_PROMPT_INTERVAL_MS = 60_000L
 
 /**
+ * `{{extensionDir}}` or `{{some.setting.key}}` inside an autocomplete's suggest command.
+ *
+ * Both braces of the closing pair are escaped. Android's regex engine is ICU, not the JDK's, and it
+ * rejects a bare `}` that desktop Java quietly accepts as a literal — so the unescaped form compiles
+ * everywhere it is written and throws on the only machine that runs it.
+ */
+private val SUGGEST_PLACEHOLDER = Regex("""\{\{([A-Za-z0-9_.\-]+)\}\}""")
+
+/** A settings field is waiting on this; a tool that has not answered by now is not going to. */
+private const val SUGGEST_TIMEOUT_MS = 15_000L
+
+/** Enough to pick from. A tool that lists thousands is not offering a choice, it is offering a wall. */
+private const val SUGGEST_LIMIT = 200
+
+/**
  * Process-singleton holder for the app-level UI-preferences DataStore. A DataStore must be created
  * exactly once per file per process; constructing a second one (e.g. when MainViewModel is rebuilt
  * after the Activity is recreated) throws "multiple DataStores active for the same file".
@@ -4438,6 +4453,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         extensionSettings.value[extensionId]?.get(key)?.let { return it }
         return installedExtensions.value.firstOrNull { it.id == extensionId }
             ?.settings?.firstOrNull { it.key == key }?.default ?: ""
+    }
+
+    /**
+     * Suggestions for an autocomplete setting, from the command the manifest declares for it.
+     *
+     * `{{extensionDir}}` becomes the extension's own directory and `{{someKey}}` the current value of
+     * any of its other settings, so a manifest can point at a script it ships and hand that script
+     * whatever the rest of the form says — the tool that was picked, typically. What a tool's models
+     * are called is the extension's business; JCode only runs the command and splits the lines.
+     *
+     * Everything about this is best-effort. The command runs in the guest, the tool it asks may not
+     * be installed, and it is answering a text field that accepts anything typed into it — so a
+     * failure is an empty list, not an error worth interrupting the settings screen for.
+     */
+    suspend fun extensionSettingSuggestions(extensionId: String, key: String): List<String> {
+        val ext = installedExtensions.value.firstOrNull { it.id == extensionId } ?: return emptyList()
+        val raw = ext.settings.firstOrNull { it.key == key }?.suggestCommand?.takeIf { it.isNotBlank() }
+            ?: return emptyList()
+        val command = SUGGEST_PLACEHOLDER.replace(raw) { m ->
+            when (val name = m.groupValues[1]) {
+                "extensionDir" -> ext.dir.absolutePath
+                else -> resolvedExtensionSetting(ext, name)
+            }
+        }
+        val result = runCatching {
+            distroService.exec(command, timeoutMs = SUGGEST_TIMEOUT_MS, user = "root", raw = true)
+        }.getOrNull() ?: return emptyList()
+        if (result.exitCode != 0) return emptyList()
+        return result.stdout.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .take(SUGGEST_LIMIT)
+            .toList()
     }
 
     fun setExtensionSetting(extensionId: String, key: String, value: String) {

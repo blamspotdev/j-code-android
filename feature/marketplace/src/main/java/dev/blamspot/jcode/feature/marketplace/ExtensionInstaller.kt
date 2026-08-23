@@ -402,6 +402,7 @@ class ExtensionInstaller internal constructor(context: Context) {
                 default = s.str("default"),
                 options = s.strList("options"),
                 description = s.str("description"),
+                suggestCommand = s.str("suggestCommand"),
             )
         }
         return InstalledExtension(

@@ -489,12 +489,14 @@ fun JCodeApp(
                             options = s.options,
                             default = s.default ?: "",
                             description = s.description,
+                            suggestCommand = s.suggestCommand,
                         )
                     },
                 )
             },
             valueOf = viewModel::extensionSettingValue,
             onChange = viewModel::setExtensionSetting,
+            suggest = viewModel::extensionSettingSuggestions,
         )
     }
     val marketplaceEntries by viewModel.marketplaceEntries.collectAsStateWithLifecycle()

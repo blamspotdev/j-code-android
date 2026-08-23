@@ -330,6 +330,7 @@ object VsixPackage {
         SettingType.Bool -> "bool"
         SettingType.Enum -> "enum"
         SettingType.Int -> "int"
+        SettingType.Autocomplete -> "autocomplete"
         SettingType.Str -> "str"
     }
 
