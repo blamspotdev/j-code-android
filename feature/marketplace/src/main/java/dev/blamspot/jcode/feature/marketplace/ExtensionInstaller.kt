@@ -379,6 +379,10 @@ class ExtensionInstaller internal constructor(context: Context) {
 
     // --- parsing -----------------------------------------------------------------------------
 
+    /** How many of a preset's matched files reach a script as JCODE_FILE<n>/JCODE_DIR<n>. Presets
+     *  address at most a handful; an unmatched slot simply arrives empty. */
+    private val PRESET_MATCH_SLOTS = 3
+
     private fun loadInstalled(dir: File): InstalledExtension? {
         val manifest = File(dir, "extension.yaml").takeIf { it.isFile } ?: return null
         val map = runCatching { parseYamlMapping(manifest.readText()) }.getOrNull() ?: return null
@@ -409,7 +413,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             version = map.str("version"),
             description = map.str("description") ?: "",
             dir = dir,
-            longDescription = map.str("longDescription"),
+            longDescription = longDescriptionOf(map, dir),
             samples = parseSamples(map["samples"]),
             templates = templates,
             languages = languages,
@@ -510,6 +514,19 @@ class ExtensionInstaller internal constructor(context: Context) {
             .map { File(dir, it) }
             .firstOrNull { it.isFile }
     }
+
+    /**
+     * The extension's long description: the manifest's own `longDescription`, else `docs/description.md`.
+     *
+     * Prose is the one body a header cannot avoid carrying, and a page of it folded into a YAML
+     * block scalar is a page nobody can read in review or render in a preview. A file lets it be
+     * Markdown that an editor shows as Markdown.
+     */
+    private fun longDescriptionOf(map: Map<String, Any?>, dir: File): String? =
+        map.str("longDescription")?.takeIf { it.isNotBlank() }
+            ?: File(dir, "docs/description.md").takeIf { it.isFile }
+                ?.let { runCatching { it.readText().trim() }.getOrNull() }
+                ?.takeIf { it.isNotBlank() }
 
     private fun loadTemplate(extensionDir: File, id: String?): ProjectTemplate? {
         if (id.isNullOrBlank()) return null
@@ -642,7 +659,12 @@ class ExtensionInstaller internal constructor(context: Context) {
     private fun presetCommand(map: Map<String, Any?>, owner: File?): String {
         val resolved = commandOf(map, owner)
         if (!resolved.startsWith("sh ")) return resolved
-        return "JCODE_PROJECT_DIR='{{projectDir}}' JCODE_FILE='{{file}}' JCODE_DIR='{{dir}}' " + resolved
+        // The numbered forms too: a preset matching several files addresses them as {{file1}}/{{dir2}}.
+        val numbered = (1..PRESET_MATCH_SLOTS).joinToString(" ") { n ->
+            "JCODE_FILE$n='{{file$n}}' JCODE_DIR$n='{{dir$n}}'"
+        }
+        return "JCODE_PROJECT_DIR='{{projectDir}}' JCODE_FILE='{{file}}' JCODE_DIR='{{dir}}' " +
+            numbered + " " + resolved
     }
 
     private fun parseContributions(raw: Any?, dir: File): ExtensionContributions {
