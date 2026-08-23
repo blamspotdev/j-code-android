@@ -110,7 +110,10 @@ internal class NativeHostBridge(
     override fun openFolder(path: String) = send("workbench.openFolder", JSONObject().put("path", path))
     override fun addFolder(path: String) = send("workbench.addFolder", JSONObject().put("path", path))
     override fun openUrl(url: String) = send("workbench.openUrl", JSONObject().put("url", url))
-    override fun openView(id: String) = send("workbench.openView", JSONObject().put("view", id))
+    override fun openView(id: String, title: String?) = send(
+        "workbench.openView",
+        JSONObject().put("view", id).apply { title?.let { put("title", it) } },
+    )
     override fun closeView(id: String) = send("workbench.closeView", JSONObject().put("view", id))
 
     override fun setExplorerDecorations(root: String, decorations: List<NativeDecoration>) {

@@ -146,8 +146,16 @@ interface NativeHost {
     /** Hand a URL to the device — a sign-in page, a repository, a docs link. */
     fun openUrl(url: String)
 
-    /** Show or hide one of this extension's own pages by id. */
-    fun openView(id: String)
+    /**
+     * Show one of this extension's own pages by id, optionally naming it.
+     *
+     * [title] is what the tab and the workbench header call the page. Without it the workbench makes
+     * a label out of the id, which works while the id happens to read like a name and fails as soon
+     * as it does not: a stash route is `stash:<repo>:stash@{0}`, and "stash@{0}" is a position in a
+     * list rather than the name the user gave the stash. Only the extension knows that name, so only
+     * the extension can supply it.
+     */
+    fun openView(id: String, title: String? = null)
     fun closeView(id: String)
 
     /**
@@ -236,5 +244,10 @@ data class NativeContextAction(
  * was given, and nothing like enough for a plugin that has to run git and put badges in the
  * Explorer. The methods added are the ones the WebView bridge has always offered; a plugin should
  * not have to be a web page to reach them.
+ *
+ * 5 lets [NativeHost.openView] name the page it opens. The workbench was left to invent a label out
+ * of the route, which cannot work for a page whose name only the plugin knows. The parameter has a
+ * default, so calling code is unchanged — but a default is a second JVM signature, and a plugin
+ * compiled against the one-argument method would not find it here, which is what the number is for.
  */
-const val JCODE_EXT_ABI: Int = 4
+const val JCODE_EXT_ABI: Int = 5
