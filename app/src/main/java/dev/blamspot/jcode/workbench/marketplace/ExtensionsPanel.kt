@@ -351,6 +351,8 @@ internal fun ScmPanel(
     onExec: suspend (command: String, timeoutMs: Long) -> String,
     onApiRequest: suspend (extensionId: String, envelopeJson: String) -> String,
     events: SharedFlow<Pair<String, String>>?,
+    /** Where a word from the extension goes — the app's own snackbar, action and all. */
+    onSnackbar: (String, String?, (() -> Unit)?) -> Unit,
     projectKey: Any? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -368,7 +370,7 @@ internal fun ScmPanel(
                 projectDir = null,
                 view = dev.blamspot.jcode.ext.api.JCodeNativeExtension.Params.SURFACE_PANEL,
                 dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
-                onSnackbar = {},
+                onSnackbar = onSnackbar,
                 onShowSource = {},
                 readFile = { null },
                 writeFile = { _, _ -> },

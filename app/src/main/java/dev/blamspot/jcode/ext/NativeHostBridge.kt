@@ -28,7 +28,7 @@ internal class NativeHostBridge(
     private val readFileText: (String) -> String?,
     private val writeFileText: (String, String) -> Unit,
     private val projectDirPath: () -> String?,
-    private val onSnackbar: (String) -> Unit,
+    private val onSnackbar: (String, String?, (() -> Unit)?) -> Unit,
     private val onIssues: (List<String>) -> Unit,
     private val onShowSource: () -> Unit,
 ) : NativeHost {
@@ -38,7 +38,10 @@ internal class NativeHostBridge(
     override fun readFile(path: String): String? = readFileText(path)
     override fun writeFile(path: String, text: String) = writeFileText(path, text)
     override fun projectDir(): String? = projectDirPath()
-    override fun snackbar(message: String) = onSnackbar(message)
+    override fun snackbar(message: String) = onSnackbar(message, null, null)
+
+    override fun snackbar(message: String, actionLabel: String, action: () -> Unit) =
+        onSnackbar(message, actionLabel, action)
     override fun reportIssues(messages: List<String>) = onIssues(messages)
     override fun showSource() = onShowSource()
 

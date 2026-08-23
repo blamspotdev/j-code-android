@@ -96,6 +96,14 @@ interface NativeHost {
     fun snackbar(message: String)
 
     /**
+     * The same, with one thing to do about it.
+     *
+     * [action] runs if [actionLabel] is tapped. For a result worth mentioning but not worth a
+     * dialog: the message says what happened, and the action is where the rest of it lives.
+     */
+    fun snackbar(message: String, actionLabel: String, action: () -> Unit) = snackbar(message)
+
+    /**
      * Report a problem to the Issues pane, or clear this plugin's problems when [messages] is empty.
      *
      * For anything the user may need to *act* on — a layout that will not parse, a resource that
@@ -250,4 +258,4 @@ data class NativeContextAction(
  * default, so calling code is unchanged — but a default is a second JVM signature, and a plugin
  * compiled against the one-argument method would not find it here, which is what the number is for.
  */
-const val JCODE_EXT_ABI: Int = 5
+const val JCODE_EXT_ABI: Int = 6

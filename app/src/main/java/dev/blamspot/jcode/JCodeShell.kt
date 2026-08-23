@@ -400,6 +400,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
 
 
 @Composable
@@ -1882,6 +1883,23 @@ fun JCodeApp(
 
 }
 
+/**
+ * How an extension's snackbar reaches the app's.
+ *
+ * The same one everything else in JCode uses, so a word from an extension arrives where the user
+ * already looks for one — and carries an action, which is the difference between mentioning a
+ * result and making someone dismiss a dialog to get past it.
+ */
+private fun extensionSnackbar(
+    scope: CoroutineScope,
+    host: SnackbarHostState,
+): (String, String?, (() -> Unit)?) -> Unit = { message, label, action ->
+    scope.launch {
+        val shown = host.showSnackbar(message, actionLabel = label)
+        if (shown == SnackbarResult.ActionPerformed) action?.invoke()
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class) // WindowInsets.imeAnimationTarget (snap IME padding)
 @Composable
 private fun JCodeShell(
@@ -3199,9 +3217,7 @@ private fun JCodeShell(
                 runConfigVersion = runConfigVersion,
                 runUrl = runUrl,
                 runInProgress = runInProgress,
-                onSnackbar = { message ->
-                    scope.launch { snackbarHostState.showSnackbar(message) }
-                },
+                onSnackbar = extensionSnackbar(scope, snackbarHostState),
                 themeBundleId = themeBundleId,
                 onUpdateThemeBundle = onUpdateThemeBundle,
                 iconBundleId = iconBundleId,
@@ -3605,9 +3621,7 @@ private fun JCodeShell(
                                                     projectDir = null,
                                                     view = view,
                                                     dark = editorDark,
-                                                    onSnackbar = { message ->
-                                                        scope.launch { snackbarHostState.showSnackbar(message) }
-                                                    },
+                                                    onSnackbar = extensionSnackbar(scope, snackbarHostState),
                                                     onShowSource = {},
                                                     readFile = onReadFileText,
                                                     writeFile = onReplaceFileText,
@@ -3668,9 +3682,7 @@ private fun JCodeShell(
                                                 file = tab.filePath,
                                                 projectDir = selectedProject?.let { File(it.location) },
                                                 dark = editorDark,
-                                                onSnackbar = { message ->
-                                                    scope.launch { snackbarHostState.showSnackbar(message) }
-                                                },
+                                                onSnackbar = extensionSnackbar(scope, snackbarHostState),
                                                 onShowSource = { onToggleTabPreview(tab.id) },
                                                 readFile = onReadFileText,
                                                 writeFile = onReplaceFileText,
@@ -3745,9 +3757,7 @@ private fun JCodeShell(
                             runConfigVersion = runConfigVersion,
                             runUrl = runUrl,
                             runInProgress = runInProgress,
-                            onSnackbar = { message ->
-                                scope.launch { snackbarHostState.showSnackbar(message) }
-                            },
+                            onSnackbar = extensionSnackbar(scope, snackbarHostState),
                             themeBundleId = themeBundleId,
                             onUpdateThemeBundle = onUpdateThemeBundle,
                             iconBundleId = iconBundleId,
@@ -3972,7 +3982,7 @@ private fun WorkspacePanel(
     runConfigVersion: Int,
     runUrl: String?,
     runInProgress: Boolean,
-    onSnackbar: (String) -> Unit,
+    onSnackbar: (String, String?, (() -> Unit)?) -> Unit,
     themeBundleId: String,
     onUpdateThemeBundle: (String) -> Unit,
     iconBundleId: String,
@@ -4056,7 +4066,7 @@ private fun WorkspacePanel(
                                                 greyOutExcluded = LocalExplorerHiddenSetting.current.effect == ExplorerExcludeEffect.GreyOut,
                                                 autoRefreshEnabled = explorerAutoRefresh,
                                                 onFileSelected = onOpenFile,
-                                                onSnackbar = onSnackbar,
+                                                onSnackbar = { message -> onSnackbar(message, null, null) },
                                             )
                                         }
                                     }
@@ -4089,6 +4099,7 @@ private fun WorkspacePanel(
                         onExec = managerActions.onExtensionExec,
                         onApiRequest = managerActions.onExtensionApiRequest,
                         events = managerActions.extensionEvents,
+                        onSnackbar = onSnackbar,
                         projectKey = selectedProject?.id,
                         modifier = Modifier.fillMaxSize(),
                     )

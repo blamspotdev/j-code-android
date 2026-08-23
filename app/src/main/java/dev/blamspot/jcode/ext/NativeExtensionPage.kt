@@ -42,7 +42,7 @@ internal fun NativeExtensionPage(
      */
     view: String? = null,
     dark: Boolean,
-    onSnackbar: (String) -> Unit,
+    onSnackbar: (String, String?, (() -> Unit)?) -> Unit,
     onShowSource: () -> Unit,
     readFile: (String) -> String?,
     writeFile: (String, String) -> Unit,
