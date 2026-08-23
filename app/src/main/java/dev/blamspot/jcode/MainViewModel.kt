@@ -4274,7 +4274,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun openExtensionViewPage(extensionId: String, view: String, title: String? = null, coexist: Boolean = false) {
         _bringEditorToFront.tryEmit(Unit)
         val ext = _installedExtensions.value.firstOrNull { it.id == extensionId }
-        val viewLabel = when (view) { "github" -> "GitHub"; "" -> null; else -> view.replaceFirstChar { it.uppercaseChar() } }
+        val viewLabel = viewLabel(view)
         // A blank view IS the app/root view — focus the existing app tab instead of minting a
         // distinct `<id>#` tab that renders identically and collides with it on the render key.
         if (view.isBlank()) { openExtensionAppPage(extensionId); return }
@@ -4283,6 +4283,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             title?.takeIf { it.isNotBlank() } ?: listOfNotNull(ext?.name, viewLabel).joinToString(" · ").ifBlank { "View" }
         }
         if (coexist) openExtensionPage(tabId, titleOf) else openDetailPage(tabId, EditorPageKind.ExtensionApp, titleOf)
+    }
+
+    /**
+     * A readable name for an extension route.
+     *
+     * The route is the extension's own string and the workbench does not know its grammar, but
+     * `<kind>:<arg>:<arg>` is the convention and the last argument is what the page is about — so the
+     * label is the kind plus the tail of that argument, with percent-decoding undoing whatever the
+     * route did to fit a path into one segment. Without it a tab reads
+     * `Diff:w:%2Fworkspace%2Fscmtest:docs%2Fnotes.md`, which does name the file it is showing, to
+     * anyone willing to decode it themselves.
+     *
+     * `Uri.decode` rather than `URLDecoder`: the routes are written by `encodeURIComponent`, which
+     * never emits `+` for a space, so a `+` in the id is a literal one and `URLDecoder` would eat it.
+     */
+    private fun viewLabel(view: String): String? = when {
+        view.isBlank() -> null
+        view == "github" -> "GitHub"
+        !view.contains(':') -> view.replaceFirstChar { it.uppercaseChar() }
+        else -> {
+            val kind = view.substringBefore(':').replaceFirstChar { it.uppercaseChar() }
+            val subject = runCatching { Uri.decode(view.substringAfterLast(':')) }
+                .getOrDefault(view.substringAfterLast(':'))
+                .trimEnd('/')
+                .substringAfterLast('/')
+            listOf(kind, subject).filter { it.isNotBlank() }.joinToString(" · ")
+        }
     }
 
     /** Open/focus an ExtensionApp page WITHOUT evicting other extension pages, so distinct routes
