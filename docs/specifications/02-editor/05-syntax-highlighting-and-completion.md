@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Partially implemented — highlighting works via a hand-written tokenizer; the tree-sitter stack is built but unwired |
 | **Modules** | `:core:buffer`, `:core:treesitter`, `:core:editor-completion`, `:native:buffer`, `:native:tree-sitter`, `:native:grammars`, `:app` |
-| **Primary sources** | core/buffer/src/main/java/dev/jcode/core/buffer/NativeHighlighter.kt, native/buffer/src/highlight.cpp, app/src/main/java/dev/jcode/editor/SyntaxHighlighter.kt, core/treesitter/src/main/java/dev/jcode/core/treesitter/TsParseService.kt, core/treesitter/src/main/java/dev/jcode/core/treesitter/LanguageRegistry.kt, core/treesitter/src/main/java/dev/jcode/core/treesitter/TsHandles.kt, core/editor-completion/src/main/java/dev/jcode/core/editor/completion/, app/src/main/java/dev/jcode/editor/LanguagePackCompletions.kt, app/src/main/java/dev/jcode/editor/CodeFormatter.kt |
+| **Primary sources** | core/buffer/src/main/java/dev/blamspot/jcode/core/buffer/NativeHighlighter.kt, native/buffer/src/highlight.cpp, app/src/main/java/dev/blamspot/jcode/editor/SyntaxHighlighter.kt, core/treesitter/src/main/java/dev/blamspot/jcode/core/treesitter/TsParseService.kt, core/treesitter/src/main/java/dev/blamspot/jcode/core/treesitter/LanguageRegistry.kt, core/treesitter/src/main/java/dev/blamspot/jcode/core/treesitter/TsHandles.kt, core/editor-completion/src/main/java/dev/blamspot/jcode/core/editor/completion/, app/src/main/java/dev/blamspot/jcode/editor/LanguagePackCompletions.kt, app/src/main/java/dev/blamspot/jcode/editor/CodeFormatter.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -40,7 +40,7 @@ text never crosses the JNI boundary — and returns packed
 the renderer's span sweep.
 
 `highlight()` returns `null` for a Kotlin-path snapshot (`nativeHandleOrZero == 0`), and the caller
-falls back to the equivalent Kotlin tokenizers in `app/src/main/java/dev/jcode/editor/SyntaxHighlighter.kt`.
+falls back to the equivalent Kotlin tokenizers in `app/src/main/java/dev/blamspot/jcode/editor/SyntaxHighlighter.kt`.
 
 ### 2.1 Modes
 
@@ -168,8 +168,8 @@ data class CompletionContext(val items: List<CompletionItem>, val triggerOffset:
 
 | Source | Where | Status |
 |---|---|---|
-| Dev Pack keywords/snippets | `app/src/main/java/dev/jcode/editor/LanguagePackCompletions.kt` → `languagePackCompletionItems(lang, prefix)` | Live |
-| Language server | `LspController.completions(...)` → `MainViewModel.lspCompletions(...)` → `app/src/main/java/dev/jcode/editor/LspCompletions.kt` | Live |
+| Dev Pack keywords/snippets | `app/src/main/java/dev/blamspot/jcode/editor/LanguagePackCompletions.kt` → `languagePackCompletionItems(lang, prefix)` | Live |
+| Language server | `LspController.completions(...)` → `MainViewModel.lspCompletions(...)` → `app/src/main/java/dev/blamspot/jcode/editor/LspCompletions.kt` | Live |
 
 Both are merged in `JCodeShell`'s `CompletionSource`: server items first (they know what is actually
 in scope), then pack keywords, deduplicated by label. Server results are filtered to the typed prefix
@@ -250,4 +250,3 @@ see §7.
 - [Rendering and decorations](03-rendering-and-decorations.md)
 - [LSP client](../04-language-services/01-lsp-client.md)
 - [Extension model and lifecycle](../07-extensions/01-extension-model-and-lifecycle.md)
-- [Known gaps and unwired code](../09-platform/05-known-gaps-and-unwired-code.md)

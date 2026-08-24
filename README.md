@@ -99,9 +99,9 @@ wrapped as `AutoCloseable` + `Cleaner`.
 
 Full as-built engineering specifications live in
 [`docs/specifications/`](docs/specifications/README.md) — architecture, module
-contracts, wire protocols, on-disk formats, and build/release details. The
-[known-gaps inventory](docs/specifications/09-platform/05-known-gaps-and-unwired-code.md)
-records stubs, built-but-unwired subsystems, and runtime limitations.
+contracts, wire protocols, on-disk formats, and build/release details. Each document
+closes with a "Known gaps" section recording what is stubbed, unwired or limited in
+that subsystem, so the caveat sits beside the thing it qualifies.
 
 ## Extensions
 

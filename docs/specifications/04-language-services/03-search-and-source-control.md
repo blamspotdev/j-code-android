@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Status** | Search: implemented. Source control: implemented as an extension, not as `:core:vcs` |
-| **Modules** | `:core:search`, `:native:ripgrep-ffi`, `:feature:search` (stub), `:feature:scm` (stub), `:core:vcs` (stub), `:app` |
-| **Primary sources** | core/search/src/main/java/dev/jcode/core/search/SearchEngine.kt (316 lines), core/search/src/main/java/dev/jcode/core/search/NativeSearch.kt, native/ripgrep-ffi/rust/src/lib.rs (241 lines), app/src/main/java/dev/jcode/workbench/SearchToolPanel.kt, app/src/main/java/dev/jcode/workbench/ScmExtensionHost.kt, feature/explorer/src/main/java/dev/jcode/feature/explorer/ExplorerScmUi.kt |
+| **Status** | Search: implemented. Source control: implemented as an extension |
+| **Modules** | `:core:search`, `:native:ripgrep-ffi`, `:app` |
+| **Primary sources** | core/search/src/main/java/dev/blamspot/jcode/core/search/SearchEngine.kt (316 lines), core/search/src/main/java/dev/blamspot/jcode/core/search/NativeSearch.kt, native/ripgrep-ffi/rust/src/lib.rs (241 lines), app/src/main/java/dev/blamspot/jcode/workbench/SearchToolPanel.kt, app/src/main/java/dev/blamspot/jcode/workbench/ScmExtensionHost.kt, feature/explorer/src/main/java/dev/blamspot/jcode/feature/explorer/ExplorerScmUi.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -15,8 +15,9 @@ Two unrelated features grouped because both are "find and act on things across t
 project-wide search engine, and the Git integration.
 
 They are grouped for a second reason worth stating up front: **neither lives where the module layout
-suggests.** Search's UI is in `:app`, not `:feature:search`; source control is a WebView-hosted
-extension, not `:core:vcs`.
+suggests.** Search's UI is in `:app`, and source control is a WebView-hosted extension. The
+`:feature:search`, `:feature:scm` and `:core:vcs` module boundaries that once implied otherwise were
+marker-only stubs and were removed at 1.6.2.
 
 ---
 
@@ -130,7 +131,7 @@ hidden-file skip.
 
 ## 6. Search UI
 
-`app/src/main/java/dev/jcode/workbench/SearchToolPanel.kt`, in the left drawer.
+`app/src/main/java/dev/blamspot/jcode/workbench/SearchToolPanel.kt`, in the left drawer.
 
 ```kotlin
 internal enum class SearchScope(val label: String, val placeholder: String) {
@@ -160,10 +161,8 @@ scroll regardless of drawer width.
 
 | Component | Reality |
 |---|---|
-| `:core:vcs` | **Stub.** A marker object; the KDoc says "libgit2 JNI + porcelain API, Phase 9" |
 | `:native:libgit2` | **Built but unwired.** Links real libgit2, libssh2 and mbedTLS into `libgit2_ffi.so`, exposes no JNI |
-| `:feature:scm` | **Stub.** A marker object |
-| The working Git UI | An **installed extension** rendered in a WebView, hosted by `app/src/main/java/dev/jcode/workbench/ScmExtensionHost.kt` |
+| The working Git UI | An **installed extension** rendered in a WebView, hosted by `app/src/main/java/dev/blamspot/jcode/workbench/ScmExtensionHost.kt` |
 
 The Git panel therefore runs the real `git` binary inside the guest distro, driven by extension
 JavaScript over the extension bridge — not through an in-process library.
@@ -230,7 +229,8 @@ Project or a Workspace before it moves under the projects root. See
 1. `NativeSearch.FLAG_*` mirrors the Rust constants.
 2. Match columns are UTF-16 code units on both paths.
 3. `Sink.onMatch` returning `false` must stop the walk — cancellation depends on it.
-4. `.jcode/trash/` is always excluded, so deleted files never resurface in results.
+4. `.jcode/trash/` is always excluded. The Trash itself is app-private and outside every project,
+   so nothing in it is reachable by a search in the first place.
 5. Explorer status maps are keyed by `FsPath.stableId` (an absolute host path).
 6. The SCM WebView must be hosted persistently; a plain `AndroidView` blanks on rotation.
 
@@ -252,9 +252,10 @@ Project or a Workspace before it moves under the projects root. See
 
 - The Kotlin fallback is **not gitignore-aware** — it applies only the hard-coded default excludes,
   so results differ between the two paths on a project with a rich `.gitignore`.
-- `:core:vcs` and `:native:libgit2` carry a full statically-linked libgit2/libssh2/mbedTLS stack that
+- `:native:libgit2` carries a full statically-linked libgit2/libssh2/mbedTLS stack that
   nothing calls; it is dead weight in the APK.
-- `:feature:search` and `:feature:scm` are stubs whose real implementations live in `:app`.
+- `:feature:search` and `:feature:scm` were marker-only stubs (removed at 1.6.2); the real
+  implementations live in `:app`.
 - Result truncation at `MAX_DISPLAY_RESULTS` is silent in the list.
 
 ---
@@ -265,4 +266,3 @@ Project or a Workspace before it moves under the projects root. See
 - [Storage and path model](../01-architecture/05-storage-and-path-model.md)
 - [Extension API and hosts](../07-extensions/04-extension-api-and-hosts.md)
 - [Panels and tools](../06-workbench/03-panels-and-tools.md)
-- [Known gaps and unwired code](../09-platform/05-known-gaps-and-unwired-code.md)

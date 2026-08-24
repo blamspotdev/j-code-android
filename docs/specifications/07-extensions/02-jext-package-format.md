@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:feature:marketplace` |
-| **Primary sources** | feature/marketplace/src/main/java/dev/jcode/feature/marketplace/JextCrypto.kt, feature/marketplace/src/main/java/dev/jcode/feature/marketplace/ExtensionInstaller.kt (`verifyManifest`, `installFromJextBytes`, `parseJehmHeader`) |
+| **Primary sources** | feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/JextCrypto.kt, feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/ExtensionInstaller.kt (`verifyManifest`, `installFromJextBytes`, `parseJehmHeader`) |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---

@@ -41,7 +41,7 @@ std::string toString(JNIEnv* env, jstring str) {
 extern "C" {
 
 JNIEXPORT jlong JNICALL
-Java_dev_jcode_core_buffer_NativeHighlighter_nativeCreateProfile(
+Java_dev_blamspot_jcode_core_buffer_NativeHighlighter_nativeCreateProfile(
     JNIEnv* env, jobject thiz, jobjectArray lineComments, jstring blockStart, jstring blockEnd,
     jobjectArray delimiters, jobjectArray keywords, jobjectArray types, jint sep, jboolean sections) {
     auto* profile = new HighlightProfile();
@@ -61,12 +61,12 @@ Java_dev_jcode_core_buffer_NativeHighlighter_nativeCreateProfile(
 }
 
 JNIEXPORT void JNICALL
-Java_dev_jcode_core_buffer_NativeHighlighter_nativeDestroyProfile(JNIEnv* env, jclass clazz, jlong handle) {
+Java_dev_blamspot_jcode_core_buffer_NativeHighlighter_nativeDestroyProfile(JNIEnv* env, jclass clazz, jlong handle) {
     delete reinterpret_cast<HighlightProfile*>(handle);
 }
 
 JNIEXPORT jintArray JNICALL
-Java_dev_jcode_core_buffer_NativeHighlighter_nativeHighlight(
+Java_dev_blamspot_jcode_core_buffer_NativeHighlighter_nativeHighlight(
     JNIEnv* env, jobject thiz, jlong snapshotHandle, jlong profileHandle, jint mode, jintArray palette) {
     Snapshot* snapshot = reinterpret_cast<Snapshot*>(snapshotHandle);
     if (!snapshot || !palette || env->GetArrayLength(palette) < 11) return nullptr;

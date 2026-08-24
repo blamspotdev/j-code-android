@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | Repository-wide |
-| **Primary sources** | scripts/check-no-host-root.sh, app/src/main/AndroidManifest.xml, feature/marketplace/src/main/java/dev/jcode/feature/marketplace/JextCrypto.kt, core/distro/src/main/java/dev/jcode/core/distro/adb/AdbAuth.kt, core/distro/src/main/java/dev/jcode/core/distro/ProotManager.kt, app/src/main/java/dev/jcode/vdevice/GuestContext.kt, app/src/main/java/dev/jcode/vdevice/VirtualDevicePolicy.kt, app/src/main/java/dev/jcode/vdevice/GuestPermissions.kt, app/src/main/java/dev/jcode/vdevice/GuestLocation.kt, app/src/main/java/android/hardware/GuestSensorManager.kt, app/src/main/java/dev/jcode/AppUpdateInstaller.kt, app/src/main/res/xml/network_security_config.xml, app/src/main/res/xml/backup_rules.xml, app/src/main/res/xml/data_extraction_rules.xml |
+| **Primary sources** | scripts/check-no-host-root.sh, app/src/main/AndroidManifest.xml, feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/JextCrypto.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/adb/AdbAuth.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/ProotManager.kt, app/src/main/java/dev/blamspot/jcode/vdevice/GuestContext.kt, app/src/main/java/dev/blamspot/jcode/vdevice/VirtualDevicePolicy.kt, app/src/main/java/dev/blamspot/jcode/vdevice/GuestPermissions.kt, app/src/main/java/dev/blamspot/jcode/vdevice/GuestLocation.kt, app/src/main/java/android/hardware/GuestSensorManager.kt, app/src/main/java/dev/blamspot/jcode/AppUpdateInstaller.kt, app/src/main/res/xml/network_security_config.xml, app/src/main/res/xml/backup_rules.xml, app/src/main/res/xml/data_extraction_rules.xml |
 | **Verified against** | device-verified on Android 13, 2026-08-13 |
 
 ---

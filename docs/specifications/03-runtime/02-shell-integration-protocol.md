@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:term`, `:core:distro`, `:app` |
-| **Primary sources** | core/term/src/main/java/dev/jcode/core/term/TerminalSessionManager.kt (`GUEST_SHELL_INTEGRATION`, `GUEST_OPEN_URL_SHIM`, `NESTED_SHELL_WRAPPER_TEMPLATE`, the reader's `oscHandler`), core/term/src/main/java/dev/jcode/core/term/VtParser.kt, native/vt/src/vt_parser.c, app/src/main/java/dev/jcode/workbench/SetupTerminalRunner.kt, core/distro/src/main/java/dev/jcode/core/distro/DistroService.kt (`CATALOG_SHELL_HELPERS`) |
+| **Primary sources** | core/term/src/main/java/dev/blamspot/jcode/core/term/TerminalSessionManager.kt (`GUEST_SHELL_INTEGRATION`, `GUEST_OPEN_URL_SHIM`, `NESTED_SHELL_WRAPPER_TEMPLATE`, the reader's `oscHandler`), core/term/src/main/java/dev/blamspot/jcode/core/term/VtParser.kt, native/vt/src/vt_parser.c, app/src/main/java/dev/blamspot/jcode/workbench/SetupTerminalRunner.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/DistroService.kt (`CATALOG_SHELL_HELPERS`) |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---

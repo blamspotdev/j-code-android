@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:feature:marketplace`, `:app` |
-| **Primary sources** | feature/marketplace/src/main/java/dev/jcode/feature/marketplace/MarketplaceModels.kt, feature/marketplace/src/main/java/dev/jcode/feature/marketplace/ExtensionInstaller.kt (664 lines), feature/marketplace/src/main/java/dev/jcode/feature/marketplace/ExtensionManifestValidator.kt, feature/marketplace/src/main/java/dev/jcode/feature/marketplace/MarketplaceServiceLocator.kt, app/src/main/java/dev/jcode/workbench/marketplace/ExtensionsPanel.kt, app/src/main/java/dev/jcode/workbench/marketplace/ExtensionActivationLocal.kt |
+| **Primary sources** | feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/MarketplaceModels.kt, feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/ExtensionInstaller.kt (664 lines), feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/ExtensionManifestValidator.kt, feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/MarketplaceServiceLocator.kt, app/src/main/java/dev/blamspot/jcode/workbench/marketplace/ExtensionsPanel.kt, app/src/main/java/dev/blamspot/jcode/workbench/marketplace/ExtensionActivationLocal.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -255,7 +255,8 @@ Signed marketplace packages are always `dev = false` and are not debuggable.
   settings schema validation.
 - Theme and icon bundles are not yet a contribution point, though the design system would support
   them.
-- `:core:ext` — the intended WASM host and contribution dispatcher — is a stub; everything here runs
+- `:core:ext` — the intended WASM host and contribution dispatcher — was a marker-only stub and was
+  removed at 1.6.2; everything here runs
   in a WebView or a Node process instead.
 
 ---

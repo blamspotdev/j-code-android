@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:fs`, `:feature:explorer`, `:app` |
-| **Primary sources** | core/fs/src/main/java/dev/jcode/fs/WorkspaceManager.kt (755 lines), core/fs/src/main/java/dev/jcode/fs/WorkspaceModel.kt, core/fs/src/main/java/dev/jcode/fs/WorkspacePersistence.kt, core/fs/src/main/java/dev/jcode/fs/StorageRoots.kt, core/fs/src/main/java/dev/jcode/fs/FsContract.kt, core/fs/src/main/java/dev/jcode/fs/FsOperations.kt (494 lines), core/fs/src/main/java/dev/jcode/fs/FsImplementations.kt |
+| **Primary sources** | core/fs/src/main/java/dev/blamspot/jcode/fs/WorkspaceManager.kt (755 lines), core/fs/src/main/java/dev/blamspot/jcode/fs/WorkspaceModel.kt, core/fs/src/main/java/dev/blamspot/jcode/fs/WorkspacePersistence.kt, core/fs/src/main/java/dev/blamspot/jcode/fs/StorageRoots.kt, core/fs/src/main/java/dev/blamspot/jcode/fs/FsContract.kt, core/fs/src/main/java/dev/blamspot/jcode/fs/FsOperations.kt (494 lines), core/fs/src/main/java/dev/blamspot/jcode/fs/FsImplementations.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -172,8 +172,18 @@ the slow path if a provider rejects the batched form.
 `FolderScan(fileCount, totalBytes)` is returned by `scanFolderForImport` so the UI can show a
 determinate import progress bar (`ImportPhase.Scanning` then `ImportPhase.Copying`).
 
-Deletes route through `.jcode/trash/`, which is why that path is in the search engine's default
-excludes.
+Deletes route through the **Trash** (`Trash.kt`) when `TRASH_ENABLED` is on, and through
+`deletePermanently` when it is not. The bin is app-private — `<filesDir>/trash/<id>/` holding an
+`entry.json` and a `data/<name>` payload — rather than a folder inside the project, so `git clean`
+cannot destroy it and a trashed build directory never appears in `git status`. A local project and
+the bin share a volume, so taking something in is a rename; SAF entries are copied. Restoring lands
+beside an occupant under a numbered name rather than overwriting it.
+
+The bin is read from `TrashPage` (`EditorPageKind.Trash`), an editor page rather than a dialog: what
+decides whether an entry is the one to restore is its contents, so the list picks and the pane beside
+it previews — text, images, and the files inside a trashed folder, which can themselves be opened.
+`Trash.listInside` caps its listing and `Trash.read` caps its bytes; both exist to show someone what
+they are about to restore, not to reproduce it.
 
 ---
 

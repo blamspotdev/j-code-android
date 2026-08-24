@@ -24,8 +24,8 @@ for arg in "$@"; do
             echo "Usage: $(basename "$0") [-y|--yes] [--release|--beta] [--label=<s>] [--keystore=<f>]"
             echo "Builds a release APK of JCode into ./builds."
             echo "  -y, --yes       auto-accept install prompts"
-            echo "  --release       final build (default; dev.jcode / \"JCode\"; version from app/build.gradle.kts)"
-            echo "  --beta          side-by-side testing build (dev.jcode.beta / \"JCode (beta)\") that"
+            echo "  --release       final build (default; dev.blamspot.jcode / \"JCode\"; version from app/build.gradle.kts)"
+            echo "  --beta          side-by-side testing build (dev.blamspot.jcode.beta / \"JCode (beta)\") that"
             echo "                  installs ALONGSIDE the release app; versionName gets a -label suffix"
             echo "  --label=<s>     pre-release label, alpha.N|beta.N|rc.N (default: beta.1 -> 1.5.0-beta.1)"
             echo "  --keystore=<f>  signing keystore (overrides \$JCODE_KEYSTORE + the default). Omit it"
@@ -208,8 +208,8 @@ if [ -z "$VARIANT" ]; then
     if [ -t 0 ]; then
         printf '\n'
         say 'Which build?'
-        printf '  [1] Release  - final build (dev.jcode / "JCode"), version from app/build.gradle.kts\n'
-        printf '  [2] Beta     - side-by-side build (dev.jcode.beta / "JCode (beta)"): installs ALONGSIDE\n'
+        printf '  [1] Release  - final build (dev.blamspot.jcode / "JCode"), version from app/build.gradle.kts\n'
+        printf '  [2] Beta     - side-by-side build (dev.blamspot.jcode.beta / "JCode (beta)"): installs ALONGSIDE\n'
         printf '                 the release app, own data, versionName gets a -label suffix\n'
         read -r -p 'Select [1] ' _sel
         case "$_sel" in 2|p|P|b|B|pre*|beta) VARIANT="beta" ;; *) VARIANT="release" ;; esac
@@ -224,7 +224,7 @@ fi
 case "$VARIANT" in beta|prerelease) IS_PRE=1; VARIANT="beta" ;; *) IS_PRE=0; VARIANT="release" ;; esac
 # Beta = a separate app id (fixed ".beta", one beta slot) so it never overwrites the release build.
 ID_SUFFIX=""; APP_LABEL="JCode"; [ "$IS_PRE" = 1 ] && { ID_SUFFIX=".beta"; APP_LABEL="JCode (beta)"; }
-[ "$IS_PRE" = 1 ] && say "Variant: beta -> app id dev.jcode$ID_SUFFIX, label '$APP_LABEL', version label: $PRERELEASE_LABEL" || say "Variant: release"
+[ "$IS_PRE" = 1 ] && say "Variant: beta -> app id dev.blamspot.jcode$ID_SUFFIX, label '$APP_LABEL', version label: $PRERELEASE_LABEL" || say "Variant: release"
 
 # The version lives in app/build.gradle.kts (`val jcodeVersion = "…"`) — real Android metadata.
 VERSION="$(sed -n 's/^val jcodeVersion = "\([^"]*\)".*/\1/p' app/build.gradle.kts 2>/dev/null | head -1)"
@@ -435,5 +435,5 @@ fi
 if have sha256sum; then SHA="$(sha256sum "$OUT" | cut -d' ' -f1)"; else SHA="$(shasum -a 256 "$OUT" | cut -d' ' -f1)"; fi
 SIZE="$(du -h "$OUT" | cut -f1)"
 say "Done: $OUT ($SIZE, $SIGN_STATE)"
-[ -n "$ID_SUFFIX" ] && say "Installs as a SEPARATE app: dev.jcode$ID_SUFFIX ('$APP_LABEL') — won't overwrite the release build."
+[ -n "$ID_SUFFIX" ] && say "Installs as a SEPARATE app: dev.blamspot.jcode$ID_SUFFIX ('$APP_LABEL') — won't overwrite the release build."
 say "sha256: $SHA"

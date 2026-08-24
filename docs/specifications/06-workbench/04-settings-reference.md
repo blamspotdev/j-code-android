@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:feature:settings`, `:core:design`, `:core:config` |
-| **Primary sources** | feature/settings/src/main/java/dev/jcode/feature/settings/SettingsFeature.kt (1,949 lines), core/design/src/main/java/dev/jcode/design/SettingsDefaults.kt, core/design/src/main/java/dev/jcode/design/SettingsDropdownRow.kt, core/design/src/main/java/dev/jcode/design/SettingsResettableRow.kt, core/design/src/main/java/dev/jcode/design/SettingsTextFieldRow.kt, core/design/src/main/java/dev/jcode/design/DesignSystem.kt, app/src/main/java/dev/jcode/SettingsBackup.kt |
+| **Primary sources** | feature/settings/src/main/java/dev/blamspot/jcode/feature/settings/SettingsFeature.kt (1,949 lines), core/design/src/main/java/dev/blamspot/jcode/design/SettingsDefaults.kt, core/design/src/main/java/dev/blamspot/jcode/design/SettingsDropdownRow.kt, core/design/src/main/java/dev/blamspot/jcode/design/SettingsResettableRow.kt, core/design/src/main/java/dev/blamspot/jcode/design/SettingsTextFieldRow.kt, core/design/src/main/java/dev/blamspot/jcode/design/DesignSystem.kt, app/src/main/java/dev/blamspot/jcode/SettingsBackup.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -52,7 +52,7 @@ behind, because the built-in divider spans only the tab content.
 | **About** | Version, update check, backup and restore |
 | **Diagnostics** | Opt-in diagnostic logging: detail level, system-log and crash capture, view/export/clear |
 | **Editor** | Editor defaults, gestures, tabs, formatter, Markdown preview |
-| **Explorer** | Exclude files and folders |
+| **Explorer** | Exclude files and folders, Trash |
 | **Developer** | Developer options |
 
 ### 3.2 WORKSPACE / PROJECT tabs
@@ -97,6 +97,8 @@ by the Settings screen's modified/reset-to-default logic.
 | `HIDDEN_ROOT_MODE` | `ExplorerHiddenMode.HideSpecifiedAndInjected` | |
 | `EXCLUDE_EFFECT` | `ExplorerExcludeEffect.GreyOut` | |
 | `HIDDEN_ROOT_PATTERNS` | `".jcode"` | Newline-separated pattern list |
+| `TRASH_ENABLED` | `true` | Off makes an Explorer delete and an SCM discard permanent |
+| `TRASH_RETENTION_DAYS` | `30` | 0 keeps until the user empties it |
 | `RESPECT_DEVICE_CUTOUT` | `false` | |
 | `MARKDOWN_WRAP_PORTRAIT` | `true` | |
 | `EDITOR_FONT_SIZE` | `14f` | Clamped 8–72 |
@@ -150,6 +152,18 @@ Each lives in its own small file under `core/design/`:
 the user's newline-separated `specifiedRaw` list with an **injected** list that the SCM extension
 pushes from each project's `.gitignore`. `ExplorerExcludeEffect` then decides whether a matched
 entry is greyed out (default) or removed from the tree.
+
+### 5.2 Trash
+
+`TRASH_ENABLED` decides whether an Explorer delete and an extension's `workbench.trash` call move to
+the bin or destroy. The bin itself opens from the Explorer toolbar as an editor page
+(`EditorPageKind.Trash`, `TrashPage`). The Explorer reads it through `LocalTrashSettings` and words its confirmation
+accordingly; the workbench applies it on behalf of extensions, so whether a discard is kept stays a
+decision about JCode rather than one each extension makes for itself.
+
+`TRASH_RETENTION_DAYS` is swept at startup (`MainViewModel.init`), when the Trash page opens, and
+immediately when the value is lowered. `TRASH_RETENTION_CHOICES` holds the offered periods; 0 is
+"until I empty it" and never expires.
 
 ---
 
@@ -210,6 +224,27 @@ produces a `tar.gz` of the rootfs via `RootfsArchiver`.
 
 - Some enum member names are historical, kept for persistence compatibility rather than clarity.
 - The ENV VAR tab sits in the scope strip but is not a scope, which can read as one.
+
+### 11.1 Wiring audit, 1.6.2
+
+Every control on this screen was traced from its row through to something that acts on the value —
+55 persisted preference keys, 43 settings `CompositionLocal`s and the scoped `EditorConfig` block.
+All but one are wired. Two things are worth recording because they made the audit harder than it
+looks, and will do so again:
+
+- **A setting is not dead just because its flow has no reader.** `restoreLastSession` looks unused
+  until you notice `restoreSessionOnLaunch` reads `restoreLastSessionKey` — the raw preference key —
+  rather than the `StateFlow`. Volume keys are the same: the Settings screen reads
+  `LocalVolumeKeysSetting`, while the behaviour reads `viewModel.volumeUpAction` in `MainActivity`.
+- **A `CompositionLocal` whose only reader is `SettingsFeature` is the shape to look for**, but nine
+  of them match that and eight are legitimate — either the row *is* the feature (backup and update
+  actions), or the value reaches behaviour by a second path (word wrap through `applyConfigToTab`,
+  fonts through `MonoFontCatalog.resolve`, tab colouring through `effectiveTabColoring`,
+  diagnostics through `DiagnosticLog.configure`).
+
+The one that was genuinely dead was the minimap toggle, removed along with `Layer.MINIMAP`. In the
+scoped config, `formatOnSave` was wired up and `aggressiveAutocorrectKill` and `watcherExclude` were
+removed — see [Configuration model](../05-workspace/02-configuration-model.md).
 
 ---
 

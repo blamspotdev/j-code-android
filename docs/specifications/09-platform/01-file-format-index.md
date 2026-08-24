@@ -23,7 +23,7 @@ as the entry point when you have a file and need to know what owns it.
 | `<workspaceRoot>/.jcode-workspace.yaml` | YAML | `ConfigService` | [Configuration model](../05-workspace/02-configuration-model.md) |
 | `<folder>/.jcode/<folderName>.yaml` | YAML | `ConfigService`, `WorkspaceManager` | [Configuration model](../05-workspace/02-configuration-model.md) |
 | `<project>/.jcode/run.yaml` | YAML (v1 / v2) | `RunConfigStore` | [Run and build configurations](../05-workspace/03-run-and-build-configurations.md) |
-| `<project>/.jcode/trash/` | Directory | `FsOperations` | [Workspaces and projects](../05-workspace/01-workspaces-and-projects.md) |
+| `<filesDir>/trash/<id>/entry.json` | JSON | `Trash` | [Workspaces and projects §7](../05-workspace/01-workspaces-and-projects.md) |
 
 The per-folder YAML doubles as the **role marker** (`type: project | workspace`) and records
 `template:` for scaffolded projects.

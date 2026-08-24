@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.jcode.core.editor.completion"
+    namespace = "dev.blamspot.jcode.core.editor.completion"
     compileSdk = 36
 
     defaultConfig {
@@ -30,6 +30,6 @@ dependencies {
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
+    implementation(project(":core:design"))
     implementation(project(":core:editor"))
-    implementation(project(":core:editor-decor"))
 }

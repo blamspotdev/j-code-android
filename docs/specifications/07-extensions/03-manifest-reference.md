@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:feature:marketplace` |
-| **Primary sources** | feature/marketplace/src/main/java/dev/jcode/feature/marketplace/ExtensionInstaller.kt (`loadInstalled`, `headerMap`, `parseDeps`, `parseContributions`, `parseLanguages`, `parseSamples`, `loadTemplate`), feature/marketplace/src/main/java/dev/jcode/feature/marketplace/ExtensionManifestValidator.kt, feature/marketplace/src/main/java/dev/jcode/feature/marketplace/MarketplaceModels.kt |
+| **Primary sources** | feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/ExtensionInstaller.kt (`loadInstalled`, `headerMap`, `parseDeps`, `parseContributions`, `parseLanguages`, `parseSamples`, `loadTemplate`), feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/ExtensionManifestValidator.kt, feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/MarketplaceModels.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---

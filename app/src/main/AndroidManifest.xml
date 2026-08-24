@@ -153,7 +153,7 @@
             android:name=".AppInstallReceiver"
             android:exported="false" />
 
-        <!-- Virtual device (dev.jcode.vdevice): a declared activity the container never launches.
+        <!-- Virtual device (dev.blamspot.jcode.vdevice): a declared activity the container never launches.
              A guest activity belongs to a package the system has never heard of, so there is no
              ActivityInfo to build one from; this stub is that template, and nothing else. It is
              declared in the :guest process so the guest gets its own ART heap and framework hooks

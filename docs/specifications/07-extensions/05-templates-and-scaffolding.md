@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:feature:marketplace`, `:app` |
-| **Primary sources** | feature/marketplace/src/main/java/dev/jcode/feature/marketplace/TemplateCatalogModels.kt, feature/marketplace/src/main/java/dev/jcode/feature/marketplace/TemplateCatalog.kt, feature/marketplace/src/main/java/dev/jcode/feature/marketplace/TemplateScaffolder.kt (180 lines), feature/marketplace/src/main/java/dev/jcode/feature/marketplace/ExtensionInstaller.kt (`loadTemplate`) |
+| **Primary sources** | feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/TemplateCatalogModels.kt, feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/TemplateCatalog.kt, feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/TemplateScaffolder.kt (180 lines), feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/ExtensionInstaller.kt (`loadTemplate`) |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---

@@ -26,7 +26,7 @@ virtual device's own adb daemon.
 
 | | installed | in the container |
 |---|---|---|
-| identity | uid 10155, own process | uid 10166, `dev.jcode.debug:guest`, `installed = NO`, filesDir redirected under `vdevice/` |
+| identity | uid 10155, own process | uid 10166, `dev.blamspot.jcode.debug:guest`, `installed = NO`, filesDir redirected under `vdevice/` |
 | `AudioTrack` | `STATE_INITIALIZED`, `PLAYSTATE_PLAYING`, 132300/132300 frames, 0 underruns, `performanceMode = 2` | **identical** |
 | | `performanceMode 2` is `PERFORMANCE_MODE_POWER_SAVING` — the fixture asks for a 200 ms buffer, so neither column is a low-latency track. It is not a container limit. | |
 | routed device | `BUILTIN_SPEAKER "Odin2"` | `BUILTIN_SPEAKER "JCode vDevice"` |

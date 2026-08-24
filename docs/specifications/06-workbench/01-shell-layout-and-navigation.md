@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:app`, `:core:adaptive`, `:core:design` |
-| **Primary sources** | app/src/main/java/dev/jcode/JCodeShell.kt (4,999 lines), app/src/main/java/dev/jcode/workbench/WorkbenchChrome.kt, app/src/main/java/dev/jcode/workbench/WorkbenchChromeBars.kt, app/src/main/java/dev/jcode/workbench/WorkbenchModel.kt, app/src/main/java/dev/jcode/WorkbenchStatusBar.kt, app/src/main/java/dev/jcode/SessionStore.kt, core/adaptive/src/main/java/dev/jcode/adaptive/WindowInfo.kt, app/src/main/java/dev/jcode/MainActivity.kt |
+| **Primary sources** | app/src/main/java/dev/blamspot/jcode/JCodeShell.kt (4,999 lines), app/src/main/java/dev/blamspot/jcode/workbench/WorkbenchChrome.kt, app/src/main/java/dev/blamspot/jcode/workbench/WorkbenchChromeBars.kt, app/src/main/java/dev/blamspot/jcode/workbench/WorkbenchModel.kt, app/src/main/java/dev/blamspot/jcode/WorkbenchStatusBar.kt, app/src/main/java/dev/blamspot/jcode/SessionStore.kt, core/adaptive/src/main/java/dev/blamspot/jcode/adaptive/WindowInfo.kt, app/src/main/java/dev/blamspot/jcode/MainActivity.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---

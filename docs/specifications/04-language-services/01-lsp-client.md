@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | **Status** | Implemented — the client runs the catalogued servers and is wired to the editor (diagnostics, completions, go-to-definition, references, rename, formatting) |
-| **Modules** | `:core:lsp`, `:core:distro` (catalog + process spawn), `:feature:lsp-manager` (install UI), `:app` (`dev.jcode.lsp.LspController`) |
-| **Primary sources** | core/lsp/src/main/java/dev/jcode/core/lsp/LspSession.kt, core/lsp/src/main/java/dev/jcode/core/lsp/LspTransport.kt, core/lsp/src/main/java/dev/jcode/core/lsp/LspServerDescriptor.kt, core/lsp/src/main/java/dev/jcode/core/lsp/DiagnosticsBus.kt, app/src/main/java/dev/jcode/lsp/LspController.kt, core/distro/src/main/java/dev/jcode/core/distro/LspCatalogModels.kt |
+| **Modules** | `:core:lsp`, `:core:distro` (catalog + process spawn), `:feature:lsp-manager` (install UI), `:app` (`dev.blamspot.jcode.lsp.LspController`) |
+| **Primary sources** | core/lsp/src/main/java/dev/blamspot/jcode/core/lsp/LspSession.kt, core/lsp/src/main/java/dev/blamspot/jcode/core/lsp/LspTransport.kt, core/lsp/src/main/java/dev/blamspot/jcode/core/lsp/LspServerDescriptor.kt, core/lsp/src/main/java/dev/blamspot/jcode/core/lsp/DiagnosticsBus.kt, app/src/main/java/dev/blamspot/jcode/lsp/LspController.kt, core/distro/src/main/java/dev/blamspot/jcode/core/distro/LspCatalogModels.kt |
 
 ---
 
@@ -107,7 +107,7 @@ data class LspServerDescriptor(
 )
 ```
 
-`BUILT_IN` is **derived** from `dev.jcode.core.distro.LspServerCatalog.BUILT_IN` rather than
+`BUILT_IN` is **derived** from `dev.blamspot.jcode.core.distro.LspServerCatalog.BUILT_IN` rather than
 duplicating it, "so the catalog never drifts". Lookup helpers: `findForLanguage(languageId)`,
 `findForExtension(extension)`, `findForFile(fileName)`.
 
@@ -232,7 +232,7 @@ data class WorkspaceEditResult(val editsByPath: Map<String, List<TextEditResult>
 
 `DiagnosticSeverity.fromLsp(value)` maps 1–4 and **defaults to `ERROR`** for anything else.
 
-> This `DiagnosticSeverity` is a different type from `dev.jcode.core.editor.decor.DiagnosticSeverity`,
+> This `DiagnosticSeverity` is a different type from `dev.blamspot.jcode.core.editor.decor.DiagnosticSeverity`,
 > which carries a colour instead of the LSP number. Conversion happens at the editor boundary.
 
 Positions in `TextEditResult` and `LocationResult` are LSP coordinates — 0-based line, UTF-16
@@ -276,7 +276,7 @@ per update, with no incremental path.
 
 ## 8. `LspController` — session management
 
-`app/src/main/java/dev/jcode/lsp/LspController.kt` owns the running servers and routes the editor's
+`app/src/main/java/dev/blamspot/jcode/lsp/LspController.kt` owns the running servers and routes the editor's
 requests. It mirrors `DebugController`, but a debug session is singular and user-started while
 language servers start implicitly and several run at once.
 
@@ -382,4 +382,3 @@ when its turn comes.
 - [Debug Adapter Protocol](02-debug-adapter-protocol.md) — the sibling stdio client
 - [Syntax highlighting and completion](../02-editor/05-syntax-highlighting-and-completion.md)
 - [Storage and path model](../01-architecture/05-storage-and-path-model.md)
-- [Known gaps and unwired code](../09-platform/05-known-gaps-and-unwired-code.md)

@@ -137,6 +137,6 @@ public class NotifyMain extends Activity {
                 .build();
     }
 
-    static final String ACTION_REPLY = "dev.jcode.notifyfixture.REPLY";
-    static final String ACTION_DISMISS = "dev.jcode.notifyfixture.DISMISS";
+    static final String ACTION_REPLY = "dev.blamspot.jcode.notifyfixture.REPLY";
+    static final String ACTION_DISMISS = "dev.blamspot.jcode.notifyfixture.DISMISS";
 }

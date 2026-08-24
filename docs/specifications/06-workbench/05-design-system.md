@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:design`, `:core:adaptive` |
-| **Primary sources** | core/design/src/main/java/dev/jcode/design/DesignSystem.kt (532 lines), core/design/src/main/java/dev/jcode/design/ThemeBundle.kt (227), core/design/src/main/java/dev/jcode/design/IconBundle.kt (206), core/design/src/main/java/dev/jcode/design/CustomIconBundle.kt (184), core/design/src/main/java/dev/jcode/design/ManagerUi.kt (713), core/design/src/main/java/dev/jcode/design/ContextMenu.kt, core/design/src/main/java/dev/jcode/design/Tooltip.kt, app/src/main/java/dev/jcode/MonoFontCatalog.kt |
+| **Primary sources** | core/design/src/main/java/dev/blamspot/jcode/design/DesignSystem.kt (532 lines), core/design/src/main/java/dev/blamspot/jcode/design/ThemeBundle.kt (227), core/design/src/main/java/dev/blamspot/jcode/design/IconBundle.kt (206), core/design/src/main/java/dev/blamspot/jcode/design/CustomIconBundle.kt (184), core/design/src/main/java/dev/blamspot/jcode/design/ManagerUi.kt (713), core/design/src/main/java/dev/blamspot/jcode/design/ContextMenu.kt, core/design/src/main/java/dev/blamspot/jcode/design/Tooltip.kt, app/src/main/java/dev/blamspot/jcode/MonoFontCatalog.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---

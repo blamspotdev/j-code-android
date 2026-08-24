@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:app`, `:feature:marketplace` |
-| **Primary sources** | app/src/main/java/dev/jcode/workbench/ExtensionWebView.kt (1,245 lines), app/src/main/java/dev/jcode/workbench/VsCodeExtensionHost.kt (270), app/src/main/assets/vscode-host/host.js (662), app/src/main/java/dev/jcode/workbench/VsixDrawerPanel.kt, app/src/main/java/dev/jcode/workbench/ScmExtensionHost.kt, app/src/main/java/dev/jcode/workbench/ExtensionDevPanel.kt, app/src/main/java/dev/jcode/workbench/ExtensionDevLog.kt, feature/marketplace/src/main/java/dev/jcode/feature/marketplace/VsixPackage.kt (278) |
+| **Primary sources** | app/src/main/java/dev/blamspot/jcode/workbench/ExtensionWebView.kt (1,245 lines), app/src/main/java/dev/blamspot/jcode/workbench/VsCodeExtensionHost.kt (270), app/src/main/assets/vscode-host/host.js (662), app/src/main/java/dev/blamspot/jcode/workbench/VsixDrawerPanel.kt, app/src/main/java/dev/blamspot/jcode/workbench/ScmExtensionHost.kt, app/src/main/java/dev/blamspot/jcode/workbench/ExtensionDevPanel.kt, app/src/main/java/dev/blamspot/jcode/workbench/ExtensionDevLog.kt, feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/VsixPackage.kt (278) |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -318,7 +318,7 @@ raw form because only the presenting layer knows which of its own icons it can m
 - The `.vsix` surface is the webview slice only — `languages`, `debug`, `tasks` and `scm` throw.
 - `engines.vscode` is not enforced, so an extension targeting a much newer VS Code imports and then
   fails at its first unimplemented call.
-- `:core:ext` (the intended WASM host and contribution dispatcher) is a stub, as is
+- `:core:ext` (the intended WASM host and contribution dispatcher) was removed at 1.6.2, as was
   `:native:wasmtime-ffi`; there is no WASM extension runtime.
 
 ---

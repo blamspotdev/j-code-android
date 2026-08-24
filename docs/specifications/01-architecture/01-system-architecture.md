@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:app` and every `:core:*` / `:feature:*` / `:native:*` module |
-| **Primary sources** | app/src/main/AndroidManifest.xml, app/build.gradle.kts, build.gradle.kts, settings.gradle.kts, app/src/main/java/dev/jcode/MainActivity.kt, app/src/main/java/dev/jcode/BackendService.kt |
+| **Primary sources** | app/src/main/AndroidManifest.xml, app/build.gradle.kts, build.gradle.kts, settings.gradle.kts, app/src/main/java/dev/blamspot/jcode/MainActivity.kt, app/src/main/java/dev/blamspot/jcode/BackendService.kt |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -80,13 +80,13 @@ The application runs in up to three processes.
 
 ```mermaid
 flowchart LR
-    subgraph P1["dev.jcode — main process"]
+    subgraph P1["dev.blamspot.jcode — main process"]
         MA["MainActivity<br/>(the whole IDE UI)"]
         BS["BackendService<br/>foregroundServiceType=specialUse"]
         PDP["ProjectsDocumentsProvider"]
     end
 
-    subgraph P2["dev.jcode:guest — virtual device"]
+    subgraph P2["dev.blamspot.jcode:guest — virtual device"]
         GB["GuestBootstrapActivity"]
         GA["GuestActivity0..3 (stubs)"]
         GS["GuestSessionService"]
@@ -104,8 +104,8 @@ flowchart LR
 
 | Process | Declared at | Contains | Why separate |
 |---|---|---|---|
-| `dev.jcode` (main) | default | `MainActivity`, `BackendService`, `ProjectsDocumentsProvider`, `AppInstallReceiver` | — |
-| `dev.jcode:guest` | `android:process=":guest"` on `GuestBootstrapActivity`, `GuestActivity0`–`GuestActivity3`, `GuestSessionService` (AndroidManifest.xml:96–143) | The loaded guest APK and the framework hooks that host it | The guest gets its own ART heap and framework hooks and cannot corrupt the IDE |
+| `dev.blamspot.jcode` (main) | default | `MainActivity`, `BackendService`, `ProjectsDocumentsProvider`, `AppInstallReceiver` | — |
+| `dev.blamspot.jcode:guest` | `android:process=":guest"` on `GuestBootstrapActivity`, `GuestActivity0`–`GuestActivity3`, `GuestSessionService` (AndroidManifest.xml:96–143) | The loaded guest APK and the framework hooks that host it | The guest gets its own ART heap and framework hooks and cannot corrupt the IDE |
 | proot children | spawned at runtime | Every distro tool | They are ordinary Linux processes under a PTY, not Android components |
 
 The `:guest` process is **not a security boundary** — it shares the app's uid. See
@@ -114,7 +114,7 @@ The `:guest` process is **not a security boundary** — it shares the app's uid.
 `BackendService` is a `specialUse` foreground service with subtype
 `interactive_terminal_and_build_runner` and `android:stopWithTask="false"`, so terminal sessions,
 language servers, debug adapters, and build jobs survive backgrounding. It is driven by
-`SessionRegistry` (`app/src/main/java/dev/jcode/backend/SessionRegistry.kt`), whose
+`SessionRegistry` (`app/src/main/java/dev/blamspot/jcode/backend/SessionRegistry.kt`), whose
 `BackendSessionKind` enum is `TERMINAL`, `LANGUAGE_SERVER`, `DEBUG_ADAPTER`, `JOB`.
 
 ### 2.3 The three execution domains
@@ -204,12 +204,19 @@ Full detail in [Build variants and release](../09-platform/02-build-variants-and
 
 ## 6. Known gaps
 
-- Several `:feature:*` modules that the layer diagram implies own their UI are in fact empty
-  markers, with the real implementation living in `:app`. See
-  [Module map](02-module-map.md) and
-  [Known gaps and unwired code](../09-platform/05-known-gaps-and-unwired-code.md).
-- `:app` is very top-heavy: `JCodeShell.kt` (4,999 lines) and `MainViewModel.kt` (4,844 lines)
-  hold work that the module layering would place in features.
+- `:app` is very top-heavy: `JCodeShell.kt` (5,607 lines) and `MainViewModel.kt` (6,380 lines)
+  hold work that the module layering would place in features. `DistroService.kt` (2,524) likewise
+  mixes orchestration, catalog execution, apt self-heal and user management.
+- One split of the shape the layer diagram implies — a `:feature:*` module owning its UI — still
+  has its screens in `:app`; see [Module map](02-module-map.md). The nine marker-only modules that
+  used to make this worse were removed at 1.6.2.
+- Native wrappers (`Buffer`, `VtParser`, `PtyProcess`) each register their own `Cleaner` rather
+  than sharing a base class; the one that existed was removed at 1.6.2 because it released twice.
+  See [Concurrency and resource lifecycle](03-concurrency-and-resource-lifecycle.md).
+- Two distinct `DiagnosticSeverity` types (`core.lsp` and `core.editor.decor`) are converted at the
+  boundary.
+- `JCodePosture` in `:core:adaptive` is computed on every window change and nothing branches on
+  `TableTop` or `Book`.
 
 ---
 

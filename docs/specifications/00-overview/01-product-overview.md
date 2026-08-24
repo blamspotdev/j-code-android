@@ -17,7 +17,7 @@ real projects entirely on-device, with no companion app and no root.
 | | |
 |---|---|
 | Version | 1.6.2 |
-| Package | `dev.jcode` (`.debug` / `.beta` variants install side by side) |
+| Package | `dev.blamspot.jcode` (`.debug` / `.beta` variants install side by side) |
 | Platform | Android 13+ (`minSdk` / `targetSdk` 33, `compileSdk` 36) |
 | Release ABI | `arm64-v8a` |
 | Language | Kotlin + Jetpack Compose, with C, C++ and Rust for performance-critical subsystems |
@@ -85,15 +85,19 @@ These are settled and should not be revisited casually:
 The app builds clean and the major features are device-verified on arm64 (AYN Odin2). The
 significant gaps, stated up front:
 
-- **Editor ↔ language-server integration is incomplete.** The LSP client works, but Go to Definition,
-  Find References and Rename Symbol still show a "coming soon" notice, and LSP diagnostics do not
-  reach the Issues panel.
+- **Language-server coverage stops short of the full protocol.** Diagnostics, completion, Go to
+  Definition, Find References, Rename Symbol and Format Document all reach a running server, but
+  document sync re-sends the whole file on every change, hover has no editor UI, and there are no
+  code actions, semantic tokens, signature help or symbol search. See
+  [LSP client](../04-language-services/01-lsp-client.md).
 - **External formatters are not executed.** The built-in Format Document works; a Dev Pack's
   `formatter.command` is parsed and ignored.
-- **Tree-sitter is built but never loaded.** Colouring comes from a hand-written tokenizer.
-- Several `:feature:*` modules are empty markers whose real UI lives in `:app`.
+- **Syntax colouring is a hand-written tokenizer**, not a grammar engine. The tree-sitter binding
+  and its grammars were removed at 1.6.2 having never been reachable — see
+  [Syntax highlighting and completion](../02-editor/05-syntax-highlighting-and-completion.md).
+- **Cross-architecture emulation is inert.** The QEMU code paths exist; no emulator is bundled.
 
-The complete list is [Known gaps and unwired code](../09-platform/05-known-gaps-and-unwired-code.md).
+Each subsystem specification states its own gaps in a closing section, against the code as built.
 
 ---
 
@@ -127,6 +131,5 @@ The complete list is [Known gaps and unwired code](../09-platform/05-known-gaps-
 
 - [Glossary and conventions](02-glossary-and-conventions.md)
 - [System architecture](../01-architecture/01-system-architecture.md)
-- [Known gaps and unwired code](../09-platform/05-known-gaps-and-unwired-code.md)
 - [`README.md`](../../../README.md)
 - [`THIRD-PARTY-NOTICES.md`](../../../THIRD-PARTY-NOTICES.md)
