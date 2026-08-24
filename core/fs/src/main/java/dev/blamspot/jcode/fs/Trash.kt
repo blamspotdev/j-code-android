@@ -36,6 +36,16 @@ data class TrashEntry(
     val source: TrashSource,
 )
 
+/** One file inside a trashed folder. */
+@Immutable
+data class TrashChild(val path: String, val sizeBytes: Long)
+
+/** What a trashed folder holds, and how much of it the listing could name. */
+@Immutable
+data class TrashListing(val children: List<TrashChild> = emptyList(), val total: Int = 0) {
+    val truncated: Boolean get() = total > children.size
+}
+
 /**
  * The app's bin: deleted files kept aside for a while instead of destroyed.
  *
@@ -59,9 +69,61 @@ class Trash(private val root: File) {
     suspend fun list(): List<TrashEntry> = withContext(Dispatchers.IO) {
         root.listFiles().orEmpty()
             .filter { it.isDirectory }
-            .mapNotNull { dir -> read(dir) }
+            .mapNotNull { dir -> readEntry(dir) }
             .sortedByDescending { it.deletedAtMillis }
     }
+
+    /**
+     * The files inside a trashed folder, as paths relative to it.
+     *
+     * Capped: a trashed `node_modules` holds tens of thousands of files, and a preview that tried to
+     * name all of them would spend longer listing than the delete took.
+     */
+    suspend fun listInside(entry: TrashEntry, limit: Int = 2_000): TrashListing =
+        withContext(Dispatchers.IO) {
+            val payload = payloadOf(File(root, entry.id)) ?: return@withContext TrashListing()
+            if (!payload.isDirectory) return@withContext TrashListing()
+            val all = payload.walkTopDown().filter { it.isFile }.iterator()
+            val children = ArrayList<TrashChild>(limit.coerceAtMost(256))
+            var total = 0
+            while (all.hasNext()) {
+                val file = all.next()
+                total++
+                if (children.size < limit) {
+                    children += TrashChild(file.relativeTo(payload).invariantPath(), file.length())
+                }
+            }
+            TrashListing(
+                children = children.sortedBy { it.path.lowercase() },
+                total = total,
+            )
+        }
+
+    /**
+     * The bytes of a trashed file — the entry itself, or [inside] it when the entry is a folder.
+     *
+     * Bounded by [maxBytes] because this exists to show someone what they are about to restore, and
+     * a preview does not need the whole of a file that a phone cannot hold in one string anyway.
+     */
+    suspend fun read(entry: TrashEntry, inside: String? = null, maxBytes: Int = 512 * 1024): ByteArray? =
+        withContext(Dispatchers.IO) {
+            val payload = payloadOf(File(root, entry.id)) ?: return@withContext null
+            val file = if (inside.isNullOrEmpty()) payload else File(payload, inside)
+            // Refuse a path that climbs out of the entry; `inside` comes from a listing, but a
+            // preview must not be the one place a "../.." would be honoured.
+            if (!file.canonicalPath.startsWith(payload.canonicalPath)) return@withContext null
+            if (!file.isFile) return@withContext null
+            file.inputStream().use { input ->
+                val buffer = ByteArray(maxBytes)
+                var read = 0
+                while (read < maxBytes) {
+                    val n = input.read(buffer, read, maxBytes - read)
+                    if (n <= 0) break
+                    read += n
+                }
+                buffer.copyOf(read)
+            }
+        }
 
     /** Whether there is anything in the bin, without reading what. */
     suspend fun isEmpty(): Boolean = withContext(Dispatchers.IO) {
@@ -147,7 +209,7 @@ class Trash(private val root: File) {
         val cutoff = System.currentTimeMillis() - retentionDays * DAY_MS
         var dropped = 0
         root.listFiles().orEmpty().filter { it.isDirectory }.forEach { dir ->
-            val entry = read(dir)
+            val entry = readEntry(dir)
             // An entry too damaged to read is swept too — it can never be restored, and leaving it
             // means the bin only ever grows.
             if (entry == null || entry.deletedAtMillis < cutoff) {
@@ -268,7 +330,7 @@ class Trash(private val root: File) {
 
     // --- the entry file ------------------------------------------------------------------------
 
-    private fun read(dir: File): TrashEntry? {
+    private fun readEntry(dir: File): TrashEntry? {
         val json = runCatching { JSONObject(File(dir, ENTRY).readText()) }.getOrNull() ?: return null
         val name = json.optString("name").ifBlank { return null }
         if (payloadOf(dir) == null) return null
@@ -322,6 +384,9 @@ class Trash(private val root: File) {
         }
         return if (inside.isEmpty()) projectName else "$projectName/$inside"
     }
+
+    /** A relative path spelled the one way, whatever the platform's separator is. */
+    private fun File.invariantPath(): String = path.replace(File.separatorChar, '/')
 
     /** Sortable and unique: the moment it was binned, plus enough randomness for the same millisecond. */
     private fun newId(): String =

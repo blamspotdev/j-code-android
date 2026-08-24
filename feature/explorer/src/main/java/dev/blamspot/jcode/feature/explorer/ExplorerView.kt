@@ -143,7 +143,6 @@ fun ExplorerView(
     var showCreateDialog by remember { mutableStateOf<CreateTarget?>(null) }
     var showRenameDialog by remember { mutableStateOf<RenameTarget?>(null) }
     var showDeleteConfirm by remember { mutableStateOf<TreeRow?>(null) }
-    var showTrash by remember { mutableStateOf(false) }
 
     // Clipboard for copy/cut operations
     var clipboard by remember { mutableStateOf<ClipboardEntry?>(null) }
@@ -154,7 +153,9 @@ fun ExplorerView(
     val trash = remember(context) { WorkspaceServiceLocator.trash(context) }
     var trashHasItems by remember { mutableStateOf(false) }
     var trashRevision by remember { mutableStateOf(0) }
-    LaunchedEffect(trashRevision) { trashHasItems = !trash.isEmpty() }
+    // Re-checked whenever the Explorer comes back on screen as well as after a delete: the bin is
+    // emptied on its own page, so this cannot be the only thing that knows what is in it.
+    LaunchedEffect(trashRevision, autoRefreshEnabled) { trashHasItems = !trash.isEmpty() }
 
     // Load project root on first composition
     LaunchedEffect(project) {
@@ -344,7 +345,7 @@ fun ExplorerView(
             },
             canPaste = clipboard != null,
             showTrash = trashSettings.enabled || trashHasItems,
-            onOpenTrash = { showTrash = true },
+            onOpenTrash = trashSettings.onOpen,
         )
 
         // Content. Tree shows the hierarchy from the root (no breadcrumb); List is a flat
@@ -503,22 +504,6 @@ fun ExplorerView(
             },
             dismissButton = {
                 CompactOutlinedButton(text = "Cancel", onClick = { showDeleteConfirm = null })
-            },
-        )
-    }
-
-    if (showTrash) {
-        TrashDialog(
-            trash = trash,
-            retentionDays = trashSettings.retentionDays,
-            onDismiss = {
-                showTrash = false
-                trashRevision++
-            },
-            onSnackbar = { message -> onSnackbar?.invoke(message) },
-            onRestored = {
-                scope.launch { viewModel.refresh() }
-                scmUi.onFsActivity?.invoke()
             },
         )
     }

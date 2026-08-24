@@ -14,6 +14,9 @@ class TrashSettings(
     val retentionDays: Int = SettingsDefaults.TRASH_RETENTION_DAYS,
     val onSetEnabled: (Boolean) -> Unit = {},
     val onSetRetentionDays: (Int) -> Unit = {},
+    /** Open the Trash as an editor page. Here rather than as an Explorer parameter for the same
+     *  reason the rest of this class is: the toolbar that raises it is five call sites deep. */
+    val onOpen: () -> Unit = {},
 )
 
 val LocalTrashSettings = compositionLocalOf { TrashSettings() }

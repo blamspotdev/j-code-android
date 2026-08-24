@@ -4299,6 +4299,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _editorGroup.value = _editorGroup.value.withTabAdded(tab)
     }
 
+    /** Open (or focus) the Trash as an editor tab. */
+    fun openTrashPage() {
+        _bringEditorToFront.tryEmit(Unit)
+        val existing = _editorGroup.value.tabs.firstOrNull { it.pageKind == EditorPageKind.Trash }
+        if (existing != null) {
+            _editorGroup.value = _editorGroup.value.withActiveTabChanged(existing.id)
+            return
+        }
+        _editorGroup.value = _editorGroup.value.withTabAdded(
+            EditorTab.page(TRASH_TAB_ID, "Trash", EditorPageKind.Trash),
+        )
+    }
+
     fun openEnvironmentPage() {
         _bringEditorToFront.tryEmit(Unit)
         val existing = _editorGroup.value.tabs.firstOrNull { it.pageKind == EditorPageKind.Environment }
@@ -6335,6 +6348,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         private const val RELOAD_NOTICE_THROTTLE_MS = 4_000L
         const val SETTINGS_TAB_ID = "jcode://settings"
+        const val TRASH_TAB_ID = "jcode://trash"
         const val ENVIRONMENT_TAB_ID = "jcode://environment"
         const val SDK_DETAIL_PREFIX = "jcode://sdk/"
         const val LSP_DETAIL_PREFIX = "jcode://lsp/"

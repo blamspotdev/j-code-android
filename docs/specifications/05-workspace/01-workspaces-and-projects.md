@@ -179,6 +179,12 @@ cannot destroy it and a trashed build directory never appears in `git status`. A
 the bin share a volume, so taking something in is a rename; SAF entries are copied. Restoring lands
 beside an occupant under a numbered name rather than overwriting it.
 
+The bin is read from `TrashPage` (`EditorPageKind.Trash`), an editor page rather than a dialog: what
+decides whether an entry is the one to restore is its contents, so the list picks and the pane beside
+it previews — text, images, and the files inside a trashed folder, which can themselves be opened.
+`Trash.listInside` caps its listing and `Trash.read` caps its bytes; both exist to show someone what
+they are about to restore, not to reproduce it.
+
 ---
 
 ## 8. Explorer

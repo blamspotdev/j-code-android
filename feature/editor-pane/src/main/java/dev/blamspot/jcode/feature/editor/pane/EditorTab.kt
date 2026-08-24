@@ -9,7 +9,7 @@ import java.io.File
  * Identifies a non-file "page" tab (e.g. the in-editor Settings page). [None] is an ordinary
  * file-backed tab.
  */
-enum class EditorPageKind { None, Settings, Environment, SdkDetail, LspDetail, DebugEngineDetail, ExtensionDetail, ExtensionPermissions, ExtensionSources, ExtensionApp, VsixPanel, RunConfig, BuildConfig, Browser, ImageViewer, AndroidDevice, AppSandbox, VirtualHardware }
+enum class EditorPageKind { None, Settings, Environment, SdkDetail, LspDetail, DebugEngineDetail, ExtensionDetail, ExtensionPermissions, ExtensionSources, ExtensionApp, VsixPanel, RunConfig, BuildConfig, Browser, ImageViewer, AndroidDevice, AppSandbox, VirtualHardware, Trash }
 
 /**
  * Represents a single open tab in the editor. A file tab carries an [editorState]; a page tab

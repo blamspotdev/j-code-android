@@ -348,6 +348,7 @@ import dev.blamspot.jcode.design.LocalPerformanceSettings
 import dev.blamspot.jcode.design.WebPreviewBrowsers
 import dev.blamspot.jcode.design.LocalWebPreviewBrowsers
 import dev.blamspot.jcode.workbench.TerminalInstance
+import dev.blamspot.jcode.workbench.TrashPage
 import dev.blamspot.jcode.workbench.WorkbenchTopBar
 import dev.blamspot.jcode.workbench.WorkspaceHeader
 import dev.blamspot.jcode.workbench.ProjectRoster
@@ -394,6 +395,7 @@ import dev.blamspot.jcode.run.ProjectRunner
 import dev.blamspot.jcode.run.BuildConfigPage
 import dev.blamspot.jcode.run.RunConfigPage
 import dev.blamspot.jcode.fs.Workspace
+import dev.blamspot.jcode.fs.WorkspaceServiceLocator
 import dev.blamspot.jcode.fs.WorkspaceCrumb
 import dev.blamspot.jcode.fs.WorkspaceManager
 import dev.blamspot.jcode.fs.rememberOpenFolderLauncher
@@ -602,6 +604,7 @@ fun JCodeApp(
             retentionDays = trashRetentionDays,
             onSetEnabled = viewModel::setTrashEnabled,
             onSetRetentionDays = viewModel::setTrashRetentionDays,
+            onOpen = viewModel::openTrashPage,
         )
     }
     val respectDeviceCutout by viewModel.respectDeviceCutout.collectAsStateWithLifecycle()
@@ -3603,6 +3606,19 @@ private fun JCodeShell(
                                 )
                                 EditorPageKind.VirtualHardware ->
                                     VirtualHardwarePage(modifier = Modifier.fillMaxSize())
+                                EditorPageKind.Trash -> {
+                                    val trashContext = LocalContext.current
+                                    TrashPage(
+                                        trash = remember(trashContext) {
+                                            WorkspaceServiceLocator.trash(trashContext)
+                                        },
+                                        retentionDays = LocalTrashSettings.current.retentionDays,
+                                        onSnackbar = { message ->
+                                            scope.launch { snackbarHostState.showSnackbar(message) }
+                                        },
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                }
                                 EditorPageKind.Browser -> BrowserPage(modifier = Modifier.fillMaxSize())
                                 EditorPageKind.ImageViewer -> key(tab.id) {
                                     // Key by tab id so switching between image tabs (same call site)

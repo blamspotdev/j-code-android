@@ -1408,7 +1408,7 @@ object SettingsFeature {
             SettingsCard(
                 title = "Trash",
                 description = "Where deleted files go before they are gone. Covers Delete in the Explorer " +
-                    "and Discard in Source Control; the Trash itself is reached from the Explorer toolbar.",
+                    "and Discard in Source Control; the Trash itself opens from the Explorer toolbar.",
                 keywords = "trash bin recycle delete deleted remove restore recover undelete discard scm source control retention keep days empty permanently",
             ) {
                 ToggleRow(
