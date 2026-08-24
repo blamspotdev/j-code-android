@@ -16,7 +16,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /**
- * A compact, clickable manager list row: name + one-line description + trailing status chip.
+ * A compact, clickable manager list row: name + short description + trailing status chip.
  * Actions live on the detail page, so the drawer stays dense.
  */
 @Composable
@@ -54,7 +54,10 @@ fun ManagerListRow(
                 text = description,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+                // Two lines, because one loses the sentence. The status chip beside this column is
+                // as wide as its longest word ("Update available"), so a single line left roughly
+                // three words of a description before the ellipsis — every row read the same.
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
         }
