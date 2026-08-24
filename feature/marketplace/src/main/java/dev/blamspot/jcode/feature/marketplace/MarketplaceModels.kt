@@ -222,6 +222,8 @@ data class MarketplaceEntry(
     val minJCodeVersion: String? = null,
     /** JCode version this extension was built/tested against. */
     val targetJCodeVersion: String? = null,
+    /** Highest JCode app version that can run this extension. Null means no ceiling. */
+    val maxJCodeVersion: String? = null,
     /** Absolute URL of the marketplace-published icon, shown before install. Null if none. */
     val iconUrl: String? = null,
     /** One-line summary shown in the compact row. */
@@ -251,6 +253,29 @@ fun compareVersions(a: String, b: String): Int {
         if (na != nb) return na - nb
     }
     return 0
+}
+
+/**
+ * Why [appVersion] cannot run an extension declaring this floor and ceiling, or null when it can.
+ * Both bounds include the version they name: `minJCodeVersion: 1.7.0` runs on 1.7.0, and
+ * `maxJCodeVersion: 1.8.4` runs on 1.8.4 but not on 1.9. A blank bound is no bound.
+ *
+ * The installer refuses on this and the Extensions list explains it before anything is downloaded,
+ * so both say the same thing for the same reason.
+ */
+fun jcodeVersionMismatch(
+    minJCodeVersion: String?,
+    maxJCodeVersion: String?,
+    appVersion: String,
+    name: String,
+): String? {
+    if (!minJCodeVersion.isNullOrBlank() && compareVersions(appVersion, minJCodeVersion) < 0) {
+        return "$name requires JCode $minJCodeVersion or newer (you have $appVersion)"
+    }
+    if (!maxJCodeVersion.isNullOrBlank() && compareVersions(appVersion, maxJCodeVersion) > 0) {
+        return "$name supports JCode up to $maxJCodeVersion (you have $appVersion)"
+    }
+    return null
 }
 
 /** True when [latest] is a strictly newer version than [installed]. */

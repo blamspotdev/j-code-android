@@ -55,6 +55,7 @@ class ExtensionInstaller internal constructor(context: Context) {
                     fingerprint = fingerprint,
                     minJCodeVersion = entry.str("minJCodeVersion"),
                     targetJCodeVersion = entry.str("targetJCodeVersion"),
+                    maxJCodeVersion = entry.str("maxJCodeVersion"),
                     iconUrl = iconUrl,
                     description = entry.str("shortDescription") ?: entry.str("description"),
                     longDescription = entry.str("longDescription"),
@@ -72,7 +73,7 @@ class ExtensionInstaller internal constructor(context: Context) {
         withContext(Dispatchers.IO) {
             runCatching {
                 val jextPath = entry.jext ?: error("${entry.name} has no .jext package")
-                requireCompatible(entry.minJCodeVersion, appVersion, entry.name)
+                requireCompatible(entry.minJCodeVersion, entry.maxJCodeVersion, appVersion, entry.name)
                 val bytes = openStream(BASE_URL + jextPath).use { it.readBytes() }
                 installFromJextBytes(bytes, expectedFingerprint = entry.fingerprint, appVersion = appVersion)
             }
@@ -297,6 +298,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             ?: error("package has no extension.yaml id (nor a legacy extension.jehm uniqueName)")
         requireCompatible(
             yamlMap?.str("minJCodeVersion") ?: jehmMap?.str("minJCodeVersion"),
+            yamlMap?.str("maxJCodeVersion") ?: jehmMap?.str("maxJCodeVersion"),
             appVersion,
             yamlMap?.str("name") ?: jehmMap?.str("name") ?: uniqueName,
         )
@@ -328,11 +330,8 @@ class ExtensionInstaller internal constructor(context: Context) {
         return loadInstalled(dest) ?: error("Installed package has no valid extension.yaml")
     }
 
-    private fun requireCompatible(minVersion: String?, appVersion: String, name: String) {
-        if (minVersion.isNullOrBlank()) return
-        if (compareVersions(appVersion, minVersion) < 0) {
-            error("$name requires JCode $minVersion or newer (you have $appVersion)")
-        }
+    private fun requireCompatible(minVersion: String?, maxVersion: String?, appVersion: String, name: String) {
+        jcodeVersionMismatch(minVersion, maxVersion, appVersion, name)?.let { error(it) }
     }
 
     // Verify every listed file's SHA-256 and the order-independent package fingerprint. The fingerprint

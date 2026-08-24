@@ -26,7 +26,7 @@ this document in step when adding a key.
 id, name, publisher, author, authors, type, version, description,
 longDescription, shortDescription, samples, templates, language, languages,
 settings, api, requires, suggests, contributes, entry, images,
-minJCodeVersion, targetJCodeVersion, category, subcategory
+minJCodeVersion, targetJCodeVersion, maxJCodeVersion, category, subcategory
 ```
 
 | Key | Type | Required | Notes |
@@ -52,6 +52,7 @@ minJCodeVersion, targetJCodeVersion, category, subcategory
 | `entry` | map | No | `ui`: relative path to the web-UI HTML |
 | `images` | map | No | `icon`: relative path |
 | `minJCodeVersion` | string | No | Install refused below this |
+| `maxJCodeVersion` | string | No | Install refused above this; absent means no ceiling |
 | `targetJCodeVersion` | string | No | Accepted; informational |
 | `category` / `subcategory` | string | No | Marketplace classification |
 

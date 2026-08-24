@@ -65,10 +65,12 @@ import dev.blamspot.jcode.design.ManagerItemStatus
 import dev.blamspot.jcode.design.ManagerListRow
 import dev.blamspot.jcode.design.ManagerPanelHeader
 import dev.blamspot.jcode.design.ManagerGroupHeader
+import dev.blamspot.jcode.design.ManagerNoticeCard
 import dev.blamspot.jcode.design.ManagerSectionCard
 import dev.blamspot.jcode.design.SettingsDropdownRow
 import dev.blamspot.jcode.design.SettingsAutocompleteRow
 import dev.blamspot.jcode.design.SettingsTextFieldRow
+import dev.blamspot.jcode.BuildConfig
 import dev.blamspot.jcode.feature.marketplace.CodeSample
 import dev.blamspot.jcode.feature.marketplace.ExtensionActivation
 import dev.blamspot.jcode.feature.marketplace.ExtensionDeps
@@ -78,6 +80,7 @@ import dev.blamspot.jcode.feature.marketplace.choosesActivation
 import dev.blamspot.jcode.feature.marketplace.hasWebUi
 import dev.blamspot.jcode.feature.marketplace.MarketplaceEntry
 import dev.blamspot.jcode.feature.marketplace.isUpdateAvailable
+import dev.blamspot.jcode.feature.marketplace.jcodeVersionMismatch
 import dev.blamspot.jcode.feature.marketplace.otherAuthors
 import dev.blamspot.jcode.feature.marketplace.isVsix
 import dev.blamspot.jcode.feature.marketplace.primaryAuthor
@@ -107,7 +110,10 @@ internal fun ExtensionsPanel(
     LaunchedEffect(Unit) { if (available.isEmpty()) onRefreshMarketplace() }
     var query by remember { mutableStateOf("") }
     var searchActive by remember { mutableStateOf(false) }
-    val rows = remember(available, installed, query) { buildExtensionRows(available, installed, query) }
+    val appVersion = BuildConfig.VERSION_NAME
+    val rows = remember(available, installed, query, appVersion) {
+        buildExtensionRows(available, installed, query, appVersion)
+    }
 
     Column(
         modifier = modifier
@@ -200,10 +206,16 @@ internal fun ExtensionsPanel(
                             },
                             // A VS Code import sits beside JCode's own extensions and behaves
                             // differently — unverified, and only partly supported — so it says so.
-                            trailing = if (row.vsix) {
-                                { VsixBadge() }
-                            } else {
-                                null
+                            // An extension this JCode cannot run says so in the list, rather than
+                            // letting the detail page be the first place anyone finds out.
+                            trailing = when {
+                                row.incompatible != null -> {
+                                    { IncompatibleBadge() }
+                                }
+                                row.vsix -> {
+                                    { VsixBadge() }
+                                }
+                                else -> null
                             },
                         )
                     }
@@ -577,6 +589,11 @@ internal fun ExtensionDetailPage(
     val samples = (installed?.samples.orEmpty()).ifEmpty { entry?.samples.orEmpty() }
     val hasDeps = entry != null && (!entry.requires.isEmpty || !entry.suggests.isEmpty)
     var showDeps by remember(id) { mutableStateOf(false) }
+    // Checked here as well as in the installer: the install would fail anyway, and failing after a
+    // download with a toast is a worse way to learn it than a disabled button and a reason.
+    val incompatible = entry?.let {
+        jcodeVersionMismatch(it.minJCodeVersion, it.maxJCodeVersion, BuildConfig.VERSION_NAME, it.name)
+    }
 
     ManagerDetailScreen(
         title = entry?.name ?: installed?.name ?: id,
@@ -586,6 +603,9 @@ internal fun ExtensionDetailPage(
         busy = busy,
         busyLabel = installPhase,
         actionsEnabled = !busy && (!uninstalled || reinstallable),
+        // Only Install/Update: an incompatible extension that is already installed must still be
+        // removable, which is the one action that makes sense in that state.
+        installEnabled = incompatible == null,
         onInstall = { if (hasDeps) showDeps = true else entry?.let(onInstall) },
         onUpdate = { entry?.let(onInstall) },
         onUninstall = { onUninstall(id) },
@@ -600,6 +620,12 @@ internal fun ExtensionDetailPage(
             )
         },
         extra = {
+            incompatible?.let { reason ->
+                ManagerNoticeCard(
+                    title = "Not supported on this JCode",
+                    message = "$reason. An installed copy keeps working; this only stops it being installed here.",
+                )
+            }
             if (uninstalled) {
                 RemovedNotice(
                     text = if (reinstallable) {
@@ -1100,6 +1126,23 @@ private fun RemovedNotice(text: String) {
     }
 }
 
+/** Marks a row this JCode cannot run — the reason itself is on the detail page. */
+@Composable
+private fun IncompatibleBadge() {
+    Text(
+        text = "Unsupported",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.error,
+        modifier = Modifier
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.error.copy(alpha = 0.6f),
+                shape = RoundedCornerShape(Radius.sm),
+            )
+            .padding(horizontal = Space.s, vertical = Space.hairline),
+    )
+}
+
 /** Marks a row as a VS Code import: unverified, and only as supported as JCode's API slice allows. */
 @Composable
 private fun VsixBadge() {
@@ -1131,6 +1174,8 @@ private data class ExtensionRow(
     val iconUrl: String?,
     /** Imported from a VS Code `.vsix` rather than published as a JCode extension. */
     val vsix: Boolean = false,
+    /** Why this JCode cannot run it, or null. Set from the marketplace entry's declared range. */
+    val incompatible: String? = null,
 )
 
 /** Merge marketplace + installed into one list, filtered by [query] and sorted installed-first. */
@@ -1138,6 +1183,7 @@ private fun buildExtensionRows(
     available: List<MarketplaceEntry>,
     installed: List<InstalledExtension>,
     query: String,
+    appVersion: String,
 ): List<ExtensionRow> {
     val installedById = installed.associateBy { it.id }
     val availableIds = available.map { it.id }.toSet()
@@ -1157,6 +1203,9 @@ private fun buildExtensionRows(
             // Anything a custom source publishes is a `.vsix`, so it carries the badge before it is
             // installed too — and keeps it once an update entry stands in for the installed row.
             vsix = inst?.isVsix ?: (e.vsixAssetUrl != null),
+            // Only what is offered can be incompatible: an installed-only row has nothing to
+            // install, and its own manifest is what the host already loaded.
+            incompatible = jcodeVersionMismatch(e.minJCodeVersion, e.maxJCodeVersion, appVersion, e.name),
         )
     }
     val installedOnly = installed.filter { it.id !in availableIds }.map { ext ->

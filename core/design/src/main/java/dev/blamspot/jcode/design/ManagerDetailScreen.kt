@@ -38,6 +38,12 @@ fun ManagerDetailScreen(
     status: ManagerItemStatus,
     busy: Boolean,
     actionsEnabled: Boolean,
+    /**
+     * Whether *acquiring* is possible — Install, Update and per-version installs. Removal is not
+     * gated by it: something already installed must stay removable even when it can no longer be
+     * installed, which is exactly the case for an extension this app version has outgrown.
+     */
+    installEnabled: Boolean = true,
     onInstall: () -> Unit,
     onUpdate: () -> Unit,
     onUninstall: () -> Unit,
@@ -174,14 +180,14 @@ fun ManagerDetailScreen(
                     CompactFilledButton(
                         text = "Install",
                         onClick = onInstall,
-                        enabled = actionsEnabled,
+                        enabled = actionsEnabled && installEnabled,
                         modifier = Modifier.weight(1f, fill = false),
                     )
                 } else {
                     CompactFilledButton(
                         text = if (status == ManagerItemStatus.UpdateAvailable) "Update" else "Reinstall",
                         onClick = onUpdate,
-                        enabled = actionsEnabled,
+                        enabled = actionsEnabled && installEnabled,
                         modifier = Modifier.weight(1f, fill = false),
                     )
                 }
