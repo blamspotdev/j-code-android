@@ -37,7 +37,9 @@ import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.DatasetLinked
 import androidx.compose.material.icons.rounded.Dns
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.RestoreFromTrash
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.DeveloperMode
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
@@ -97,6 +99,7 @@ enum class JCodeIcon {
     Preview, Pin, Palette, CommandPalette, ScreenRotation, Fullscreen, KeepAwake,
     Lock, LockOpen,
     TextIncrease, TextDecrease, GoToLine,
+    Trash, Restore,
 }
 
 /**
@@ -193,6 +196,10 @@ val defaultIconBundle = IconBundle(
         JCodeIcon.Copy to Icons.Rounded.ContentCopy,
         JCodeIcon.Cut to Icons.Rounded.ContentCut,
         JCodeIcon.Delete to Icons.Rounded.DeleteOutline,
+        // Filled, where the row action is outlined: the bin itself and "delete this" sit in the same
+        // toolbars, and one silhouette for both makes the destructive one look like the safe one.
+        JCodeIcon.Trash to Icons.Rounded.Delete,
+        JCodeIcon.Restore to Icons.Rounded.RestoreFromTrash,
         JCodeIcon.Open to Icons.Rounded.FileOpen,
         JCodeIcon.Rename to Icons.Rounded.DriveFileRenameOutline,
         JCodeIcon.SelectAll to Icons.Rounded.SelectAll,

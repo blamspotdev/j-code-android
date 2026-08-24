@@ -194,6 +194,21 @@ interface NativeHost {
     fun setHiddenInjected(paths: List<String>)
 
     /**
+     * Move files into JCode's Trash instead of destroying them, and report how many went.
+     *
+     * For a plugin whose own action deletes the user's work — Source Control's "Discard" throws away
+     * every uncommitted edit in a file, which git cannot give back. Call it *before* the destructive
+     * command runs; what is trashed is the state as it is now.
+     *
+     * [paths] are absolute, guest or host. Anything that does not exist is skipped rather than
+     * reported. The user's Trash setting is honoured by the workbench, so a return of 0 may simply
+     * mean they turned it off — the caller's job is to offer the copy, not to decide it is kept.
+     *
+     * Present since JCode 1.6.2; an extension that calls it must say so with `minJCodeVersion`.
+     */
+    suspend fun trash(paths: List<String>): Int = 0
+
+    /**
      * The Explorer context-menu tap waiting for this extension, consumed by reading it.
      *
      * A tap can land before the plugin is ready, so the workbench holds the most recent one rather

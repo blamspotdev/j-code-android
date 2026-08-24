@@ -9,10 +9,22 @@ object WorkspaceServiceLocator {
     @Volatile
     private var workspaceManager: WorkspaceManager? = null
 
+    @Volatile
+    private var trash: Trash? = null
+
     fun workspaceManager(context: Context): WorkspaceManager {
         return workspaceManager ?: synchronized(this) {
             workspaceManager ?: createWorkspaceManager(context.applicationContext).also {
                 workspaceManager = it
+            }
+        }
+    }
+
+    /** The app's Trash. One bin for every project — see [Trash]. */
+    fun trash(context: Context): Trash {
+        return trash ?: synchronized(this) {
+            trash ?: Trash(java.io.File(context.applicationContext.filesDir, "trash")).also {
+                trash = it
             }
         }
     }

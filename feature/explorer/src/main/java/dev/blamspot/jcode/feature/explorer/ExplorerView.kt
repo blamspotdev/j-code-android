@@ -60,6 +60,8 @@ import dev.blamspot.jcode.design.CompactContextMenu
 import dev.blamspot.jcode.design.ContextAction
 import dev.blamspot.jcode.design.JCodeTheme
 import dev.blamspot.jcode.design.JcTooltip
+import dev.blamspot.jcode.design.LocalTrashSettings
+import dev.blamspot.jcode.design.trashRetentionLabel
 import dev.blamspot.jcode.design.DenseRow
 import dev.blamspot.jcode.design.IconSize
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -77,6 +79,8 @@ import dev.blamspot.jcode.fs.deletePermanently
 import dev.blamspot.jcode.fs.exportFileToUri
 import dev.blamspot.jcode.fs.importContentUris
 import dev.blamspot.jcode.fs.renameFile
+import dev.blamspot.jcode.fs.TrashSource
+import dev.blamspot.jcode.fs.WorkspaceServiceLocator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -139,9 +143,18 @@ fun ExplorerView(
     var showCreateDialog by remember { mutableStateOf<CreateTarget?>(null) }
     var showRenameDialog by remember { mutableStateOf<RenameTarget?>(null) }
     var showDeleteConfirm by remember { mutableStateOf<TreeRow?>(null) }
+    var showTrash by remember { mutableStateOf(false) }
 
     // Clipboard for copy/cut operations
     var clipboard by remember { mutableStateOf<ClipboardEntry?>(null) }
+
+    // The bin. Its button stays on the toolbar while there is anything in it even after the setting
+    // is turned off — opting out should stop deletes going there, not strand what already has.
+    val trashSettings = LocalTrashSettings.current
+    val trash = remember(context) { WorkspaceServiceLocator.trash(context) }
+    var trashHasItems by remember { mutableStateOf(false) }
+    var trashRevision by remember { mutableStateOf(0) }
+    LaunchedEffect(trashRevision) { trashHasItems = !trash.isEmpty() }
 
     // Load project root on first composition
     LaunchedEffect(project) {
@@ -330,6 +343,8 @@ fun ExplorerView(
                 }
             },
             canPaste = clipboard != null,
+            showTrash = trashSettings.enabled || trashHasItems,
+            onOpenTrash = { showTrash = true },
         )
 
         // Content. Tree shows the hierarchy from the root (no breadcrumb); List is a flat
@@ -430,36 +445,80 @@ fun ExplorerView(
         )
     }
 
-    // Delete confirmation — deletes are permanent (no trash bin); git is the recovery path.
+    // Delete confirmation. With the Trash on this is a move and says so; with it off the delete is
+    // final, and the wording has to be the one the button will actually honour.
     showDeleteConfirm?.let { target ->
         val isDir = target.node.kind == FsKind.Directory
+        val subject = if (isDir) "The folder, with everything in it," else "The file"
+        val what = if (isDir) "folder and everything in it" else "file"
+        val toTrash = trashSettings.enabled
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = null },
             title = { Text("Delete '${target.node.name}'?") },
             text = {
                 Text(
-                    "This permanently deletes the ${if (isDir) "folder and its contents" else "file"}. " +
-                        "If the project is under git, you can restore it there.",
+                    if (toTrash) {
+                        "$subject moves to the Trash, where it is kept for " +
+                            trashRetentionLabel(trashSettings.retentionDays).lowercase() +
+                            " and can be restored."
+                    } else {
+                        "This permanently deletes the $what. " +
+                            "If the project is under git, you can restore it there."
+                    },
                 )
             },
-            // Destructive "Delete" is kept out of the rightmost (reflexive-tap) slot; Material puts
-            // the dismiss button to its left, so Cancel lands there and Delete stays the far action.
+            // Emphasis follows the consequence: a move to the Trash is recoverable and gets the
+            // ordinary filled button, while a real delete is drawn destructive.
             confirmButton = {
-                CompactDestructiveButton(text = "Delete", onClick = {
+                val confirmAction: () -> Unit = {
                     val node = target.node
                     showDeleteConfirm = null
                     scope.launch {
                         runCatching {
-                            deletePermanently(fs, context, node.path)
+                            if (toTrash) {
+                                trash.put(
+                                    context = context,
+                                    path = node.path,
+                                    projectName = project.name,
+                                    projectRoot = (project.fsPath as? FsPath.Local)?.file?.absolutePath,
+                                    source = TrashSource.Explorer,
+                                )
+                                trashRevision++
+                            } else {
+                                deletePermanently(fs, context, node.path)
+                            }
                             viewModel.refresh()
                             scmUi.onFsActivity?.invoke()
-                            onSnackbar?.invoke("Deleted '${node.name}'")
+                            onSnackbar?.invoke(
+                                if (toTrash) "Moved '${node.name}' to Trash" else "Deleted '${node.name}'",
+                            )
                         }.onFailure { onSnackbar?.invoke("Delete failed: ${it.message}") }
                     }
-                })
+                }
+                if (toTrash) {
+                    CompactFilledButton(text = "Move to Trash", onClick = confirmAction)
+                } else {
+                    CompactDestructiveButton(text = "Delete", onClick = confirmAction)
+                }
             },
             dismissButton = {
-                CompactFilledButton(text = "Cancel", onClick = { showDeleteConfirm = null })
+                CompactOutlinedButton(text = "Cancel", onClick = { showDeleteConfirm = null })
+            },
+        )
+    }
+
+    if (showTrash) {
+        TrashDialog(
+            trash = trash,
+            retentionDays = trashSettings.retentionDays,
+            onDismiss = {
+                showTrash = false
+                trashRevision++
+            },
+            onSnackbar = { message -> onSnackbar?.invoke(message) },
+            onRestored = {
+                scope.launch { viewModel.refresh() }
+                scmUi.onFsActivity?.invoke()
             },
         )
     }
@@ -887,6 +946,8 @@ private fun ExplorerToolbar(
     onRefresh: () -> Unit,
     onPaste: () -> Unit,
     canPaste: Boolean,
+    showTrash: Boolean,
+    onOpenTrash: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -901,6 +962,12 @@ private fun ExplorerToolbar(
         ToolbarIcon(jcIcon(JCodeIcon.Refresh), "Refresh", onRefresh)
         if (viewMode == ExplorerViewMode.Tree) {
             ToolbarIcon(jcIcon(JCodeIcon.Collapse), "Collapse all", onCollapseAll)
+        }
+        // Away from the make-and-refresh cluster, at the end of the row: the bin is where deletes
+        // are undone, not another thing to do to the tree.
+        if (showTrash) {
+            Spacer(modifier = Modifier.weight(1f))
+            ToolbarIcon(jcIcon(JCodeIcon.Trash), "Trash", onOpenTrash)
         }
     }
 }

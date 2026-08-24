@@ -52,7 +52,7 @@ behind, because the built-in divider spans only the tab content.
 | **About** | Version, update check, backup and restore |
 | **Diagnostics** | Opt-in diagnostic logging: detail level, system-log and crash capture, view/export/clear |
 | **Editor** | Editor defaults, gestures, tabs, formatter, Markdown preview |
-| **Explorer** | Exclude files and folders |
+| **Explorer** | Exclude files and folders, Trash |
 | **Developer** | Developer options |
 
 ### 3.2 WORKSPACE / PROJECT tabs
@@ -97,6 +97,8 @@ by the Settings screen's modified/reset-to-default logic.
 | `HIDDEN_ROOT_MODE` | `ExplorerHiddenMode.HideSpecifiedAndInjected` | |
 | `EXCLUDE_EFFECT` | `ExplorerExcludeEffect.GreyOut` | |
 | `HIDDEN_ROOT_PATTERNS` | `".jcode"` | Newline-separated pattern list |
+| `TRASH_ENABLED` | `true` | Off makes an Explorer delete and an SCM discard permanent |
+| `TRASH_RETENTION_DAYS` | `30` | 0 keeps until the user empties it |
 | `RESPECT_DEVICE_CUTOUT` | `false` | |
 | `MARKDOWN_WRAP_PORTRAIT` | `true` | |
 | `EDITOR_FONT_SIZE` | `14f` | Clamped 8–72 |
@@ -150,6 +152,17 @@ Each lives in its own small file under `core/design/`:
 the user's newline-separated `specifiedRaw` list with an **injected** list that the SCM extension
 pushes from each project's `.gitignore`. `ExplorerExcludeEffect` then decides whether a matched
 entry is greyed out (default) or removed from the tree.
+
+### 5.2 Trash
+
+`TRASH_ENABLED` decides whether an Explorer delete and an extension's `workbench.trash` call move to
+the bin or destroy. The Explorer reads it through `LocalTrashSettings` and words its confirmation
+accordingly; the workbench applies it on behalf of extensions, so whether a discard is kept stays a
+decision about JCode rather than one each extension makes for itself.
+
+`TRASH_RETENTION_DAYS` is swept at startup (`MainViewModel.init`), when the Trash view opens, and
+immediately when the value is lowered. `TRASH_RETENTION_CHOICES` holds the offered periods; 0 is
+"until I empty it" and never expires.
 
 ---
 

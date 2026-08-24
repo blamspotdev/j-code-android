@@ -229,7 +229,8 @@ Project or a Workspace before it moves under the projects root. See
 1. `NativeSearch.FLAG_*` mirrors the Rust constants.
 2. Match columns are UTF-16 code units on both paths.
 3. `Sink.onMatch` returning `false` must stop the walk — cancellation depends on it.
-4. `.jcode/trash/` is always excluded, so deleted files never resurface in results.
+4. `.jcode/trash/` is always excluded. The Trash itself is app-private and outside every project,
+   so nothing in it is reachable by a search in the first place.
 5. Explorer status maps are keyed by `FsPath.stableId` (an absolute host path).
 6. The SCM WebView must be hosted persistently; a plain `AndroidView` blanks on rotation.
 

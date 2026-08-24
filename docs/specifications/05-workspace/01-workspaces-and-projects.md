@@ -172,8 +172,12 @@ the slow path if a provider rejects the batched form.
 `FolderScan(fileCount, totalBytes)` is returned by `scanFolderForImport` so the UI can show a
 determinate import progress bar (`ImportPhase.Scanning` then `ImportPhase.Copying`).
 
-Deletes route through `.jcode/trash/`, which is why that path is in the search engine's default
-excludes.
+Deletes route through the **Trash** (`Trash.kt`) when `TRASH_ENABLED` is on, and through
+`deletePermanently` when it is not. The bin is app-private — `<filesDir>/trash/<id>/` holding an
+`entry.json` and a `data/<name>` payload — rather than a folder inside the project, so `git clean`
+cannot destroy it and a trashed build directory never appears in `git status`. A local project and
+the bin share a volume, so taking something in is a rename; SAF entries are copied. Restoring lands
+beside an occupant under a numbered name rather than overwriting it.
 
 ---
 

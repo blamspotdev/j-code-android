@@ -104,6 +104,7 @@ import dev.blamspot.jcode.fs.Project
 import dev.blamspot.jcode.fs.ProjectKind
 import dev.blamspot.jcode.fs.RecentEntity
 import dev.blamspot.jcode.fs.scanFolderForImport
+import dev.blamspot.jcode.fs.TrashSource
 import dev.blamspot.jcode.fs.Workspace
 import dev.blamspot.jcode.fs.WorkspaceCrumb
 import dev.blamspot.jcode.fs.WorkspaceManager
@@ -1194,6 +1195,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { uiPreferences.edit { it[explorerHiddenPatternsKey] = raw } }
     }
 
+    private val trashEnabledKey = booleanPreferencesKey("trash_enabled")
+
+    /** Whether an Explorer delete and an SCM discard move to the Trash instead of destroying. */
+    val trashEnabled: StateFlow<Boolean> = uiPreferences.data
+        .map { prefs -> prefs[trashEnabledKey] ?: SettingsDefaults.TRASH_ENABLED }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.TRASH_ENABLED)
+
+    fun setTrashEnabled(enabled: Boolean) {
+        viewModelScope.launch { uiPreferences.edit { it[trashEnabledKey] = enabled } }
+    }
+
+    private val trashRetentionDaysKey = intPreferencesKey("trash_retention_days")
+
+    /** How long a trashed item is kept before the sweep drops it. 0 keeps it until the user empties. */
+    val trashRetentionDays: StateFlow<Int> = uiPreferences.data
+        .map { prefs -> prefs[trashRetentionDaysKey] ?: SettingsDefaults.TRASH_RETENTION_DAYS }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.TRASH_RETENTION_DAYS)
+
+    fun setTrashRetentionDays(days: Int) {
+        viewModelScope.launch {
+            uiPreferences.edit { it[trashRetentionDaysKey] = days.coerceAtLeast(0) }
+            // Immediately, not at the next launch: shortening the period is an instruction about
+            // what is in the bin now, and leaving expired entries visible would contradict it.
+            trash.sweep(days.coerceAtLeast(0))
+        }
+    }
+
+    /** The app's bin — see [dev.blamspot.jcode.fs.Trash]. */
+    private val trash by lazy { WorkspaceServiceLocator.trash(appContext) }
+
     private val respectCutoutKey = booleanPreferencesKey("respect_device_cutout")
 
     /** Whether to keep content out of the display cutout (notch/punch-hole). Mirrored to synchronous
@@ -1293,6 +1324,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     (state as? AdbBridgeState.Ready)?.relayPort ?: 0
             }
         }
+        // Expire the Trash once per start. Not on a timer: the retention period is measured in days
+        // and a session rarely spans one, so a start plus the sweep the Trash view does when opened
+        // covers everything a schedule would, without a wakeup that exists only to delete nothing.
+        viewModelScope.launch { trash.sweep(trashRetentionDays.value) }
     }
 
     private val virtualDeviceAdb: AdbDaemon by lazy { VirtualDeviceAdbService.daemon(appContext) }
@@ -4206,6 +4241,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Which project a host path belongs to, as a name and a root.
+     *
+     * Read off the path rather than taken from the open project: a workspace can hold several
+     * repositories, and the one an extension is acting on is not necessarily the one on screen.
+     */
+    private fun owningProject(file: File): Pair<String, String?> {
+        val projectsRoot = dev.blamspot.jcode.core.distro.WorkspaceHostPaths.projectsRoot.trimEnd('/')
+        val inside = file.absolutePath.removePrefix("$projectsRoot/")
+        if (inside != file.absolutePath) {
+            val name = inside.substringBefore('/')
+            if (name.isNotBlank()) return name to "$projectsRoot/$name"
+        }
+        val open = selectedProject.value
+        return open?.name.orEmpty() to (open?.fsPath as? FsPath.Local)?.file?.absolutePath
+    }
+
     /** Save a clipboard image pasted into the terminal under the active project and return its guest
      *  /workspace path (or null if there's no open project or the write fails). Called on the main
      *  thread from the terminal paste action; images are small (screenshots) so the write is inline. */
@@ -4796,6 +4848,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         "workbench.notify" -> {
             emitMessage(p.optString("message").take(300))
             apiOk(JSONObject())
+        }
+
+        // The workbench's bin, offered to extensions so a destructive action of theirs can be as
+        // recoverable as one of the Explorer's — Source Control's "Discard" is the case it exists
+        // for. The setting is honoured here rather than by the caller: whether a delete is kept is
+        // the user's decision about JCode, not a decision each extension gets to make for itself.
+        "workbench.trash" -> {
+            val paths = p.optJSONArray("paths")
+            val enabled = trashEnabled.value
+            var moved = 0
+            if (enabled && paths != null) {
+                for (i in 0 until paths.length()) {
+                    val file = resolveHostFile(paths.optString(i))?.takeIf { it.exists() } ?: continue
+                    val (name, root) = owningProject(file)
+                    runCatching {
+                        trash.put(appContext, FsPath.Local(file), name, root, TrashSource.SourceControl)
+                    }.onSuccess { moved++ }
+                }
+            }
+            apiOk(JSONObject().put("moved", moved).put("enabled", enabled))
         }
 
         "workbench.openUrl" -> {

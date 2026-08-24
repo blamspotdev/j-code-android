@@ -337,6 +337,8 @@ import dev.blamspot.jcode.vdevice.SimulatedHardware
 import dev.blamspot.jcode.vdevice.VirtualHardwarePage
 import dev.blamspot.jcode.design.LocalCutoutSetting
 import dev.blamspot.jcode.design.LocalExplorerHiddenSetting
+import dev.blamspot.jcode.design.LocalTrashSettings
+import dev.blamspot.jcode.design.TrashSettings
 import dev.blamspot.jcode.design.LocalVolumeKeysSetting
 import dev.blamspot.jcode.design.VolumeKeyAction
 import dev.blamspot.jcode.design.VolumeKeysSetting
@@ -590,6 +592,16 @@ fun JCodeApp(
                         explorerHiddenPatterns.lines().map { it.trim() }.filter { it.isNotEmpty() } + hiddenInjected[pid].orEmpty()
                 }
             },
+        )
+    }
+    val trashEnabled by viewModel.trashEnabled.collectAsStateWithLifecycle()
+    val trashRetentionDays by viewModel.trashRetentionDays.collectAsStateWithLifecycle()
+    val trashSettings = remember(trashEnabled, trashRetentionDays) {
+        TrashSettings(
+            enabled = trashEnabled,
+            retentionDays = trashRetentionDays,
+            onSetEnabled = viewModel::setTrashEnabled,
+            onSetRetentionDays = viewModel::setTrashRetentionDays,
         )
     }
     val respectDeviceCutout by viewModel.respectDeviceCutout.collectAsStateWithLifecycle()
@@ -1602,6 +1614,7 @@ fun JCodeApp(
         LocalPerformanceSettings provides performanceSettings,
         LocalEnvVarSettings provides envVarSettings,
         LocalExplorerHiddenSetting provides explorerHiddenSetting,
+        LocalTrashSettings provides trashSettings,
         LocalCutoutSetting provides cutoutSetting,
         LocalAppUpdate provides appUpdateSetting,
         LocalSettingsBackup provides settingsBackupActions,

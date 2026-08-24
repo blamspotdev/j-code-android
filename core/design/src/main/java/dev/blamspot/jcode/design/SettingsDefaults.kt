@@ -23,6 +23,10 @@ object SettingsDefaults {
     val HIDDEN_ROOT_MODE = ExplorerHiddenMode.HideSpecifiedAndInjected
     val EXCLUDE_EFFECT = ExplorerExcludeEffect.GreyOut
     const val HIDDEN_ROOT_PATTERNS = ".jcode"
+
+    // On by default: a delete the user cannot take back is the surprising behaviour, not the safe one.
+    const val TRASH_ENABLED = true
+    const val TRASH_RETENTION_DAYS = 30
     const val RESPECT_DEVICE_CUTOUT = false
     const val MARKDOWN_WRAP_PORTRAIT = true
     const val EDITOR_FONT_SIZE = 14f

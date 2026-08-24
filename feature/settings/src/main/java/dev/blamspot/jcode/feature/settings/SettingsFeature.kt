@@ -106,6 +106,9 @@ import dev.blamspot.jcode.design.LocalEnvVarSettings
 import dev.blamspot.jcode.design.LocalEnvironmentBackup
 import dev.blamspot.jcode.design.LocalCutoutSetting
 import dev.blamspot.jcode.design.LocalExplorerHiddenSetting
+import dev.blamspot.jcode.design.LocalTrashSettings
+import dev.blamspot.jcode.design.TRASH_RETENTION_CHOICES
+import dev.blamspot.jcode.design.trashRetentionLabel
 import dev.blamspot.jcode.design.LocalTabColoringSetting
 import dev.blamspot.jcode.design.LocalTabMaxSize
 import dev.blamspot.jcode.design.TabColoring
@@ -187,6 +190,7 @@ object SettingsFeature {
         val editorDragSetting = LocalEditorDragMovesCursor.current
         val restoreSessionSetting = LocalRestoreSession.current
         val explorerHiddenSetting = LocalExplorerHiddenSetting.current
+        val trashSettings = LocalTrashSettings.current
         val cutoutSetting = LocalCutoutSetting.current
         val volumeKeysSetting = LocalVolumeKeysSetting.current
         val tabColoringSetting = LocalTabColoringSetting.current
@@ -1400,6 +1404,35 @@ object SettingsFeature {
                     singleLine = false,
                     minLines = 3,
                 )
+            }
+            SettingsCard(
+                title = "Trash",
+                description = "Where deleted files go before they are gone. Covers Delete in the Explorer " +
+                    "and Discard in Source Control; the Trash itself is reached from the Explorer toolbar.",
+                keywords = "trash bin recycle delete deleted remove restore recover undelete discard scm source control retention keep days empty permanently",
+            ) {
+                ToggleRow(
+                    label = "Move deleted files to Trash",
+                    supporting = "Deleting a file or folder, or discarding a change in Source Control, keeps a " +
+                        "copy that can be restored. Turn this off to delete immediately and permanently.",
+                    checked = trashSettings.enabled,
+                    onCheckedChange = trashSettings.onSetEnabled,
+                    modified = trashSettings.enabled != SettingsDefaults.TRASH_ENABLED,
+                    onReset = { trashSettings.onSetEnabled(SettingsDefaults.TRASH_ENABLED) },
+                )
+                if (trashSettings.enabled) {
+                    SettingsDropdownRow(
+                        label = "Keep deleted files for",
+                        supporting = "Older items are removed when JCode starts and when the Trash is opened. " +
+                            "The Trash is app-private storage, so what is in it counts against the app's size.",
+                        options = TRASH_RETENTION_CHOICES.map { it.toString() },
+                        selected = trashSettings.retentionDays.toString(),
+                        onSelect = { trashSettings.onSetRetentionDays(it.toInt()) },
+                        optionLabel = { trashRetentionLabel(it.toInt()) },
+                        modified = trashSettings.retentionDays != SettingsDefaults.TRASH_RETENTION_DAYS,
+                        onReset = { trashSettings.onSetRetentionDays(SettingsDefaults.TRASH_RETENTION_DAYS) },
+                    )
+                }
             }
 
             } // end Explorer

@@ -140,6 +140,9 @@ internal class NativeHostBridge(
     override fun setHiddenInjected(paths: List<String>) =
         send("workbench.setHiddenInjected", JSONObject().put("paths", JSONArray(paths)))
 
+    override suspend fun trash(paths: List<String>): Int =
+        call("workbench.trash", JSONObject().put("paths", JSONArray(paths)))?.optInt("moved") ?: 0
+
     override suspend fun pendingContextAction(): NativeContextAction? {
         val action = call("workbench.pendingContextAction")?.optJSONObject("action") ?: return null
         val id = action.optString("actionId").ifBlank { return null }
