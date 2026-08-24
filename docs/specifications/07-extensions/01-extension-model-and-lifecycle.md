@@ -152,7 +152,7 @@ flowchart TB
     open --> zip["inner plain .jext ZIP"]
     dev --> zip
     zip --> fp["verify .jext-manifest.json<br/>per-file SHA-256 + package fingerprint"]
-    fp --> ver["requireCompatible(minJCodeVersion, appVersion)"]
+    fp --> ver["requireCompatible(min/maxJCodeVersion, appVersion)"]
     ver --> tmp["unpack to extensions/.tmp-&lt;id&gt;"]
     tmp --> swap["atomic swap → extensions/&lt;id&gt;"]
     swap --> load["loadInstalled(dir) → InstalledExtension"]
@@ -243,6 +243,7 @@ Signed marketplace packages are always `dev = false` and are not debuggable.
 | Signature verification fails | Install aborted: "not an official package or it was tampered with" |
 | File SHA-256 or package fingerprint mismatch | Install aborted |
 | `minJCodeVersion` newer than the app | Install refused with a version message |
+| `maxJCodeVersion` older than the app | Install refused; the Extensions list badges the row **Unsupported** and disables Install before anything downloads |
 | `api.minApiVersion` newer than the host | Validation error; the extension will not run |
 | Extension has no `extension.yaml` id | Install fails: "package has no extension.yaml id" |
 | Interrupted install | The `.tmp-<id>` directory is discarded; the previous version stays intact |

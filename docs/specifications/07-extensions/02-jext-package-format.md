@@ -177,7 +177,10 @@ requireCompatible(minVersion, appVersion, name)
 // error("$name requires JCode $minVersion or newer (you have $appVersion)")
 ```
 
-A blank or absent `minJCodeVersion` means "no floor". Comparison is semantic, not lexical.
+A blank or absent `minJCodeVersion` means "no floor", and a blank or absent `maxJCodeVersion`
+means "no ceiling". Both bounds include the version they name: `1.7.0`–`1.8.4` runs on both ends
+and not on 1.9. Comparison is semantic, not lexical. `jext pack` refuses a ceiling below the floor,
+since that describes no JCode at all.
 
 ---
 
@@ -222,6 +225,7 @@ filesDir/extensions/
 | GCM tag mismatch | `AEADBadTagException` from `doFinal` |
 | Any manifest check | See §5.3 |
 | `minJCodeVersion` too new | `<name> requires JCode <v> or newer (you have <appVersion>)` |
+| `maxJCodeVersion` too old | `<name> supports JCode up to <v> (you have <appVersion>)` |
 
 ---
 

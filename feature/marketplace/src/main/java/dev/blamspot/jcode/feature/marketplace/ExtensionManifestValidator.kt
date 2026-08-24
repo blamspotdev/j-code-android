@@ -24,7 +24,7 @@ object ExtensionManifestValidator {
         "id", "name", "publisher", "author", "authors", "type", "version", "description",
         "longDescription", "shortDescription", "samples", "templates", "language", "languages",
         "settings", "api", "requires", "suggests", "contributes", "entry", "images",
-        "minJCodeVersion", "targetJCodeVersion", "category", "subcategory",
+        "minJCodeVersion", "targetJCodeVersion", "maxJCodeVersion", "category", "subcategory",
     )
     private val KNOWN_CAPABILITIES = setOf("api", "exec", "fs", "config", "workbench", "service")
 
