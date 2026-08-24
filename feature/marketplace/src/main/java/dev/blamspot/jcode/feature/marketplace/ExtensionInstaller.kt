@@ -39,7 +39,7 @@ class ExtensionInstaller internal constructor(context: Context) {
                 val jext = entry.str("jext") ?: return@mapNotNull null // .jext-only marketplace
                 val fingerprint = (entry["fingerprint"] as? Map<*, *>)?.toStringKeyMap()?.str("value")
                     ?: entry.str("fingerprint")
-                // Only the marketplace-published `icon:` path (dist/icons/…) is fetchable; the
+                // Only the marketplace-published `icon:` path (dist_v2/icons/…) is fetchable; the
                 // per-package `images.icon` points inside the .jext and isn't a usable URL.
                 val iconUrl = entry.str("icon")?.let { if (it.startsWith("http")) it else BASE_URL + it }
                 MarketplaceEntry(
@@ -848,7 +848,11 @@ class ExtensionInstaller internal constructor(context: Context) {
 
     private companion object {
         const val BASE_URL = "https://raw.githubusercontent.com/blamspotdev/j-code-marketplace/main/"
-        const val INDEX_URL = BASE_URL + "marketplace.yaml"
+
+        // The marketplace serves one index per app generation. 1.7.0 reads `marketplace_v2.yaml`,
+        // whose entries point into `dist_v2/`; `marketplace.yaml` + `dist/` are frozen where 1.6.x
+        // left them so already-shipped builds keep resolving the packages they know.
+        const val INDEX_URL = BASE_URL + "marketplace_v2.yaml"
         const val JEHM_FILE = "extension.jehm"
         const val JEXT_MANIFEST = ".jext-manifest.json"
         const val DEV_MARKER = ".jcode-dev"

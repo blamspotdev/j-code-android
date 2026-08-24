@@ -200,7 +200,7 @@ data class CodeSample(
     val language: String? = null,
 )
 
-/** One extension listed in the remote marketplace index (marketplace.yaml). */
+/** One extension listed in the remote marketplace index (marketplace_v2.yaml). */
 data class MarketplaceEntry(
     /** Globally-unique reverse-DNS install id (the .jehm `uniqueName`). */
     val id: String,
