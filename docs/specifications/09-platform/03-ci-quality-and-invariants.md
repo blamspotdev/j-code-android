@@ -240,9 +240,10 @@ Repository conventions worth knowing:
 
 ## 8. Known gaps
 
-- **The only CI workflow that gates anything is the no-host-root guard** (the version-bump
-  workflow automates a chore, it does not check anything). There is no build, lint, unit-test or
-  instrumented-test workflow.
+- **No CI workflow gates anything.** The two that exist — `release.yml` and `version-bump.yml` —
+  publish and bump; neither checks. The no-host-root scanner runs only from the commit hook and the
+  release scripts, so a contributor without hooks enabled, or a pull request from a fork, reaches
+  `main` unscanned. There is no build, lint, unit-test or instrumented-test workflow.
 - `detekt` is a placeholder task with no configuration.
 - Warning-free builds and the contrast standards are conventions, not gates.
 - Test coverage is narrow: the buffer and the highlighter have differential tests; the terminal, LSP,

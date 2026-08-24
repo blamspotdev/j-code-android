@@ -130,9 +130,8 @@ says otherwise.
 
 ### 4.2 Where a claim is "as designed" rather than "as built"
 
-It says so, in place, and the case also appears in
-[Known gaps and unwired code](../09-platform/05-known-gaps-and-unwired-code.md). If a document
-describes something without such a note, it is describing running code.
+It says so, in place, and the subsystem's own closing "Known gaps" section repeats it. If a
+document describes something without such a note, it is describing running code.
 
 ---
 

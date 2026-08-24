@@ -91,8 +91,9 @@ Rust library is built before it compiles.
 
 ## 6. Where the feature code actually lives
 
-Four such `:feature:*` stubs were removed at 1.6.2 (`terminal-pane`, `scm`, `problems`, `search`) —
-see [Known gaps](../09-platform/05-known-gaps-and-unwired-code.md) for where each one's work is done.
+Four such `:feature:*` stubs were removed at 1.6.2 (`terminal-pane`, `scm`, `problems`, `search`);
+their work lives in `TerminalSessionHost.kt`, `workbench/ScmExtensionHost.kt`, `IssuesPanel.kt` and
+`workbench/SearchToolPanel.kt` respectively.
 One split of this shape remains, because the module still holds real code alongside its UI half:
 
 | Stub module | Real implementation |
@@ -143,11 +144,16 @@ mechanism.
 
 ## 9. Known gaps
 
-- Stub modules: `:feature:debug` (UI half), `:native:editor-render`, `:native:wasmtime-ffi`. The
-  nine marker-only `:core:*`/`:feature:*` stubs were removed at 1.6.2 (45 modules down to 36).
-- Built-but-unwired: `:core:treesitter`, `:native:grammars`, `:native:libgit2`, the editor/undo/config
-  halves of `:native:core`.
-- Full inventory with reasons: [Known gaps and unwired code](../09-platform/05-known-gaps-and-unwired-code.md).
+- Stub modules that stay, because each ships an `.so` the smoke test loads: `:native:editor-render`
+  (a stub `.so`, no sources) and `:native:wasmtime-ffi` (a four-line Rust crate returning a version).
+  `:feature:debug` keeps `DebugEngineManagerFeature`; only its two marker objects went.
+- Removed at 1.6.2: nine marker-only `:core:*`/`:feature:*` stubs (45 modules down to 36), then the
+  three built-but-unwired native stacks — `:native:libgit2` (1.3 MB/ABI, zero JNI functions),
+  `:native:core` (629 KB/ABI, no `external fun` declared against it) and
+  `:core:treesitter` + `:native:grammars` (whose CMakeLists never ran, so the grammars were never
+  built or shipped). That took the debug APK from 90.2 MB to 86.1 MB and the count from 36 to 31.
+- `:native:proot` and `:native:grammars` look like stubs and are not: the first carries the proot
+  binary and its loaders, the second is a CMake target. Neither has Kotlin sources or needs any.
 
 ---
 

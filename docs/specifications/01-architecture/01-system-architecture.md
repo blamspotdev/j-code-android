@@ -204,12 +204,19 @@ Full detail in [Build variants and release](../09-platform/02-build-variants-and
 
 ## 6. Known gaps
 
-- Several `:feature:*` modules that the layer diagram implies own their UI are in fact empty
-  markers, with the real implementation living in `:app`. See
-  [Module map](02-module-map.md) and
-  [Known gaps and unwired code](../09-platform/05-known-gaps-and-unwired-code.md).
-- `:app` is very top-heavy: `JCodeShell.kt` (4,999 lines) and `MainViewModel.kt` (4,844 lines)
-  hold work that the module layering would place in features.
+- `:app` is very top-heavy: `JCodeShell.kt` (5,607 lines) and `MainViewModel.kt` (6,380 lines)
+  hold work that the module layering would place in features. `DistroService.kt` (2,524) likewise
+  mixes orchestration, catalog execution, apt self-heal and user management.
+- One split of the shape the layer diagram implies — a `:feature:*` module owning its UI — still
+  has its screens in `:app`; see [Module map](02-module-map.md). The nine marker-only modules that
+  used to make this worse were removed at 1.6.2.
+- Native wrappers (`Buffer`, `VtParser`, `PtyProcess`) each register their own `Cleaner` rather
+  than sharing a base class; the one that existed was removed at 1.6.2 because it released twice.
+  See [Concurrency and resource lifecycle](03-concurrency-and-resource-lifecycle.md).
+- Two distinct `DiagnosticSeverity` types (`core.lsp` and `core.editor.decor`) are converted at the
+  boundary.
+- `JCodePosture` in `:core:adaptive` is computed on every window change and nothing branches on
+  `TableTop` or `Book`.
 
 ---
 

@@ -14,8 +14,8 @@
 
 These specs describe **what the system actually is today**, derived from the source tree — not
 what it was planned to be. Where an intended design was never wired up, the spec says so in
-place rather than describing the intent as if it shipped. The complete list of such cases lives
-in [Known gaps and unwired code](09-platform/05-known-gaps-and-unwired-code.md).
+place rather than describing the intent as if it shipped — each document closes with its own
+"Known gaps" section, so the caveat sits beside the thing it qualifies.
 
 They are *not* a requirements document. There are no `SHALL` statements and no requirement IDs;
 nothing here is a promise about future behavior.
@@ -39,8 +39,6 @@ for *how to work in this repo* (conventions, locked decisions, verification comm
 
 **Looking for a specific on-disk format** — go straight to the
 [File format index](09-platform/01-file-format-index.md).
-
-**Auditing what is real** — [Known gaps and unwired code](09-platform/05-known-gaps-and-unwired-code.md).
 
 ---
 
@@ -135,7 +133,6 @@ for *how to work in this repo* (conventions, locked decisions, verification comm
 | [02 Build variants and release](09-platform/02-build-variants-and-release.md) | Toolchain versions, variants, version codes, signing |
 | [03 CI, quality and invariants](09-platform/03-ci-quality-and-invariants.md) | The no-host-root scanner, code-quality rules, verification commands |
 | [04 Security and privacy](09-platform/04-security-and-privacy.md) | Trust model, sandbox boundaries, permissions, log hygiene |
-| [05 Known gaps and unwired code](09-platform/05-known-gaps-and-unwired-code.md) | Stubs, orphaned code, declared-but-unused dependencies |
 
 ---
 

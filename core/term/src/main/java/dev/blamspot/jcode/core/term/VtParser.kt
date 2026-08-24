@@ -38,7 +38,7 @@ class VtParser(rows: Int, cols: Int) : AutoCloseable {
      * task-complete, 7714 open-url, 7715 nested-shell open, 7716 task progress) queued by the native
      * parser during [feed]. Each native entry is encoded "<code>;<payload>" and split at the FIRST
      * ';' — payloads may themselves contain ';' (7713's is "<token>;<exitCode>"; 7716's is
-     * "<token>;<percent>;<label>"; 7715's is "open;<token>;<b64label>;<b64cwd>;<b64user>"). Returns
+     * "<token>;<percent>;<label>"; 7715's is "open;<token>;<label>"). Returns
      * an empty list when nothing is queued.
      */
     fun drainOsc(): List<Pair<Int, String>> {

@@ -382,4 +382,3 @@ when its turn comes.
 - [Debug Adapter Protocol](02-debug-adapter-protocol.md) — the sibling stdio client
 - [Syntax highlighting and completion](../02-editor/05-syntax-highlighting-and-completion.md)
 - [Storage and path model](../01-architecture/05-storage-and-path-model.md)
-- [Known gaps and unwired code](../09-platform/05-known-gaps-and-unwired-code.md)

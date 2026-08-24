@@ -258,9 +258,9 @@ on the single-writer dispatcher. Calling them from the UI thread is a deliberate
   computes fold ranges automatically — folds only appear if a caller supplies them.
 - `carets` is a list and the model is multi-caret-capable, but the input layer creates a single
   caret; there is no multi-cursor UI.
-- `native/core`'s C++ `EditorState`/`UndoManager` (with matching JNI exports) exists and is never
-  bound — this Kotlin implementation is the live one. See
-  [Known gaps and unwired code](../09-platform/05-known-gaps-and-unwired-code.md).
+- `native/core`'s C++ `EditorState`/`UndoManager` were removed at 1.6.2 having never been bound —
+  `core/editor` declared no `external fun` against them. This Kotlin implementation always was, and
+  remains, the live one.
 
 ---
 

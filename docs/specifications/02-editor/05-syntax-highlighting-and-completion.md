@@ -250,4 +250,3 @@ see §7.
 - [Rendering and decorations](03-rendering-and-decorations.md)
 - [LSP client](../04-language-services/01-lsp-client.md)
 - [Extension model and lifecycle](../07-extensions/01-extension-model-and-lifecycle.md)
-- [Known gaps and unwired code](../09-platform/05-known-gaps-and-unwired-code.md)

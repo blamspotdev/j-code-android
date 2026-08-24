@@ -266,4 +266,3 @@ Project or a Workspace before it moves under the projects root. See
 - [Storage and path model](../01-architecture/05-storage-and-path-model.md)
 - [Extension API and hosts](../07-extensions/04-extension-api-and-hosts.md)
 - [Panels and tools](../06-workbench/03-panels-and-tools.md)
-- [Known gaps and unwired code](../09-platform/05-known-gaps-and-unwired-code.md)
