@@ -651,20 +651,12 @@ class TerminalSessionManager(
     fun foregroundSessions(): List<Pair<String, String>> =
         synchronized(sessionsLock) { _sessions.values.mapNotNull { s -> s.foreground?.let { s.id to it } } }
 
-    /** True if any session is running a foreground program (used to warn before closing). */
-    fun hasForegroundProcess(): Boolean =
-        synchronized(sessionsLock) { _sessions.values.any { it.foreground != null } }
-
     /** Parent session to refocus when the relocated child [childId] ends, or null. */
     fun relocationParentOf(childId: String): String? = relocationParents[childId]
 
     /** Relocated child tabs whose parent is [parentId] (for cascade-close). */
     fun childrenOf(parentId: String): List<String> =
         relocationParents.entries.filter { it.value == parentId }.map { it.key }
-
-    /** True if [parentId] has a live relocated child — its shell is blocked waiting on the child, so
-     *  it must be treated as busy (never idle-reaped, warned before close). */
-    fun hasLiveRelocatedChild(parentId: String): Boolean = relocationParents.containsValue(parentId)
 
     /** Forget the relocation link for [childId] once the host has handled its exit. */
     fun clearRelocation(childId: String) { relocationParents.remove(childId) }
@@ -743,11 +735,6 @@ class TerminalSessionManager(
      * Get a session by ID.
      */
     fun getSession(id: String): Session? = synchronized(sessionsLock) { _sessions[id] }
-
-    /**
-     * Get the active session.
-     */
-    fun getActiveSession(): Session? = activeSessionId?.let { getSession(it) }
 
     /**
      * Close all sessions.

@@ -328,9 +328,6 @@ internal object GuestRuntime {
         active?.let { GuestWindow.applySize(it, widthPx, heightPx) }
     }
 
-    /** The label the device's status bar names the running app by. */
-    fun activeLabel(): String? = active?.let { guest -> guest.labelOf(guest.launchActivity).toString() }
-
     /** Hosts intra-guest `startActivity` calls in the tab while [launcher] is set. */
     fun setEmbeddedLauncher(launcher: ((Intent) -> Boolean)?) {
         embeddedLauncher = launcher

@@ -14,6 +14,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -41,6 +42,8 @@ fun CompactSearchField(
     modifier: Modifier = Modifier,
     autoFocus: Boolean = false,
     onImeAction: (() -> Unit)? = null,
+    /** Shows a spinner in place of the clear button while a search is still running. */
+    searching: Boolean = false,
 ) {
     val focusRequester = remember { FocusRequester() }
     if (autoFocus) {
@@ -84,7 +87,9 @@ fun CompactSearchField(
                     modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
                 )
             }
-            if (query.isNotEmpty()) {
+            if (searching) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+            } else if (query.isNotEmpty()) {
                 Icon(
                     LocalIconBundle.current[JCodeIcon.Close],
                     contentDescription = "Clear search",

@@ -230,33 +230,3 @@ internal fun ProjectRoster(
         )
     }
 }
-
-@Composable
-internal fun WelcomeCard(
-    title: String,
-    icon: ImageVector,
-    lines: List<String>,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f))
-            .padding(Space.md),
-        verticalArrangement = Arrangement.spacedBy(Space.sm),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Space.sm),
-        ) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Text(title, fontWeight = FontWeight.SemiBold)
-        }
-        lines.forEach { line ->
-            Text(
-                text = line,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}

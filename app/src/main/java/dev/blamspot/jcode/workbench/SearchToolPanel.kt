@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import dev.blamspot.jcode.core.search.SearchMatch
 import dev.blamspot.jcode.core.search.SearchModule
 import dev.blamspot.jcode.core.search.SearchOptions
+import dev.blamspot.jcode.design.CompactSearchField
 import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.LocalIconBundle
@@ -215,7 +216,7 @@ internal fun SearchToolPanel(
             modifier = Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.sm),
             verticalArrangement = Arrangement.spacedBy(Space.s),
         ) {
-            SearchField(
+            CompactSearchField(
                 query = query,
                 onQueryChange = { query = it },
                 searching = searching,
@@ -344,65 +345,6 @@ private fun MatchRow(match: SearchMatch, onClick: () -> Unit) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-    }
-}
-
-/** Compact single-line search field (~36dp) matching the manager panels — the default
- *  OutlinedTextField's 56dp min height is too bulky for this dense left-drawer panel. */
-@Composable
-private fun SearchField(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    searching: Boolean,
-    placeholder: String,
-) {
-    Surface(
-        shape = RoundedCornerShape(Radius.xl),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
-        border = BorderStroke(StrokeWidth.thin, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.heightIn(min = 36.dp).padding(horizontal = Space.sm),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Space.s),
-        ) {
-            Icon(
-                LocalIconBundle.current[JCodeIcon.Search],
-                contentDescription = null,
-                modifier = Modifier.size(IconSize.sm),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Box(modifier = Modifier.weight(1f)) {
-                if (query.isEmpty()) {
-                    Text(
-                        placeholder,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                BasicTextField(
-                    value = query,
-                    onValueChange = onQueryChange,
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            if (searching) {
-                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-            } else if (query.isNotEmpty()) {
-                Icon(
-                    LocalIconBundle.current[JCodeIcon.Close],
-                    contentDescription = "Clear search",
-                    modifier = Modifier.size(IconSize.sm).clickable { onQueryChange("") },
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
     }
 }
 
