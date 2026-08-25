@@ -262,9 +262,6 @@ data class RootfsManifest(
         )
     }
 
-    /** Entries matching a given architecture. */
-    fun forArch(arch: Arch): List<RootfsEntry> = entries.filter { it.arch == arch }
-
     fun profiles(): List<DistroProfile> {
         return entries.map { entry ->
             DistroProfile(

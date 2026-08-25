@@ -348,7 +348,4 @@ class EditorState(
         bufferRef.close()
     }
 
-    internal fun emitEvent(event: EditorEvent) {
-        scope.launch { _events.emit(event) }
-    }
 }

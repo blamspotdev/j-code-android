@@ -40,13 +40,6 @@ class ResourceManager @Inject constructor(
     }
 
     /**
-     * Unregister a cache (e.g., when its owner is destroyed).
-     */
-    fun unregisterCache(cache: ManagedCache) {
-        caches.remove(cache)
-    }
-
-    /**
      * Create and register a new LRU cache in one call.
      */
     fun <K, V> managedCache(
@@ -90,15 +83,6 @@ class ResourceManager @Inject constructor(
     override fun onLowMemory() {
         _pressure.value = MemoryPressure.CRITICAL
         applyTrimming(MemoryPressure.CRITICAL)
-    }
-
-    /**
-     * Manually trigger trimming at the given pressure level.
-     * Useful for testing or proactive cleanup.
-     */
-    fun trimToPressure(pressure: MemoryPressure) {
-        _pressure.value = pressure
-        applyTrimming(pressure)
     }
 
     private fun applyTrimming(pressure: MemoryPressure) {

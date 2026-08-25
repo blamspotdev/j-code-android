@@ -218,10 +218,6 @@ class DistroService(
 
     // --- Multi-environment ("docker-style") management ---
 
-    /** The catalog of base images that can be installed as new environments. */
-    fun environmentCatalog(): List<DistroProfile> =
-        _environmentState.value.availableDistros.ifEmpty { DistroProfile.defaults() }
-
     /**
      * Create a new environment by downloading + extracting a base image. Reuses the rootfs install
      * pipeline; foreign-arch images download fine without QEMU (emulation is only needed to *run* them).
@@ -1267,9 +1263,6 @@ class DistroService(
      *  is on app-private ext4) — e.g. a guest `/usr/share/fonts/...` path is `File(activeRootfsPath(),
      *  "usr/share/fonts/...")`. */
     fun activeRootfsPath(): File = rootfsManager.getRootfsPath(_environmentState.value.runtime.selectedDistro.id)
-
-    /** The distro path that an unbound project would resolve to (e.g. `/workspace`). */
-    fun defaultWorkdir(): String = _environmentState.value.runtime.workdir
 
     // --- Private implementation methods ---
 

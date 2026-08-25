@@ -96,10 +96,6 @@ internal object NativeExtensionLoader {
         cache.remove(extensionId)
     }
 
-    fun evictAll() {
-        cache.clear()
-    }
-
     /**
      * The plugin for [extension], loading it if this is the first ask.
      *

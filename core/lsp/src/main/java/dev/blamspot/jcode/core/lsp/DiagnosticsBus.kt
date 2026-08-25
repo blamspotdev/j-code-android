@@ -63,29 +63,6 @@ class DiagnosticsBus {
             .sortedWith(compareBy({ it.severity.value }, { it.startLine }, { it.startCol }))
     }
 
-    /**
-     * Get total counts across all files and sources.
-     */
-    fun getCounts(): DiagnosticCount {
-        var errors = 0
-        var warnings = 0
-        var infos = 0
-
-        diagnosticsBySource.values.forEach { sourceMap ->
-            sourceMap.values.forEach { diags ->
-                diags.forEach { diag ->
-                    when (diag.severity) {
-                        DiagnosticSeverity.ERROR -> errors++
-                        DiagnosticSeverity.WARNING -> warnings++
-                        DiagnosticSeverity.INFORMATION, DiagnosticSeverity.HINT -> infos++
-                    }
-                }
-            }
-        }
-
-        return DiagnosticCount(errors, warnings, infos)
-    }
-
     private fun recompute() {
         // Merge all sources
         val merged = mutableMapOf<String, MutableList<Diagnostic>>()

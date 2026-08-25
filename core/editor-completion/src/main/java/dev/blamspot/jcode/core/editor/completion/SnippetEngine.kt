@@ -207,10 +207,4 @@ data class AppliedSnippet(
     val text: String,
     val tabStops: List<TabStop>,
     val finalOffset: Int,
-) {
-    /** Get the next tab stop after the given number. */
-    fun nextTabStop(after: Int): TabStop? {
-        return tabStops.firstOrNull { it.number > after }
-            ?: tabStops.firstOrNull { it.number == 0 }
-    }
-}
+)

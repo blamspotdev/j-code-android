@@ -129,11 +129,6 @@ class VsCodeExtensionHost(
     suspend fun executeCommand(id: String, args: JSONArray = JSONArray()): JSONObject =
         request("command/execute", JSONObject().put("id", id).put("args", args))
 
-    /** Push the file the user is looking at, so the extension's own view can follow along. */
-    suspend fun setActiveFile(file: JSONObject?) {
-        request("state/activeFile", file ?: JSONObject())
-    }
-
     suspend fun setTheme(dark: Boolean) {
         request("state/theme", JSONObject().put("kind", if (dark) "dark" else "light"))
     }

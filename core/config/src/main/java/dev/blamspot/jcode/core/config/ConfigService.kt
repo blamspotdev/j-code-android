@@ -222,10 +222,6 @@ class ConfigService {
         return serializeToYaml(mergeWorkspaceDocument(config))
     }
 
-    fun serializeProjectConfig(config: ProjectConfig): String {
-        return serializeToYaml(mergeProjectDocument(config))
-    }
-
     fun defaultWorkspaceConfig(): WorkspaceConfig = WorkspaceConfig()
 
     fun defaultProjectConfig(): ProjectConfig = ProjectConfig()
