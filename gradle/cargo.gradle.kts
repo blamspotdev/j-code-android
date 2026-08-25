@@ -25,7 +25,12 @@ fun registerCargoNdkBuildTask(taskName: String, buildMode: String) =
             val cargoHome = System.getenv("CARGO_HOME")
             val rustupHome = System.getenv("RUSTUP_HOME")
 
+            val outputDir = project.layout.buildDirectory.dir("generated/cargoJniLibs/$buildMode").get().asFile
             if (!cargoAvailable(project)) {
+                // Anything left here is from a build made when cargo was still installed. The root
+                // build script has already decided this machine gets the stub, so a stale library
+                // would be a second one of the same name beside it.
+                if (outputDir.exists()) outputDir.deleteRecursively()
                 logger.warn("cargo not available; skipping cargo-ndk build for $cargoPackageName and relying on native stub output.")
                 return@doLast
             }
@@ -50,7 +55,7 @@ fun registerCargoNdkBuildTask(taskName: String, buildMode: String) =
                         "cargo",
                         "ndk",
                         "-t", cargoTarget,
-                        "-o", project.layout.buildDirectory.dir("generated/cargoJniLibs/$buildMode").get().asFile.absolutePath,
+                        "-o", outputDir.absolutePath,
                         "build",
                         "--manifest-path", manifest.absolutePath,
                         *(if (buildMode == "release") arrayOf("--release") else emptyArray())

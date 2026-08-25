@@ -31,6 +31,19 @@ private val desiredCmakeVersion = "3.28.3"
 private fun cmakeOrdinal(version: String): Long = version.split(".", "-")
     .take(3)
     .fold(0L) { acc, part -> acc * 100_000 + (part.takeWhile(Char::isDigit).toLongOrNull() ?: 0L) }
+// Is cargo on this machine? A file lookup rather than running `cargo --version`, so it stays cheap
+// and leaves the configuration cache alone. Checked once here because the native modules need the
+// answer while Gradle configures — see the cargo notes in the library block below.
+private val cargoOnPath: Boolean = run {
+    val windows = System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true)
+    val names = if (windows) listOf("cargo.exe", "cargo.bat", "cargo.cmd") else listOf("cargo")
+    val dirs = (System.getenv("PATH").orEmpty().split(File.pathSeparator) + listOfNotNull(
+        System.getenv("CARGO_HOME")?.plus("${File.separator}bin"),
+        System.getProperty("user.home")?.plus("${File.separator}.cargo${File.separator}bin"),
+    )).filter(String::isNotBlank)
+    dirs.any { dir -> names.any { File(dir, it).isFile } }
+}
+
 private val configuredCmakeVersion = System.getenv("ANDROID_HOME")
     ?.let(::File)
     ?.resolve("cmake")
@@ -118,13 +131,19 @@ subprojects {
                 }
 
                 // Rust FFI modules build their real library with cargo (see gradle/cargo.gradle.kts)
-                // and carry a CMake stub for machines without it. Whether the real one is there
-                // decides two things below — which srcDir is registered, and whether CMake builds
-                // the stub as a shared library at all — and they have to agree, so it is asked once.
+                // and carry a CMake stub for machines without it. Whether cargo will deliver decides
+                // two things below — which srcDir is registered, and whether CMake builds the stub as
+                // a shared library at all — and they have to agree, so it is asked once.
+                //
+                // The question is "will cargo build this?", not "has it already?". Both answers are
+                // needed while Gradle configures, before any task has run: CMake is handed its half
+                // as a flag. Asking whether the output exists yet answers "no" on every clean tree —
+                // the stub then gets built AND registered, cargo writes the real library during
+                // execution, and two libraries of the same name reach the packager. That made a
+                // fresh clone fail and the immediate re-run succeed, since by then the output was
+                // there to be found. Whether the machine has cargo is the same answer both times.
                 val cargoModule = path == ":native:ripgrep-ffi" || path == ":native:wasmtime-ffi"
-                fun hasCargoLibs(variant: String): Boolean = cargoModule &&
-                    layout.buildDirectory.dir("generated/cargoJniLibs/$variant").get().asFile
-                        .walkTopDown().any { it.extension == "so" }
+                val cargoWillBuild = cargoModule && cargoOnPath
 
                 buildTypes {
                     getByName("debug") {
@@ -135,7 +154,7 @@ subprojects {
                         externalNativeBuild {
                             cmake {
                                 arguments.add("-DJCODE_VARIANT_DIR=debug")
-                                if (hasCargoLibs("debug")) arguments.add("-DJCODE_REAL_LIB_PRESENT=ON")
+                                if (cargoWillBuild) arguments.add("-DJCODE_REAL_LIB_PRESENT=ON")
                             }
                         }
                     }
@@ -148,7 +167,7 @@ subprojects {
                         externalNativeBuild {
                             cmake {
                                 arguments.add("-DJCODE_VARIANT_DIR=release")
-                                if (hasCargoLibs("release")) arguments.add("-DJCODE_REAL_LIB_PRESENT=ON")
+                                if (cargoWillBuild) arguments.add("-DJCODE_REAL_LIB_PRESENT=ON")
                             }
                         }
                     }
@@ -161,11 +180,11 @@ subprojects {
                     }
                 }
 
-                // Where the CMake stub is picked up from. Once cargo has built the real library for
-                // a variant, this dir holds last run's stub and registering it would put two
-                // libraries of the same name in front of the jniLibs merger.
-                listOf("debug", "release").forEach { variant ->
-                    if (!hasCargoLibs(variant)) {
+                // Where the CMake stub is picked up from. With cargo on the machine the stub is
+                // static and nothing is written here, so registering it would only offer the jniLibs
+                // merger a second library of the same name as cargo's.
+                if (!cargoWillBuild) {
+                    listOf("debug", "release").forEach { variant ->
                         sourceSets.getByName(variant).jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs/$variant"))
                     }
                 }
