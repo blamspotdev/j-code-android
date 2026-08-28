@@ -41,6 +41,29 @@ What the container should produce, and what was measured on an Odin2 (Android 13
 | Recents → its card | `onRestart` → `onStart` → `onResume`, same instance, no `onRestoreInstanceState` |
 | A screen-options change | pause → stop → save → destroy → `onCreate(restored build-N)` → start → **`onRestoreInstanceState`** → resume |
 
+## The `own:` lines
+
+Anything logged with an `own:` prefix came back through
+`Activity.registerActivityLifecycleCallbacks` — a callback this app registered **on the activity**,
+not on the Application. That distinction is the whole point: the list behind that public method is a
+non-SDK field, so a container that cannot read it has no way to dispatch to whatever an app put
+there, and AndroidX's own `ReportFragment` is one of the apps that puts something there.
+
+Measured on Android 13 at `targetSdk` 33: every callback arrives **except**
+`onActivityPostStarted`, `onActivityPostResumed` and `onActivityPreStopped`, which only
+`Activity.performStart`/`performResume` send and which the container cannot call. The device says so
+itself, behind the warning triangle on its control bar.
+
+Lift it with the platform's own developer setting and all three arrive:
+
+```bash
+adb shell settings put global hidden_api_policy 1
+```
+
+Restart JCode afterwards. `settings delete global hidden_api_policy` puts it back. This is the
+device's to give, not the app's to take — `VMRuntime.setHiddenApiExemptions` by double reflection was
+tried and is blocklisted, which `HiddenApi`'s notes record.
+
 `onConfigurationChanged` appearing in this app's log is a bug: it declares nothing, so it is the one
 app on the device that should never be told about a change instead of rebuilt for it. The container
 says which it chose, under the `VDEVICE` tag:
