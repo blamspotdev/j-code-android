@@ -1,6 +1,7 @@
 package dev.blamspot.jcode.vdevice.lifecycle;
 
 import android.app.Activity;
+import android.app.Application;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.graphics.Color;
@@ -43,6 +44,13 @@ public class LifecycleActivity extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         builds++;
+        // Registered on the ACTIVITY, not on the Application, and that distinction is the test.
+        // `Activity.registerActivityLifecycleCallbacks` is public SDK and the list behind it is a
+        // non-SDK field, so a container that cannot reach that field has no way to dispatch to
+        // whatever an app put in it — which is AndroidX's own ReportFragment on API 29+, and any
+        // app that does its own book-keeping this way. Anything logged with an `own:` prefix below
+        // came back through that list.
+        registerActivityLifecycleCallbacks(new Watcher());
         if (state != null) {
             log.append(state.getString(KEY_LOG, ""));
             restoredMark = state.getString(KEY_MARK);
@@ -145,6 +153,33 @@ public class LifecycleActivity extends Activity {
         page.addView(column, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         return page;
+    }
+
+    /**
+     * What the activity itself asked to be told.
+     *
+     * All of them, because which ones arrive is the question. The plain callbacks come from
+     * `Activity.onStart` and friends dispatching to their own list; the Pre/Post pairs come only
+     * from `Activity.performStart`/`performResume`, which the container cannot call and has to
+     * stand in for.
+     */
+    private final class Watcher implements Application.ActivityLifecycleCallbacks {
+        @Override public void onActivityCreated(Activity a, Bundle s) { own("onActivityCreated"); }
+        @Override public void onActivityStarted(Activity a) { own("onActivityStarted"); }
+        @Override public void onActivityResumed(Activity a) { own("onActivityResumed"); }
+        @Override public void onActivityPaused(Activity a) { own("onActivityPaused"); }
+        @Override public void onActivityStopped(Activity a) { own("onActivityStopped"); }
+        @Override public void onActivitySaveInstanceState(Activity a, Bundle s) { own("onActivitySaveInstanceState"); }
+        @Override public void onActivityDestroyed(Activity a) { own("onActivityDestroyed"); }
+
+        @Override public void onActivityPostStarted(Activity a) { own("onActivityPostStarted"); }
+        @Override public void onActivityPostResumed(Activity a) { own("onActivityPostResumed"); }
+        @Override public void onActivityPrePaused(Activity a) { own("onActivityPrePaused"); }
+        @Override public void onActivityPreStopped(Activity a) { own("onActivityPreStopped"); }
+    }
+
+    private void own(String step) {
+        say("own: " + step);
     }
 
     private void say(String step) {
