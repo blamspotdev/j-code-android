@@ -32,4 +32,9 @@ android {
 dependencies {
     implementation(platform(libs.compose.bom))
     api(libs.compose.runtime)
+
+    // The adb service seam the virtual-device contract hands back (AdbServiceHandler / AdbStream).
+    // compileOnly because JCode supplies it at runtime exactly as it supplies Compose: an extension
+    // that bundled a second copy would implement an interface the daemon does not accept.
+    compileOnly(project(":core:distro"))
 }

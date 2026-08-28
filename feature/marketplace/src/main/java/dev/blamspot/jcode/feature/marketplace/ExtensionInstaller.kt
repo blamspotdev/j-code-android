@@ -421,6 +421,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             webUiEntry = findWebUiEntry(dir),
             nativeEntry = nativeEntry(dir),
             nativeClass = nativeHeader(dir).str("class"),
+            nativeGuestClass = nativeHeader(dir).str("guest"),
             nativeAbi = (nativeHeader(dir)["abi"] as? Number)?.toInt() ?: 0,
             nativeClaims = parseNativeClaims(nativeHeader(dir)),
             apiMinVersion = (map["api"] as? Map<*, *>)?.toStringKeyMap()?.str("minApiVersion")?.toIntOrNull() ?: 0,

@@ -16,7 +16,7 @@ import androidx.core.content.ContextCompat
 import dev.blamspot.jcode.backend.SessionRegistry
 import dev.blamspot.jcode.backend.SessionRegistryState
 import dev.blamspot.jcode.core.distro.AppProcesses
-import dev.blamspot.jcode.vdevice.AppSandbox
+import dev.blamspot.jcode.vdevice.VirtualDeviceBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -76,7 +76,7 @@ class BackendService : Service() {
         // leaves it up: measured, `:guest` and the logcat a guest had open outlived a Stop & close,
         // holding 198 MB with no JCode left to show them in. Turned off through its own door first,
         // so the guest is told rather than found dead.
-        runCatching { AppSandbox.shutdown() }
+        runCatching { VirtualDeviceBridge.shutdown() }
         endEveryOtherProcess()
         if (isForegroundActive) {
             stopForeground(STOP_FOREGROUND_REMOVE)

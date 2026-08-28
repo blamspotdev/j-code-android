@@ -35,9 +35,9 @@ import dev.blamspot.jcode.debug.DebugController
 import dev.blamspot.jcode.core.distro.SdkCatalogAction
 import dev.blamspot.jcode.core.distro.DistroService
 import dev.blamspot.jcode.core.distro.DistroServiceLocator
-import dev.blamspot.jcode.adb.VirtualDeviceAdbService
-import dev.blamspot.jcode.vdevice.AppSandbox
-import dev.blamspot.jcode.vdevice.VirtualDeviceApps
+import dev.blamspot.jcode.ext.NativeExtensionLoader
+import dev.blamspot.jcode.vdevice.VirtualDeviceBridge
+import dev.blamspot.jcode.core.distro.adb.AdbAuthorizedKeys
 import dev.blamspot.jcode.core.distro.adb.AdbBridge
 import dev.blamspot.jcode.core.distro.adb.AdbBridgeLocator
 import dev.blamspot.jcode.core.distro.adb.AdbBridgeState
@@ -1305,10 +1305,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         sessionFlushBlocking = { runCatching { runBlocking { persistSession() } } }
         viewModelScope.launch { exitOnSwipeAway.collect { exitOnSwipeAwayEnabled = it } }
-        // The virtual device is a clean room, not a second phone: every JCode start hands it back
-        // with no apps installed and nothing any of them stored. Off the main thread because it is a
-        // recursive delete, and before anything can install to it — see VirtualDeviceApps.
-        viewModelScope.launch(Dispatchers.IO) { VirtualDeviceApps.resetOnStart(appContext) }
+        // The device ships in the Android Dev Pack now; this is the app's only handle on it, and it
+        // needs a context before any of the manifest stubs can ask it for one.
+        VirtualDeviceBridge.init(appContext)
         // Bring the adb bridge back up, but only once a serial has been restored — i.e. only for a
         // device that was paired before. Otherwise every cold start of a fresh install would pay a
         // full mDNS discovery plus an `adb start-server` in the distro for nothing.
@@ -1330,7 +1329,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { trash.sweep(trashRetentionDays.value) }
     }
 
-    private val virtualDeviceAdb: AdbDaemon by lazy { VirtualDeviceAdbService.daemon(appContext) }
+    /**
+     * The adb daemon for JCode's virtual device.
+     *
+     * The daemon is the app's — binding a socket in JCode's storage and authenticating against the
+     * distro's keys would be the same for any target — while everything it *serves* is the device's,
+     * and the device ships in the Android Dev Pack. With no pack installed it still binds and still
+     * answers, with "no virtual device"; see [VirtualDeviceBridge.adb].
+     */
+    private val virtualDeviceAdb: AdbDaemon by lazy {
+        val (banner, handler) = VirtualDeviceBridge.adb()
+        AdbDaemon(
+            banner = banner,
+            authorizedKeys = AdbAuthorizedKeys(File(appContext.filesDir, "distros")),
+            handler = handler,
+            log = { message -> android.util.Log.i("VDEVICE", message) },
+        )
+    }
 
     /** Holds the guest's adb server open; see [startVirtualDeviceAdb]. */
     private var virtualDeviceAdbServer: Process? = null
@@ -1588,7 +1603,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val runInVirtualDeviceKey = booleanPreferencesKey("run_in_virtual_device")
 
     /** When true, an Android run config built for the container starts its APK inside JCode's own
-     *  process (no install, no adb) once the build finishes — see [dev.blamspot.jcode.vdevice.VirtualDevice]. */
+     *  process (no install, no adb) once the build finishes — see [VirtualDeviceBridge]. */
     val runInVirtualDevice: StateFlow<Boolean> = uiPreferences.data
         .map { prefs -> prefs[runInVirtualDeviceKey] ?: SettingsDefaults.RUN_IN_VIRTUAL_DEVICE }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.RUN_IN_VIRTUAL_DEVICE)
@@ -2029,6 +2044,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setDeveloperOptions(enabled: Boolean) {
         viewModelScope.launch {
             uiPreferences.edit { prefs -> prefs[developerOptionsKey] = enabled }
+        }
+    }
+
+    // A third init block, for the reason the second one gives: [developerOptions] is declared just
+    // above and the main init block at the top of the class runs long before it exists.
+    //
+    // Developer options is what lets an unsigned, sideloaded pack load code into JCode's process.
+    // Pushed into the loader rather than read on demand, because the loader is called from the
+    // composition and a DataStore read is suspending.
+    init {
+        viewModelScope.launch {
+            developerOptions.collect { NativeExtensionLoader.allowUnsigned = it }
         }
     }
 
@@ -5236,7 +5263,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         stopAllRuntimeServices()
         lspController.shutdownAll()
-        AppSandbox.close()
+        // shutdown(), where this used to merely close the session: the ViewModel going away means the
+        // workbench is, and leaving a `:guest` process behind for a workbench that no longer exists
+        // is what BackendService already tears down on the same exit.
+        VirtualDeviceBridge.shutdown()
         adbBridge.stop()
         super.onCleared()
     }
@@ -5304,12 +5334,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         openDetailPage(ANDROID_DEVICE_TAB_ID, EditorPageKind.AndroidDevice) { "Android Device" }
     }
 
-    /** Open (or focus) the device sandbox tab. The APK is carried by [dev.blamspot.jcode.vdevice.AppSandbox]
-     *  (set via its `requestOpen`), like the browser's URL. */
+    /** Open (or focus) the device sandbox tab. The APK, and the name the tab wears for it, are the
+     *  Android Dev Pack's — it asks for this through [VirtualDeviceBridge], like the browser's URL. */
     fun openAppSandboxTab() {
-        val title = AppSandbox.apkPath.value.takeIf { it.isNotBlank() }
-            ?.let { "Device: ${File(it).name.removeSuffix(".apk")}" }
-            ?: "Device sandbox"
+        val title = VirtualDeviceBridge.deviceTabTitle?.takeIf { it.isNotBlank() } ?: "Device sandbox"
         openDetailPage(APP_SANDBOX_TAB_ID, EditorPageKind.AppSandbox) { title }
         // A second request can name a different APK — `adb shell am start` does — and the tab is
         // reused, so the name it is wearing has to move with it.
@@ -5331,7 +5359,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Turn the device off once its editor tab is gone — process and all, not merely unbound. Page
      *  tabs get no close callback, so the shell calls this whenever the tab list changes. */
     fun pruneAppSandbox() {
-        if (_editorGroup.value.tabs.none { it.pageKind == EditorPageKind.AppSandbox }) AppSandbox.shutdown()
+        if (_editorGroup.value.tabs.none { it.pageKind == EditorPageKind.AppSandbox }) VirtualDeviceBridge.shutdown()
     }
 
     /**

@@ -296,5 +296,12 @@ data class NativeContextAction(
  * of the route, which cannot work for a page whose name only the plugin knows. The parameter has a
  * default, so calling code is unchanged — but a default is a second JVM signature, and a plugin
  * compiled against the one-argument method would not find it here, which is what the number is for.
+ *
+ * 8 moved the virtual device out of the app. [JCodeVirtualDevice], [JCodeVirtualDeviceGuest] and
+ * [VirtualDeviceHost] are new, and so is the `entry.native.guest` manifest field that names the
+ * class the `:guest` stub loads. Nothing already in this file changed shape — a pack built against 7
+ * would still draw its pages correctly — but a JCode on 8 asks the Android pack for a device and an
+ * older pack has none to give, which is a missing feature rather than a crash and so has to be
+ * refused at load time with something that says "update the extension".
  */
-const val JCODE_EXT_ABI: Int = 7
+const val JCODE_EXT_ABI: Int = 8

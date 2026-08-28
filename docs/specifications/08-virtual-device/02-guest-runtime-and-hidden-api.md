@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Status** | Implemented — verified on Android 13 with `targetSdk = 33` |
-| **Modules** | `:app` (`dev.blamspot.jcode.vdevice`, plus `android.hardware.GuestSensorManager`) |
-| **Primary sources** | app/src/main/java/dev/blamspot/jcode/vdevice/HiddenApi.kt, GuestLoader.kt, GuestContext.kt, GuestRuntime.kt, GuestHooks.kt, GuestInstrumentation.kt, GuestOverlay.kt, GuestPermissions.kt, GuestLocation.kt, GuestSensors.kt, VirtualIdentity.kt, EmbeddedWindows.kt, app/src/main/java/android/hardware/GuestSensorManager.kt |
+| **Status** | Implemented — verified on Android 13 with `targetSdk = 33`. The `targetSdk` that governs the hidden-API greylist is **JCode's**, not the pack's: the pack's archive is loaded, never installed, so it has no `targetSdk` of its own at runtime |
+| **Modules** | The **Android Dev Pack** (`dev.jcode.ext.android.vdevice`, plus `android.hardware.GuestSensorManager`). All of it runs in `:app`'s `:guest` process, loaded there by the app's `GuestSessionService` stub — see [App sandbox §1a](01-app-sandbox-architecture.md#1a-where-this-lives-and-why-it-is-split) |
+| **Primary sources** | `native/src/main/java/dev/jcode/ext/android/vdevice/`: HiddenApi.kt, GuestLoader.kt, GuestContext.kt, GuestRuntime.kt, GuestHooks.kt, GuestInstrumentation.kt, GuestOverlay.kt, GuestPermissions.kt, GuestLocation.kt, GuestSensors.kt, VirtualIdentity.kt, EmbeddedWindows.kt, VirtualDeviceGuest.kt, and `native/src/main/java/android/hardware/GuestSensorManager.kt` |
 | **Verified against** | device-verified on Android 13, 2026-08-13 (`tools/appcompat-fixture`, `tools/hardware-fixture`) |
 
 ---

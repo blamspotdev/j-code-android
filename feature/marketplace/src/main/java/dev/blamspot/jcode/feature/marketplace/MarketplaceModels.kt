@@ -407,6 +407,16 @@ data class InstalledExtension(
     val nativeEntry: String? = null,
     /** Fully-qualified class in [nativeEntry] implementing `JCodeNativeExtension`. */
     val nativeClass: String? = null,
+    /**
+     * Fully-qualified class in [nativeEntry] implementing `JCodeVirtualDeviceGuest`, for a pack that
+     * provides JCode's virtual device.
+     *
+     * Named separately from [nativeClass] because it is loaded into a different process — `:guest`,
+     * where the container installs framework hooks the IDE could not survive — by the manifest stub
+     * that owns that process rather than by the page loader. Declaring it is also how JCode knows an
+     * installed pack *has* a device to offer: there is no device without one.
+     */
+    val nativeGuestClass: String? = null,
     /** Extension-API version [nativeEntry] was built against; must equal JCode's `JCODE_EXT_ABI`. */
     val nativeAbi: Int = 0,
     /** What this extension's native UI will draw. Any rule matching is enough. */

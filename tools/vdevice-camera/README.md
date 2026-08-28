@@ -108,5 +108,5 @@ Push-Location out; jar uf ..\base.apk classes.dex; Pop-Location
 Then copy it over the bundled copy, which is what every device is built from:
 
 ```powershell
-Copy-Item camera.apk ..\..\app\src\main\assets\vdevice\camera.apk
+Copy-Item camera.apk X:\jcode-extensions\android\native\vdevice\assets\vdevice\camera.apk
 ```
