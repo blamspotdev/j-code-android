@@ -98,9 +98,10 @@ screen. Push it in for a test run instead:
 adb push lifecycle.apk /sdcard/JCode/lifecycle.apk
 ```
 
-then the device's **Install an app** sheet, or `adb install` over the device's own adb
-(`adb connect localfilesystem:/run/jcode-vdevice-adb.sock` from JCode's terminal). It is gone at the
-next JCode start, which is what a device rebuilt from its assets on every start means.
+then the device's **Install an app** sheet, which reads the phone's storage. Not `adb install` over
+the device's own adb: that runs in JCode's terminal, which is inside the distro, and the distro has
+no view of `/sdcard` at all — `adb: failed to stat /sdcard/JCode/lifecycle.apk`. Either way it is
+gone at the next JCode start, which is what a device rebuilt from its assets on every start means.
 
 For a longer session, dropping it beside the built-ins in the Android Dev Pack
 (`X:\jcode-extensions\android\native\vdevice\assets\vdevice\`) and rebuilding the pack makes it
