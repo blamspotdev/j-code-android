@@ -43,7 +43,7 @@ import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.JcTooltip
 import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
-import dev.blamspot.jcode.vdevice.AppSandbox
+import dev.blamspot.jcode.vdevice.VirtualDeviceBridge
 import dev.blamspot.jcode.workbench.LocalDebugSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -202,7 +202,7 @@ internal fun TaskManagerSidebarContent(
                             // something that was done on purpose, and the container writes an exit
                             // reason for a process nobody lost. Measured, on this row.
                             if (proc.name == guestProcess) {
-                                AppSandbox.shutdown()
+                                VirtualDeviceBridge.shutdown()
                             } else {
                                 runCatching { Os.kill(proc.pid, OsConstants.SIGTERM) }
                             }

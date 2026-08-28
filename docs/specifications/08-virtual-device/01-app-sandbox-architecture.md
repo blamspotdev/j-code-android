@@ -2,10 +2,46 @@
 
 | | |
 |---|---|
-| **Status** | Implemented — device-verified on Android 13 |
-| **Modules** | `:app` (`dev.blamspot.jcode.vdevice`) |
-| **Primary sources** | app/src/main/java/dev/blamspot/jcode/vdevice/VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualStorage.kt, VirtualStorageProvider.kt, GuestDocuments.kt, GuestResults.kt, DeviceIntents.kt, GuestNetwork.kt, HiddenSeams.kt, VirtualSettingsProvider.kt, GuestSurfaces.kt, SimulatedHardware.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, GuestSessionService.kt, GuestActivity.kt, VirtualScreen.kt, app/src/main/aidl/dev/blamspot/jcode/vdevice/IGuestSession.aidl, app/src/main/aidl/dev/blamspot/jcode/vdevice/IGuestSessionCallback.aidl, app/src/main/AndroidManifest.xml |
-| **Verified against** | device-verified on Android 13, 2026-08-15 |
+| **Status** | Implemented — device-verified on Android 13. **Moved out of the app at 1.7.0** (§1a); the move itself is not yet device-verified |
+| **Modules** | The **Android Dev Pack** (`jcode.pack.android`), package `dev.jcode.ext.android.vdevice`, plus four manifest stubs in `:app` (`dev.blamspot.jcode.vdevice`) |
+| **Primary sources** | *In the pack* (`jcode-ext-android`, `native/src/main/java/dev/jcode/ext/android/vdevice/`): VirtualDevice.kt, VirtualDeviceApps.kt, VirtualDevicePolicy.kt, VirtualStorage.kt, VirtualStorageProvider.kt, GuestDocuments.kt, GuestResults.kt, DeviceIntents.kt, GuestNetwork.kt, HiddenSeams.kt, VirtualSettingsProvider.kt, GuestSurfaces.kt, SimulatedHardware.kt, VirtualDeviceLog.kt, VirtualLauncher.kt, VirtualWallpaper.kt, VirtualInput.kt, GuestHierarchy.kt, UiXml.kt, AppSandbox.kt, AppSandboxPage.kt, AppPermissionsSheet.kt, VirtualHardwarePage.kt, AppSandboxSurfaceView.kt, EmbeddedGuest.kt, VirtualDeviceGuest.kt, VirtualScreen.kt, VirtualScreenOptions.kt, VirtualNavigationBar.kt, VirtualTaskView.kt, VirtualDeviceAdbService.kt, AdbSync.kt, `native/src/main/aidl/.../IGuestSession.aidl`, `IGuestSessionCallback.aidl`. *In the app*: `vdevice/GuestActivity.kt`, `GuestSessionService.kt`, `VirtualStorageProvider.kt`, `VirtualSettingsProvider.kt`, `VirtualDeviceBridge.kt`, `core/ext-api/.../VirtualDeviceExtension.kt`, `app/src/main/AndroidManifest.xml` |
+| **Verified against** | device-verified on Android 13, 2026-08-15; re-homed into the pack 2026-08-28 (builds clean both sides, **not** re-verified on a device) |
+
+---
+
+## 1a. Where this lives, and why it is split
+
+**The device is not part of JCode any more.** Everything that makes an APK run inside the IDE — the
+container, the framework hooks, the launcher, the status bar, the navigation bar, the adb daemon's
+device end — ships in the **Android Dev Pack**. A JCode with no Android pack installed has no virtual
+device, the same way it has no Kotlin completions without the Kotlin pack.
+
+Four things could not go with it, because an installed extension is a directory of files that a
+`DexClassLoader` opens inside a process that is already running, and **it cannot contribute to
+`AndroidManifest.xml`**:
+
+| Stays in `:app` | Why only a manifest can declare it |
+|---|---|
+| `GuestSessionService` | `android:process=":guest"` — the separate ART heap the swapped `Instrumentation` and rewritten `Build` live in |
+| `GuestActivity` | the `ActivityInfo` template `Instrumentation.newActivity` needs for a package the real `PackageManager` has never heard of |
+| `VirtualStorageProvider`, `VirtualSettingsProvider` | `${applicationId}`-scoped authorities, resolved by the system from the manifest long before an extension could be consulted |
+| the guest's `<uses-permission>` set | fixed at install time |
+
+Each of those is a **stub**. It holds no device logic and forwards to whatever pack is installed;
+with none installed they answer emptily rather than failing, because the phone's Files app queries
+every `DocumentsProvider` it can see whether or not a dev pack was ever installed.
+
+The contract between the two halves is `dev.blamspot.jcode.ext.api.JCodeVirtualDevice` (the IDE
+process), `JCodeVirtualDeviceGuest` (the `:guest` process, named by `entry.native.guest` in the
+pack's manifest) and `VirtualDeviceComponents` (the four names above, agreed once). `:app`'s entire
+view of the device is `VirtualDeviceBridge`.
+
+**Two objects, two processes — the trap this split introduces.** `AppSandbox` and
+`VirtualScreenOptions` are Kotlin `object`s, and `:guest` has its own copies of both. Anything the
+container decides that only the IDE can act on has to cross the binder: the navigation bar's Home
+and its task-view switch go out over `IGuestSessionCallback`, and the screen profile's density
+travels as an argument of `IGuestSession.start`/`resize`. Handling either locally compiles, runs and
+does nothing.
 
 ---
 
@@ -1197,6 +1233,65 @@ now. The location feed backs off from one second to five on the same reasoning.
 > background — and the *cumulative* CPU time identical across samples four seconds apart, so the
 > process did no work at all rather than a little. Bringing JCode back resumed it at 11.5% with the
 > viewfinder live and no lifecycle damage.
+
+### 7o. The device's navigation bar — `VirtualNavigationBar`
+
+Back, Home and Recents, along the bottom of the device's screen, in AOSP's order.
+
+**Back used to be a button on JCode's toolbar, and it was in the wrong window.** The tab's control
+bar is the IDE's chrome, so `adb shell screencap` of the device did not show it, `uiautomator dump`
+did not list it, and `input tap` could not reach it — an agent driving the device could see an app
+waiting for a Back press and had no way to press it. That is the same argument the phone's IME lost
+to `VirtualKeyboard` (§7c), and it loses here for the same reason: **anything a person can press on
+the device, a driver must be able to press too.** The three buttons carry
+`vdevice_nav_back` / `vdevice_nav_home` / `vdevice_nav_recents`, addressable exactly as a phone's
+`com.android.systemui:id/back` is.
+
+The glyphs are drawn in code rather than shipped as drawables, so they stay sharp at whatever density
+the screen profile is pretending to be (§7p).
+
+| Button | What it does | Where it is handled |
+|---|---|---|
+| Back | pops the embedded back stack, or sends Back to the only activity | `:guest`, locally |
+| Home | takes the app off the screen and leaves a live, blank device | the **IDE**, over `IGuestSessionCallback.onHome` |
+| Recents | opens the task view | `:guest`, locally |
+
+Home and the task view's switch cross the binder because `AppSandbox` is an `object` in the IDE's
+process and the copy `:guest` holds has no session in it — see §1a.
+
+A full-screen app takes the navigation bar with it exactly as it takes the status bar, and
+`GuestInsets` now reports `navigationBars()` the same three ways it reports `statusBars()`: the
+guest's window already stops above the bar, so nothing is covered *now*, and what an edge-to-edge app
+is told is how much a bar would want back.
+
+**The task view — `VirtualTaskView`.** A device that runs one app at a time still wants one: the
+single `:guest` process means switching apps *is* stopping one and starting another, and that is
+what a phone's recents is for. It lists the apps that have actually started this session
+(`VirtualTasks`, most-recent-first, filtered against what is still installed), drawn inside the
+device's own container so a capture shows it and a tap can reach it. Dismissing a card force-stops
+that app; tapping one runs it.
+
+### 7p. Screen options — `VirtualScreenOptions`
+
+Which screen the device is pretending to be, and which way up. The presets are the layout designer's
+— Phone, Phone (small), Foldable, Tablet — deliberately, so a layout checked in the designer and an
+app run on the device are checked against the same screens. The default, "Fit the tab", is what the
+device always did.
+
+**The resize is real, not letterboxed.** Picking a profile rewrites the guest's `DisplayMetrics` and
+its `Configuration` through `GuestWindow.applySize`: `widthPixels`/`heightPixels`, `density`,
+`densityDpi` and `scaledDensity`, then `screenWidthDp`, `screenHeightDp`, `smallestScreenWidthDp`,
+`orientation` and the `screenLayout` size bucket. Resource qualifiers reselect,
+`onConfigurationChanged` fires, and an app laid out for a small phone genuinely reflows. The tab
+then scales the whole device down to fit, the way an emulator window does — the `SurfaceView` is
+*laid out* at the device's own pixel size and given a `graphicsLayer` scale, so what reaches
+`onSizeChanged` (and from there the guest, `wm size` and `screencap`) is the device's resolution
+rather than the tab's. Touches need no mapping: the framework maps them back through the view's
+transform before they arrive.
+
+A profile is a size **and** a density, because 360×640dp at 320dpi and the same at 480dpi select
+different drawables and wrap text differently — resizing without re-densifying would be testing
+neither. The density has to travel over `IGuestSession.start`/`resize` for the reason §1a gives.
 
 ## 8. Session states
 

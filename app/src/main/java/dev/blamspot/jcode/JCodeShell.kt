@@ -330,11 +330,7 @@ import dev.blamspot.jcode.design.LocalAndroidDevice
 import dev.blamspot.jcode.design.LocalAndroidRunTargets
 import dev.blamspot.jcode.design.LocalVirtualDevice
 import dev.blamspot.jcode.design.VirtualDeviceSetting
-import dev.blamspot.jcode.vdevice.AppSandbox
-import dev.blamspot.jcode.vdevice.AppSandboxPage
-import dev.blamspot.jcode.vdevice.VirtualDevice
-import dev.blamspot.jcode.vdevice.SimulatedHardware
-import dev.blamspot.jcode.vdevice.VirtualHardwarePage
+import dev.blamspot.jcode.vdevice.VirtualDeviceBridge
 import dev.blamspot.jcode.design.LocalCutoutSetting
 import dev.blamspot.jcode.design.LocalExplorerHiddenSetting
 import dev.blamspot.jcode.design.LocalTrashSettings
@@ -1013,13 +1009,17 @@ fun JCodeApp(
     LaunchedEffect(Unit) {
         snapshotFlow { BuiltinBrowser.revealSignal.value }.collect { if (it > 0) viewModel.openBrowserTab() }
     }
-    // Same pattern for the device sandbox: a finished virtual-device build only bumps AppSandbox.revealSignal.
+    // Same pattern for the device sandbox, which lives in the Android Dev Pack: the pack asks for its
+    // tab through VirtualDeviceHost.openDeviceTab, and the bridge turns that into a signal here. It
+    // has to be a signal rather than a direct call because the pack asks from the `:guest` binder's
+    // thread as well as its own, and a tab may only be opened from the composition.
     LaunchedEffect(Unit) {
-        snapshotFlow { AppSandbox.revealSignal.value }.collect { if (it > 0) viewModel.openAppSandboxTab() }
+        snapshotFlow { VirtualDeviceBridge.revealDevice.intValue }
+            .collect { if (it > 0) viewModel.openAppSandboxTab() }
     }
     // And for the hardware bench, which the device's own control bar asks for.
     LaunchedEffect(Unit) {
-        snapshotFlow { SimulatedHardware.revealSignal.intValue }
+        snapshotFlow { VirtualDeviceBridge.revealHardware.intValue }
             .collect { if (it > 0) viewModel.openVirtualHardwareTab() }
     }
     // A page tab has no close callback, so the guest is reaped by watching the tab list.
@@ -1916,6 +1916,72 @@ private fun extensionSnackbar(
     }
 }
 
+/** The pack's route for the device tab. Its counterpart in the pack dispatches on the same string. */
+private const val VIRTUAL_DEVICE_VIEW = "device"
+
+/** And for the hardware bench, which opens beside the device rather than over it. */
+private const val VIRTUAL_HARDWARE_VIEW = "hardware"
+
+/**
+ * One of the virtual device's pages, drawn out of whichever pack provides the device.
+ *
+ * The tab kinds stay the workbench's — the device is opened by a finished build, by the palette and
+ * by `adb shell am start`, none of which is a file being opened, so the tab cannot be a native
+ * *claim* the way a layout is. What changed is only where the page comes from: [NativeExtensionPage]
+ * loads it, and a missing pack reports itself there rather than leaving an empty rectangle.
+ */
+@Composable
+private fun VirtualDevicePage(
+    view: String,
+    dark: Boolean,
+    scope: CoroutineScope,
+    snackbarHostState: SnackbarHostState,
+    managerActions: WorkbenchManagerActions,
+    modifier: Modifier = Modifier,
+) {
+    val pack = VirtualDeviceBridge.pack()
+    if (pack == null) {
+        NoVirtualDeviceNotice(modifier = modifier)
+        return
+    }
+    NativeExtensionPage(
+        extension = pack,
+        file = null,
+        projectDir = null,
+        view = view,
+        dark = dark,
+        onSnackbar = extensionSnackbar(scope, snackbarHostState),
+        onShowSource = {},
+        readFile = { null },
+        writeFile = { _, _ -> },
+        request = { envelope -> managerActions.onExtensionApiRequest(pack.id, envelope) },
+        events = managerActions.extensionEvents ?: kotlinx.coroutines.flow.emptyFlow(),
+        modifier = modifier.fillMaxSize(),
+    )
+}
+
+/**
+ * What the device tab shows with no pack installed.
+ *
+ * Reachable despite the surfaces that offer the device being hidden: a session restored from before
+ * the pack was uninstalled reopens its tabs, and this is what that tab is now.
+ */
+@Composable
+private fun NoVirtualDeviceNotice(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.fillMaxSize().padding(Space.lg),
+        verticalArrangement = Arrangement.spacedBy(Space.s),
+    ) {
+        Text("No virtual device", style = MaterialTheme.typography.titleSmall)
+        Text(
+            text = "Running an APK inside JCode comes from the Android Dev Pack. " +
+                "Install it from the Marketplace and open this again.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class) // WindowInsets.imeAnimationTarget (snap IME padding)
 @Composable
 private fun JCodeShell(
@@ -2530,14 +2596,14 @@ private fun JCodeShell(
             fail("Build reported success but left no APK in ${apkDir.absolutePath}.")
             return
         }
-        // The tab is the preferred presentation; it falls back to the full-screen launch itself when
-        // the window cannot host an embedded guest, so the decision is not taken here.
-        VirtualDevice.inspect(appContext, apk.absolutePath)
-            .onSuccess {
-                OutputLog.append("✓ Opening ${it.label} (${it.packageName}) on the device sandbox")
-                AppSandbox.requestOpen(apk.absolutePath)
-            }
-            .onFailure { fail("Virtual device: ${it.message ?: it.toString()}") }
+        if (!VirtualDeviceBridge.isAvailable) {
+            fail("No virtual device — install the Android Dev Pack to run this APK here.")
+            return
+        }
+        // Reading the APK's identity, logging what is opening and reporting a file that is not one
+        // all belong to the device, which is the only thing that can read a guest APK. It reports
+        // through VirtualDeviceHost, which lands in this same Output pane.
+        VirtualDeviceBridge.requestOpen(apk.absolutePath)
     }
 
     // A run command reporting completion (OSC 7713, emitted after the command) marks that terminal
@@ -3056,7 +3122,7 @@ private fun JCodeShell(
             title = "Open Virtual Device",
             group = "Tools",
             icon = JCodeIcon.Destinations,
-        ) { AppSandbox.requestOpen(null) }
+        ) { VirtualDeviceBridge.requestOpen(null) }
         // The browser had a toolbar and nothing else. That is fine while you are looking at it and no
         // use at all from anywhere else, which is where the palette is reached from — so opening it
         // is here beside the device, and its three nav actions are here for the same reason the
@@ -3598,14 +3664,23 @@ private fun JCodeShell(
                                     onPair = managerActions.onAdbPair,
                                     modifier = Modifier.fillMaxSize(),
                                 )
-                                EditorPageKind.AppSandbox -> AppSandboxPage(
-                                    onSnackbar = { message ->
-                                        scope.launch { snackbarHostState.showSnackbar(message) }
-                                    },
-                                    modifier = Modifier.fillMaxSize(),
+                                // Both device pages are the Android Dev Pack's, drawn through the
+                                // ordinary native-extension host: `view` is the route the pack
+                                // dispatches on, exactly as the source-control extension's pages do.
+                                EditorPageKind.AppSandbox -> VirtualDevicePage(
+                                    view = VIRTUAL_DEVICE_VIEW,
+                                    dark = editorDark,
+                                    scope = scope,
+                                    snackbarHostState = snackbarHostState,
+                                    managerActions = managerActions,
                                 )
-                                EditorPageKind.VirtualHardware ->
-                                    VirtualHardwarePage(modifier = Modifier.fillMaxSize())
+                                EditorPageKind.VirtualHardware -> VirtualDevicePage(
+                                    view = VIRTUAL_HARDWARE_VIEW,
+                                    dark = editorDark,
+                                    scope = scope,
+                                    snackbarHostState = snackbarHostState,
+                                    managerActions = managerActions,
+                                )
                                 EditorPageKind.Trash -> {
                                     val trashContext = LocalContext.current
                                     TrashPage(

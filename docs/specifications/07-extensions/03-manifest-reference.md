@@ -87,6 +87,39 @@ why the validator re-checks the raw value against disk and reports a hard error.
 Both are read from a **merged header**: a legacy `extension.jehm` frontmatter overlaid by
 `extension.yaml`, with YAML winning, so pre-merge and post-merge installs both resolve.
 
+### 2.2a `entry.native` — an extension that ships code
+
+```yaml
+entry:
+  native:
+    apk: lib/android-pack.apk      # or `dex:` for a plugin that owns no resources
+    class: dev.jcode.ext.android.AndroidPackExtension
+    guest: dev.jcode.ext.android.vdevice.VirtualDeviceGuest   # optional
+    abi: 8
+    claims:
+      - fileTypes: [xml]
+        pathContains: res/layout
+        opensInPreview: openLayoutsInDesigner
+        label: Show Designer
+        icon: image
+```
+
+A native extension is loaded into **JCode's own process** by `NativeExtensionLoader`, with JCode's
+class loader as its parent, so it shares one Compose runtime with the workbench.
+
+| Key | Meaning |
+|---|---|
+| `apk` / `dex` | the payload, relative to the install directory. `dex` is enough for a plugin that resolves no resources; `apk` is required for one with its own drawables, ids or assets, because a resource table needs an archive for `addAssetPath` to attach |
+| `class` | the entry class, implementing `JCodeNativeExtension`. **One per extension** — a plugin that draws several surfaces dispatches on `Params.VIEW` rather than declaring several entries |
+| `guest` | *(added at ABI 8)* a class implementing `JCodeVirtualDeviceGuest`, loaded into the `:guest` process by the app's `GuestSessionService` stub. Declaring it is also **how JCode knows an installed pack provides the virtual device** — see [App sandbox §1a](../08-virtual-device/01-app-sandbox-architecture.md#1a-where-this-lives-and-why-it-is-split) |
+| `abi` | must equal the host's `JCODE_EXT_ABI` exactly; a mismatch is refused with a message naming both numbers |
+| `claims` | which files this plugin draws. A file type alone is too broad, so a rule may also require a `pathContains` fragment or a `contains` substring of the file's own text |
+
+**Only officially signed extensions load native code**, because loading it means running it inside
+JCode. The one way past that is `Settings → Developer options`, which also permits unsigned
+sideloading — it exists so a pack that ships the virtual device can be worked on at all, since
+otherwise every test round would need the package signed first.
+
 ### 2.3 `requires` / `suggests`
 
 ```yaml
@@ -358,6 +391,9 @@ images:
    dropped, not errors.
 6. Adding a key means updating `KNOWN_TOP_LEVEL`, the parser, and this document.
 7. `formatterCommand` is currently inert.
+8. `entry.native.abi` must equal the host's `JCODE_EXT_ABI` exactly — not "at least".
+9. An extension declaring `entry.native.guest` is offering to provide the virtual device; at most one
+   installed extension should, and JCode takes the first it finds.
 
 ---
 

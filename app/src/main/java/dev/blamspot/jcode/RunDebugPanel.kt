@@ -60,7 +60,7 @@ import dev.blamspot.jcode.design.LocalAndroidDevice
 import dev.blamspot.jcode.design.LocalAndroidRunTargets
 import dev.blamspot.jcode.fs.Project
 import dev.blamspot.jcode.run.ProjectRunner
-import dev.blamspot.jcode.vdevice.AppSandbox
+import dev.blamspot.jcode.vdevice.VirtualDeviceBridge
 import dev.blamspot.jcode.workbench.DebugSessionUi
 import dev.blamspot.jcode.workbench.LocalRunConfigPresets
 import kotlinx.coroutines.Dispatchers
@@ -202,7 +202,11 @@ private fun ProjectRunBuildDetail(
             // both: the container recipe only builds and is handed to JCode's own sandbox afterwards,
             // while every other Android recipe shells out to adb and takes its device from the target
             // row. Each row appears only when a config of its kind is present.
-            if (runs.any { run -> run.terminals.any { it.command.contains(ProjectRunner.VDEVICE_MARKER) } }) {
+            // ...and only when a pack that provides the device is actually installed: the recipe is
+            // in the project either way, but there is nothing to open it in without one.
+            if (VirtualDeviceBridge.isAvailable &&
+                runs.any { run -> run.terminals.any { it.command.contains(ProjectRunner.VDEVICE_MARKER) } }
+            ) {
                 VirtualDeviceRow()
             }
             if (runs.any { run -> run.terminals.any { it.command.contains("adb ") } }) {
@@ -668,7 +672,7 @@ private fun TargetChoiceRow(target: AndroidRunTarget, chosen: Boolean, onClick: 
  *  same virtual device as an adb target and two rows reading "Virtual device" say nothing apart. */
 @Composable
 private fun VirtualDeviceRow() {
-    PanelRow(onClick = { AppSandbox.requestOpen(null) }) {
+    PanelRow(onClick = { VirtualDeviceBridge.requestOpen(null) }) {
         Icon(
             Icons.Rounded.Smartphone,
             contentDescription = null,

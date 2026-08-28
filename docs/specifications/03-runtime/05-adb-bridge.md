@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:distro` (package `dev.blamspot.jcode.core.distro.adb`), `:app` (`dev.blamspot.jcode.adb`) |
-| **Primary sources** | core/distro/src/main/java/dev/blamspot/jcode/core/distro/adb/AdbWire.kt, AdbAuth.kt, AdbDaemon.kt, AdbHostClient.kt, AdbRelayServer.kt, AdbBackendDiscovery.kt, AdbBridge.kt, AdbBridgeLocator.kt, AdbModels.kt, app/src/main/java/dev/blamspot/jcode/adb/VirtualDeviceAdbService.kt |
+| **Primary sources** | core/distro/src/main/java/dev/blamspot/jcode/core/distro/adb/AdbWire.kt, AdbAuth.kt, AdbDaemon.kt, AdbHostClient.kt, AdbRelayServer.kt, AdbBackendDiscovery.kt, AdbBridge.kt, AdbBridgeLocator.kt, AdbModels.kt. The device end of the transport — `VirtualDeviceAdbService.kt`, `AdbSync.kt` — moved to the **Android Dev Pack** at 1.7.0 |
 | **Verified against** | device-verified on Android 13, 2026-08-11 |
 
 ---
@@ -221,7 +221,15 @@ A device-side adb daemon so the guest's `adb` can drive JCode's app sandbox.
 - `AdbStream` is one open stream from the answering service's point of view, carrying the requested
   service string (for example `shell:getprop ro.build.version.sdk`).
 
-`VirtualDeviceAdbService` (in `:app`) implements the service handler. Supported services:
+`VirtualDeviceAdbService` implements the service handler. **It ships in the Android Dev Pack**, not in
+`:app`: what the daemon serves is the virtual device, and the device is the pack's — see
+[App sandbox §1a](../08-virtual-device/01-app-sandbox-architecture.md#1a-where-this-lives-and-why-it-is-split).
+The daemon itself stays in `:core:distro`, because binding a socket in JCode's storage and
+authenticating against the distro's keys would be the same for any target. `VirtualDeviceBridge.adb()`
+is the join: with no pack installed it answers with a handler that refuses every service, so
+`adb connect` still succeeds and `adb shell` says why rather than dying on an opened connection.
+
+Supported services:
 
 | Service | Behavior |
 |---|---|

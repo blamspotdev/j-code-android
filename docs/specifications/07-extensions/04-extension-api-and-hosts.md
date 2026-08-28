@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Status** | Implemented |
-| **Modules** | `:app`, `:feature:marketplace` |
+| **Modules** | `:app`, `:feature:marketplace`, `:core:ext-api` |
 | **Primary sources** | app/src/main/java/dev/blamspot/jcode/workbench/ExtensionWebView.kt (1,245 lines), app/src/main/java/dev/blamspot/jcode/workbench/VsCodeExtensionHost.kt (270), app/src/main/assets/vscode-host/host.js (662), app/src/main/java/dev/blamspot/jcode/workbench/VsixDrawerPanel.kt, app/src/main/java/dev/blamspot/jcode/workbench/ScmExtensionHost.kt, app/src/main/java/dev/blamspot/jcode/workbench/ExtensionDevPanel.kt, app/src/main/java/dev/blamspot/jcode/workbench/ExtensionDevLog.kt, feature/marketplace/src/main/java/dev/blamspot/jcode/feature/marketplace/VsixPackage.kt (278) |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
@@ -17,6 +17,7 @@ There are **two independent extension runtimes**, with two different protocols:
 |---|---|---|---|
 | **WebView bridge** | First-party `.jext` extensions with a web UI | JavaScript in an Android `WebView` | `window.JCodeNative` ↔ `window.JCode._on*` |
 | **VS Code host** | Imported `.vsix` extensions | Node inside the Linux runtime | Newline-delimited JSON over stdio |
+| **Native** | First-party packs that ship Kotlin — the layout designer, the virtual device | Dalvik, **in JCode's own process** | Kotlin interfaces in `:core:ext-api`, versioned by `JCODE_EXT_ABI` |
 
 Conflating them is easy and wrong; they share no code.
 
@@ -103,6 +104,37 @@ reports correctly. The host therefore publishes a CSS custom property,
 
 An unsigned sideload (`dev = true`) appears in the **Ext Dev** panel with an inspector, the manifest
 validator, and a live log. **Its `console` output goes to the Ext Dev log, not to logcat.**
+
+---
+
+## 2a. The native runtime
+
+A native extension's payload is loaded by `NativeExtensionLoader` with a `DexClassLoader` whose
+**parent is JCode's own class loader**. That inversion — the guest loader's parent is the *boot*
+loader — is what lets the composition a plugin returns be spliced into JCode's, and it is safe only
+because the packaging forbids a plugin from bundling AndroidX: with nothing shared present twice,
+there is no second `R` for an id to resolve against.
+
+**This is a real ABI, and `JCODE_EXT_ABI` is the whole of the compatibility story.** It must match
+exactly; "at least" would be wrong in both directions, since a plugin can be newer than the host.
+
+| Interface | Process | What it is |
+|---|---|---|
+| `JCodeNativeExtension` | IDE | one `Content(host, params)` composable. A plugin that draws several surfaces dispatches on `Params.VIEW` |
+| `NativeHost` | IDE | what a plugin may ask of the workbench — read/write the editor buffer, run a command in the runtime, open a view, decorate the Explorer |
+| `JCodeVirtualDevice` | IDE | *(ABI 8)* a pack offering to **be** JCode's virtual device: open/stop an APK, hand back an adb handler and the device's two content providers |
+| `JCodeVirtualDeviceGuest` | `:guest` | *(ABI 8)* the container half, loaded into the app's `:guest` process by its `GuestSessionService` stub |
+| `VirtualDeviceHost` | IDE | the four things the device asks back: open its tab, open the hardware bench, a snackbar, a line in the Output pane |
+| `VirtualDeviceComponents` | both | the names of the four manifest components the app declares on the device's behalf |
+
+The surface is kept small on purpose: every declaration is a promise that cannot be withdrawn without
+breaking installed extensions. **`:core:design` and `:core:distro`'s adb package are reachable but not
+promised** — a first-party pack compiles against them as `compileOnly` jars and is refused by the ABI
+check when it goes stale, which is the trade that keeps the virtual device's menus following the
+user's icon bundle instead of a vendored copy that drifts.
+
+Why the virtual device is split across two processes, and what that costs, is
+[App sandbox §1a](../08-virtual-device/01-app-sandbox-architecture.md#1a-where-this-lives-and-why-it-is-split).
 
 ---
 

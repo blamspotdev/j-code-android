@@ -8,8 +8,8 @@ import android.util.Log
 import dalvik.system.DexClassLoader
 import dev.blamspot.jcode.ext.api.JCODE_EXT_ABI
 import dev.blamspot.jcode.ext.api.JCodeNativeExtension
+import dev.blamspot.jcode.ext.api.JCodeVirtualDeviceGuest
 import dev.blamspot.jcode.feature.marketplace.InstalledExtension
-import dev.blamspot.jcode.vdevice.HiddenApi
 import java.io.File
 import dev.blamspot.jcode.core.resource.ManagedCache
 import dev.blamspot.jcode.core.resource.ResourceManagerLocator
@@ -19,9 +19,9 @@ import kotlin.math.ceil
 /**
  * Loads an extension's **native** UI — an APK it ships — into JCode's own process, on first use.
  *
- * The technique is [dev.blamspot.jcode.vdevice.GuestLoader]'s: a [DexClassLoader] over the archive and an
+ * The technique is the virtual device's guest loader's: a [DexClassLoader] over the archive and an
  * [AssetManager] with the archive's path added, so the plugin gets both its classes and its
- * resources. One decision is deliberately the **opposite** of the guest loader's, and it is the
+ * resources. One decision is deliberately the **opposite** of that loader's, and it is the
  * whole reason this is a separate file:
  *
  * > **The parent is JCode's own class loader, not the boot loader.**
@@ -32,11 +32,12 @@ import kotlin.math.ceil
  * interoperate.
  *
  * That inversion is safe here only because of a rule the packaging enforces: **a plugin bundles no
- * AndroidX**. The hazard `GuestLoader` documents at length — a library present in both loaders, each
+ * AndroidX**. The hazard the pack's own guest loader documents at length — a library present in both
+ * loaders, each
  * with its own generated `R`, resolving ids against the wrong resource table — needs the library to
  * be present twice. With Compose and AndroidX resolved parent-first from JCode and nothing shared
  * bundled in the plugin, there is no second copy for an id to come from. The plugin's *own* `R` is
- * unique to its dex and indexes its own table, which is what [addAssetPath] supplies.
+ * unique to its dex and indexes its own table, which is what `addAssetPath` supplies.
  *
  * Not a security boundary: a plugin runs with JCode's permissions because it is JCode's process.
  * What keeps that honest is upstream — [resolve] refuses an extension that was not officially
@@ -79,6 +80,16 @@ internal object NativeExtensionLoader {
         override fun clear() = cache.clear()
     }
 
+    /**
+     * Whether an unsigned, sideloaded extension may load code into JCode's process.
+     *
+     * A plain field rather than a read of the preference, because [resolve] is called from the
+     * composition and a DataStore read is suspending — blocking on one to draw a frame is worse than
+     * the staleness of a flag the workbench pushes. `MainViewModel` keeps it current.
+     */
+    @Volatile
+    var allowUnsigned: Boolean = false
+
     @Volatile
     private var registered = false
 
@@ -113,10 +124,16 @@ internal object NativeExtensionLoader {
         // Signed-only, and checked here rather than at install time as well as: an extension can be
         // sideloaded unsigned for development (that is what `dev` means), and that is fine for a web
         // frontend running in a WebView. Code that loads into this process is a different question.
-        if (extension.dev) {
+        //
+        // [allowUnsigned] is the one way past it, and it is not a convenience: the virtual device now
+        // ships in an extension, so without it the device cannot be worked on at all — every test
+        // round would need the pack signed first. It is off by default and turned on only by
+        // Settings → Developer options, the same switch that already permits unsigned sideloading.
+        if (extension.dev && !allowUnsigned) {
             throw LoadFailure(
                 "${extension.name} is an unsigned development build. Extensions that ship native " +
-                    "code run inside JCode itself, so only officially signed packages are loaded.",
+                    "code run inside JCode itself, so only officially signed packages are loaded. " +
+                    "Turn on Settings → Developer options to load unsigned ones while working on them.",
             )
         }
 
@@ -134,6 +151,57 @@ internal object NativeExtensionLoader {
             .getOrElse { throw asFailure(extension, it) }
         cache[extension.id] = loaded
         return loaded.instance to loaded.context
+    }
+
+    /**
+     * The pack's `:guest`-side half, for the manifest stub that owns that process.
+     *
+     * Separate from [resolve] rather than another cache entry, because this runs in a **different
+     * process**: `:guest` has its own copy of this object, its own class loader and its own instance
+     * of the pack, and the two never see each other. What they share is the technique — a
+     * [DexClassLoader] over the same archive, parented on JCode's own loader.
+     *
+     * Note the parent is JCode's loader here too, not the boot loader. The boot-parented one belongs
+     * to the *guest app* the container loads; this is the container itself, which is JCode's code
+     * running in a process of JCode's, and it must see exactly one copy of everything JCode ships.
+     *
+     * No resources are attached: the container draws its status bar and its permission prompt from
+     * the pack's own archive, so the caller supplies a context built the same way [resolve] does.
+     */
+    @Throws(LoadFailure::class)
+    fun resolveGuest(host: Context, extension: InstalledExtension): Pair<JCodeVirtualDeviceGuest, Context> {
+        val entry = extension.nativeEntry
+            ?: throw LoadFailure("${extension.name} declares no native entry point.")
+        val guestClass = extension.nativeGuestClass
+            ?: throw LoadFailure("${extension.name} declares no guest entry class (entry.native.guest).")
+        if (extension.dev && !allowUnsigned) {
+            throw LoadFailure("${extension.name} is an unsigned development build.")
+        }
+        if (extension.nativeAbi != JCODE_EXT_ABI) {
+            throw LoadFailure(
+                "${extension.name} was built for JCode extension API ${extension.nativeAbi}; " +
+                    "this JCode implements $JCODE_EXT_ABI. Update the extension.",
+            )
+        }
+        val apk = File(extension.dir, entry)
+        if (!apk.isFile) throw LoadFailure("${extension.name}'s native entry ($entry) is missing.")
+
+        return runCatching {
+            // A dex output directory of its own: `:guest` and the IDE would otherwise write optimised
+            // dex for the same archive to one path from two processes.
+            val dexDir = File(host.codeCacheDir, "native-ext-guest/${extension.id}").apply { mkdirs() }
+            val loader = DexClassLoader(
+                apk.absolutePath,
+                dexDir.absolutePath,
+                File(extension.dir, "lib").takeIf { it.isDirectory }?.absolutePath,
+                NativeExtensionLoader::class.java.classLoader,
+            )
+            val instance = loader.loadClass(guestClass)
+                .getDeclaredConstructor()
+                .newInstance() as? JCodeVirtualDeviceGuest
+                ?: throw LoadFailure("$guestClass does not implement JCodeVirtualDeviceGuest.")
+            instance to pluginContext(host, apk, loader)
+        }.getOrElse { throw asFailure(extension, it) }
     }
 
     private fun load(host: Context, extension: InstalledExtension, apk: File): Loaded {
@@ -169,8 +237,12 @@ internal object NativeExtensionLoader {
         val assets = AssetManager::class.java.getDeclaredConstructor()
             .apply { isAccessible = true }
             .newInstance()
-        val added = HiddenApi.method(AssetManager::class.java, "addAssetPath", String::class.java)
-            ?.invoke(assets, apk.absolutePath) as? Int
+        val added = runCatching {
+            AssetManager::class.java
+                .getDeclaredMethod("addAssetPath", String::class.java)
+                .apply { isAccessible = true }
+                .invoke(assets, apk.absolutePath) as? Int
+        }.getOrNull()
         // A bare .dex has no resource table by definition, so failing to attach one is the expected
         // outcome rather than a problem to report. For an archive it IS a problem: the plugin still
         // runs, but its own @drawable/@string break as "resource not found" deep inside its UI.

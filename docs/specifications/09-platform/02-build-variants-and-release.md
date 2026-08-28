@@ -72,8 +72,10 @@ editing a string — both were done for 1.7.0 rather than deferred:
 
 - **The virtual device's guest apps** are now `dev.blamspot.jcode.vdevice.*`. That string *is* the
   identity of the apps installed inside the device: the host names them from `DeviceIntents`,
-  `VirtualLauncher` and friends, and the APKs are committed prebuilt under
-  `app/src/main/assets/vdevice/`. Both halves have to agree exactly — a constant that disagrees with
+  `VirtualLauncher` and friends, and the APKs are committed prebuilt under the **Android Dev Pack's**
+  `native/src/main/assets/vdevice/`. Their *sources* stay in this repo under `tools/vdevice-*`, so the
+  two live in different repositories: rebuilding one of these APKs means copying the artifact across.
+  Both halves have to agree exactly — a constant that disagrees with
   an APK's manifest fails when the launcher cannot find the app, at runtime, not at build. All six
   (`browser`, `camera`, `files`, `hardware`, `keyboard`, `settings`) were rebuilt from
   `tools/` with the `aapt2` + `javac` + `d8` + `zipalign` + `apksigner` pipeline each README
