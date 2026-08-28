@@ -108,7 +108,7 @@ Push-Location out; jar uf ..\base.apk classes.dex; Pop-Location
 Then copy it over the bundled copy, which is what every device is built from:
 
 ```powershell
-Copy-Item hwfixture.apk ..\..\app\src\main\assets\vdevice\hardware.apk
+Copy-Item hwfixture.apk X:\jcode-extensions\android\native\vdevice\assets\vdevice\hardware.apk
 ```
 
 Being bundled is what makes it survive a wipe: the device is rebuilt on every JCode start and

@@ -71,17 +71,19 @@ Two trees ship as separate artifacts, so moving them meant rebuilding those arti
 editing a string — both were done for 1.7.0 rather than deferred:
 
 - **The virtual device's guest apps** are now `dev.blamspot.jcode.vdevice.*`. That string *is* the
-  identity of the apps installed inside the device: the host names them from `DeviceIntents`,
-  `VirtualLauncher` and friends, and the APKs are committed prebuilt under the **Android Dev Pack's**
-  `native/src/main/assets/vdevice/`. Their *sources* stay in this repo under `tools/vdevice-*`, so the
+  identity of the apps installed inside the device: the host names them from `DeviceIntents` and
+  friends, and the APKs are committed prebuilt under the **Android Dev Pack's**
+  `native/vdevice/assets/vdevice/`. Their *sources* stay in this repo under `tools/vdevice-*`, so the
   two live in different repositories: rebuilding one of these APKs means copying the artifact across.
   Both halves have to agree exactly — a constant that disagrees with
-  an APK's manifest fails when the launcher cannot find the app, at runtime, not at build. All six
+  an APK's manifest fails when the home screen cannot find the app, at runtime, not at build. All six
   (`browser`, `camera`, `files`, `hardware`, `keyboard`, `settings`) were rebuilt from
   `tools/` with the `aapt2` + `javac` + `d8` + `zipalign` + `apksigner` pipeline each README
-  documents, and verified with `aapt2 dump packagename` against the shipped asset.
-  `VirtualLauncher`'s own ids are synthetic — they label the launcher's nodes in a uiautomator dump
-  and have no APK behind them.
+  documents, and verified with `aapt2 dump packagename` against the shipped asset. A seventh,
+  `launcher`, was added at 1.7.0 and was born in the new package — the device's home screen became an
+  app rather than something the container drew.
+  `VirtualLauncher`'s own ids are synthetic — they label the *drawn* fallback launcher's nodes in a
+  uiautomator dump and have no APK behind them.
 - **`tools/java-dap`** is now `dev.blamspot.jcode.javadap`. The jar is not built during a JCode
   build; it is downloaded from a pinned release and launched by main class, so the package could
   only move together with a republished jar. `DebugEngineModels` now fetches `java-dap-v2` and

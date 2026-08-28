@@ -1,0 +1,5 @@
+out/
+gen/
+res.zip
+*.apk
+*.idsig

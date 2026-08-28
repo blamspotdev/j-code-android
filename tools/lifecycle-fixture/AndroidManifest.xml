@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A guest that says out loud what the container is doing to it.
+
+     Every other fixture on this device tests a surface the container draws. This one tests the
+     lifecycle behind it, which has no picture at all: whether an app covered by another one is
+     stopped as well as paused, whether it is restarted rather than merely resumed on the way back,
+     whether it is asked to save anything, and whether a screen it did not agree to handle rebuilds
+     it. None of that can be seen; all of it can be read.
+
+     It declares NO android:configChanges, and that is the point of it rather than an omission. Every
+     other app on this device declares the full set, so every one of them is resized in place - which
+     left the rebuild path with nothing on the device that could exercise it. This is the app a phone
+     would relaunch on rotation, so it is the app that proves the container does too. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.blamspot.jcode.vdevice.lifecycle">
+
+    <application
+        android:label="Lifecycle Fixture"
+        android:icon="@android:drawable/ic_menu_recent_history"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        <activity
+            android:name=".LifecycleActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- A second screen, so the fixture can cover itself: what happens to the activity
+             underneath is the question, and it needs one of its own to be covered by. -->
+        <activity
+            android:name=".SecondActivity"
+            android:exported="true"
+            android:label="Second" />
+    </application>
+
+</manifest>

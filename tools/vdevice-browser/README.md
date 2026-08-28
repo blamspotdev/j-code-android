@@ -20,10 +20,12 @@ WebView paths every other app takes. That makes it a live test of those paths as
 
 ## Where it ends up
 
-The signed APK is copied to `app/src/main/assets/vdevice/browser.apk`, which the root `.gitignore`
-un-ignores on purpose: it is an input to the app's build.
-`VirtualDeviceApps.installBuiltIns` reinstalls it after every `resetOnStart`, because a built-in is
-not exempt from the clean room — it is put back into it.
+The signed APK goes over the bundled copy, which lives in the **Android Dev Pack** rather than
+here: the virtual device moved into that extension at 1.7.0, so the source stays in this repo and
+the artifact ships from that one. The `Copy-Item` closing the build below is that step.
+
+`VirtualDeviceApps.installBuiltIns` reinstalls it after every wipe, because a built-in is not exempt
+from the clean room — it is put back into it.
 
 ## Notes on the manifest
 
@@ -47,7 +49,7 @@ javac -source 11 -target 11 -encoding UTF-8 -nowarn -cp $jar -d out (Get-ChildIt
 Push-Location out; jar uf ..\base.apk classes.dex; Pop-Location
 & "$bt\zipalign.exe" -f 4 base.apk aligned.apk
 & "$bt\apksigner.bat" sign --ks "$env:USERPROFILE\.android\debug.keystore" --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out browser.apk aligned.apk
-Copy-Item browser.apk ..\..\app\src\main\assets\vdevice\browser.apk -Force
+Copy-Item browser.apk X:\jcode-extensions\android\native\vdevice\assets\vdevice\browser.apk -Force
 ```
 
 The copy is the step that matters — the asset is what ships.

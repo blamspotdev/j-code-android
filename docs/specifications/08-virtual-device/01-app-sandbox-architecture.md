@@ -339,31 +339,40 @@ This is what backs `adb shell screencap` against the virtual device — see
 
 ## 7a. The device with nothing on it
 
-The tab's resting state is a **device**, not an empty panel: `VirtualWallpaper` (dark grey, outlined
-square/triangle/circle), the device's name, and either the installed apps as icons or the words
-"No app installed".
+**The device's resting state is its home screen, and the home screen is an app** —
+`tools/vdevice-launcher`, installed from the pack's assets like the browser and the camera. Opening
+the tab starts it; it is the root of the device's activity stack and everything else is pushed on
+top of it.
 
-**The launcher is device content, not IDE chrome, and that is a correctness property rather than a
-style.** It is drawn onto the `SurfaceView`'s **own surface** by `VirtualLauncher` — not composed
-over it, since a `SurfaceView` punches a hole in the window and nothing behind it is ever visible —
-and `VirtualScreen.blank` draws it through the same code. So:
+It took two earlier forms to get there. First Compose laid *over* the `SurfaceView`, which meant
+`screencap` answered a bare wallpaper and an agent could not see what was installed. Then a `Canvas`
+painted onto the surface itself with taps resolved against the very rectangles that had been drawn,
+which fixed the capture and left one thing wrong: the home screen was the only part of the device
+that was not an app. It had no activity, so `uiautomator dump` reported a bare `SurfaceView` where a
+phone reports a view tree; it could not be started, stopped, paused or switched away from, so
+"nothing is running" had to be special-cased everywhere instead of being answered by asking the app
+that was; and the device had no activity stack, so Back from an app's last screen left a blank device
+rather than the screen you came from.
 
-| | Answered by |
-|---|---|
-| What the tab shows | `VirtualLauncher.draw` onto the surface |
-| What `screencap` returns | `VirtualLauncher.draw` into a bitmap |
-| Where a finger lands | `VirtualLauncher.hit`, from `AppSandboxSurfaceView` |
-| Where `input tap` lands | `VirtualLauncher.hit`, from `VirtualDeviceAdbService` |
-| What `uiautomator dump` lists | `VirtualLauncher.dump`, off the same `tiles` |
+As an app, every one of those is the platform's problem again — which is the test this design is
+meant to pass. The launcher asks `queryIntentActivities(MAIN + LAUNCHER)` for what is installed,
+`loadLabel`/`loadIcon` to draw it and `startActivity` to open it. Nothing in its source knows it is
+running anywhere unusual; `GuestPackageHook` answers that query with the device's apps instead of the
+phone's (§7h), and that is the whole of the difference. **If the home screen needs a private API,
+the device is not a device.**
 
-One `tiles(width, height, density, apps)` behind all five, so **what an agent screenshots is where
-its taps land**. Drawing the launcher a second time for the capture would have put the icons it sees
-in one place and the taps it sends in another.
+It declares `HOME` and `DEFAULT` but deliberately **not** `LAUNCHER`, which is what keeps it off its
+own home screen — and out of that query's answer, since `GuestLoader.launchActivityOf` reads
+MAIN/LAUNCHER to decide what an app's entry point is.
 
-What is *not* on the device's screen is JCode's "Install an app" button: it is the IDE reaching onto
-the device, so it is composed over the surface and is deliberately absent from a capture, exactly
-like the control bar. A guest's surface package reparents above the surface, so starting an app needs
-no matching erase and stopping one repaints.
+`VirtualLauncher` still exists and still draws: it is the fallback for a device whose tree was
+emptied before the launcher could be installed, and it is what `VirtualScreen.blank` paints when
+there is no `:guest` at all. It is no longer what anybody normally sees.
+
+What is *not* on the device's screen is the tab's own chrome — the corner menu, the control gutter.
+That is the IDE reaching onto the device, so it is composed over the surface and is deliberately
+absent from a capture. A guest's surface package reparents above the surface, so starting an app
+needs no matching erase and stopping one repaints.
 
 ### 7b. The device's status bar and shade
 
@@ -474,8 +483,9 @@ be put back — a built-in is not exempt from the clean room, it is reinstalled 
 `installBuiltIns` does that from `assets/vdevice/*.apk` immediately after the wipe, through the same
 `install` path any other APK takes.
 
-Today that is five apps, and the first three are the device's **system apps** — the launcher offers
-no Uninstall for them (§7h).
+Today that is seven, and six of them are the device's **system apps** — the home screen offers no
+Uninstall for those (§7h). The launcher itself is one of the six: it is an app on this device like
+any other (§7a), and the only one of the seven that is not is the hardware fixture.
 
 **The browser** (`tools/vdevice-browser`) is the one that makes the device usable: it opens a URL
 without reaching for the phone's browser, which would take the user out of JCode and load the page
@@ -500,9 +510,18 @@ back, so the bench (§7f), Manage permissions (§7e) and the device's own apps (
 having an effect on a real app rather than taken on trust. It is on every device by default because the moment you want it is the moment
 something looks wrong, which is not the moment to go and build an APK.
 
-All four are ordinary guests with no container privileges, which makes them a live test of the load,
-embed, window, result and WebView paths as much as a feature — the Camera app found three real bugs
-on its first run (§7i, §7j).
+**The launcher** (`tools/vdevice-launcher`) is the device's home screen, and the reason there is one
+of these on the list at all is that it used to be drawn by the container instead — see §7a for what
+that cost and why it stopped.
+
+The **keyboard** (`tools/vdevice-keyboard`) and **Settings** (`tools/vdevice-settings`) round out the
+seven; both have sections of their own (§7m, and the keyboard in
+[02-guest-runtime-and-hidden-api](02-guest-runtime-and-hidden-api.md)).
+
+Every one of them is an ordinary guest with no container privileges, which makes them a live test of
+the load, embed, window, result and WebView paths as much as a feature — the Camera app found three
+real bugs on its first run (§7i, §7j), and making the home screen one of them found four more
+(§7o1, §7o2).
 
 ### 7d. What a guest leaves behind
 
@@ -808,9 +827,11 @@ What is actually needed is narrower — the apps that have to answer implicit in
 assets, so what they answer is known here rather than discovered. A guest answering *another
 guest's* implicit intent is deliberately not supported; nothing has wanted it.
 
-**They are system apps.** Camera, Files and Browser have no Uninstall in the launcher's long-press
+**They are system apps.** Camera, Files and Browser have no Uninstall in the home screen's long-press
 menu, the way a phone's stock camera and files have none. A device you can leave in a state where an
-app asking for a photo gets nothing is a device that fails in a way nothing explains.
+app asking for a photo gets nothing is a device that fails in a way nothing explains. The keyboard,
+Settings and the launcher itself are in that set for the same reason — `DeviceIntents.SYSTEM_PACKAGES`
+is the list, and uninstalling the home screen is the clearest case of all.
 
 ### 7i. Results between the device's own activities
 
@@ -850,7 +871,9 @@ rather than as silence.
 
 Both are ordinary guests — no container privileges, started by ordinary intent resolution, answering
 through the ordinary result path. Sources in `tools/vdevice-camera` and `tools/vdevice-files`,
-bundled in `app/src/main/assets/vdevice/` and reinstalled into every device on every start.
+bundled in the Android Dev Pack's `native/vdevice/assets/vdevice/` and reinstalled into every device
+on every start. Their *sources* stay in JCode's own repo under `tools/vdevice-*`, so rebuilding one
+means copying the artifact across — see §1a for why the two halves live in different repositories.
 
 **Camera** answers `ACTION_VIDEO_CAPTURE` as well as the stills, because the specification's claim
 that the device "can draw a frame and cannot encode a film" was true of nothing except the code not
@@ -1271,6 +1294,99 @@ what a phone's recents is for. It lists the apps that have actually started this
 device's own container so a capture shows it and a tap can reach it. Dismissing a card force-stops
 that app; tapping one runs it.
 
+### 7o1. A guest's lifecycle is the platform's, driven by hand
+
+`ActivityThread` drives an activity on a phone. Nothing drives one here — the container built it
+with `Instrumentation.newActivity` and the system has never heard of it — so `GuestRuntime` makes
+every call the platform would, in the order the platform makes it. What the container did *not* call
+was, for a long time, simply a callback apps never got.
+
+| Step | Called by | Notes |
+|---|---|---|
+| `onCreate(savedState)` | `embed` | `savedState` is non-null only for a relaunch |
+| `onRestart` | `restartEmbedded` | The only signal that says "you were stopped and are coming back" |
+| `onStart` / `onResume` | `resumeEmbedded` | Wrapped in the `Pre`/`Post` dispatches `performStart` would have made — see §02 |
+| `onRestoreInstanceState` | `resumeEmbedded` | Between start and post-create, and **only** for a rebuilt instance |
+| `onPause` | `pauseEmbedded` | |
+| `onStop` | `stopEmbedded` | |
+| `onSaveInstanceState` | `stopEmbedded` | *After* the stop, which is the order since Android P |
+| `onNewIntent` | `newIntentEmbedded` | What `singleTask` means: the running instance is handed the intent |
+| `onDestroy` | `destroyEmbedded` | Walks down whatever steps the activity has not taken yet |
+
+`GuestRuntime` keeps each activity's position, the way `ActivityThread` keeps it in an
+`ActivityClientRecord`, because the calls arrive from several directions — the tab being hidden,
+another activity opening over it, the device being torn down — and two in a row used to pause a
+paused activity and send a second `onStop` to one that had already released everything the first
+asked for.
+
+**Stopping is not pausing, and both are owed.** A guest used to be paused when something covered it
+and never stopped, which is half a promise: `onPause` means "you are not in front" and `onStop` means
+"you are not on the screen", and apps split their teardown across the two deliberately — the device's
+own Camera switches its viewfinder off in the first and releases the camera in the second. The
+covered activity is stopped *after* the new one resumes, which is the order a phone guarantees so
+that an outgoing screen's teardown is never something the incoming screen waits on.
+
+**The device's tab going away is the app going to the background.** `setVisible(false)` pauses and
+stops; `setVisible(true)` restarts. Anything less left a guest holding its sensors behind whatever
+the person was actually doing.
+
+**A configuration change is either told or obeyed, per activity, per its own manifest.**
+`GuestWindow.applySize` answers with `Configuration.diff` — the same question `ActivityThread` asks —
+and anything outside the activity's `android:configChanges` *relaunches* it: pause, stop, save,
+destroy, rebuild from the intent that started it, and hand the new instance the saved state. Destroy
+comes before create, as on a phone, so an app with a static holder that asserts one live instance
+never sees two. Everything else is told through `onConfigurationChanged`.
+
+That distinction is the difference between a device and a scaler. An app that does not declare
+rotation handling is *relaunched* by a phone — that is what rotating one does — and an app resized in
+place instead is an app whose own rotation handling has never once been exercised, on the one screen
+built for exercising it. The container says which it chose:
+
+```
+BrowserActivity told for config 0x1d00 (declares 0x1da3)
+LifecycleActivity relaunched for config 0x1d00 (declares 0x0)
+```
+
+Every app on the stack is resized, not only the one in front. Sizing the active guest alone left
+whatever was underneath holding the screen it had when it was last on top, and then being "told"
+about the change by being handed its own unchanged `Configuration` — a notification about nothing.
+
+An app started **from the home screen** is sized before it is built, the way the first guest is.
+Until it was, only the app the IDE started got the device's screen: measured, the launcher ran at
+411×844dp while the app it opened ran at the tablet JCode itself was on.
+
+`tools/lifecycle-fixture` is the app that proves all of this. It reports every callback it is given
+and declares no `configChanges`, which makes it the one app on the device that a screen change must
+rebuild — every other one declares the full set and is resized in place.
+
+### 7o2. Home, and the apps behind it
+
+Home means what it means on a phone: the app stops, the home screen comes forward, and the app is
+still there. `EmbeddedGuest.home()` moves everything above the stack's root into a per-app background
+list, restarts the launcher, and reports the change; the IDE is not involved.
+
+It used to be. The device's Home button called out to `AppSandbox.requestOpen(launcher)`, which —
+because the launcher is a different app from the one on the screen — unbound the session and rebuilt
+the device from nothing. **Every Home press destroyed the running app, the container's process and
+the launcher's own instance, and put back a device that had never run anything.**
+
+A card in Recents resumes that background task rather than starting the app again: it returns whole,
+in the order it left in, with only its top resumed. Tapping an app on the home screen that is already
+waiting brings it forward too — but only for a plain `MAIN`/`LAUNCHER` intent, since an intent
+carrying data or extras is a request to *do* something and a task that has never seen it would drop
+what was asked for.
+
+`VirtualTasks` refuses to record the launcher. It is running more of the time than anything else, so
+it would sit permanently at the top of Recents, and a card that takes you home duplicates the button
+next to it — which is why a phone's recents does not list its launcher either.
+
+The device's tab is named from what the container reports, not from what the IDE started. Those
+stopped being the same thing when the home screen became an app: the IDE's last instruction is "start
+the launcher" for the whole time an app opened from that launcher is running, so the tab read
+`Device: dev.blamspot.jcode.vdevice.launcher` while the browser was on the screen. `onForeground`
+carries the app's own label across, and the launcher is never named — a tab called "Device: launcher"
+says less than "Device sandbox", which is what a device showing its home screen is.
+
 ### 7p. Screen options — `VirtualScreenOptions`
 
 Which screen the device is pretending to be, and which way up. The presets are the layout designer's
@@ -1362,6 +1478,13 @@ the same path, so it means the same thing.
     which compares canonical paths, and never by joining onto the root.
 12. A guest asking for something the device answers itself must be answered *something*: a cancelled
     result is a real answer and silence is not.
+13. Every lifecycle step a phone would make, the container makes — and makes once. An activity is
+    paused before it is stopped, stopped before it is destroyed, and restarted rather than resumed
+    when it is coming back from stopped — see §7o1.
+14. An activity is sized for the device's screen **before** it is built, whoever started it.
+15. A configuration change outside an activity's own `android:configChanges` relaunches it. Resizing
+    in place something that expects to be rebuilt is the one thing this device must not do, because
+    it is the thing it exists to test.
 
 ---
 
