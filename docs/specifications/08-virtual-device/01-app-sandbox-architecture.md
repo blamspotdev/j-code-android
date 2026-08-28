@@ -378,6 +378,15 @@ needs no matching erase and stopping one repaints.
 
 A slim bar across the top of the device's screen, plus a notification shade that pulls down from it.
 
+**The shade is the screen while it is open.** It opens to the full height under the strip, square
+and opaque, with the notifications in a scroller and the navigation bar's height reserved at the
+bottom so *Clear all* is never under the Back button. It used to open to however tall its contents
+measured, which made it a dropdown card: the panel's size announced how much was in it before any of
+it could be read, and a device with nothing posted opened almost nothing at all. A phone's shade is
+the same size every time, because it is the screen; what changes is how much of it has anything in
+it. There is no "outside the panel" left to tap, so what closes it is the empty part of the panel
+itself — a press that reaches the container is a press no card, tile or button wanted.
+
 **The bar is persistent — a property of the device, not of whatever app is on it.** It is drawn
 twice, because the device's screen is drawn two ways, and both must produce the same strip:
 
@@ -410,8 +419,8 @@ running app's label on the left, and what it has posted on the right.
 
 | Gesture | Effect |
 |---|---|
-| Drag down from the top strip | Opens the shade: one row per notification, title and text, with **Clear all** |
-| Drag up, or tap below an open shade | Closes it |
+| Drag down from the top strip | Opens the shade **over the whole screen**, as a phone's does: quick-settings tiles, then one row per notification, then **Clear all** when there is something to clear |
+| Drag up, or tap the empty part of an open shade | Closes it |
 | `back` | Closes the shade first, the way a phone answers, before the guest ever sees the key |
 | Tap the pill in the middle | JCode's own control bar — back, keyboard, the hardware bench, restart, stop, and a warning only when this guest actually lost something. IDE chrome, not the device's |
 
