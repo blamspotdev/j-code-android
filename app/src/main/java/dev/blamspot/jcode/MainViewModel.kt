@@ -1308,12 +1308,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // The device ships in the Android Dev Pack now; this is the app's only handle on it, and it
         // needs a context before any of the manifest stubs can ask it for one.
         VirtualDeviceBridge.init(appContext)
-        // Developer options is what lets an unsigned, sideloaded pack load code into this process.
-        // Pushed rather than read on demand: the loader is called from the composition and a
-        // DataStore read is suspending.
-        viewModelScope.launch {
-            developerOptions.collect { NativeExtensionLoader.allowUnsigned = it }
-        }
         // Bring the adb bridge back up, but only once a serial has been restored — i.e. only for a
         // device that was paired before. Otherwise every cold start of a fresh install would pay a
         // full mDNS discovery plus an `adb start-server` in the distro for nothing.
@@ -2050,6 +2044,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setDeveloperOptions(enabled: Boolean) {
         viewModelScope.launch {
             uiPreferences.edit { prefs -> prefs[developerOptionsKey] = enabled }
+        }
+    }
+
+    // A third init block, for the reason the second one gives: [developerOptions] is declared just
+    // above and the main init block at the top of the class runs long before it exists.
+    //
+    // Developer options is what lets an unsigned, sideloaded pack load code into JCode's process.
+    // Pushed into the loader rather than read on demand, because the loader is called from the
+    // composition and a DataStore read is suspending.
+    init {
+        viewModelScope.launch {
+            developerOptions.collect { NativeExtensionLoader.allowUnsigned = it }
         }
     }
 
