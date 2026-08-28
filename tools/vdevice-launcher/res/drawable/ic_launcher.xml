@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The device's home screen. A grid of app tiles rather than a house: the icon is only ever seen in
+     a list of the device's own apps, where "home" as a building would sit oddly beside Camera and
+     Files — and what this app actually is, is the grid. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp" android:height="48dp"
+    android:viewportWidth="48" android:viewportHeight="48">
+    <path android:pathData="M11,3h26a8,8 0 0 1 8,8v26a8,8 0 0 1 -8,8h-26a8,8 0 0 1 -8,-8v-26a8,8 0 0 1 8,-8z"
+        android:fillColor="#1E293B"/>
+    <path android:pathData="M11,3h26a8,8 0 0 1 8,8v9h-42v-9a8,8 0 0 1 8,-8z"
+        android:fillColor="#334155"/>
+    <path android:pathData="M13,25h7v7h-7zM20.5,25h7v7h-7zM28,25h7v7h-7z"
+        android:fillColor="#0F172A" android:fillAlpha="0.0"/>
+    <path android:pathData="M13,24m0,2a2,2 0 0 1 2,-2h4a2,2 0 0 1 2,2v4a2,2 0 0 1 -2,2h-4a2,2 0 0 1 -2,-2z"
+        android:fillColor="#8AB4F8"/>
+    <path android:pathData="M21,24m0,2a2,2 0 0 1 2,-2h4a2,2 0 0 1 2,2v4a2,2 0 0 1 -2,2h-4a2,2 0 0 1 -2,-2z"
+        android:fillColor="#FFFFFF"/>
+    <path android:pathData="M29,24m0,2a2,2 0 0 1 2,-2h4a2,2 0 0 1 2,2v4a2,2 0 0 1 -2,2h-4a2,2 0 0 1 -2,-2z"
+        android:fillColor="#FFFFFF"/>
+    <path android:pathData="M13,34m0,2a2,2 0 0 1 2,-2h4a2,2 0 0 1 2,2v4a2,2 0 0 1 -2,2h-4a2,2 0 0 1 -2,-2z"
+        android:fillColor="#FFFFFF"/>
+    <path android:pathData="M21,34m0,2a2,2 0 0 1 2,-2h4a2,2 0 0 1 2,2v4a2,2 0 0 1 -2,2h-4a2,2 0 0 1 -2,-2z"
+        android:fillColor="#8AB4F8"/>
+</vector>

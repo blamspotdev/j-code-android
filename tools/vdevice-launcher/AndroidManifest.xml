@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The virtual device's home screen.
+
+     It used to be drawn by the container: a Canvas painted straight onto the device's surface, with
+     the taps resolved against the very rectangles that had been drawn. That was already the second
+     attempt — before it, the launcher was Compose laid OVER the surface, which meant `screencap`
+     answered a bare wallpaper and an agent could not see what was installed.
+
+     Painting it onto the surface fixed the capture and left one thing wrong: the home screen was the
+     only part of the device that was not an app. It had no activity, so `uiautomator dump` reported
+     a bare SurfaceView where a phone reports a view tree; it could not be started, stopped or
+     switched away from; and every question about it had to be answered by special-casing "nothing is
+     running" rather than by asking the app that was.
+
+     So it is an app. It reads what is installed with `queryIntentActivities`, the same call a real
+     launcher makes — the container answers it from the device's own apps, see GuestPackageHook —
+     and it starts them with `startActivity`, the same call any app makes.
+
+     It declares HOME and DEFAULT but NOT LAUNCHER, which is what keeps it off its own home screen. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.blamspot.jcode.vdevice.launcher">
+
+    <application
+        android:label="Home"
+        android:icon="@drawable/ic_launcher"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        <activity
+            android:name=".LauncherActivity"
+            android:exported="true"
+            android:label="Home"
+            android:launchMode="singleTask"
+            android:stateNotNeeded="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|density|smallestScreenSize">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
