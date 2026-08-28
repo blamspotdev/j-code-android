@@ -204,6 +204,28 @@ internal object NativeExtensionLoader {
         }.getOrElse { throw asFailure(extension, it) }
     }
 
+    /**
+     * A [Context] whose assets are [extension]'s own, over the host context given.
+     *
+     * Not cached, and that is the point: [resolve]'s cache is keyed on the extension and its base
+     * context is whichever caller got there first — usually a page, whose context is the Activity.
+     * A singleton that held one of those would hold the Activity, so the virtual device asks for its
+     * own over the application context instead.
+     *
+     * The device needs this at all because its six built-in apps ship as assets **inside the pack**.
+     * Read through JCode's own AssetManager they are simply not there, and `assets.list` answers an
+     * empty array rather than failing — so the device came up with nothing installed and nothing
+     * logged.
+     */
+    @Throws(LoadFailure::class)
+    fun assetContext(host: Context, extension: InstalledExtension): Context {
+        val entry = extension.nativeEntry
+            ?: throw LoadFailure("${extension.name} declares no native entry point.")
+        val apk = File(extension.dir, entry)
+        if (!apk.isFile) throw LoadFailure("${extension.name}'s native entry ($entry) is missing.")
+        return pluginContext(host, apk, NativeExtensionLoader::class.java.classLoader!!)
+    }
+
     private fun load(host: Context, extension: InstalledExtension, apk: File): Loaded {
         // Per-extension optimised-dex directory, so two plugins never race over one output and an
         // update is not read back out of the previous version's cache.

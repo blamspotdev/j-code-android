@@ -118,7 +118,13 @@ internal object VirtualDeviceBridge : VirtualDeviceHost {
             Log.w(TAG, "${extension.id} declares a guest entry but is not a JCodeVirtualDevice")
             return null
         }
-        runCatching { device.attach(this, context) }
+        // The pack's OWN context, not JCode's: the device's built-in apps are assets inside the
+        // pack's archive, and JCode's AssetManager cannot see them — it answers an empty list, so the
+        // device came up empty and said nothing about why.
+        val deviceContext = runCatching { NativeExtensionLoader.assetContext(context, extension) }
+            .onFailure { Log.w(TAG, "cannot reach the pack's own assets", it) }
+            .getOrDefault(context)
+        runCatching { device.attach(this, deviceContext) }
             .onFailure { Log.w(TAG, "the virtual device refused to attach", it) }
         return device
     }
