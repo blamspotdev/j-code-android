@@ -3,7 +3,6 @@ package dev.blamspot.jcode.workbench.dialog
 import android.content.res.Configuration
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,25 +13,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
 import dev.blamspot.jcode.design.AlertDialog
 import dev.blamspot.jcode.design.CompactFilledButton
 import dev.blamspot.jcode.design.CompactOutlinedButton
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,6 +43,8 @@ import dev.blamspot.jcode.ImportPhase
 import dev.blamspot.jcode.ImportProgress
 import dev.blamspot.jcode.MainViewModel
 import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.SettingsDropdownRow
+import dev.blamspot.jcode.design.SettingsTextFieldRow
 import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.feature.marketplace.ProjectTemplate
 import dev.blamspot.jcode.feature.marketplace.TemplateInput
@@ -253,12 +246,11 @@ internal fun NewItemDialog(
                 )
             }
         }
-        TextField(
+        SettingsTextFieldRow(
+            label = "Name",
             value = name,
             onValueChange = { name = it },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text(if (isWorkspace) "Workspace name" else "Project name") },
-            singleLine = true,
+            placeholder = if (isWorkspace) "Workspace name" else "Project name",
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
         )
     }
@@ -380,38 +372,19 @@ private fun TemplateInputField(
     value: String,
     onValue: (String) -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
-        Text(input.label, style = MaterialTheme.typography.labelLarge)
-        if (input.type == "select" && options.isNotEmpty()) {
-            var expanded by remember { mutableStateOf(false) }
-            Box {
-                OutlinedButton(
-                    onClick = { expanded = true },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(value.ifBlank { "Select" }, modifier = Modifier.weight(1f))
-                    Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
-                }
-                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                    options.forEach { option ->
-                        DropdownMenuItem(
-                            text = { Text(option) },
-                            onClick = {
-                                onValue(option)
-                                expanded = false
-                            },
-                        )
-                    }
-                }
-            }
-        } else {
-            OutlinedTextField(
-                value = value,
-                onValueChange = onValue,
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-            )
-        }
+    // The settings rows rather than raw Material controls: this dialog was a filled TextField for
+    // the name, an OutlinedTextField for text inputs and an OutlinedButton pretending to be a
+    // dropdown, so three fields in one modal had three different shapes and none of them matched
+    // the fields in Settings.
+    if (input.type == "select" && options.isNotEmpty()) {
+        SettingsDropdownRow(
+            label = input.label,
+            options = options,
+            selected = value,
+            onSelect = onValue,
+        )
+    } else {
+        SettingsTextFieldRow(label = input.label, value = value, onValueChange = onValue)
     }
 }
 
