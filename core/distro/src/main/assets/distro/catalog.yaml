@@ -336,6 +336,70 @@ entries:
       sudo ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
       go version
 
+  - id: flutter
+    category: languages
+    name: Flutter SDK
+    description: >-
+      Flutter and the Dart SDK, cloned from the flutter/flutter stable channel. Brings `flutter`,
+      `dart` and the Dart analysis server, and precaches the Android engine artifacts so the first
+      build does not stall on a download. Targets the virtual device and Linux desktop. Large
+      download.
+    # arm64 only, and deliberately: Flutter publishes arm64 *engine artifacts*, which is what the
+    # git-clone install below fetches — but its Linux release *tarball* is x86-64 only. That
+    # difference is the whole reason this installs from a clone rather than from an archive.
+    supportedArches: [arm64]
+    # ~1.5GB over a phone connection: the shallow clone, then the Dart SDK, then the Android engine.
+    # The global "Toolchain install timeout" still wins when it is larger.
+    minInstallTimeoutMinutes: 45
+    installScript: |
+      set -e
+      jcode_apt 0 8 "Installing Flutter's prerequisites" git curl unzip xz-utils zip ca-certificates
+      jcode_progress 10 "Cloning the Flutter stable channel"
+      # A shallow clone of one branch. Flutter reads its own version out of git, so this has to be a
+      # repository rather than an unpacked archive — but it does not have to be the whole history.
+      if [ -d /opt/flutter/.git ]; then
+        # `reset --hard`, not `checkout FETCH_HEAD`: Flutter reads its channel from the branch it is
+        # on, and a detached HEAD makes it announce that it is "not currently on a released channel"
+        # and refuse to look for updates. This moves `stable` and stays on it.
+        sudo git -C /opt/flutter fetch --depth 1 origin stable
+        sudo git -C /opt/flutter reset --hard FETCH_HEAD
+      else
+        sudo rm -rf /opt/flutter
+        sudo git clone --depth 1 -b stable https://github.com/flutter/flutter.git /opt/flutter
+      fi
+      # Flutter shells out to git constantly, and git refuses a repository owned by another user.
+      # `--system`, so it holds for every user here: toolchains install as the runtime user while
+      # terminals run as root, and a `--global` entry would cover exactly one of them — the tool
+      # would work during the install and fail with "dubious ownership" for ever afterwards.
+      sudo git config --system --add safe.directory /opt/flutter || true
+      sudo chmod -R a+rX /opt/flutter
+      sudo ln -sf /opt/flutter/bin/flutter /usr/local/bin/flutter
+      sudo ln -sf /opt/flutter/bin/dart /usr/local/bin/dart
+      jcode_progress 25 "Downloading the Dart SDK (this is the long part)"
+      # The first invocation is what bootstraps bin/cache: the Dart SDK for this architecture, then
+      # the tool's own snapshot. Run as root because /opt is root-owned and the cache lands inside it.
+      sudo /opt/flutter/bin/flutter --version
+      jcode_progress 70 "Turning off Flutter's analytics"
+      sudo /opt/flutter/bin/flutter --disable-analytics >/dev/null 2>&1 || true
+      jcode_progress 75 "Precaching the Android engine"
+      # Done here rather than left to the first build, which would otherwise spend several minutes
+      # downloading with nothing but a Gradle task name on screen.
+      sudo /opt/flutter/bin/flutter precache --android --no-universal >/dev/null 2>&1 || true
+      sudo chmod -R a+rX /opt/flutter
+      jcode_progress 100 "Flutter ready"
+    # Not `flutter --version`: that talks to git and can touch the network, so a healthy install
+    # reads as broken on a bad connection. The two binaries the SDK is made of are the fact.
+    verifyScript: |
+      test -x /opt/flutter/bin/flutter && test -x /opt/flutter/bin/cache/dart-sdk/bin/dart && echo ready
+    uninstallScript: |
+      sudo rm -rf /opt/flutter /usr/local/bin/flutter /usr/local/bin/dart
+    # Exit 0 when the tracked stable tip has moved past what is checked out, which is what every
+    # other entry here means by "an update is available".
+    updateCheckScript: |
+      test -d /opt/flutter/.git || exit 1
+      git -C /opt/flutter fetch --depth 1 origin stable >/dev/null 2>&1 || exit 1
+      [ "$(git -C /opt/flutter rev-parse HEAD)" != "$(git -C /opt/flutter rev-parse FETCH_HEAD)" ]
+
   - id: rust
     category: build-tools
     name: Rust toolchain

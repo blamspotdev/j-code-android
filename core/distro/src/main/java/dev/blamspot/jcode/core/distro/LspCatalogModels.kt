@@ -192,6 +192,28 @@ object LspServerCatalog {
             requiredSdks = listOf("rust"),
         ),
         LspCatalogEntry(
+            id = "dart-language-server",
+            category = "Dart",
+            name = "Dart Analysis Server",
+            description = "Analysis server for Dart and Flutter. Ships inside the Flutter SDK, so " +
+                "installing it is installing Flutter — there is nothing else to fetch.",
+            // Nothing to install: `dart` is part of the Flutter SDK, and requiredSdks below is what
+            // actually brings it. Saying so out loud beats a no-op that reads as a broken script.
+            installCommand = "command -v dart >/dev/null 2>&1 || " +
+                "{ echo 'The Flutter SDK provides dart; install it first.'; exit 1; }; " +
+                "echo 'The Dart analysis server ships with Flutter — nothing further to install.'",
+            verifyCommand = "dart language-server --help >/dev/null 2>&1 && echo ready",
+            // Removing it would mean removing Flutter, which is the SDK entry's business and not
+            // something a language server should do behind the user's back.
+            uninstallCommand = "echo 'The Dart analysis server is part of the Flutter SDK. " +
+                "Remove the Flutter SDK to remove it.'",
+            runCommand = "dart language-server --protocol=lsp --client-id=jcode",
+            languageIds = listOf("dart"),
+            extensions = listOf(".dart"),
+            rootDetectors = listOf("pubspec.yaml", ".git"),
+            requiredSdks = listOf("flutter"),
+        ),
+        LspCatalogEntry(
             id = "kotlin-language-server",
             category = "JVM",
             name = "Kotlin Language Server",
