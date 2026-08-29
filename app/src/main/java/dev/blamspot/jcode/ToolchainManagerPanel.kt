@@ -42,6 +42,9 @@ private const val DETAIL_LINES = 60
 
 /** What a unified toolchain row is: which catalog it came from decides its detail route. */
 private enum class ToolchainKind(val chip: String, val section: String) {
+    // First, because a manager is a way in to a whole family of tools rather than one of them: the
+    // Android SDK Manager is how the platforms, build-tools and NDKs below it get installed at all.
+    Manager("Managers", "Managers"),
     Sdk("SDKs", "SDKs"),
     Lsp("Servers", "Language servers"),
     Debugger("Debuggers", "Debug engines"),
@@ -52,9 +55,12 @@ private data class ToolchainRow(
     val id: String,
     val name: String,
     val description: String,
-    val status: ManagerItemStatus,
+    /** Null for a [ToolchainKind.Manager] row: it is opened, never installed. */
+    val status: ManagerItemStatus?,
     val checking: Boolean,
     val checkingLabel: String = "Checking…",
+    /** Manager rows only: which extension owns the page this row opens. */
+    val extId: String = "",
 )
 
 /**
@@ -73,6 +79,9 @@ internal fun ToolchainManagerPanel(
     onOpenLspDetail: (String) -> Unit,
     onOpenDebugDetail: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** Managers installed extensions bring here — see ExtensionContributions.toolchainActions. */
+    managers: List<MainViewModel.ShellContribution> = emptyList(),
+    onOpenManager: (MainViewModel.ShellContribution) -> Unit = {},
     /** Percent + phase of the running install, so the row shows it without opening the detail page. */
     progress: CatalogProgress? = null,
     /** Reveal the Issues pane, where this panel's failures are listed. */
@@ -91,8 +100,25 @@ internal fun ToolchainManagerPanel(
             category.contains(query, ignoreCase = true) ||
             description.contains(query, ignoreCase = true)
 
-    val rows = remember(sdkState, lspState, debugState, query, filterName, selectedDistro, progress) {
+    val rows = remember(sdkState, lspState, debugState, managers, query, filterName, selectedDistro, progress) {
         val all = buildList {
+            if (filter == null || filter == ToolchainKind.Manager) {
+                managers
+                    .filter { matches(it.label, "Managers", "") }
+                    .forEach {
+                        add(
+                            ToolchainRow(
+                                kind = ToolchainKind.Manager,
+                                id = it.id,
+                                name = it.label,
+                                description = "Manager · opens its own page",
+                                status = null,
+                                checking = false,
+                                extId = it.extId,
+                            ),
+                        )
+                    }
+            }
             if (filter == null || filter == ToolchainKind.Sdk) {
                 sdkState.entries
                     // Entries that don't support the active distro/arch stay hidden, as in the SDK manager.
@@ -266,6 +292,9 @@ internal fun ToolchainManagerPanel(
                             checkingLabel = row.checkingLabel,
                             onClick = {
                                 when (row.kind) {
+                                    ToolchainKind.Manager ->
+                                        managers.firstOrNull { it.extId == row.extId && it.id == row.id }
+                                            ?.let(onOpenManager)
                                     ToolchainKind.Sdk -> onOpenSdkDetail(row.id)
                                     ToolchainKind.Lsp -> onOpenLspDetail(row.id)
                                     ToolchainKind.Debugger -> onOpenDebugDetail(row.id)

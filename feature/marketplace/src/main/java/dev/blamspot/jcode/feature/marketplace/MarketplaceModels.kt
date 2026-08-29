@@ -169,6 +169,17 @@ data class ExtensionContributions(
     val drawerActions: List<ContributedAction> = emptyList(),
     val editorContextActions: List<ContributedAction> = emptyList(),
     val explorerContextActions: List<ContributedAction> = emptyList(),
+    /**
+     * Managers this extension brings to the **Toolchains** panel, listed under "Managers" and opened
+     * as one of its own pages.
+     *
+     * For a toolchain that has a real manager of its own and loses too much as a catalog entry. The
+     * Android SDK is the case this exists for: `sdkmanager` knows about platforms, build-tools, NDKs
+     * and system images, each with a revision and a partially-installed state, and a single
+     * "Android SDK · Installed" row can say none of it. The pack that owns that knowledge draws the
+     * page; JCode only offers the row.
+     */
+    val toolchainActions: List<ContributedAction> = emptyList(),
     val explorerDecorations: Boolean = false,
     val runConfigPresets: List<RunConfigPreset> = emptyList(),
     /**
@@ -184,8 +195,8 @@ data class ExtensionContributions(
 ) {
     val isEmpty: Boolean
         get() = editorStartActions.isEmpty() && drawerActions.isEmpty() && editorContextActions.isEmpty() &&
-            explorerContextActions.isEmpty() && !explorerDecorations && runConfigPresets.isEmpty() &&
-            debugEngines.isEmpty()
+            explorerContextActions.isEmpty() && toolchainActions.isEmpty() && !explorerDecorations &&
+            runConfigPresets.isEmpty() && debugEngines.isEmpty()
 
     companion object {
         val EMPTY = ExtensionContributions()

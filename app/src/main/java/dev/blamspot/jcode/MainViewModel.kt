@@ -3263,6 +3263,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
 
     /**
+     * Managers extensions contribute to the Toolchains panel.
+     *
+     * Not gated on `requires.sdks` the way the other surfaces are, and deliberately: a manager for a
+     * toolchain is most useful *before* that toolchain is installed, which is exactly when the gate
+     * would hide it. Android's SDK Manager is how you install the Android SDK, so requiring the
+     * Android SDK to see it would be a door locked from the inside.
+     */
+    val contributedToolchainActions: StateFlow<List<ShellContribution>> =
+        combine(installedExtensions, extensionActivations) { exts, acts ->
+            exts.filter { it.enabledIn(acts) }
+                .flatMap { ext ->
+                    ext.contributes.toolchainActions.map { ShellContribution(ext.id, it.id, it.label, it.icon) }
+                }
+                .distinctBy { it.extId + ":" + it.id }
+        }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+    /**
      * Republish the debug adapters installed extensions bring, so the Debug Engine manager and the
      * DAP launcher both see them.
      *

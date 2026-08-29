@@ -1217,6 +1217,7 @@ fun JCodeApp(
     val recents by viewModel.recents.collectAsStateWithLifecycle()
     val contributedStartActions by viewModel.contributedEditorStartActions.collectAsStateWithLifecycle()
     val contributedDrawerActions by viewModel.contributedDrawerActions.collectAsStateWithLifecycle()
+    val contributedToolchainManagers by viewModel.contributedToolchainActions.collectAsStateWithLifecycle()
     val contributedContextActions by viewModel.contributedEditorContextActions.collectAsStateWithLifecycle()
     // Extra items for the editor's long-press context menu, computed for the ACTIVE tab: the built-in
     // Markdown "Preview" toggle plus extension-contributed actions matching the file's extension.
@@ -1742,7 +1743,11 @@ fun JCodeApp(
         onDeleteRun = viewModel::deleteRunConfig,
         onDeleteBuild = viewModel::deleteBuildConfig,
         runConfigVersion = runConfigVersion,
-        managerActions = remember(viewModel) { WorkbenchManagerActions(
+        managerActions = remember(viewModel, contributedToolchainManagers) { WorkbenchManagerActions(
+            toolchainManagers = contributedToolchainManagers,
+            // The same route every contributed action takes: the extension's own view, opened as an
+            // editor page tab. A manager is a page, not a dialog — it is where you sit and work.
+            onOpenToolchainManager = viewModel::openContributedView,
             onCheckSdkStatuses = viewModel::checkSdkStatuses,
             onInstallSdkCatalogEntry = viewModel::installSdkCatalogEntry,
             onInstallSdkCatalogVersion = viewModel::installSdkCatalogVersion,
@@ -4349,6 +4354,8 @@ private fun WorkspacePanel(
                         modifier = Modifier.fillMaxSize(),
                         progress = LocalCatalogProgress.current,
                         onShowIssues = managerActions.onShowIssues,
+                        managers = managerActions.toolchainManagers,
+                        onOpenManager = managerActions.onOpenToolchainManager,
                     )
 
                     WorkbenchTool.DbManager -> DbManagerPanel(

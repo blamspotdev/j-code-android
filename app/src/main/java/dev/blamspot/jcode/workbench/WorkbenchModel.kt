@@ -178,6 +178,10 @@ internal data class WorkbenchManagerActions(
     val onInstallDebugEngine: (String) -> Unit,
     val onUninstallDebugEngine: (String) -> Unit,
     val onOpenDebugEngineDetail: (String) -> Unit,
+    /** Managers installed extensions contribute to the Toolchains panel, and how to open one. They
+     *  ride with the other manager actions because that panel is the only place they are offered. */
+    val toolchainManagers: List<dev.blamspot.jcode.MainViewModel.ShellContribution> = emptyList(),
+    val onOpenToolchainManager: (dev.blamspot.jcode.MainViewModel.ShellContribution) -> Unit = {},
     val onRefreshMarketplace: () -> Unit,
     val onInstallExtension: (MarketplaceEntry) -> Unit,
     val onUninstallExtension: (String) -> Unit,

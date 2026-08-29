@@ -756,6 +756,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             drawerActions = actions("drawerActions"),
             editorContextActions = actions("editorContextActions"),
             explorerContextActions = actions("explorerContextActions"),
+            toolchainActions = actions("toolchainActions"),
             explorerDecorations = map["explorerDecorations"] == true || map.str("explorerDecorations") == "true",
             runConfigPresets = runPresets,
             debugEngines = debugEngines,
