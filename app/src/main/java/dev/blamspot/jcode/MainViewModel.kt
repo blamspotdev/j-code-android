@@ -5376,6 +5376,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Turn the device off once its editor tab is gone — process and all, not merely unbound. Page
      *  tabs get no close callback, so the shell calls this whenever the tab list changes. */
     fun pruneAppSandbox() {
+        // Only while the tab is where the device lives. With `deviceSurface: drawer` there is never
+        // an AppSandbox tab, so the absence of one is not a statement about the device — and read as
+        // one it said "off" on *every* editor change. Measured: opening the drawer's Device panel
+        // ended the `:guest` process a moment later, and the panel then sat on "Starting the app…"
+        // for a device nothing was starting.
+        if (virtualDeviceInDrawer.value) return
         if (_editorGroup.value.tabs.none { it.pageKind == EditorPageKind.AppSandbox }) VirtualDeviceBridge.shutdown()
     }
 

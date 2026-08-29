@@ -1021,10 +1021,22 @@ fun JCodeApp(
             .collect { if (it > 0 && !virtualDeviceInDrawer) viewModel.openAppSandboxTab() }
     }
     // The device is one embedded surface with one guest behind it, so it lives in one place at a
-    // time. Moving it to the drawer takes the editor tab with it; the workbench brings the drawer up
-    // on the other side of the same switch.
+    // time and the setting moving takes it there: into the drawer the tab closes behind it, back out
+    // the tab opens in front of it. Without the second half a running device was left with nowhere
+    // to be drawn, and the next editor change reaped it.
+    //
+    // Only on an actual move. This effect also runs on the first composition, and treating that as a
+    // move would open a device tab nobody asked for at every launch.
+    var deviceSurfaceSeen by remember { mutableStateOf<Boolean?>(null) }
     LaunchedEffect(virtualDeviceInDrawer) {
-        if (virtualDeviceInDrawer) viewModel.closeEditorTab(MainViewModel.APP_SANDBOX_TAB_ID)
+        val previous = deviceSurfaceSeen
+        deviceSurfaceSeen = virtualDeviceInDrawer
+        if (previous == null || previous == virtualDeviceInDrawer) return@LaunchedEffect
+        if (virtualDeviceInDrawer) {
+            viewModel.closeEditorTab(MainViewModel.APP_SANDBOX_TAB_ID)
+        } else {
+            viewModel.openAppSandboxTab()
+        }
     }
     // And for the hardware bench, which the device's own control bar asks for.
     LaunchedEffect(Unit) {
