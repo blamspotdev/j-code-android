@@ -11,6 +11,7 @@ import dev.blamspot.jcode.ext.api.JCodeVirtualDevice
 import dev.blamspot.jcode.ext.api.VirtualDeviceHost
 import dev.blamspot.jcode.feature.marketplace.MarketplaceServiceLocator
 import dev.blamspot.jcode.feature.marketplace.InstalledExtension
+import dev.blamspot.jcode.feature.marketplace.nativeGuestModule
 
 internal const val TAG = "VDEVICE"
 
@@ -86,7 +87,7 @@ internal object VirtualDeviceBridge : VirtualDeviceHost {
         val context = appContext ?: return null
         val found = runCatching {
             MarketplaceServiceLocator.extensionInstaller(context).installed()
-                .firstOrNull { it.nativeGuestClass != null && it.nativeEntry != null }
+                .firstOrNull { it.nativeGuestModule() != null }
         }.getOrNull()
         packCache = found
         return found
@@ -110,7 +111,8 @@ internal object VirtualDeviceBridge : VirtualDeviceHost {
     private fun load(): JCodeVirtualDevice? {
         val context = appContext ?: return null
         val extension = pack() ?: return null
-        val instance = runCatching { NativeExtensionLoader.resolve(context, extension).first }
+        val module = extension.nativeGuestModule() ?: return null
+        val instance = runCatching { NativeExtensionLoader.resolve(context, extension, module).first }
             .onFailure { Log.w(TAG, "cannot load the virtual device from ${extension.id}", it) }
             .getOrNull()
         val device = instance as? JCodeVirtualDevice
@@ -121,7 +123,7 @@ internal object VirtualDeviceBridge : VirtualDeviceHost {
         // The pack's OWN context, not JCode's: the device's built-in apps are assets inside the
         // pack's archive, and JCode's AssetManager cannot see them — it answers an empty list, so the
         // device came up empty and said nothing about why.
-        val deviceContext = runCatching { NativeExtensionLoader.assetContext(context, extension) }
+        val deviceContext = runCatching { NativeExtensionLoader.assetContext(context, extension, module) }
             .onFailure { Log.w(TAG, "cannot reach the pack's own assets", it) }
             .getOrDefault(context)
         runCatching { device.attach(this, deviceContext) }

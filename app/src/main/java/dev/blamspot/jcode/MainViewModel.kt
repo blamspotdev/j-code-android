@@ -93,6 +93,7 @@ import dev.blamspot.jcode.feature.marketplace.MarketplaceServiceLocator
 import dev.blamspot.jcode.feature.marketplace.ProjectTemplate
 import dev.blamspot.jcode.feature.marketplace.TemplateCatalog
 import dev.blamspot.jcode.feature.marketplace.TemplateScaffolder
+import dev.blamspot.jcode.feature.marketplace.nativeGuestModule
 import dev.blamspot.jcode.workbench.SetupTerminalRunner
 import dev.blamspot.jcode.fs.FsKind
 import dev.blamspot.jcode.fs.FsNode
@@ -2055,7 +2056,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // composition and a DataStore read is suspending.
     init {
         viewModelScope.launch {
-            developerOptions.collect { NativeExtensionLoader.allowUnsigned = it }
+            var previous: Boolean? = null
+            developerOptions.collect { allowed ->
+                NativeExtensionLoader.setAllowUnsigned(appContext, allowed)
+                // Whatever asked for the device before this flag arrived got a refusal -- the pack
+                // is unsigned and the loader only takes unsigned code once this is on -- and
+                // [VirtualDeviceBridge.device] caches that answer for the life of the process. Two
+                // collectors start in this init and the other one reaches the device through
+                // stopVirtualDeviceAdb, so a DataStore read losing that race left the virtual device
+                // dead with developer options visibly ON, and a restart only re-ran the race.
+                // Dropping the cached refusal is what makes the switch mean anything after startup;
+                // nothing is running this early, so there is no live device to lose.
+                if (allowed && previous != true) VirtualDeviceBridge.evict()
+                previous = allowed
+            }
         }
     }
 
@@ -4578,11 +4592,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun opensInExtensionView(file: File): Boolean =
         installedExtensions.value.any { ext ->
-            ext.nativeEntry != null && ext.nativeClass != null &&
-                ext.nativeClaims.any { claim ->
+            ext.nativeModules.any { module ->
+                module.claims.any { claim ->
                     val setting = claim.opensInPreviewSetting ?: return@any false
                     claim.matches(file) && resolvedExtensionSetting(ext, setting) != "false"
                 }
+            }
         }
 
     /** A setting's saved value, or its manifest default, or "". Used by config.* (caller-scoped). */
@@ -4601,7 +4616,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     val virtualDeviceInDrawer: StateFlow<Boolean> =
         combine(installedExtensions, extensionSettings) { installed, saved ->
-            val pack = installed.firstOrNull { it.nativeGuestClass != null && it.nativeEntry != null }
+            val pack = installed.firstOrNull { it.nativeGuestModule() != null }
                 ?: return@combine false
             val value = saved[pack.id]?.get(DEVICE_SURFACE_KEY)
                 ?: pack.settings.firstOrNull { it.key == DEVICE_SURFACE_KEY }?.default

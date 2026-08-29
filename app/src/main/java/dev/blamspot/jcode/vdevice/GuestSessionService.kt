@@ -7,6 +7,7 @@ import android.util.Log
 import dev.blamspot.jcode.ext.NativeExtensionLoader
 import dev.blamspot.jcode.ext.api.JCodeVirtualDeviceGuest
 import dev.blamspot.jcode.feature.marketplace.MarketplaceServiceLocator
+import dev.blamspot.jcode.feature.marketplace.nativeGuestModule
 
 /**
  * The `:guest` process, and nothing that runs in it.
@@ -53,9 +54,13 @@ class GuestSessionService : Service() {
      * because the second is far harder to diagnose from the guest app's side.
      */
     private fun load(): JCodeVirtualDeviceGuest? {
+        // This is a different process from the workbench, so the flag it pushes into the loader is
+        // not set here — every unsigned pack was refused with developer options on, and the device
+        // opened only to say it could not start its guest.
+        NativeExtensionLoader.adoptAllowUnsigned(this)
         val extension = runCatching {
             MarketplaceServiceLocator.extensionInstaller(this).installed()
-                .firstOrNull { it.nativeGuestClass != null && it.nativeEntry != null }
+                .firstOrNull { it.nativeGuestModule() != null }
         }.getOrNull() ?: run {
             Log.i(TAG, "no installed extension provides a virtual device")
             return null

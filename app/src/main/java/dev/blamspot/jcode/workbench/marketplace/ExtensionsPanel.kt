@@ -84,6 +84,7 @@ import dev.blamspot.jcode.feature.marketplace.jcodeVersionMismatch
 import dev.blamspot.jcode.feature.marketplace.otherAuthors
 import dev.blamspot.jcode.feature.marketplace.isVsix
 import dev.blamspot.jcode.feature.marketplace.primaryAuthor
+import dev.blamspot.jcode.feature.marketplace.hasNativeUi
 import androidx.compose.runtime.collectAsState
 import dev.blamspot.jcode.workbench.ExtensionWebViewPage
 import dev.blamspot.jcode.workbench.ScmHostWebView
@@ -251,7 +252,7 @@ internal fun DbManagerPanel(
     // Native or web: a client that draws itself in Compose has no web UI to look for, and filtering
     // on one would hide it entirely.
     val dbExtensions = installed.filter {
-        it.type == ExtensionType.DbManager && (it.hasWebUi || it.nativeEntry != null)
+        it.type == ExtensionType.DbManager && (it.hasWebUi || it.hasNativeUi)
     }
     if (dbExtensions.isEmpty()) {
         Column(
@@ -343,7 +344,7 @@ internal fun DbManagerPanel(
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
             }
             key(selected.id) {
-                if (selected.nativeEntry != null) {
+                if (selected.hasNativeUi) {
                     dev.blamspot.jcode.ext.NativeExtensionPage(
                         extension = selected,
                         file = null,
@@ -397,7 +398,7 @@ internal fun ScmPanel(
     // A native SCM draws itself into the drawer through the same contract a native editor page uses;
     // it needs no persistent WebView because its state is Compose state, kept by the panel's own
     // composition. Preferred over a web one when both are installed.
-    val nativeExt = installed.firstOrNull { it.type == ExtensionType.Scm && it.nativeEntry != null }
+    val nativeExt = installed.firstOrNull { it.type == ExtensionType.Scm && it.hasNativeUi }
     if (nativeExt != null) {
         key(nativeExt.id, projectKey) {
             dev.blamspot.jcode.ext.NativeExtensionPage(

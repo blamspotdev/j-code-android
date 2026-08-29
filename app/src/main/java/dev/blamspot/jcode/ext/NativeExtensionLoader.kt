@@ -10,6 +10,8 @@ import dev.blamspot.jcode.ext.api.JCODE_EXT_ABI
 import dev.blamspot.jcode.ext.api.JCodeNativeExtension
 import dev.blamspot.jcode.ext.api.JCodeVirtualDeviceGuest
 import dev.blamspot.jcode.feature.marketplace.InstalledExtension
+import dev.blamspot.jcode.feature.marketplace.NativeModule
+import dev.blamspot.jcode.feature.marketplace.nativeGuestModule
 import java.io.File
 import dev.blamspot.jcode.core.resource.ManagedCache
 import dev.blamspot.jcode.core.resource.ResourceManagerLocator
@@ -90,6 +92,33 @@ internal object NativeExtensionLoader {
     @Volatile
     var allowUnsigned: Boolean = false
 
+    /**
+     * Where [allowUnsigned] is written down so the `:guest` process can read it.
+     *
+     * A Kotlin `object` exists once per PROCESS, and the virtual device's guest half runs in
+     * `:guest` — so the flag the workbench pushes into this field in the main process is simply
+     * absent over there, and the guest refused every unsigned pack with developer options plainly
+     * on. The device opened and then reported "Could not start the guest process."
+     *
+     * A file rather than the preference itself: DataStore is explicitly single-process, and
+     * multi-process SharedPreferences has been unreliable for a decade. Its presence is the whole
+     * value, so there is nothing to parse and nothing to corrupt.
+     */
+    private const val ALLOW_UNSIGNED_MARKER = "allow-unsigned-extensions"
+
+    /** Sets the flag for this process and records it for the others. Main process only. */
+    fun setAllowUnsigned(context: Context, allowed: Boolean) {
+        allowUnsigned = allowed
+        val marker = File(context.filesDir, ALLOW_UNSIGNED_MARKER)
+        runCatching { if (allowed) marker.createNewFile() else marker.delete() }
+            .onFailure { Log.w(TAG, "could not record the unsigned-extension setting", it) }
+    }
+
+    /** Adopts what the main process recorded. For a process that has no workbench to push it. */
+    fun adoptAllowUnsigned(context: Context) {
+        allowUnsigned = File(context.filesDir, ALLOW_UNSIGNED_MARKER).exists()
+    }
+
     @Volatile
     private var registered = false
 
@@ -102,24 +131,34 @@ internal object NativeExtensionLoader {
         }
     }
 
-    /** Drop a plugin — on uninstall or update, so the next open picks up the new archive. */
+    /** Drop an extension's plugins — on uninstall or update, so the next open picks up the new archive. */
     fun evict(extensionId: String) {
-        cache.remove(extensionId)
+        cache.keys.removeAll { it.substringBefore('/') == extensionId }
     }
 
+    /** What a module's loaded plugin is filed under. One archive, one entry. */
+    private fun key(extension: InstalledExtension, module: NativeModule) = "${extension.id}/${module.id}"
+
     /**
-     * The plugin for [extension], loading it if this is the first ask.
+     * The plugin for one of [extension]'s native modules, loading it if this is the first ask.
+     *
+     * Per module rather than per extension: a pack ships several archives and the caller has already
+     * decided which one answers — loading the others to reach this one is what splitting them was
+     * for.
      *
      * Throws [LoadFailure] with something worth showing the user; every refusal below is a case
      * where the alternative is a crash inside the IDE's own UI that reads as JCode being broken.
      */
     @Throws(LoadFailure::class)
-    fun resolve(host: Context, extension: InstalledExtension): Pair<JCodeNativeExtension, Context> {
+    fun resolve(
+        host: Context,
+        extension: InstalledExtension,
+        module: NativeModule,
+    ): Pair<JCodeNativeExtension, Context> {
         registerForTrimming(host)
-        cache[extension.id]?.let { return it.instance to it.context }
+        cache[key(extension, module)]?.let { return it.instance to it.context }
 
-        val entry = extension.nativeEntry
-            ?: throw LoadFailure("${extension.name} declares no native entry point.")
+        val entry = module.payload
 
         // Signed-only, and checked here rather than at install time as well as: an extension can be
         // sideloaded unsigned for development (that is what `dev` means), and that is fine for a web
@@ -137,19 +176,21 @@ internal object NativeExtensionLoader {
             )
         }
 
-        if (extension.nativeAbi != JCODE_EXT_ABI) {
+        // Per module, because each archive is built separately and can be built against a different
+        // API than its neighbour in the same pack.
+        if (module.abi != JCODE_EXT_ABI) {
             throw LoadFailure(
-                "${extension.name} was built for JCode extension API ${extension.nativeAbi}; " +
+                "${extension.name} (${module.id}) was built for JCode extension API ${module.abi}; " +
                     "this JCode implements $JCODE_EXT_ABI. Update the extension.",
             )
         }
 
         val apk = File(extension.dir, entry)
-        if (!apk.isFile) throw LoadFailure("${extension.name}'s native entry ($entry) is missing.")
+        if (!apk.isFile) throw LoadFailure("${extension.name}'s native payload ($entry) is missing.")
 
-        val loaded = runCatching { load(host, extension, apk) }
+        val loaded = runCatching { load(host, extension, module, apk) }
             .getOrElse { throw asFailure(extension, it) }
-        cache[extension.id] = loaded
+        cache[key(extension, module)] = loaded
         return loaded.instance to loaded.context
     }
 
@@ -170,26 +211,29 @@ internal object NativeExtensionLoader {
      */
     @Throws(LoadFailure::class)
     fun resolveGuest(host: Context, extension: InstalledExtension): Pair<JCodeVirtualDeviceGuest, Context> {
-        val entry = extension.nativeEntry
-            ?: throw LoadFailure("${extension.name} declares no native entry point.")
-        val guestClass = extension.nativeGuestClass
+        // Only the module that declares a guest — which is the whole point of loading per module
+        // here: this process wants the container and nothing else the pack happens to ship.
+        val module = extension.nativeGuestModule()
+            ?: throw LoadFailure("${extension.name} declares no guest entry class (entry.native.guest).")
+        val entry = module.payload
+        val guestClass = module.guestClass
             ?: throw LoadFailure("${extension.name} declares no guest entry class (entry.native.guest).")
         if (extension.dev && !allowUnsigned) {
             throw LoadFailure("${extension.name} is an unsigned development build.")
         }
-        if (extension.nativeAbi != JCODE_EXT_ABI) {
+        if (module.abi != JCODE_EXT_ABI) {
             throw LoadFailure(
-                "${extension.name} was built for JCode extension API ${extension.nativeAbi}; " +
+                "${extension.name} (${module.id}) was built for JCode extension API ${module.abi}; " +
                     "this JCode implements $JCODE_EXT_ABI. Update the extension.",
             )
         }
         val apk = File(extension.dir, entry)
-        if (!apk.isFile) throw LoadFailure("${extension.name}'s native entry ($entry) is missing.")
+        if (!apk.isFile) throw LoadFailure("${extension.name}'s native payload ($entry) is missing.")
 
         return runCatching {
             // A dex output directory of its own: `:guest` and the IDE would otherwise write optimised
             // dex for the same archive to one path from two processes.
-            val dexDir = File(host.codeCacheDir, "native-ext-guest/${extension.id}").apply { mkdirs() }
+            val dexDir = File(host.codeCacheDir, "native-ext-guest/${extension.id}/${module.id}").apply { mkdirs() }
             val loader = DexClassLoader(
                 apk.absolutePath,
                 dexDir.absolutePath,
@@ -218,18 +262,16 @@ internal object NativeExtensionLoader {
      * logged.
      */
     @Throws(LoadFailure::class)
-    fun assetContext(host: Context, extension: InstalledExtension): Context {
-        val entry = extension.nativeEntry
-            ?: throw LoadFailure("${extension.name} declares no native entry point.")
-        val apk = File(extension.dir, entry)
-        if (!apk.isFile) throw LoadFailure("${extension.name}'s native entry ($entry) is missing.")
+    fun assetContext(host: Context, extension: InstalledExtension, module: NativeModule): Context {
+        val apk = File(extension.dir, module.payload)
+        if (!apk.isFile) throw LoadFailure("${extension.name}'s native payload (${module.payload}) is missing.")
         return pluginContext(host, apk, NativeExtensionLoader::class.java.classLoader!!)
     }
 
-    private fun load(host: Context, extension: InstalledExtension, apk: File): Loaded {
-        // Per-extension optimised-dex directory, so two plugins never race over one output and an
+    private fun load(host: Context, extension: InstalledExtension, module: NativeModule, apk: File): Loaded {
+        // Per-module optimised-dex directory, so two plugins never race over one output and an
         // update is not read back out of the previous version's cache.
-        val dexDir = File(host.codeCacheDir, "native-ext/${extension.id}").apply { mkdirs() }
+        val dexDir = File(host.codeCacheDir, "native-ext/${extension.id}/${module.id}").apply { mkdirs() }
 
         val loader = DexClassLoader(
             apk.absolutePath,
@@ -238,8 +280,7 @@ internal object NativeExtensionLoader {
             NativeExtensionLoader::class.java.classLoader,
         )
 
-        val entryClass = extension.nativeClass
-            ?: throw LoadFailure("${extension.name} declares no entry class (entry.class).")
+        val entryClass = module.entryClass
         val instance = loader.loadClass(entryClass)
             .getDeclaredConstructor()
             .newInstance() as? JCodeNativeExtension

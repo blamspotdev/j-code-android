@@ -409,29 +409,15 @@ data class InstalledExtension(
     /** Relative path (from [dir]) to the extension's web-frontend HTML entry, e.g. "www/index.html". */
     val webUiEntry: String? = null,
     /**
-     * Relative path (from [dir]) to a **native** UI payload — an APK the extension ships, loaded
-     * into JCode's own process on demand. Null for the ordinary WebView-frontend kind.
+     * The **native** payloads this extension ships, each loaded into JCode's own process on demand.
+     * Empty for the ordinary WebView-frontend kind.
      *
-     * An APK rather than a bare dex because a dex has no resource table: a plugin with its own
-     * drawables or strings needs `addAssetPath`, and that takes an archive.
+     * A list rather than one entry because a pack is not one screen. The Android pack ships a layout
+     * designer, an SDK manager and a virtual device; folded into a single archive they shared a
+     * `minSdk` only the device needs, re-dexed together on every edit, and handed the `:guest`
+     * process megabytes of UI it never calls. See [NativeModule].
      */
-    val nativeEntry: String? = null,
-    /** Fully-qualified class in [nativeEntry] implementing `JCodeNativeExtension`. */
-    val nativeClass: String? = null,
-    /**
-     * Fully-qualified class in [nativeEntry] implementing `JCodeVirtualDeviceGuest`, for a pack that
-     * provides JCode's virtual device.
-     *
-     * Named separately from [nativeClass] because it is loaded into a different process — `:guest`,
-     * where the container installs framework hooks the IDE could not survive — by the manifest stub
-     * that owns that process rather than by the page loader. Declaring it is also how JCode knows an
-     * installed pack *has* a device to offer: there is no device without one.
-     */
-    val nativeGuestClass: String? = null,
-    /** Extension-API version [nativeEntry] was built against; must equal JCode's `JCODE_EXT_ABI`. */
-    val nativeAbi: Int = 0,
-    /** What this extension's native UI will draw. Any rule matching is enough. */
-    val nativeClaims: List<NativeClaim> = emptyList(),
+    val nativeModules: List<NativeModule> = emptyList(),
     /** Lowest JCode extension-API version this extension needs (0 = legacy exec-only bridge). */
     val apiMinVersion: Int = 0,
     /** Capability families this extension declares it uses (e.g. "exec", "fs", "workbench"). */
@@ -473,10 +459,69 @@ fun InstalledExtension.languageFor(fileName: String): LanguagePack? =
 fun InstalledExtension.claimsNatively(file: File): Boolean = nativeClaimFor(file) != null
 
 /** The rule by which this extension claims [file], or null when it does not. */
-fun InstalledExtension.nativeClaimFor(file: File): NativeClaim? {
-    if (nativeEntry == null || nativeClass == null) return null
-    return nativeClaims.firstOrNull { it.matches(file) }
+fun InstalledExtension.nativeClaimFor(file: File): NativeClaim? = nativeModuleFor(file)?.second
+
+/** The module that claims [file] and the rule it claimed it by, or null when none does. */
+fun InstalledExtension.nativeModuleFor(file: File): Pair<NativeModule, NativeClaim>? {
+    for (module in nativeModules) {
+        val claim = module.claims.firstOrNull { it.matches(file) } ?: continue
+        return module to claim
+    }
+    return null
 }
+
+/**
+ * The module that answers [view], or null when none does.
+ *
+ * Read from the manifest rather than by asking the code, which is the point of splitting them: the
+ * workbench has to know which archive serves a route *before* it loads one, or it is back to loading
+ * everything to find out.
+ */
+fun InstalledExtension.nativeModuleForView(view: String?): NativeModule? {
+    if (view.isNullOrBlank()) return nativeModules.firstOrNull { it.claims.isNotEmpty() }
+    return nativeModules.firstOrNull { view in it.views }
+}
+
+/** The module carrying the `:guest` half, for a pack that provides the virtual device. */
+fun InstalledExtension.nativeGuestModule(): NativeModule? =
+    nativeModules.firstOrNull { it.guestClass != null }
+
+/** True when this extension ships any native payload at all. */
+val InstalledExtension.hasNativeUi: Boolean get() = nativeModules.isNotEmpty()
+
+/**
+ * One native payload: an archive, the class that fronts it, and what it answers.
+ *
+ * [views] and [claims] are what let the host route without loading. A module that declares neither
+ * is reachable only as an extension's sole native surface, which is the shape a single-purpose
+ * plugin has.
+ */
+data class NativeModule(
+    /** Stable within the extension. Names the load cache and appears in failure messages. */
+    val id: String,
+    /**
+     * Relative path (from the extension's dir) to the payload — `.apk` where the module owns
+     * resources, `.dex` where it builds its UI in code and owns none.
+     */
+    val payload: String,
+    /** Fully-qualified class in [payload] implementing `JCodeNativeExtension`. */
+    val entryClass: String,
+    /**
+     * Fully-qualified class implementing `JCodeVirtualDeviceGuest`, for the module that provides
+     * JCode's virtual device.
+     *
+     * Loaded into a different process — `:guest`, where the container installs framework hooks the
+     * IDE could not survive — by the manifest stub that owns that process rather than by the page
+     * loader. Declaring it is also how JCode knows an installed pack *has* a device to offer.
+     */
+    val guestClass: String? = null,
+    /** Extension-API version [payload] was built against; must equal JCode's `JCODE_EXT_ABI`. */
+    val abi: Int = 0,
+    /** Routes this module answers, matched against a page's `view` param. */
+    val views: Set<String> = emptySet(),
+    /** Files this module's UI will draw. Any rule matching is enough. */
+    val claims: List<NativeClaim> = emptyList(),
+)
 
 /**
  * One rule for a file a native extension will draw.

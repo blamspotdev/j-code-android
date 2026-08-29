@@ -303,5 +303,12 @@ data class NativeContextAction(
  * would still draw its pages correctly — but a JCode on 8 asks the Android pack for a device and an
  * older pack has none to give, which is a missing feature rather than a crash and so has to be
  * refused at load time with something that says "update the extension".
+ *
+ * 9 made `entry.native` a **list**. A pack ships one archive per surface it offers rather than one
+ * for all of them, each with its own `id`, its own `abi`, and a declaration of the routes (`views:`)
+ * or files (`claims:`) it answers — so the workbench picks the archive from the manifest instead of
+ * loading everything to ask the code. Nothing in this file changed shape, but a pack built against 8
+ * declares a single mapping with no `views:`, so every route but its file surface would resolve to
+ * nothing; that is a pack the manifest cannot describe rather than a crash, and is refused here.
  */
-const val JCODE_EXT_ABI: Int = 8
+const val JCODE_EXT_ABI: Int = 9

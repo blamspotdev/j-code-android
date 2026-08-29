@@ -382,6 +382,7 @@ import dev.blamspot.jcode.feature.explorer.ExplorerScmUi
 import dev.blamspot.jcode.feature.explorer.LocalExplorerScmUi
 import dev.blamspot.jcode.feature.marketplace.hasWebUi
 import dev.blamspot.jcode.feature.marketplace.webUiFile
+import dev.blamspot.jcode.feature.marketplace.hasNativeUi
 import dev.blamspot.jcode.fs.FsKind
 import dev.blamspot.jcode.fs.FsPath
 import dev.blamspot.jcode.fs.Project
@@ -3797,7 +3798,7 @@ private fun JCodeShell(
                                     installedExtensions.firstOrNull { it.id == appId }?.let { ext ->
                                         // Key by id+view so each extension app/view gets its own host.
                                         key(ext.id, view) {
-                                            if (ext.nativeEntry != null) {
+                                            if (ext.hasNativeUi) {
                                                 // Native wins wherever it exists, the same rule the
                                                 // drawer follows: an extension that draws one surface
                                                 // natively and the next in a WebView would be two
