@@ -250,6 +250,15 @@ internal enum class RightPanelTab(
     /** Extension-authoring tools (inspector / manifest validator / live log); shown only when
      *  Developer options is enabled (see [dev.blamspot.jcode.design.LocalDeveloperSetting]). */
     ExtensionDev("Ext Dev", JCodeIcon.Extensions, enabled = true),
+
+    /**
+     * The Android Dev Pack's virtual device, when its `deviceSurface` setting puts it here.
+     *
+     * Shown only when a pack actually provides a device *and* has been asked to put it in the
+     * drawer — the device is a real embedded surface with one guest behind it, so it exists in one
+     * place at a time and JCode moves it rather than drawing it twice.
+     */
+    Device("Device", JCodeIcon.Vm, enabled = true),
 }
 
 /**

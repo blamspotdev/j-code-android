@@ -76,14 +76,33 @@ precisely so that what should survive can.
 
 ---
 
-## 2. One presentation: the device is a tab
+## 2. One presentation: a tab, or the drawer beside it
 
-An app runs one way here — embedded, window-less, composited into the device's editor tab.
+**Where** is the pack's setting; **that there is only one** is the invariant. `deviceSurface` on the
+Android Dev Pack chooses between an editor tab and the workbench's right drawer, and JCode reads it
+and routes — `VirtualDeviceHost.openDeviceTab` is one request either way, answered by opening the tab
+or by bringing the drawer up on the device's own panel. Switching to the drawer closes the editor
+tab, and a selection left pointing at the drawer's panel falls back when the setting moves the device
+out of it.
+
+The device is one `SurfaceView` with one `hostToken` and one guest embedded under it, so it cannot be
+drawn in two places: a second surface would ask the container to embed a guest that is already
+embedded. That is why this is a choice rather than two views of one thing.
+
+The drawer keeps the device on screen while a file is being edited, which is what watching an app
+react to a change actually looks like; a tab gives it the full width, which is what a tablet profile
+wants. Moving between them destroys and re-acquires the surface — the session, and the guest, live
+across it.
+
+## 2a. Why a tab at all
+
+An app runs one way here — embedded, window-less, composited into whichever of the two surfaces
+§2 named.
 
 | | |
 |---|---|
 | **Entry** | `AppSandboxPage` → `AppSandbox.session` → `GuestSessionService` → `EmbeddedGuest` |
-| **Window** | None of the guest's own. Its decor view is a child of the container's `FrameLayout`, and the tab shows that hierarchy through a `SurfaceControlViewHost` surface package |
+| **Window** | None of the guest's own. Its decor view is a child of the container's `FrameLayout`, and the surface shows that hierarchy through a `SurfaceControlViewHost` surface package |
 | **Asked for by** | The tab, a finished virtual-device build, the `tools.virtualDevice` palette command, or the adb daemon's `am start` — all through `AppSandbox.requestOpen`, so they cannot disagree about what running an app means |
 
 **There used to be a second one**, and it is worth recording what it was because the shape of the

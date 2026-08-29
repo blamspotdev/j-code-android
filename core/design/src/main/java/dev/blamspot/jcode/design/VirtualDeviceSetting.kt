@@ -17,6 +17,15 @@ class VirtualDeviceSetting(
     val onReconnect: () -> Unit = {},
     /** True while a reconnect is in flight, so the action can show it is working. */
     val reconnecting: Boolean = false,
+    /**
+     * Whether the device belongs in the right drawer rather than in an editor tab.
+     *
+     * The pack that provides the device owns this as one of its own settings; what is here is the
+     * answer, shared the way the rest of the device's facts already are. It rides along rather than
+     * becoming another parameter because the workbench composable that needs it is eighty
+     * parameters deep and already reads this local for the device's other answers.
+     */
+    val inDrawer: Boolean = false,
 )
 
 val LocalVirtualDevice = compositionLocalOf { VirtualDeviceSetting() }

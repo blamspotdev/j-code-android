@@ -4574,6 +4574,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return ext.settings.firstOrNull { it.key == key }?.default ?: ""
     }
 
+    /**
+     * Whether the virtual device belongs in the right drawer rather than in an editor tab.
+     *
+     * The pack that provides the device declares the choice as one of its own settings, because it
+     * is a fact about *that* extension and belongs on its settings screen — JCode only reads it and
+     * routes. A flow rather than a lookup: changing it has to move the device while somebody is
+     * looking at it, not at the next launch.
+     */
+    val virtualDeviceInDrawer: StateFlow<Boolean> =
+        combine(installedExtensions, extensionSettings) { installed, saved ->
+            val pack = installed.firstOrNull { it.nativeGuestClass != null && it.nativeEntry != null }
+                ?: return@combine false
+            val value = saved[pack.id]?.get(DEVICE_SURFACE_KEY)
+                ?: pack.settings.firstOrNull { it.key == DEVICE_SURFACE_KEY }?.default
+            value == DEVICE_SURFACE_DRAWER
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
     /** Same resolution, looked up by id — for the settings screen, which has no [InstalledExtension]. */
     fun extensionSettingValue(extensionId: String, key: String): String {
         extensionSettings.value[extensionId]?.get(key)?.let { return it }
@@ -6396,6 +6413,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val ANDROID_DEVICE_TAB_ID = "jcode://android-device"
         /** Stable id of the single device sandbox editor tab — the container owns one `:guest` process. */
         const val APP_SANDBOX_TAB_ID = "jcode://app-sandbox"
+
+        /** The Android Dev Pack setting that says where its device opens — see [virtualDeviceInDrawer]. */
+        private const val DEVICE_SURFACE_KEY = "deviceSurface"
+
+        /** The one value of [DEVICE_SURFACE_KEY] that means the drawer; anything else is a tab. */
+        private const val DEVICE_SURFACE_DRAWER = "drawer"
         /** Stable id of the virtual device's hardware bench, which the device shares with its tab. */
         const val VIRTUAL_HARDWARE_TAB_ID = "jcode://virtual-hardware"
         /** `adb pair` is one round trip to adbd; anything past this is a wrong port or a closed dialog. */
