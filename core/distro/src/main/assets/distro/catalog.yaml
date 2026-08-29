@@ -789,20 +789,31 @@ entries:
       # that) and its resource dir, which carries the Android compiler-rt, libunwind and builtin
       # headers. Without -rtlib/-unwindlib Ubuntu's driver defaults reach for -lgcc, which Android
       # does not have, and the link dies with "unable to find library -lgcc".
-      command -v clang >/dev/null 2>&1 && for NDK in "$ANDROID_HOME"/ndk/*/; do
+      for NDK in "$ANDROID_HOME"/ndk/*/; do
         PRE="${NDK}toolchains/llvm/prebuilt/linux-x86_64"
         [ -d "$PRE/bin" ] || continue
+        # The clang shims need the distro's clang; the binutils links below do not. Gating the
+        # whole loop on clang, which is what this used to do, left an NDK installed from the SDK
+        # Manager without the C/C++ pack beside it completely unpatched, an ordinary thing to have.
         RES=$(ls -d "$PRE"/lib/clang/* 2>/dev/null | head -1)
-        [ -n "$RES" ] || continue
-        for t in clang clang++; do
-          head -c 200 "$PRE/bin/$t" 2>/dev/null | grep -q jcode-arm && continue
-          rm -f "$PRE/bin/$t"
-          printf '#!/bin/sh\n# jcode-arm\nexec /usr/bin/%s -resource-dir %s -rtlib=compiler-rt -unwindlib=libunwind "$@"\n' "$t" "$RES" > "$PRE/bin/$t"
-          chmod 755 "$PRE/bin/$t"
-        done
+        if command -v clang >/dev/null 2>&1 && [ -n "$RES" ]; then
+          for t in clang clang++; do
+            head -c 200 "$PRE/bin/$t" 2>/dev/null | grep -q jcode-arm && continue
+            rm -f "$PRE/bin/$t"
+            printf '#!/bin/sh\n# jcode-arm\nexec /usr/bin/%s -resource-dir %s -rtlib=compiler-rt -unwindlib=libunwind "$@"\n' "$t" "$RES" > "$PRE/bin/$t"
+            chmod 755 "$PRE/bin/$t"
+          done
+        fi
         for t in ld.lld lld llvm-ar llvm-ranlib llvm-strip llvm-nm llvm-objcopy \
                  llvm-objdump llvm-readelf llvm-readobj llvm-strings llvm-symbolizer; do
-          [ -x "/usr/bin/$t" ] && ln -sf "/usr/bin/$t" "$PRE/bin/$t"
+          # Ubuntu ships these under their LLVM version and no other name: /usr/bin/llvm-strip-18
+          # exists, /usr/bin/llvm-strip does not. The unversioned guard this used to have therefore
+          # matched nothing, all twelve symlinks were quietly skipped, and Google's x86_64 originals
+          # survived untouched. Nothing noticed until a build actually invoked one and died in
+          # StripDebugSymbolsRunnable with "A problem occurred starting process".
+          SRC="/usr/bin/$t"
+          [ -x "$SRC" ] || SRC=$(ls "/usr/bin/$t"-[0-9]* 2>/dev/null | sort -V | tail -1)
+          if [ -n "$SRC" ] && [ -x "$SRC" ]; then ln -sf "$SRC" "$PRE/bin/$t"; fi
         done
         echo "patched ${NDK}"
       done
@@ -819,14 +830,36 @@ entries:
       // Written by JCode's android-sdk entry: sdkmanager only publishes x86_64 Linux binaries, so
       // anything AGP downloads mid-build (an NDK, a pinned build-tools) arrives unrunnable on this
       // aarch64 device. Re-apply the ARM patch around configuration so those pieces are fixed
-      // before any task executes them. projectsLoaded catches what earlier builds left; whenReady
-      // catches what THIS build's configuration phase just downloaded.
-      def patch = {
-          try { ["/bin/sh", "/usr/local/bin/jcode-arm-sdk-patch", "-q"].execute().waitFor() }
-          catch (Throwable ignored) { }
+      // before any task executes them. settingsEvaluated catches what earlier builds left;
+      // whenReady catches what THIS build's configuration phase just downloaded.
+      //
+      // Through a ValueSource rather than a bare .execute(), which is what this used to be. Gradle
+      // refuses to start a process during configuration once the configuration cache is on, and
+      // Google's own project templates now ship org.gradle.configuration-cache=true, so the bare
+      // form failed every AGP 9 build outright: "Starting an external process ... during
+      // configuration time is unsupported". A ValueSource is the sanctioned way in — Gradle knows
+      // about the call, so it caches and revalidates it instead of rejecting it. The phase
+      // parameter is load-bearing: results are cached per parameter value, so without something to
+      // tell the two calls apart the second would reuse the first's result and never run.
+      import org.gradle.api.provider.Property
+      import org.gradle.api.provider.ValueSource
+      import org.gradle.api.provider.ValueSourceParameters
+
+      abstract class JCodeArmSdkPatch implements ValueSource<String, JCodeArmSdkPatch.Params> {
+          interface Params extends ValueSourceParameters { Property<String> getPhase() }
+          @Override String obtain() {
+              try { ["/bin/sh", "/usr/local/bin/jcode-arm-sdk-patch", "-q"].execute().waitFor() }
+              catch (Throwable ignored) { }
+              return parameters.phase.get()
+          }
       }
-      gradle.projectsLoaded { patch() }
-      gradle.taskGraph.whenReady { patch() }
+
+      def factory = null
+      def patch = { phase ->
+          factory?.of(JCodeArmSdkPatch) { it.parameters.phase.set(phase) }?.get()
+      }
+      gradle.settingsEvaluated { settings -> factory = settings.providers; patch("settings") }
+      gradle.taskGraph.whenReady { patch("taskgraph") }
       INIT
       done
       # AGP 8+ resolves its OWN aapt2 as a Maven artifact (aapt2-<ver>-linux), which is x86_64 only,
