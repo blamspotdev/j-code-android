@@ -236,7 +236,11 @@ internal fun ToolchainManagerPanel(
                 label = "All",
                 onClick = { filterName = "" },
             )
-            ToolchainKind.entries.forEach { kind ->
+            // Managers is the one kind that can be legitimately empty: the others are catalog-backed
+            // and always have entries, while this one exists only if an installed extension
+            // contributes a page. Gated on the managers themselves rather than on the filtered rows,
+            // so typing in the search box does not make chips come and go.
+            ToolchainKind.entries.filter { it != ToolchainKind.Manager || managers.isNotEmpty() }.forEach { kind ->
                 ManagerFilterChip(
                     selected = filter == kind,
                     label = kind.chip,
