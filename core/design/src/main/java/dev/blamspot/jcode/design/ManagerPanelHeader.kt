@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -94,8 +95,14 @@ fun ManagerPanelHeader(
                 active = searchActive,
             )
             if (busy) {
-                Box(modifier = Modifier.size(36.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                Box(
+                    modifier = Modifier.size(ControlSize.iconButtonSm),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(IconSize.sm),
+                        strokeWidth = StrokeWidth.thick,
+                    )
                 }
             } else {
                 HeaderIconButton(
@@ -117,6 +124,13 @@ fun ManagerPanelHeader(
                 placeholder = searchPlaceholder,
             )
         }
+        // Closes the header off from the list under it, as Source Control's does. Inset by whatever
+        // padding the panel puts around this, rather than spanning the drawer — the panels own that
+        // padding, and reaching past it from in here would take it away from them.
+        HorizontalDivider(
+            thickness = StrokeWidth.hairline,
+            color = MaterialTheme.colorScheme.outlineVariant,
+        )
     }
 }
 
@@ -170,11 +184,11 @@ private fun HeaderIconButton(
     active: Boolean = false,
 ) {
     JcTooltip(contentDescription) {
-        IconButton(onClick = onClick, modifier = Modifier.size(36.dp)) {
+        IconButton(onClick = onClick, modifier = Modifier.size(ControlSize.iconButtonSm)) {
             Icon(
                 imageVector = icon,
                 contentDescription = contentDescription,
-                modifier = Modifier.size(IconSize.md),
+                modifier = Modifier.size(IconSize.sm),
                 tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
