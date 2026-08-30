@@ -478,6 +478,14 @@ fun InstalledExtension.nativeModuleFor(file: File): Pair<NativeModule, NativeCla
  * everything to find out.
  */
 fun InstalledExtension.nativeModuleForView(view: String?): NativeModule? {
+    // One module answers whatever it is asked. That is what a single `entry.native` always did --
+    // the entry class dispatches on the view param itself -- and every extension written before the
+    // list existed has exactly one and declares no `views:`. Requiring the declaration of them too
+    // meant Source Control, the SQL client and the Postgres client all opened to "has no native
+    // module for panel", which is a routing rule reporting itself as a broken extension.
+    //
+    // `views:` is how SIBLINGS are told apart, so it is only consulted when there are siblings.
+    nativeModules.singleOrNull()?.let { return it }
     if (view.isNullOrBlank()) return nativeModules.firstOrNull { it.claims.isNotEmpty() }
     return nativeModules.firstOrNull { view in it.views }
 }

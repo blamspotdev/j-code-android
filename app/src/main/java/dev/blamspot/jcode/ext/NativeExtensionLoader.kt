@@ -177,10 +177,13 @@ internal object NativeExtensionLoader {
         }
 
         // Per module, because each archive is built separately and can be built against a different
-        // API than its neighbour in the same pack.
+        // API than its neighbour in the same pack. Named only when there IS a neighbour: a pack with
+        // one module has an id nobody chose -- "Source Control (native-0)" tells a reader nothing
+        // and reads like part of the fault.
         if (module.abi != JCODE_EXT_ABI) {
+            val which = if (extension.nativeModules.size > 1) "${extension.name} (${module.id})" else extension.name
             throw LoadFailure(
-                "${extension.name} (${module.id}) was built for JCode extension API ${module.abi}; " +
+                "$which was built for JCode extension API ${module.abi}; " +
                     "this JCode implements $JCODE_EXT_ABI. Update the extension.",
             )
         }
@@ -222,8 +225,9 @@ internal object NativeExtensionLoader {
             throw LoadFailure("${extension.name} is an unsigned development build.")
         }
         if (module.abi != JCODE_EXT_ABI) {
+            val which = if (extension.nativeModules.size > 1) "${extension.name} (${module.id})" else extension.name
             throw LoadFailure(
-                "${extension.name} (${module.id}) was built for JCode extension API ${module.abi}; " +
+                "$which was built for JCode extension API ${module.abi}; " +
                     "this JCode implements $JCODE_EXT_ABI. Update the extension.",
             )
         }
