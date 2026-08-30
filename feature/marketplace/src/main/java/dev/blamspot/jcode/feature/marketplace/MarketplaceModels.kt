@@ -487,7 +487,12 @@ fun InstalledExtension.nativeModuleForView(view: String?): NativeModule? {
     // `views:` is how SIBLINGS are told apart, so it is only consulted when there are siblings.
     nativeModules.singleOrNull()?.let { return it }
     if (view.isNullOrBlank()) return nativeModules.firstOrNull { it.claims.isNotEmpty() }
-    return nativeModules.firstOrNull { view in it.views }
+    // A route may carry an argument after a colon -- `newAndroidProject:MyApp`, which is how the New
+    // Project dialog hands a name to the pack that scaffolds it. Only the part before the colon
+    // names the module; the whole string is still what reaches it, since the argument is the
+    // module's to read.
+    val route = view.substringBefore(':')
+    return nativeModules.firstOrNull { view in it.views || route in it.views }
 }
 
 /** The module carrying the `:guest` half, for a pack that provides the virtual device. */

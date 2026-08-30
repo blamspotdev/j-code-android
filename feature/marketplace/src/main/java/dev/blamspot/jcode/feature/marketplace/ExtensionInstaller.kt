@@ -596,6 +596,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             requires = map.listOfAny("requires").mapNotNull { it?.toString()?.takeIf(String::isNotBlank) },
             inputs = inputs,
             recipe = recipe,
+            gallery = map.str("gallery")?.trim().orEmpty(),
         )
     }
 

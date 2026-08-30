@@ -187,6 +187,13 @@ internal fun NewItemDialog(
     installedToolchains: Set<String>,
     onDismiss: () -> Unit,
     onConfirm: (MainViewModel.NewItemRequest) -> Unit,
+    /**
+     * Hands the rest of the wizard to an extension's own view: (extension id, view, project name).
+     *
+     * For a template that declares a [ProjectTemplate.gallery] — one with variants to look at rather
+     * than fields to fill — this dialog gets the name and then steps aside.
+     */
+    onOpenGallery: (String, String, String) -> Unit = { _, _, _ -> },
     resolveDynamicOptions: suspend (String) -> List<String> = { emptyList() },
     /** When false (already inside a User Workspace), the Project/Workspace type toggle is hidden and
      *  the dialog only creates a project — you don't create a workspace inside a workspace. */
@@ -337,10 +344,18 @@ internal fun NewItemDialog(
             }
         },
         confirmButton = {
+            val gallery = selectedTemplate?.gallery.orEmpty()
+            val handsOff = !isWorkspace && gallery.isNotBlank() && selectedTemplate?.extensionId?.isNotBlank() == true
             CompactFilledButton(
-                text = if (step == 0 && hasInputs) "Next" else "Create",
+                text = if (handsOff || (step == 0 && hasInputs)) "Next" else "Create",
                 onClick = {
-                    if (step == 0 && hasInputs) {
+                    if (handsOff) {
+                        // The extension takes it from here: it draws the variants, asks whatever it
+                        // needs and scaffolds. The name travels with the view, so nobody types it
+                        // twice.
+                        onOpenGallery(selectedTemplate!!.extensionId, gallery, name.trim())
+                        onDismiss()
+                    } else if (step == 0 && hasInputs) {
                         step = 1
                     } else {
                         onConfirm(

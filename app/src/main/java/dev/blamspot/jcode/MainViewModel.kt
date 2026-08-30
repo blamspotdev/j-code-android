@@ -343,7 +343,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             dev.blamspot.jcode.workbench.ExtensionDevLog.devIds = installed.filter { it.dev }.map { it.id }.toSet()
             // Any extension may contribute templates (a language/dev pack can bundle them too).
             // Always offer an "Empty Project" first — a blank folder that needs no extension.
-            val fromExtensions = installed.flatMap { it.templates }
+            // Stamped with its extension on the way through: a template that hands its configure
+            // step to a view needs to say whose view it is, and only the list knows that here.
+            val fromExtensions = installed.flatMap { ext ->
+                ext.templates.map { it.copy(extensionId = ext.id) }
+            }
             val emptyOption = fromExtensions.filter { it.id == "empty" }.ifEmpty {
                 listOf(ProjectTemplate(id = "empty", name = "Empty Project", description = "A blank project folder — no scaffolding."))
             }

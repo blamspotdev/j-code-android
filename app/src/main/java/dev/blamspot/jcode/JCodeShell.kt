@@ -1809,6 +1809,9 @@ fun JCodeApp(
             installedToolchains = sdkCatalogState.installedEntryIds,
             onDismiss = viewModel::dismissNewDialog,
             onConfirm = viewModel::createNewItem,
+            onOpenGallery = { extId, view, name ->
+                viewModel.openExtensionViewPage(extId, if (name.isBlank()) view else "$view:$name")
+            },
             resolveDynamicOptions = viewModel::runTemplateOptionsCommand,
             allowWorkspaceType = breadcrumb.size <= 1,
         )
