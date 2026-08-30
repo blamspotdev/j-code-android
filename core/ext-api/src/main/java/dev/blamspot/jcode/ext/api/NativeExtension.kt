@@ -277,38 +277,27 @@ data class NativeContextAction(
 /**
  * The version of this contract that JCode implements.
  *
- * Bumped whenever anything above changes in a way an already-built extension would notice —
- * a signature change, a removal, a meaning change. Purely additive changes (a new [Params] key, a
- * new interface an old plugin never implements) do not need a bump.
+ * One number per RELEASE that changes the contract, not one per change:
  *
- * 3 was the package move: this contract lived at `dev.jcode.ext.api` until 1.6.2. Nothing in it
- * changed shape, but the names did, so an extension built against 2 no longer implements the
- * interface it thinks it does. Without the bump that surfaces as "does not implement
- * JCodeNativeExtension", which reads like the extension is broken rather than merely old.
+ *   up to 1.6.0   no contract — there was no ext-api module
+ *   1.6.1         2
+ *   1.7.0         3
  *
- * 4 opens [NativeHost] onto the runtime and the workbench. Until now a native plugin could read a
- * file, write it back, and say something — enough for a designer that only transforms the buffer it
- * was given, and nothing like enough for a plugin that has to run git and put badges in the
- * Explorer. The methods added are the ones the WebView bridge has always offered; a plugin should
- * not have to be a web page to reach them.
+ * Within a release cycle the contract moves as often as the work needs it to, and none of those
+ * steps are numbers an extension author ever sees. This cycle reached 9 that way — the virtual-device
+ * interfaces, `entry.native` becoming a list, and several smaller additions — and all of it ships as
+ * 3, because 3 is what 1.7.0 hands to extensions. An author targets a JCode release; the counter
+ * should say the same thing.
  *
- * 5 lets [NativeHost.openView] name the page it opens. The workbench was left to invent a label out
- * of the route, which cannot work for a page whose name only the plugin knows. The parameter has a
- * default, so calling code is unchanged — but a default is a second JVM signature, and a plugin
- * compiled against the one-argument method would not find it here, which is what the number is for.
+ * Bump it when something here changes in a way an already-built extension would notice: a signature
+ * change, a removal, a meaning change. `openView` gaining a defaulted parameter is the shape of that
+ * — a default is a second JVM signature, so a plugin compiled against the one-argument method finds
+ * nothing here. Purely additive changes (a new [Params] key, a new interface an old plugin never
+ * implements) are not a reason on their own; a feature an old pack cannot offer is absent because it
+ * declares nothing, not because it was refused.
  *
- * 8 moved the virtual device out of the app. [JCodeVirtualDevice], [JCodeVirtualDeviceGuest] and
- * [VirtualDeviceHost] are new, and so is the `entry.native.guest` manifest field that names the
- * class the `:guest` stub loads. Nothing already in this file changed shape — a pack built against 7
- * would still draw its pages correctly — but a JCode on 8 asks the Android pack for a device and an
- * older pack has none to give, which is a missing feature rather than a crash and so has to be
- * refused at load time with something that says "update the extension".
- *
- * 9 made `entry.native` a **list**. A pack ships one archive per surface it offers rather than one
- * for all of them, each with its own `id`, its own `abi`, and a declaration of the routes (`views:`)
- * or files (`claims:`) it answers — so the workbench picks the archive from the manifest instead of
- * loading everything to ask the code. Nothing in this file changed shape, but a pack built against 8
- * declares a single mapping with no `views:`, so every route but its file surface would resolve to
- * nothing; that is a pack the manifest cannot describe rather than a crash, and is refused here.
+ * The check is exact equality, so this number and every `entry.native[].abi` in the marketplace move
+ * together or not at all. The 1.7.0 betas went out declaring 7, so the extensions built for them say
+ * 7 and must be republished at 3 alongside the stable release.
  */
-const val JCODE_EXT_ABI: Int = 9
+const val JCODE_EXT_ABI: Int = 3
