@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Smartphone
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -106,14 +108,17 @@ internal fun RunPanel(
     // re-read `adb devices` whenever it opens rather than trusting whatever the last look found.
     LaunchedEffect(Unit) { targets.onRefresh() }
 
-    Column(
-        modifier = modifier
-            .verticalScroll(rememberScrollState())
-            .padding(Space.ms),
-        verticalArrangement = Arrangement.spacedBy(Space.s),
-    ) {
+    Column(modifier = modifier.fillMaxSize()) {
+        // Header outside the scroll and padded on its own, with the rule spanning the drawer — the
+        // shape every panel here uses, so moving between them does not move the title.
         Row(
-            modifier = Modifier.padding(start = Space.xxs, top = Space.xxs),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = PanelHeader.minHeight)
+                .padding(
+                    horizontal = PanelHeader.horizontalPadding,
+                    vertical = PanelHeader.verticalPadding,
+                ),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
@@ -135,7 +140,18 @@ internal fun RunPanel(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        HorizontalDivider(
+            thickness = PanelHeader.rule,
+            color = MaterialTheme.colorScheme.outlineVariant,
+        )
 
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(Space.ms),
+            verticalArrangement = Arrangement.spacedBy(Space.s),
+        ) {
         when {
             projects.isEmpty() -> HintText("Open a project to build & run.")
             inUserWorkspace && activeProject == null -> projects.forEach { project ->
@@ -161,6 +177,7 @@ internal fun RunPanel(
                 onDeleteRun = onDeleteRun,
                 onDeleteBuild = onDeleteBuild,
             )
+        }
         }
     }
 }

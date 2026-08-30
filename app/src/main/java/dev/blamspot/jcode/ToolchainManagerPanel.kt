@@ -191,13 +191,7 @@ internal fun ToolchainManagerPanel(
         debugState.installedEntryIds.size
     val busy = sdkState.checking || lspState.checking || debugState.checking
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(Space.ms),
-        verticalArrangement = Arrangement.spacedBy(Space.sm),
-    ) {
+    Column(modifier = modifier.fillMaxSize()) {
         // Reported to the Issues pane rather than drawn here: a failure is worth keeping after the
         // user has moved on to another tool, and the list is what this panel is for. Each message is
         // carried with the log of the run it came out of — what a catalog puts in errorMessage is the
@@ -224,6 +218,15 @@ internal fun ToolchainManagerPanel(
             onQueryChange = { query = it },
             searchPlaceholder = "Search SDKs, servers, debuggers",
         )
+        // Outside the scroll, like Source Control's: the panel's name and its refresh should not
+        // scroll away with the list they describe.
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(Space.ms),
+            verticalArrangement = Arrangement.spacedBy(Space.sm),
+        ) {
 
         Row(
             modifier = Modifier
@@ -308,6 +311,7 @@ internal fun ToolchainManagerPanel(
                     }
                 }
             }
+        }
         }
     }
 }

@@ -290,7 +290,10 @@ internal fun DbManagerPanel(
                 fontWeight = PanelHeader.titleWeight,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = Space.ms, vertical = Space.s),
+                    .padding(
+                        horizontal = PanelHeader.horizontalPadding,
+                        vertical = PanelHeader.verticalPadding,
+                    ),
             )
             HorizontalDivider(
                 thickness = PanelHeader.rule,

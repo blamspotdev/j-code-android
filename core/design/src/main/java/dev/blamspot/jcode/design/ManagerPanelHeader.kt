@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
@@ -56,8 +57,21 @@ fun ManagerPanelHeader(
     noticeCount: Int = 0,
     onNotice: (() -> Unit)? = null,
 ) {
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    // The header carries its own padding and the rule spans the drawer, so a panel pads only its
+    // body. Panels used to wrap this in their own inset, which left the title further in than the
+    // drawer's other panels and the rule stopping short of both edges.
+    Column(modifier = modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier.padding(
+            horizontal = PanelHeader.horizontalPadding,
+            vertical = PanelHeader.verticalPadding,
+        ),
+        verticalArrangement = Arrangement.spacedBy(Space.xs),
+    ) {
+        Row(
+            modifier = Modifier.heightIn(min = PanelHeader.minHeight - PanelHeader.verticalPadding * 2),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
                 text = title,
                 style = PanelHeader.titleStyle,
@@ -124,9 +138,9 @@ fun ManagerPanelHeader(
                 placeholder = searchPlaceholder,
             )
         }
-        // Closes the header off from the list under it, as Source Control's does. Inset by whatever
-        // padding the panel puts around this, rather than spanning the drawer — the panels own that
-        // padding, and reaching past it from in here would take it away from them.
+    }
+        // Closes the header off from the list under it, as Source Control's does — edge to edge,
+        // outside the header's own padding.
         HorizontalDivider(
             thickness = PanelHeader.rule,
             color = MaterialTheme.colorScheme.outlineVariant,
