@@ -4981,9 +4981,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Default Workspace (opens immediately), a workspace id = that User Workspace (switches to it
         // and prompts open-vs-add). Absent id registers under whatever workspace is currently open.
         "workbench.openFolder" -> {
-            val name = p.optString("name").trim()
+            val name = p.optString("name").trim().trimEnd('/')
             require(name.isNotBlank()) { "name required" }
-            val sanitized = workspaceManager.sanitizedFolderName(name)
+            // One path segment. The folder is the caller's to have created, but the name reaches
+            // the workspace root as a file name, so it may not walk out of it.
+            require(name == File(name).name && name.trim('.').isNotEmpty()) {
+                "name must be a single folder name"
+            }
             val defId = workspaceManager.ensureDefaultWorkspaceId()
             val destId = p.optString("destinationId").trim()
             val currentId = workspaceManager.currentWorkspace.value?.id ?: defId
@@ -5000,11 +5004,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             workspaceManager.restoreWorkspace(targetWs)
             if (targetWs == defId) {
                 resetDefaultWorkspaceProject()
-                val project = workspaceManager.createNodeIn(defId, sanitized, WorkspaceNodeType.Project, null)
+                val project = workspaceManager.createNodeIn(defId, name, WorkspaceNodeType.Project, null)
                 _selectedProjectId.value = project.id
                 apiOk(JSONObject().put("name", project.name).put("opened", true))
             } else {
-                val project = workspaceManager.createNodeIn(targetWs, sanitized, WorkspaceNodeType.Project, null)
+                val project = workspaceManager.createNodeIn(targetWs, name, WorkspaceNodeType.Project, null)
                 _postClonePrompt.value = project
                 apiOk(JSONObject().put("name", project.name).put("opened", false))
             }

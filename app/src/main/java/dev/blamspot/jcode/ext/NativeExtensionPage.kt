@@ -108,7 +108,7 @@ internal fun NativeExtensionPage(
     val scope = rememberCoroutineScope()
     val host = remember(file?.path, view, scope) {
         NativeHostBridge(
-            scope = scope,
+            pageScope = scope,
             request = request,
             events = events,
             readFileText = readFile,

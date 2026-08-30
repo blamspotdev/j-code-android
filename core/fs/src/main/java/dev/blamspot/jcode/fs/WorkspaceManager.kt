@@ -255,7 +255,12 @@ class WorkspaceManager @Inject constructor(
         nodeType: WorkspaceNodeType,
         templateId: String?,
     ): Project {
-        val directory = File(baseDirFor(workspaceId), sanitizedFolderName(name))
+        val base = baseDirFor(workspaceId)
+        // A name that already names a folder here is taken as it stands. Sanitizing is for turning
+        // something a person typed into a directory name; run over a folder that exists it picks a
+        // *different* name, and registers a new empty project beside the real one -- which is what
+        // happened to every folder an extension scaffolded with a capital letter in it.
+        val directory = File(base, name).takeIf { it.isDirectory } ?: File(base, sanitizedFolderName(name))
         val path = FsPath.Local(directory)
         validateWritable(path)
         writeNodeConfig(directory, nodeType, templateId)

@@ -6,10 +6,23 @@ import dev.blamspot.jcode.ext.api.NativeExecResult
 import dev.blamspot.jcode.ext.api.NativeHost
 import dev.blamspot.jcode.ext.api.NativeProjectInfo
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
+
+/**
+ * Where a fire-and-forget host call runs.
+ *
+ * The process's lifetime rather than the calling page's, because several of these calls *end* that
+ * page: opening a project clears the editor, closing your own view closes your tab. Launched on the
+ * page's scope, such a call cancels itself halfway and leaves the workbench holding a job it began
+ * and will never finish -- which is how a scaffolded project came to be created and never opened.
+ * One job is one envelope and its reply, so nothing accumulates here.
+ */
+private val hostCalls = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
 /**
  * [NativeHost] over the same request dispatcher the WebView bridge uses.
@@ -21,7 +34,8 @@ import org.json.JSONObject
  * reimplemented its own half of `exec.run` would be the copy that drifts.
  */
 internal class NativeHostBridge(
-    private val scope: CoroutineScope,
+    /** The page's own. Event collectors belong to it: a closed page stops listening. */
+    private val pageScope: CoroutineScope,
     /** Sends one envelope and returns the reply, already scoped to the calling extension. */
     private val request: suspend (String) -> String,
     private val events: Flow<Pair<String, String>>,
@@ -57,7 +71,7 @@ internal class NativeHostBridge(
 
     /** For a call whose answer nobody waits on — the plugin said something, the workbench does it. */
     private fun send(type: String, payload: JSONObject = JSONObject()) {
-        scope.launch { call(type, payload) }
+        hostCalls.launch { call(type, payload) }
     }
 
     // --- the runtime -------------------------------------------------------------------------------
@@ -120,7 +134,12 @@ internal class NativeHostBridge(
     override fun openFile(path: String, line: Int?) =
         send("workbench.openFile", JSONObject().put("path", path).apply { line?.let { put("line", it) } })
 
-    override fun openFolder(path: String) = send("workbench.openFolder", JSONObject().put("path", path))
+    // The route registers a folder the extension has already created under the guest workspace mount,
+    // and it names that folder rather than pathing to it -- a top-level name is the only thing it can
+    // register. Native plugins hold a path, which is what they have just made, so the name is taken
+    // from it here instead of in every plugin.
+    override fun openFolder(path: String) =
+        send("workbench.openFolder", JSONObject().put("name", path.trimEnd('/').substringAfterLast('/')))
     override fun addFolder(path: String) = send("workbench.addFolder", JSONObject().put("path", path))
     override fun openUrl(url: String) = send("workbench.openUrl", JSONObject().put("url", url))
     override fun openView(id: String, title: String?) = send(
@@ -167,7 +186,7 @@ internal class NativeHostBridge(
     }
 
     override fun onEvent(listener: (name: String, json: String) -> Unit): AutoCloseable {
-        val job = scope.launch {
+        val job = pageScope.launch {
             events.collect { (name, json) -> listener(name, json) }
         }
         return AutoCloseable { job.cancel() }
