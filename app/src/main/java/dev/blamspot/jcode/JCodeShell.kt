@@ -80,6 +80,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import kotlin.math.abs
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imeAnimationTarget
@@ -159,6 +160,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.text.font.FontWeight
@@ -4016,8 +4018,30 @@ private fun JCodeShell(
     // does ONE relayout per toggle; the keyboard then slides over an already-settled layout.
     Box(modifier = modifier.fillMaxSize().windowInsetsPadding(WindowInsets.imeAnimationTarget)) {
         if (usesModalWorkspace) {
+            // Gestures only while it is OPEN, so the swipe that closes it still works and the one
+            // that opened it no longer exists. A ModalNavigationDrawer takes horizontal drags across
+            // its WHOLE content, and this shell's content is full of surfaces that want them: the
+            // designer pans its canvas, the SDK manager scrolls a table, the terminal selects text,
+            // and the virtual device relays every touch to the app inside it. All of them were
+            // fighting the drawer for the same gesture, and near the left edge the drawer won.
+            // No drag-to-open, deliberately. A ModalNavigationDrawer takes horizontal drags across
+            // its WHOLE content by default, and this shell's content is made of surfaces that want
+            // them: the designer pans its canvas, the SDK manager scrolls a table sideways, the
+            // terminal selects text, and the virtual device hands every touch to the app inside it.
+            // All of them were losing the gesture to the drawer.
+            //
+            // Confining it to a left edge was the obvious answer and is not available: on gesture
+            // navigation that edge belongs to the system's Back, which takes the drag mid-gesture and
+            // leaves the app with a cancel. Measured — the same pull opens the drawer with three-
+            // button navigation and never arrives with gestural. `systemGestureExclusion` can claim
+            // it back for at most 200dp of a screen's height, which is a drawer that works in a band
+            // and not above or below it.
+            //
+            // So the button in the app bar opens it, and gestures are for closing what is already
+            // open — where they cover the drawer itself and conflict with nothing.
             ModalNavigationDrawer(
                 drawerState = compactDrawerState,
+                gesturesEnabled = compactDrawerState.isOpen,
                 drawerContent = drawerContent,
                 content = content,
             )
@@ -4942,6 +4966,7 @@ private const val ADB_CATALOG_ENTRY = "adb"
 private const val SCM_VISIBLE_REFRESH_MS = 3_000L
 
 /** The gap between the docked panes, and the touch target that resizes them. */
+
 private val SPLIT_HANDLE_WIDTH = 12.dp
 
 /**
