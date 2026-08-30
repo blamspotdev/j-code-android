@@ -4,6 +4,7 @@ import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.JcTooltip
 import dev.blamspot.jcode.design.ManagerFilterChip
 import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.PanelHeader
 import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
 
@@ -117,15 +118,19 @@ internal fun RunPanel(
             horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             if (inUserWorkspace && activeProject != null) {
-                IconButton(onClick = { pickedId = null }, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to projects", modifier = Modifier.size(IconSize.lg))
+                IconButton(onClick = { pickedId = null }, modifier = Modifier.size(PanelHeader.iconButton)) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = "Back to projects",
+                        modifier = Modifier.size(PanelHeader.icon),
+                    )
                 }
             }
             // No leading icon: the drawer's own "Run" tab chip already carries one directly above.
             Text(
                 text = activeProject?.name ?: "Run",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
+                style = PanelHeader.titleStyle,
+                fontWeight = PanelHeader.titleWeight,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

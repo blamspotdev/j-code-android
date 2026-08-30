@@ -60,8 +60,8 @@ fun ManagerPanelHeader(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                style = PanelHeader.titleStyle,
+                fontWeight = PanelHeader.titleWeight,
                 modifier = Modifier.weight(1f),
             )
             if (onExtras != null) {
@@ -96,12 +96,12 @@ fun ManagerPanelHeader(
             )
             if (busy) {
                 Box(
-                    modifier = Modifier.size(ControlSize.iconButtonSm),
+                    modifier = Modifier.size(PanelHeader.iconButton),
                     contentAlignment = Alignment.Center,
                 ) {
                     CircularProgressIndicator(
-                        modifier = Modifier.size(IconSize.sm),
-                        strokeWidth = StrokeWidth.thick,
+                        modifier = Modifier.size(PanelHeader.icon),
+                        strokeWidth = PanelHeader.busyStroke,
                     )
                 }
             } else {
@@ -128,7 +128,7 @@ fun ManagerPanelHeader(
         // padding the panel puts around this, rather than spanning the drawer — the panels own that
         // padding, and reaching past it from in here would take it away from them.
         HorizontalDivider(
-            thickness = StrokeWidth.hairline,
+            thickness = PanelHeader.rule,
             color = MaterialTheme.colorScheme.outlineVariant,
         )
     }
@@ -184,11 +184,11 @@ private fun HeaderIconButton(
     active: Boolean = false,
 ) {
     JcTooltip(contentDescription) {
-        IconButton(onClick = onClick, modifier = Modifier.size(ControlSize.iconButtonSm)) {
+        IconButton(onClick = onClick, modifier = Modifier.size(PanelHeader.iconButton)) {
             Icon(
                 imageVector = icon,
                 contentDescription = contentDescription,
-                modifier = Modifier.size(IconSize.sm),
+                modifier = Modifier.size(PanelHeader.icon),
                 tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
