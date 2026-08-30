@@ -1,6 +1,7 @@
 package dev.blamspot.jcode.design
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Pause
@@ -11,7 +12,6 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.rounded.MenuOpen
 import androidx.compose.material.icons.automirrored.rounded.Redo
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.Add
@@ -191,7 +191,10 @@ val defaultIconBundle = IconBundle(
         // Auto-mirrored: back is a direction, and it is the other one in a right-to-left locale.
         JCodeIcon.ArrowBack to Icons.AutoMirrored.Rounded.ArrowBack,
         JCodeIcon.ArrowForward to Icons.AutoMirrored.Rounded.ArrowForward,
-        JCodeIcon.MenuToggle to Icons.AutoMirrored.Rounded.MenuOpen,
+        // A plain hamburger, not `MenuOpen`: the same button both shows and hides the sidebar, and
+        // which it will do is carried by the tint, not the glyph. MenuOpen's chevron pointed one way
+        // in both states, so it described the control's direction wrongly half the time.
+        JCodeIcon.MenuToggle to Icons.Rounded.Menu,
         JCodeIcon.Help to Icons.AutoMirrored.Rounded.HelpOutline,
         JCodeIcon.Copy to Icons.Rounded.ContentCopy,
         JCodeIcon.Cut to Icons.Rounded.ContentCut,
