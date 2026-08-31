@@ -197,8 +197,8 @@ the UI reports exactly what adb reported.
 
 A device-side adb daemon so the guest's `adb` can drive JCode's app sandbox.
 
-- A **Unix socket**, not a port: `<rootfs>/run/jcode-vdevice-adb.sock`, which the distro sees as
-  `/run/jcode-vdevice-adb.sock`. Clients reach it with `adb connect localfilesystem:<path>`.
+- A **Unix socket**, not a port: `<rootfs>/run/<serial>`, which the distro sees as `/run/<serial>`.
+  Clients reach it with `adb connect localfilesystem:<path>`.
 - Authenticated by `AdbAuth` against the distro's enrolled key.
 
 > **Why not a port.** This daemon exposes `exec:cmd package install` — "run this APK inside JCode" —
@@ -209,11 +209,32 @@ A device-side adb daemon so the guest's `adb` can drive JCode's app sandbox.
 > reaches it and nothing else does. Authentication is unchanged; it is now the second line rather
 > than the only one.
 >
-> Two consequences worth stating. The transport's **serial is the socket spec**, so `adb devices`
-> reads `localfilesystem:/run/jcode-vdevice-adb.sock` rather than an address — there is no port to
-> scan for and none to type. And the device is **unreachable from a computer**: a Unix socket cannot
-> be `adb forward`ed, so driving the virtual device from a desktop is no longer possible. That is the
-> point rather than a regression, but it does mean the device is a JCode-terminal-only target.
+> Two consequences worth stating. The transport's **serial is the socket spec** — adb takes a
+> transport's serial to be whatever it was connected with — so there is no port to scan for and none
+> to type. And the device is **unreachable from a computer**: a Unix socket cannot be `adb
+> forward`ed, so driving the virtual device from a desktop is no longer possible. That is the point
+> rather than a regression, but it does mean the device is a JCode-terminal-only target.
+
+### 10a. The serial
+
+Because the serial *is* the spec, `adb devices` printed `localfilesystem:/run/jcode-vdevice-adb.sock`
+where every other device prints a serial — JCode's own plumbing, in the user's terminal, repeated by
+`$ANDROID_SERIAL` and by every tool downstream. Two halves fix that, and neither works alone:
+
+- **The pack names the socket after the device's serial** (`VirtualDeviceSerial`): eight lowercase
+  alphanumerics, minted on the device's first run and kept. It is the same string as `ro.serialno`
+  and `Build.SERIAL`, so the device agrees with itself about what it is called. It is stored in
+  `filesDir` rather than in the device's own tree, which is cache and is emptied on every start —
+  identity is what a device keeps through a wipe.
+- **JCode writes `/usr/local/bin/adb`**, a shim that rewrites the spec to that serial in the output of
+  the two commands that report one (`devices`, `get-serialno`) and accepts the serial back in `-s`
+  and `$ANDROID_SERIAL`. Everything else is `exec`'d untouched, so no binary stream (`adb exec-out
+  screencap -p`, `adb pull`) passes through it. The real adb is baked in at write time, not looked up
+  on PATH: an adb that found itself would exec itself forever.
+
+`$ANDROID_SERIAL` is still *exported* as the spec. AGP and ddmlib read it themselves and match it
+against what the adb server reports — which is the spec — so a friendlier value there would break
+`./gradlew installDebug` on the device to tidy up an `env` listing.
 >
 > `adb connect localfilesystem:` is supported by adb on Linux and refused on Windows
 > (`socket type localfilesystem is unavailable on this platform`), which is why the client end only

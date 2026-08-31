@@ -1375,7 +1375,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
             return
         }
-        TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec = spec
+        TerminalSessionHost.manager(appContext).let { manager ->
+            manager.virtualDeviceAdbSpec = spec
+            manager.installAdbShim(rootfs)
+        }
         virtualDeviceAdbRunning = true
         // The daemon only trusts the distro's own adbkey.pub, and adb does not create one until it
         // has run once — so mint it before connecting, or the first connection is refused for want
@@ -1428,7 +1431,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // the runtime's own server and this is what started it, so this is what ends it.
         runCatching { distroService.spawnStdioProcess(command = "adb kill-server") }
         runCatching { VirtualDeviceBridge.stopAdb() }
-        TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec = ""
+        TerminalSessionHost.manager(appContext).let { manager ->
+            manager.virtualDeviceAdbSpec = ""
+            virtualDeviceRootfs()?.let(manager::installAdbShim)
+        }
     }
 
     /**
