@@ -88,8 +88,6 @@ object OnboardingFeature {
         onRestoreEnvironment: (() -> Unit)? = null,
         onImportMigration: (() -> Unit)? = null,
         migrationSummary: String? = null,
-        legacyInstall: String? = null,
-        onOpenLegacyInstall: (String) -> Unit = {},
     ) {
         // Full-bleed backdrop first, insets padding inside: otherwise the workbench behind the
         // onboarding shows through the status/navigation-bar strips (visible in landscape).
@@ -119,8 +117,6 @@ object OnboardingFeature {
                     onRestoreEnvironment = onRestoreEnvironment,
                     onImportMigration = onImportMigration,
                     migrationSummary = migrationSummary,
-                    legacyInstall = legacyInstall,
-                    onOpenLegacyInstall = onOpenLegacyInstall,
                 )
             }
         }
@@ -232,8 +228,6 @@ private fun StepperScreen(
     onRestoreEnvironment: (() -> Unit)? = null,
     onImportMigration: (() -> Unit)? = null,
     migrationSummary: String? = null,
-    legacyInstall: String? = null,
-    onOpenLegacyInstall: (String) -> Unit = {},
     installedEnvironments: List<EnvironmentInfo> = emptyList(),
     onSwitchEnvironment: (String) -> Unit = {},
     onDeleteEnvironment: (String) -> Unit = {},
@@ -309,14 +303,6 @@ private fun StepperScreen(
                         storageGranted = true
                         onStorageAccessGranted()
                     },
-                )
-            }
-        }
-        if (showWizard && legacyInstall != null) {
-            item {
-                LegacyInstallCard(
-                    packageName = legacyInstall,
-                    onOpen = { onOpenLegacyInstall(legacyInstall) },
                 )
             }
         }
@@ -650,40 +636,6 @@ private fun ConfigureStepCard(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("Done")
-            }
-        }
-    }
-}
-
-/** Shown when a JCode from before the package rename is still installed and left no bundle.
- *
- *  It cannot have left one — the export arrived in 1.6.1 — so the environment it holds is only
- *  reachable from inside it, through the backup that version already had. Nothing is lost while
- *  that install is still there, which is the part worth saying first: an update that turns into a
- *  second app with an empty environment reads as data loss until someone explains that it isn't. */
-@Composable
-private fun LegacyInstallCard(packageName: String, onOpen: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(Radius.sheet),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(Space.lg),
-            verticalArrangement = Arrangement.spacedBy(Space.ms),
-        ) {
-            Text("Your previous JCode is still installed", fontWeight = FontWeight.SemiBold)
-            Text(
-                text = "Nothing is lost: $packageName still holds your Linux environment, projects " +
-                    "and settings. JCode's package name changed, so this is a separate app that " +
-                    "cannot read them — back them up there (Settings → Environment), then use " +
-                    "Restore below instead of picking a distro.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            FilledTonalButton(onClick = onOpen) {
-                Text("Open the previous JCode")
             }
         }
     }

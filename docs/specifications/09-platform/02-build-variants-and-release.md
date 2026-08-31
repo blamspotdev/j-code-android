@@ -300,9 +300,9 @@ rootfs goes through `setPendingRestoreTarball` + the normal setup pipeline rathe
 into place, so proot, the `jcode` user and the smoke test still run against it. Afterwards a dialog
 (not a snackbar — onboarding is not a screen where transient messages are read) offers to delete the
 bundle and uninstall the old app. That needs `REQUEST_DELETE_PACKAGES` and a `<queries>` block naming
-the packages a bundle can have come *from* — `dev.jcode`/`.debug`/`.beta`, listed in
-`MigrationBundle.PREVIOUS_PACKAGES` and mirrored in the manifest; without the latter, Android 11
-package filtering reports the old install as absent and the offer silently degrades.
+the packages a bundle can have come *from* — `dev.jcode`/`.debug`/`.beta`, listed in the manifest;
+without it, Android 11 package filtering reports the old install as absent and the offer silently
+degrades.
 
 **The release this was built for.** 1.7.0 is the release that changes the package, from `dev.jcode`
 to `dev.blamspot.jcode`. 1.6.1 is the one that makes it survivable: it shipped the export side
@@ -310,12 +310,9 @@ above, so every 1.6.1 install hands its environment over on its own when it upda
 
 An install **older than 1.6.1** cannot — the export did not exist yet — so it updates into
 `dev.blamspot.jcode` as a second app and keeps everything. Nothing is lost, but nothing crosses
-either, so onboarding says so: when no bundle is found and one of `PREVIOUS_PACKAGES` is still
-installed, `LegacyInstallCard` explains that the old app still holds the environment and points at
-the route that version does have — its own environment backup, restored here through the distro
-step's **Restore**. `MainViewModel.legacyInstall` is refreshed by the same pass that looks for a
-bundle, including the re-check after storage access is granted, since neither is readable before
-that.
+either; the route out is the one that version does have, its own environment backup, restored here
+through the distro step's **Restore**. Onboarding used to say so in a `LegacyInstallCard`, which was
+removed once the rename was several releases old — the whole migration flow goes at 1.8.0.
 
 ---
 
