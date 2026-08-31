@@ -5301,7 +5301,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Snapshot of every extension doing background work, for the Task Manager (polled, not reactive). */
-    fun backgroundExtensionSnapshot(): List<BackgroundExtensionInfo> {
+    fun backgroundExtensionSnapshot(deviceRunning: Boolean = false): List<BackgroundExtensionInfo> {
         val scmIds = dev.blamspot.jcode.workbench.ScmWebViewHolder.ids().toSet()
         val vsixIds = dev.blamspot.jcode.workbench.VsixViewHolder.ids().toSet()
         val serviceCounts = runtimeServices.keys.groupingBy { it.substringBefore(' ') }.eachCount()
@@ -5313,9 +5313,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // daemon, and a proot tree of `adb`, `sh` and `sleep` that the Processes list below shows
         // as six anonymous rows nobody could connect to the pack they belong to.
         val devicePack = installedExtensions.value.firstOrNull { it.nativeGuestModule() != null }
-        val deviceRunning = devicePack != null && VirtualDeviceBridge.isRunning
+        val hasDevice = devicePack != null && deviceRunning
         val adbRunning = devicePack != null && virtualDeviceAdbRunning
-        val deviceId = devicePack?.id?.takeIf { deviceRunning || adbRunning }
+        val deviceId = devicePack?.id?.takeIf { hasDevice || adbRunning }
         return (scmIds + vsixIds + serviceCounts.keys + suspended + listOfNotNull(deviceId)).map { id ->
             BackgroundExtensionInfo(
                 id = id,
@@ -5323,7 +5323,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 hasHost = id in scmIds || id in vsixIds,
                 serviceCount = serviceCounts[id] ?: 0,
                 suspended = id in suspended,
-                hasDevice = id == deviceId && deviceRunning,
+                hasDevice = id == deviceId && hasDevice,
                 hasAdb = id == deviceId && adbRunning,
             )
         }.sortedBy { it.name.lowercase() }
@@ -5339,7 +5339,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // to take the `:guest` process and the adb that serves it, or the row says stopped and
             // the processes below carry on. `shutdown` rather than a kill -- the device has a door.
             if (installedExtensions.value.firstOrNull { it.id == id }?.nativeGuestModule() != null) {
-                VirtualDeviceBridge.shutdown()
+                VirtualDeviceBridge.shutdown(loadIfNeeded = true)
                 stopVirtualDeviceAdb()
                 // Suspended as well as stopped, or it comes straight back: the drawer's device
                 // panel is what *builds* the device, so a panel still on screen rebuilds what was

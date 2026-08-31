@@ -96,15 +96,6 @@ internal object VirtualDeviceBridge : VirtualDeviceHost {
     /** True when a device could be opened. What the workbench hides its device surfaces on. */
     val isAvailable: Boolean get() = pack() != null
 
-    /**
-     * True while a device has actually been built, rather than merely being on offer.
-     *
-     * What the Task Manager lists the pack under: a device that has been opened is a `:guest`
-     * process and, with the setting on, an adb daemon -- background work somebody may want to see
-     * and stop, and which until now appeared there only as unnamed `sh` and `sleep` rows.
-     */
-    val isRunning: Boolean get() = resolved is JCodeVirtualDevice
-
     private fun device(): JCodeVirtualDevice? {
         (resolved as? JCodeVirtualDevice)?.let { return it }
         if (resolved !== Unresolved) return null
@@ -178,10 +169,16 @@ internal object VirtualDeviceBridge : VirtualDeviceHost {
      * a reason to load a multi-megabyte archive: a device that was never loaded is a device that is
      * already off.
      */
-    fun shutdown() {
-        (resolved as? JCodeVirtualDevice)?.let { runCatching { it.shutdown() } }
-        // Forgotten as well as shut down, so [isRunning] answers for what is there rather than
-        // for what was once loaded. The next ask reloads it; that is what `device()` is for.
+    fun shutdown(loadIfNeeded: Boolean = false) {
+        // The device's page loads the pack itself, through `NativeExtensionLoader`, so the device
+        // that is running is often one this object has never held -- and a shutdown that only
+        // consults the cached field then does nothing at all. [loadIfNeeded] is for a person who
+        // asked it to stop; teardown keeps the old rule, since a device that was never loaded is
+        // already off and not a reason to load a multi-megabyte archive.
+        val live = (resolved as? JCodeVirtualDevice) ?: if (loadIfNeeded) device() else null
+        live?.let { runCatching { it.shutdown() } }
+        // Forgotten as well as shut down: what is cached here should describe a device that
+        // exists. The next ask reloads it, which is what `device()` is for.
         resolved = Unresolved
     }
 

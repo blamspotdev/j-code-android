@@ -60,7 +60,8 @@ private data class HostMemory(val availKb: Long, val totalKb: Long)
  * without threading the ViewModel through the shell. [snapshot] is polled on the panel's refresh tick.
  */
 internal data class TaskManagerBackgroundActions(
-    val snapshot: () -> List<MainViewModel.BackgroundExtensionInfo> = { emptyList() },
+    val snapshot: (deviceRunning: Boolean) -> List<MainViewModel.BackgroundExtensionInfo> =
+        { _ -> emptyList() },
     val onStop: (String) -> Unit = {},
     val onStart: (String) -> Unit = {},
 )
@@ -103,7 +104,12 @@ internal fun TaskManagerSidebarContent(
                 val (procs, mem) = withContext(Dispatchers.IO) { AppProcesses.list() to readHostMemory() }
                 processes = procs
                 hostMemory = mem
-                backgroundExtensions = backgroundActions.snapshot()
+                // The device's own `:guest` process is the honest answer to "is a device running":
+                // the page that draws it is disposed by switching to this very tab, and a
+                // device at its home screen has no process of its own to find.
+                backgroundExtensions = backgroundActions.snapshot(
+                    procs.any { it.name.endsWith(":guest") },
+                )
                 now = System.currentTimeMillis()
                 delay(2_000L)
             }
