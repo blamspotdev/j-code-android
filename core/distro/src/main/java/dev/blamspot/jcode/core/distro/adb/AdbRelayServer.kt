@@ -81,7 +81,7 @@ class AdbRelayServer(
     }
 
     private fun bind(): ServerSocket {
-        // IPv4 loopback explicitly — see AdbDaemon.bind: getLoopbackAddress() resolves to ::1 on this
+        // IPv4 loopback explicitly — see VirtualDeviceAdbDaemon.bind in the Android Dev Pack: getLoopbackAddress() resolves to ::1 on this
         // platform, which no adb client dialling 127.0.0.1 can reach.
         val loopback = InetAddress.getByName(AdbHostClient.LOOPBACK)
         for (candidate in PREFERRED_PORT..LAST_PORT) {

@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented |
 | **Modules** | `:core:distro` (package `dev.blamspot.jcode.core.distro.adb`), `:app` (`dev.blamspot.jcode.adb`) |
-| **Primary sources** | core/distro/src/main/java/dev/blamspot/jcode/core/distro/adb/AdbWire.kt, AdbAuth.kt, AdbDaemon.kt, AdbHostClient.kt, AdbRelayServer.kt, AdbBackendDiscovery.kt, AdbBridge.kt, AdbBridgeLocator.kt, AdbModels.kt. The device end of the transport — `VirtualDeviceAdbService.kt`, `AdbSync.kt` — moved to the **Android Dev Pack** at 1.7.0 |
+| **Primary sources** | core/distro/src/main/java/dev/blamspot/jcode/core/distro/adb/AdbWire.kt, AdbAuth.kt, AdbService.kt, AdbHostClient.kt, AdbRelayServer.kt, AdbBackendDiscovery.kt, AdbBridge.kt, AdbBridgeLocator.kt, AdbModels.kt. The virtual device's whole end — `VirtualDeviceAdbDaemon.kt`, `VirtualDeviceAdbService.kt`, `AdbSync.kt` — is in the **Android Dev Pack** |
 | **Verified against** | device-verified on Android 13, 2026-08-11 |
 
 ---
@@ -33,7 +33,7 @@ flowchart LR
         HC["AdbHostClient"]
         RS["AdbRelayServer<br/>5580-5599"]
         BD["AdbBackendDiscovery<br/>mDNS"]
-        VD["AdbDaemon (virtual device)<br/>5620-5639"]
+        VD["VirtualDeviceAdbDaemon (pack)<br/>unix socket"]
     end
     adbd["System adbd<br/>(wireless debugging, random port)"]
 
@@ -193,7 +193,7 @@ the UI reports exactly what adb reported.
 
 ---
 
-## 10. `AdbDaemon` — serving the virtual device
+## 10. `VirtualDeviceAdbDaemon` — serving the virtual device
 
 A device-side adb daemon so the guest's `adb` can drive JCode's app sandbox.
 
@@ -221,13 +221,24 @@ A device-side adb daemon so the guest's `adb` can drive JCode's app sandbox.
 - `AdbStream` is one open stream from the answering service's point of view, carrying the requested
   service string (for example `shell:getprop ro.build.version.sdk`).
 
-`VirtualDeviceAdbService` implements the service handler. **It ships in the Android Dev Pack**, not in
-`:app`: what the daemon serves is the virtual device, and the device is the pack's — see
+**The daemon and everything it serves ship in the Android Dev Pack**, not in `:app` — see
 [App sandbox §1a](../08-virtual-device/01-app-sandbox-architecture.md#1a-where-this-lives-and-why-it-is-split).
-The daemon itself stays in `:core:distro`, because binding a socket in JCode's storage and
-authenticating against the distro's keys would be the same for any target. `VirtualDeviceBridge.adb()`
-is the join: with no pack installed it answers with a handler that refuses every service, so
-`adb connect` still succeeds and `adb shell` says why rather than dying on an opened connection.
+`VirtualDeviceAdbDaemon` and `VirtualDeviceAdbService` are both the pack's, because the device is:
+the banner is the device's identity, the services are the device's, and a JCode with no pack
+installed has no device to answer for. It used to live here on the argument that binding a socket
+is not Android-specific; the argument was true and the conclusion was wrong, because what was
+being bound was the device's.
+
+What stays here is what more than one thing uses. `AdbWire`/`AdbAuth` are shared with the bridge
+to a **real** phone (§1–§9), which speaks the same protocol — one implementation of a binary
+format is enough for both — and `AdbStream`/`AdbServiceHandler` are the contract `ext-api` puts on
+the device interface. `AdbWire` is public rather than module-internal for exactly this reason.
+
+The host still decides **whether** and **where**: it owns the setting (declared by the pack, read
+by JCode) and the Linux runtime whose rootfs the socket must sit inside to be reachable from it,
+and it attaches the runtime's adb *client* afterwards, because that client is the runtime's.
+`VirtualDeviceBridge.startAdb(rootfs)` is the join, and it answers null with no pack installed —
+so `adb connect` fails outright rather than opening a connection that refuses every service.
 
 Supported services:
 
@@ -331,7 +342,7 @@ storage into JCode's own data directory. A path outside it is refused by name ra
 
 ## 11. Threading and lifecycle
 
-Every component runs on `Dispatchers.IO` with its own `SupervisorJob`. `AdbDaemon` tracks streams in
+Every component runs on `Dispatchers.IO` with its own `SupervisorJob`. `VirtualDeviceAdbDaemon` tracks streams in
 a `ConcurrentHashMap` with a `Mutex` around writes; `AdbRelayServer` pumps each direction in its own
 coroutine.
 

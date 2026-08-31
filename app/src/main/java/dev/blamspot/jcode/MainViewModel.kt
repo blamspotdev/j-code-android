@@ -37,11 +37,9 @@ import dev.blamspot.jcode.core.distro.DistroService
 import dev.blamspot.jcode.core.distro.DistroServiceLocator
 import dev.blamspot.jcode.ext.NativeExtensionLoader
 import dev.blamspot.jcode.vdevice.VirtualDeviceBridge
-import dev.blamspot.jcode.core.distro.adb.AdbAuthorizedKeys
 import dev.blamspot.jcode.core.distro.adb.AdbBridge
 import dev.blamspot.jcode.core.distro.adb.AdbBridgeLocator
 import dev.blamspot.jcode.core.distro.adb.AdbBridgeState
-import dev.blamspot.jcode.core.distro.adb.AdbDaemon
 import dev.blamspot.jcode.core.distro.adb.AdbHostClient
 import dev.blamspot.jcode.core.buffer.offsetToUtf16Position
 import dev.blamspot.jcode.core.buffer.utf16PositionToOffset
@@ -1334,64 +1332,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { trash.sweep(trashRetentionDays.value) }
     }
 
-    /**
-     * The adb daemon for JCode's virtual device.
-     *
-     * The daemon is the app's — binding a socket in JCode's storage and authenticating against the
-     * distro's keys would be the same for any target — while everything it *serves* is the device's,
-     * and the device ships in the Android Dev Pack. With no pack installed it still binds and still
-     * answers, with "no virtual device"; see [VirtualDeviceBridge.adb].
-     */
-    private val virtualDeviceAdb: AdbDaemon by lazy {
-        // Asked per connection rather than captured here. This object is built the first time the
-        // setting is *read*, and that is at startup with the setting off -- long before any pack has
-        // been loaded. The answer then is the handler that refuses every service, and captured once
-        // it goes on refusing for the life of the process: turning the setting on later produced a
-        // device that `adb devices` listed and that answered "no virtual device: install the Android
-        // Dev Pack" to install, logcat, screencap and the rest, on a device that had the pack.
-        AdbDaemon(
-            banner = { VirtualDeviceBridge.adb().first },
-            authorizedKeys = AdbAuthorizedKeys(File(appContext.filesDir, "distros")),
-            handler = { stream -> VirtualDeviceBridge.adb().second.handle(stream) },
-            log = { message -> android.util.Log.i("VDEVICE", message) },
-        )
-    }
-
-    /** Holds the guest's adb server open; see [startVirtualDeviceAdb]. */
+    /** Holds the guest's adb client open; see [startVirtualDeviceAdb]. */
     private var virtualDeviceAdbServer: Process? = null
 
     /**
-     * Where the daemon's socket goes: inside the selected distro's own rootfs.
+     * The rootfs the device's adb socket goes inside: the selected distro's own.
      *
-     * That is what makes it reachable from the distro without a new proot bind — `<rootfs>/run/x` on
-     * this side is `/run/x` on that one — and unreachable from anywhere else, since the whole rootfs
-     * lives in JCode's private storage where no other uid may open a file.
+     * That is what makes it reachable from the distro without a new proot bind -- `<rootfs>/run/x`
+     * on this side is `/run/x` on that one -- and unreachable from anywhere else, since the whole
+     * rootfs lives in JCode's private storage where no other uid may open a file. Which file it
+     * binds in there is the device's business, not this one's.
      */
-    private fun virtualDeviceSocket(): Pair<File, String>? {
+    private fun virtualDeviceRootfs(): File? {
         val distro = distroService.selectedEnvironment().id.takeIf { it.isNotBlank() } ?: return null
-        val rootfs = File(appContext.filesDir, "distros/$distro/rootfs")
-        if (!rootfs.isDirectory) return null
-        return File(rootfs, "run/${AdbDaemon.SOCKET_NAME}") to "/run/${AdbDaemon.SOCKET_NAME}"
+        return File(appContext.filesDir, "distros/$distro/rootfs").takeIf { it.isDirectory }
     }
 
     private suspend fun startVirtualDeviceAdb() {
-        val (socket, guestPath) = virtualDeviceSocket() ?: run {
+        val rootfs = virtualDeviceRootfs() ?: run {
             OutputLog.append(
                 "Virtual device adb not started: no installed Linux runtime to host its socket\n",
                 OutputKind.Error,
             )
             return
         }
-        runCatching { virtualDeviceAdb.start(socket) }.getOrElse { error ->
-            OutputLog.append("Virtual device adb failed to start: ${error.message}\n", OutputKind.Error)
+        // The device's own daemon, in the pack that provides the device. With no pack installed
+        // there is nothing to start, and nothing for a client to connect to.
+        val spec = runCatching { VirtualDeviceBridge.startAdb(rootfs) }.getOrNull() ?: run {
+            OutputLog.append(
+                "Virtual device adb not started: no pack provides a device\n",
+                OutputKind.Error,
+            )
             return
         }
-        val spec = AdbDaemon.connectSpec(guestPath)
         TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec = spec
         // The daemon only trusts the distro's own adbkey.pub, and adb does not create one until it
         // has run once — so mint it before connecting, or the first connection is refused for want
         // of a key rather than because anything is wrong.
-        //
         attachVirtualDeviceAdb(spec)
     }
 
@@ -1402,7 +1379,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * proot session started it — which proot reaps on exit. Connecting from a one-shot command
      * therefore left nothing behind: the next terminal started a server of its own, `adb devices` was
      * empty, and `adb install` had no device to install to. Keeping this session alive keeps that
-     * server alive, and every terminal shares it.
+     * server alive, and every terminal shares it. The client is the runtime's, which is why this
+     * half stayed here when the daemon went to the pack.
      */
     private fun attachVirtualDeviceAdb(spec: String) {
         runCatching { virtualDeviceAdbServer?.destroy() }
@@ -1419,7 +1397,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun stopVirtualDeviceAdb() {
         runCatching { virtualDeviceAdbServer?.destroy() }
         virtualDeviceAdbServer = null
-        runCatching { virtualDeviceAdb.stop() }
+        runCatching { VirtualDeviceBridge.stopAdb() }
         TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec = ""
     }
 
