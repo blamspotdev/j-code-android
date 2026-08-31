@@ -1049,14 +1049,17 @@ fun JCodeApp(
     }
     // Where the Android Dev Pack says its device belongs. Read here rather than beside the rest of
     // the device's settings because the reveal below is the first thing that needs it.
-    val virtualDeviceInDrawer by viewModel.virtualDeviceInDrawer.collectAsStateWithLifecycle()
+    val deviceSurface by viewModel.virtualDeviceSurface.collectAsStateWithLifecycle()
     // Same pattern for the device sandbox, which lives in the Android Dev Pack: the pack asks for its
     // tab through VirtualDeviceHost.openDeviceTab, and the bridge turns that into a signal here. It
     // has to be a signal rather than a direct call because the pack asks from the `:guest` binder's
     // thread as well as its own, and a tab may only be opened from the composition.
-    LaunchedEffect(virtualDeviceInDrawer) {
+    LaunchedEffect(deviceSurface) {
         snapshotFlow { VirtualDeviceBridge.revealDevice.intValue }
-            .collect { if (it > 0 && !virtualDeviceInDrawer) viewModel.openAppSandboxTab() }
+            // Only a device that has somewhere to be. A pack's code stays resident after its
+            // uninstall (Android cannot unload a dex), so this can still be asked by a pack that is
+            // no longer installed — and a tab opened for it would draw a device nothing provides.
+            .collect { if (it > 0 && deviceSurface == VirtualDeviceSurface.Tab) viewModel.openAppSandboxTab() }
     }
     // The device is one embedded surface with one guest behind it, so it lives in one place at a
     // time and the setting moving takes it there: into the drawer the tab closes behind it, back out
@@ -1065,15 +1068,23 @@ fun JCodeApp(
     //
     // Only on an actual move. This effect also runs on the first composition, and treating that as a
     // move would open a device tab nobody asked for at every launch.
-    var deviceSurfaceSeen by remember { mutableStateOf<Boolean?>(null) }
-    LaunchedEffect(virtualDeviceInDrawer) {
+    var deviceSurfaceSeen by remember { mutableStateOf<VirtualDeviceSurface?>(null) }
+    LaunchedEffect(deviceSurface) {
         val previous = deviceSurfaceSeen
-        deviceSurfaceSeen = virtualDeviceInDrawer
-        if (previous == null || previous == virtualDeviceInDrawer) return@LaunchedEffect
-        if (virtualDeviceInDrawer) {
-            viewModel.closeEditorTab(MainViewModel.APP_SANDBOX_TAB_ID)
-        } else {
-            viewModel.openAppSandboxTab()
+        deviceSurfaceSeen = deviceSurface
+        if (previous == null || previous == deviceSurface) return@LaunchedEffect
+        when (deviceSurface) {
+            // Out of the drawer: the running device needs the tab that is now its home. Not when the
+            // pack has only just been installed — nothing is running yet, and the "move" is only
+            // this workbench learning that a device exists at all.
+            VirtualDeviceSurface.Tab ->
+                if (previous != VirtualDeviceSurface.None) viewModel.openAppSandboxTab()
+            // Into the drawer, or nowhere at all. "Nowhere" is the pack being uninstalled, which the
+            // Boolean this used to be could not tell apart from a move to the tab: uninstalling the
+            // Android pack ended with its device opening in front of the user, drawn by code that
+            // outlives the files. The device is already stopped by then; the tab goes with it.
+            VirtualDeviceSurface.Drawer, VirtualDeviceSurface.None ->
+                viewModel.closeEditorTab(MainViewModel.APP_SANDBOX_TAB_ID)
         }
     }
     // And for the hardware bench, which the device's own control bar asks for.
@@ -1138,6 +1149,14 @@ fun JCodeApp(
                         duration = SnackbarDuration.Long,
                     )
                     if (result == SnackbarResult.ActionPerformed) viewModel.restartApp()
+                }
+                is WorkbenchPrompt.ReloadExtension -> {
+                    val result = snackbarHostState.showSnackbar(
+                        message = prompt.message,
+                        actionLabel = "Reload",
+                        duration = SnackbarDuration.Long,
+                    )
+                    if (result == SnackbarResult.ActionPerformed) viewModel.unloadRemovedExtension(prompt.id)
                 }
                 WorkbenchPrompt.ProcessLimit -> {
                     val result = snackbarHostState.showSnackbar(
@@ -1568,7 +1587,7 @@ fun JCodeApp(
         runInVirtualDevice,
         adbToolInstalled,
         virtualDeviceReconnecting,
-        virtualDeviceInDrawer,
+        deviceSurface,
         virtualDeviceStopped,
     ) {
         VirtualDeviceSetting(
@@ -1576,7 +1595,7 @@ fun JCodeApp(
             adbAvailable = adbToolInstalled,
             onReconnect = viewModel::reconnectVirtualDeviceAdb,
             reconnecting = virtualDeviceReconnecting,
-            inDrawer = virtualDeviceInDrawer,
+            inDrawer = deviceSurface == VirtualDeviceSurface.Drawer,
             stopped = virtualDeviceStopped,
             onResume = viewModel::resumeVirtualDevice,
             onDeviceStarted = viewModel::ensureVirtualDeviceAdb,

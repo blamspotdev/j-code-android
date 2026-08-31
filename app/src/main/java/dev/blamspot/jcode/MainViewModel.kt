@@ -236,6 +236,15 @@ sealed interface WorkbenchPrompt {
     /** A change only applies on a fresh process — offer to restart the app. */
     data class RestartApp(val message: String) : WorkbenchPrompt
 
+    /**
+     * An uninstalled extension whose views are still on screen — offer to clear them.
+     *
+     * Distinct from [RestartApp], which is what a plugin that loaded *code* into this process needs:
+     * a web extension leaves nothing resident, so closing what it has open finishes the job without
+     * taking the workbench down with it.
+     */
+    data class ReloadExtension(val id: String, val message: String) : WorkbenchPrompt
+
     /** Android killed the distro's processes; point the user at the setting that explains it. */
     data object ProcessLimit : WorkbenchPrompt
 
@@ -246,6 +255,16 @@ sealed interface WorkbenchPrompt {
 
 /** An updated extension awaiting a reload; surfaced as a compact banner atop the Extensions panel. */
 data class PendingReload(val id: String, val name: String)
+
+/**
+ * Where the virtual device is drawn, or that there is nowhere to draw it.
+ *
+ * [None] is not a third placement but the absence of one: no installed pack provides a device, so
+ * there is nothing to move and nothing to open. It is distinct from [Tab] because as a Boolean the
+ * pack being *uninstalled* was indistinguishable from its setting being changed to "tab" — and the
+ * workbench answered an uninstall by opening the very device it had just removed.
+ */
+enum class VirtualDeviceSurface { None, Drawer, Tab }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     val workspaceManager: WorkspaceManager = WorkspaceServiceLocator.workspaceManager(application)
@@ -376,6 +395,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Reload every extension awaiting one (the banner's "Reload" button). */
     fun reloadPendingExtensions() {
         _pendingReload.value.map { it.id }.forEach { reloadExtension(it) }
+    }
+
+    /** Whether [id] still has something of its own on screen: a live host, a `.vsix` session, or a
+     *  page tab. Asked after an uninstall, where each of those is a view of an extension that is
+     *  no longer installed and goes on working until something takes it down. */
+    private fun hasLiveSurfaces(id: String): Boolean =
+        id in liveExtensionHosts ||
+            dev.blamspot.jcode.workbench.ScmWebViewHolder.get(id) != null ||
+            dev.blamspot.jcode.workbench.VsixViewHolder.get(id) != null ||
+            _editorGroup.value.tabs.any { it.id.startsWith(EXT_APP_PREFIX + id) || it.id.startsWith(VSIX_PANEL_PREFIX + id) }
+
+    /**
+     * Close what an uninstalled extension still has open (the "Reload" on its removal snackbar).
+     *
+     * Not [reloadExtension]: that tells a live page to re-read its extension off disk, and for one
+     * that has just been removed there is nothing to re-read — the page would reload into a 404 and
+     * sit there. What a removed extension needs is for its surfaces to go.
+     *
+     * The extension's *detail* page deliberately survives, the same way its source attribution does:
+     * it is the page the uninstall was pressed on, and it keeps a working Install.
+     */
+    fun unloadRemovedExtension(id: String) {
+        viewModelScope.launch(Dispatchers.Main) {
+            liveExtensionHosts.remove(id)
+            runCatching { dev.blamspot.jcode.workbench.ScmWebViewHolder.destroy(id) }
+            runCatching { dev.blamspot.jcode.workbench.VsixViewHolder.destroy(id) }
+            val open = _editorGroup.value.tabs
+                .filter { it.id.startsWith(EXT_APP_PREFIX + id) || it.id.startsWith(VSIX_PANEL_PREFIX + id) }
+                .map { it.id }
+                .toSet()
+            if (open.isNotEmpty()) requestCloseEditorTabs(open, activate = null)
+            _pendingReload.update { list -> list.filterNot { it.id == id } }
+        }
     }
 
     /** Actionable prompts surfaced as a snackbar with a button (restart the app). */
@@ -758,12 +810,57 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun uninstallExtension(id: String) {
         clearExtensionActivation(id)
+        // Read before the uninstall takes it out of the list, and only for the message.
+        val name = _installedExtensions.value.firstOrNull { it.id == id }?.name
+        // A plugin that ran code in this process does not leave when its files do: its dex is loaded
+        // and Android cannot unload one, so its pages, its background host and anything it registered
+        // — the virtual device among them — stay live until the process is replaced. Uninstalling the
+        // Android pack with a device open otherwise reads as an uninstall that did not work.
+        val residentCode = NativeExtensionLoader.hasLoadedCode(id)
+        // Also read while it is still listed: what it declares is how the workbench knows it is the
+        // one running the virtual device.
+        val providesDevice = _installedExtensions.value.firstOrNull { it.id == id }?.nativeGuestModule() != null
+        // Read here too: the holders behind it are the main thread's, and the uninstall below runs
+        // on IO. Nothing the uninstall does changes the answer — a view stays live until something
+        // takes it down, which is the whole reason for asking.
+        val liveSurfaces = hasLiveSurfaces(id)
         // The source attribution deliberately survives: it is what still ties the removed extension to
         // the repo that publishes it, so its source keeps offering it under the right id — and the
         // detail page left open by this uninstall keeps a working Install.
         viewModelScope.launch(Dispatchers.IO) {
+            // A pack that provides the virtual device is *running* one, and none of that goes when
+            // its files do: the `:guest` process, the adb daemon serving it and the tabs drawing it
+            // all outlive the uninstall. Stopped here, before the files are removed, because
+            // `shutdown` reaches the device through the pack — afterwards there is nothing left to
+            // ask, and what is running becomes unreachable rather than stopped.
+            if (providesDevice) {
+                runCatching { VirtualDeviceBridge.shutdown(loadIfNeeded = true) }
+                runCatching { stopVirtualDeviceAdb() }
+                closeEditorTab(APP_SANDBOX_TAB_ID)
+                closeEditorTab(VIRTUAL_HARDWARE_TAB_ID)
+            }
             extensionInstaller.uninstall(id)
             refreshInstalledExtensions()
+            // The bridge caches which installed pack provides the device, and `evict` is what makes
+            // that current again. Without it the workbench goes on being told a device is available
+            // by the pack it has just removed, and keeps offering every surface that draws one.
+            if (providesDevice) runCatching { VirtualDeviceBridge.evict() }
+            if (residentCode) {
+                _prompts.tryEmit(
+                    WorkbenchPrompt.RestartApp(
+                        "Restart JCode to finish removing ${name ?: "the extension"}.",
+                    ),
+                )
+            } else if (liveSurfaces) {
+                // Nothing of this one is resident, so its views are all that is left of it — and they
+                // keep working, which reads as an uninstall that did not happen.
+                _prompts.tryEmit(
+                    WorkbenchPrompt.ReloadExtension(
+                        id = id,
+                        message = "${name ?: "The extension"} was removed — reload to close what it still has open.",
+                    ),
+                )
+            }
         }
     }
 
@@ -4590,21 +4687,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Whether the virtual device belongs in the right drawer rather than in an editor tab.
+     * Where the virtual device belongs: the right drawer, an editor tab, or nowhere at all.
      *
      * The pack that provides the device declares the choice as one of its own settings, because it
      * is a fact about *that* extension and belongs on its settings screen — JCode only reads it and
      * routes. A flow rather than a lookup: changing it has to move the device while somebody is
      * looking at it, not at the next launch.
      */
-    val virtualDeviceInDrawer: StateFlow<Boolean> =
+    val virtualDeviceSurface: StateFlow<VirtualDeviceSurface> =
         combine(installedExtensions, extensionSettings) { installed, saved ->
             val pack = installed.firstOrNull { it.nativeGuestModule() != null }
-                ?: return@combine false
+                ?: return@combine VirtualDeviceSurface.None
             val value = saved[pack.id]?.get(DEVICE_SURFACE_KEY)
                 ?: pack.settings.firstOrNull { it.key == DEVICE_SURFACE_KEY }?.default
-            value == DEVICE_SURFACE_DRAWER
-        }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+            if (value == DEVICE_SURFACE_DRAWER) VirtualDeviceSurface.Drawer else VirtualDeviceSurface.Tab
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, VirtualDeviceSurface.None)
 
     /**
      * When true, an Android run config built for the container starts its APK inside JCode's own
@@ -5472,7 +5569,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // one it said "off" on *every* editor change. Measured: opening the drawer's Device panel
         // ended the `:guest` process a moment later, and the panel then sat on "Starting the app…"
         // for a device nothing was starting.
-        if (virtualDeviceInDrawer.value) return
+        if (virtualDeviceSurface.value == VirtualDeviceSurface.Drawer) return
         if (_editorGroup.value.tabs.none { it.pageKind == EditorPageKind.AppSandbox }) VirtualDeviceBridge.shutdown()
     }
 
@@ -6511,7 +6608,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         /** Stable id of the single device sandbox editor tab — the container owns one `:guest` process. */
         const val APP_SANDBOX_TAB_ID = "jcode://app-sandbox"
 
-        /** The Android Dev Pack setting that says where its device opens — see [virtualDeviceInDrawer]. */
+        /** The Android Dev Pack setting that says where its device opens — see [virtualDeviceSurface]. */
         private const val DEVICE_SURFACE_KEY = "deviceSurface"
 
         /** The pack setting behind [runInVirtualDevice]. */

@@ -211,6 +211,24 @@ verifies and swaps as above, then the workbench offers a snackbar with two actio
 | **Reload extension** | `webView.reload()` — enough for a web-UI change |
 | **Restart app** | Needed when hardware-accelerated rendering state must be rebuilt |
 
+## 9a. Uninstall flow
+
+Deleting the files does not remove the extension from the running workbench, so an uninstall ends in
+one of two prompts, chosen by what the extension left behind:
+
+| Condition | Prompt | Action |
+|---|---|---|
+| `NativeExtensionLoader.hasLoadedCode(id)` — its dex loaded into this process | **Restart JCode** | `restartApp()`; Android cannot unload a `DexClassLoader`, so nothing less finishes it |
+| Otherwise, a live host / `.vsix` session / page tab of its own | **Reload** | `unloadRemovedExtension(id)` — destroys its view holders and closes its page tabs |
+
+Its *detail* page and its source attribution deliberately survive both: that page is where the
+uninstall was pressed, and it keeps a working Install.
+
+A pack providing the virtual device is additionally stopped **before** the files go — device, adb,
+sandbox and hardware tabs — and `VirtualDeviceBridge.evict()` runs after, so the bridge stops
+answering with a pack that is no longer installed. See
+[App sandbox §2](../08-virtual-device/01-app-sandbox-architecture.md).
+
 ---
 
 ## 10. Sideloading and developer mode

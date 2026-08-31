@@ -85,6 +85,12 @@ or by bringing the drawer up on the device's own panel. Switching to the drawer 
 tab, and a selection left pointing at the drawer's panel falls back when the setting moves the device
 out of it.
 
+JCode reads that as three states (`MainViewModel.VirtualDeviceSurface`), not two: `Drawer`, `Tab`,
+and `None` for no installed pack providing a device. `None` has to be its own answer because
+uninstalling the pack changes the same flow a setting change does — read as a move to `Tab`, an
+uninstall ended by opening the device it had just removed. Uninstalling a device pack instead stops
+the device and its adb, closes the sandbox and hardware tabs, and evicts the bridge's cached pack.
+
 The device is one `SurfaceView` with one `hostToken` and one guest embedded under it, so it cannot be
 drawn in two places: a second surface would ask the container to embed a guest that is already
 embedded. That is why this is a choice rather than two views of one thing.
