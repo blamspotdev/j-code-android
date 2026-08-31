@@ -173,7 +173,9 @@ buffers. Tabs whose files no longer exist are dropped rather than resurrected as
 ## 8. Status bar and chrome
 
 `WorkbenchStatusBar` shows the caret position, language, encoding, the diagnostics count from
-`DiagnosticsBus.totalCount`, and the live `distro:` environment state.
+`DiagnosticsBus.totalCount`, and the live `distro:` environment state. The `branch:` cell reads
+`.git/HEAD` directly and is **omitted** when the project is not a git repository, rather than shown
+holding a placeholder.
 
 `WorkbenchChrome` / `WorkbenchChromeBars` own the top bar and activity bar;
 `WorkbenchSnackbar` owns transient messages and the post-update prompts ("Reload extension",
