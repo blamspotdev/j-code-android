@@ -4,6 +4,7 @@ import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.JcTooltip
 import dev.blamspot.jcode.design.ManagerFilterChip
 import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.PanelHeader
 import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
 
@@ -11,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -29,6 +31,7 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Smartphone
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -105,32 +108,50 @@ internal fun RunPanel(
     // re-read `adb devices` whenever it opens rather than trusting whatever the last look found.
     LaunchedEffect(Unit) { targets.onRefresh() }
 
-    Column(
-        modifier = modifier
-            .verticalScroll(rememberScrollState())
-            .padding(Space.ms),
-        verticalArrangement = Arrangement.spacedBy(Space.s),
-    ) {
+    Column(modifier = modifier.fillMaxSize()) {
+        // Header outside the scroll and padded on its own, with the rule spanning the drawer — the
+        // shape every panel here uses, so moving between them does not move the title.
         Row(
-            modifier = Modifier.padding(start = Space.xxs, top = Space.xxs),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = PanelHeader.minHeight)
+                .padding(
+                    horizontal = PanelHeader.horizontalPadding,
+                    vertical = PanelHeader.verticalPadding,
+                ),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             if (inUserWorkspace && activeProject != null) {
-                IconButton(onClick = { pickedId = null }, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to projects", modifier = Modifier.size(IconSize.lg))
+                IconButton(onClick = { pickedId = null }, modifier = Modifier.size(PanelHeader.iconButton)) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = "Back to projects",
+                        modifier = Modifier.size(PanelHeader.icon),
+                    )
                 }
             }
             // No leading icon: the drawer's own "Run" tab chip already carries one directly above.
             Text(
                 text = activeProject?.name ?: "Run",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
+                style = PanelHeader.titleStyle,
+                fontWeight = PanelHeader.titleWeight,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        HorizontalDivider(
+            thickness = PanelHeader.rule,
+            color = MaterialTheme.colorScheme.outlineVariant,
+        )
 
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(Space.ms),
+            verticalArrangement = Arrangement.spacedBy(Space.s),
+        ) {
         when {
             projects.isEmpty() -> HintText("Open a project to build & run.")
             inUserWorkspace && activeProject == null -> projects.forEach { project ->
@@ -156,6 +177,7 @@ internal fun RunPanel(
                 onDeleteRun = onDeleteRun,
                 onDeleteBuild = onDeleteBuild,
             )
+        }
         }
     }
 }

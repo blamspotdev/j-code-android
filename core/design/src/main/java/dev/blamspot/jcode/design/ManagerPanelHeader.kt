@@ -8,9 +8,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -55,12 +57,25 @@ fun ManagerPanelHeader(
     noticeCount: Int = 0,
     onNotice: (() -> Unit)? = null,
 ) {
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    // The header carries its own padding and the rule spans the drawer, so a panel pads only its
+    // body. Panels used to wrap this in their own inset, which left the title further in than the
+    // drawer's other panels and the rule stopping short of both edges.
+    Column(modifier = modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier.padding(
+            horizontal = PanelHeader.horizontalPadding,
+            vertical = PanelHeader.verticalPadding,
+        ),
+        verticalArrangement = Arrangement.spacedBy(Space.xs),
+    ) {
+        Row(
+            modifier = Modifier.heightIn(min = PanelHeader.minHeight - PanelHeader.verticalPadding * 2),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                style = PanelHeader.titleStyle,
+                fontWeight = PanelHeader.titleWeight,
                 modifier = Modifier.weight(1f),
             )
             if (onExtras != null) {
@@ -94,8 +109,14 @@ fun ManagerPanelHeader(
                 active = searchActive,
             )
             if (busy) {
-                Box(modifier = Modifier.size(36.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                Box(
+                    modifier = Modifier.size(PanelHeader.iconButton),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(PanelHeader.icon),
+                        strokeWidth = PanelHeader.busyStroke,
+                    )
                 }
             } else {
                 HeaderIconButton(
@@ -117,6 +138,13 @@ fun ManagerPanelHeader(
                 placeholder = searchPlaceholder,
             )
         }
+    }
+        // Closes the header off from the list under it, as Source Control's does — edge to edge,
+        // outside the header's own padding.
+        HorizontalDivider(
+            thickness = PanelHeader.rule,
+            color = MaterialTheme.colorScheme.outlineVariant,
+        )
     }
 }
 
@@ -170,11 +198,11 @@ private fun HeaderIconButton(
     active: Boolean = false,
 ) {
     JcTooltip(contentDescription) {
-        IconButton(onClick = onClick, modifier = Modifier.size(36.dp)) {
+        IconButton(onClick = onClick, modifier = Modifier.size(PanelHeader.iconButton)) {
             Icon(
                 imageVector = icon,
                 contentDescription = contentDescription,
-                modifier = Modifier.size(IconSize.md),
+                modifier = Modifier.size(PanelHeader.icon),
                 tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
