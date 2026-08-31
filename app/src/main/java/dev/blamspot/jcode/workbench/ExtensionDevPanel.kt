@@ -90,7 +90,6 @@ fun ExtensionDevSidebarContent(modifier: Modifier = Modifier) {
                         DevTab(label = p.label, selected = p == pane) { pane = p }
                     }
                 }
-                ActionText("Load") { state.onLoad() }
                 ActionText("Reload") { state.onReload() }
                 if (pane == DevPane.Log) ActionText("Clear") { ExtensionDevLog.clear() }
             }

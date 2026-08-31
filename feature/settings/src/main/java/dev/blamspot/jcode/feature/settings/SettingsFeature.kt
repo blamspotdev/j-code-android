@@ -1431,8 +1431,8 @@ object SettingsFeature {
                 ToggleRow(
                     label = "Enable developer options",
                     supporting = "Adds an \"Ext Dev\" tab to the right panel (inspector, manifest validator, " +
-                        "live log) and lets you sideload an unsigned .jext to debug it. Signed marketplace " +
-                        "extensions are unaffected.",
+                        "live log) for debugging an unsigned .jext or .vsix. Importing one does not need this; " +
+                        "signed marketplace extensions are unaffected.",
                     checked = developerSetting.enabled,
                     onCheckedChange = { developerSetting.onSetEnabled(it) },
                     modified = developerSetting.enabled != SettingsDefaults.DEVELOPER_OPTIONS,
@@ -1440,15 +1440,12 @@ object SettingsFeature {
                 )
                 if (developerSetting.enabled) {
                     Text(
-                        "Compile and pack your extension with the JCode extension make tool, then load the " +
-                            "unsigned .jext here — the Ext Dev tab auto-reloads it on each rebuild. Only signed " +
-                            "packages (signed privately by the JCode maintainers) reach the marketplace.",
+                        "Compile and pack your extension with the JCode extension make tool, then import the " +
+                            "unsigned .jext from the Extensions panel — the Ext Dev tab auto-reloads it on each " +
+                            "rebuild. Only signed packages (signed privately by the JCode maintainers) reach the " +
+                            "marketplace.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    CompactFilledButton(
-                        text = "Load extension (.jext)…",
-                        onClick = developerSetting.onLoadExtension,
                     )
                 }
             }

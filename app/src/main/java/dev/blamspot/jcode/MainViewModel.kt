@@ -449,16 +449,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Sideload an extension from a picked `.jext` [uri] (Developer options). Streams it to a cache
-     * file, installs it (unsigned → marked debuggable; signed → installed normally), refreshes, and
-     * reports the outcome. See [ExtensionInstaller.installLocalJext].
+     * Install an extension package the user picked — `.jext` or `.vsix`, told apart by what is
+     * inside it rather than by its name (a file from SAF often arrives without a usable extension).
+     *
+     * One entry point for both, because from the user's side they are one act: bringing in an
+     * extension the marketplace does not publish. Neither is verified, and both run code in the
+     * Linux runtime, so the picker sits behind a trust warning either way.
+     *
+     * An unsigned package installs like any other and says so afterwards. Nothing has vouched for
+     * its code, which is worth a warning rather than a refusal — Developer options is about
+     * *debugging* an unsigned extension, not about permission to have one.
      */
-    fun sideloadExtension(uri: android.net.Uri) {
+    fun importExtension(uri: android.net.Uri) {
         viewModelScope.launch {
             val installedBefore = _installedExtensions.value.map { it.id }.toSet()
+            // A .vsix that bundles its own runtime runs to hundreds of megabytes, and unpacking one
+            // takes long enough that a silent wait reads as a hang. Say it started before doing it.
+            emitMessage("Importing extension… a large package takes a while.")
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val tmp = File.createTempFile("sideload", ".jext", appContext.cacheDir)
+                    val tmp = File.createTempFile("import", ".pkg", appContext.cacheDir)
                     try {
                         appContext.contentResolver.openInputStream(uri)?.use { input ->
                             tmp.outputStream().use { input.copyTo(it) }
@@ -476,7 +486,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         when (outcome) {
                             is ExtensionInstaller.SideloadOutcome.Jext ->
                                 if (outcome.signed) "Installed '${outcome.extension.name}' (signed — not debuggable)."
-                                else "Loaded '${outcome.extension.name}' (unsigned dev extension)."
+                                // Named as the warning it is: nothing verified this package, and what
+                                // it runs, it runs in the Linux runtime.
+                                else "Imported '${outcome.extension.name}' — unsigned and unverified; " +
+                                    "it runs with your runtime's access."
                             // Lead with what will not work: a VS Code extension can install cleanly and
                             // still be missing the part the user wanted.
                             is ExtensionInstaller.SideloadOutcome.Vsix ->
@@ -489,49 +502,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         markPendingReload(outcome.extension.id, outcome.extension.name)
                     }
                 }
-                .onFailure { emitMessage("Sideload failed: ${it.message ?: "unrecognised package"}") }
-        }
-    }
-
-    /**
-     * Import a VS Code extension package picked by the user. Unlike sideloading a `.jext` this is
-     * not a developer action — importing a `.vsix` is how you bring in an extension JCode does not
-     * publish — so it is reachable from the extension list itself.
-     */
-    fun importVsix(uri: android.net.Uri) {
-        viewModelScope.launch {
-            val installedBefore = _installedExtensions.value.map { it.id }.toSet()
-            // Extensions that bundle their own runtime run to hundreds of megabytes, and unpacking one
-            // takes long enough that a silent wait reads as a hang. Say it started before doing it.
-            emitMessage("Importing extension… large packages take a while.")
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    val tmp = File.createTempFile("import", ".vsix", appContext.cacheDir)
-                    try {
-                        appContext.contentResolver.openInputStream(uri)?.use { input ->
-                            tmp.outputStream().use { input.copyTo(it) }
-                        } ?: error("cannot open the selected file")
-                        extensionInstaller.installLocalVsix(tmp).getOrThrow()
-                    } finally {
-                        tmp.delete()
-                    }
-                }
-            }
-            result
-                .onSuccess { r ->
-                    refreshInstalledExtensions()
-                    // Lead with what will not work: a .vsix can install cleanly and still be missing
-                    // the part the user came for.
-                    emitMessage(
-                        r.compatibility.warnings.firstOrNull()
-                            ?.let { "Imported '${r.extension.name}' — $it" }
-                            ?: "Imported '${r.extension.name}' ${r.manifest.version}.",
-                    )
-                    if (r.extension.id in installedBefore) {
-                        markPendingReload(r.extension.id, r.extension.name)
-                    }
-                }
-                .onFailure { emitMessage("Import failed: ${it.message ?: "not a usable .vsix"}") }
+                .onFailure { emitMessage("Import failed: ${it.message ?: "unrecognised package"}") }
         }
     }
 
@@ -2117,7 +2088,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val developerOptionsKey = booleanPreferencesKey("developer_options")
 
     /** Developer options (off by default): reveals extension-authoring tools — the Extension Dev
-     *  right-drawer tab and unsigned `.jext` sideloading. */
+     *  right-drawer tab, and permits an unsigned extension's native code to load into this process.
+     *  Importing an unsigned package is not gated by it; see [importExtension]. */
     val developerOptions: StateFlow<Boolean> = uiPreferences.data
         .map { prefs -> prefs[developerOptionsKey] ?: SettingsDefaults.DEVELOPER_OPTIONS }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.DEVELOPER_OPTIONS)

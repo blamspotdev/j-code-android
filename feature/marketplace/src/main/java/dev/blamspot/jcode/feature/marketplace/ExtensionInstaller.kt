@@ -134,22 +134,8 @@ class ExtensionInstaller internal constructor(context: Context) {
     }
 
     /**
-     * Install a VS Code extension package. The `extension/` subtree becomes the install directory
-     * and the VS Code manifest is translated into an `extension.yaml`, so everything downstream —
-     * the extension list, detail page, uninstall, developer tools — works without knowing that this
-     * one arrived as a `.vsix`.
-     *
-     * A `.vsix` is unsigned third-party code, so it installs on the same footing as an unsigned
-     * sideload: marked dev, and never mistaken for a verified marketplace package.
-     */
-    suspend fun installLocalVsix(file: File): Result<VsixInstallResult> =
-        withContext(Dispatchers.IO) {
-            runCatching { installFromVsix(file) }
-        }
-
-    /**
      * Install a `.vsix` fetched from an arbitrary absolute [url] — a custom provider's release asset.
-     * Same footing as [installLocalVsix]: unsigned third-party code, marked dev. [openStream] already
+     * Unsigned third-party code, marked dev, like every other `.vsix`. [openStream] already
      * accepts any absolute URL and [installFromVsix] is origin-agnostic, so this just bridges the
      * two; nothing here is tied to the marketplace [BASE_URL].
      */
