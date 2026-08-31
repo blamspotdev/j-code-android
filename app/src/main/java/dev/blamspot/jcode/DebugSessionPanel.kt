@@ -36,6 +36,11 @@ import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
 import dev.blamspot.jcode.workbench.DebugSessionUi
 
+/** Whether a session is up: there is something to step, inspect and stop. Three places asked this
+ *  question and each spelled the answer out again. */
+internal val DebugSessionUi.active: Boolean
+    get() = state != DebugState.DISCONNECTED && state != DebugState.TERMINATED
+
 /**
  * The live debug-session section of the Run/Debug panel: a launch button when idle, and a
  * transport toolbar + call-stack + variables + console once a session is running. Reads its state
@@ -43,7 +48,7 @@ import dev.blamspot.jcode.workbench.DebugSessionUi
  */
 @Composable
 internal fun DebugSessionPanel(ui: DebugSessionUi, modifier: Modifier = Modifier) {
-    val active = ui.state != DebugState.DISCONNECTED && ui.state != DebugState.TERMINATED
+    val active = ui.active
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Space.s)) {
         Row(
             modifier = Modifier.padding(start = Space.xxs),
@@ -51,7 +56,9 @@ internal fun DebugSessionPanel(ui: DebugSessionUi, modifier: Modifier = Modifier
             horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             Icon(jcIcon(JCodeIcon.Debug), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Text("Debug", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            // "Debug session", not "Debug": beside a row of run configs each carrying their own Debug
+            // button, a section called Debug reads as a second, different Debug command.
+            Text("Debug session", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.weight(1f))
             if (active) DebugStateChip(ui.state)
         }
@@ -268,7 +275,7 @@ internal fun DebugConsoleLines(
 @Composable
 internal fun DebugConsoleSidebarContent(modifier: Modifier = Modifier) {
     val ui = dev.blamspot.jcode.workbench.LocalDebugSession.current
-    val active = ui.state != DebugState.DISCONNECTED && ui.state != DebugState.TERMINATED
+    val active = ui.active
     Column(modifier = modifier.fillMaxSize().padding(horizontal = Space.sm, vertical = Space.s)) {
         if (!active && ui.output.isEmpty()) {
             Text(

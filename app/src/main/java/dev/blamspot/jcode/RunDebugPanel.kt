@@ -252,11 +252,16 @@ private fun ProjectRunBuildDetail(
                 )
             }
             AddRow("Add run config", onClick = { showAddRun = true })
-            // Always shown: DebugSessionPanel renders the "Debug <file>" launch row when no session is
-            // running, and that row is the only way to debug the active file. Gating it on an active
-            // session made it unreachable — you needed a session to get the button that starts one.
-            Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.10f), shape = RoundedCornerShape(Radius.lg)) {
-                DebugSessionPanel(ui = debugUi, modifier = Modifier.padding(Space.sm))
+            // While a session runs this is the debugger — steps, stack, variables — and nothing else
+            // shows it. Idle it is a launch row for the active file, which every run config's own
+            // Debug button already falls through to when its command names no source: two buttons,
+            // one target, both saying "open a source file" when there is none. So idle it appears
+            // only where nothing else can start a session. Not gated on the session alone: that was
+            // tried, and it left you needing a session to reach the button that starts one.
+            if (debugUi.active || runs.isEmpty()) {
+                Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.10f), shape = RoundedCornerShape(Radius.lg)) {
+                    DebugSessionPanel(ui = debugUi, modifier = Modifier.padding(Space.sm))
+                }
             }
         }
         Segment.Build -> {
