@@ -181,6 +181,10 @@ buffers. Tabs whose files no longer exist are dropped rather than resurrected as
 (unsaved changes, switching workspace, a running process). Destructive actions are deliberately
 **not** the rightmost button.
 
+The top bar's action button (beside Run) is configurable through `HEADER_ACTION_BUTTON`
+(Settings → Appearance → Header): `Terminal` (default, with the busy shimmer and
+unseen-session badge), `CommandPalette`, or `Hidden`.
+
 Fullscreen, orientation lock, keep-awake and chrome-hiding are command-palette commands — see
 [Panels and tools](03-panels-and-tools.md).
 

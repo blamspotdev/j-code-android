@@ -29,9 +29,12 @@ import dev.blamspot.jcode.MainViewModel
 import dev.blamspot.jcode.design.CompactContextMenu
 import dev.blamspot.jcode.design.ContextAction
 import dev.blamspot.jcode.core.debug.DebugState
+import dev.blamspot.jcode.design.HeaderActionButton
 import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
+import dev.blamspot.jcode.design.LocalCommandPaletteLauncher
 import dev.blamspot.jcode.design.LocalEditorSaveActions
+import dev.blamspot.jcode.design.LocalHeaderActionSetting
 import dev.blamspot.jcode.design.Radius
 import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
@@ -368,25 +371,43 @@ internal fun WorkbenchTopBar(
                     )
                 }
             }
-            // Terminal shimmers while any session is busy; a dot badge flags new background instances;
-            // long-press lists the live instances and opens the right drawer on the chosen one.
-            var terminalMenuOpen by remember { mutableStateOf(false) }
-            Box {
-                WorkbenchIconActionButton(
-                    icon = jcIcon(JCodeIcon.Terminal),
-                    contentDescription = "Terminal",
-                    onClick = onShowTerminal,
-                    shimmer = terminalBusy,
-                    badge = terminalHasUnseen,
-                    onLongClick = { terminalMenuOpen = true },
-                )
-                CompactContextMenu(
-                    expanded = terminalMenuOpen && terminalSessions.isNotEmpty(),
-                    onDismissRequest = { terminalMenuOpen = false },
-                    listActions = terminalSessions.map { session ->
-                        ContextAction(JCodeIcon.Terminal, session.label) { onOpenTerminalSession(session.id) }
-                    },
-                )
+            // What this slot does is a setting (Settings → Appearance → Header): the terminal it has
+            // always been, the Command Palette for anyone who reaches for that instead, or nothing
+            // at all. The terminal stays reachable from the right drawer either way.
+            when (LocalHeaderActionSetting.current.button) {
+                HeaderActionButton.Terminal -> {
+                    // Shimmers while any session is busy; a dot badge flags new background instances;
+                    // long-press lists the live instances and opens the right drawer on the chosen one.
+                    var terminalMenuOpen by remember { mutableStateOf(false) }
+                    Box {
+                        WorkbenchIconActionButton(
+                            icon = jcIcon(JCodeIcon.Terminal),
+                            contentDescription = "Terminal",
+                            onClick = onShowTerminal,
+                            shimmer = terminalBusy,
+                            badge = terminalHasUnseen,
+                            onLongClick = { terminalMenuOpen = true },
+                        )
+                        CompactContextMenu(
+                            expanded = terminalMenuOpen && terminalSessions.isNotEmpty(),
+                            onDismissRequest = { terminalMenuOpen = false },
+                            listActions = terminalSessions.map { session ->
+                                ContextAction(JCodeIcon.Terminal, session.label) { onOpenTerminalSession(session.id) }
+                            },
+                        )
+                    }
+                }
+
+                HeaderActionButton.CommandPalette -> {
+                    val launcher = LocalCommandPaletteLauncher.current
+                    WorkbenchIconActionButton(
+                        icon = jcIcon(JCodeIcon.CommandPalette),
+                        contentDescription = "Command Palette",
+                        onClick = launcher.onOpen,
+                    )
+                }
+
+                HeaderActionButton.Hidden -> Unit
             }
             // A docked panel is already on screen beside the editor with its own Close button, so
             // this toggle would only duplicate it. It returns as soon as the panel is hidden, and

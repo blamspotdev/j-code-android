@@ -43,6 +43,15 @@ class CommandPaletteSetting(
 val LocalCommandPaletteSetting = compositionLocalOf { CommandPaletteSetting() }
 
 /**
+ * Opens the Command Palette from chrome composed outside the shell composable that owns its
+ * visibility — the header's action button, when Settings points it there.
+ */
+@Immutable
+class CommandPaletteLauncher(val onOpen: () -> Unit = {})
+
+val LocalCommandPaletteLauncher = compositionLocalOf { CommandPaletteLauncher() }
+
+/**
  * Workbench chrome state for the palette's "Hide Header and Tabs" mode. A CompositionLocal (not
  * params) because the shell composables sit at the ART verifier register limit.
  */
