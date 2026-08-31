@@ -25,6 +25,10 @@ class VirtualDeviceSetting(
      * parameters deep and already reads this local for the device's other answers.
      */
     val inDrawer: Boolean = false,
+    /** True while the device has been stopped: it is placed in the drawer but not showing there. */
+    val stopped: Boolean = false,
+    /** Un-stop it, for whatever asks for the device next. */
+    val onResume: () -> Unit = {},
 )
 
 val LocalVirtualDevice = compositionLocalOf { VirtualDeviceSetting() }

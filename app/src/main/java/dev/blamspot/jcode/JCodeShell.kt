@@ -1558,11 +1558,13 @@ fun JCodeApp(
     val runInVirtualDevice by viewModel.runInVirtualDevice.collectAsStateWithLifecycle()
     val adbToolInstalled = ADB_CATALOG_ENTRY in sdkCatalogState.installedEntryIds
     val virtualDeviceReconnecting by viewModel.virtualDeviceAdbReconnecting.collectAsStateWithLifecycle()
+    val virtualDeviceStopped by viewModel.virtualDeviceStopped.collectAsStateWithLifecycle()
     val virtualDeviceSetting = remember(
         runInVirtualDevice,
         adbToolInstalled,
         virtualDeviceReconnecting,
         virtualDeviceInDrawer,
+        virtualDeviceStopped,
     ) {
         VirtualDeviceSetting(
             enabled = runInVirtualDevice,
@@ -1570,6 +1572,8 @@ fun JCodeApp(
             onReconnect = viewModel::reconnectVirtualDeviceAdb,
             reconnecting = virtualDeviceReconnecting,
             inDrawer = virtualDeviceInDrawer,
+            stopped = virtualDeviceStopped,
+            onResume = viewModel::resumeVirtualDevice,
         )
     }
     val envBackupStatus by viewModel.envBackupStatus.collectAsStateWithLifecycle()
@@ -2160,7 +2164,12 @@ private fun JCodeShell(
     // otherwise a persisted ExtensionDev selection would survive turning developer mode off.
     val developerModeEnabled = LocalDeveloperSetting.current.enabled
     // Where the Android Dev Pack says its device belongs — see VirtualDeviceSetting.inDrawer.
-    val deviceInDrawer = virtualDevice.inDrawer && VirtualDeviceBridge.isAvailable
+    // Where the device is *placed* -- the pack's setting -- and whether it is showing there. They
+    // differ while the device is stopped: the panel is what builds the device, so a panel left on
+    // screen would rebuild whatever the Task Manager had just stopped.
+    val devicePlacedInDrawer = virtualDevice.inDrawer && VirtualDeviceBridge.isAvailable
+    val deviceStopped = virtualDevice.stopped
+    val deviceInDrawer = devicePlacedInDrawer && !deviceStopped
     val portraitRightSidebarTabs = remember(developerModeEnabled, deviceInDrawer) {
         RightPanelTab.entries
             .filter {
@@ -2327,10 +2336,14 @@ private fun JCodeShell(
     // VirtualDeviceBridge.revealDevice that JCodeApp does not handle: it opens the editor tab when
     // the device is a tab, and this brings the drawer up on the device's own panel when it is not.
     // Exactly one of the two fires for any one request.
-    LaunchedEffect(deviceInDrawer) {
-        if (!deviceInDrawer) return@LaunchedEffect
+    LaunchedEffect(devicePlacedInDrawer) {
+        if (!devicePlacedInDrawer) return@LaunchedEffect
         snapshotFlow { VirtualDeviceBridge.revealDevice.intValue }.collect {
             if (it > 0) {
+                // Keyed on where the device is placed rather than on whether it is showing, so a
+                // stopped device can still be asked for -- by `adb shell am start`, by a run
+                // config, by the Run panel. Being asked for is what un-stops it.
+                virtualDevice.onResume()
                 selectRightPanelTab(RightPanelTab.Device)
                 rightSidebarVisible = true
             }

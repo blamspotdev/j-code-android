@@ -5288,6 +5288,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** SCM hosts the user stopped; the shell gates SCM host re-attach on this so it stays down. */
     val suspendedBackgroundExtensions: StateFlow<Set<String>> = _suspendedBackgroundExtensions.asStateFlow()
 
+    /** True while the device's own pack is stopped: the drawer takes its panel down and the tab with it. */
+    val virtualDeviceStopped: StateFlow<Boolean> =
+        combine(installedExtensions, _suspendedBackgroundExtensions) { installed, suspended ->
+            installed.firstOrNull { it.nativeGuestModule() != null }?.id in suspended
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** Undo that -- for the Start button, and for anything asking for the device again. */
+    fun resumeVirtualDevice() {
+        val pack = installedExtensions.value.firstOrNull { it.nativeGuestModule() != null } ?: return
+        _suspendedBackgroundExtensions.update { it - pack.id }
+    }
+
     /** Snapshot of every extension doing background work, for the Task Manager (polled, not reactive). */
     fun backgroundExtensionSnapshot(): List<BackgroundExtensionInfo> {
         val scmIds = dev.blamspot.jcode.workbench.ScmWebViewHolder.ids().toSet()
@@ -5329,6 +5341,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (installedExtensions.value.firstOrNull { it.id == id }?.nativeGuestModule() != null) {
                 VirtualDeviceBridge.shutdown()
                 stopVirtualDeviceAdb()
+                // Suspended as well as stopped, or it comes straight back: the drawer's device
+                // panel is what *builds* the device, so a panel still on screen rebuilds what was
+                // just stopped. Suspension takes the panel away with it; the row keeps a Start.
+                _suspendedBackgroundExtensions.update { it + id }
             }
             if (id in liveExtensionHosts || dev.blamspot.jcode.workbench.ScmWebViewHolder.get(id) != null) {
                 _suspendedBackgroundExtensions.update { it + id }
