@@ -79,6 +79,7 @@ import dev.blamspot.jcode.design.IconBundleRegistry
 import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.SettingsActionRow
 import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.StrokeWidth
 import dev.blamspot.jcode.design.jcIcon
@@ -98,7 +99,6 @@ import dev.blamspot.jcode.design.LocalRightDrawerSetting
 import dev.blamspot.jcode.design.ExplorerExcludeEffect
 import dev.blamspot.jcode.design.ExplorerHiddenMode
 import dev.blamspot.jcode.design.LocalAndroidDevice
-import dev.blamspot.jcode.design.LocalVirtualDevice
 import dev.blamspot.jcode.design.LocalAppUpdate
 import dev.blamspot.jcode.design.LocalSettingsBackup
 import dev.blamspot.jcode.design.EnvVarSettings
@@ -1038,44 +1038,6 @@ object SettingsFeature {
                 )
             }
 
-            SettingsCard(
-                title = "Virtual device",
-                description = "Start a freshly built Android app inside JCode, without installing it.",
-                keywords = "virtual device container guest sandbox android app run apk launch no install " +
-                    "without adb quick iteration preview identity permissions services providers",
-            ) {
-                val virtualDevice = LocalVirtualDevice.current
-                ToggleRow(
-                    label = "Run in a virtual device",
-                    supporting = "An Android run config built for the virtual device starts its APK inside " +
-                        "JCode — no install and no ADB setup — under a virtual device identity, with its " +
-                        "storage kept under JCode. The app still inherits JCode's permissions, and the " +
-                        "providers, services and receivers it declares run inside the device only, so " +
-                        "nothing outside can reach them. Use this for quick iteration and install the app " +
-                        "for real before trusting what you see.",
-                    checked = virtualDevice.enabled,
-                    onCheckedChange = virtualDevice.onChange,
-                    modified = virtualDevice.enabled != SettingsDefaults.RUN_IN_VIRTUAL_DEVICE,
-                    onReset = { virtualDevice.onChange(SettingsDefaults.RUN_IN_VIRTUAL_DEVICE) },
-                )
-                // The device is reached through the runtime's own adb, so there is nothing to
-                // reconnect without it — and the button would be a dead end rather than a fix.
-                if (virtualDevice.adbAvailable) {
-                    SettingsActionRow(
-                        label = "Reconnect adb",
-                        supporting = "Attach the virtual device to the runtime's adb server again, for " +
-                            "when `adb devices` no longer lists it — after `adb kill-server`, or a " +
-                            "runtime restart. The device is reachable only from JCode's own terminals: " +
-                            "it listens on a socket inside JCode's storage rather than a port, so " +
-                            "nothing else on the phone can see it and there is nothing to connect to " +
-                            "from a computer.",
-                        buttonLabel = "Reconnect",
-                        enabled = virtualDevice.enabled,
-                        busy = virtualDevice.reconnecting,
-                        onClick = virtualDevice.onReconnect,
-                    )
-                }
-            }
 
             } // end Environment
 
@@ -2311,38 +2273,6 @@ private fun OptionRow(
             )
             content()
         }
-    }
-}
-
-/** A settings row that performs an action rather than holding a value, so it has nothing to reset. */
-@Composable
-private fun SettingsActionRow(
-    label: String,
-    supporting: String,
-    buttonLabel: String,
-    onClick: () -> Unit,
-    enabled: Boolean = true,
-    busy: Boolean = false,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = Space.ms),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Space.md),
-    ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
-            Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-            Text(
-                text = supporting,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        CompactFilledButton(
-            text = buttonLabel,
-            onClick = onClick,
-            enabled = enabled,
-            busy = busy,
-        )
     }
 }
 

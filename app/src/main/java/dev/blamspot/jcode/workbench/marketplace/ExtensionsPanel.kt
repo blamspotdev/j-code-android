@@ -67,6 +67,7 @@ import dev.blamspot.jcode.design.ManagerPanelHeader
 import dev.blamspot.jcode.design.ManagerGroupHeader
 import dev.blamspot.jcode.design.ManagerNoticeCard
 import dev.blamspot.jcode.design.ManagerSectionCard
+import dev.blamspot.jcode.design.SettingsActionRow
 import dev.blamspot.jcode.design.SettingsDropdownRow
 import dev.blamspot.jcode.design.SettingsAutocompleteRow
 import dev.blamspot.jcode.design.SettingsTextFieldRow
@@ -954,6 +955,15 @@ private fun ExtensionSettingsControls(extensionId: String) {
                     }
                 }
             }
+
+            // A button, not a value: nothing is read back and nothing is stored.
+            "action" -> SettingsActionRow(
+                label = spec.label,
+                supporting = spec.description,
+                buttonLabel = spec.buttonLabel ?: spec.label,
+                busy = ui.busy(extensionId, spec.key),
+                onClick = { ui.onAction(extensionId, spec.key) },
+            )
 
             "autocomplete" -> {
                 var text by remember(extensionId, spec.key) { mutableStateOf(current) }

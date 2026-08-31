@@ -1610,31 +1610,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private val runInVirtualDeviceKey = booleanPreferencesKey("run_in_virtual_device")
-
-    /** When true, an Android run config built for the container starts its APK inside JCode's own
-     *  process (no install, no adb) once the build finishes — see [VirtualDeviceBridge]. */
-    val runInVirtualDevice: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs -> prefs[runInVirtualDeviceKey] ?: SettingsDefaults.RUN_IN_VIRTUAL_DEVICE }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.RUN_IN_VIRTUAL_DEVICE)
-
-    fun setRunInVirtualDevice(enabled: Boolean) {
-        viewModelScope.launch { uiPreferences.edit { it[runInVirtualDeviceKey] = enabled } }
-    }
-
-
-    // A second init block, deliberately: it collects [runInVirtualDevice], which is declared above
-    // but well below the main init block — referencing it from there reads an uninitialised field
-    // and crashes the ViewModel's construction.
-    init {
-        // JCode's own adbd runs only while the setting is on: it is an authenticated listener on
-        // loopback, and there is no reason to hold a port open for a feature that is switched off.
-        viewModelScope.launch {
-            runInVirtualDevice.collect { enabled ->
-                if (enabled) startVirtualDeviceAdb() else stopVirtualDeviceAdb()
-            }
-        }
-    }
 
     private val envVarsKey = stringPreferencesKey("env_vars_json")
 
@@ -4632,6 +4607,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             value == DEVICE_SURFACE_DRAWER
         }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    /**
+     * When true, an Android run config built for the container starts its APK inside JCode's own
+     * process (no install, no adb) once the build finishes — see [VirtualDeviceBridge]. It is
+     * also what runs the device's adb daemon, since there is nothing to serve without a device.
+     *
+     * The pack that provides the device declares it, the same way it declares which surface the
+     * device opens on: it is a fact about *that* extension, it should leave with the extension,
+     * and JCode only reads it. A switch in JCode's own settings for a device JCode does not
+     * contain was a setting that outlived what it configured.
+     */
+    val runInVirtualDevice: StateFlow<Boolean> =
+        combine(installedExtensions, extensionSettings) { installed, saved ->
+            val pack = installed.firstOrNull { it.nativeGuestModule() != null }
+                ?: return@combine false
+            val value = saved[pack.id]?.get(RUN_IN_DEVICE_KEY)
+                ?: pack.settings.firstOrNull { it.key == RUN_IN_DEVICE_KEY }?.default
+            value == "true" || value == "1"
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, SettingsDefaults.RUN_IN_VIRTUAL_DEVICE)
+
+
+
+    // A second init block, deliberately: it collects [runInVirtualDevice], which is declared above
+    // but well below the main init block — referencing it from there reads an uninitialised field
+    // and crashes the ViewModel's construction.
+    init {
+        // JCode's own adbd runs only while the setting is on: it is an authenticated listener on
+        // loopback, and there is no reason to hold a port open for a feature that is switched off.
+        viewModelScope.launch {
+            runInVirtualDevice.collect { enabled ->
+                if (enabled) startVirtualDeviceAdb() else stopVirtualDeviceAdb()
+            }
+        }
+    }
+
     /** Same resolution, looked up by id — for the settings screen, which has no [InstalledExtension]. */
     fun extensionSettingValue(extensionId: String, key: String): String {
         extensionSettings.value[extensionId]?.get(key)?.let { return it }
@@ -6467,6 +6476,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         /** The Android Dev Pack setting that says where its device opens — see [virtualDeviceInDrawer]. */
         private const val DEVICE_SURFACE_KEY = "deviceSurface"
+
+        /** The pack setting behind [runInVirtualDevice]. */
+        private const val RUN_IN_DEVICE_KEY = "runInVirtualDevice"
 
         /** The one value of [DEVICE_SURFACE_KEY] that means the drawer; anything else is a tab. */
         private const val DEVICE_SURFACE_DRAWER = "drawer"

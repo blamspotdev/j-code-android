@@ -352,6 +352,14 @@ enum class SettingType {
     Int,
     /** Free-form text, offered a list of suggestions the extension computes. */
     Autocomplete,
+    /**
+     * A button, not a value.
+     *
+     * For the things an extension's settings screen needs to *offer* rather than remember --
+     * reattaching a device that has come loose, say. It names a command JCode already has; see
+     * [ExtensionSetting.command].
+     */
+    Action,
     /** Free-form text. The default when a type is missing or unrecognized. */
     Str;
 
@@ -361,6 +369,7 @@ enum class SettingType {
             "enum", "select", "choice" -> Enum
             "int", "integer", "number" -> Int
             "autocomplete", "suggest", "combo" -> Autocomplete
+            "action", "button" -> Action
             else -> Str
         }
     }
@@ -385,6 +394,16 @@ data class ExtensionSetting(
      * which is the point: what a tool's models are called is the extension's business, not JCode's.
      */
     val suggestCommand: String? = null,
+    /**
+     * For [SettingType.Action]: the id of a JCode command the button runs.
+     *
+     * A name, not behaviour. The extension says where the control belongs -- on its own settings
+     * screen, beside the thing it acts on -- and JCode says what it does, so a manifest cannot
+     * ask for anything the app does not already offer somewhere else.
+     */
+    val command: String? = null,
+    /** For [SettingType.Action]: the button's own text. Defaults to [label]. */
+    val buttonLabel: String? = null,
 )
 
 /** An extension that has been downloaded and unpacked under the app's install root. */

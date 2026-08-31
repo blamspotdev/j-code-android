@@ -406,6 +406,20 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 
 
+/**
+ * The command an extension's `type: action` setting names, if any.
+ *
+ * A manifest says which command its button runs and nothing about what that command does, so
+ * this is the whole of the lookup: extension, key, command id.
+ */
+private fun commandOf(
+    installed: List<dev.blamspot.jcode.feature.marketplace.InstalledExtension>,
+    extensionId: String,
+    key: String,
+): String? = installed.firstOrNull { it.id == extensionId }
+    ?.settings?.firstOrNull { it.key == key }
+    ?.command?.takeIf { it.isNotBlank() }
+
 @Composable
 fun JCodeApp(
     viewModel: MainViewModel,
@@ -479,7 +493,12 @@ fun JCodeApp(
         )
     }
     val extensionSettings by viewModel.extensionSettings.collectAsStateWithLifecycle()
-    val extensionSettingsUi = remember(installedExtensions, extensionSettings) {
+    // Which of the commands an extension's action can name are currently working. Keyed by
+    // command rather than by setting, because it is the command that takes time -- the manifest
+    // only points at it, and two extensions naming the same one should both say so.
+    val reconnectingAdb by viewModel.virtualDeviceAdbReconnecting.collectAsStateWithLifecycle()
+    val busyCommands = mapOf("vdevice.reconnectAdb" to reconnectingAdb)
+    val extensionSettingsUi = remember(installedExtensions, extensionSettings, busyCommands) {
         ExtensionSettingsUi(
             groups = installedExtensions.filter { it.settings.isNotEmpty() }.map { ext ->
                 ExtensionSettingsGroup(
@@ -494,11 +513,18 @@ fun JCodeApp(
                             default = s.default ?: "",
                             description = s.description,
                             suggestCommand = s.suggestCommand,
+                            buttonLabel = s.buttonLabel,
                         )
                     },
                 )
             },
             valueOf = viewModel::extensionSettingValue,
+            // The manifest names a command; JCode owns what it does. An id it does not have runs
+            // nothing, which is the right outcome for a pack written against a newer JCode.
+            onAction = { extId, key ->
+                commandOf(installedExtensions, extId, key)?.let { CommandRegistry.run(it) }
+            },
+            busy = { extId, key -> busyCommands[commandOf(installedExtensions, extId, key)] == true },
             onChange = viewModel::setExtensionSetting,
             suggest = viewModel::extensionSettingSuggestions,
         )
@@ -1539,7 +1565,6 @@ fun JCodeApp(
     ) {
         VirtualDeviceSetting(
             enabled = runInVirtualDevice,
-            onChange = viewModel::setRunInVirtualDevice,
             adbAvailable = adbToolInstalled,
             onReconnect = viewModel::reconnectVirtualDeviceAdb,
             reconnecting = virtualDeviceReconnecting,
@@ -3289,6 +3314,16 @@ private fun JCodeShell(
             icon = JCodeIcon.Search,
         )
         CommandRegistry.register(
+            id = "vdevice.reconnectAdb",
+            title = "Reconnect the virtual device to adb",
+            group = "Virtual device",
+            // The pack's settings screen names this command; the palette offers it too. Both
+            // reach the same place, and neither has to know that the daemon is JCode's.
+            action = virtualDevice.onReconnect,
+            whenPredicate = { virtualDevice.adbAvailable && virtualDevice.enabled },
+            icon = JCodeIcon.Refresh,
+        )
+        CommandRegistry.register(
             id = "settings.openPage",
             title = "Open Settings",
             group = "Settings",
@@ -4400,6 +4435,7 @@ private fun WorkspacePanel(
                         onExec = managerActions.onExtensionExec,
                         onApiRequest = managerActions.onExtensionApiRequest,
                         events = managerActions.extensionEvents,
+                        onSnackbar = onSnackbar,
                         modifier = Modifier.fillMaxSize(),
                     )
 

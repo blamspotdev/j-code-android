@@ -402,6 +402,8 @@ class ExtensionInstaller internal constructor(context: Context) {
                 options = s.strList("options"),
                 description = s.str("description"),
                 suggestCommand = s.str("suggestCommand"),
+                command = s.str("command"),
+                buttonLabel = s.str("buttonLabel") ?: s.str("button"),
             )
         }
         return InstalledExtension(

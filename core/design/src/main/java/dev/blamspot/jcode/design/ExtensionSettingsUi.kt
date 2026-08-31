@@ -16,6 +16,8 @@ data class ExtensionSettingSpec(
     val description: String? = null,
     /** The command behind an autocomplete's suggestions; see `ExtensionSetting.suggestCommand`. */
     val suggestCommand: String? = null,
+    /** The button's own text, for a spec of type `action`. Defaults to the label. */
+    val buttonLabel: String? = null,
 )
 
 /** One installed extension's declared settings, grouped for the settings screen. */
@@ -43,6 +45,17 @@ class ExtensionSettingsUi(
      * into. An empty list is the honest answer to "no suggestions", not an error.
      */
     val suggest: suspend (extensionId: String, key: String) -> List<String> = { _, _ -> emptyList() },
+    /**
+     * Runs a spec of type `action` -- a button rather than a value.
+     *
+     * Not everything an extension wants on its settings screen is something to store. A device
+     * that has come unattached needs reattaching, and there is no value that expresses that: it
+     * is a thing to *do*, and the manifest names a command JCode already has rather than
+     * describing behaviour of its own.
+     */
+    val onAction: (extensionId: String, key: String) -> Unit = { _, _ -> },
+    /** True while [onAction] for this key is still running, so its button can say so. */
+    val busy: (extensionId: String, key: String) -> Boolean = { _, _ -> false },
 )
 
 val LocalExtensionSettingsUi = compositionLocalOf { ExtensionSettingsUi() }
