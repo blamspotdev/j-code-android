@@ -77,13 +77,12 @@ internal val LocalRunConfigPresets =
     compositionLocalOf<List<ProjectRunner.ExtensionRunPreset>> { emptyList() }
 
 /** State for the right-drawer "Extension Dev" tab (developer options): the installed **dev** (unsigned
- *  sideloaded) extensions plus the host's extension-API version and reload/sideload actions. Provided
+ *  sideloaded) extensions plus the host's extension-API version and a reload action. Provided
  *  via a CompositionLocal so the register-limited shell needn't thread it. */
 internal data class ExtensionDevState(
     val extensions: List<InstalledExtension> = emptyList(),
     val hostApiVersion: Int = 1,
     val onReload: () -> Unit = {},
-    val onLoad: () -> Unit = {},
 )
 
 internal val LocalExtensionDevState = compositionLocalOf { ExtensionDevState() }
@@ -197,7 +196,7 @@ internal data class WorkbenchManagerActions(
     val onInstallFromSource: (String) -> Unit = {},
     /** Starts the "import a VS Code .vsix" flow from the extension list. Not a developer action —
      *  importing an extension JCode does not publish is ordinary use, so it is always available. */
-    val onImportVsix: (() -> Unit)? = null,
+    val onImportExtension: (() -> Unit)? = null,
     /** Opens an extension's web frontend at its `#config` route by extension id (e.g. Source Control
      *  git identity/credentials), reachable without an open project. */
     val onOpenExtensionConfig: (String) -> Unit,

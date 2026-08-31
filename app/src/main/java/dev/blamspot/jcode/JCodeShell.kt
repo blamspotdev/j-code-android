@@ -718,23 +718,19 @@ fun JCodeApp(
     val pendingReloadUi = remember(pendingReloadList) {
         PendingReloadUi(pendingReloadList.map { it.name }, viewModel::reloadPendingExtensions)
     }
-    // Developer options: reveals the Extension Dev right-drawer tab + unsigned .jext sideloading.
+    // Developer options: reveals the Extension Dev right-drawer tab, and lets an unsigned
+    // extension load native code into this process. Importing one never depended on it.
     val developerOptions by viewModel.developerOptions.collectAsStateWithLifecycle()
-    val jextPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) viewModel.sideloadExtension(uri)
+    // One picker for both package formats: a `.jext` and a `.vsix` are the same act from here, and
+    // which one this is gets decided by what is inside the file, not by the name SAF hands back.
+    val extensionPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) viewModel.importExtension(uri)
     }
-    var showSideloadWarning by remember { mutableStateOf(false) }
-    // Importing a .vsix is ordinary use, not a developer action, so this picker is independent of
-    // the developer-options gate above.
-    val vsixPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) viewModel.importVsix(uri)
-    }
-    var showVsixImportInfo by remember { mutableStateOf(false) }
+    var showImportInfo by remember { mutableStateOf(false) }
     val developerSetting = remember(developerOptions) {
         DeveloperSetting(
             enabled = developerOptions,
             onSetEnabled = viewModel::setDeveloperOptions,
-            onLoadExtension = { showSideloadWarning = true },
         )
     }
     val rightDrawerPersistent by viewModel.rightDrawerPersistent.collectAsStateWithLifecycle()
@@ -752,59 +748,48 @@ fun JCodeApp(
             extensions = installedExtensions.filter { it.dev },
             hostApiVersion = EXTENSION_API_VERSION,
             onReload = viewModel::refreshInstalledExtensions,
-            onLoad = { showSideloadWarning = true },
         )
     }
-    if (showSideloadWarning) {
+    if (showImportInfo) {
+        // Developer options changes what you can do with an unsigned package, never whether you may
+        // have one — so this last paragraph is the only part the dialog works out rather than states.
+        val signingNote = if (LocalDeveloperSetting.current.enabled) {
+            "An unsigned package is marked as a dev extension and can be debugged from the Ext Dev tab; " +
+                "a signed .jext installs normally but cannot be debugged here."
+        } else {
+            "An unsigned package installs and runs, and is flagged as unsigned when it lands. Turn on " +
+                "Settings → Developer options to debug one."
+        }
         AlertDialog(
-            onDismissRequest = { showSideloadWarning = false },
-            title = { Text("Load unsigned extension?") },
-            text = {
-                Text(
-                    "Sideloaded extensions aren't verified by the marketplace. Only load a .jext from a " +
-                        "developer you trust — it can run commands in the Linux runtime.\n\n" +
-                        "An unsigned package loads as a debuggable dev extension; a signed one installs " +
-                        "normally but can't be debugged here.",
-                )
-            },
-            confirmButton = {
-                CompactFilledButton(
-                    text = "Choose .jext",
-                    onClick = { showSideloadWarning = false; jextPicker.launch("*/*") },
-                )
-            },
-            dismissButton = {
-                CompactOutlinedButton(text = "Cancel", onClick = { showSideloadWarning = false })
-            },
-        )
-    }
-    if (showVsixImportInfo) {
-        AlertDialog(
-            onDismissRequest = { showVsixImportInfo = false },
-            title = { Text("Import a VS Code extension") },
+            onDismissRequest = { showImportInfo = false },
+            title = { Text("Import an extension") },
             text = {
                 // Scrollable: this is the longest dialog in the app and it must stay readable in
                 // landscape, where there is far less height to work with.
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                Text(
-                    "JCode runs the part of the VS Code API that extensions built around a webview " +
-                        "use — a side panel, commands, settings, and the current file and theme.\n\n" +
-                        "Extensions that add languages, themes, snippets, debuggers or tasks won't " +
-                        "work: JCode has its own systems for those. You'll be told what an extension " +
-                        "needs that's missing, both when it imports and if it asks for it while running.\n\n" +
-                        "A .vsix isn't verified by the marketplace and its code runs in the Linux " +
-                        "runtime, so import one only from a publisher you trust.",
-                )
+                    Text(
+                        "Choose a JCode extension (.jext) or a VS Code extension (.vsix). Which one it " +
+                            "is comes from what is inside the file, so a package saved under any name " +
+                            "still lands where it belongs.\n\n" +
+                            "Neither is verified by the marketplace and both run code in the Linux " +
+                            "runtime, so import one only from a publisher you trust.\n\n" +
+                            "From a .vsix, JCode runs the part of the VS Code API that extensions built " +
+                            "around a webview use — a side panel, commands, settings, and the current " +
+                            "file and theme. Extensions that add languages, themes, snippets, debuggers " +
+                            "or tasks will not work: JCode has its own systems for those, and you will " +
+                            "be told what is missing, both on import and if it is asked for while " +
+                            "running.\n\n" + signingNote,
+                    )
                 }
             },
             confirmButton = {
                 CompactFilledButton(
-                    text = "Choose .vsix",
-                    onClick = { showVsixImportInfo = false; vsixPicker.launch("*/*") },
+                    text = "Choose file",
+                    onClick = { showImportInfo = false; extensionPicker.launch("*/*") },
                 )
             },
             dismissButton = {
-                CompactOutlinedButton(text = "Cancel", onClick = { showVsixImportInfo = false })
+                CompactOutlinedButton(text = "Cancel", onClick = { showImportInfo = false })
             },
         )
     }
@@ -1832,7 +1817,7 @@ fun JCodeApp(
             onRemoveExtensionSource = viewModel::removeExtensionSource,
             onRefreshExtensionSources = viewModel::refreshExtensionSources,
             onInstallFromSource = viewModel::installFromSource,
-            onImportVsix = { showVsixImportInfo = true },
+            onImportExtension = { showImportInfo = true },
             // The Source Control extension renders its git-identity + GitHub-auth screen at its
             // `#github` route (a global-config screen that works with no project open).
             onOpenExtensionConfig = { id -> viewModel.openExtensionViewPage(id, "github", "Git Configuration") },
@@ -4441,7 +4426,7 @@ private fun WorkspacePanel(
                             onRefreshMarketplace = managerActions.onRefreshMarketplace,
                             onOpenDetail = managerActions.onOpenExtensionDetail,
                             onOpenPermissions = managerActions.onOpenExtensionPermissions,
-                            onImportVsix = managerActions.onImportVsix,
+                            onImportExtension = managerActions.onImportExtension,
                             onOpenSources = managerActions.onOpenExtensionSources,
                             pendingReloadNames = pendingReload.names,
                             onReloadPending = pendingReload.onReload,

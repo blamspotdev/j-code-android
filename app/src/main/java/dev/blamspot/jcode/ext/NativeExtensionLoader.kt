@@ -182,7 +182,8 @@ internal object NativeExtensionLoader {
         // [allowUnsigned] is the one way past it, and it is not a convenience: the virtual device now
         // ships in an extension, so without it the device cannot be worked on at all — every test
         // round would need the pack signed first. It is off by default and turned on only by
-        // Settings → Developer options, the same switch that already permits unsigned sideloading.
+        // Settings → Developer options, which is what that switch is for: not permission to import
+        // an unsigned package, which anyone may do, but permission to run and debug its code here.
         if (extension.dev && !allowUnsigned) {
             throw LoadFailure(
                 "${extension.name} is an unsigned development build. Extensions that ship native " +

@@ -231,11 +231,20 @@ answering with a pack that is no longer installed. See
 
 ---
 
-## 10. Sideloading and developer mode
+## 10. Importing a package, and developer mode
 
-An **unsigned** `.jext` installs only through Developer options and is marked `dev = true`. Only
-`dev` extensions appear in the Ext Dev tools, where their `console` output is captured to the
-**Ext Dev log** — not to logcat.
+There is **one** import action, the file button in the Extensions panel header
+(`ExtensionsPanel.onImportExtension`). It accepts both package formats and tells them apart by what
+is inside the file rather than by its name — a file picked through SAF often arrives without a usable
+extension — so `MainViewModel.importExtension` hands everything to
+`ExtensionInstaller.installLocalPackage`, whose `SideloadOutcome` says which it turned out to be.
+
+An **unsigned** package installs like any other and is marked `dev = true`; the import reports that
+it was unsigned rather than refusing it. Developer options does not gate importing. What it gates is
+what an unsigned extension may then *do*: only `dev` extensions appear in the Ext Dev tools, where
+their `console` output is captured to the **Ext Dev log** rather than logcat, and
+`NativeExtensionLoader` refuses to load a `dev` extension's **native code** into JCode's process
+unless it is on.
 
 Signed marketplace packages are always `dev = false` and are not debuggable.
 
