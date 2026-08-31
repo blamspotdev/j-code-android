@@ -34,19 +34,6 @@ object MigrationBundle {
     /** Bundle format; refused rather than half-read if a later version changes the layout. */
     const val FORMAT = 1
 
-    /**
-     * The packages JCode shipped under before this one.
-     *
-     * Kept here because they answer the other half of the same question. A bundle means an old
-     * install has already handed its environment over; one of these being present with no bundle
-     * beside it means one is still sitting there that has not — an install older than 1.6.1, which
-     * is where the export was added.
-     *
-     * Must stay in step with the `<queries>` block in AndroidManifest.xml: Android 11 filters
-     * package lookups, so anything not named there reads as uninstalled whether it is or not.
-     */
-    val PREVIOUS_PACKAGES = listOf("dev.jcode", "dev.jcode.debug", "dev.jcode.beta")
-
     /** A bundle found on disk, and what it turned out to hold. */
     data class Found(
         val dir: File,

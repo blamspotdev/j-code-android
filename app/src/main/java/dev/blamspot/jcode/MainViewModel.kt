@@ -930,18 +930,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }.onFailure { _messages.tryEmit("Could not open the uninstaller for $packageName.") }
     }
 
-    /** Bring [packageName] to the front, so the user can do something only that app can do. */
-    fun openInstalledApp(packageName: String) {
-        val intent = appContext.packageManager.getLaunchIntentForPackage(packageName)
-        if (intent == null) {
-            _messages.tryEmit("Could not open $packageName.")
-            return
-        }
-        runCatching {
-            appContext.startActivity(intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
-        }.onFailure { _messages.tryEmit("Could not open $packageName.") }
-    }
-
     /** A migration bundle waiting to be imported, refreshed on demand. See [MigrationBundle]. */
     private val _migrationBundle = MutableStateFlow<MigrationBundle.Found?>(null)
     val migrationBundle: StateFlow<MigrationBundle.Found?> = _migrationBundle.asStateFlow()
@@ -950,27 +938,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         appContext.packageManager.getPackageInfo(packageName, 0) != null
     }.getOrDefault(false)
 
-    /**
-     * An earlier-packaged JCode still on the device that left nothing behind, or null.
-     *
-     * Only 1.6.1 and later write a bundle, so anything older updates into this package as a second
-     * app and keeps its environment to itself. Nothing is lost — the old install still has all of
-     * it — but nothing comes across either, and the only place it can be moved from is inside the
-     * app that still holds it. Worth saying so, because the alternative is a user who thinks the
-     * update ate their 2.5 GB.
-     */
-    private val _legacyInstall = MutableStateFlow<String?>(null)
-    val legacyInstall: StateFlow<String?> = _legacyInstall.asStateFlow()
-
     fun refreshMigrationBundle() {
         viewModelScope.launch(Dispatchers.IO) {
-            val found = runCatching { MigrationBundle.find(appContext) }.getOrNull()
-            _migrationBundle.value = found
-            // A bundle is the answer to this question, so stop asking once there is one.
-            _legacyInstall.value = if (found != null) null else {
-                MigrationBundle.PREVIOUS_PACKAGES
-                    .firstOrNull { it != appContext.packageName && isPackageInstalled(it) }
-            }
+            _migrationBundle.value = runCatching { MigrationBundle.find(appContext) }.getOrNull()
         }
     }
 

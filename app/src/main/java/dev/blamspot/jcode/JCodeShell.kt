@@ -1518,9 +1518,6 @@ fun JCodeApp(
     // A bundle another install left in shared storage, looked for once per launch — the only thing
     // that carries data across a package rename (see MigrationBundle).
     val migrationBundle by viewModel.migrationBundle.collectAsStateWithLifecycle()
-    // …and, when there is no bundle, an install too old to have written one. Same refresh: they are
-    // the two answers to "did anything come across?", and only one of them can be true.
-    val legacyInstall by viewModel.legacyInstall.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { viewModel.refreshMigrationBundle() }
     val migrationSummary = migrationBundle?.let {
         "Found a ${it.bytes / (1024 * 1024)} MB bundle from ${it.sourcePackage} " +
@@ -1966,8 +1963,6 @@ fun JCodeApp(
             onRestoreEnvironment = { envRestoreOnboardingLauncher.launch("*/*") },
             onImportMigration = { viewModel.importMigrationBundle() },
             migrationSummary = migrationSummary,
-            legacyInstall = legacyInstall,
-            onOpenLegacyInstall = { viewModel.openInstalledApp(it) },
         )
     }
 
