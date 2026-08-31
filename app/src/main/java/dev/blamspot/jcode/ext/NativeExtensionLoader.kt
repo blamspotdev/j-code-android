@@ -57,6 +57,20 @@ internal object NativeExtensionLoader {
     private val cache = ConcurrentHashMap<String, Loaded>()
 
     /**
+     * Every extension whose code has been loaded into this process, whether or not it is still cached.
+     *
+     * Separate from [cache] because that answers a different question: an entry can be trimmed under
+     * memory pressure, but the classes it defined are still live — Android has no way to unload a
+     * `DexClassLoader`, and a page or a `object` singleton keeps referring to them. So an uninstall
+     * of one of these takes effect on the next process and not before, which is worth telling the
+     * user rather than leaving them with a plugin that is gone from the list and still on screen.
+     */
+    private val loadedIds = ConcurrentHashMap.newKeySet<String>()
+
+    /** Whether [id]'s code is resident in this process, and so outlives its uninstall. */
+    fun hasLoadedCode(id: String): Boolean = id in loadedIds
+
+    /**
      * Lets the OS reclaim loaded plugins under memory pressure.
      *
      * By far the heaviest thing this app caches: every entry is a whole APK resident in-process —
@@ -156,6 +170,7 @@ internal object NativeExtensionLoader {
         module: NativeModule,
     ): Pair<JCodeNativeExtension, Context> {
         registerForTrimming(host)
+        loadedIds += extension.id
         cache[key(extension, module)]?.let { return it.instance to it.context }
 
         val entry = module.payload
