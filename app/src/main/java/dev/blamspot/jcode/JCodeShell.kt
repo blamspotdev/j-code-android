@@ -199,8 +199,12 @@ import dev.blamspot.jcode.core.term.TerminalView
 import dev.blamspot.jcode.design.ChromeControls
 import dev.blamspot.jcode.design.CommandPaletteSetting
 import dev.blamspot.jcode.design.CommandRegistry
+import dev.blamspot.jcode.design.CommandPaletteLauncher
+import dev.blamspot.jcode.design.HeaderActionSetting
 import dev.blamspot.jcode.design.LocalChromeControls
+import dev.blamspot.jcode.design.LocalCommandPaletteLauncher
 import dev.blamspot.jcode.design.LocalCommandPaletteSetting
+import dev.blamspot.jcode.design.LocalHeaderActionSetting
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import dev.blamspot.jcode.design.DeveloperSetting
@@ -903,6 +907,10 @@ fun JCodeApp(
     val bottomStatusBar by viewModel.bottomStatusBar.collectAsStateWithLifecycle()
     val bottomBarSetting = remember(bottomStatusBar) {
         BottomBarSetting(bottomStatusBar, viewModel::setBottomStatusBar)
+    }
+    val headerActionButton by viewModel.headerActionButton.collectAsStateWithLifecycle()
+    val headerActionSetting = remember(headerActionButton) {
+        HeaderActionSetting(headerActionButton, viewModel::setHeaderActionButton)
     }
     val volumeUpAction by viewModel.volumeUpAction.collectAsStateWithLifecycle()
     val volumeDownAction by viewModel.volumeDownAction.collectAsStateWithLifecycle()
@@ -1611,6 +1619,7 @@ fun JCodeApp(
         LocalExtraKeysState provides extraKeysState,
         LocalVolumeKeysSetting provides volumeKeysSetting,
         LocalBottomBarSetting provides bottomBarSetting,
+        LocalHeaderActionSetting provides headerActionSetting,
         LocalFontSettings provides fontSettings,
         LocalEditorTypeface provides editorTypeface,
         LocalTerminalTypeface provides terminalTypeface,
@@ -3551,6 +3560,12 @@ private fun JCodeShell(
                                 chromeHidden = chromeHidden,
                                 onSetChromeHidden = { chromeHidden = it },
                             )
+                        },
+                        // The header's action button can be pointed at the palette (Settings →
+                        // Appearance → Header); the palette's visibility is owned here, not up in
+                        // the provider block that carries the setting itself.
+                        LocalCommandPaletteLauncher provides remember {
+                            CommandPaletteLauncher { commandPaletteVisible = true }
                         },
                     ) {
                     // Run configs behind the top-bar Run button: a tap runs the first (or opens a picker

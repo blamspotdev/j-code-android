@@ -63,6 +63,7 @@ import androidx.compose.ui.graphics.toArgb
 import dev.blamspot.jcode.design.AndroidRunTarget
 import dev.blamspot.jcode.design.BottomBarVisibility
 import dev.blamspot.jcode.design.ExtraKeysVisibility
+import dev.blamspot.jcode.design.HeaderActionButton
 import dev.blamspot.jcode.core.diag.DiagLevel
 import dev.blamspot.jcode.core.diag.DiagnosticLog
 import dev.blamspot.jcode.design.SettingsDefaults
@@ -1846,6 +1847,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             uiPreferences.edit { prefs -> prefs[bottomStatusBarKey] = mode.name }
         }
+    }
+
+    private val headerActionButtonKey = stringPreferencesKey("header_action_button")
+
+    /** What the workbench header's quick-action button does (terminal, palette, or nothing). */
+    val headerActionButton: StateFlow<HeaderActionButton> = uiPreferences.data
+        .map { prefs ->
+            prefs[headerActionButtonKey]?.let { runCatching { HeaderActionButton.valueOf(it) }.getOrNull() }
+                ?: SettingsDefaults.HEADER_ACTION_BUTTON
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.HEADER_ACTION_BUTTON)
+
+    fun setHeaderActionButton(button: HeaderActionButton) {
+        viewModelScope.launch { uiPreferences.edit { it[headerActionButtonKey] = button.name } }
     }
 
     private val volumeUpActionKey = stringPreferencesKey("volume_up_action")

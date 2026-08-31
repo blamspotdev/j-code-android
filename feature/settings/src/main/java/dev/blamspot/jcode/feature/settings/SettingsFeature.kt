@@ -113,7 +113,9 @@ import dev.blamspot.jcode.design.LocalTabColoringSetting
 import dev.blamspot.jcode.design.LocalTabMaxSize
 import dev.blamspot.jcode.design.TabColoring
 import dev.blamspot.jcode.design.TabMaxSize
+import dev.blamspot.jcode.design.HeaderActionButton
 import dev.blamspot.jcode.design.LocalCommandPaletteSetting
+import dev.blamspot.jcode.design.LocalHeaderActionSetting
 import dev.blamspot.jcode.design.LocalDeveloperSetting
 import dev.blamspot.jcode.design.LocalMarkdownPreviewSetting
 import dev.blamspot.jcode.design.LocalVolumeKeysSetting
@@ -491,6 +493,26 @@ object SettingsFeature {
                     onCheckedChange = rightDrawerSetting.onSetEnabled,
                     modified = rightDrawerSetting.enabled != SettingsDefaults.RIGHT_DRAWER_PERSISTENT,
                     onReset = { rightDrawerSetting.onSetEnabled(SettingsDefaults.RIGHT_DRAWER_PERSISTENT) },
+                )
+            }
+
+            SettingsCard(
+                title = "Header",
+                description = "The bar across the top of the workbench, with the project name and " +
+                    "quick actions.",
+                keywords = "header top bar app bar terminal command palette button action hide disable remove",
+            ) {
+                val headerActionSetting = LocalHeaderActionSetting.current
+                SettingsDropdownRow(
+                    label = "Action button",
+                    supporting = "The button beside Run. Hiding it leaves the terminal reachable " +
+                        "from the right drawer.",
+                    options = HeaderActionButton.entries.map { it.name },
+                    selected = headerActionSetting.button.name,
+                    onSelect = { headerActionSetting.onChange(HeaderActionButton.valueOf(it)) },
+                    optionLabel = { headerActionButtonLabel(HeaderActionButton.valueOf(it)) },
+                    modified = headerActionSetting.button != SettingsDefaults.HEADER_ACTION_BUTTON,
+                    onReset = { headerActionSetting.onChange(SettingsDefaults.HEADER_ACTION_BUTTON) },
                 )
             }
 
@@ -1613,6 +1635,12 @@ private fun bottomBarVisibilityLabel(mode: BottomBarVisibility): String = when (
     BottomBarVisibility.Hidden -> "Hidden"
     BottomBarVisibility.HideOnKeyboard -> "Hide on Soft Keyboard"
     BottomBarVisibility.AlwaysShow -> "Always Show"
+}
+
+private fun headerActionButtonLabel(button: HeaderActionButton): String = when (button) {
+    HeaderActionButton.Terminal -> "Terminal"
+    HeaderActionButton.CommandPalette -> "Command Palette"
+    HeaderActionButton.Hidden -> "Hidden"
 }
 
 private fun tabColoringLabel(mode: TabColoring): String = when (mode) {

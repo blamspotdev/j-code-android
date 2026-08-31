@@ -20,6 +20,7 @@ object SettingsDefaults {
     val EXTRA_KEYS_LANDSCAPE = ExtraKeysVisibility.Hidden
     const val EXTRA_KEYS_FUNCTION_KEYS = false
     val BOTTOM_STATUS_BAR = BottomBarVisibility.HideOnKeyboard
+    val HEADER_ACTION_BUTTON = HeaderActionButton.Terminal
     val HIDDEN_ROOT_MODE = ExplorerHiddenMode.HideSpecifiedAndInjected
     val EXCLUDE_EFFECT = ExplorerExcludeEffect.GreyOut
     const val HIDDEN_ROOT_PATTERNS = ".jcode"
