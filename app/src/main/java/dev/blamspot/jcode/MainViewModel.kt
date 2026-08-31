@@ -1343,11 +1343,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * answers, with "no virtual device"; see [VirtualDeviceBridge.adb].
      */
     private val virtualDeviceAdb: AdbDaemon by lazy {
-        val (banner, handler) = VirtualDeviceBridge.adb()
+        // Asked per connection rather than captured here. This object is built the first time the
+        // setting is *read*, and that is at startup with the setting off -- long before any pack has
+        // been loaded. The answer then is the handler that refuses every service, and captured once
+        // it goes on refusing for the life of the process: turning the setting on later produced a
+        // device that `adb devices` listed and that answered "no virtual device: install the Android
+        // Dev Pack" to install, logcat, screencap and the rest, on a device that had the pack.
         AdbDaemon(
-            banner = banner,
+            banner = { VirtualDeviceBridge.adb().first },
             authorizedKeys = AdbAuthorizedKeys(File(appContext.filesDir, "distros")),
-            handler = handler,
+            handler = { stream -> VirtualDeviceBridge.adb().second.handle(stream) },
             log = { message -> android.util.Log.i("VDEVICE", message) },
         )
     }

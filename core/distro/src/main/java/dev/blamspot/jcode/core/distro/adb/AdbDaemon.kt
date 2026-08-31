@@ -106,7 +106,13 @@ fun adbCommandArgs(command: String): List<String> {
  * `push` + `pm install` and needs the whole `sync:` service.
  */
 class AdbDaemon(
-    private val banner: String,
+    /**
+     * Read per connection, not once.
+     *
+     * What the banner says depends on what answers, and that can change after this object is
+     * built -- the extension providing the device may not have been loaded yet. See [handler].
+     */
+    private val banner: () -> String,
     private val authorizedKeys: () -> List<String>,
     private val handler: AdbServiceHandler,
     private val log: (String) -> Unit = {},
@@ -275,7 +281,7 @@ class AdbDaemon(
                         AdbWire.CNXN,
                         AdbWire.VERSION,
                         AdbWire.MAX_PAYLOAD,
-                        (banner + AdbWire.NUL).toByteArray(Charsets.UTF_8),
+                        (banner() + AdbWire.NUL).toByteArray(Charsets.UTF_8),
                     ),
                 )
                 log("client authenticated")
