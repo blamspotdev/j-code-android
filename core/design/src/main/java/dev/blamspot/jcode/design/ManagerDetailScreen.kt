@@ -205,7 +205,11 @@ fun ManagerDetailScreen(
         }
 
         if (description.isNotBlank()) {
-            Text(text = description, style = MaterialTheme.typography.bodyMedium)
+            // Reflowed, not drawn as written: these are Markdown paragraphs hard-wrapped at about
+            // 80 columns by whoever authored them, and a phone wraps at far fewer. See
+            // [reflowDescription] for which breaks survive.
+            val prose = remember(description) { reflowDescription(description) }
+            Text(text = prose, style = MaterialTheme.typography.bodyMedium)
         }
 
         extra()
