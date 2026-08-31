@@ -107,7 +107,7 @@ internal fun WorkbenchStatusBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Space.ms),
         ) {
-            StatusCell("branch: $branch")
+            if (branch != null) StatusCell("branch: $branch")
             StatusCell(
                 "${issueCount.total}",
                 color = if (issueCount.hasErrors) MaterialTheme.colorScheme.error else Color.Unspecified,
@@ -147,14 +147,15 @@ private fun LanguageServerCell(servers: List<dev.blamspot.jcode.lsp.LspServerSta
 
 /**
  * Resolve the current git branch (or short detached-HEAD sha) for a local project by reading
- * `.git/HEAD` off the main thread. Returns "--" when there is no project, the project is a SAF
- * (content-uri) tree, or the folder is not a git repo.
+ * `.git/HEAD` off the main thread. Null when there is no project, the project is a SAF (content-uri)
+ * tree, or the folder is not a git repo — the status bar leaves the cell out entirely then, rather
+ * than reserving room to say "branch: --" about a folder that was never going to have one.
  */
 @Composable
-private fun rememberGitBranch(project: Project?): String {
+private fun rememberGitBranch(project: Project?): String? {
     val location = if (project?.kind == ProjectKind.Local) project.location else null
-    val branch by produceState(initialValue = "--", location) {
-        value = withContext(Dispatchers.IO) { readGitBranch(location) } ?: "--"
+    val branch by produceState<String?>(initialValue = null, location) {
+        value = withContext(Dispatchers.IO) { readGitBranch(location) }
     }
     return branch
 }
