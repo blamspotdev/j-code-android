@@ -153,7 +153,7 @@ internal class NativeHostBridge(
         decorations.forEach { d ->
             entries.put(JSONObject().put("path", d.path).put("status", d.status))
         }
-        send("workbench.setExplorerDecorations", JSONObject().put("path", root).put("entries", entries))
+        send("workbench.setExplorerDecorations", JSONObject().put("path", root).put("decorations", entries))
     }
 
     override fun setHiddenInjected(paths: List<String>) =
