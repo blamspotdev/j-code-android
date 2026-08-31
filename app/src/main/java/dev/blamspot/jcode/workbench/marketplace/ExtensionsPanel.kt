@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.Radius
+import dev.blamspot.jcode.design.PanelHeader
 import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.StrokeWidth
 import dev.blamspot.jcode.design.jcIcon
@@ -117,13 +118,9 @@ internal fun ExtensionsPanel(
         buildExtensionRows(available, installed, query, appVersion)
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(Space.ms),
-        verticalArrangement = Arrangement.spacedBy(Space.sm),
-    ) {
+    Column(modifier = modifier.fillMaxSize()) {
+        // Outside the scroll, like Source Control's: the panel's name and its refresh should not
+        // scroll away with the list they describe.
         ManagerPanelHeader(
             title = "Extensions",
             installedCount = installed.size,
@@ -142,6 +139,13 @@ internal fun ExtensionsPanel(
             extrasIcon = JCodeIcon.Sources,
             extrasContentDescription = "Extension sources",
         )
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(Space.ms),
+            verticalArrangement = Arrangement.spacedBy(Space.sm),
+        ) {
 
         if (pendingReloadNames.isNotEmpty()) {
             Surface(
@@ -224,7 +228,7 @@ internal fun ExtensionsPanel(
                 }
             }
         }
-
+        }
     }
 }
 
@@ -260,7 +264,7 @@ internal fun DbManagerPanel(
             modifier = modifier.fillMaxSize().padding(Space.md),
             verticalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
-            Text("DB Managers", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("DB Managers", style = PanelHeader.titleStyle, fontWeight = PanelHeader.titleWeight)
             Text(
                 "Install a database-manager extension (e.g. SQL Client) from Extensions to browse databases here.",
                 style = MaterialTheme.typography.bodySmall,
@@ -282,11 +286,16 @@ internal fun DbManagerPanel(
         Column(modifier = modifier.fillMaxSize()) {
             Text(
                 "DB Managers",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(start = Space.md, top = Space.md, end = Space.md, bottom = Space.s),
+                style = PanelHeader.titleStyle,
+                fontWeight = PanelHeader.titleWeight,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Space.ms, vertical = Space.s),
             )
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            HorizontalDivider(
+                thickness = PanelHeader.rule,
+                color = MaterialTheme.colorScheme.outlineVariant,
+            )
             dbExtensions.forEachIndexed { index, ext ->
                 if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                 Row(
@@ -510,7 +519,7 @@ internal fun List<InstalledExtension>.hasVmManagerClient(): Boolean =
     any { it.type == ExtensionType.Vm }
 
 /**
- * Left-drawer "VM" panel: embeds the installed VM-manager extension's web frontend directly (VM list +
+ * Left-drawer "VM" panel: embeds the installed VM-manager extension's frontend directly (VM list +
  * create + a QEMU-availability check), wired to the Linux runtime via the Extension API. Tapping a VM
  * opens its console as an editor tab (workbench.openView).
  */
@@ -520,15 +529,20 @@ internal fun VmPanel(
     onExec: suspend (command: String, timeoutMs: Long) -> String,
     onApiRequest: suspend (extensionId: String, envelopeJson: String) -> String,
     events: SharedFlow<Pair<String, String>>?,
+    /** Where a word from a native client goes — the app's own snackbar, action and all. */
+    onSnackbar: (String, String?, (() -> Unit)?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val ext = installed.firstOrNull { it.type == ExtensionType.Vm && it.hasWebUi }
+    // Native or web, the same rule the DB-manager panel follows: a client that draws itself in
+    // Compose has no web UI to look for, and filtering on one would hide it entirely — the drawer
+    // would report no VM manager installed while its extension sat there, installed.
+    val ext = installed.firstOrNull { it.type == ExtensionType.Vm && (it.hasWebUi || it.hasNativeUi) }
     if (ext == null) {
         Column(
             modifier = modifier.fillMaxSize().padding(Space.md),
             verticalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
-            Text("VM Manager", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("VM Manager", style = PanelHeader.titleStyle, fontWeight = PanelHeader.titleWeight)
             Text(
                 "Install a VM Manager extension from Extensions to run virtual machines here.",
                 style = MaterialTheme.typography.bodySmall,
@@ -538,13 +552,32 @@ internal fun VmPanel(
         return
     }
     key(ext.id) {
-        ExtensionWebViewPage(
-            extension = ext,
-            onExec = onExec,
-            onApiRequest = { envelope -> onApiRequest(ext.id, envelope) },
-            events = events,
-            modifier = modifier.fillMaxSize(),
-        )
+        if (ext.hasNativeUi) {
+            dev.blamspot.jcode.ext.NativeExtensionPage(
+                extension = ext,
+                file = null,
+                // The plugin asks the workbench for the project itself; a host File here would be
+                // the wrong path for anything it runs in the runtime.
+                projectDir = null,
+                view = dev.blamspot.jcode.ext.api.JCodeNativeExtension.Params.SURFACE_PANEL,
+                dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
+                onSnackbar = onSnackbar,
+                onShowSource = {},
+                readFile = { null },
+                writeFile = { _, _ -> },
+                request = { envelope -> onApiRequest(ext.id, envelope) },
+                events = events ?: kotlinx.coroutines.flow.emptyFlow(),
+                modifier = modifier.fillMaxSize(),
+            )
+        } else {
+            ExtensionWebViewPage(
+                extension = ext,
+                onExec = onExec,
+                onApiRequest = { envelope -> onApiRequest(ext.id, envelope) },
+                events = events,
+                modifier = modifier.fillMaxSize(),
+            )
+        }
     }
 }
 
@@ -885,6 +918,9 @@ private fun extensionTypeLabel(type: ExtensionType): String = when (type) {
  * Settings card. Reads/writes through [LocalExtensionSettingsUi]; renders nothing when the extension
  * declares no settings.
  */
+/** What a stored `bool` setting counts as on. Manifests write either. */
+private fun String.isOn(): Boolean = this == "true" || this == "1"
+
 @Composable
 private fun ExtensionSettingsControls(extensionId: String) {
     val ui = LocalExtensionSettingsUi.current
@@ -913,7 +949,7 @@ private fun ExtensionSettingsControls(extensionId: String) {
                     }
                 }
                 Switch(
-                    checked = current == "true" || current == "1",
+                    checked = current.isOn(),
                     onCheckedChange = { ui.onChange(extensionId, spec.key, it.toString()) },
                 )
             }
@@ -961,6 +997,9 @@ private fun ExtensionSettingsControls(extensionId: String) {
                 label = spec.label,
                 supporting = spec.description,
                 buttonLabel = spec.buttonLabel ?: spec.label,
+                // Greyed out while the switch it depends on is off: a button that runs and does
+                // nothing is worse than one that says it cannot.
+                enabled = spec.enabledWhen?.let { ui.valueOf(extensionId, it).isOn() } ?: true,
                 busy = ui.busy(extensionId, spec.key),
                 onClick = { ui.onAction(extensionId, spec.key) },
             )

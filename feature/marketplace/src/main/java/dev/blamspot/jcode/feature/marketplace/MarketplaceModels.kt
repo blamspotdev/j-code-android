@@ -404,6 +404,14 @@ data class ExtensionSetting(
     val command: String? = null,
     /** For [SettingType.Action]: the button's own text. Defaults to [label]. */
     val buttonLabel: String? = null,
+    /**
+     * For [SettingType.Action]: another of this extension's settings that must be on.
+     *
+     * A button whose effect depends on a switch is a button that should be greyed out when the
+     * switch is off, not one that runs and does nothing -- reconnecting a device that is not
+     * running is the case this exists for.
+     */
+    val enabledWhen: String? = null,
 )
 
 /** An extension that has been downloaded and unpacked under the app's install root. */

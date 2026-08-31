@@ -18,6 +18,8 @@ data class ExtensionSettingSpec(
     val suggestCommand: String? = null,
     /** The button's own text, for a spec of type `action`. Defaults to the label. */
     val buttonLabel: String? = null,
+    /** For an `action`: another key in the same group that must be on for it to be enabled. */
+    val enabledWhen: String? = null,
 )
 
 /** One installed extension's declared settings, grouped for the settings screen. */

@@ -514,6 +514,7 @@ fun JCodeApp(
                             description = s.description,
                             suggestCommand = s.suggestCommand,
                             buttonLabel = s.buttonLabel,
+                            enabledWhen = s.enabledWhen,
                         )
                     },
                 )
