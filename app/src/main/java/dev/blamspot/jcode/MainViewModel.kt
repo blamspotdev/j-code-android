@@ -1405,6 +1405,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Bring the device's adb up if it should be and is not.
+     *
+     * Called when a device starts. The setting's collector only fires when the *setting* changes,
+     * so anything that stops adb while the setting stays on -- the Task Manager, for one -- left
+     * it down until the switch was toggled: the device came back and `adb devices` was empty.
+     *
+     * Idempotent, because a device can be opened any number of times.
+     */
+    fun ensureVirtualDeviceAdb() {
+        if (!runInVirtualDevice.value || virtualDeviceAdbRunning) return
+        viewModelScope.launch { startVirtualDeviceAdb() }
+    }
+
     private fun stopVirtualDeviceAdb() {
         virtualDeviceAdbRunning = false
         runCatching { virtualDeviceAdbServer?.destroy() }

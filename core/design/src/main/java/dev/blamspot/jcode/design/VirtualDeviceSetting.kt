@@ -29,6 +29,8 @@ class VirtualDeviceSetting(
     val stopped: Boolean = false,
     /** Un-stop it, for whatever asks for the device next. */
     val onResume: () -> Unit = {},
+    /** A device has started: bring its adb up if the setting says it should be. */
+    val onDeviceStarted: () -> Unit = {},
 )
 
 val LocalVirtualDevice = compositionLocalOf { VirtualDeviceSetting() }

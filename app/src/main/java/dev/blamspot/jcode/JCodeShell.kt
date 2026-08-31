@@ -1574,6 +1574,7 @@ fun JCodeApp(
             inDrawer = virtualDeviceInDrawer,
             stopped = virtualDeviceStopped,
             onResume = viewModel::resumeVirtualDevice,
+            onDeviceStarted = viewModel::ensureVirtualDeviceAdb,
         )
     }
     val envBackupStatus by viewModel.envBackupStatus.collectAsStateWithLifecycle()
@@ -2003,6 +2004,10 @@ private fun VirtualDevicePage(
     managerActions: WorkbenchManagerActions,
     modifier: Modifier = Modifier,
 ) {
+    // A device is starting: its adb should be up with it. The setting's own collector only fires
+    // on a change, so anything that stopped adb while the setting stayed on left it down.
+    val virtualDevice = LocalVirtualDevice.current
+    LaunchedEffect(Unit) { virtualDevice.onDeviceStarted() }
     val pack = VirtualDeviceBridge.pack()
     if (pack == null) {
         NoVirtualDeviceNotice(modifier = modifier)
