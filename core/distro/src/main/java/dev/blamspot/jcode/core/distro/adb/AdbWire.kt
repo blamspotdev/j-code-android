@@ -15,7 +15,12 @@ class AdbProtocolException(message: String) : IOException(message)
  * data_check, magic`), optionally followed by `data_length` payload bytes. `magic` is `command` with
  * every bit flipped and is the only header field either side still validates.
  */
-internal object AdbWire {
+/*
+ * Public rather than internal to this module: the virtual device's daemon lives in the Android
+ * Dev Pack, and speaks this. The alternative was a second copy of a binary protocol in the pack,
+ * which is the kind of duplication that is fine until the day the two disagree about a byte.
+ */
+object AdbWire {
     const val CNXN: Int = 0x4E584E43
     const val OPEN: Int = 0x4E45504F
     const val OKAY: Int = 0x59414B4F
@@ -59,7 +64,7 @@ internal object AdbWire {
 
 private val EMPTY_PAYLOAD = ByteArray(0)
 
-internal class AdbMessage(
+class AdbMessage(
     val command: Int,
     val arg0: Int,
     val arg1: Int,
@@ -70,7 +75,7 @@ internal class AdbMessage(
 }
 
 /** One adb transport socket. [write] is safe to call from any thread; [read] belongs to one reader. */
-internal class AdbTransport(
+class AdbTransport(
     private val input: InputStream,
     private val output: OutputStream,
 ) {

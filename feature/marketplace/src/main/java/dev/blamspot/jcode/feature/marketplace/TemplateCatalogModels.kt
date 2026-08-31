@@ -48,6 +48,16 @@ data class ProjectTemplate(
     val requires: List<String> = emptyList(),
     /** User-configurable inputs collected before scaffolding; empty for fixed templates. */
     val inputs: List<TemplateInput> = emptyList(),
+    /** The extension this template came from; blank for the built-in empty one. */
+    val extensionId: String = "",
+    /**
+     * An extension view that replaces this dialog's own configure step.
+     *
+     * For a template with more to ask than a list of inputs can express — a gallery of variants,
+     * each with a picture — the extension draws that itself and the workbench steps aside after the
+     * name is chosen. Blank for a template that is happy with [inputs], which is most of them.
+     */
+    val gallery: String = "",
     val recipe: List<TemplateRecipeStep> = emptyList(),
     /**
      * The template's own directory (`<extension>/templates/<id>`), against which a step's

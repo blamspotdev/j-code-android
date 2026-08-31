@@ -37,11 +37,9 @@ import dev.blamspot.jcode.core.distro.DistroService
 import dev.blamspot.jcode.core.distro.DistroServiceLocator
 import dev.blamspot.jcode.ext.NativeExtensionLoader
 import dev.blamspot.jcode.vdevice.VirtualDeviceBridge
-import dev.blamspot.jcode.core.distro.adb.AdbAuthorizedKeys
 import dev.blamspot.jcode.core.distro.adb.AdbBridge
 import dev.blamspot.jcode.core.distro.adb.AdbBridgeLocator
 import dev.blamspot.jcode.core.distro.adb.AdbBridgeState
-import dev.blamspot.jcode.core.distro.adb.AdbDaemon
 import dev.blamspot.jcode.core.distro.adb.AdbHostClient
 import dev.blamspot.jcode.core.buffer.offsetToUtf16Position
 import dev.blamspot.jcode.core.buffer.utf16PositionToOffset
@@ -93,6 +91,7 @@ import dev.blamspot.jcode.feature.marketplace.MarketplaceServiceLocator
 import dev.blamspot.jcode.feature.marketplace.ProjectTemplate
 import dev.blamspot.jcode.feature.marketplace.TemplateCatalog
 import dev.blamspot.jcode.feature.marketplace.TemplateScaffolder
+import dev.blamspot.jcode.feature.marketplace.nativeGuestModule
 import dev.blamspot.jcode.workbench.SetupTerminalRunner
 import dev.blamspot.jcode.fs.FsKind
 import dev.blamspot.jcode.fs.FsNode
@@ -342,7 +341,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             dev.blamspot.jcode.workbench.ExtensionDevLog.devIds = installed.filter { it.dev }.map { it.id }.toSet()
             // Any extension may contribute templates (a language/dev pack can bundle them too).
             // Always offer an "Empty Project" first — a blank folder that needs no extension.
-            val fromExtensions = installed.flatMap { it.templates }
+            // Stamped with its extension on the way through: a template that hands its configure
+            // step to a view needs to say whose view it is, and only the list knows that here.
+            val fromExtensions = installed.flatMap { ext ->
+                ext.templates.map { it.copy(extensionId = ext.id) }
+            }
             val emptyOption = fromExtensions.filter { it.id == "empty" }.ifEmpty {
                 listOf(ProjectTemplate(id = "empty", name = "Empty Project", description = "A blank project folder — no scaffolding."))
             }
@@ -1329,59 +1332,57 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { trash.sweep(trashRetentionDays.value) }
     }
 
-    /**
-     * The adb daemon for JCode's virtual device.
-     *
-     * The daemon is the app's — binding a socket in JCode's storage and authenticating against the
-     * distro's keys would be the same for any target — while everything it *serves* is the device's,
-     * and the device ships in the Android Dev Pack. With no pack installed it still binds and still
-     * answers, with "no virtual device"; see [VirtualDeviceBridge.adb].
-     */
-    private val virtualDeviceAdb: AdbDaemon by lazy {
-        val (banner, handler) = VirtualDeviceBridge.adb()
-        AdbDaemon(
-            banner = banner,
-            authorizedKeys = AdbAuthorizedKeys(File(appContext.filesDir, "distros")),
-            handler = handler,
-            log = { message -> android.util.Log.i("VDEVICE", message) },
-        )
-    }
-
-    /** Holds the guest's adb server open; see [startVirtualDeviceAdb]. */
+    /** Holds the guest's adb client open; see [startVirtualDeviceAdb]. */
     private var virtualDeviceAdbServer: Process? = null
 
     /**
-     * Where the daemon's socket goes: inside the selected distro's own rootfs.
+     * Whether the device's adb is actually up.
      *
-     * That is what makes it reachable from the distro without a new proot bind — `<rootfs>/run/x` on
-     * this side is `/run/x` on that one — and unreachable from anywhere else, since the whole rootfs
-     * lives in JCode's private storage where no other uid may open a file.
+     * Not the setting: the setting is what the user asked for, and this is what is true. They
+     * part company the moment anything stops it -- the Task Manager, for one, which otherwise
+     * went on listing an adb it had just been told to stop.
      */
-    private fun virtualDeviceSocket(): Pair<File, String>? {
+    @Volatile
+    private var virtualDeviceAdbRunning = false
+
+    /**
+     * The rootfs the device's adb socket goes inside: the selected distro's own.
+     *
+     * That is what makes it reachable from the distro without a new proot bind -- `<rootfs>/run/x`
+     * on this side is `/run/x` on that one -- and unreachable from anywhere else, since the whole
+     * rootfs lives in JCode's private storage where no other uid may open a file. Which file it
+     * binds in there is the device's business, not this one's.
+     */
+    private fun virtualDeviceRootfs(): File? {
         val distro = distroService.selectedEnvironment().id.takeIf { it.isNotBlank() } ?: return null
-        val rootfs = File(appContext.filesDir, "distros/$distro/rootfs")
-        if (!rootfs.isDirectory) return null
-        return File(rootfs, "run/${AdbDaemon.SOCKET_NAME}") to "/run/${AdbDaemon.SOCKET_NAME}"
+        return File(appContext.filesDir, "distros/$distro/rootfs").takeIf { it.isDirectory }
     }
 
     private suspend fun startVirtualDeviceAdb() {
-        val (socket, guestPath) = virtualDeviceSocket() ?: run {
+        val rootfs = virtualDeviceRootfs() ?: run {
             OutputLog.append(
                 "Virtual device adb not started: no installed Linux runtime to host its socket\n",
                 OutputKind.Error,
             )
             return
         }
-        runCatching { virtualDeviceAdb.start(socket) }.getOrElse { error ->
-            OutputLog.append("Virtual device adb failed to start: ${error.message}\n", OutputKind.Error)
+        // The device's own daemon, in the pack that provides the device. With no pack installed
+        // there is nothing to start, and nothing for a client to connect to.
+        val spec = runCatching { VirtualDeviceBridge.startAdb(rootfs) }.getOrNull() ?: run {
+            OutputLog.append(
+                "Virtual device adb not started: no pack provides a device\n",
+                OutputKind.Error,
+            )
             return
         }
-        val spec = AdbDaemon.connectSpec(guestPath)
-        TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec = spec
+        TerminalSessionHost.manager(appContext).let { manager ->
+            manager.virtualDeviceAdbSpec = spec
+            manager.installAdbShim(rootfs)
+        }
+        virtualDeviceAdbRunning = true
         // The daemon only trusts the distro's own adbkey.pub, and adb does not create one until it
         // has run once — so mint it before connecting, or the first connection is refused for want
         // of a key rather than because anything is wrong.
-        //
         attachVirtualDeviceAdb(spec)
     }
 
@@ -1392,7 +1393,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * proot session started it — which proot reaps on exit. Connecting from a one-shot command
      * therefore left nothing behind: the next terminal started a server of its own, `adb devices` was
      * empty, and `adb install` had no device to install to. Keeping this session alive keeps that
-     * server alive, and every terminal shares it.
+     * server alive, and every terminal shares it. The client is the runtime's, which is why this
+     * half stayed here when the daemon went to the pack.
      */
     private fun attachVirtualDeviceAdb(spec: String) {
         runCatching { virtualDeviceAdbServer?.destroy() }
@@ -1406,11 +1408,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Bring the device's adb up if it should be and is not.
+     *
+     * Called when a device starts. The setting's collector only fires when the *setting* changes,
+     * so anything that stops adb while the setting stays on -- the Task Manager, for one -- left
+     * it down until the switch was toggled: the device came back and `adb devices` was empty.
+     *
+     * Idempotent, because a device can be opened any number of times.
+     */
+    fun ensureVirtualDeviceAdb() {
+        if (!runInVirtualDevice.value || virtualDeviceAdbRunning) return
+        viewModelScope.launch { startVirtualDeviceAdb() }
+    }
+
     private fun stopVirtualDeviceAdb() {
+        virtualDeviceAdbRunning = false
         runCatching { virtualDeviceAdbServer?.destroy() }
         virtualDeviceAdbServer = null
-        runCatching { virtualDeviceAdb.stop() }
-        TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec = ""
+        // `adb start-server` daemonises, so destroying the session that started it leaves the
+        // server behind -- still listed, still holding the device it can no longer reach. It is
+        // the runtime's own server and this is what started it, so this is what ends it.
+        runCatching { distroService.spawnStdioProcess(command = "adb kill-server") }
+        runCatching { VirtualDeviceBridge.stopAdb() }
+        TerminalSessionHost.manager(appContext).let { manager ->
+            manager.virtualDeviceAdbSpec = ""
+            virtualDeviceRootfs()?.let(manager::installAdbShim)
+        }
     }
 
     /**
@@ -1600,31 +1624,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private val runInVirtualDeviceKey = booleanPreferencesKey("run_in_virtual_device")
-
-    /** When true, an Android run config built for the container starts its APK inside JCode's own
-     *  process (no install, no adb) once the build finishes — see [VirtualDeviceBridge]. */
-    val runInVirtualDevice: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs -> prefs[runInVirtualDeviceKey] ?: SettingsDefaults.RUN_IN_VIRTUAL_DEVICE }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.RUN_IN_VIRTUAL_DEVICE)
-
-    fun setRunInVirtualDevice(enabled: Boolean) {
-        viewModelScope.launch { uiPreferences.edit { it[runInVirtualDeviceKey] = enabled } }
-    }
-
-
-    // A second init block, deliberately: it collects [runInVirtualDevice], which is declared above
-    // but well below the main init block — referencing it from there reads an uninitialised field
-    // and crashes the ViewModel's construction.
-    init {
-        // JCode's own adbd runs only while the setting is on: it is an authenticated listener on
-        // loopback, and there is no reason to hold a port open for a feature that is switched off.
-        viewModelScope.launch {
-            runInVirtualDevice.collect { enabled ->
-                if (enabled) startVirtualDeviceAdb() else stopVirtualDeviceAdb()
-            }
-        }
-    }
 
     private val envVarsKey = stringPreferencesKey("env_vars_json")
 
@@ -2055,7 +2054,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // composition and a DataStore read is suspending.
     init {
         viewModelScope.launch {
-            developerOptions.collect { NativeExtensionLoader.allowUnsigned = it }
+            var previous: Boolean? = null
+            developerOptions.collect { allowed ->
+                NativeExtensionLoader.setAllowUnsigned(appContext, allowed)
+                // Whatever asked for the device before this flag arrived got a refusal -- the pack
+                // is unsigned and the loader only takes unsigned code once this is on -- and
+                // [VirtualDeviceBridge.device] caches that answer for the life of the process. Two
+                // collectors start in this init and the other one reaches the device through
+                // stopVirtualDeviceAdb, so a DataStore read losing that race left the virtual device
+                // dead with developer options visibly ON, and a restart only re-ran the race.
+                // Dropping the cached refusal is what makes the switch mean anything after startup;
+                // nothing is running this early, so there is no live device to lose.
+                if (allowed && previous != true) VirtualDeviceBridge.evict()
+                previous = allowed
+            }
         }
     }
 
@@ -3260,6 +3272,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val contributedExplorerContextActions: StateFlow<List<ShellContribution>> =
         combine(installedExtensions, extensionActivations, distroService.sdkCatalogState) { exts, acts, sdk ->
             availableContributions(exts, acts, sdk) { it.explorerContextActions }
+        }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+    /**
+     * Managers extensions contribute to the Toolchains panel.
+     *
+     * Not gated on `requires.sdks` the way the other surfaces are, and deliberately: a manager for a
+     * toolchain is most useful *before* that toolchain is installed, which is exactly when the gate
+     * would hide it. Android's SDK Manager is how you install the Android SDK, so requiring the
+     * Android SDK to see it would be a door locked from the inside.
+     */
+    val contributedToolchainActions: StateFlow<List<ShellContribution>> =
+        combine(installedExtensions, extensionActivations) { exts, acts ->
+            exts.filter { it.enabledIn(acts) }
+                .flatMap { ext ->
+                    ext.contributes.toolchainActions.map { ShellContribution(ext.id, it.id, it.label, it.icon) }
+                }
+                .distinctBy { it.extId + ":" + it.id }
         }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L), emptyList())
 
     /**
@@ -4561,17 +4590,69 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun opensInExtensionView(file: File): Boolean =
         installedExtensions.value.any { ext ->
-            ext.nativeEntry != null && ext.nativeClass != null &&
-                ext.nativeClaims.any { claim ->
+            ext.nativeModules.any { module ->
+                module.claims.any { claim ->
                     val setting = claim.opensInPreviewSetting ?: return@any false
                     claim.matches(file) && resolvedExtensionSetting(ext, setting) != "false"
                 }
+            }
         }
 
     /** A setting's saved value, or its manifest default, or "". Used by config.* (caller-scoped). */
     private fun resolvedExtensionSetting(ext: InstalledExtension, key: String): String {
         extensionSettings.value[ext.id]?.get(key)?.let { return it }
         return ext.settings.firstOrNull { it.key == key }?.default ?: ""
+    }
+
+    /**
+     * Whether the virtual device belongs in the right drawer rather than in an editor tab.
+     *
+     * The pack that provides the device declares the choice as one of its own settings, because it
+     * is a fact about *that* extension and belongs on its settings screen — JCode only reads it and
+     * routes. A flow rather than a lookup: changing it has to move the device while somebody is
+     * looking at it, not at the next launch.
+     */
+    val virtualDeviceInDrawer: StateFlow<Boolean> =
+        combine(installedExtensions, extensionSettings) { installed, saved ->
+            val pack = installed.firstOrNull { it.nativeGuestModule() != null }
+                ?: return@combine false
+            val value = saved[pack.id]?.get(DEVICE_SURFACE_KEY)
+                ?: pack.settings.firstOrNull { it.key == DEVICE_SURFACE_KEY }?.default
+            value == DEVICE_SURFACE_DRAWER
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /**
+     * When true, an Android run config built for the container starts its APK inside JCode's own
+     * process (no install, no adb) once the build finishes — see [VirtualDeviceBridge]. It is
+     * also what runs the device's adb daemon, since there is nothing to serve without a device.
+     *
+     * The pack that provides the device declares it, the same way it declares which surface the
+     * device opens on: it is a fact about *that* extension, it should leave with the extension,
+     * and JCode only reads it. A switch in JCode's own settings for a device JCode does not
+     * contain was a setting that outlived what it configured.
+     */
+    val runInVirtualDevice: StateFlow<Boolean> =
+        combine(installedExtensions, extensionSettings) { installed, saved ->
+            val pack = installed.firstOrNull { it.nativeGuestModule() != null }
+                ?: return@combine false
+            val value = saved[pack.id]?.get(RUN_IN_DEVICE_KEY)
+                ?: pack.settings.firstOrNull { it.key == RUN_IN_DEVICE_KEY }?.default
+            value == "true" || value == "1"
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, SettingsDefaults.RUN_IN_VIRTUAL_DEVICE)
+
+
+
+    // A second init block, deliberately: it collects [runInVirtualDevice], which is declared above
+    // but well below the main init block — referencing it from there reads an uninitialised field
+    // and crashes the ViewModel's construction.
+    init {
+        // JCode's own adbd runs only while the setting is on: it is an authenticated listener on
+        // loopback, and there is no reason to hold a port open for a feature that is switched off.
+        viewModelScope.launch {
+            runInVirtualDevice.collect { enabled ->
+                if (enabled) startVirtualDeviceAdb() else stopVirtualDeviceAdb()
+            }
+        }
     }
 
     /** Same resolution, looked up by id — for the settings screen, which has no [InstalledExtension]. */
@@ -4928,9 +5009,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Default Workspace (opens immediately), a workspace id = that User Workspace (switches to it
         // and prompts open-vs-add). Absent id registers under whatever workspace is currently open.
         "workbench.openFolder" -> {
-            val name = p.optString("name").trim()
+            val name = p.optString("name").trim().trimEnd('/')
             require(name.isNotBlank()) { "name required" }
-            val sanitized = workspaceManager.sanitizedFolderName(name)
+            // One path segment. The folder is the caller's to have created, but the name reaches
+            // the workspace root as a file name, so it may not walk out of it.
+            require(name == File(name).name && name.trim('.').isNotEmpty()) {
+                "name must be a single folder name"
+            }
             val defId = workspaceManager.ensureDefaultWorkspaceId()
             val destId = p.optString("destinationId").trim()
             val currentId = workspaceManager.currentWorkspace.value?.id ?: defId
@@ -4947,11 +5032,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             workspaceManager.restoreWorkspace(targetWs)
             if (targetWs == defId) {
                 resetDefaultWorkspaceProject()
-                val project = workspaceManager.createNodeIn(defId, sanitized, WorkspaceNodeType.Project, null)
+                val project = workspaceManager.createNodeIn(defId, name, WorkspaceNodeType.Project, null)
                 _selectedProjectId.value = project.id
                 apiOk(JSONObject().put("name", project.name).put("opened", true))
             } else {
-                val project = workspaceManager.createNodeIn(targetWs, sanitized, WorkspaceNodeType.Project, null)
+                val project = workspaceManager.createNodeIn(targetWs, name, WorkspaceNodeType.Project, null)
                 _postClonePrompt.value = project
                 apiOk(JSONObject().put("name", project.name).put("opened", false))
             }
@@ -5212,6 +5297,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val hasHost: Boolean,
         val serviceCount: Int,
         val suspended: Boolean,
+        /** A virtual device this extension is running: a `:guest` process, and what is in it. */
+        val hasDevice: Boolean = false,
+        /** The device's adb daemon, which is the extension's too. */
+        val hasAdb: Boolean = false,
     )
 
     private val _suspendedBackgroundExtensions = MutableStateFlow<Set<String>>(emptySet())
@@ -5219,20 +5308,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** SCM hosts the user stopped; the shell gates SCM host re-attach on this so it stays down. */
     val suspendedBackgroundExtensions: StateFlow<Set<String>> = _suspendedBackgroundExtensions.asStateFlow()
 
+    /** True while the device's own pack is stopped: the drawer takes its panel down and the tab with it. */
+    val virtualDeviceStopped: StateFlow<Boolean> =
+        combine(installedExtensions, _suspendedBackgroundExtensions) { installed, suspended ->
+            installed.firstOrNull { it.nativeGuestModule() != null }?.id in suspended
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** Undo that -- for the Start button, and for anything asking for the device again. */
+    fun resumeVirtualDevice() {
+        val pack = installedExtensions.value.firstOrNull { it.nativeGuestModule() != null } ?: return
+        _suspendedBackgroundExtensions.update { it - pack.id }
+    }
+
     /** Snapshot of every extension doing background work, for the Task Manager (polled, not reactive). */
-    fun backgroundExtensionSnapshot(): List<BackgroundExtensionInfo> {
+    fun backgroundExtensionSnapshot(deviceRunning: Boolean = false): List<BackgroundExtensionInfo> {
         val scmIds = dev.blamspot.jcode.workbench.ScmWebViewHolder.ids().toSet()
         val vsixIds = dev.blamspot.jcode.workbench.VsixViewHolder.ids().toSet()
         val serviceCounts = runtimeServices.keys.groupingBy { it.substringBefore(' ') }.eachCount()
         val suspended = _suspendedBackgroundExtensions.value
         val names = installedExtensions.value.associate { it.id to it.name }
-        return (scmIds + vsixIds + serviceCounts.keys + suspended).map { id ->
+        // The pack that provides the virtual device does background work of a kind this list did
+        // not know about: it has no WebView host and starts no `service.start` server, so it never
+        // appeared here at all -- while a running device is a whole `:guest` process, an adb
+        // daemon, and a proot tree of `adb`, `sh` and `sleep` that the Processes list below shows
+        // as six anonymous rows nobody could connect to the pack they belong to.
+        val devicePack = installedExtensions.value.firstOrNull { it.nativeGuestModule() != null }
+        val hasDevice = devicePack != null && deviceRunning
+        val adbRunning = devicePack != null && virtualDeviceAdbRunning
+        val deviceId = devicePack?.id?.takeIf { hasDevice || adbRunning }
+        return (scmIds + vsixIds + serviceCounts.keys + suspended + listOfNotNull(deviceId)).map { id ->
             BackgroundExtensionInfo(
                 id = id,
                 name = names[id] ?: id,
                 hasHost = id in scmIds || id in vsixIds,
                 serviceCount = serviceCounts[id] ?: 0,
                 suspended = id in suspended,
+                hasDevice = id == deviceId && hasDevice,
+                hasAdb = id == deviceId && adbRunning,
             )
         }.sortedBy { it.name.lowercase() }
     }
@@ -5243,6 +5355,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopBackgroundExtension(id: String) {
         viewModelScope.launch(Dispatchers.Main) {
             reapExtensionServices(id)
+            // A pack that provides the device is also running the device: turning it off here has
+            // to take the `:guest` process and the adb that serves it, or the row says stopped and
+            // the processes below carry on. `shutdown` rather than a kill -- the device has a door.
+            if (installedExtensions.value.firstOrNull { it.id == id }?.nativeGuestModule() != null) {
+                VirtualDeviceBridge.shutdown(loadIfNeeded = true)
+                stopVirtualDeviceAdb()
+                // Suspended as well as stopped, or it comes straight back: the drawer's device
+                // panel is what *builds* the device, so a panel still on screen rebuilds what was
+                // just stopped. Suspension takes the panel away with it; the row keeps a Start.
+                _suspendedBackgroundExtensions.update { it + id }
+            }
             if (id in liveExtensionHosts || dev.blamspot.jcode.workbench.ScmWebViewHolder.get(id) != null) {
                 _suspendedBackgroundExtensions.update { it + id }
                 liveExtensionHosts.remove(id)
@@ -5359,6 +5482,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Turn the device off once its editor tab is gone — process and all, not merely unbound. Page
      *  tabs get no close callback, so the shell calls this whenever the tab list changes. */
     fun pruneAppSandbox() {
+        // Only while the tab is where the device lives. With `deviceSurface: drawer` there is never
+        // an AppSandbox tab, so the absence of one is not a statement about the device — and read as
+        // one it said "off" on *every* editor change. Measured: opening the drawer's Device panel
+        // ended the `:guest` process a moment later, and the panel then sat on "Starting the app…"
+        // for a device nothing was starting.
+        if (virtualDeviceInDrawer.value) return
         if (_editorGroup.value.tabs.none { it.pageKind == EditorPageKind.AppSandbox }) VirtualDeviceBridge.shutdown()
     }
 
@@ -6396,6 +6525,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val ANDROID_DEVICE_TAB_ID = "jcode://android-device"
         /** Stable id of the single device sandbox editor tab — the container owns one `:guest` process. */
         const val APP_SANDBOX_TAB_ID = "jcode://app-sandbox"
+
+        /** The Android Dev Pack setting that says where its device opens — see [virtualDeviceInDrawer]. */
+        private const val DEVICE_SURFACE_KEY = "deviceSurface"
+
+        /** The pack setting behind [runInVirtualDevice]. */
+        private const val RUN_IN_DEVICE_KEY = "runInVirtualDevice"
+
+        /** The one value of [DEVICE_SURFACE_KEY] that means the drawer; anything else is a tab. */
+        private const val DEVICE_SURFACE_DRAWER = "drawer"
         /** Stable id of the virtual device's hardware bench, which the device shares with its tab. */
         const val VIRTUAL_HARDWARE_TAB_ID = "jcode://virtual-hardware"
         /** `adb pair` is one round trip to adbd; anything past this is a wrong port or a closed dialog. */

@@ -80,6 +80,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import kotlin.math.abs
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imeAnimationTarget
@@ -159,6 +160,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.text.font.FontWeight
@@ -382,6 +384,7 @@ import dev.blamspot.jcode.feature.explorer.ExplorerScmUi
 import dev.blamspot.jcode.feature.explorer.LocalExplorerScmUi
 import dev.blamspot.jcode.feature.marketplace.hasWebUi
 import dev.blamspot.jcode.feature.marketplace.webUiFile
+import dev.blamspot.jcode.feature.marketplace.hasNativeUi
 import dev.blamspot.jcode.fs.FsKind
 import dev.blamspot.jcode.fs.FsPath
 import dev.blamspot.jcode.fs.Project
@@ -402,6 +405,20 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 
+
+/**
+ * The command an extension's `type: action` setting names, if any.
+ *
+ * A manifest says which command its button runs and nothing about what that command does, so
+ * this is the whole of the lookup: extension, key, command id.
+ */
+private fun commandOf(
+    installed: List<dev.blamspot.jcode.feature.marketplace.InstalledExtension>,
+    extensionId: String,
+    key: String,
+): String? = installed.firstOrNull { it.id == extensionId }
+    ?.settings?.firstOrNull { it.key == key }
+    ?.command?.takeIf { it.isNotBlank() }
 
 @Composable
 fun JCodeApp(
@@ -476,7 +493,12 @@ fun JCodeApp(
         )
     }
     val extensionSettings by viewModel.extensionSettings.collectAsStateWithLifecycle()
-    val extensionSettingsUi = remember(installedExtensions, extensionSettings) {
+    // Which of the commands an extension's action can name are currently working. Keyed by
+    // command rather than by setting, because it is the command that takes time -- the manifest
+    // only points at it, and two extensions naming the same one should both say so.
+    val reconnectingAdb by viewModel.virtualDeviceAdbReconnecting.collectAsStateWithLifecycle()
+    val busyCommands = mapOf("vdevice.reconnectAdb" to reconnectingAdb)
+    val extensionSettingsUi = remember(installedExtensions, extensionSettings, busyCommands) {
         ExtensionSettingsUi(
             groups = installedExtensions.filter { it.settings.isNotEmpty() }.map { ext ->
                 ExtensionSettingsGroup(
@@ -491,11 +513,19 @@ fun JCodeApp(
                             default = s.default ?: "",
                             description = s.description,
                             suggestCommand = s.suggestCommand,
+                            buttonLabel = s.buttonLabel,
+                            enabledWhen = s.enabledWhen,
                         )
                     },
                 )
             },
             valueOf = viewModel::extensionSettingValue,
+            // The manifest names a command; JCode owns what it does. An id it does not have runs
+            // nothing, which is the right outcome for a pack written against a newer JCode.
+            onAction = { extId, key ->
+                commandOf(installedExtensions, extId, key)?.let { CommandRegistry.run(it) }
+            },
+            busy = { extId, key -> busyCommands[commandOf(installedExtensions, extId, key)] == true },
             onChange = viewModel::setExtensionSetting,
             suggest = viewModel::extensionSettingSuggestions,
         )
@@ -1009,13 +1039,34 @@ fun JCodeApp(
     LaunchedEffect(Unit) {
         snapshotFlow { BuiltinBrowser.revealSignal.value }.collect { if (it > 0) viewModel.openBrowserTab() }
     }
+    // Where the Android Dev Pack says its device belongs. Read here rather than beside the rest of
+    // the device's settings because the reveal below is the first thing that needs it.
+    val virtualDeviceInDrawer by viewModel.virtualDeviceInDrawer.collectAsStateWithLifecycle()
     // Same pattern for the device sandbox, which lives in the Android Dev Pack: the pack asks for its
     // tab through VirtualDeviceHost.openDeviceTab, and the bridge turns that into a signal here. It
     // has to be a signal rather than a direct call because the pack asks from the `:guest` binder's
     // thread as well as its own, and a tab may only be opened from the composition.
-    LaunchedEffect(Unit) {
+    LaunchedEffect(virtualDeviceInDrawer) {
         snapshotFlow { VirtualDeviceBridge.revealDevice.intValue }
-            .collect { if (it > 0) viewModel.openAppSandboxTab() }
+            .collect { if (it > 0 && !virtualDeviceInDrawer) viewModel.openAppSandboxTab() }
+    }
+    // The device is one embedded surface with one guest behind it, so it lives in one place at a
+    // time and the setting moving takes it there: into the drawer the tab closes behind it, back out
+    // the tab opens in front of it. Without the second half a running device was left with nowhere
+    // to be drawn, and the next editor change reaped it.
+    //
+    // Only on an actual move. This effect also runs on the first composition, and treating that as a
+    // move would open a device tab nobody asked for at every launch.
+    var deviceSurfaceSeen by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(virtualDeviceInDrawer) {
+        val previous = deviceSurfaceSeen
+        deviceSurfaceSeen = virtualDeviceInDrawer
+        if (previous == null || previous == virtualDeviceInDrawer) return@LaunchedEffect
+        if (virtualDeviceInDrawer) {
+            viewModel.closeEditorTab(MainViewModel.APP_SANDBOX_TAB_ID)
+        } else {
+            viewModel.openAppSandboxTab()
+        }
     }
     // And for the hardware bench, which the device's own control bar asks for.
     LaunchedEffect(Unit) {
@@ -1196,6 +1247,7 @@ fun JCodeApp(
     val recents by viewModel.recents.collectAsStateWithLifecycle()
     val contributedStartActions by viewModel.contributedEditorStartActions.collectAsStateWithLifecycle()
     val contributedDrawerActions by viewModel.contributedDrawerActions.collectAsStateWithLifecycle()
+    val contributedToolchainManagers by viewModel.contributedToolchainActions.collectAsStateWithLifecycle()
     val contributedContextActions by viewModel.contributedEditorContextActions.collectAsStateWithLifecycle()
     // Extra items for the editor's long-press context menu, computed for the ACTIVE tab: the built-in
     // Markdown "Preview" toggle plus extension-contributed actions matching the file's extension.
@@ -1506,17 +1558,23 @@ fun JCodeApp(
     val runInVirtualDevice by viewModel.runInVirtualDevice.collectAsStateWithLifecycle()
     val adbToolInstalled = ADB_CATALOG_ENTRY in sdkCatalogState.installedEntryIds
     val virtualDeviceReconnecting by viewModel.virtualDeviceAdbReconnecting.collectAsStateWithLifecycle()
+    val virtualDeviceStopped by viewModel.virtualDeviceStopped.collectAsStateWithLifecycle()
     val virtualDeviceSetting = remember(
         runInVirtualDevice,
         adbToolInstalled,
         virtualDeviceReconnecting,
+        virtualDeviceInDrawer,
+        virtualDeviceStopped,
     ) {
         VirtualDeviceSetting(
             enabled = runInVirtualDevice,
-            onChange = viewModel::setRunInVirtualDevice,
             adbAvailable = adbToolInstalled,
             onReconnect = viewModel::reconnectVirtualDeviceAdb,
             reconnecting = virtualDeviceReconnecting,
+            inDrawer = virtualDeviceInDrawer,
+            stopped = virtualDeviceStopped,
+            onResume = viewModel::resumeVirtualDevice,
+            onDeviceStarted = viewModel::ensureVirtualDeviceAdb,
         )
     }
     val envBackupStatus by viewModel.envBackupStatus.collectAsStateWithLifecycle()
@@ -1719,7 +1777,11 @@ fun JCodeApp(
         onDeleteRun = viewModel::deleteRunConfig,
         onDeleteBuild = viewModel::deleteBuildConfig,
         runConfigVersion = runConfigVersion,
-        managerActions = remember(viewModel) { WorkbenchManagerActions(
+        managerActions = remember(viewModel, contributedToolchainManagers) { WorkbenchManagerActions(
+            toolchainManagers = contributedToolchainManagers,
+            // The same route every contributed action takes: the extension's own view, opened as an
+            // editor page tab. A manager is a page, not a dialog — it is where you sit and work.
+            onOpenToolchainManager = viewModel::openContributedView,
             onCheckSdkStatuses = viewModel::checkSdkStatuses,
             onInstallSdkCatalogEntry = viewModel::installSdkCatalogEntry,
             onInstallSdkCatalogVersion = viewModel::installSdkCatalogVersion,
@@ -1778,6 +1840,9 @@ fun JCodeApp(
             installedToolchains = sdkCatalogState.installedEntryIds,
             onDismiss = viewModel::dismissNewDialog,
             onConfirm = viewModel::createNewItem,
+            onOpenGallery = { extId, view, name ->
+                viewModel.openExtensionViewPage(extId, if (name.isBlank()) view else "$view:$name")
+            },
             resolveDynamicOptions = viewModel::runTemplateOptionsCommand,
             allowWorkspaceType = breadcrumb.size <= 1,
         )
@@ -1939,6 +2004,10 @@ private fun VirtualDevicePage(
     managerActions: WorkbenchManagerActions,
     modifier: Modifier = Modifier,
 ) {
+    // A device is starting: its adb should be up with it. The setting's own collector only fires
+    // on a change, so anything that stopped adb while the setting stayed on left it down.
+    val virtualDevice = LocalVirtualDevice.current
+    LaunchedEffect(Unit) { virtualDevice.onDeviceStarted() }
     val pack = VirtualDeviceBridge.pack()
     if (pack == null) {
         NoVirtualDeviceNotice(modifier = modifier)
@@ -2099,9 +2168,20 @@ private fun JCodeShell(
     // The Extension Dev tab exists only when Developer options is on, so it's excluded here too —
     // otherwise a persisted ExtensionDev selection would survive turning developer mode off.
     val developerModeEnabled = LocalDeveloperSetting.current.enabled
-    val portraitRightSidebarTabs = remember(developerModeEnabled) {
+    // Where the Android Dev Pack says its device belongs — see VirtualDeviceSetting.inDrawer.
+    // Where the device is *placed* -- the pack's setting -- and whether it is showing there. They
+    // differ while the device is stopped: the panel is what builds the device, so a panel left on
+    // screen would rebuild whatever the Task Manager had just stopped.
+    val devicePlacedInDrawer = virtualDevice.inDrawer && VirtualDeviceBridge.isAvailable
+    val deviceStopped = virtualDevice.stopped
+    val deviceInDrawer = devicePlacedInDrawer && !deviceStopped
+    val portraitRightSidebarTabs = remember(developerModeEnabled, deviceInDrawer) {
         RightPanelTab.entries
-            .filter { it.enabled && (it != RightPanelTab.ExtensionDev || developerModeEnabled) }
+            .filter {
+                it.enabled &&
+                    (it != RightPanelTab.ExtensionDev || developerModeEnabled) &&
+                    (it != RightPanelTab.Device || deviceInDrawer)
+            }
             .toSet()
     }
 
@@ -2219,6 +2299,36 @@ private fun JCodeShell(
             }
         }
     }
+    /**
+     * The device's page for the right drawer to host, or null when it belongs in an editor tab.
+     *
+     * The same [VirtualDevicePage] the editor composes, handed over as a slot so the drawer needs to
+     * know none of what it takes. Remembered so the drawer is not recomposed by a new lambda on
+     * every pass of a shell this large.
+     */
+    val devicePanel: (@Composable (Modifier) -> Unit)? = remember(
+        deviceInDrawer,
+        editorDark,
+        scope,
+        snackbarHostState,
+        managerActions,
+    ) {
+        if (!deviceInDrawer) {
+            null
+        } else {
+            { paneModifier: Modifier ->
+                VirtualDevicePage(
+                    view = VIRTUAL_DEVICE_VIEW,
+                    dark = editorDark,
+                    scope = scope,
+                    snackbarHostState = snackbarHostState,
+                    managerActions = managerActions,
+                    modifier = paneModifier,
+                )
+            }
+        }
+    }
+
     // Saved as a string rather than the sealed type itself: an extension tab is identified by an id,
     // which no enum ordinal can carry across process death.
     var rightPanelKey by rememberSaveable { mutableStateOf(RightPanelSelection.Default.asKey()) }
@@ -2226,6 +2336,31 @@ private fun JCodeShell(
     val rightPanelTab = (rightPanelSelection as? RightPanelSelection.Builtin)?.tab
     fun selectRightPanel(selection: RightPanelSelection) { rightPanelKey = selection.asKey() }
     fun selectRightPanelTab(tab: RightPanelTab) = selectRightPanel(RightPanelSelection.Builtin(tab))
+
+    // The pack asked for its device and its setting puts it here, so this is the half of
+    // VirtualDeviceBridge.revealDevice that JCodeApp does not handle: it opens the editor tab when
+    // the device is a tab, and this brings the drawer up on the device's own panel when it is not.
+    // Exactly one of the two fires for any one request.
+    LaunchedEffect(devicePlacedInDrawer) {
+        if (!devicePlacedInDrawer) return@LaunchedEffect
+        snapshotFlow { VirtualDeviceBridge.revealDevice.intValue }.collect {
+            if (it > 0) {
+                // Keyed on where the device is placed rather than on whether it is showing, so a
+                // stopped device can still be asked for -- by `adb shell am start`, by a run
+                // config, by the Run panel. Being asked for is what un-stops it.
+                virtualDevice.onResume()
+                selectRightPanelTab(RightPanelTab.Device)
+                rightSidebarVisible = true
+            }
+        }
+    }
+    // A selection left pointing at the device's tab after the setting moved it back to the editor
+    // would be a drawer showing nothing: the strip has already stopped offering that tab.
+    LaunchedEffect(deviceInDrawer) {
+        if (!deviceInDrawer && rightPanelSelection == RightPanelSelection.Builtin(RightPanelTab.Device)) {
+            selectRightPanel(RightPanelSelection.Default)
+        }
+    }
     // The Issues pane is this scope's, not that of the caller who built the bundle, so the reveal is
     // attached here: a manager panel reports a failure by pointing at the pane instead of bannering
     // it, and needs a way to bring the pane forward.
@@ -3198,6 +3333,16 @@ private fun JCodeShell(
             icon = JCodeIcon.Search,
         )
         CommandRegistry.register(
+            id = "vdevice.reconnectAdb",
+            title = "Reconnect the virtual device to adb",
+            group = "Virtual device",
+            // The pack's settings screen names this command; the palette offers it too. Both
+            // reach the same place, and neither has to know that the daemon is JCode's.
+            action = virtualDevice.onReconnect,
+            whenPredicate = { virtualDevice.adbAvailable && virtualDevice.enabled },
+            icon = JCodeIcon.Refresh,
+        )
+        CommandRegistry.register(
             id = "settings.openPage",
             title = "Open Settings",
             group = "Settings",
@@ -3712,7 +3857,7 @@ private fun JCodeShell(
                                     installedExtensions.firstOrNull { it.id == appId }?.let { ext ->
                                         // Key by id+view so each extension app/view gets its own host.
                                         key(ext.id, view) {
-                                            if (ext.nativeEntry != null) {
+                                            if (ext.hasNativeUi) {
                                                 // Native wins wherever it exists, the same rule the
                                                 // drawer follows: an extension that draws one surface
                                                 // natively and the next in a WebView would be two
@@ -3894,6 +4039,7 @@ private fun JCodeShell(
                     WorkbenchRightSidebar(
                         selected = rightPanelSelection,
                         vsixExtensions = vsixExtensions,
+                        devicePanel = devicePanel,
                         selectedProject = selectedProject,
                         terminalSessionIds = terminalSessionIds,
                         selectedTerminalSessionId = selectedTerminalSessionId,
@@ -3929,8 +4075,30 @@ private fun JCodeShell(
     // does ONE relayout per toggle; the keyboard then slides over an already-settled layout.
     Box(modifier = modifier.fillMaxSize().windowInsetsPadding(WindowInsets.imeAnimationTarget)) {
         if (usesModalWorkspace) {
+            // Gestures only while it is OPEN, so the swipe that closes it still works and the one
+            // that opened it no longer exists. A ModalNavigationDrawer takes horizontal drags across
+            // its WHOLE content, and this shell's content is full of surfaces that want them: the
+            // designer pans its canvas, the SDK manager scrolls a table, the terminal selects text,
+            // and the virtual device relays every touch to the app inside it. All of them were
+            // fighting the drawer for the same gesture, and near the left edge the drawer won.
+            // No drag-to-open, deliberately. A ModalNavigationDrawer takes horizontal drags across
+            // its WHOLE content by default, and this shell's content is made of surfaces that want
+            // them: the designer pans its canvas, the SDK manager scrolls a table sideways, the
+            // terminal selects text, and the virtual device hands every touch to the app inside it.
+            // All of them were losing the gesture to the drawer.
+            //
+            // Confining it to a left edge was the obvious answer and is not available: on gesture
+            // navigation that edge belongs to the system's Back, which takes the drag mid-gesture and
+            // leaves the app with a cancel. Measured — the same pull opens the drawer with three-
+            // button navigation and never arrives with gestural. `systemGestureExclusion` can claim
+            // it back for at most 200dp of a screen's height, which is a drawer that works in a band
+            // and not above or below it.
+            //
+            // So the button in the app bar opens it, and gestures are for closing what is already
+            // open — where they cover the drawer itself and conflict with nothing.
             ModalNavigationDrawer(
                 drawerState = compactDrawerState,
+                gesturesEnabled = compactDrawerState.isOpen,
                 drawerContent = drawerContent,
                 content = content,
             )
@@ -3962,6 +4130,7 @@ private fun JCodeShell(
                         WorkbenchRightSidebar(
                             selected = rightPanelSelection.clampedTo(portraitRightSidebarTabs),
                             vsixExtensions = vsixExtensions,
+                            devicePanel = devicePanel,
                             selectedProject = selectedProject,
                             terminalSessionIds = terminalSessionIds,
                             selectedTerminalSessionId = selectedTerminalSessionId,
@@ -4267,6 +4436,8 @@ private fun WorkspacePanel(
                         modifier = Modifier.fillMaxSize(),
                         progress = LocalCatalogProgress.current,
                         onShowIssues = managerActions.onShowIssues,
+                        managers = managerActions.toolchainManagers,
+                        onOpenManager = managerActions.onOpenToolchainManager,
                     )
 
                     WorkbenchTool.DbManager -> DbManagerPanel(
@@ -4283,6 +4454,7 @@ private fun WorkspacePanel(
                         onExec = managerActions.onExtensionExec,
                         onApiRequest = managerActions.onExtensionApiRequest,
                         events = managerActions.extensionEvents,
+                        onSnackbar = onSnackbar,
                         modifier = Modifier.fillMaxSize(),
                     )
 
@@ -4713,6 +4885,15 @@ private fun terminalTabLabel(raw: String?): String {
 private fun WorkbenchRightSidebar(
     selected: RightPanelSelection,
     vsixExtensions: List<dev.blamspot.jcode.feature.marketplace.InstalledExtension>,
+    /**
+     * The virtual device, when it belongs in this drawer rather than in an editor tab — null when it
+     * does not, which is also what hides its tab.
+     *
+     * A slot rather than the four things the device's page needs, because those live where the
+     * editor's pages are composed and this drawer has no business knowing about any of them. It is
+     * also the honest shape of the decision: either there is a device to show here or there is not.
+     */
+    devicePanel: (@Composable (Modifier) -> Unit)?,
     selectedProject: Project?,
     terminalSessionIds: List<String>,
     selectedTerminalSessionId: String,
@@ -4767,7 +4948,8 @@ private fun WorkbenchRightSidebar(
                         .filter {
                             it.enabled &&
                                 (it != RightPanelTab.Devtools || BuiltinBrowser.everOpened.value) &&
-                                (it != RightPanelTab.ExtensionDev || devMode)
+                                (it != RightPanelTab.ExtensionDev || devMode) &&
+                                (it != RightPanelTab.Device || devicePanel != null)
                         }
                         .forEach { tab ->
                             RightPanelTabItem(
@@ -4809,6 +4991,7 @@ private fun WorkbenchRightSidebar(
             } else {
                 WorkbenchRightSidebarBody(
                     tab = (selected as? RightPanelSelection.Builtin)?.tab ?: RightPanelTab.Terminal,
+                    devicePanel = devicePanel,
                     selectedProject = selectedProject,
                     terminalSessionIds = terminalSessionIds,
                     selectedTerminalSessionId = selectedTerminalSessionId,
@@ -4841,6 +5024,7 @@ private const val ADB_CATALOG_ENTRY = "adb"
 private const val SCM_VISIBLE_REFRESH_MS = 3_000L
 
 /** The gap between the docked panes, and the touch target that resizes them. */
+
 private val SPLIT_HANDLE_WIDTH = 12.dp
 
 /**
@@ -4963,6 +5147,8 @@ private fun VsixTitleActionsMenu(extension: dev.blamspot.jcode.feature.marketpla
 @Composable
 private fun WorkbenchRightSidebarBody(
     tab: RightPanelTab,
+    /** See [WorkbenchRightSidebar]'s parameter of the same name. */
+    devicePanel: (@Composable (Modifier) -> Unit)?,
     selectedProject: Project?,
     terminalSessionIds: List<String>,
     selectedTerminalSessionId: String,
@@ -4982,6 +5168,10 @@ private fun WorkbenchRightSidebarBody(
     modifier: Modifier = Modifier,
 ) {
     when (tab) {
+        // Null only for the moment between the setting changing and the selection following it; the
+        // strip stops offering the tab at the same time, so this is a frame rather than a state.
+        RightPanelTab.Device -> devicePanel?.invoke(modifier)
+
         RightPanelTab.Terminal -> {
             TerminalSidebarContent(
                 selectedProject = selectedProject,

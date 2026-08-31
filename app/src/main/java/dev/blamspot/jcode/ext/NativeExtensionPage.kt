@@ -17,6 +17,7 @@ import dev.blamspot.jcode.WorkbenchNotices
 import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.ext.api.JCodeNativeExtension
 import dev.blamspot.jcode.feature.marketplace.InstalledExtension
+import dev.blamspot.jcode.feature.marketplace.nativeModuleForView
 import java.io.File
 
 /**
@@ -58,8 +59,16 @@ internal fun NativeExtensionPage(
     // Loading is a plain function call, not a suspend one — a DexClassLoader over a local archive is
     // milliseconds — so it is remembered per extension rather than run in a LaunchedEffect, which
     // would flash an empty frame first.
-    val resolved = remember(extension.id, extension.version) {
-        runCatching { NativeExtensionLoader.resolve(context, extension) }
+    // Which archive answers this route is a manifest fact, so it costs a lookup rather than loading
+    // every module the pack ships to ask them in turn.
+    val resolved = remember(extension.id, extension.version, view) {
+        runCatching {
+            val module = extension.nativeModuleForView(view)
+                ?: throw NativeExtensionLoader.LoadFailure(
+                    "${extension.name} has no native module for \"${view ?: "its file surface"}\".",
+                )
+            NativeExtensionLoader.resolve(context, extension, module)
+        }
     }
 
     val failure = resolved.exceptionOrNull()
@@ -99,7 +108,7 @@ internal fun NativeExtensionPage(
     val scope = rememberCoroutineScope()
     val host = remember(file?.path, view, scope) {
         NativeHostBridge(
-            scope = scope,
+            pageScope = scope,
             request = request,
             events = events,
             readFileText = readFile,

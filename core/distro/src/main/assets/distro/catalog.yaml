@@ -336,6 +336,70 @@ entries:
       sudo ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
       go version
 
+  - id: flutter
+    category: languages
+    name: Flutter SDK
+    description: >-
+      Flutter and the Dart SDK, cloned from the flutter/flutter stable channel. Brings `flutter`,
+      `dart` and the Dart analysis server, and precaches the Android engine artifacts so the first
+      build does not stall on a download. Targets the virtual device and Linux desktop. Large
+      download.
+    # arm64 only, and deliberately: Flutter publishes arm64 *engine artifacts*, which is what the
+    # git-clone install below fetches — but its Linux release *tarball* is x86-64 only. That
+    # difference is the whole reason this installs from a clone rather than from an archive.
+    supportedArches: [arm64]
+    # ~1.5GB over a phone connection: the shallow clone, then the Dart SDK, then the Android engine.
+    # The global "Toolchain install timeout" still wins when it is larger.
+    minInstallTimeoutMinutes: 45
+    installScript: |
+      set -e
+      jcode_apt 0 8 "Installing Flutter's prerequisites" git curl unzip xz-utils zip ca-certificates
+      jcode_progress 10 "Cloning the Flutter stable channel"
+      # A shallow clone of one branch. Flutter reads its own version out of git, so this has to be a
+      # repository rather than an unpacked archive — but it does not have to be the whole history.
+      if [ -d /opt/flutter/.git ]; then
+        # `reset --hard`, not `checkout FETCH_HEAD`: Flutter reads its channel from the branch it is
+        # on, and a detached HEAD makes it announce that it is "not currently on a released channel"
+        # and refuse to look for updates. This moves `stable` and stays on it.
+        sudo git -C /opt/flutter fetch --depth 1 origin stable
+        sudo git -C /opt/flutter reset --hard FETCH_HEAD
+      else
+        sudo rm -rf /opt/flutter
+        sudo git clone --depth 1 -b stable https://github.com/flutter/flutter.git /opt/flutter
+      fi
+      # Flutter shells out to git constantly, and git refuses a repository owned by another user.
+      # `--system`, so it holds for every user here: toolchains install as the runtime user while
+      # terminals run as root, and a `--global` entry would cover exactly one of them — the tool
+      # would work during the install and fail with "dubious ownership" for ever afterwards.
+      sudo git config --system --add safe.directory /opt/flutter || true
+      sudo chmod -R a+rX /opt/flutter
+      sudo ln -sf /opt/flutter/bin/flutter /usr/local/bin/flutter
+      sudo ln -sf /opt/flutter/bin/dart /usr/local/bin/dart
+      jcode_progress 25 "Downloading the Dart SDK (this is the long part)"
+      # The first invocation is what bootstraps bin/cache: the Dart SDK for this architecture, then
+      # the tool's own snapshot. Run as root because /opt is root-owned and the cache lands inside it.
+      sudo /opt/flutter/bin/flutter --version
+      jcode_progress 70 "Turning off Flutter's analytics"
+      sudo /opt/flutter/bin/flutter --disable-analytics >/dev/null 2>&1 || true
+      jcode_progress 75 "Precaching the Android engine"
+      # Done here rather than left to the first build, which would otherwise spend several minutes
+      # downloading with nothing but a Gradle task name on screen.
+      sudo /opt/flutter/bin/flutter precache --android --no-universal >/dev/null 2>&1 || true
+      sudo chmod -R a+rX /opt/flutter
+      jcode_progress 100 "Flutter ready"
+    # Not `flutter --version`: that talks to git and can touch the network, so a healthy install
+    # reads as broken on a bad connection. The two binaries the SDK is made of are the fact.
+    verifyScript: |
+      test -x /opt/flutter/bin/flutter && test -x /opt/flutter/bin/cache/dart-sdk/bin/dart && echo ready
+    uninstallScript: |
+      sudo rm -rf /opt/flutter /usr/local/bin/flutter /usr/local/bin/dart
+    # Exit 0 when the tracked stable tip has moved past what is checked out, which is what every
+    # other entry here means by "an update is available".
+    updateCheckScript: |
+      test -d /opt/flutter/.git || exit 1
+      git -C /opt/flutter fetch --depth 1 origin stable >/dev/null 2>&1 || exit 1
+      [ "$(git -C /opt/flutter rev-parse HEAD)" != "$(git -C /opt/flutter rev-parse FETCH_HEAD)" ]
+
   - id: rust
     category: build-tools
     name: Rust toolchain
@@ -453,12 +517,9 @@ entries:
   - id: android-sdk
     category: android
     name: Android SDK
-    description: Command-line tools, Android platforms, build-tools and the latest Gradle, wired with the ARM-native aapt2 so on-device Gradle builds (assembleDebug) produce a real APK. Several platforms can be installed side by side and a project picks any of them with compileSdk; the newest one this device's aapt2 can actually read is the default and is recorded in android-sdk/jcode-compile-sdk.txt. That is NOT the newest platform that exists — the version list marks the ones this device cannot build against. Gradle is exposed at /opt/gradle/current and on PATH. Requires the Android SDK prerequisites. Large download.
+    description: Command-line tools, Android platforms, build-tools and the latest Gradle, wired with the ARM-native aapt2 so on-device Gradle builds (assembleDebug) produce a real APK. Several platforms can be installed side by side and a project picks any of them with compileSdk; the newest one this device's aapt2 can actually read is the default and is recorded in android-sdk/jcode-compile-sdk.txt. That is NOT the newest platform that exists — this device's aapt2 cannot read the newest ones at all. Gradle is exposed at /opt/gradle/current and on PATH. Requires the Android SDK prerequisites. Large download.
     supportedArches: [arm64]
     requiredSdks: [android-prereqs]
-    # The SDK keeps every platform in its own platforms/android-<api> directory, so they coexist with
-    # no extra machinery — only the shared base (command-line tools, build-tools, Gradle) is single.
-    multiVersion: true
     # Several hundred MB over a phone connection. The global "Toolchain install timeout" setting still
     # wins when it is larger; this only stops a short default from killing a healthy install midway.
     minInstallTimeoutMinutes: 45
@@ -529,7 +590,7 @@ entries:
       for R in repository2-3.xml repository2-1.xml; do
         if wget -q --timeout=60 --tries=3 -O /tmp/android-repo.xml "https://dl.google.com/android/repository/$R"; then
           REPO_XML=/tmp/android-repo.xml
-          # Kept so the version picker still has a list when the network is down (see versionsScript).
+          # Kept so a retried install still has a manifest when the network is down.
           mkdir -p "$HOME/.cache/jcode" 2>/dev/null || true
           cp -f /tmp/android-repo.xml "$HOME/.cache/jcode/android-repo.xml" 2>/dev/null || true
           break
@@ -728,20 +789,31 @@ entries:
       # that) and its resource dir, which carries the Android compiler-rt, libunwind and builtin
       # headers. Without -rtlib/-unwindlib Ubuntu's driver defaults reach for -lgcc, which Android
       # does not have, and the link dies with "unable to find library -lgcc".
-      command -v clang >/dev/null 2>&1 && for NDK in "$ANDROID_HOME"/ndk/*/; do
+      for NDK in "$ANDROID_HOME"/ndk/*/; do
         PRE="${NDK}toolchains/llvm/prebuilt/linux-x86_64"
         [ -d "$PRE/bin" ] || continue
+        # The clang shims need the distro's clang; the binutils links below do not. Gating the
+        # whole loop on clang, which is what this used to do, left an NDK installed from the SDK
+        # Manager without the C/C++ pack beside it completely unpatched, an ordinary thing to have.
         RES=$(ls -d "$PRE"/lib/clang/* 2>/dev/null | head -1)
-        [ -n "$RES" ] || continue
-        for t in clang clang++; do
-          head -c 200 "$PRE/bin/$t" 2>/dev/null | grep -q jcode-arm && continue
-          rm -f "$PRE/bin/$t"
-          printf '#!/bin/sh\n# jcode-arm\nexec /usr/bin/%s -resource-dir %s -rtlib=compiler-rt -unwindlib=libunwind "$@"\n' "$t" "$RES" > "$PRE/bin/$t"
-          chmod 755 "$PRE/bin/$t"
-        done
+        if command -v clang >/dev/null 2>&1 && [ -n "$RES" ]; then
+          for t in clang clang++; do
+            head -c 200 "$PRE/bin/$t" 2>/dev/null | grep -q jcode-arm && continue
+            rm -f "$PRE/bin/$t"
+            printf '#!/bin/sh\n# jcode-arm\nexec /usr/bin/%s -resource-dir %s -rtlib=compiler-rt -unwindlib=libunwind "$@"\n' "$t" "$RES" > "$PRE/bin/$t"
+            chmod 755 "$PRE/bin/$t"
+          done
+        fi
         for t in ld.lld lld llvm-ar llvm-ranlib llvm-strip llvm-nm llvm-objcopy \
                  llvm-objdump llvm-readelf llvm-readobj llvm-strings llvm-symbolizer; do
-          [ -x "/usr/bin/$t" ] && ln -sf "/usr/bin/$t" "$PRE/bin/$t"
+          # Ubuntu ships these under their LLVM version and no other name: /usr/bin/llvm-strip-18
+          # exists, /usr/bin/llvm-strip does not. The unversioned guard this used to have therefore
+          # matched nothing, all twelve symlinks were quietly skipped, and Google's x86_64 originals
+          # survived untouched. Nothing noticed until a build actually invoked one and died in
+          # StripDebugSymbolsRunnable with "A problem occurred starting process".
+          SRC="/usr/bin/$t"
+          [ -x "$SRC" ] || SRC=$(ls "/usr/bin/$t"-[0-9]* 2>/dev/null | sort -V | tail -1)
+          if [ -n "$SRC" ] && [ -x "$SRC" ]; then ln -sf "$SRC" "$PRE/bin/$t"; fi
         done
         echo "patched ${NDK}"
       done
@@ -758,14 +830,36 @@ entries:
       // Written by JCode's android-sdk entry: sdkmanager only publishes x86_64 Linux binaries, so
       // anything AGP downloads mid-build (an NDK, a pinned build-tools) arrives unrunnable on this
       // aarch64 device. Re-apply the ARM patch around configuration so those pieces are fixed
-      // before any task executes them. projectsLoaded catches what earlier builds left; whenReady
-      // catches what THIS build's configuration phase just downloaded.
-      def patch = {
-          try { ["/bin/sh", "/usr/local/bin/jcode-arm-sdk-patch", "-q"].execute().waitFor() }
-          catch (Throwable ignored) { }
+      // before any task executes them. settingsEvaluated catches what earlier builds left;
+      // whenReady catches what THIS build's configuration phase just downloaded.
+      //
+      // Through a ValueSource rather than a bare .execute(), which is what this used to be. Gradle
+      // refuses to start a process during configuration once the configuration cache is on, and
+      // Google's own project templates now ship org.gradle.configuration-cache=true, so the bare
+      // form failed every AGP 9 build outright: "Starting an external process ... during
+      // configuration time is unsupported". A ValueSource is the sanctioned way in — Gradle knows
+      // about the call, so it caches and revalidates it instead of rejecting it. The phase
+      // parameter is load-bearing: results are cached per parameter value, so without something to
+      // tell the two calls apart the second would reuse the first's result and never run.
+      import org.gradle.api.provider.Property
+      import org.gradle.api.provider.ValueSource
+      import org.gradle.api.provider.ValueSourceParameters
+
+      abstract class JCodeArmSdkPatch implements ValueSource<String, JCodeArmSdkPatch.Params> {
+          interface Params extends ValueSourceParameters { Property<String> getPhase() }
+          @Override String obtain() {
+              try { ["/bin/sh", "/usr/local/bin/jcode-arm-sdk-patch", "-q"].execute().waitFor() }
+              catch (Throwable ignored) { }
+              return parameters.phase.get()
+          }
       }
-      gradle.projectsLoaded { patch() }
-      gradle.taskGraph.whenReady { patch() }
+
+      def factory = null
+      def patch = { phase ->
+          factory?.of(JCodeArmSdkPatch) { it.parameters.phase.set(phase) }?.get()
+      }
+      gradle.settingsEvaluated { settings -> factory = settings.providers; patch("settings") }
+      gradle.taskGraph.whenReady { patch("taskgraph") }
       INIT
       done
       # AGP 8+ resolves its OWN aapt2 as a Maven artifact (aapt2-<ver>-linux), which is x86_64 only,
@@ -808,8 +902,8 @@ entries:
       # unbounded: the static build is 2.19-eng.202505, and it reads 36.1 and below but not the 37.x
       # tables Google began shipping after it was cut (measured on an Odin2, 2026-08-19: 34, 35, 36
       # and 36.1 all link; 37.0 and 37.1 do not). Re-measure with `aapt2 link -I <platform>/android.jar`
-      # before raising it — the same number drives the version list's "Unsupported here" marks, and an
-      # over-optimistic ceiling makes the picker recommend a platform nothing here can build against.
+      # before raising it — the Android SDK Manager reads the same ceiling to mark a platform
+      # "Not usable here", so an over-optimistic one lets it offer what nothing here can build against.
       if [ -x /opt/jcode-arm-tools/aapt2 ]; then
         CEILING=36
       else
@@ -821,81 +915,43 @@ entries:
       echo "aapt2 $AAPT2_VER — trying Android platforms from API $CEILING downwards"
 
       jcode_progress 50 "Choosing an Android platform"
-      WANT="${JCODE_VERSION:-}"
-      [ "$WANT" = "latest" ] && WANT=""
       CHOSEN=""
-      if [ -n "$WANT" ]; then
-        # A platform was picked in the version list. Install exactly that one — platforms coexist, so
-        # this ADDS to whatever is already there rather than replacing it.
-        CDIR="android-$WANT"
-        # Refuse before downloading. The list marks these "Unsupported here", but the newest is also
-        # the list head (what the picker preselects), so it is easy to pick one by accident — and
-        # finding out after ~90 MB has been pulled is the sort of failure this entry is meant to stop.
-        WANT_API=$(printf '%s' "$WANT" | sed -E 's/\..*$//')
-        case "$WANT_API" in ''|*[!0-9]*) WANT_API=0 ;; esac
-        if [ "$WANT_API" -gt "$CEILING" ]; then
-          rm -f /tmp/jcode-probe.apk /tmp/jcode-probe-manifest.xml /tmp/jcode-sdkm.log "$REPO_XML"
-          echo "Android platform $WANT cannot be used on this device."
-          echo "aapt2 $AAPT2_VER — the only ARM build available — cannot read the resource tables that"
-          echo "API $((CEILING + 1)) and newer ship, so nothing would ever build against it. Nothing was downloaded."
-          echo "Install API $CEILING or lower; the version list marks those as supported."
-          exit 1
+      # Land a platform that works. One already on disk is free to test, so a retried install never
+      # re-downloads 90 MB, and one left behind by an interrupted run that this aapt2 cannot read is
+      # removed here rather than lingering for ever.
+      for D in $(ls -1 "$ANDROID_HOME/platforms" 2>/dev/null | sort -Vr); do
+        if probe_platform "$D"; then
+          CHOSEN="$D"
+          echo "   reusing the already-installed $D"
+          break
         fi
-        if [ ! -f "$ANDROID_HOME/platforms/$CDIR/android.jar" ]; then
-          echo "== Android platform $CDIR: downloading =="
-          sdkm_run 50 78 "Downloading Android platform $CDIR" "$(pkg_size "platforms;$CDIR")" "platforms;$CDIR"
-        fi
+        echo "   removing $D — this device's aapt2 cannot read its resource table"
+        rm -rf "$ANDROID_HOME/platforms/$D"
+      done
+
+      TRIED=0
+      for CAND in $ALL_PLATFORMS; do
+        [ -n "$CHOSEN" ] && break
+        CDIR="${CAND#platforms;}"
+        API=$(printf '%s' "$CDIR" | sed -E 's/^android-//; s/\..*$//')
+        case "$API" in ''|*[!0-9]*) continue ;; esac
+        # Above the ceiling this aapt2 provably cannot read it; below 30 it is too old to build against.
+        [ "$API" -le "$CEILING" ] || continue
+        [ "$API" -ge 30 ] || continue
+        # Three strikes. Past that the ceiling table is wrong about this device and downloading more
+        # candidates is just burning the user's data.
+        TRIED=$((TRIED + 1))
+        [ "$TRIED" -le 3 ] || break
+        echo "== Android platform $CDIR: downloading and probing =="
+        sdkm_run 50 78 "Downloading Android platform $CDIR" "$(pkg_size "$CAND")" "$CAND"
         if probe_platform "$CDIR"; then
           CHOSEN="$CDIR"
-          echo "   aapt2 links against $CDIR"
-        else
-          # Keep the SDK exactly as it was: only this candidate is removed, so any platform that was
-          # already working still is.
-          rm -rf "$ANDROID_HOME/platforms/$CDIR"
-          rm -f /tmp/jcode-probe.apk /tmp/jcode-probe-manifest.xml /tmp/jcode-sdkm.log "$REPO_XML"
-          echo "Android platform $CDIR downloaded, but this device's aapt2 ($AAPT2_VER) cannot read its"
-          echo "resource table — nothing could ever build against it, so it has been removed again."
-          echo "Choose a platform the version list does not mark as unsupported (API $CEILING or lower)."
-          exit 1
+          echo "   aapt2 links against $CDIR — using it"
+          break
         fi
-      else
-        # No particular version asked for: land one that works. A platform already on disk is free to
-        # test, so a retried install never re-downloads 90 MB, and one left behind by an interrupted
-        # run that this aapt2 cannot read is removed here rather than lingering forever.
-        for D in $(ls -1 "$ANDROID_HOME/platforms" 2>/dev/null | sort -Vr); do
-          if probe_platform "$D"; then
-            CHOSEN="$D"
-            echo "   reusing the already-installed $D"
-            break
-          fi
-          echo "   removing $D — this device's aapt2 cannot read its resource table"
-          rm -rf "$ANDROID_HOME/platforms/$D"
-        done
-
-        TRIED=0
-        for CAND in $ALL_PLATFORMS; do
-          [ -n "$CHOSEN" ] && break
-          CDIR="${CAND#platforms;}"
-          API=$(printf '%s' "$CDIR" | sed -E 's/^android-//; s/\..*$//')
-          case "$API" in ''|*[!0-9]*) continue ;; esac
-          # Above the ceiling this aapt2 provably cannot read it; below 30 it is too old to build against.
-          [ "$API" -le "$CEILING" ] || continue
-          [ "$API" -ge 30 ] || continue
-          # Three strikes. Past that the ceiling table is wrong about this device and downloading more
-          # candidates is just burning the user's data.
-          TRIED=$((TRIED + 1))
-          [ "$TRIED" -le 3 ] || break
-          echo "== Android platform $CDIR: downloading and probing =="
-          sdkm_run 50 78 "Downloading Android platform $CDIR" "$(pkg_size "$CAND")" "$CAND"
-          if probe_platform "$CDIR"; then
-            CHOSEN="$CDIR"
-            echo "   aapt2 links against $CDIR — using it"
-            break
-          fi
-          echo "   aapt2 cannot read $CDIR's resource table — removing it and stepping down"
-          rm -rf "$ANDROID_HOME/platforms/$CDIR"
-        done
-      fi
+        echo "   aapt2 cannot read $CDIR's resource table — removing it and stepping down"
+        rm -rf "$ANDROID_HOME/platforms/$CDIR"
+      done
       if [ -z "$CHOSEN" ]; then
         rm -f /tmp/jcode-probe.apk /tmp/jcode-probe-manifest.xml /tmp/jcode-sdkm.log "$REPO_XML"
         echo "No available Android platform can be read by this device's aapt2 ($AAPT2_VER)."
@@ -984,52 +1040,6 @@ entries:
       [ -d "$HOME/android-sdk/platforms" ] || exit 1
       G=$(wget -qO- https://services.gradle.org/versions/current | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
       [ -n "$G" ] && [ ! -x "/opt/gradle/gradle-$G/bin/gradle" ]
-    # Every Android platform Google publishes that is worth building against here, newest first, each
-    # marked with whether THIS device's aapt2 can actually read it — Google ships no arm64 aapt2, so
-    # we run either the fetched static build or Debian's, and above that build's ceiling a platform
-    # links nowhere (see the install script for where each ceiling comes from). They are still
-    # offered: the ceiling table is a shortcut, and the install probes for real before keeping
-    # anything. Runs without the catalog helpers (the versions fetch is a quiet exec).
-    versionsScript: |
-      A=/usr/lib/android-sdk/build-tools/debian/aapt2
-      CEILING=9999
-      # Both aapt2 builds have a ceiling; they differ in where it is. Keep this in step with the
-      # install script's copy — a version marked Recommended here and refused there is the worst of
-      # both, and that is exactly what an unbounded ceiling produced once 37.x shipped.
-      if [ -x /opt/jcode-arm-tools/aapt2 ]; then
-        CEILING=36
-      elif [ -x "$A" ]; then
-        case "$("$A" version 2>&1 | sed -n 's/.*(aapt) \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1)" in
-          2.19) CEILING=34 ;;
-        esac
-      fi
-      # Google's manifest, cached. A version list that vanishes because one HTTPS request blipped is
-      # worse than a slightly stale one — platforms are only ever added — so a successful fetch is
-      # kept and reused when the next one fails. The install script populates the same cache.
-      CACHE="$HOME/.cache/jcode/android-repo.xml"
-      mkdir -p "$(dirname "$CACHE")" 2>/dev/null || true
-      REPO=""
-      for R in repository2-3.xml repository2-1.xml; do
-        if wget -q --timeout=60 --tries=3 -O /tmp/jcode-platforms.xml "https://dl.google.com/android/repository/$R"; then
-          cp -f /tmp/jcode-platforms.xml "$CACHE" 2>/dev/null || true
-          REPO=/tmp/jcode-platforms.xml; break
-        fi
-      done
-      if [ -z "$REPO" ] && [ -s "$CACHE" ]; then REPO="$CACHE"; fi
-      [ -n "$REPO" ] || exit 1
-      grep -oE 'path="platforms;android-[0-9]+(\.[0-9]+)?"' "$REPO" |
-        sed -E 's/^path="platforms;android-//; s/"$//' | sort -u -Vr |
-        awk -v ceil="$CEILING" '
-          { api = $0; sub(/\..*/, "", api) }
-          api + 0 < 30 { next }
-          api + 0 > ceil + 0 { print $0 "\tUnsupported here"; next }
-          !seen++ { print $0 "\tRecommended"; next }
-          { print $0 "\t" }
-        '
-      rm -f /tmp/jcode-platforms.xml
-    installedVersionsScript: |
-      ls -1 "$HOME/android-sdk/platforms" 2>/dev/null | sed -n 's/^android-//p' | sort -rV
-
   - id: adb
     category: android
     name: ADB (Android Debug Bridge)

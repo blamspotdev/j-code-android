@@ -169,6 +169,17 @@ data class ExtensionContributions(
     val drawerActions: List<ContributedAction> = emptyList(),
     val editorContextActions: List<ContributedAction> = emptyList(),
     val explorerContextActions: List<ContributedAction> = emptyList(),
+    /**
+     * Managers this extension brings to the **Toolchains** panel, listed under "Managers" and opened
+     * as one of its own pages.
+     *
+     * For a toolchain that has a real manager of its own and loses too much as a catalog entry. The
+     * Android SDK is the case this exists for: `sdkmanager` knows about platforms, build-tools, NDKs
+     * and system images, each with a revision and a partially-installed state, and a single
+     * "Android SDK · Installed" row can say none of it. The pack that owns that knowledge draws the
+     * page; JCode only offers the row.
+     */
+    val toolchainActions: List<ContributedAction> = emptyList(),
     val explorerDecorations: Boolean = false,
     val runConfigPresets: List<RunConfigPreset> = emptyList(),
     /**
@@ -184,8 +195,8 @@ data class ExtensionContributions(
 ) {
     val isEmpty: Boolean
         get() = editorStartActions.isEmpty() && drawerActions.isEmpty() && editorContextActions.isEmpty() &&
-            explorerContextActions.isEmpty() && !explorerDecorations && runConfigPresets.isEmpty() &&
-            debugEngines.isEmpty()
+            explorerContextActions.isEmpty() && toolchainActions.isEmpty() && !explorerDecorations &&
+            runConfigPresets.isEmpty() && debugEngines.isEmpty()
 
     companion object {
         val EMPTY = ExtensionContributions()
@@ -341,6 +352,14 @@ enum class SettingType {
     Int,
     /** Free-form text, offered a list of suggestions the extension computes. */
     Autocomplete,
+    /**
+     * A button, not a value.
+     *
+     * For the things an extension's settings screen needs to *offer* rather than remember --
+     * reattaching a device that has come loose, say. It names a command JCode already has; see
+     * [ExtensionSetting.command].
+     */
+    Action,
     /** Free-form text. The default when a type is missing or unrecognized. */
     Str;
 
@@ -350,6 +369,7 @@ enum class SettingType {
             "enum", "select", "choice" -> Enum
             "int", "integer", "number" -> Int
             "autocomplete", "suggest", "combo" -> Autocomplete
+            "action", "button" -> Action
             else -> Str
         }
     }
@@ -374,6 +394,24 @@ data class ExtensionSetting(
      * which is the point: what a tool's models are called is the extension's business, not JCode's.
      */
     val suggestCommand: String? = null,
+    /**
+     * For [SettingType.Action]: the id of a JCode command the button runs.
+     *
+     * A name, not behaviour. The extension says where the control belongs -- on its own settings
+     * screen, beside the thing it acts on -- and JCode says what it does, so a manifest cannot
+     * ask for anything the app does not already offer somewhere else.
+     */
+    val command: String? = null,
+    /** For [SettingType.Action]: the button's own text. Defaults to [label]. */
+    val buttonLabel: String? = null,
+    /**
+     * For [SettingType.Action]: another of this extension's settings that must be on.
+     *
+     * A button whose effect depends on a switch is a button that should be greyed out when the
+     * switch is off, not one that runs and does nothing -- reconnecting a device that is not
+     * running is the case this exists for.
+     */
+    val enabledWhen: String? = null,
 )
 
 /** An extension that has been downloaded and unpacked under the app's install root. */
@@ -398,29 +436,15 @@ data class InstalledExtension(
     /** Relative path (from [dir]) to the extension's web-frontend HTML entry, e.g. "www/index.html". */
     val webUiEntry: String? = null,
     /**
-     * Relative path (from [dir]) to a **native** UI payload — an APK the extension ships, loaded
-     * into JCode's own process on demand. Null for the ordinary WebView-frontend kind.
+     * The **native** payloads this extension ships, each loaded into JCode's own process on demand.
+     * Empty for the ordinary WebView-frontend kind.
      *
-     * An APK rather than a bare dex because a dex has no resource table: a plugin with its own
-     * drawables or strings needs `addAssetPath`, and that takes an archive.
+     * A list rather than one entry because a pack is not one screen. The Android pack ships a layout
+     * designer, an SDK manager and a virtual device; folded into a single archive they shared a
+     * `minSdk` only the device needs, re-dexed together on every edit, and handed the `:guest`
+     * process megabytes of UI it never calls. See [NativeModule].
      */
-    val nativeEntry: String? = null,
-    /** Fully-qualified class in [nativeEntry] implementing `JCodeNativeExtension`. */
-    val nativeClass: String? = null,
-    /**
-     * Fully-qualified class in [nativeEntry] implementing `JCodeVirtualDeviceGuest`, for a pack that
-     * provides JCode's virtual device.
-     *
-     * Named separately from [nativeClass] because it is loaded into a different process — `:guest`,
-     * where the container installs framework hooks the IDE could not survive — by the manifest stub
-     * that owns that process rather than by the page loader. Declaring it is also how JCode knows an
-     * installed pack *has* a device to offer: there is no device without one.
-     */
-    val nativeGuestClass: String? = null,
-    /** Extension-API version [nativeEntry] was built against; must equal JCode's `JCODE_EXT_ABI`. */
-    val nativeAbi: Int = 0,
-    /** What this extension's native UI will draw. Any rule matching is enough. */
-    val nativeClaims: List<NativeClaim> = emptyList(),
+    val nativeModules: List<NativeModule> = emptyList(),
     /** Lowest JCode extension-API version this extension needs (0 = legacy exec-only bridge). */
     val apiMinVersion: Int = 0,
     /** Capability families this extension declares it uses (e.g. "exec", "fs", "workbench"). */
@@ -462,10 +486,82 @@ fun InstalledExtension.languageFor(fileName: String): LanguagePack? =
 fun InstalledExtension.claimsNatively(file: File): Boolean = nativeClaimFor(file) != null
 
 /** The rule by which this extension claims [file], or null when it does not. */
-fun InstalledExtension.nativeClaimFor(file: File): NativeClaim? {
-    if (nativeEntry == null || nativeClass == null) return null
-    return nativeClaims.firstOrNull { it.matches(file) }
+fun InstalledExtension.nativeClaimFor(file: File): NativeClaim? = nativeModuleFor(file)?.second
+
+/** The module that claims [file] and the rule it claimed it by, or null when none does. */
+fun InstalledExtension.nativeModuleFor(file: File): Pair<NativeModule, NativeClaim>? {
+    for (module in nativeModules) {
+        val claim = module.claims.firstOrNull { it.matches(file) } ?: continue
+        return module to claim
+    }
+    return null
 }
+
+/**
+ * The module that answers [view], or null when none does.
+ *
+ * Read from the manifest rather than by asking the code, which is the point of splitting them: the
+ * workbench has to know which archive serves a route *before* it loads one, or it is back to loading
+ * everything to find out.
+ */
+fun InstalledExtension.nativeModuleForView(view: String?): NativeModule? {
+    // One module answers whatever it is asked. That is what a single `entry.native` always did --
+    // the entry class dispatches on the view param itself -- and every extension written before the
+    // list existed has exactly one and declares no `views:`. Requiring the declaration of them too
+    // meant Source Control, the SQL client and the Postgres client all opened to "has no native
+    // module for panel", which is a routing rule reporting itself as a broken extension.
+    //
+    // `views:` is how SIBLINGS are told apart, so it is only consulted when there are siblings.
+    nativeModules.singleOrNull()?.let { return it }
+    if (view.isNullOrBlank()) return nativeModules.firstOrNull { it.claims.isNotEmpty() }
+    // A route may carry an argument after a colon -- `newAndroidProject:MyApp`, which is how the New
+    // Project dialog hands a name to the pack that scaffolds it. Only the part before the colon
+    // names the module; the whole string is still what reaches it, since the argument is the
+    // module's to read.
+    val route = view.substringBefore(':')
+    return nativeModules.firstOrNull { view in it.views || route in it.views }
+}
+
+/** The module carrying the `:guest` half, for a pack that provides the virtual device. */
+fun InstalledExtension.nativeGuestModule(): NativeModule? =
+    nativeModules.firstOrNull { it.guestClass != null }
+
+/** True when this extension ships any native payload at all. */
+val InstalledExtension.hasNativeUi: Boolean get() = nativeModules.isNotEmpty()
+
+/**
+ * One native payload: an archive, the class that fronts it, and what it answers.
+ *
+ * [views] and [claims] are what let the host route without loading. A module that declares neither
+ * is reachable only as an extension's sole native surface, which is the shape a single-purpose
+ * plugin has.
+ */
+data class NativeModule(
+    /** Stable within the extension. Names the load cache and appears in failure messages. */
+    val id: String,
+    /**
+     * Relative path (from the extension's dir) to the payload — `.apk` where the module owns
+     * resources, `.dex` where it builds its UI in code and owns none.
+     */
+    val payload: String,
+    /** Fully-qualified class in [payload] implementing `JCodeNativeExtension`. */
+    val entryClass: String,
+    /**
+     * Fully-qualified class implementing `JCodeVirtualDeviceGuest`, for the module that provides
+     * JCode's virtual device.
+     *
+     * Loaded into a different process — `:guest`, where the container installs framework hooks the
+     * IDE could not survive — by the manifest stub that owns that process rather than by the page
+     * loader. Declaring it is also how JCode knows an installed pack *has* a device to offer.
+     */
+    val guestClass: String? = null,
+    /** Extension-API version [payload] was built against; must equal JCode's `JCODE_EXT_ABI`. */
+    val abi: Int = 0,
+    /** Routes this module answers, matched against a page's `view` param. */
+    val views: Set<String> = emptySet(),
+    /** Files this module's UI will draw. Any rule matching is enough. */
+    val claims: List<NativeClaim> = emptyList(),
+)
 
 /**
  * One rule for a file a native extension will draw.

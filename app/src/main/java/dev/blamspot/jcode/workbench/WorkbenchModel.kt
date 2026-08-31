@@ -178,6 +178,10 @@ internal data class WorkbenchManagerActions(
     val onInstallDebugEngine: (String) -> Unit,
     val onUninstallDebugEngine: (String) -> Unit,
     val onOpenDebugEngineDetail: (String) -> Unit,
+    /** Managers installed extensions contribute to the Toolchains panel, and how to open one. They
+     *  ride with the other manager actions because that panel is the only place they are offered. */
+    val toolchainManagers: List<dev.blamspot.jcode.MainViewModel.ShellContribution> = emptyList(),
+    val onOpenToolchainManager: (dev.blamspot.jcode.MainViewModel.ShellContribution) -> Unit = {},
     val onRefreshMarketplace: () -> Unit,
     val onInstallExtension: (MarketplaceEntry) -> Unit,
     val onUninstallExtension: (String) -> Unit,
@@ -250,6 +254,15 @@ internal enum class RightPanelTab(
     /** Extension-authoring tools (inspector / manifest validator / live log); shown only when
      *  Developer options is enabled (see [dev.blamspot.jcode.design.LocalDeveloperSetting]). */
     ExtensionDev("Ext Dev", JCodeIcon.Extensions, enabled = true),
+
+    /**
+     * The Android Dev Pack's virtual device, when its `deviceSurface` setting puts it here.
+     *
+     * Shown only when a pack actually provides a device *and* has been asked to put it in the
+     * drawer — the device is a real embedded surface with one guest behind it, so it exists in one
+     * place at a time and JCode moves it rather than drawing it twice.
+     */
+    Device("Device", JCodeIcon.Vm, enabled = true),
 }
 
 /**

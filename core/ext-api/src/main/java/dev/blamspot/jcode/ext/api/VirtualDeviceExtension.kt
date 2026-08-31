@@ -2,7 +2,6 @@ package dev.blamspot.jcode.ext.api
 
 import android.content.Intent
 import android.os.IBinder
-import dev.blamspot.jcode.core.distro.adb.AdbServiceHandler
 
 /**
  * The contract between JCode and the extension that provides its **virtual device**.
@@ -101,21 +100,24 @@ interface JCodeVirtualDevice {
     }
 
     /**
-     * The adb connection banner this device answers with, without its terminating NUL.
+     * Start the device's own adb daemon, binding its socket inside [rootfs].
      *
-     * The pack owns it because the properties in it — `ro.product.model` and the rest — are the
-     * device's identity, and the device is the pack's.
+     * Returns what an adb client must be given to reach it -- `adb connect <this>` -- or null if
+     * it could not start. The daemon is the pack's, like the banner it answers with and the
+     * services it serves: everything the device *is* belongs to whoever provides the device.
+     *
+     * What the host still decides is *whether* and *where*: it owns the setting, and it owns the
+     * Linux runtime whose rootfs the socket has to live inside to be reachable from it. It also
+     * attaches the runtime's adb client to the spec this returns, because that client is the
+     * runtime's rather than the device's.
+     *
+     * Defaulted so a pack built before this existed still satisfies the interface; it simply has
+     * no adb, which is what it had.
      */
-    val adbBanner: String
+    suspend fun startAdb(rootfs: java.io.File): String? = null
 
-    /**
-     * The device end of the adb transport: `pm install`, `am start`, `screencap`, `input tap`.
-     *
-     * The daemon itself stays in the app ([dev.blamspot.jcode.core.distro.adb.AdbDaemon]) because
-     * binding a socket in JCode's storage and authenticating against the distro's keys is not
-     * Android-specific and would be the same for any target. What is served over it is.
-     */
-    val adbHandler: AdbServiceHandler
+    /** Stop it again, releasing the socket. */
+    fun stopAdb() {}
 }
 
 /**

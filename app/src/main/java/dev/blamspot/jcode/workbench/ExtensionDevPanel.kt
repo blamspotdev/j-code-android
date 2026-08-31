@@ -154,6 +154,7 @@ private fun InspectorPane(ext: InstalledExtension, modifier: Modifier = Modifier
             if (c.drawerActions.isNotEmpty()) add("drawerActions: ${c.drawerActions.joinToString(", ") { it.id }}")
             if (c.editorContextActions.isNotEmpty()) add("editorContextActions: ${c.editorContextActions.joinToString(", ") { it.id }}")
             if (c.explorerContextActions.isNotEmpty()) add("explorerContextActions: ${c.explorerContextActions.joinToString(", ") { it.id }}")
+            if (c.toolchainActions.isNotEmpty()) add("toolchainActions: ${c.toolchainActions.joinToString(", ") { it.id }}")
             if (c.explorerDecorations) add("explorerDecorations: true")
             if (c.runConfigPresets.isNotEmpty()) add("runConfigPresets: ${c.runConfigPresets.joinToString(", ") { it.id }}")
         }

@@ -23,7 +23,9 @@ import androidx.compose.ui.unit.dp
 fun ManagerListRow(
     name: String,
     description: String,
-    status: ManagerItemStatus,
+    /** Null for a row that is not an installable thing — a manager the list only opens. Every one of
+     *  the three states would be a lie about it, and "Not installed" is the one it would tell. */
+    status: ManagerItemStatus?,
     onClick: () -> Unit,
     checking: Boolean = false,
     checkingLabel: String = "Checking…",
@@ -62,6 +64,8 @@ fun ManagerListRow(
             )
         }
         trailing?.invoke()
-        ManagerStatusChip(status = status, checking = checking, checkingLabel = checkingLabel)
+        if (status != null) {
+            ManagerStatusChip(status = status, checking = checking, checkingLabel = checkingLabel)
+        }
     }
 }

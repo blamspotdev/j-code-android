@@ -45,6 +45,16 @@ object CommandRegistry {
 
     fun all(): List<CommandSpec> = commands.values.toList()
 
+    /**
+     * Runs a command by id, if there is one.
+     *
+     * For a caller that has a *name* rather than a lambda -- an extension whose manifest declares
+     * a `type: action` setting, which says which command its button runs and nothing about what
+     * that command does. Silently does nothing when the id is unknown: a manifest naming a
+     * command this JCode does not have is a button that should do nothing, not a crash.
+     */
+    fun run(id: String): Boolean = commands[id]?.also { it.action() } != null
+
     fun clear() {
         commands.clear()
         version++

@@ -5,12 +5,13 @@ import android.util.Log
 import androidx.compose.runtime.mutableIntStateOf
 import dev.blamspot.jcode.OutputKind
 import dev.blamspot.jcode.OutputLog
-import dev.blamspot.jcode.core.distro.adb.AdbServiceHandler
 import dev.blamspot.jcode.ext.NativeExtensionLoader
 import dev.blamspot.jcode.ext.api.JCodeVirtualDevice
+import java.io.File
 import dev.blamspot.jcode.ext.api.VirtualDeviceHost
 import dev.blamspot.jcode.feature.marketplace.MarketplaceServiceLocator
 import dev.blamspot.jcode.feature.marketplace.InstalledExtension
+import dev.blamspot.jcode.feature.marketplace.nativeGuestModule
 
 internal const val TAG = "VDEVICE"
 
@@ -86,7 +87,7 @@ internal object VirtualDeviceBridge : VirtualDeviceHost {
         val context = appContext ?: return null
         val found = runCatching {
             MarketplaceServiceLocator.extensionInstaller(context).installed()
-                .firstOrNull { it.nativeGuestClass != null && it.nativeEntry != null }
+                .firstOrNull { it.nativeGuestModule() != null }
         }.getOrNull()
         packCache = found
         return found
@@ -110,7 +111,8 @@ internal object VirtualDeviceBridge : VirtualDeviceHost {
     private fun load(): JCodeVirtualDevice? {
         val context = appContext ?: return null
         val extension = pack() ?: return null
-        val instance = runCatching { NativeExtensionLoader.resolve(context, extension).first }
+        val module = extension.nativeGuestModule() ?: return null
+        val instance = runCatching { NativeExtensionLoader.resolve(context, extension, module).first }
             .onFailure { Log.w(TAG, "cannot load the virtual device from ${extension.id}", it) }
             .getOrNull()
         val device = instance as? JCodeVirtualDevice
@@ -121,7 +123,7 @@ internal object VirtualDeviceBridge : VirtualDeviceHost {
         // The pack's OWN context, not JCode's: the device's built-in apps are assets inside the
         // pack's archive, and JCode's AssetManager cannot see them — it answers an empty list, so the
         // device came up empty and said nothing about why.
-        val deviceContext = runCatching { NativeExtensionLoader.assetContext(context, extension) }
+        val deviceContext = runCatching { NativeExtensionLoader.assetContext(context, extension, module) }
             .onFailure { Log.w(TAG, "cannot reach the pack's own assets", it) }
             .getOrDefault(context)
         runCatching { device.attach(this, deviceContext) }
@@ -167,25 +169,32 @@ internal object VirtualDeviceBridge : VirtualDeviceHost {
      * a reason to load a multi-megabyte archive: a device that was never loaded is a device that is
      * already off.
      */
-    fun shutdown() {
-        (resolved as? JCodeVirtualDevice)?.let { runCatching { it.shutdown() } }
+    fun shutdown(loadIfNeeded: Boolean = false) {
+        // The device's page loads the pack itself, through `NativeExtensionLoader`, so the device
+        // that is running is often one this object has never held -- and a shutdown that only
+        // consults the cached field then does nothing at all. [loadIfNeeded] is for a person who
+        // asked it to stop; teardown keeps the old rule, since a device that was never loaded is
+        // already off and not a reason to load a multi-megabyte archive.
+        val live = (resolved as? JCodeVirtualDevice) ?: if (loadIfNeeded) device() else null
+        live?.let { runCatching { it.shutdown() } }
+        // Forgotten as well as shut down: what is cached here should describe a device that
+        // exists. The next ask reloads it, which is what `device()` is for.
+        resolved = Unresolved
     }
 
     /**
-     * The device end of adb, for [dev.blamspot.jcode.core.distro.adb.AdbDaemon].
+     * Ask the device to start its own adb daemon, with its socket inside [rootfs].
      *
-     * Answers with a handler that refuses every service when no pack is installed, rather than with
-     * null. The daemon is started by the distro's adb client reaching a socket, and "unsupported"
-     * printed by `adb shell` is a far better outcome than a connection that opens and then dies.
+     * Returns the `adb connect` spec, or null when there is no pack to ask. That is the whole of
+     * what the host does here: the daemon, the banner it answers with and everything it serves
+     * are the pack's, and with no pack installed there is nothing listening rather than something
+     * listening that says it cannot help.
      */
-    fun adb(): Pair<String, AdbServiceHandler> {
-        val device = device()
-            ?: return NO_DEVICE_BANNER to AdbServiceHandler { stream ->
-                stream.write(
-                    "(jcode) no virtual device: install the Android Dev Pack to run APKs here\n",
-                )
-            }
-        return device.adbBanner to device.adbHandler
+    suspend fun startAdb(rootfs: File): String? = device()?.startAdb(rootfs)
+
+    /** Stop it. Does not load the pack to do it -- a device never loaded has no daemon running. */
+    fun stopAdb() {
+        (resolved as? JCodeVirtualDevice)?.let { runCatching { it.stopAdb() } }
     }
 
     // --- VirtualDeviceHost ---------------------------------------------------------------------
@@ -212,5 +221,4 @@ internal object VirtualDeviceBridge : VirtualDeviceHost {
         OutputLog.append(line, if (error) OutputKind.Error else OutputKind.Stdout)
     }
 
-    private const val NO_DEVICE_BANNER = "device::ro.product.name=jcode;features="
 }

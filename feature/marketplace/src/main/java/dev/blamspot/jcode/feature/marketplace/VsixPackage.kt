@@ -331,6 +331,10 @@ object VsixPackage {
         SettingType.Enum -> "enum"
         SettingType.Int -> "int"
         SettingType.Autocomplete -> "autocomplete"
+        // A VSIX has no way to declare one -- `contributes.configuration` is values only -- so
+        // nothing here ever produces it. Named rather than folded into `else` so adding a type
+        // to the enum keeps failing here until somebody decides what a VSIX should say.
+        SettingType.Action -> "action"
         SettingType.Str -> "str"
     }
 

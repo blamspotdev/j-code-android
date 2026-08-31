@@ -402,6 +402,9 @@ class ExtensionInstaller internal constructor(context: Context) {
                 options = s.strList("options"),
                 description = s.str("description"),
                 suggestCommand = s.str("suggestCommand"),
+                command = s.str("command"),
+                buttonLabel = s.str("buttonLabel") ?: s.str("button"),
+                enabledWhen = s.str("enabledWhen"),
             )
         }
         return InstalledExtension(
@@ -419,11 +422,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             languages = languages,
             iconFile = findIconFile(dir),
             webUiEntry = findWebUiEntry(dir),
-            nativeEntry = nativeEntry(dir),
-            nativeClass = nativeHeader(dir).str("class"),
-            nativeGuestClass = nativeHeader(dir).str("guest"),
-            nativeAbi = (nativeHeader(dir)["abi"] as? Number)?.toInt() ?: 0,
-            nativeClaims = parseNativeClaims(nativeHeader(dir)),
+            nativeModules = parseNativeModules(dir),
             apiMinVersion = (map["api"] as? Map<*, *>)?.toStringKeyMap()?.str("minApiVersion")?.toIntOrNull() ?: 0,
             apiCapabilities = (map["api"] as? Map<*, *>)?.toStringKeyMap()?.strList("capabilities") ?: emptyList(),
             settings = settings,
@@ -497,27 +496,48 @@ class ExtensionInstaller internal constructor(context: Context) {
         )
     }
 
-    private fun nativeHeader(dir: File): Map<String, Any?> =
-        ((headerMap(dir)["entry"] as? Map<*, *>)?.toStringKeyMap()?.get("native") as? Map<*, *>)
-            ?.toStringKeyMap().orEmpty()
-
-    // The native payload the header declares, if it is actually there. Deliberately NOT checked for
-    // signature here: install-time is the wrong place, because an extension may legitimately be
-    // sideloaded unsigned for development and only its *native* half is refused. The loader makes
-    // that call, where it can say so to the user (see NativeExtensionLoader.resolve).
     /**
-     * The native payload the header names: `dex` for a plugin that owns no resources, `apk` for one
-     * that does.
+     * The `entry.native` list, or empty.
      *
-     * Both load the same way — a DexClassLoader takes either — so the choice is only whether there
-     * is a resource table to attach. A plugin that builds its UI in code needs none, and an APK just
-     * to carry an empty one is an archive for nothing.
+     * A list, because a pack is not one screen: the Android pack ships a designer, an SDK manager
+     * and a virtual device, and folding them into one archive made the `:guest` process load two
+     * UIs it never calls. A module whose payload is not actually there is dropped rather than
+     * carried as a promise the loader would fail on later.
      */
-    private fun nativeEntry(dir: File): String? {
-        val header = nativeHeader(dir)
-        return listOfNotNull(header.str("dex"), header.str("apk"))
-            .firstOrNull { it.isNotBlank() && File(dir, it).isFile }
+    // Payloads are deliberately NOT signature-checked here: install-time is the wrong place, because
+    // an extension may legitimately be sideloaded unsigned for development and only its *native*
+    // half is refused. The loader makes that call, where it can say so to the user.
+    //
+    // `dex` for a module that owns no resources, `apk` for one that does. Both load the same way --
+    // a DexClassLoader takes either -- so the choice is only whether there is a resource table to
+    // attach, and an APK carrying an empty one is an archive for nothing.
+    private fun parseNativeModules(dir: File): List<NativeModule> =
+        nativeHeaders(dir).mapIndexedNotNull { index, header ->
+            val payload = listOfNotNull(header.str("dex"), header.str("apk"))
+                .firstOrNull { it.isNotBlank() && File(dir, it).isFile } ?: return@mapIndexedNotNull null
+            val entryClass = header.str("class")?.takeIf { it.isNotBlank() } ?: return@mapIndexedNotNull null
+            NativeModule(
+                id = header.str("id")?.takeIf { it.isNotBlank() } ?: "native-$index",
+                payload = payload,
+                entryClass = entryClass,
+                guestClass = header.str("guest")?.takeIf { it.isNotBlank() },
+                abi = (header["abi"] as? Number)?.toInt() ?: 0,
+                views = header.strList("views").filter { it.isNotBlank() }.toSet(),
+                claims = parseNativeClaims(header),
+            )
+        }
+
+    // `entry.native` is a list. A single mapping is still read as one module, which is what a
+    // one-surface plugin writes and what there is no reason to make it stop writing.
+    private fun nativeHeaders(dir: File): List<Map<String, Any?>> {
+        val native = (headerMap(dir)["entry"] as? Map<*, *>)?.toStringKeyMap()?.get("native")
+        return when (native) {
+            is List<*> -> native.mapNotNull { (it as? Map<*, *>)?.toStringKeyMap() }
+            is Map<*, *> -> listOf(native.toStringKeyMap())
+            else -> emptyList()
+        }
     }
+
 
     // The icon path the header declares (images.icon), else a conventional location; null if absent.
     private fun findIconFile(dir: File): File? {
@@ -579,6 +599,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             requires = map.listOfAny("requires").mapNotNull { it?.toString()?.takeIf(String::isNotBlank) },
             inputs = inputs,
             recipe = recipe,
+            gallery = map.str("gallery")?.trim().orEmpty(),
         )
     }
 
@@ -756,6 +777,7 @@ class ExtensionInstaller internal constructor(context: Context) {
             drawerActions = actions("drawerActions"),
             editorContextActions = actions("editorContextActions"),
             explorerContextActions = actions("explorerContextActions"),
+            toolchainActions = actions("toolchainActions"),
             explorerDecorations = map["explorerDecorations"] == true || map.str("explorerDecorations") == "true",
             runConfigPresets = runPresets,
             debugEngines = debugEngines,

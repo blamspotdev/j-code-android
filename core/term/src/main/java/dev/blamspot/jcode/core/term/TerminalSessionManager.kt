@@ -220,6 +220,44 @@ class TerminalSessionManager(
     @Volatile
     var virtualDeviceAdbSpec: String = ""
 
+    /**
+     * Present the virtual device by its serial rather than by the socket it is bound to.
+     *
+     * adb takes a transport's serial to be whatever it was connected with, so where every other
+     * device reports a serial this one reported the path of a socket inside JCode's storage — to
+     * `adb devices`, and to everything downstream of it. The socket is named after the device's
+     * serial now (the pack does that half), and this shim is what keeps the `localfilesystem:/run/`
+     * in front of it off the listing. /usr/local/bin is early on PATH, so it shadows the distro's
+     * adb without replacing it, and it is removed again — ours only — when the device stops.
+     *
+     * A serial it prints is one that works: `adb -s <serial>` and `ANDROID_SERIAL=<serial>` both
+     * reach the device. `ANDROID_SERIAL` is still *exported* as the spec, because AGP and ddmlib
+     * read it themselves and match it against what the adb server reports, which is the spec.
+     *
+     * Called when the device's adb starts and stops as well as at session start: a terminal that
+     * was already open when the device came up would otherwise be the one place still showing a
+     * socket path.
+     */
+    fun installAdbShim(rootfsPath: File) {
+        runCatching {
+            val shim = File(File(rootfsPath, "usr/local/bin").apply { mkdirs() }, "adb")
+            val body = virtualDeviceAdbSpec.substringAfterLast('/')
+                .takeIf { serial -> serial.length in 6..32 && serial.all(Char::isLetterOrDigit) }
+                ?.let { serial ->
+                    resolveGuestAdb(rootfsPath, androidSdkGuestPath(rootfsPath))
+                        ?.let { real -> adbSerialShim(real, virtualDeviceAdbSpec, serial) }
+                }
+            if (body != null) {
+                if (!shim.exists() || shim.readText() != body) {
+                    shim.writeText(body)
+                    shim.setExecutable(true, false)
+                }
+            } else if (shim.exists() && shim.readText().startsWith(ADB_SHIM_MARKER)) {
+                shim.delete()
+            }
+        }
+    }
+
     private fun adbEnvVars(): Map<String, String> {
         virtualDeviceAdbSpec.takeIf { it.isNotEmpty() }?.let { spec ->
             return mapOf("ANDROID_SERIAL" to spec)
@@ -365,6 +403,8 @@ class TerminalSessionManager(
                 script.delete()
             }
         }
+
+        installAdbShim(rootfsPath)
 
         // Foreign-arch environment: ensure the QEMU emulator is extracted before spawning.
         if (prootManager.needsQemu(rootfsArch) && !prootManager.isQemuInstalled(rootfsArch)) {
@@ -822,6 +862,69 @@ private val NESTED_SHELL_NAMES = listOf("bash", "dash", "ash", "zsh", "ksh", "mk
 private const val NSH_MARKER = "#!/bin/sh\n# jcode-nsh-wrapper"
 
 private const val ADB_PROFILE_MARKER = "# jcode-adb (generated — edits are overwritten)"
+
+// Leading bytes of the adb shim, so only our own /usr/local/bin/adb is removed when the virtual
+// device stops (a distro's real adb there, if any, is left alone).
+private const val ADB_SHIM_MARKER = "#!/bin/sh\n# jcode-vdevice-adb"
+
+/** Absolute GUEST path of the real adb, or null when the distro has none to shim. Skips usr/local,
+ *  where the shim itself lives: an adb that found itself on PATH would exec itself forever. */
+private fun resolveGuestAdb(rootfsPath: File, sdkGuestPath: String?): String? {
+    for (dir in listOf("usr/bin", "bin", "usr/sbin", "sbin")) {
+        val file = File(rootfsPath, "$dir/adb")
+        if (file.exists() && !file.isDirectory) return "/$dir/adb"
+    }
+    val sdk = sdkGuestPath ?: return null
+    return "$sdk/platform-tools/adb".takeIf { File(rootfsPath, it.trimStart('/')).exists() }
+}
+
+/** The adb shim: [real] is the adb it defers to, for a device reached at [spec] and called [serial]. */
+private fun adbSerialShim(real: String, spec: String, serial: String): String =
+    ADB_SERIAL_SHIM_TEMPLATE.replace("__REAL__", real).replace("__SPEC__", spec).replace("__SERIAL__", serial)
+
+// Shows the virtual device under its serial instead of the socket spec adb derives a serial from,
+// and accepts that serial back. Everything but the two commands that report one is exec'd untouched,
+// so no binary stream (`adb exec-out screencap -p`, `adb pull`) passes through anything of ours.
+private val ADB_SERIAL_SHIM_TEMPLATE = """#!/bin/sh
+# jcode-vdevice-adb v1 — generated, edits are overwritten.
+# The real adb is baked in rather than looked up: an adb that found itself would exec itself forever.
+real='__REAL__'
+spec='__SPEC__'
+serial='__SERIAL__'
+[ -x "${'$'}real" ] || { echo "adb: ${'$'}real is missing" >&2; exit 127; }
+
+[ "${'$'}{ANDROID_SERIAL:-}" = "${'$'}serial" ] && export ANDROID_SERIAL="${'$'}spec"
+
+# -s <serial> means the same device.
+swap=0; n=${'$'}#
+while [ "${'$'}n" -gt 0 ]; do
+  arg=${'$'}1; shift; n=${'$'}((n - 1))
+  [ "${'$'}swap" = 1 ] && [ "${'$'}arg" = "${'$'}serial" ] && arg=${'$'}spec
+  case "${'$'}arg" in -s) swap=1 ;; *) swap=0 ;; esac
+  set -- "${'$'}@" "${'$'}arg"
+done
+
+# The subcommand, past adb's own options.
+cmd=; skip=0
+for arg in "${'$'}@"; do
+  [ "${'$'}skip" = 1 ] && { skip=0; continue; }
+  case "${'$'}arg" in
+    -s|-t|-H|-P|-L|--one-device) skip=1 ;;
+    -*) ;;
+    *) cmd=${'$'}arg; break ;;
+  esac
+done
+
+case "${'$'}cmd" in
+  devices|get-serialno)
+    out=${'$'}("${'$'}real" "${'$'}@"); status=${'$'}?
+    printf '%s\n' "${'$'}out" | sed "s|${'$'}spec|${'$'}serial|g"
+    exit ${'$'}status
+    ;;
+esac
+
+exec "${'$'}real" "${'$'}@"
+"""
 
 // Relocation tokens are interpolated into guest and host paths, so restrict them to a safe charset.
 private val NSH_TOKEN_RE = Regex("[A-Za-z0-9_]+")
