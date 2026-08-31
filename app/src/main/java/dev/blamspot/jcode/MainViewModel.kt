@@ -1336,6 +1336,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var virtualDeviceAdbServer: Process? = null
 
     /**
+     * Whether the device's adb is actually up.
+     *
+     * Not the setting: the setting is what the user asked for, and this is what is true. They
+     * part company the moment anything stops it -- the Task Manager, for one, which otherwise
+     * went on listing an adb it had just been told to stop.
+     */
+    @Volatile
+    private var virtualDeviceAdbRunning = false
+
+    /**
      * The rootfs the device's adb socket goes inside: the selected distro's own.
      *
      * That is what makes it reachable from the distro without a new proot bind -- `<rootfs>/run/x`
@@ -1366,6 +1376,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec = spec
+        virtualDeviceAdbRunning = true
         // The daemon only trusts the distro's own adbkey.pub, and adb does not create one until it
         // has run once — so mint it before connecting, or the first connection is refused for want
         // of a key rather than because anything is wrong.
@@ -1395,8 +1406,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun stopVirtualDeviceAdb() {
+        virtualDeviceAdbRunning = false
         runCatching { virtualDeviceAdbServer?.destroy() }
         virtualDeviceAdbServer = null
+        // `adb start-server` daemonises, so destroying the session that started it leaves the
+        // server behind -- still listed, still holding the device it can no longer reach. It is
+        // the runtime's own server and this is what started it, so this is what ends it.
+        runCatching { distroService.spawnStdioProcess(command = "adb kill-server") }
         runCatching { VirtualDeviceBridge.stopAdb() }
         TerminalSessionHost.manager(appContext).virtualDeviceAdbSpec = ""
     }
@@ -5261,6 +5277,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val hasHost: Boolean,
         val serviceCount: Int,
         val suspended: Boolean,
+        /** A virtual device this extension is running: a `:guest` process, and what is in it. */
+        val hasDevice: Boolean = false,
+        /** The device's adb daemon, which is the extension's too. */
+        val hasAdb: Boolean = false,
     )
 
     private val _suspendedBackgroundExtensions = MutableStateFlow<Set<String>>(emptySet())
@@ -5275,13 +5295,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val serviceCounts = runtimeServices.keys.groupingBy { it.substringBefore(' ') }.eachCount()
         val suspended = _suspendedBackgroundExtensions.value
         val names = installedExtensions.value.associate { it.id to it.name }
-        return (scmIds + vsixIds + serviceCounts.keys + suspended).map { id ->
+        // The pack that provides the virtual device does background work of a kind this list did
+        // not know about: it has no WebView host and starts no `service.start` server, so it never
+        // appeared here at all -- while a running device is a whole `:guest` process, an adb
+        // daemon, and a proot tree of `adb`, `sh` and `sleep` that the Processes list below shows
+        // as six anonymous rows nobody could connect to the pack they belong to.
+        val devicePack = installedExtensions.value.firstOrNull { it.nativeGuestModule() != null }
+        val deviceRunning = devicePack != null && VirtualDeviceBridge.isRunning
+        val adbRunning = devicePack != null && virtualDeviceAdbRunning
+        val deviceId = devicePack?.id?.takeIf { deviceRunning || adbRunning }
+        return (scmIds + vsixIds + serviceCounts.keys + suspended + listOfNotNull(deviceId)).map { id ->
             BackgroundExtensionInfo(
                 id = id,
                 name = names[id] ?: id,
                 hasHost = id in scmIds || id in vsixIds,
                 serviceCount = serviceCounts[id] ?: 0,
                 suspended = id in suspended,
+                hasDevice = id == deviceId && deviceRunning,
+                hasAdb = id == deviceId && adbRunning,
             )
         }.sortedBy { it.name.lowercase() }
     }
@@ -5292,6 +5323,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopBackgroundExtension(id: String) {
         viewModelScope.launch(Dispatchers.Main) {
             reapExtensionServices(id)
+            // A pack that provides the device is also running the device: turning it off here has
+            // to take the `:guest` process and the adb that serves it, or the row says stopped and
+            // the processes below carry on. `shutdown` rather than a kill -- the device has a door.
+            if (installedExtensions.value.firstOrNull { it.id == id }?.nativeGuestModule() != null) {
+                VirtualDeviceBridge.shutdown()
+                stopVirtualDeviceAdb()
+            }
             if (id in liveExtensionHosts || dev.blamspot.jcode.workbench.ScmWebViewHolder.get(id) != null) {
                 _suspendedBackgroundExtensions.update { it + id }
                 liveExtensionHosts.remove(id)

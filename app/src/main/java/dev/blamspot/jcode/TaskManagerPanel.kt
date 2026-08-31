@@ -289,6 +289,8 @@ private fun BackgroundExtensionRow(
         buildList {
             if (info.hasHost) add("background host")
             if (info.serviceCount > 0) add("${info.serviceCount} server${if (info.serviceCount > 1) "s" else ""}")
+            if (info.hasDevice) add("virtual device")
+            if (info.hasAdb) add("device adb")
         }.joinToString(" · ").ifEmpty { "running" }
     }
     Surface(

@@ -96,6 +96,15 @@ internal object VirtualDeviceBridge : VirtualDeviceHost {
     /** True when a device could be opened. What the workbench hides its device surfaces on. */
     val isAvailable: Boolean get() = pack() != null
 
+    /**
+     * True while a device has actually been built, rather than merely being on offer.
+     *
+     * What the Task Manager lists the pack under: a device that has been opened is a `:guest`
+     * process and, with the setting on, an adb daemon -- background work somebody may want to see
+     * and stop, and which until now appeared there only as unnamed `sh` and `sleep` rows.
+     */
+    val isRunning: Boolean get() = resolved is JCodeVirtualDevice
+
     private fun device(): JCodeVirtualDevice? {
         (resolved as? JCodeVirtualDevice)?.let { return it }
         if (resolved !== Unresolved) return null
@@ -171,6 +180,9 @@ internal object VirtualDeviceBridge : VirtualDeviceHost {
      */
     fun shutdown() {
         (resolved as? JCodeVirtualDevice)?.let { runCatching { it.shutdown() } }
+        // Forgotten as well as shut down, so [isRunning] answers for what is there rather than
+        // for what was once loaded. The next ask reloads it; that is what `device()` is for.
+        resolved = Unresolved
     }
 
     /**
