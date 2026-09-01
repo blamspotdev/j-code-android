@@ -43,7 +43,7 @@ behind, because the built-in divider spans only the tab content.
 
 | Group | Contains |
 |---|---|
-| **Appearance** | Theme bundle, icon bundle, fonts, terminal font size, immersive keyboard, display cutout, right-drawer split, bottom status bar, extra-keys row |
+| **Appearance** | Theme bundle, UI icons, file icons (hidden until an icon pack provides one), fonts, terminal font size, immersive keyboard, display cutout, right-drawer split, bottom status bar, extra-keys row |
 | **Input** | Volume-key bindings, command-palette command toggles |
 | **Startup** | Restore last session |
 | **Performance** | Hardware acceleration, auto-close idle terminals, idle timeout, max terminal sessions |

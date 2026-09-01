@@ -10,14 +10,14 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
 
 /**
- * Custom vector icon packs. Each is an [IconBundle] whose overrides are hand-authored [ImageVector]s
- * and which falls back to [defaultIconBundle] for any slot it doesn't restyle, so a pack can ship
- * just its hero icons. This is the same shape a disk/asset icon-bundle extension would map onto.
+ * Hand-drawn UI icon sets that ship with the app. Each is a [UiIconSet] whose overrides are authored
+ * [ImageVector]s and which falls back to [defaultUiIconSet] for any slot it doesn't restyle, so a set
+ * can ship just its hero icons. This is the same shape an installed icon pack maps onto.
  *
  * Icons are drawn on a 24x24 grid. Colors are black; the consuming `Icon` applies the real tint.
  */
 // --- "JCode Line": a minimal, uniform-stroke line set --------------------------------------
-// Declared before [jcodeLineIconBundle] / [customIconBundles] below so top-level init order
+// Declared before [jcodeLineIconSet] / [customUiIconSets] below so top-level init order
 // (top-to-bottom) populates the map before the bundle reads it.
 
 private val lineIcons: Map<JCodeIcon, ImageVector> = mapOf(
@@ -124,15 +124,15 @@ private val lineIcons: Map<JCodeIcon, ImageVector> = mapOf(
     },
 )
 
-private val jcodeLineIconBundle = IconBundle(
+private val jcodeLineIconSet = UiIconSet.ofVectors(
     id = "jcode-line",
     name = "JCode Line",
     description = "Custom minimal line icons.",
     overrides = lineIcons,
-    fallback = defaultIconBundle,
+    fallback = defaultUiIconSet,
 )
 
-val customIconBundles: List<IconBundle> = listOf(jcodeLineIconBundle)
+val customUiIconSets: List<UiIconSet> = listOf(jcodeLineIconSet)
 
 // --- builders -------------------------------------------------------------------------------
 

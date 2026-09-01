@@ -93,7 +93,7 @@ fun SettingsDropdownRow(
                         modifier = Modifier.weight(1f, fill = false),
                     )
                     Icon(
-                        imageVector = jcIcon(JCodeIcon.ChevronDown),
+                        painter = jcIcon(JCodeIcon.ChevronDown),
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(IconSize.md),

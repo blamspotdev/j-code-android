@@ -15,6 +15,8 @@ enum class ExtensionType {
     Scm,
     /** Like [App], but its UI is a virtual-machine manager surfaced in the left-drawer "VM" panel. */
     Vm,
+    /** Ships icon art: a set of the app's chrome icons, a set of file/folder icons, or both. */
+    IconPack,
     Unknown;
 
     companion object {
@@ -26,6 +28,7 @@ enum class ExtensionType {
             "dbmanager", "db-manager", "database" -> DbManager
             "scm", "source-control", "sourcecontrol", "vcs" -> Scm
             "vm", "vmmanager", "vm-manager", "virtualmachine", "virtualization" -> Vm
+            "iconpack", "icon-pack", "icons", "icontheme", "icon-theme" -> IconPack
             else -> Unknown
         }
     }
@@ -74,8 +77,10 @@ enum class ExtensionActivation {
 val ExtensionType.choosesActivation: Boolean
     get() = when (this) {
         ExtensionType.App, ExtensionType.DbManager, ExtensionType.Scm, ExtensionType.Vm -> true
+        // An icon pack is art the settings screen reads on demand: it starts nothing, so there is
+        // no activation to choose.
         ExtensionType.Templates, ExtensionType.Language, ExtensionType.Formatter,
-        ExtensionType.Unknown,
+        ExtensionType.IconPack, ExtensionType.Unknown,
         -> false
     }
 
@@ -192,14 +197,124 @@ data class ExtensionContributions(
      * adapter the pack bundles installs by copying rather than downloading.
      */
     val debugEngines: List<dev.blamspot.jcode.core.distro.DebugEngineEntry> = emptyList(),
+    /** Icon sets this extension provides, offered in Settings while it is installed. */
+    val iconSets: ContributedIconSets = ContributedIconSets.NONE,
 ) {
     val isEmpty: Boolean
         get() = editorStartActions.isEmpty() && drawerActions.isEmpty() && editorContextActions.isEmpty() &&
             explorerContextActions.isEmpty() && toolchainActions.isEmpty() && !explorerDecorations &&
-            runConfigPresets.isEmpty() && debugEngines.isEmpty()
+            runConfigPresets.isEmpty() && debugEngines.isEmpty() && iconSets.isEmpty
 
     companion object {
         val EMPTY = ExtensionContributions()
+    }
+}
+
+/**
+ * The icon-pack indexes an installed extension ships, resolved to files on disk.
+ *
+ * A pack may provide either half or both, and **any number of each**: a set of the app's chrome
+ * icons and a set of file/folder icons are independent choices, and a pack that offers an outlined
+ * and a filled variant of each ships four sets. Both lists are empty for an ordinary extension.
+ *
+ * Only the paths live here. Reading an index is the design system's job, because the result is
+ * Compose art and this module draws nothing.
+ */
+data class ContributedIconSets(
+    val uiIndexes: List<File> = emptyList(),
+    val filesIndexes: List<File> = emptyList(),
+    /** Declared paths that resolved to no index. Surfaced by the validator, not acted on. */
+    val unresolved: List<String> = emptyList(),
+) {
+    val isEmpty: Boolean get() = uiIndexes.isEmpty() && filesIndexes.isEmpty()
+
+    companion object {
+        val NONE = ContributedIconSets()
+    }
+}
+
+/**
+ * Where an icon pack keeps its indexes.
+ *
+ * Two layouts are read. The preferred one puts each index beside the art it describes; the flat one
+ * puts a single index at the package root and points it at a shared art directory:
+ *
+ * ```
+ * ui-icons/index.yaml           files-icons/index.yaml       # one set of each
+ * ui-icons/outlined/index.yaml  files-icons/dark/index.yaml  # several — one directory per variant
+ * ui-icons.yaml                 files-icons.yaml             # flat, with `base:` naming the art dir
+ * ```
+ *
+ * A directory holding an `index.yaml` **is** one set; a directory holding none is scanned for
+ * subdirectories that do, one set each. So a pack grows from one variant to several by moving its
+ * index down a level, with nothing to declare either way.
+ *
+ * `contributes.iconSets` is only needed for a package that uses neither layout. Each value names an
+ * index file or a directory, and may be a list when a package keeps its variants apart:
+ *
+ * ```yaml
+ * contributes:
+ *   iconSets:
+ *     ui: art/chrome                          # a directory: every set inside it
+ *     files: [art/light.yaml, art/dark.yaml]  # a list: exactly these
+ * ```
+ *
+ * This is the one place the layout is defined; the design system is handed resolved files and never
+ * goes looking.
+ */
+object IconPackLayout {
+    private val INDEX_NAMES = listOf("index.yaml", "index.yml")
+    private val UI_DIR = "ui-icons"
+    private val FILES_DIR = "files-icons"
+    private val UI_FLAT = listOf("ui-icons.yaml", "ui-icons.yml")
+    private val FILES_FLAT = listOf("files-icons.yaml", "files-icons.yml")
+
+    fun resolve(dir: File, declaredUi: List<String>, declaredFiles: List<String>): ContributedIconSets {
+        val unresolved = mutableListOf<String>()
+        fun find(declared: List<String>, conventionalDir: String, flat: List<String>, path: String): List<File> {
+            if (declared.isEmpty()) {
+                return setsIn(File(dir, conventionalDir))
+                    .ifEmpty { flat.map { File(dir, it) }.filter { it.isFile } }
+            }
+            return declared.flatMap { entry ->
+                val named = File(dir, entry)
+                val found = if (named.isFile) listOf(named) else setsIn(named)
+                // A declaration that resolves to nothing is NOT quietly replaced by a conventional
+                // index: the pack said where its icons are, and being wrong about that is worth saying.
+                if (found.isEmpty()) unresolved += "$path: $entry"
+                found
+            }
+        }
+        return ContributedIconSets(
+            uiIndexes = find(declaredUi, UI_DIR, UI_FLAT, "contributes.iconSets.ui"),
+            filesIndexes = find(declaredFiles, FILES_DIR, FILES_FLAT, "contributes.iconSets.files"),
+            unresolved = unresolved,
+        )
+    }
+
+    /**
+     * The sets inside [root]: itself when it holds an index, otherwise each subdirectory that does.
+     * Sorted by name so the order a pack's variants are offered in does not depend on the filesystem.
+     */
+    private fun setsIn(root: File): List<File> {
+        if (!root.isDirectory) return emptyList()
+        indexIn(root)?.let { return listOf(it) }
+        return root.listFiles().orEmpty()
+            .filter { it.isDirectory }
+            .sortedBy { it.name }
+            .mapNotNull { indexIn(it) }
+    }
+
+    private fun indexIn(dir: File): File? = INDEX_NAMES.map { File(dir, it) }.firstOrNull { it.isFile }
+
+    /**
+     * The id a set falls back to when its index declares none: the variant's own directory name, or
+     * the index's file name for the flat layout.
+     */
+    fun localId(index: File): String {
+        val parent = index.parentFile?.name
+        return if (index.name.startsWith("index.") && !parent.isNullOrBlank()) parent
+        else index.nameWithoutExtension
     }
 }
 

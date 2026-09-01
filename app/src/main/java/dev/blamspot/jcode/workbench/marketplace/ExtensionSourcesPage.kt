@@ -110,7 +110,7 @@ internal fun ExtensionSourcesPage(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                imageVector = jcIcon(JCodeIcon.Lock),
+                painter = jcIcon(JCodeIcon.Lock),
                 contentDescription = null,
                 modifier = Modifier.size(13.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -132,7 +132,7 @@ internal fun ExtensionSourcesPage(
                 } else {
                     IconButton(onClick = onRefresh, modifier = Modifier.size(32.dp)) {
                         Icon(
-                            imageVector = jcIcon(JCodeIcon.Refresh),
+                            painter = jcIcon(JCodeIcon.Refresh),
                             contentDescription = "Refresh sources",
                             modifier = Modifier.size(IconSize.md),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -223,7 +223,7 @@ private fun SourceCard(
                     ) {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Icon(
-                                imageVector = jcIcon(JCodeIcon.Sources),
+                                painter = jcIcon(JCodeIcon.Sources),
                                 contentDescription = null,
                                 modifier = Modifier.size(IconSize.lg),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,

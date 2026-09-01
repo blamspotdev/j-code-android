@@ -104,7 +104,7 @@ in particular.
 | Extension ids are reverse-DNS | `dev.example.webpack` |
 | Catalog ids are lowercase-hyphenated | `android-sdk`, `cmake-ninja` |
 | Enum settings persist by `.name`, never ordinal | `TabColoring.RandomRemember` |
-| Composition locals are `Local*` | `LocalIconBundle`, `LocalExplorerScmUi` |
+| Composition locals are `Local*` | `LocalUiIconSet`, `LocalFileIconSet`, `LocalExplorerScmUi` |
 | Host↔guest path translation always goes through `WorkspaceHostPaths` | — |
 
 ---

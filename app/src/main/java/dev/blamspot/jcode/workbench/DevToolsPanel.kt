@@ -208,7 +208,7 @@ private fun PaneMenuButton(pane: DevToolsPane) {
     val clipboard = LocalClipboardManager.current
     Box {
         Icon(
-            imageVector = jcIcon(JCodeIcon.MoreVert),
+            painter = jcIcon(JCodeIcon.MoreVert),
             contentDescription = "${pane.label} options",
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
@@ -993,7 +993,7 @@ private fun StoredValueDetail(
             horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Icon(
-                imageVector = jcIcon(JCodeIcon.ArrowBack),
+                painter = jcIcon(JCodeIcon.ArrowBack),
                 contentDescription = "Back to storage",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(IconSize.sm),
@@ -1514,7 +1514,7 @@ private fun NetworkDetail(e: BrowserNetworkEntry, onBack: () -> Unit, modifier: 
             horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Icon(
-                imageVector = jcIcon(JCodeIcon.ArrowBack),
+                painter = jcIcon(JCodeIcon.ArrowBack),
                 contentDescription = "Back to requests",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(IconSize.sm),
@@ -1616,7 +1616,7 @@ private fun DetailSection(
             horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Icon(
-                imageVector = jcIcon(if (expanded) JCodeIcon.ChevronDown else JCodeIcon.ChevronRight),
+                painter = jcIcon(if (expanded) JCodeIcon.ChevronDown else JCodeIcon.ChevronRight),
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(IconSize.xs),

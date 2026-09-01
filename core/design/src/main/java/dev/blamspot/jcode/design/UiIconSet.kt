@@ -79,11 +79,12 @@ import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
  * Semantic icon slots used across the app. Call sites reference these instead of `Icons.*` directly,
- * so the whole icon set is swappable by providing a different [IconBundle]. New slots are added here
+ * so the whole icon set is swappable by providing a different [UiIconSet]. New slots are added here
  * as the UI grows.
  */
 enum class JCodeIcon {
@@ -103,26 +104,58 @@ enum class JCodeIcon {
 }
 
 /**
- * A swappable icon set. [overrides] need only cover the slots a bundle wants to restyle; anything
- * missing resolves through [fallback] (ultimately the built-in default), so a custom vector pack can
- * ship just its hero icons and inherit the rest. This is also the shape a disk/asset icon-bundle
- * extension would map onto, so external packs can be added later without touching call sites.
+ * A swappable set of the app's own chrome icons — the toolbars, menus, tabs and panel headers.
+ *
+ * [overrides] need only cover the slots a set wants to restyle; anything missing resolves through
+ * [fallback] (ultimately the built-in default), so a pack can ship just its hero icons and inherit
+ * the rest. Art is an [IconArt] rather than an `ImageVector` because a pack installed from disk may
+ * ship either SVG (parsed to a vector) or PNG.
+ *
+ * The companion set for files and folders is [FileIconSet]; the two are chosen independently in
+ * Settings, since wanting a different toolbar look and wanting a different `.ts` badge are different
+ * wants.
  */
 @Immutable
-class IconBundle(
+class UiIconSet(
     val id: String,
     val name: String,
     val description: String,
     val author: String = "JCode",
-    private val overrides: Map<JCodeIcon, ImageVector>,
-    private val fallback: IconBundle? = null,
+    /** Id of the extension this set came from, or null for a built-in. */
+    val providerId: String? = null,
+    private val overrides: Map<JCodeIcon, IconArt>,
+    private val fallback: UiIconSet? = null,
 ) {
-    operator fun get(icon: JCodeIcon): ImageVector =
-        overrides[icon] ?: fallback?.get(icon) ?: Icons.Rounded.Circle
+    fun art(icon: JCodeIcon): IconArt =
+        overrides[icon] ?: fallback?.art(icon) ?: FALLBACK_ART
+
+    /** Slots this set fills itself, not counting anything inherited through [fallback]. */
+    val filledSlots: Int get() = overrides.size
+
+    companion object {
+        private val FALLBACK_ART = IconArt.Vector(Icons.Rounded.Circle)
+
+        /** A set built from Compose vectors — the shape every built-in takes. */
+        fun ofVectors(
+            id: String,
+            name: String,
+            description: String,
+            author: String = "JCode",
+            overrides: Map<JCodeIcon, ImageVector>,
+            fallback: UiIconSet? = null,
+        ): UiIconSet = UiIconSet(
+            id = id,
+            name = name,
+            description = description,
+            author = author,
+            overrides = overrides.mapValues { (_, vector) -> IconArt.Vector(vector) },
+            fallback = fallback,
+        )
+    }
 }
 
 /** Built-in Material icon set, unified to the Rounded family for consistency. Always complete. */
-val defaultIconBundle = IconBundle(
+val defaultUiIconSet = UiIconSet.ofVectors(
     id = "material",
     name = "Material Rounded",
     description = "The built-in Material rounded icon set.",
@@ -216,17 +249,19 @@ val defaultIconBundle = IconBundle(
     ),
 )
 
-object IconBundleRegistry {
-    // Custom vector packs are appended here (see CustomIconBundle.kt).
-    val builtIns: List<IconBundle> = listOf(defaultIconBundle) + customIconBundles
+object UiIconSetRegistry {
+    // Hand-drawn vector packs are appended here (see JCodeLineIconSet.kt).
+    val builtIns: List<UiIconSet> = listOf(defaultUiIconSet) + customUiIconSets
 
-    val default: IconBundle get() = defaultIconBundle
+    val default: UiIconSet get() = defaultUiIconSet
 
-    fun byId(id: String?): IconBundle = builtIns.firstOrNull { it.id == id } ?: default
+    /** [id] resolved against the built-ins plus whatever [installed] sets an extension provides. */
+    fun byId(id: String?, installed: List<UiIconSet> = emptyList()): UiIconSet =
+        builtIns.firstOrNull { it.id == id } ?: installed.firstOrNull { it.id == id } ?: default
 }
 
-val LocalIconBundle = staticCompositionLocalOf { defaultIconBundle }
+val LocalUiIconSet = staticCompositionLocalOf { defaultUiIconSet }
 
-/** Resolve a semantic icon through the active [IconBundle]. */
+/** Resolve a semantic icon through the active [UiIconSet]. */
 @Composable
-fun jcIcon(icon: JCodeIcon): ImageVector = LocalIconBundle.current[icon]
+fun jcIcon(icon: JCodeIcon): Painter = LocalUiIconSet.current.art(icon).painter()

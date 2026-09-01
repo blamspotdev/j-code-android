@@ -46,9 +46,10 @@ import dev.blamspot.jcode.core.search.SearchMatch
 import dev.blamspot.jcode.core.search.SearchModule
 import dev.blamspot.jcode.core.search.SearchOptions
 import dev.blamspot.jcode.design.CompactSearchField
+import dev.blamspot.jcode.design.FileTypeIcon
 import dev.blamspot.jcode.design.IconSize
+import dev.blamspot.jcode.design.LocalFileIconSet
 import dev.blamspot.jcode.design.JCodeIcon
-import dev.blamspot.jcode.design.LocalIconBundle
 import dev.blamspot.jcode.design.ManagerFilterChip
 import dev.blamspot.jcode.design.Radius
 import dev.blamspot.jcode.design.Space
@@ -273,16 +274,22 @@ internal fun SearchToolPanel(
             } else {
                 grouped.forEach { (path, matches) ->
                     item(key = "file:$path") {
-                        Text(
-                            text = path,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = Space.md, vertical = Space.xs),
-                        )
+                            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            SearchFileIcon(path)
+                            Text(
+                                text = path,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                     items(matches, key = { "${path}:${it.lineNumber}:${it.columnStart}" }) { match ->
                         MatchRow(match) { openMatch(match) }
@@ -291,6 +298,23 @@ internal fun SearchToolPanel(
             }
         }
     }
+}
+
+/**
+ * The file type badge on a search row.
+ *
+ * Drawn only when a file icon set is chosen: with none, every row would carry the same generic glyph
+ * and the list would be narrower for no information. [path] may be a full path or a bare name.
+ */
+@Composable
+private fun SearchFileIcon(path: String) {
+    if (LocalFileIconSet.current == null) return
+    FileTypeIcon(
+        name = path.replace('\\', '/').substringAfterLast('/'),
+        isDirectory = false,
+        size = IconSize.sm,
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable
@@ -304,6 +328,7 @@ private fun FileNameRow(match: SearchMatch, onClick: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        SearchFileIcon(match.lineText)
         Text(
             text = match.lineText,
             style = MaterialTheme.typography.bodySmall,

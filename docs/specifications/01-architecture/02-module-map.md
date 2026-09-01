@@ -58,7 +58,7 @@ Largest files: `JCodeShell.kt` (4,999 lines), `MainViewModel.kt` (4,844).
 | `:core:config` | — | Implemented | Workspace/project YAML, merge to effective config, `run.yaml` |
 | `:core:diag` | — | Implemented | Opt-in `DiagnosticLog`: redacted rotating file, own-process logcat tee, crash capture |
 | `:core:debug` | `:core:term`, `:core:distro` | Implemented | DAP client |
-| `:core:design` | `:core:diag` | Implemented | Design system, theme/icon bundles, settings widgets, command registry |
+| `:core:design` | `:core:diag` | Implemented | Design system, theme bundles, UI/file icon sets (incl. the icon-pack reader), settings widgets, command registry |
 | `:core:distro` | `:core:config` | Implemented | proot, rootfs, toolchain catalog, ADB stack. Largest core module |
 | `:core:editor` | `:core:buffer`, `:core:resource` | Implemented | `EditorState`, `EditorView`, `Renderer`, `UndoManager`, `WrapMap`, decorations |
 | `:core:editor-completion` | `:core:editor` | Implemented | Completion model, snippet engine, completion popup |

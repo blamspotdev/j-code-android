@@ -99,7 +99,7 @@ private fun DebugLaunchRow(ui: DebugSessionUi) {
                     JcTooltip("Start debugging") {
                         IconButton(onClick = ui.onDebug) {
                             Icon(
-                                imageVector = jcIcon(JCodeIcon.Debug),
+                                painter = jcIcon(JCodeIcon.Debug),
                                 contentDescription = "Start debugging",
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(22.dp),
@@ -144,7 +144,7 @@ private fun DebugAction(icon: JCodeIcon, label: String, enabled: Boolean, tint: 
     JcTooltip(label) {
         IconButton(onClick = onClick, enabled = enabled) {
             Icon(
-                imageVector = jcIcon(icon),
+                painter = jcIcon(icon),
                 contentDescription = label,
                 tint = if (enabled) tint else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
                 modifier = Modifier.size(IconSize.lg),

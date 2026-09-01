@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -42,7 +43,7 @@ import dev.blamspot.jcode.design.jcIcon
 
 @Composable
 internal fun WorkbenchIconActionButton(
-    icon: ImageVector,
+    icon: Painter,
     contentDescription: String,
     onClick: () -> Unit,
     active: Boolean = false,
@@ -98,7 +99,7 @@ internal fun WorkbenchIconActionButton(
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
-                    imageVector = icon,
+                    painter = icon,
                     contentDescription = contentDescription,
                     modifier = Modifier.size(IconSize.sm).then(shimmerModifier),
                     tint = contentColor,
@@ -181,7 +182,7 @@ internal fun SidebarToolButton(
             horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Icon(
-                imageVector = jcIcon(tool.icon),
+                painter = jcIcon(tool.icon),
                 contentDescription = tool.label,
                 modifier = Modifier.size(IconSize.xs),
                 tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,

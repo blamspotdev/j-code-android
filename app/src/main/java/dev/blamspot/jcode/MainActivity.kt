@@ -23,7 +23,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.blamspot.jcode.adaptive.rememberJCodeWindowInfo
 import dev.blamspot.jcode.design.DensityMode
-import dev.blamspot.jcode.design.IconBundleRegistry
+import dev.blamspot.jcode.design.FileIconSetRegistry
+import dev.blamspot.jcode.design.UiIconSetRegistry
 import dev.blamspot.jcode.design.M3Theme
 import dev.blamspot.jcode.design.ThemeBundleRegistry
 import dev.blamspot.jcode.design.VolumeKeyAction
@@ -155,14 +156,21 @@ private fun JCodeRoot(viewModel: MainViewModel) {
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val themeBundleId by viewModel.themeBundleId.collectAsStateWithLifecycle()
     val themeBundle = ThemeBundleRegistry.byId(themeBundleId)
-    val iconBundleId by viewModel.iconBundleId.collectAsStateWithLifecycle()
-    val iconBundle = IconBundleRegistry.byId(iconBundleId)
+    val uiIconSetId by viewModel.uiIconSetId.collectAsStateWithLifecycle()
+    val installedUiIconSets by viewModel.installedUiIconSets.collectAsStateWithLifecycle()
+    val uiIconSet = UiIconSetRegistry.byId(uiIconSetId, installedUiIconSets)
+    val fileIconSetId by viewModel.fileIconSetId.collectAsStateWithLifecycle()
+    val installedFileIconSets by viewModel.installedFileIconSets.collectAsStateWithLifecycle()
+    // Null when nothing is chosen, or when the pack that provided the chosen set has been removed:
+    // files then fall back to the UI set's own folder/file glyphs rather than to blank rows.
+    val fileIconSet = FileIconSetRegistry.byId(fileIconSetId, installedFileIconSets)
 
     M3Theme(
         themeMode = themeMode,
         densityMode = densityMode,
         themeBundle = themeBundle,
-        iconBundle = iconBundle,
+        uiIconSet = uiIconSet,
+        fileIconSet = fileIconSet,
     ) {
         WithoutExtractedIme {
             JCodeApp(viewModel = viewModel, modifier = Modifier)

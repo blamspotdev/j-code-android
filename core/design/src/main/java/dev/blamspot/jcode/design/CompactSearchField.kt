@@ -63,7 +63,7 @@ fun CompactSearchField(
             horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             Icon(
-                LocalIconBundle.current[JCodeIcon.Search],
+                jcIcon(JCodeIcon.Search),
                 contentDescription = null,
                 modifier = Modifier.size(IconSize.sm),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -91,7 +91,7 @@ fun CompactSearchField(
                 CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
             } else if (query.isNotEmpty()) {
                 Icon(
-                    LocalIconBundle.current[JCodeIcon.Close],
+                    jcIcon(JCodeIcon.Close),
                     contentDescription = "Clear search",
                     modifier = Modifier
                         .size(18.dp)

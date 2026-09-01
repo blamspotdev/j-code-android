@@ -23,13 +23,17 @@ import dev.blamspot.jcode.design.LocalRestoreSession
 import dev.blamspot.jcode.design.LocalTabCloseButtonSetting
 import dev.blamspot.jcode.design.BottomBarSetting
 import dev.blamspot.jcode.design.EditorTabActions
+import dev.blamspot.jcode.design.FileTypeIcon
 import dev.blamspot.jcode.design.FloatingRestorePill
 import dev.blamspot.jcode.design.FontOption
 import dev.blamspot.jcode.design.FontSettings
 import dev.blamspot.jcode.design.LocalEditorTabActions
 import dev.blamspot.jcode.design.LocalEditorTypeface
+import dev.blamspot.jcode.design.IconSetSettings
 import dev.blamspot.jcode.design.LocalFontSettings
+import dev.blamspot.jcode.design.LocalIconSetSettings
 import dev.blamspot.jcode.design.LocalTerminalTypeface
+import dev.blamspot.jcode.design.UiIconSetRegistry
 import dev.blamspot.jcode.design.ExtraKeysSetting
 import dev.blamspot.jcode.design.ExtraKeysState
 import dev.blamspot.jcode.design.LocalBottomBarSetting
@@ -545,7 +549,6 @@ fun JCodeApp(
     val setupTerminalSessionId by viewModel.setupTerminalRunner.sessionId.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val themeBundleId by viewModel.themeBundleId.collectAsStateWithLifecycle()
-    val iconBundleId by viewModel.iconBundleId.collectAsStateWithLifecycle()
     val formatterId by viewModel.formatterId.collectAsStateWithLifecycle()
     val hardwareAcceleration by viewModel.hardwareAcceleration.collectAsStateWithLifecycle()
     val confirmCloseRunning by viewModel.confirmCloseRunning.collectAsStateWithLifecycle()
@@ -1612,6 +1615,21 @@ fun JCodeApp(
         )
     }
 
+    val uiIconSetId by viewModel.uiIconSetId.collectAsStateWithLifecycle()
+    val fileIconSetId by viewModel.fileIconSetId.collectAsStateWithLifecycle()
+    val installedUiIconSets by viewModel.installedUiIconSets.collectAsStateWithLifecycle()
+    val installedFileIconSets by viewModel.installedFileIconSets.collectAsStateWithLifecycle()
+    val iconSetSettings = remember(uiIconSetId, fileIconSetId, installedUiIconSets, installedFileIconSets) {
+        IconSetSettings(
+            uiSets = UiIconSetRegistry.builtIns + installedUiIconSets,
+            uiSetId = uiIconSetId,
+            onSelectUiSet = viewModel::setUiIconSet,
+            fileSets = installedFileIconSets,
+            fileSetId = fileIconSetId,
+            onSelectFileSet = viewModel::setFileIconSet,
+        )
+    }
+
     CompositionLocalProvider(
         LocalDevToolsCodeSupport provides devToolsCodeSupport,
         LocalTerminalTapConfig provides terminalTapConfig,
@@ -1622,6 +1640,7 @@ fun JCodeApp(
         LocalBottomBarSetting provides bottomBarSetting,
         LocalHeaderActionSetting provides headerActionSetting,
         LocalFontSettings provides fontSettings,
+        LocalIconSetSettings provides iconSetSettings,
         LocalEditorTypeface provides editorTypeface,
         LocalTerminalTypeface provides terminalTypeface,
         LocalExtraKeysGlyphFontFamily provides extraKeysGlyphFont,
@@ -1765,8 +1784,6 @@ fun JCodeApp(
         onUpdateThemeMode = { viewModel.setThemeMode(it) },
         themeBundleId = themeBundleId,
         onUpdateThemeBundle = viewModel::setThemeBundle,
-        iconBundleId = iconBundleId,
-        onUpdateIconBundle = viewModel::setIconBundle,
         formatterId = formatterId,
         onSelectFormatter = viewModel::setFormatter,
         installedExtensions = installedExtensions,
@@ -2111,8 +2128,6 @@ private fun JCodeShell(
     onUpdateThemeMode: (ThemeMode?) -> Unit,
     themeBundleId: String,
     onUpdateThemeBundle: (String) -> Unit,
-    iconBundleId: String,
-    onUpdateIconBundle: (String) -> Unit,
     installedExtensions: List<InstalledExtension>,
     marketplaceEntries: List<MarketplaceEntry>,
     marketplaceBusy: Boolean,
@@ -3455,8 +3470,6 @@ private fun JCodeShell(
                 onSnackbar = extensionSnackbar(scope, snackbarHostState),
                 themeBundleId = themeBundleId,
                 onUpdateThemeBundle = onUpdateThemeBundle,
-                iconBundleId = iconBundleId,
-                onUpdateIconBundle = onUpdateIconBundle,
                 installedExtensions = installedExtensions,
                 marketplaceEntries = marketplaceEntries,
                 marketplaceBusy = marketplaceBusy,
@@ -3665,8 +3678,6 @@ private fun JCodeShell(
                                     onUpdateThemeMode = onUpdateThemeMode,
                                     themeBundleId = themeBundleId,
                                     onUpdateThemeBundle = onUpdateThemeBundle,
-                                    iconBundleId = iconBundleId,
-                                    onUpdateIconBundle = onUpdateIconBundle,
                                     formatterId = formatterId,
                                     formatterOptions = listOf("builtin" to "Built-in") +
                                         installedExtensions
@@ -4023,8 +4034,6 @@ private fun JCodeShell(
                             onSnackbar = extensionSnackbar(scope, snackbarHostState),
                             themeBundleId = themeBundleId,
                             onUpdateThemeBundle = onUpdateThemeBundle,
-                            iconBundleId = iconBundleId,
-                            onUpdateIconBundle = onUpdateIconBundle,
                             installedExtensions = installedExtensions,
                             marketplaceEntries = marketplaceEntries,
                             marketplaceBusy = marketplaceBusy,
@@ -4272,8 +4281,6 @@ private fun WorkspacePanel(
     onSnackbar: (String, String?, (() -> Unit)?) -> Unit,
     themeBundleId: String,
     onUpdateThemeBundle: (String) -> Unit,
-    iconBundleId: String,
-    onUpdateIconBundle: (String) -> Unit,
     installedExtensions: List<InstalledExtension>,
     marketplaceEntries: List<MarketplaceEntry>,
     marketplaceBusy: Boolean,
@@ -4735,7 +4742,7 @@ private fun EditorEmptyHint(
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector = jcIcon(JCodeIcon.Files),
+                        painter = jcIcon(JCodeIcon.Files),
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                     )
@@ -4769,7 +4776,7 @@ private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modi
                 horizontalArrangement = Arrangement.spacedBy(Space.ms),
             ) {
                 Icon(
-                    imageVector = jcIcon(JCodeIcon.Files),
+                    painter = jcIcon(JCodeIcon.Files),
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                 )
@@ -4829,10 +4836,11 @@ private fun RecentRow(recent: RecentEntity, onOpen: () -> Unit, onExport: () -> 
                 color = MaterialTheme.colorScheme.surfaceVariant,
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = jcIcon(JCodeIcon.Code),
-                        contentDescription = null,
-                        modifier = Modifier.size(IconSize.sm),
+                    FileTypeIcon(
+                        name = recentDisplayName(recent),
+                        isDirectory = true,
+                        size = IconSize.sm,
+                        fallback = JCodeIcon.Code,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -4857,7 +4865,7 @@ private fun RecentRow(recent: RecentEntity, onOpen: () -> Unit, onExport: () -> 
                 Box {
                     IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(32.dp)) {
                         Icon(
-                            imageVector = jcIcon(JCodeIcon.MoreVert),
+                            painter = jcIcon(JCodeIcon.MoreVert),
                             contentDescription = "Recent project actions",
                             modifier = Modifier.size(IconSize.md),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -5103,7 +5111,7 @@ private fun RightPanelTabItem(
         horizontalArrangement = Arrangement.spacedBy(Space.s),
     ) {
         Icon(
-            imageVector = jcIcon(icon),
+            painter = jcIcon(icon),
             contentDescription = null,
             modifier = Modifier.size(IconSize.md),
             tint = tint,
@@ -5407,7 +5415,7 @@ private fun TerminalSidebarContent(
                             // Pinned terminal shows a leading pin instead of a "×" (close via long-press).
                             if (isPinned) {
                                 Icon(
-                                    imageVector = jcIcon(JCodeIcon.Pin),
+                                    painter = jcIcon(JCodeIcon.Pin),
                                     contentDescription = "Pinned",
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(IconSize.xxs),
@@ -5504,7 +5512,7 @@ private fun TerminalSidebarContent(
                 verticalArrangement = Arrangement.Center,
             ) {
                 Icon(
-                    imageVector = jcIcon(JCodeIcon.Sdk),
+                    painter = jcIcon(JCodeIcon.Sdk),
                     contentDescription = null,
                     modifier = Modifier.size(48.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
@@ -5631,7 +5639,7 @@ private fun TerminalSidebarContent(
                     verticalArrangement = Arrangement.spacedBy(Space.sm),
                 ) {
                     Icon(
-                        imageVector = jcIcon(JCodeIcon.Terminal),
+                        painter = jcIcon(JCodeIcon.Terminal),
                         contentDescription = null,
                         modifier = Modifier.size(48.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),

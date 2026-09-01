@@ -28,7 +28,8 @@ fun M3Theme(
     themeMode: ThemeMode = ThemeMode.System,
     densityMode: DensityMode = DensityMode.Comfortable,
     themeBundle: ThemeBundle = ThemeBundleRegistry.default,
-    iconBundle: IconBundle = IconBundleRegistry.default,
+    uiIconSet: UiIconSet = UiIconSetRegistry.default,
+    fileIconSet: FileIconSet? = null,
     content: @Composable () -> Unit,
 ) {
     val darkTheme = when (themeMode) {
@@ -39,7 +40,8 @@ fun M3Theme(
     CompositionLocalProvider(
         LocalDensityMode provides densityMode,
         LocalSemanticColors provides themeBundle.semanticColors(darkTheme),
-        LocalIconBundle provides iconBundle,
+        LocalUiIconSet provides uiIconSet,
+        LocalFileIconSet provides fileIconSet,
     ) {
         MaterialTheme(
             colorScheme = themeBundle.colorScheme(darkTheme),

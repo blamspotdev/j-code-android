@@ -270,7 +270,7 @@ private fun TaskRow(
             JcTooltip(actionDescription) {
                 IconButton(onClick = onStop) {
                     Icon(
-                        imageVector = jcIcon(JCodeIcon.Stop),
+                        painter = jcIcon(JCodeIcon.Stop),
                         contentDescription = actionDescription,
                         tint = MaterialTheme.colorScheme.error,
                         modifier = Modifier.size(IconSize.lg),
@@ -330,7 +330,7 @@ private fun BackgroundExtensionRow(
                 JcTooltip("Start extension") {
                     IconButton(onClick = onStart) {
                         Icon(
-                            imageVector = jcIcon(JCodeIcon.Run),
+                            painter = jcIcon(JCodeIcon.Run),
                             contentDescription = "Start extension",
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(IconSize.lg),
@@ -341,7 +341,7 @@ private fun BackgroundExtensionRow(
                 JcTooltip("Stop extension") {
                     IconButton(onClick = onStop) {
                         Icon(
-                            imageVector = jcIcon(JCodeIcon.Stop),
+                            painter = jcIcon(JCodeIcon.Stop),
                             contentDescription = "Stop extension",
                             tint = MaterialTheme.colorScheme.error,
                             modifier = Modifier.size(IconSize.lg),
@@ -429,7 +429,7 @@ private fun ProcessRow(proc: AppProcesses.Process, isSelf: Boolean, onKill: () -
             // Killing our own process would just crash the IDE; keep the slot for alignment.
             IconButton(onClick = {}, enabled = false) {
                 Icon(
-                    imageVector = jcIcon(JCodeIcon.Stop),
+                    painter = jcIcon(JCodeIcon.Stop),
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f),
                     modifier = Modifier.size(IconSize.md),
@@ -439,7 +439,7 @@ private fun ProcessRow(proc: AppProcesses.Process, isSelf: Boolean, onKill: () -
             JcTooltip("Kill process") {
                 IconButton(onClick = onKill) {
                     Icon(
-                        imageVector = jcIcon(JCodeIcon.Stop),
+                        painter = jcIcon(JCodeIcon.Stop),
                         contentDescription = "Kill process",
                         tint = MaterialTheme.colorScheme.error,
                         modifier = Modifier.size(IconSize.md),

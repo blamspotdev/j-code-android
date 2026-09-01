@@ -1,4 +1,5 @@
 package dev.blamspot.jcode.feature.explorer
+import dev.blamspot.jcode.design.FileTypeIcon
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.design.jcIcon
@@ -50,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
@@ -560,7 +562,7 @@ private fun RowOverflowMenu(
                 modifier = Modifier.size(28.dp),
             ) {
                 Icon(
-                    imageVector = jcIcon(JCodeIcon.MoreVert),
+                    painter = jcIcon(JCodeIcon.MoreVert),
                     contentDescription = "More actions",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(IconSize.md),
@@ -620,7 +622,7 @@ private fun ExplorerBreadcrumb(
             JcTooltip("Up one level") {
                 IconButton(onClick = onNavigateUp, modifier = Modifier.size(28.dp)) {
                     Icon(
-                        imageVector = jcIcon(JCodeIcon.ArrowUp),
+                        painter = jcIcon(JCodeIcon.ArrowUp),
                         contentDescription = "Up one level",
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(IconSize.md),
@@ -767,25 +769,26 @@ private fun TreeRowItem(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            imageVector = if (row.isExpanded) jcIcon(JCodeIcon.ChevronDown) else jcIcon(JCodeIcon.ChevronRight),
+                            painter = if (row.isExpanded) jcIcon(JCodeIcon.ChevronDown) else jcIcon(JCodeIcon.ChevronRight),
                             contentDescription = if (row.isExpanded) "Collapse" else "Expand",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(iconSize),
                         )
                     }
-                    Icon(
-                        imageVector = jcIcon(JCodeIcon.Folder),
-                        contentDescription = null,
+                    FileTypeIcon(
+                        name = row.node.name,
+                        isDirectory = true,
+                        isExpanded = row.isExpanded,
+                        size = iconSize,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(iconSize),
                     )
                 } else {
                     Spacer(modifier = Modifier.width(ChevronSlot))
-                    Icon(
-                        imageVector = jcIcon(JCodeIcon.Output),
-                        contentDescription = null,
+                    FileTypeIcon(
+                        name = row.node.name,
+                        isDirectory = false,
+                        size = iconSize,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(iconSize),
                     )
                 }
             }
@@ -858,15 +861,16 @@ private fun ListViewContent(
                     )
                     .then(if (row.isExcluded) Modifier.alpha(EXCLUDED_ROW_ALPHA) else Modifier),
                 leading = {
-                    Icon(
-                        imageVector = if (row.node.kind == FsKind.Directory) jcIcon(JCodeIcon.Folder) else jcIcon(JCodeIcon.Output),
-                        contentDescription = null,
-                        tint = if (row.node.kind == FsKind.Directory) {
+                    val isDirectory = row.node.kind == FsKind.Directory
+                    FileTypeIcon(
+                        name = row.node.name,
+                        isDirectory = isDirectory,
+                        size = iconSize,
+                        tint = if (isDirectory) {
                             MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },
-                        modifier = Modifier.width(iconSize).height(iconSize),
                     )
                 },
                 content = {
@@ -959,7 +963,7 @@ private fun ExplorerToolbar(
 
 @Composable
 private fun ToolbarIcon(
-    icon: ImageVector,
+    icon: Painter,
     description: String,
     onClick: () -> Unit,
     enabled: Boolean = true,
@@ -967,7 +971,7 @@ private fun ToolbarIcon(
     JcTooltip(description) {
         IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(34.dp)) {
             Icon(
-                imageVector = icon,
+                painter = icon,
                 contentDescription = description,
                 modifier = Modifier.size(IconSize.md),
                 tint = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),

@@ -70,6 +70,9 @@ object ExtensionManifestValidator {
             }
         }
 
+        // --- icon sets ---
+        validateIconSets(ext, ::err, ::info)
+
         // --- run presets ---
         ext.contributes.runConfigPresets.forEachIndexed { i, preset ->
             val base = "contributes.runConfigPresets[$i]"
@@ -115,6 +118,48 @@ object ExtensionManifestValidator {
         if (allDeps.isNotEmpty()) info("Requires toolchains: ${allDeps.joinToString(", ")} (installed with the extension).", "requires")
 
         return issues.sortedBy { it.severity.ordinal }
+    }
+
+    /**
+     * Reports an icon pack whose indexes were not found.
+     *
+     * This is the failure an author cannot see from the app: the pack installs, `type: iconpack`
+     * reads as correct, and Settings simply never offers the set. The paths themselves were already
+     * resolved by [IconPackLayout] at install time — this only says what came back empty.
+     */
+    private fun validateIconSets(
+        ext: InstalledExtension,
+        err: (String, String?) -> Unit,
+        info: (String, String?) -> Unit,
+    ) {
+        val sets = ext.contributes.iconSets
+        sets.unresolved.forEach { declaration ->
+            val (path, value) = declaration.split(": ", limit = 2).let { it[0] to it.getOrElse(1) { "" } }
+            err("`$path` points at `$value`, which holds no index.yaml.", path)
+        }
+        if (ext.type == ExtensionType.IconPack && sets.isEmpty) {
+            err(
+                "`type: iconpack` but no icon index found — add `ui-icons/index.yaml`, " +
+                    "`files-icons/index.yaml`, or `contributes.iconSets`.",
+                "type",
+            )
+        }
+        if (ext.type != ExtensionType.IconPack && !sets.isEmpty) {
+            info("Provides icon sets; `type: iconpack` classifies it as one in the marketplace.", "type")
+        }
+        if (sets.filesIndexes.isNotEmpty() && sets.uiIndexes.isEmpty()) {
+            info("Provides file icons only; UI icons stay as chosen.", "contributes.iconSets")
+        }
+        if (sets.uiIndexes.isNotEmpty() && sets.filesIndexes.isEmpty()) {
+            info("Provides UI icons only; file icons stay as chosen.", "contributes.iconSets")
+        }
+        if (sets.uiIndexes.size + sets.filesIndexes.size > 1) {
+            info(
+                "Provides ${sets.uiIndexes.size} UI and ${sets.filesIndexes.size} file icon " +
+                    "set(s); each is offered separately in Settings.",
+                "contributes.iconSets",
+            )
+        }
     }
 
     // A globstar-aware glob compile that returns null on failure (mirrors ProjectRunner's globToRegex
