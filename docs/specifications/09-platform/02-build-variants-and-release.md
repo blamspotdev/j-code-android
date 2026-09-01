@@ -64,11 +64,11 @@ There are **no product flavors**. Three identities come from build types plus a 
 | `release -PjcodeIdSuffix=.beta` | `dev.blamspot.jcode.beta` | JCode (beta) | `ic_launcher_beta` (purple gradient) |
 
 All three install **side by side**. The `namespace` — the compile-time R and BuildConfig package —
-is also `dev.blamspot.jcode`, and the Kotlin, Java, AIDL and JNI sources sit under it: at 1.7.2 the
+is also `dev.blamspot.jcode`, and the Kotlin, Java, AIDL and JNI sources sit under it: at 1.7.3 the
 whole package moved off `dev.jcode`, not just the install identity.
 
 Two trees ship as separate artifacts, so moving them meant rebuilding those artifacts rather than
-editing a string — both were done for 1.7.2 rather than deferred:
+editing a string — both were done for 1.7.3 rather than deferred:
 
 - **The virtual device's guest apps** are now `dev.blamspot.jcode.vdevice.*`. That string *is* the
   identity of the apps installed inside the device: the host names them from `DeviceIntents` and
@@ -80,14 +80,14 @@ editing a string — both were done for 1.7.2 rather than deferred:
   (`browser`, `camera`, `files`, `hardware`, `keyboard`, `settings`) were rebuilt from
   `tools/` with the `aapt2` + `javac` + `d8` + `zipalign` + `apksigner` pipeline each README
   documents, and verified with `aapt2 dump packagename` against the shipped asset. A seventh,
-  `launcher`, was added at 1.7.2 and was born in the new package — the device's home screen became an
+  `launcher`, was added at 1.7.3 and was born in the new package — the device's home screen became an
   app rather than something the container drew.
   `VirtualLauncher`'s own ids are synthetic — they label the *drawn* fallback launcher's nodes in a
   uiautomator dump and have no APK behind them.
 - **`tools/java-dap`** is now `dev.blamspot.jcode.javadap`. The jar is not built during a JCode
   build; it is downloaded from a pinned release and launched by main class, so the package could
   only move together with a republished jar. `DebugEngineModels` now fetches `java-dap-v2` and
-  launches `dev.blamspot.jcode.javadap.Main` — **that release must exist before 1.7.2 ships**, or
+  launches `dev.blamspot.jcode.javadap.Main` — **that release must exist before 1.7.3 ships**, or
   JVM debugging installs nothing.
 
 The app's own namespaced strings moved with it: the install-status action, the notification channel
@@ -136,7 +136,7 @@ packaging {
 Single source of truth in `app/build.gradle.kts`:
 
 ```kotlin
-val jcodeVersion = "1.7.2"                                   // the train being prepared
+val jcodeVersion = "1.7.3"                                   // the train being prepared
 val jcodeVersionName = findProperty("jcodeVersionName") ?: jcodeVersion
 val jcodeVersionCode = (MAJOR * 10000 + MINOR * 100 + PATCH) * 100 + tier
 ```
@@ -148,16 +148,16 @@ downgrades**.
 ### 4.1 Release trains
 
 `jcodeVersion` is the version being **prepared**, not the last one shipped. `main` carries an open
-train; merges do not move it. Previews of that train are built and published as `1.7.2-beta.N`, and
-`1.7.2` is published from the same line of commits when it is ready — publishing it is what opens
+train; merges do not move it. Previews of that train are built and published as `1.7.3-beta.N`, and
+`1.7.3` is published from the same line of commits when it is ready — publishing it is what opens
 the next train.
 
 ```
-main = 1.7.2        merge, merge, merge          (jcodeVersion unchanged)
-                    publish v1.7.2-beta.1        pre-release, dev.blamspot.jcode.beta
+main = 1.7.3        merge, merge, merge          (jcodeVersion unchanged)
+                    publish v1.7.3-beta.1        pre-release, dev.blamspot.jcode.beta
                     merge
-                    publish v1.7.2-beta.2        pre-release
-                    publish v1.7.2               release, dev.blamspot.jcode
+                    publish v1.7.3-beta.2        pre-release
+                    publish v1.7.3               release, dev.blamspot.jcode
 main = next patch   opened automatically
 ```
 
@@ -176,13 +176,13 @@ at all:
 
 | versionName | versionCode | tier |
 |---|---|---|
-| `1.7.2-alpha.1` | 1060101 | `N` |
-| `1.7.2-beta.1` | 1060131 | `30 + N` |
-| `1.7.2-beta.2` | 1060132 | |
-| `1.7.2-rc.1` | 1060161 | `60 + N` |
-| `1.7.2` | 1060199 | `99` |
+| `1.7.3-alpha.1` | 1060101 | `N` |
+| `1.7.3-beta.1` | 1060131 | `30 + N` |
+| `1.7.3-beta.2` | 1060132 | |
+| `1.7.3-rc.1` | 1060161 | `60 + N` |
+| `1.7.3` | 1060199 | `99` |
 
-The old derivation ignored the suffix entirely, so `1.7.2-beta.1`, `1.7.2-beta.2` and `1.7.2` all
+The old derivation ignored the suffix entirely, so `1.7.3-beta.1`, `1.7.3-beta.2` and `1.7.3` all
 produced **the same code** — successive previews never climbed, which is the one thing a version
 code has to do. An unrecognised label falls to the release tier, which is the safe end of the range
 and the reason the labels are validated before a build starts.
@@ -196,7 +196,7 @@ and takes one past the highest in the line asked for, so the label input accepts
 | `alpha` / `beta` / `rc` | the next in that line |
 | `beta.7` | exactly that |
 
-A new train starts back at `beta.1` on its own, because `v1.7.2-beta.*` is a different prefix.
+A new train starts back at `beta.1` on its own, because `v1.7.3-beta.*` is a different prefix.
 
 Whatever the label resolves to, **nothing already published for the train may be at or above the
 build's version code**, and that is checked in seconds rather than after an hour of building. It
@@ -253,7 +253,7 @@ and `dev.blamspot.jcode.beta` can never be updated *into* `dev.blamspot.jcode`. 
 A Beta build is still told when the train it was previewing ships: the final release is the highest
 version on the list, and it is reported with **no APK URL**, so the app offers the release page
 rather than an install it cannot perform. Comparison is Semantic Versioning 2.0.0 precedence —
-`1.7.2-beta.2 < 1.7.2-rc.1 < 1.7.2` — covered by `app/src/test/java/dev/blamspot/jcode/UpdateCheckerTest.kt`.
+`1.7.3-beta.2 < 1.7.3-rc.1 < 1.7.3` — covered by `app/src/test/java/dev/blamspot/jcode/UpdateCheckerTest.kt`.
 
 ### 4.5 Updates that change the package
 
@@ -304,9 +304,9 @@ the packages a bundle can have come *from* — `dev.jcode`/`.debug`/`.beta`, lis
 without it, Android 11 package filtering reports the old install as absent and the offer silently
 degrades.
 
-**The release this was built for.** 1.7.2 is the release that changes the package, from `dev.jcode`
+**The release this was built for.** 1.7.3 is the release that changes the package, from `dev.jcode`
 to `dev.blamspot.jcode`. 1.6.1 is the one that makes it survivable: it shipped the export side
-above, so every 1.6.1 install hands its environment over on its own when it updates into 1.7.2.
+above, so every 1.6.1 install hands its environment over on its own when it updates into 1.7.3.
 
 An install **older than 1.6.1** cannot — the export did not exist yet — so it updates into
 `dev.blamspot.jcode` as a second app and keeps everything. Nothing is lost, but nothing crosses
@@ -356,8 +356,8 @@ repository says it is preparing. What you choose is the channel:
 
 | Input | versionName | Tag | App id | GitHub |
 |---|---|---|---|---|
-| `beta`, label blank | `1.7.2-beta.N` (next) | `v1.7.2-beta.N` | `dev.blamspot.jcode.beta` | pre-release |
-| `stable` | `1.7.2` | `v1.7.2` | `dev.blamspot.jcode` | release |
+| `beta`, label blank | `1.7.3-beta.N` (next) | `v1.7.3-beta.N` | `dev.blamspot.jcode.beta` | pre-release |
+| `stable` | `1.7.3` | `v1.7.3` | `dev.blamspot.jcode` | release |
 
 It builds the Rust JNI libraries, assembles, signs with `apksigner`, verifies the signature, then
 creates the tag and the release with the APK attached.

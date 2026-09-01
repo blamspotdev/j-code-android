@@ -9,8 +9,8 @@ plugins {
 // `val jcodeVersion` is the version being *prepared*, not the last one shipped: main carries the
 // open release train (see docs/specifications/09-platform/02-build-variants-and-release.md), and
 // merges no longer move it. The release scripts parse this line, and `-PjcodeVersionName=…`
-// overrides it to add the pre-release label a Beta build carries (e.g. 1.7.2-beta.1).
-val jcodeVersion = "1.7.2"
+// overrides it to add the pre-release label a Beta build carries (e.g. 1.7.3-beta.1).
+val jcodeVersion = "1.7.3"
 
 val jcodeVersionName: String =
     (project.findProperty("jcodeVersionName") as? String)?.trim()?.takeIf { it.isNotBlank() }
@@ -24,16 +24,16 @@ val jcodeVersionName: String =
  * scripts/build-release.ps1 ($Code) and build-release-common.sh (CODE).
  *
  * The trailing tier is what the old formula had no room for. It used to ignore the pre-release
- * suffix entirely, so 1.7.2-beta.1, 1.7.2-beta.2 and 1.7.2 all derived the *same* code — and
+ * suffix entirely, so 1.7.3-beta.1, 1.7.3-beta.2 and 1.7.3 all derived the *same* code — and
  * successive betas therefore never climbed, which is the one thing a version code has to do.
  * A tier is ordered the way SemVer orders the label it comes from, so a build never goes backwards
  * on its way from the first preview to the release:
  *
- *     1.7.2-alpha.1  1060101      alpha.N -> N
- *     1.7.2-beta.1   1060131      beta.N  -> 30 + N
- *     1.7.2-beta.2   1060132
- *     1.7.2-rc.1     1060161      rc.N    -> 60 + N
- *     1.7.2          1060199      release -> 99   (always above every preview of itself)
+ *     1.7.3-alpha.1  1060101      alpha.N -> N
+ *     1.7.3-beta.1   1060131      beta.N  -> 30 + N
+ *     1.7.3-beta.2   1060132
+ *     1.7.3-rc.1     1060161      rc.N    -> 60 + N
+ *     1.7.3          1060199      release -> 99   (always above every preview of itself)
  *
  * An unrecognised or absent label reads as a release, which is the safe end of the range: a build
  * whose label could not be understood sorts above the previews rather than silently below them.
@@ -75,7 +75,7 @@ val jcodeUpdateChannel: String = if (jcodeIdSuffix == ".beta") "beta" else "stab
  * The base applicationId, overridable with `-PjcodeApplicationId`.
  *
  * Android keys an installed app by its package, so changing this is never an update — it is a
- * second app with an empty data directory. That is what happened at 1.7.2, when the app moved from
+ * second app with an empty data directory. That is what happened at 1.7.3, when the app moved from
  * `dev.jcode` to `dev.blamspot.jcode`; the migration path exists for exactly that (see
  * [dev.blamspot.jcode.MigrationBundle]), and 1.6.1 shipped the export side of it so the release
  * before the rename could hand its environment over.
