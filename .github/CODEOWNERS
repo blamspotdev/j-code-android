@@ -1,2 +1,5 @@
 /.github/workflows/ @blamspotdev
 /.github/CODEOWNERS @blamspotdev @janrick123
+/.gitignore @blamspotdev @janrick123
+/scripts/ @blamspotdev @janrick123
+/docs/ @blamspotdev @janrick123
