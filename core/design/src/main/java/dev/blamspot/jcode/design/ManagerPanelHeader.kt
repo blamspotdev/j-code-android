@@ -20,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -80,21 +81,21 @@ fun ManagerPanelHeader(
             )
             if (onExtras != null) {
                 HeaderIconButton(
-                    icon = LocalIconBundle.current[extrasIcon],
+                    icon = jcIcon(extrasIcon),
                     contentDescription = extrasContentDescription,
                     onClick = onExtras,
                 )
             }
             if (onImport != null) {
                 HeaderIconButton(
-                    icon = LocalIconBundle.current[importIcon],
+                    icon = jcIcon(importIcon),
                     contentDescription = importContentDescription,
                     onClick = onImport,
                 )
             }
             if (onManage != null) {
                 HeaderIconButton(
-                    icon = LocalIconBundle.current[JCodeIcon.Settings],
+                    icon = jcIcon(JCodeIcon.Settings),
                     contentDescription = manageContentDescription,
                     onClick = onManage,
                 )
@@ -103,7 +104,7 @@ fun ManagerPanelHeader(
                 HeaderNoticeButton(count = noticeCount, onClick = onNotice)
             }
             HeaderIconButton(
-                icon = LocalIconBundle.current[JCodeIcon.Search],
+                icon = jcIcon(JCodeIcon.Search),
                 contentDescription = "Search",
                 onClick = onToggleSearch,
                 active = searchActive,
@@ -120,7 +121,7 @@ fun ManagerPanelHeader(
                 }
             } else {
                 HeaderIconButton(
-                    icon = LocalIconBundle.current[JCodeIcon.Refresh],
+                    icon = jcIcon(JCodeIcon.Refresh),
                     contentDescription = "Refresh",
                     onClick = onRefresh,
                 )
@@ -192,7 +193,7 @@ private fun HeaderNoticeButton(count: Int, onClick: () -> Unit) {
 
 @Composable
 private fun HeaderIconButton(
-    icon: ImageVector,
+    icon: Painter,
     contentDescription: String,
     onClick: () -> Unit,
     active: Boolean = false,
@@ -200,7 +201,7 @@ private fun HeaderIconButton(
     JcTooltip(contentDescription) {
         IconButton(onClick = onClick, modifier = Modifier.size(PanelHeader.iconButton)) {
             Icon(
-                imageVector = icon,
+                painter = icon,
                 contentDescription = contentDescription,
                 modifier = Modifier.size(PanelHeader.icon),
                 tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,

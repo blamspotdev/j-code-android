@@ -47,6 +47,7 @@ import dev.blamspot.jcode.design.CompactDestructiveButton
 import dev.blamspot.jcode.design.CompactFilledButton
 import dev.blamspot.jcode.design.CompactOutlinedButton
 import dev.blamspot.jcode.design.IconSize
+import dev.blamspot.jcode.design.FileTypeIcon
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.JcTooltip
 import dev.blamspot.jcode.design.Space
@@ -307,10 +308,10 @@ private fun EntryList(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Space.sm),
             ) {
-                Icon(
-                    imageVector = jcIcon(if (entry.isDirectory) JCodeIcon.Folder else JCodeIcon.Output),
-                    contentDescription = null,
-                    modifier = Modifier.size(IconSize.md),
+                FileTypeIcon(
+                    name = entry.name,
+                    isDirectory = entry.isDirectory,
+                    size = IconSize.md,
                     tint = if (entry.isDirectory) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -379,7 +380,7 @@ private fun Preview(
                 JcTooltip("Back") {
                     IconButton(onClick = back, modifier = Modifier.size(32.dp)) {
                         Icon(
-                            imageVector = jcIcon(JCodeIcon.ArrowBack),
+                            painter = jcIcon(JCodeIcon.ArrowBack),
                             contentDescription = "Back",
                             modifier = Modifier.size(IconSize.md),
                         )
@@ -495,10 +496,10 @@ private fun ChildRow(child: TrashChild, onOpen: (String) -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
-        Icon(
-            imageVector = jcIcon(JCodeIcon.Output),
-            contentDescription = null,
-            modifier = Modifier.size(IconSize.sm),
+        FileTypeIcon(
+            name = child.path.substringAfterLast('/'),
+            isDirectory = false,
+            size = IconSize.sm,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(

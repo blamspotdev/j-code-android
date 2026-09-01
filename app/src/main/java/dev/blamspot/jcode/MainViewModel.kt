@@ -63,6 +63,8 @@ import androidx.compose.ui.graphics.toArgb
 import dev.blamspot.jcode.design.AndroidRunTarget
 import dev.blamspot.jcode.design.BottomBarVisibility
 import dev.blamspot.jcode.design.ExtraKeysVisibility
+import dev.blamspot.jcode.design.FileIconSet
+import dev.blamspot.jcode.design.IconPackLoader
 import dev.blamspot.jcode.design.HeaderActionButton
 import dev.blamspot.jcode.core.diag.DiagLevel
 import dev.blamspot.jcode.core.diag.DiagnosticLog
@@ -70,6 +72,7 @@ import dev.blamspot.jcode.design.SettingsDefaults
 import dev.blamspot.jcode.design.TabColoring
 import dev.blamspot.jcode.design.TabMaxSize
 import dev.blamspot.jcode.design.ThemeMode
+import dev.blamspot.jcode.design.UiIconSet
 import dev.blamspot.jcode.design.VolumeKeyAction
 import dev.blamspot.jcode.design.randomTabColor
 import dev.blamspot.jcode.design.tabColorFromHex
@@ -78,6 +81,7 @@ import dev.blamspot.jcode.editor.SyntaxHighlighter
 import dev.blamspot.jcode.feature.editor.pane.EditorGroup
 import dev.blamspot.jcode.feature.editor.pane.EditorPageKind
 import dev.blamspot.jcode.feature.editor.pane.EditorTab
+import dev.blamspot.jcode.feature.marketplace.IconPackLayout
 import dev.blamspot.jcode.feature.marketplace.BundledExtensionSpec
 import dev.blamspot.jcode.feature.marketplace.ExtensionActivation
 import dev.blamspot.jcode.feature.marketplace.enabledIn
@@ -811,6 +815,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 closeEditorTab(VIRTUAL_HARDWARE_TAB_ID)
             }
             extensionInstaller.uninstall(id)
+            // Icon art is held decoded and keyed by file path; the files are about to go, and a set
+            // the user has just removed should stop being drawn rather than linger in a cache.
+            IconPackLoader.evict()
             refreshInstalledExtensions()
             // The bridge caches which installed pack provides the device, and `evict` is what makes
             // that current again. Without it the workbench goes on being told a device is available
@@ -2256,18 +2263,61 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private val iconBundleKey = stringPreferencesKey("icon_bundle_id")
+    // The key predates the split into two sets and still holds the UI one, so upgrading keeps
+    // whichever icon set was already chosen instead of silently resetting it to Material.
+    private val uiIconSetKey = stringPreferencesKey("icon_bundle_id")
 
-    /** App-wide selected icon bundle id; empty resolves to the default (Material) bundle. */
-    val iconBundleId: StateFlow<String> = uiPreferences.data
-        .map { prefs -> prefs[iconBundleKey].orEmpty() }
+    /** App-wide selected UI icon set id; empty resolves to the default (Material) set. */
+    val uiIconSetId: StateFlow<String> = uiPreferences.data
+        .map { prefs -> prefs[uiIconSetKey].orEmpty() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
 
-    fun setIconBundle(id: String) {
+    fun setUiIconSet(id: String) {
         viewModelScope.launch {
-            uiPreferences.edit { prefs -> prefs[iconBundleKey] = id }
+            uiPreferences.edit { prefs -> prefs[uiIconSetKey] = id }
         }
     }
+
+    private val fileIconSetKey = stringPreferencesKey("file_icon_set_id")
+
+    /** App-wide selected file icon set id; empty means JCode's own folder/file glyphs. */
+    val fileIconSetId: StateFlow<String> = uiPreferences.data
+        .map { prefs -> prefs[fileIconSetKey].orEmpty() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
+
+    fun setFileIconSet(id: String) {
+        viewModelScope.launch {
+            uiPreferences.edit { prefs -> prefs[fileIconSetKey] = id }
+        }
+    }
+
+    /**
+     * Icon sets provided by installed extensions, loaded off the main thread.
+     *
+     * Derived from [installedExtensions] rather than scanned separately, so installing or removing a
+     * pack updates the Settings list and the live chrome in one step. `IconPackLoader` memoizes each
+     * parse, so re-deriving on every extension refresh costs a map lookup per pack.
+     */
+    val installedUiIconSets: StateFlow<List<UiIconSet>> = _installedExtensions
+        .map { extensions ->
+            extensions.flatMap { ext ->
+                ext.contributes.iconSets.uiIndexes.mapNotNull { index ->
+                    IconPackLoader.uiIconSet(index, ext.id, ext.name, IconPackLayout.localId(index))
+                }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** File/folder icon sets provided by installed extensions. There are no built-in ones. */
+    val installedFileIconSets: StateFlow<List<FileIconSet>> = _installedExtensions
+        .map { extensions ->
+            extensions.flatMap { ext ->
+                ext.contributes.iconSets.filesIndexes.mapNotNull { index ->
+                    IconPackLoader.fileIconSet(index, ext.id, ext.name, IconPackLayout.localId(index))
+                }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
 
     private val formatterKey = stringPreferencesKey("formatter_id")

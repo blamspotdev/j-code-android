@@ -332,9 +332,7 @@ private fun VariableTreeRow(row: TreeRow, onToggle: () -> Unit) {
     ) {
         if (row.value.expandable) {
             Icon(
-                painter = rememberVectorPainter(
-                    jcIcon(if (row.open) JCodeIcon.ChevronDown else JCodeIcon.ChevronRight),
-                ),
+                painter = jcIcon(if (row.open) JCodeIcon.ChevronDown else JCodeIcon.ChevronRight),
                 contentDescription = if (row.open) "Collapse" else "Expand",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(14.dp),

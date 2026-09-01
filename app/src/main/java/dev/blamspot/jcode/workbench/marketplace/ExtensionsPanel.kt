@@ -45,6 +45,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
@@ -485,7 +486,7 @@ internal fun ScmPanel(
  */
 @Composable
 private fun PanelEmptyState(
-    icon: ImageVector,
+    icon: Painter,
     title: String,
     message: String,
     modifier: Modifier = Modifier,
@@ -840,7 +841,7 @@ private fun ExtensionSettingsCard(
                 }
                 if (ext.type.choosesActivation) ActivationPill(mode)
                 Icon(
-                    imageVector = jcIcon(if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown),
+                    painter = jcIcon(if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown),
                     contentDescription = if (expanded) "Collapse ${ext.name}" else "Expand ${ext.name}",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(IconSize.md),
@@ -902,6 +903,7 @@ private val EXTENSION_TYPE_ORDER = listOf(
     ExtensionType.Vm,
     ExtensionType.Formatter,
     ExtensionType.Templates,
+    ExtensionType.IconPack,
     ExtensionType.Unknown,
 )
 
@@ -913,6 +915,7 @@ private fun extensionTypeLabel(type: ExtensionType): String = when (type) {
     ExtensionType.Vm -> "Virtual machines"
     ExtensionType.Formatter -> "Formatters"
     ExtensionType.Templates -> "Templates"
+    ExtensionType.IconPack -> "Icon packs"
     ExtensionType.Unknown -> "Other"
 }
 

@@ -40,8 +40,66 @@ The per-folder YAML doubles as the **role marker** (`type: project | workspace`)
 | `extension.yaml` | YAML | [Manifest reference](../07-extensions/03-manifest-reference.md) |
 | `extension.jehm` | Markdown with YAML frontmatter (legacy) | [`.jext` package format §6](../07-extensions/02-jext-package-format.md#6-legacy-jehm-header) |
 | `templates/<id>/template.yaml` | YAML | [Templates and scaffolding](../07-extensions/05-templates-and-scaffolding.md) |
+| `ui-icons/[<variant>/]index.yaml`, `ui-icons.yaml` | YAML — a UI icon set (see §3.1) | [Design system §3](../06-workbench/05-design-system.md) |
+| `files-icons/[<variant>/]index.yaml`, `files-icons.yaml` | YAML — a file icon set (see §3.1) | [Design system §3.1](../06-workbench/05-design-system.md) |
 | `*.vsix` | ZIP with `extension/package.json` | [Extension API and hosts §4](../07-extensions/04-extension-api-and-hosts.md#4-vsix-import) |
 | `.jcode-vsix` | Marker file | [Extension API and hosts §4](../07-extensions/04-extension-api-and-hosts.md#4-vsix-import) |
+
+
+### 3.1 Icon-pack indexes
+
+Both indexes share a shape and differ only in what their `icons:` keys mean: a UI index keys them by
+`JCodeIcon` slot name, a file index by ids its own `files:` / `folders:` rules point at.
+
+```yaml
+id: outlined                # defaults to the variant directory; registered as "<extId>/<id>"
+name: Neon — Outlined       # defaults to "<extension name> — <variant directory>"
+description: …
+version: 1.0.0
+author: …
+base: .                     # art directory, relative to THIS file; default is beside it
+
+defaults:                   # inherited by every entry under `icons:`
+  size: 24                  # design grid in dp — NOT the rendered size
+  scale: 1.0                # multiplier on the host's size
+  tint: theme               # theme | none
+  autoMirror: false         # UI sets only; vector art only
+
+icons:
+  Run: run.svg                              # short form
+  Folder: { file: folder.png, tint: none }  # long form: any `defaults` key, per icon
+
+aliases:
+  Continue: Run             # borrow another entry's art
+```
+
+A file index adds the name-matching rules and its own fallbacks:
+
+```yaml
+defaults:
+  file: file                # icon id for an unmatched file
+  folder: folder            # …and an unmatched folder
+  folderOpen: folder-open   # …while expanded
+
+files:
+  - icon: typescript
+    extensions: [ts, tsx]   # least specific
+    names: [tsconfig.json]  # most specific
+    globs: [".env*"]
+    patterns: ['\.spec\.[jt]s$']
+
+folders:
+  - icon: folder-src
+    openIcon: folder-src-open
+    names: [src, lib]
+```
+
+Art is SVG or PNG (`.webp` / `.jpg` read as PNG), and must resolve **inside** the package. An entry
+naming a missing file, an unreadable format, an unknown UI slot, or an undefined icon id is dropped
+with the rest of the set intact — a pack is third-party content, so a typo costs one glyph.
+
+Read by `IconPackLoader` in `:core:design`; located by `IconPackLayout` in `:feature:marketplace`.
+The authoring guide is `j-code-make-tools/docs/ICON-PACKS.md`.
 
 ---
 

@@ -138,7 +138,7 @@ private fun CommandRow(command: CommandSpec, onClick: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(Space.ms),
     ) {
         Icon(
-            imageVector = jcIcon(command.icon ?: JCodeIcon.CommandPalette),
+            painter = jcIcon(command.icon ?: JCodeIcon.CommandPalette),
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(IconSize.md),

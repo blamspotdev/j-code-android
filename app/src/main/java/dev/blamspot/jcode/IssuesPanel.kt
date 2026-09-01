@@ -35,7 +35,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.blamspot.jcode.core.lsp.DiagnosticSeverity
 import dev.blamspot.jcode.core.lsp.LspModule
 import dev.blamspot.jcode.design.JCodeIcon
-import dev.blamspot.jcode.design.LocalIconBundle
+import dev.blamspot.jcode.design.jcIcon
 import dev.blamspot.jcode.design.Radius
 import dev.blamspot.jcode.design.Space
 import dev.blamspot.jcode.workbench.LocalIssueActions
@@ -205,9 +205,7 @@ private fun NoticeRow(notice: WorkbenchNotices.Notice) {
             )
             if (hasDetail) {
                 Icon(
-                    imageVector = LocalIconBundle.current[
-                        if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown,
-                    ],
+                    painter = jcIcon(if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown),
                     contentDescription = if (expanded) "Hide details" else "Show details",
                     modifier = Modifier.padding(top = Space.xxs).size(16.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,

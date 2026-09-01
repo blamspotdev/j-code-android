@@ -22,6 +22,7 @@ android {
 }
 
 dependencies {
+    testImplementation(libs.junit)
     implementation(libs.coroutines.android)
     implementation(libs.snakeyaml.engine)
     // Ed25519 signature verification for official (signed) .jext packages — used via BC's lightweight

@@ -35,7 +35,7 @@ minJCodeVersion, targetJCodeVersion, maxJCodeVersion, category, subcategory
 | `name` | string | No | Defaults to `id`. Equalling `id` raises a warning |
 | `publisher` / `author` | string | No | `publisher` wins; `author` is the back-compat spelling |
 | `authors` | string list | No | Ordered; first is primary. Empty falls back to `author` |
-| `type` | string | No | See [Extension model §2](01-extension-model-and-lifecycle.md#2-extension-types). Unrecognized → `Unknown` + warning |
+| `type` | string | No | See [Extension model §2](01-extension-model-and-lifecycle.md#2-extension-types). `iconpack` is accepted (also `icon-pack`, `icons`, `icon-theme`). Unrecognized → `Unknown` + warning |
 | `version` | string | No (warned) | Authoritative for update comparison |
 | `description` | string | No | Defaults to `""` |
 | `longDescription` | string | No | |
@@ -233,17 +233,21 @@ A pack of any `type` may declare both `languages` and `templates`; missing secti
 
 ## 6. `contributes`
 
-Exactly six contribution points are read (`parseContributions`):
-
 ```yaml
 contributes:
   editorStartActions:    [ … ]
   drawerActions:         [ … ]
   editorContextActions:  [ … ]
   explorerContextActions:[ … ]
+  toolchainActions:      [ … ]
   explorerDecorations:   true
   runConfigPresets:      [ … ]
+  debugEngines:          [ … ]
+  iconSets:              { ui: …, files: … }
 ```
+
+`iconSets` is unusual: `parseContributions` runs its resolution **even when `contributes:` is absent
+entirely**, because a conventionally laid-out icon pack declares nothing at all. See §6.4.
 
 ### 6.1 Action lists
 
@@ -320,6 +324,46 @@ Gradle tasks a preset already covers is then dropped, so installing a pack that 
 `gradlew assembleDebug` does not show that task twice. See
 [Run and build configurations](../05-workspace/03-run-and-build-configurations.md).
 
+### 6.4 `iconSets`
+
+An icon pack ships art plus an index. JCode reads two independent kinds of set — **UI icons** (the
+app's own chrome) and **file icons** (the badge on every file and folder it lists) — and a pack may
+provide either, both, and **any number of each** as variants.
+
+The indexes are found by convention, so a conventionally laid-out pack declares nothing:
+
+```
+ui-icons/index.yaml           files-icons/index.yaml       # one set of each
+ui-icons/outlined/index.yaml  files-icons/dark/index.yaml  # several — one directory per variant
+ui-icons.yaml                 files-icons.yaml             # flat, with `base:` naming the art dir
+```
+
+A directory holding an `index.yaml` **is** one set; a directory holding none is scanned for
+subdirectories that do, one set each, ordered by name. The directory layout is checked before the
+flat file.
+
+`contributes.iconSets` is only needed for a package that uses neither layout. Each half names an
+index file **or** a directory, and accepts a list:
+
+```yaml
+contributes:
+  iconSets:
+    ui: art/chrome                          # a directory: every set inside it
+    files: [art/light.yaml, art/dark.yaml]  # a list: exactly these
+```
+
+A declared path that resolves to nothing is **not** replaced by a conventional index — it is
+recorded in `ContributedIconSets.unresolved` and reported as a validation error.
+
+Every set is registered under `"<extensionId>/<setId>"`, so two packs may both ship an `outlined`;
+a pack with a single set of a kind keeps the bare extension id. `type: iconpack` (also `icon-pack`,
+`icons`, `icon-theme`) classifies the package in the marketplace but is **not** what loads the sets —
+the indexes are. Declaring the type with no index present is a validation error.
+
+The index format itself is specified in
+[File format index](../09-platform/01-file-format-index.md), and the authoring guide lives in
+`j-code-make-tools/docs/ICON-PACKS.md`.
+
 ---
 
 ## 7. `templates`
@@ -390,6 +434,8 @@ images:
 5. Contribution entries without their required field (`id`, `command`, `requires`) are silently
    dropped, not errors.
 6. Adding a key means updating `KNOWN_TOP_LEVEL`, the parser, and this document.
+6a. `contributes.iconSets` resolution runs even with no `contributes:` block; every other
+   contribution point resolves to empty in that case.
 7. `formatterCommand` is currently inert.
 8. `entry.native.abi` must equal the host's `JCODE_EXT_ABI` exactly — not "at least".
 9. An extension declaring `entry.native.guest` is offering to provide the virtual device; at most one

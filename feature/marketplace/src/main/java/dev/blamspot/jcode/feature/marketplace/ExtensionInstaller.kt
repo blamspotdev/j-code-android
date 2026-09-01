@@ -687,7 +687,10 @@ class ExtensionInstaller internal constructor(context: Context) {
     }
 
     private fun parseContributions(raw: Any?, dir: File): ExtensionContributions {
-        val map = (raw as? Map<*, *>)?.toStringKeyMap() ?: return ExtensionContributions.EMPTY
+        // A pack laid out conventionally declares no `contributes:` at all, so icon-set discovery
+        // has to survive the early return that every other contribution point is happy with.
+        val map = (raw as? Map<*, *>)?.toStringKeyMap()
+            ?: return ExtensionContributions(iconSets = parseIconSets(null, dir))
         fun actions(key: String): List<ContributedAction> =
             map.listOfAny(key).mapNotNull { item ->
                 val a = (item as? Map<*, *>)?.toStringKeyMap() ?: return@mapNotNull null
@@ -767,7 +770,25 @@ class ExtensionInstaller internal constructor(context: Context) {
             explorerDecorations = map["explorerDecorations"] == true || map.str("explorerDecorations") == "true",
             runConfigPresets = runPresets,
             debugEngines = debugEngines,
+            iconSets = parseIconSets(map["iconSets"], dir),
         )
+    }
+
+    /**
+     * The pack's icon indexes. `contributes.iconSets` is only needed when the package uses neither
+     * conventional layout, so this runs whether or not the manifest declares anything.
+     *
+     * Each half accepts a single path or a list of them, since a pack may ship several variants of
+     * one kind of set (outlined, filled, …) without keeping them under one directory.
+     */
+    private fun parseIconSets(raw: Any?, dir: File): ContributedIconSets {
+        val map = (raw as? Map<*, *>)?.toStringKeyMap()
+        fun paths(key: String): List<String> = when (val value = map?.get(key)) {
+            null -> emptyList()
+            is List<*> -> value.mapNotNull { it?.toString()?.trim()?.takeIf(String::isNotBlank) }
+            else -> listOfNotNull(value.toString().trim().takeIf(String::isNotBlank))
+        }
+        return IconPackLayout.resolve(dir = dir, declaredUi = paths("ui"), declaredFiles = paths("files"))
     }
 
     // A `type: language` extension may declare a single `language:` block (legacy) or a `languages:`

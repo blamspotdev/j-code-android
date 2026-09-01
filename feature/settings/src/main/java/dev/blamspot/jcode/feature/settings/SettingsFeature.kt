@@ -74,8 +74,14 @@ import dev.blamspot.jcode.core.config.ConfigScope
 import dev.blamspot.jcode.core.config.EffectiveConfig
 import dev.blamspot.jcode.core.config.ProjectConfig
 import dev.blamspot.jcode.core.config.WorkspaceConfig
-import dev.blamspot.jcode.design.IconBundle
-import dev.blamspot.jcode.design.IconBundleRegistry
+import dev.blamspot.jcode.design.FileIconSet
+import dev.blamspot.jcode.design.painter
+import dev.blamspot.jcode.design.LocalFileIconSet
+import dev.blamspot.jcode.design.FileTypeIcon
+import dev.blamspot.jcode.design.FileIconSetRegistry
+import dev.blamspot.jcode.design.LocalIconSetSettings
+import dev.blamspot.jcode.design.UiIconSet
+import dev.blamspot.jcode.design.UiIconSetRegistry
 import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.Radius
@@ -178,8 +184,6 @@ object SettingsFeature {
         onUpdateThemeMode: (ThemeMode?) -> Unit,
         themeBundleId: String,
         onUpdateThemeBundle: (String) -> Unit,
-        iconBundleId: String,
-        onUpdateIconBundle: (String) -> Unit,
         formatterId: String,
         formatterOptions: List<Pair<String, String>>,
         onSelectFormatter: (String) -> Unit,
@@ -188,6 +192,7 @@ object SettingsFeature {
         isUserWorkspace: Boolean = false,
         modifier: Modifier = Modifier,
     ) {
+        val iconSettings = LocalIconSetSettings.current
         val tabCloseSetting = LocalTabCloseButtonSetting.current
         val editorDragSetting = LocalEditorDragMovesCursor.current
         val restoreSessionSetting = LocalRestoreSession.current
@@ -364,17 +369,47 @@ object SettingsFeature {
             }
 
             SettingsCard(
-                title = "Icon bundle",
-                description = "Icon set used across the app.",
-                keywords = "icon bundle icons set material rounded jcode line appearance",
+                title = "UI icons",
+                description = "Icon set used for the app's own toolbars, tabs and menus.",
+                keywords = "icon bundle icons set ui material rounded jcode line appearance " +
+                    iconSettings.uiSets.joinToString(" ") { it.name },
             ) {
-                val activeIcons = iconBundleId.ifEmpty { IconBundleRegistry.default.id }
-                IconBundleRegistry.builtIns.forEach { bundle ->
-                    IconBundleRow(
-                        bundle = bundle,
-                        selected = activeIcons == bundle.id,
-                        onClick = { onUpdateIconBundle(bundle.id) },
+                val activeUi = iconSettings.activeUiSetId
+                iconSettings.uiSets.forEach { set ->
+                    UiIconSetRow(
+                        set = set,
+                        selected = activeUi == set.id,
+                        onClick = { iconSettings.onSelectUiSet(set.id) },
                     )
+                }
+            }
+
+            // Hidden until something can fill it: JCode ships no file icon set, so with no icon-pack
+            // extension installed this card would offer exactly one choice — the one already in use.
+            if (iconSettings.fileSets.isNotEmpty()) {
+                SettingsCard(
+                    title = "File icons",
+                    description = "Icon set used for files and folders in the Explorer, tabs and search results.",
+                    keywords = "icon bundle icons set file files folder explorer appearance " +
+                        iconSettings.fileSets.joinToString(" ") { it.name },
+                ) {
+                    val activeFiles = iconSettings.activeFileSetId
+                    FileIconSetRow(
+                        name = "None",
+                        description = "JCode's own folder and file glyphs, from the UI icon set.",
+                        detail = null,
+                        selected = activeFiles == FileIconSetRegistry.NONE_ID,
+                        onClick = { iconSettings.onSelectFileSet(FileIconSetRegistry.NONE_ID) },
+                    )
+                    iconSettings.fileSets.forEach { set ->
+                        FileIconSetRow(
+                            name = set.name,
+                            description = set.description,
+                            detail = set,
+                            selected = activeFiles == set.id,
+                            onClick = { iconSettings.onSelectFileSet(set.id) },
+                        )
+                    }
                 }
             }
 
@@ -1810,7 +1845,7 @@ private fun ColumnScope.SettingsGroup(
             modifier = Modifier.weight(1f),
         )
         Icon(
-            imageVector = jcIcon(if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown),
+            painter = jcIcon(if (expanded) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown),
             contentDescription = if (expanded) "Collapse $title" else "Expand $title",
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(IconSize.md),
@@ -1945,12 +1980,71 @@ private fun BundleRow(
 }
 
 @Composable
-private fun IconBundleRow(
-    bundle: IconBundle,
+private fun UiIconSetRow(
+    set: UiIconSet,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
+    // Five slots a set is most likely to have restyled, so two packs are told apart at a glance
+    // rather than by their names.
     val sample = listOf(JCodeIcon.Files, JCodeIcon.Run, JCodeIcon.Terminal, JCodeIcon.Search, JCodeIcon.Settings)
+    IconSetRow(
+        name = set.name,
+        description = set.description.ifBlank { "${set.filledSlots} icons" },
+        selected = selected,
+        onClick = onClick,
+        preview = {
+            sample.forEach { slot ->
+                Icon(
+                    painter = set.art(slot).painter(),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(IconSize.sm),
+                )
+            }
+        },
+    )
+}
+
+@Composable
+private fun FileIconSetRow(
+    name: String,
+    description: String,
+    detail: FileIconSet?,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    // Previewed through the same resolver the Explorer uses, on names a pack of any language is
+    // likely to answer — so the row shows what the set will actually draw, not a curated sample.
+    val sample = listOf("src" to true, "index.ts" to false, "app.py" to false, "README.md" to false)
+    IconSetRow(
+        name = name,
+        description = description.ifBlank { detail?.let { "${it.iconCount} icons" } ?: "" },
+        selected = selected,
+        onClick = onClick,
+        preview = {
+            CompositionLocalProvider(LocalFileIconSet provides detail) {
+                sample.forEach { (fileName, isDirectory) ->
+                    FileTypeIcon(
+                        name = fileName,
+                        isDirectory = isDirectory,
+                        size = IconSize.sm,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun IconSetRow(
+    name: String,
+    description: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    preview: @Composable () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1960,25 +2054,22 @@ private fun IconBundleRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.ms),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
-            sample.forEach { slot ->
-                Icon(
-                    imageVector = bundle[slot],
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(IconSize.sm),
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Space.xs),
+            verticalAlignment = Alignment.CenterVertically,
+            content = { preview() },
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            if (description.isNotBlank()) {
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(bundle.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-            Text(
-                text = bundle.description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
         }
         if (selected) {
             Icon(

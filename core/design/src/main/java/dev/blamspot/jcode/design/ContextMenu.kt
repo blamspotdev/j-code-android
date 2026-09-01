@@ -81,7 +81,7 @@ fun CompactContextMenu(
                             modifier = Modifier.size(38.dp),
                         ) {
                             Icon(
-                                imageVector = jcIcon(action.icon),
+                                painter = jcIcon(action.icon),
                                 contentDescription = action.label,
                                 tint = when {
                                     !action.enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
@@ -117,7 +117,7 @@ fun CompactContextMenu(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
-                    imageVector = jcIcon(action.icon),
+                    painter = jcIcon(action.icon),
                     contentDescription = null,
                     tint = when {
                         !action.enabled -> disabledTint

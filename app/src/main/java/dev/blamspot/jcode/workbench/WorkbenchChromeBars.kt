@@ -123,7 +123,7 @@ internal fun WorkspaceHeader(
                         )
                         if (hasCloseAction) {
                             Icon(
-                                imageVector = jcIcon(JCodeIcon.DropDown),
+                                painter = jcIcon(JCodeIcon.DropDown),
                                 contentDescription = null,
                                 modifier = Modifier.size(IconSize.sm),
                                 tint = MaterialTheme.colorScheme.primary,

@@ -74,6 +74,8 @@ import dev.blamspot.jcode.design.LocalEditorTabActions
 import dev.blamspot.jcode.design.LocalEditorTypeface
 import dev.blamspot.jcode.design.LocalExtraKeysState
 import dev.blamspot.jcode.design.JCodeIcon
+import dev.blamspot.jcode.design.FileTypeIcon
+import dev.blamspot.jcode.design.LocalFileIconSet
 import dev.blamspot.jcode.design.JcTooltip
 import dev.blamspot.jcode.design.LocalTabCloseButtonSetting
 import dev.blamspot.jcode.design.jcIcon
@@ -253,10 +255,21 @@ private fun TabItem(
             // protected from accidental close (close it via the long-press menu).
             if (tab.pinned) {
                 Icon(
-                    imageVector = jcIcon(JCodeIcon.Pin),
+                    painter = jcIcon(JCodeIcon.Pin),
                     contentDescription = "Pinned",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(13.dp),
+                )
+            }
+            // A file type badge, but only from a file icon set: with none chosen every tab would
+            // carry the same generic glyph, which is width spent to say nothing. A page tab (Settings,
+            // a browser) is not a file and never gets one.
+            if (!tab.isPage && LocalFileIconSet.current != null) {
+                FileTypeIcon(
+                    name = tab.filePath.name,
+                    isDirectory = false,
+                    size = 14.dp,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             MiddleEllipsisText(

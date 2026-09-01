@@ -131,7 +131,7 @@ The surface is kept small on purpose: every declaration is a promise that cannot
 breaking installed extensions. **`:core:design` and `:core:distro`'s adb package are reachable but not
 promised** — a first-party pack compiles against them as `compileOnly` jars and is refused by the ABI
 check when it goes stale, which is the trade that keeps the virtual device's menus following the
-user's icon bundle instead of a vendored copy that drifts.
+user's UI icon set instead of a vendored copy that drifts.
 
 Why the virtual device is split across two processes, and what that costs, is
 [App sandbox §1a](../08-virtual-device/01-app-sandbox-architecture.md#1a-where-this-lives-and-why-it-is-split).

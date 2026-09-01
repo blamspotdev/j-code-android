@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -189,7 +190,7 @@ private fun readGitBranch(location: String?): String? {
 private fun StatusCell(
     text: String,
     color: Color = Color.Unspecified,
-    icon: ImageVector? = null,
+    icon: Painter? = null,
     onClick: (() -> Unit)? = null,
 ) {
     Row(
@@ -199,7 +200,7 @@ private fun StatusCell(
     ) {
         if (icon != null) {
             Icon(
-                imageVector = icon,
+                painter = icon,
                 contentDescription = null,
                 modifier = Modifier.size(13.dp),
                 tint = if (color != Color.Unspecified) color else LocalContentColor.current,

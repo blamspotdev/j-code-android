@@ -48,6 +48,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
@@ -406,7 +408,7 @@ private fun AddConfigDialog(
                                     label = group.name,
                                     subtitle = "${group.entries.size} available",
                                     onClick = { openGroup = group.name },
-                                    trailing = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                    trailing = rememberVectorPainter(Icons.AutoMirrored.Rounded.KeyboardArrowRight),
                                 )
                             }
                             ChoiceRow("Custom (blank)", "Start from an empty config", onClick = onCustom)
@@ -432,7 +434,7 @@ private fun ChoiceRow(
     label: String,
     subtitle: String,
     onClick: () -> Unit,
-    trailing: ImageVector = Icons.Rounded.Add,
+    trailing: Painter = rememberVectorPainter(Icons.Rounded.Add),
 ) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f), shape = RoundedCornerShape(Radius.xl)) {
         Row(
@@ -512,7 +514,7 @@ private fun RunConfigRow(
             ) {
                 Text(config.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 if (running && runUrl != null) {
-                    IconAction(Icons.AutoMirrored.Rounded.OpenInNew, "Open in browser", MaterialTheme.colorScheme.onSurfaceVariant, onOpenInBrowser)
+                    IconAction(rememberVectorPainter(Icons.AutoMirrored.Rounded.OpenInNew), "Open in browser", MaterialTheme.colorScheme.onSurfaceVariant, onOpenInBrowser)
                 }
                 if (running) {
                     IconAction(jcIcon(JCodeIcon.Stop), "Stop", MaterialTheme.colorScheme.error, onStop)
@@ -523,7 +525,7 @@ private fun RunConfigRow(
                     IconAction(jcIcon(JCodeIcon.Debug), "Debug", MaterialTheme.colorScheme.tertiary, onDebug)
                 }
                 IconAction(jcIcon(JCodeIcon.Settings), "Configure", MaterialTheme.colorScheme.onSurfaceVariant, onConfigure, size = 17)
-                if (!running && deletable) IconAction(Icons.Rounded.DeleteOutline, "Delete", MaterialTheme.colorScheme.onSurfaceVariant, onDelete, size = 17)
+                if (!running && deletable) IconAction(rememberVectorPainter(Icons.Rounded.DeleteOutline), "Delete", MaterialTheme.colorScheme.onSurfaceVariant, onDelete, size = 17)
             }
             // Row 2: thin status + port line.
             Row(
@@ -549,7 +551,7 @@ private fun BuildConfigRow(config: BuildConfig, deletable: Boolean, onBuild: () 
             Text(config.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             IconAction(jcIcon(JCodeIcon.Run), "Build", MaterialTheme.colorScheme.primary, onBuild, enabled = config.command.isNotBlank())
             IconAction(jcIcon(JCodeIcon.Settings), "Configure", MaterialTheme.colorScheme.onSurfaceVariant, onConfigure, size = 17)
-            if (deletable) IconAction(Icons.Rounded.DeleteOutline, "Delete", MaterialTheme.colorScheme.onSurfaceVariant, onDelete, size = 17)
+            if (deletable) IconAction(rememberVectorPainter(Icons.Rounded.DeleteOutline), "Delete", MaterialTheme.colorScheme.onSurfaceVariant, onDelete, size = 17)
         }
     }
 }
@@ -642,7 +644,7 @@ private fun AndroidTargetDialog(
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f),
                     )
-                    IconAction(Icons.Rounded.Refresh, "Refresh devices", MaterialTheme.colorScheme.onSurfaceVariant, onRefresh, enabled = !loading, size = 17)
+                    IconAction(rememberVectorPainter(Icons.Rounded.Refresh), "Refresh devices", MaterialTheme.colorScheme.onSurfaceVariant, onRefresh, enabled = !loading, size = 17)
                 }
                 if (targets.isEmpty()) {
                     HintText(if (loading) "Looking for devices…" else "The runtime's adb server lists no device.")
@@ -747,7 +749,7 @@ private fun AddRow(label: String, onClick: () -> Unit) {
 
 @Composable
 private fun IconAction(
-    icon: ImageVector,
+    icon: Painter,
     label: String,
     tint: Color,
     onClick: () -> Unit,
@@ -757,7 +759,7 @@ private fun IconAction(
     JcTooltip(label) {
         IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size((size + 13).dp)) {
             Icon(
-                imageVector = icon,
+                painter = icon,
                 contentDescription = label,
                 tint = if (enabled) tint else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                 modifier = Modifier.size(size.dp),

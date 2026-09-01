@@ -67,7 +67,7 @@ fun CompactOutlinedButton(
     ) {
         if (icon != null) {
             Icon(
-                imageVector = jcIcon(icon),
+                painter = jcIcon(icon),
                 contentDescription = null,
                 modifier = Modifier.size(IconSize.sm),
             )

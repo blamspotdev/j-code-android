@@ -36,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.blamspot.jcode.design.CompactContextMenu
 import dev.blamspot.jcode.design.ContextAction
+import dev.blamspot.jcode.design.FileTypeIcon
 import dev.blamspot.jcode.design.IconSize
 import dev.blamspot.jcode.design.JCodeIcon
 import dev.blamspot.jcode.design.JcTooltip
@@ -75,7 +76,7 @@ internal fun WorkspaceEmptyState(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = jcIcon(JCodeIcon.Files),
+                painter = jcIcon(JCodeIcon.Files),
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
             )
@@ -155,10 +156,13 @@ internal fun ProjectRoster(
                             },
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = if (isWorkspace) jcIcon(JCodeIcon.Files) else jcIcon(JCodeIcon.Code),
-                                    contentDescription = null,
-                                    modifier = Modifier.size(IconSize.sm),
+                                FileTypeIcon(
+                                    name = project.name,
+                                    isDirectory = true,
+                                    size = IconSize.sm,
+                                    // A workspace root and a project inside one are both folders, so
+                                    // a pack that names neither still tells them apart by glyph.
+                                    fallback = if (isWorkspace) JCodeIcon.Files else JCodeIcon.Code,
                                     tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
@@ -175,7 +179,7 @@ internal fun ProjectRoster(
                             JcTooltip("Project actions") {
                                 IconButton(onClick = { openMenuId = project.id }, modifier = Modifier.size(32.dp)) {
                                     Icon(
-                                        imageVector = jcIcon(JCodeIcon.MoreVert),
+                                        painter = jcIcon(JCodeIcon.MoreVert),
                                         contentDescription = "Project actions",
                                         modifier = Modifier.size(IconSize.md),
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant,

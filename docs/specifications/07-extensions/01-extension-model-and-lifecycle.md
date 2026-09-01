@@ -281,7 +281,7 @@ Signed marketplace packages are always `dev = false` and are not debuggable.
 
 - Extension **settings** are declared and surfaced generically, but there is no per-extension
   settings schema validation.
-- Theme and icon bundles are not yet a contribution point, though the design system would support
+- Theme bundles are not yet a contribution point, though the design system would support
   them.
 - `:core:ext` — the intended WASM host and contribution dispatcher — was a marker-only stub and was
   removed at 1.6.2; everything here runs

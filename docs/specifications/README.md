@@ -105,7 +105,7 @@ for *how to work in this repo* (conventions, locked decisions, verification comm
 | [02 Editor tabs and pages](06-workbench/02-editor-tabs-and-pages.md) | Tab model, page kinds, groups, pinning, close guards |
 | [03 Panels and tools](06-workbench/03-panels-and-tools.md) | Left/right drawer tools, command palette, key bindings |
 | [04 Settings reference](06-workbench/04-settings-reference.md) | Scope tabs, groups, every key and default |
-| [05 Design system](06-workbench/05-design-system.md) | Theme bundles, icon bundles, tokens, contrast rules |
+| [05 Design system](06-workbench/05-design-system.md) | Theme bundles, UI/file icon sets, tokens, contrast rules |
 
 ### 07 — Extensions
 

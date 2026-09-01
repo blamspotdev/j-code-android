@@ -289,7 +289,7 @@ internal fun ColorSampleDialog(
                         }
                         IconButton(onClick = { clipboard.setText(AnnotatedString(value)) }) {
                             Icon(
-                                imageVector = jcIcon(JCodeIcon.Copy),
+                                painter = jcIcon(JCodeIcon.Copy),
                                 contentDescription = "Copy $label",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

@@ -139,7 +139,7 @@ fun SettingsAutocompleteRow(
                         strokeWidth = StrokeWidth.thick,
                     )
                     suggestions.isNotEmpty() -> Icon(
-                        imageVector = jcIcon(if (open) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown),
+                        painter = jcIcon(if (open) JCodeIcon.ChevronUp else JCodeIcon.ChevronDown),
                         contentDescription = if (open) "Hide suggestions" else "Show suggestions",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier
