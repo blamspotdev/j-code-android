@@ -70,7 +70,7 @@ binaries extracted by pre-`jniLibs` app versions — dead weight that W^X forbid
 | `--qemu=<path>` | Only when `needsQemu(rootfsArch)` — foreign-architecture rootfs. Inert today (§9) |
 | `-r <rootfs>` | Guest root |
 | `-b <host>:<target>` … | Caller-supplied binds |
-| `-b /dev`, `-b /proc`, `-b /sys` | Android compatibility |
+| `-b /dev`, `-b /proc/self/root/proc:/proc`, `-b /sys` | Android compatibility — see §4.1 for the `/proc` alias |
 | `-b <fakeproc>/{stat,loadavg,uptime,version}:/proc/…` | Synthetic `/proc` — see §6 |
 | `-b <transferRoot>:/jcode-transfer` | Extension file import/export bridge |
 | `-b <sourcesRoot>:/sources` | Clone staging |
@@ -99,6 +99,36 @@ observed on some Android 13 devices and not others.
 **`--sysvipc`.** Android kernels ship with `CONFIG_SYSVIPC` off, so `shmget`/`shmat` return `ENOSYS`.
 The extension backs segments with the bundled memfd `libandroid-shmem`. Device-verified for both
 single- and cross-process shm attach.
+
+**`/proc` bound through `/proc/self/root/proc`, not `/proc`.** proot rewrites every `open()` of
+`/proc/<pid|self>/{uid_map,gid_map,setgroups}` to `/dev/null` (`maybe_redirect_userns_file` in its
+`syscall/enter.c`) so that sandbox helpers writing those files during user-namespace setup appear to
+succeed. The match is on the **translated host** path and covers reads, so in the guest those files
+read back as zero bytes. An empty `uid_map` is not an absent one — it means "in a user namespace
+whose mapping was never written", where every uid reads as the kernel overflow uid and file
+ownership cannot be verified — so tools that check it before creating owner-only state refuse to:
+Claude Code disables cross-session messaging with "this process runs in a user namespace without a
+uid mapping", although the guest is in the initial namespace with a normal identity map.
+
+No binding can fix it from the guest side (proot canonicalizes `/proc/self` to `/proc/<pid>` before
+matching bindings), but proot skips `realpath()` for binding **host** paths under `/proc/self` —
+they must be resolved per-tracee by the kernel at syscall time — so `/proc/self/root/proc` survives
+verbatim into translated paths. `/proc/self/root/proc/<pid>/uid_map` no longer parses as
+`/proc/<pid>/uid_map`, the redirect doesn't fire, and the kernel resolves it to the same file:
+`/proc/<pid>/root` is a magic symlink to that process's root, and the app, proot and every guest
+process have `/` (proot never `chroot()`s). Writes the redirect used to swallow now fail as they
+would natively. `ProotManager.procBindSource()` probes the alias against the app's own process once
+and falls back to a plain `-b /proc` if a device denies traversing `/proc/self/root`.
+
+The alias is deliberately blunt: every proot matcher keyed on a translated `/proc/<pid>/…` host path
+stops firing, and the aliased path cannot satisfy both matchers at once (each requires the pid digits
+immediately after `/proc/`). The one that matters is proot's `mountinfo` extension, which no longer
+rewrites `/proc/<pid>/mountinfo` to present the guest `/` as a mount of the `/data` filesystem — that
+file now shows Android's raw mount table. Nothing in JCode reads it, `df`/`statfs` go through
+`/proc/<pid>/mounts` and the `statfs` syscall, and the rewrite exists for bubblewrap-style helpers
+that cannot run under proot anyway. The proper fix is upstream: make the redirect apply only to opens
+that intend to write (`flags` is already in scope at both call sites in proot's `syscall/enter.c`),
+after which this alias can be dropped.
 
 **`-k 6.1.0`.** Reporting a modern kernel release reduces false "unknown syscall" warnings.
 

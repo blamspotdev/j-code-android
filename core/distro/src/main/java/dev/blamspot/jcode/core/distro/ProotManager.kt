@@ -19,6 +19,14 @@ class ProotManager(private val context: Context) {
         // compiled-in path, which was wrong for every build whose applicationId carries a suffix
         // (see native/proot/libandroid-shmem/README.md).
         private const val SUPPORT_LIBS_VERSION = 3
+
+        /**
+         * Host path bound at the guest's `/proc` — see [procBindSource] for why it isn't `/proc`.
+         * `/proc/<pid>/root` is a magic symlink to that process's root directory, and every process
+         * involved here (the app, proot, and every guest process — proot never chroot()s) has `/`,
+         * so this resolves to exactly the same procfs the guest would get from a plain `-b /proc`.
+         */
+        private const val PROC_BIND_ALIAS = "/proc/self/root/proc"
     }
 
     
@@ -82,6 +90,53 @@ class ProotManager(private val context: Context) {
             android.util.Log.e("ProotManager", "ensureProotTmpDir: failed", e)
             false
         }
+    }
+
+    @Volatile
+    private var procBindSourceCache: String? = null
+
+    /**
+     * The host path to bind at the guest's `/proc`.
+     *
+     * proot rewrites every `open()` of `/proc/<pid|self>/{uid_map,gid_map,setgroups}` to `/dev/null`
+     * (`maybe_redirect_userns_file` in its `syscall/enter.c`) so that sandbox helpers writing those
+     * files during user-namespace setup appear to succeed. It matches on the **translated host**
+     * path and applies to reads too, so inside the guest those files read back as zero bytes.
+     *
+     * An empty `uid_map` is not the same as an absent one: it means "in a user namespace whose
+     * mapping was never written", where every uid reads as the kernel overflow uid and file
+     * ownership therefore cannot be verified. Tools check for exactly that before creating
+     * owner-only state — Claude Code refuses to bind its cross-session messaging socket and reports
+     * "this process runs in a user namespace without a uid mapping" — even though the guest is in
+     * the initial namespace with a normal identity map.
+     *
+     * Binding a synthetic file over the guest path does not help (proot canonicalizes `/proc/self`
+     * to `/proc/<pid>` before matching bindings, so no binding can be registered for it), but the
+     * redirect can be side-stepped from the other end: proot skips `realpath()` for binding host
+     * paths under `/proc/self` (they must be resolved per-tracee by the kernel at syscall time), so
+     * [PROC_BIND_ALIAS] survives verbatim into translated paths — `/proc/self/root/proc/<pid>/uid_map`
+     * no longer parses as `/proc/<pid>/uid_map`, the redirect doesn't fire, and the kernel resolves
+     * it to the same file. Writes that the redirect used to swallow now fail as they would natively.
+     *
+     * COST: proot's other host-path matchers over `/proc/<pid>/…` stop firing too, and one of them is
+     * real — the `mountinfo` extension no longer rewrites `/proc/<pid>/mountinfo` to present the
+     * guest's `/` as a mount of the `/data` filesystem, so that file shows Android's raw mount table
+     * (with `/` read-only). Nothing in JCode reads it, `df`/`statfs` use `/proc/<pid>/mounts` and the
+     * `statfs` syscall instead, and the emulation exists for bubblewrap-style helpers that cannot run
+     * under proot anyway. Revert to a plain `/proc` bind if a guest tool turns out to need it.
+     *
+     * Gated on a probe of the app's own process: if a device denies traversal of `/proc/self/root`,
+     * fall back to a plain `/proc` bind rather than losing the guest's `/proc` entirely.
+     */
+    private fun procBindSource(): String {
+        procBindSourceCache?.let { return it }
+        val usable = runCatching {
+            File("$PROC_BIND_ALIAS/self/cmdline").inputStream().use { it.read() } >= 0
+        }.getOrDefault(false)
+        if (!usable) {
+            android.util.Log.w("ProotManager", "procBindSource: $PROC_BIND_ALIAS unusable, binding /proc directly")
+        }
+        return (if (usable) PROC_BIND_ALIAS else "/proc").also { procBindSourceCache = it }
     }
 
     /**
@@ -371,7 +426,8 @@ class ProotManager(private val context: Context) {
         if (devShmDir.exists() || devShmDir.mkdirs()) {
             args.addAll(listOf("-b", "${devShmDir.absolutePath}:/dev/shm"))
         }
-        args.addAll(listOf("-b", "/proc"))
+        // /proc is bound through an alias, not directly — see [procBindSource].
+        args.addAll(listOf("-b", "${procBindSource()}:/proc"))
         args.addAll(listOf("-b", "/sys"))
 
         // Overlay synthetic /proc/{stat,loadavg,uptime,version} — Android's SELinux sandbox denies the
