@@ -5,7 +5,7 @@
 | **Status** | Implemented — verified on Android 13 with `targetSdk = 33`. The `targetSdk` that governs the hidden-API greylist is **JCode's**, not the pack's: the pack's archive is loaded, never installed, so it has no `targetSdk` of its own at runtime |
 | **Modules** | The **Android Dev Pack** (`dev.jcode.ext.android.vdevice`, plus `android.hardware.GuestSensorManager`). All of it runs in `:app`'s `:guest` process, loaded there by the app's `GuestSessionService` stub — see [App sandbox §1a](01-app-sandbox-architecture.md#1a-where-this-lives-and-why-it-is-split) |
 | **Primary sources** | `native/src/main/java/dev/jcode/ext/android/vdevice/`: HiddenApi.kt, GuestLoader.kt, GuestContext.kt, GuestRuntime.kt, GuestHooks.kt, GuestInstrumentation.kt, GuestOverlay.kt, GuestPermissions.kt, GuestLocation.kt, GuestSensors.kt, VirtualIdentity.kt, EmbeddedWindows.kt, VirtualDeviceGuest.kt, and `native/src/main/java/android/hardware/GuestSensorManager.kt` |
-| **Verified against** | device-verified on Android 13, 2026-08-13 (`tools/appcompat-fixture`, `tools/hardware-fixture`) |
+| **Verified against** | device-verified on Android 13, 2026-08-13 (`vdevice-apps/fixtures/appcompat`, `vdevice-apps/hardware`) |
 
 ---
 
@@ -85,7 +85,7 @@ resource ids while the guest's resource table only knows the guest's.
 > applied and resolving `android:windowBackground` out of the guest's table, still died on
 > `setContentView` with "You need to use a Theme.AppCompat theme (or descendant) with this
 > activity." — `AppCompatDelegate` was reading JCode's `windowActionBar` attr id, which the guest's
-> table has never heard of. `tools/appcompat-fixture` is the regression test.
+> table has never heard of. `vdevice-apps/fixtures/appcompat` is the regression test.
 
 Isolating the parent gives the guest its own copy of everything it ships, which is what a real app
 process has. Nothing crosses between the two loaders but framework types.
@@ -357,7 +357,7 @@ caught and fed straight back into the device they came from.
 > Verified on the Odin2: host shade 0 before launch, 2 while full screen, 4 after posting two more,
 > and **0 again** the moment the guest exits.
 
-> Verified on `tools/notification-fixture`: two notifications posted from `onCreate` appear in the
+> Verified on `vdevice-apps/fixtures/notification`: two notifications posted from `onCreate` appear in the
 > device's own bar and shade, and `dumpsys notification` on the host counts **zero** of them.
 
 ## 4c-bis. The Application comes first
@@ -434,7 +434,7 @@ honour that hole, so the guest's own opaque background covers it. `GuestSurfaces
 **full-bleed** surface above the window instead — only full-bleed, because a video player putting one
 behind its controls means it, and raising that would trade a black screen for an unusable one.
 
-Measured with `tools/gl-fixture`, an APK that clears to magenta and does nothing else, written
+Measured with `vdevice-apps/fixtures/gl`, an APK that clears to magenta and does nothing else, written
 because every real GL app has a setup flow in the way and so a black tab could always mean either
 *the container cannot composite* or *the app has not drawn yet*:
 

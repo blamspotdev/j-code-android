@@ -1,5 +1,8 @@
 # JCode JVM debugging — implementation plan (java-debug adapter)
 
+> The adapter has since moved out of this repository: its source is the Java Dev Pack's `adapter/`.
+> Paths below are as they stood when this plan was carried out, and are left that way on purpose.
+
 Status: **DONE — shipped and verified end-to-end in the app UI.** The
 `tools/java-dap` module (7cb615e) compiles against the real
 `com.microsoft.java:com.microsoft.java.debug.core:0.53.1`; the fat jar is
