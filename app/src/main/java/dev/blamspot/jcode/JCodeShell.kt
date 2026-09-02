@@ -149,7 +149,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -168,6 +167,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -4799,50 +4799,36 @@ private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modi
 }
 
 /**
- * Identity line for the cold-start screen: this build's launcher icon, its name, and its version.
+ * Identity line for the cold-start screen: the app's mark, its name, and its version.
  *
  * It replaces an "Open a project" title that sat on top of a row of buttons already saying exactly
  * that - including one labelled "Open Folder" - under a copy of the same folder icon those buttons
  * and every recent row use. This is the only screen the app gets to itself, so it says which build
  * you are in instead of repeating the controls below it.
  *
- * Icon and name come from the PackageManager, not from resources, so each install answers for
- * itself: the debug build shows its red mark and "JCode (debug)", beta its purple one. The version
- * is otherwise only reachable through Settings > Updates.
+ * The mark is the launcher icon's foreground alone, without the coloured tile a launcher masks it
+ * into: on a page this is a logo, not an app entry in a grid. The name still comes from the
+ * PackageManager, so each install answers for itself - a debug build says "JCode (debug)", a beta
+ * one says "JCode (beta)". The version is otherwise only reachable through Settings > Updates.
  */
 @Composable
 private fun EditorStartHeader() {
     val context = LocalContext.current
-    val markSize = 44.dp
-    val markPx = with(LocalDensity.current) { markSize.roundToPx() }
-    val mark = remember(context, markPx) {
-        runCatching {
-            val drawable = context.packageManager.getApplicationIcon(context.packageName)
-            val bitmap = android.graphics.Bitmap.createBitmap(markPx, markPx, android.graphics.Bitmap.Config.ARGB_8888)
-            // An adaptive icon is 108dp with only the middle 72dp inside the mask, so drawing one at
-            // its own bounds spends a third of the tile on empty bleed. Oversize by 108/72 and centre
-            // it: the canvas clips the overhang, and the mark fills the tile as a launcher shows it.
-            val bleed = (markPx * 0.25f).toInt()
-            drawable.setBounds(-bleed, -bleed, markPx + bleed, markPx + bleed)
-            drawable.draw(android.graphics.Canvas(bitmap))
-            bitmap.asImageBitmap()
-        }.getOrNull()
-    }
     val label = remember(context) {
         runCatching { context.packageManager.getApplicationLabel(context.applicationInfo).toString() }
             .getOrNull().orEmpty().ifEmpty { "JCode" }
     }
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Space.ms),
+        horizontalArrangement = Arrangement.spacedBy(Space.xxs),
     ) {
-        if (mark != null) {
-            Image(
-                bitmap = mark,
-                contentDescription = null,
-                modifier = Modifier.size(markSize).clip(RoundedCornerShape(Radius.lg)),
-            )
-        }
+        // Oversized deliberately: the drawable is a 108dp adaptive-icon canvas with the mark sitting
+        // across the middle of it, so the box has to be bigger than the mark is meant to look.
+        Image(
+            painter = painterResource(R.drawable.ic_launcher_foreground),
+            contentDescription = null,
+            modifier = Modifier.size(64.dp),
+        )
         Column {
             Text(label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(
