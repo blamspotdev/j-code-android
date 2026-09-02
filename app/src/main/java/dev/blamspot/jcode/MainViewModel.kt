@@ -6032,12 +6032,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!syncMutex.tryLock()) return // a sync is already running; the next tick re-sweeps everything
         try {
             val reloaded = mutableListOf<String>()
-            for (tab in _editorGroup.value.tabs) {
-                val state = tab.editorState ?: continue   // page tab
-                if (tab.isDirty) continue                 // fast skip; replaceAll re-checks atomically
+            val candidates = _editorGroup.value.tabs.filter { tab ->
+                tab.editorState != null &&                // page tab
+                    !tab.isDirty &&                       // fast skip; replaceAll re-checks atomically
+                    tab.filePath.path.isNotBlank()        // SAF / non-file source
+            }
+            if (candidates.isEmpty()) return
+            // Stat every candidate in ONE hop to IO. This tick runs every 1.5s for as long as the app
+            // is foregrounded and its steady state is "nothing changed", so a withContext per tab was
+            // a dispatch per open tab per tick for no work.
+            val signatures = withContext(Dispatchers.IO) {
+                candidates.mapNotNull { tab -> tab.filePath.diskSignatureOrNull()?.let { tab.id to it } }.toMap()
+            }
+            for (tab in candidates) {
+                val state = tab.editorState ?: continue
                 val file = tab.filePath
-                if (file.path.isBlank()) continue         // SAF / non-file source
-                val signature = withContext(Dispatchers.IO) { file.diskSignatureOrNull() }
+                val signature = signatures[tab.id]
                     ?: continue                           // deleted on disk: keep the open copy
                 val known = diskSignatures[tab.id]
                 if (known == null) {                      // first sight: establish a baseline

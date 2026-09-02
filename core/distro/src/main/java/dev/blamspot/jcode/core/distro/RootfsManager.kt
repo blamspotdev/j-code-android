@@ -233,12 +233,21 @@ class RootfsManager(
             targetDir.mkdirs()
             val name = tarball.name.lowercase()
             val raw = FileInputStream(tarball).buffered(1 shl 16)
-            val decompressed: InputStream = when {
-                name.endsWith(".tar.xz") || name.endsWith(".txz") -> XZInputStream(raw)
-                name.endsWith(".tar.bz2") || name.endsWith(".tbz2") -> BZip2CompressorInputStream(raw)
-                name.endsWith(".tar.gz") || name.endsWith(".tgz") -> GZIPInputStream(raw)
-                name.endsWith(".tar") -> raw
-                else -> GZIPInputStream(raw)
+            // Every decompressor reads (and validates) the header in its constructor, so a truncated
+            // or misnamed archive throws HERE — before anything owns `raw`. Downloads are not
+            // checksum-verified, so that is a reachable path, and each failed attempt would otherwise
+            // strand the tarball's fd until the finalizer ran.
+            val decompressed: InputStream = try {
+                when {
+                    name.endsWith(".tar.xz") || name.endsWith(".txz") -> XZInputStream(raw)
+                    name.endsWith(".tar.bz2") || name.endsWith(".tbz2") -> BZip2CompressorInputStream(raw)
+                    name.endsWith(".tar.gz") || name.endsWith(".tgz") -> GZIPInputStream(raw)
+                    name.endsWith(".tar") -> raw
+                    else -> GZIPInputStream(raw)
+                }
+            } catch (e: Throwable) {
+                runCatching { raw.close() }
+                throw e
             }
             var hardlinks = 0
             var symlinkedLinks = 0

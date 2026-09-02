@@ -492,7 +492,13 @@ class TerminalSessionManager(
     private fun startReader(session: Session) {
         session.readerJob?.cancel()
         session.readerJob = readerScope.launch {
-            val buffer = ByteArray(8192)
+            // 32 KiB, not 8: a full-screen TUI repaint (Claude Code, htop, vim) is one write of tens
+            // of kilobytes once SGR runs are counted, and every extra iteration to drain it costs a
+            // read syscall, the session lock and four JNI crossings — for the same bytes. Bigger
+            // reads also mean the view is more likely to see a whole frame rather than a half-drawn
+            // one. The native read fills the array in place (GetPrimitiveArrayCritical), so the only
+            // cost of the larger buffer is the array itself, once per session.
+            val buffer = ByteArray(32 * 1024)
             var exited = false
             // Epoch millis when an open ?2026 synchronized update started suppressing repaints, or 0.
             var syncSince = 0L

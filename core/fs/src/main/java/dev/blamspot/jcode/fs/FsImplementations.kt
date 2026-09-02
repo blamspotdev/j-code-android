@@ -61,7 +61,7 @@ class PosixFs @Inject constructor() : Fs {
     override fun watch(path: FsPath): Flow<FsWatchEvent> = callbackFlow {
         val root = path.requireLocal()
         val observed = if (root.isDirectory) root else root.parentFile ?: root
-        val observer = object : FileObserver(observed, ALL_EVENTS) {
+        val observer = object : FileObserver(observed, WATCH_MASK) {
             override fun onEvent(event: Int, relativePath: String?) {
                 val type = when {
                     event and (CREATE or MOVED_TO) != 0 -> FsWatchEventType.Created
@@ -76,6 +76,27 @@ class PosixFs @Inject constructor() : Fs {
         observer.startWatching()
         awaitClose { observer.stopWatching() }
     }.flowOn(Dispatchers.IO)
+
+    private companion object {
+        /**
+         * Only the events [watch]'s `when` maps to a real change, plus `MOVE_SELF` for the watched
+         * directory being renamed (the `FullRescan` fallback).
+         *
+         * Deliberately NOT `ALL_EVENTS`: that also delivers `ACCESS`, `OPEN` and `CLOSE_NOWRITE`,
+         * which say a file was *read*. Those fell into the `FullRescan` branch, so merely reading a
+         * file inside a watched directory queued a rescan — and inotify reports them for the watched
+         * directory itself, which `File.listFiles()` opens and reads. The Explorer's live tree
+         * therefore fed itself: a refresh listed every expanded directory, each listing raised
+         * OPEN/ACCESS/CLOSE_NOWRITE on that directory, the debounce fired another refresh 300ms
+         * later, and each cycle also raised `filesChanged` for the SCM extension — a `git status` in
+         * the guest, forever, for a tree nothing had touched. It also made any guest-side reader (a
+         * build, a grep, an agent working in the terminal) storm the watch with events per file read.
+         */
+        private const val WATCH_MASK = FileObserver.CREATE or FileObserver.DELETE or
+            FileObserver.DELETE_SELF or FileObserver.MOVED_FROM or FileObserver.MOVED_TO or
+            FileObserver.MOVE_SELF or FileObserver.MODIFY or FileObserver.CLOSE_WRITE or
+            FileObserver.ATTRIB
+    }
 }
 
 @Singleton
