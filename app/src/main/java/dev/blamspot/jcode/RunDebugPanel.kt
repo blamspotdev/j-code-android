@@ -255,15 +255,21 @@ private fun ProjectRunBuildDetail(
             }
             AddRow("Add run config", onClick = { showAddRun = true })
             // While a session runs this is the debugger — steps, stack, variables — and nothing else
-            // shows it. Idle it is a launch row for the active file, which every run config's own
-            // Debug button already falls through to when its command names no source: two buttons,
-            // one target, both saying "open a source file" when there is none. So idle it appears
-            // only where nothing else can start a session. Not gated on the session alone: that was
-            // tried, and it left you needing a session to reach the button that starts one.
-            if (debugUi.active || runs.isEmpty()) {
-                Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.10f), shape = RoundedCornerShape(Radius.lg)) {
+            // shows it, so it gets the whole section. Idle it is only a way to start one on the open
+            // file, which every run config's own Debug button already falls through to, so it
+            // appears solely where nothing else could start a session, and then as a single row
+            // rather than a titled card. Not gated on the session alone: that was tried, and it left
+            // you needing a session to reach the button that starts one.
+            when {
+                debugUi.active -> Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.10f),
+                    shape = RoundedCornerShape(Radius.lg),
+                ) {
                     DebugSessionPanel(ui = debugUi, modifier = Modifier.padding(Space.sm))
                 }
+                // With nothing open to debug there is nothing to say: the hint above already reports
+                // an empty panel, and saying it twice is what made this read as a leftover section.
+                runs.isEmpty() && debugUi.debugTargetName != null -> DebugLaunchRow(debugUi)
             }
         }
         Segment.Build -> {
