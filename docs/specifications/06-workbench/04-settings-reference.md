@@ -85,7 +85,6 @@ by the Settings screen's modified/reset-to-default logic.
 | `MAX_TERMINAL_SESSIONS` | `12` | Hard cap 24 (`MAX_SESSIONS_CAP`) |
 | `NESTED_SHELL_TABS` | `false` | OSC 7715 sub-shell relocation |
 | `INSTALL_TIMEOUT_MINUTES` | `30` | Per-entry floors can raise it |
-| `HIDE_STATUS_BAR_WITH_KEYBOARD` | `false` | |
 | `HIDE_TAB_CLOSE_BUTTON` | `false` | |
 | `EDITOR_DRAG_MOVES_CURSOR` | `false` | |
 | `CURSOR_DRAG_LEVEL` | `2` | 1–5 |

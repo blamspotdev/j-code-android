@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** A single row in the explorer tree or list. */
 @Immutable
@@ -363,16 +365,26 @@ class TreeViewModel(
     }
 
     /** Repaint the current view in-place (mode-aware) after a file operation. */
-    suspend fun refresh() {
+    suspend fun refresh() = refreshMutex.withLock {
         when (_viewMode.value) {
             ExplorerViewMode.Tree -> rebuildRows()
             ExplorerViewMode.List -> {
-                val path = listPath ?: _currentPath.value ?: return
-                val label = _breadcrumb.value.lastOrNull()?.label ?: path.displayName
-                navigateTo(path, label)
+                // Re-list in place rather than navigateTo: refresh runs on a timer and on every
+                // watch event, and navigating clears the selection and flashes the loading state —
+                // so a write anywhere in the folder threw away what the user had just selected.
+                // The path and its breadcrumb are unchanged by definition here.
+                val path = listPath ?: _currentPath.value ?: return@withLock
+                val children = filterHiddenAtRoot(path, fs.list(path))
+                _listRows.value = children.map { child ->
+                    buildRow(child, depth = 0, isExcludedAtRoot(path, child))
+                }
             }
         }
     }
+
+    /** Serializes refresh: the visible-panel poll and the file watch both drive it, and two passes
+     *  interleaving their directory listings could publish the older one's rows last. */
+    private val refreshMutex = Mutex()
 
     // --- Internal ---
 

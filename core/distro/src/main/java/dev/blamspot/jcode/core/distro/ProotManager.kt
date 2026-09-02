@@ -371,6 +371,11 @@ class ProotManager(private val context: Context) {
         if (devShmDir.exists() || devShmDir.mkdirs()) {
             args.addAll(listOf("-b", "${devShmDir.absolutePath}:/dev/shm"))
         }
+        // Bound directly, and it has to be: proot rewrites reads of /proc/<pid>/uid_map to
+        // /dev/null, but binding /proc from an alias to dodge that (e.g. /proc/self/root/proc, which
+        // proot keeps verbatim) also stops it emulating /proc/<pid>/{exe,cwd,root} — Node's
+        // process.execPath then reads back as proot's loader and it can no longer spawn itself.
+        // Device-measured; see the runtime spec, §4.1.
         args.addAll(listOf("-b", "/proc"))
         args.addAll(listOf("-b", "/sys"))
 

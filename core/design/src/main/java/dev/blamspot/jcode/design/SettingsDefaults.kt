@@ -11,7 +11,6 @@ object SettingsDefaults {
     const val MAX_TERMINAL_SESSIONS = 12
     const val NESTED_SHELL_TABS = false
     const val INSTALL_TIMEOUT_MINUTES = 30
-    const val HIDE_STATUS_BAR_WITH_KEYBOARD = false
     const val HIDE_TAB_CLOSE_BUTTON = false
     const val EDITOR_DRAG_MOVES_CURSOR = false
     const val CURSOR_DRAG_LEVEL = 2

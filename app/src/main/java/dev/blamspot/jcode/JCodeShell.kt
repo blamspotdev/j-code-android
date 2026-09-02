@@ -95,6 +95,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -148,6 +149,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -598,7 +600,6 @@ fun JCodeApp(
             onSetProject = viewModel::setProjectWebPreviewBrowser,
         )
     }
-    val hideStatusBarWithKeyboard by viewModel.hideStatusBarWithKeyboard.collectAsStateWithLifecycle()
     val hideTabCloseButton by viewModel.hideTabCloseButton.collectAsStateWithLifecycle()
     // Carried via CompositionLocal (not a JCodeShell param — that composable is at the ART verifier's
     // register limit) so both the tab UIs and the settings toggle can read value + setter.
@@ -1000,7 +1001,6 @@ fun JCodeApp(
             onExpandVariable = viewModel::debugVariables,
         )
     }
-    StatusBarKeyboardController(enabled = hideStatusBarWithKeyboard)
     val tapContext = LocalContext.current
     // Routing for a URL surfaced by the terminal — a tapped link, or a guest CLI's xdg-open/$BROWSER
     // (OSC 7714). Both honor the same web-preview browser choice as Build & Run. rememberUpdatedState
@@ -1850,8 +1850,6 @@ fun JCodeApp(
             extensionEvents = viewModel.extensionEvents,
         ) },
         onOpenSettingsPage = viewModel::openSettingsPage,
-        hideStatusBarWithKeyboard = hideStatusBarWithKeyboard,
-        onUpdateHideStatusBarWithKeyboard = viewModel::setHideStatusBarWithKeyboard,
         bringEditorToFront = viewModel.bringEditorToFront,
         volumeKeyAction = viewModel.volumeKeyAction,
         runTerminalCompletions = viewModel.runTerminalCompletions,
@@ -2150,8 +2148,6 @@ private fun JCodeShell(
     onDeleteBuild: (Project, Int) -> Unit,
     runConfigVersion: Int,
     onOpenSettingsPage: () -> Unit,
-    hideStatusBarWithKeyboard: Boolean,
-    onUpdateHideStatusBarWithKeyboard: (Boolean) -> Unit,
     bringEditorToFront: SharedFlow<Unit>,
     volumeKeyAction: SharedFlow<VolumeKeyAction>,
     runTerminalCompletions: SharedFlow<Pair<String, Int>>,
@@ -2302,7 +2298,9 @@ private fun JCodeShell(
     val notifyFilesChanged = LocalExplorerScmUi.current.onFsActivity
     LaunchedEffect(scmPanelOnScreen, scmPollLifecycle, notifyFilesChanged) {
         if (!scmPanelOnScreen || notifyFilesChanged == null) return@LaunchedEffect
-        scmPollLifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+        // RESUMED, not STARTED: a `git status` per tick is worth running for a panel the user is
+        // looking at, not for one merely still visible behind a dialog or in an unfocused split.
+        scmPollLifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (true) {
                 notifyFilesChanged()
                 delay(SCM_VISIBLE_REFRESH_MS)
@@ -2618,7 +2616,7 @@ private fun JCodeShell(
         terminalSessionManager.switchSession(session.id)
         // Hold the foreground service while this terminal is alive (keeps the process from being
         // killed/frozen in the background so the shell keeps running).
-        TerminalSessionHost.onSessionStarted(appContext, session.id)
+        TerminalSessionHost.onSessionStarted(appContext, session.id, session.label)
         return session
     }
 
@@ -2643,7 +2641,7 @@ private fun JCodeShell(
         terminalSessionIds = terminalSessionIds + child.id
         selectedTerminalSessionId = child.id
         terminalSessionManager.switchSession(child.id)
-        TerminalSessionHost.onSessionStarted(appContext, child.id)
+        TerminalSessionHost.onSessionStarted(appContext, child.id, child.label)
     }
 
     fun selectTerminalSession(sessionId: String) {
@@ -3684,8 +3682,6 @@ private fun JCodeShell(
                                             .filter { it.type == ExtensionType.Formatter }
                                             .map { it.id to it.name },
                                     onSelectFormatter = onSelectFormatter,
-                                    hideStatusBarWithKeyboard = hideStatusBarWithKeyboard,
-                                    onUpdateHideStatusBarWithKeyboard = onUpdateHideStatusBarWithKeyboard,
                                     isUserWorkspace = breadcrumb.size > 1,
                                     modifier = Modifier.fillMaxSize(),
                                 )
@@ -4367,13 +4363,10 @@ private fun WorkspacePanel(
                                 }
                                 // User Workspace with nothing selected: roster only, tree hidden.
                                 inUserWorkspace -> Spacer(modifier = Modifier.weight(1f))
-                                // Default Workspace with nothing open: New/Open actions.
+                                // Default Workspace with nothing open: says so, and leaves the doing
+                                // to the header's + and folder buttons right above it.
                                 else -> Box(modifier = Modifier.weight(1f)) {
-                                    WorkspaceEmptyState(
-                                        workspace = workspace,
-                                        onCreateProject = onCreateProject,
-                                        onOpenExternalFolder = onOpenExternalFolder,
-                                    )
+                                    WorkspaceEmptyState(workspace = workspace)
                                 }
                             }
                         }
@@ -4771,46 +4764,104 @@ private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modi
                 .padding(Space.xxl),
             verticalArrangement = Arrangement.spacedBy(Space.md),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Space.ms),
-            ) {
-                Icon(
-                    painter = jcIcon(JCodeIcon.Files),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-                Text("Open a project", fontWeight = FontWeight.SemiBold)
-            }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.sm), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
-                WorkbenchActionButton(text = "New Folder", onClick = actions.onNewProject, active = true)
-                WorkbenchActionButton(text = "Open Folder", onClick = actions.onOpenFolder)
-                actions.startActions.forEach { action ->
-                    WorkbenchActionButton(text = action.label, onClick = { actions.onAction(action) })
+            EditorStartHeader()
+            Column(verticalArrangement = Arrangement.spacedBy(Space.s)) {
+                StartSectionLabel("Start")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.sm), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+                    WorkbenchActionButton(text = "New Folder", onClick = actions.onNewProject, active = true)
+                    WorkbenchActionButton(text = "Open Folder", onClick = actions.onOpenFolder)
+                    actions.startActions.forEach { action ->
+                        WorkbenchActionButton(text = action.label, onClick = { actions.onAction(action) })
+                    }
                 }
             }
             if (actions.recents.isEmpty()) {
+                // No "open or create a folder to get started": that is the row of buttons directly above.
                 Text(
-                    text = "No recent projects yet. Open or create a folder to get started.",
+                    text = "No recent projects yet.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                Text(
-                    text = "Recent",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                actions.recents.forEach { recent ->
-                    RecentRow(
-                        recent = recent,
-                        onOpen = { actions.onOpenRecent(recent) },
-                        onExport = { actions.onExportRecent(recent) },
-                    )
+                Column(verticalArrangement = Arrangement.spacedBy(Space.s)) {
+                    StartSectionLabel("Recent")
+                    actions.recents.forEach { recent ->
+                        RecentRow(
+                            recent = recent,
+                            onOpen = { actions.onOpenRecent(recent) },
+                            onExport = { actions.onExportRecent(recent) },
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+/**
+ * Identity line for the cold-start screen: the app's mark, its name, and its version.
+ *
+ * It replaces an "Open a project" title that sat on top of a row of buttons already saying exactly
+ * that - including one labelled "Open Folder" - under a copy of the same folder icon those buttons
+ * and every recent row use. This is the only screen the app gets to itself, so it says which build
+ * you are in instead of repeating the controls below it.
+ *
+ * The mark is the launcher icon's foreground layer alone, without the tile a launcher masks it
+ * into: on a page this is a logo, not an app entry in a grid. Both it and the name come from the
+ * installed icon rather than a fixed resource, so each build answers for itself - debug draws the
+ * whole mark hollow and says "JCode (debug)", beta hollows out the J. The version is otherwise
+ * only reachable through Settings > Updates.
+ */
+@Composable
+private fun EditorStartHeader() {
+    val context = LocalContext.current
+    val markSize = 64.dp
+    val markPx = with(LocalDensity.current) { markSize.roundToPx() }
+    val mark = remember(context, markPx) {
+        runCatching {
+            val icon = context.packageManager.getApplicationIcon(context.packageName)
+            val layer = (icon as? android.graphics.drawable.AdaptiveIconDrawable)?.foreground ?: icon
+            val bitmap = android.graphics.Bitmap.createBitmap(markPx, markPx, android.graphics.Bitmap.Config.ARGB_8888)
+            layer.setBounds(0, 0, markPx, markPx)
+            layer.draw(android.graphics.Canvas(bitmap))
+            bitmap.asImageBitmap()
+        }.getOrNull()
+    }
+    val label = remember(context) {
+        runCatching { context.packageManager.getApplicationLabel(context.applicationInfo).toString() }
+            .getOrNull().orEmpty().ifEmpty { "JCode" }
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Space.xxs),
+    ) {
+        // Drawn at the full adaptive-icon canvas size, which is deliberately larger than the mark:
+        // the layer is 108dp with the mark across its middle, and that margin is also the gap to
+        // the name beside it.
+        if (mark != null) Image(
+            bitmap = mark,
+            contentDescription = null,
+            modifier = Modifier.size(markSize),
+        )
+        Column {
+            Text(label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                text = "Version ${BuildConfig.VERSION_NAME}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** Start-screen section heading. "Start" and "Recent" are the same kind of thing, so they read alike. */
+@Composable
+private fun StartSectionLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable
@@ -5740,45 +5791,6 @@ internal fun Context.findActivity(): Activity? {
         current = current.baseContext
     }
     return null
-}
-
-/**
- * When [enabled], hides the system status bar while the soft keyboard is up (and restores it when the
- * keyboard closes), giving the editor and terminal more vertical room. The bar can still be revealed
- * with a swipe from the top. Restores the bar when the setting is off or this leaves composition.
- */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun StatusBarKeyboardController(enabled: Boolean) {
-    val activity = LocalContext.current.findActivity() ?: return
-    val imeVisible = WindowInsets.isImeVisible
-    val fullscreen by WindowModeState.fullscreen.collectAsStateWithLifecycle()
-    // Hiding the system bar kicks off a second insets animation + relayout wave; delay it until the
-    // IME animation has settled so the two don't overlap (the delay also drops the pending hide for
-    // free when the keyboard closes again quickly). Showing stays immediate so closing the keyboard
-    // never leaves the bar hidden. While the palette's Fullscreen mode owns the bars, do nothing —
-    // re-showing here would undo it on every keyboard transition.
-    LaunchedEffect(enabled, imeVisible, fullscreen) {
-        if (fullscreen) return@LaunchedEffect
-        val window = activity.window
-        val controller = WindowCompat.getInsetsController(window, window.decorView)
-        if (enabled && imeVisible) {
-            delay(300)
-            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            controller.hide(WindowInsetsCompat.Type.statusBars())
-        } else {
-            controller.show(WindowInsetsCompat.Type.statusBars())
-        }
-    }
-    DisposableEffect(Unit) {
-        onDispose {
-            if (WindowModeState.fullscreen.value) return@onDispose
-            activity.window?.let { window ->
-                WindowCompat.getInsetsController(window, window.decorView)
-                    .show(WindowInsetsCompat.Type.statusBars())
-            }
-        }
-    }
 }
 
 /**

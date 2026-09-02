@@ -82,7 +82,6 @@ import dev.blamspot.jcode.feature.editor.pane.EditorGroup
 import dev.blamspot.jcode.feature.editor.pane.EditorPageKind
 import dev.blamspot.jcode.feature.editor.pane.EditorTab
 import dev.blamspot.jcode.feature.marketplace.IconPackLayout
-import dev.blamspot.jcode.feature.marketplace.BundledExtensionSpec
 import dev.blamspot.jcode.feature.marketplace.ExtensionActivation
 import dev.blamspot.jcode.feature.marketplace.enabledIn
 import dev.blamspot.jcode.feature.marketplace.ExtensionDeps
@@ -1725,19 +1724,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private val hideStatusBarWithKeyboardKey = booleanPreferencesKey("hide_status_bar_with_keyboard")
-
-    /** When true, the system status bar is hidden while the soft keyboard is up (more room to edit). */
-    val hideStatusBarWithKeyboard: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs -> prefs[hideStatusBarWithKeyboardKey] ?: SettingsDefaults.HIDE_STATUS_BAR_WITH_KEYBOARD }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.HIDE_STATUS_BAR_WITH_KEYBOARD)
-
-    fun setHideStatusBarWithKeyboard(enabled: Boolean) {
-        viewModelScope.launch {
-            uiPreferences.edit { prefs -> prefs[hideStatusBarWithKeyboardKey] = enabled }
-        }
-    }
-
     private val extraKeysPortraitKey = stringPreferencesKey("extra_keys_portrait")
     private val extraKeysLandscapeKey = stringPreferencesKey("extra_keys_landscape")
 
@@ -3197,27 +3183,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _bringEditorToFront = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val bringEditorToFront = _bringEditorToFront.asSharedFlow()
 
-    // Extensions shipped inside the APK (assets/builtin-extensions/) and installed on first run.
-    private val builtinExtensions = listOf(
-        BundledExtensionSpec(
-            assetPath = "builtin-extensions/jcode.lang.markup-1.0.1.jext",
-            uniqueName = "jcode.lang.markup",
-            version = "1.0.1",
-        ),
-        BundledExtensionSpec(
-            assetPath = "builtin-extensions/jcode.lang.stylesheet-1.0.1.jext",
-            uniqueName = "jcode.lang.stylesheet",
-            version = "1.0.1",
-        ),
-    )
-
     init {
-        viewModelScope.launch {
-            runCatching {
-                extensionInstaller.ensureBundledExtensionsInstalled(builtinExtensions, BuildConfig.VERSION_NAME)
-            }
-            refreshInstalledExtensions()
-        }
+        viewModelScope.launch { refreshInstalledExtensions() }
 
         viewModelScope.launch {
             currentWorkspace.collectLatest { workspace ->
@@ -6032,12 +5999,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!syncMutex.tryLock()) return // a sync is already running; the next tick re-sweeps everything
         try {
             val reloaded = mutableListOf<String>()
-            for (tab in _editorGroup.value.tabs) {
-                val state = tab.editorState ?: continue   // page tab
-                if (tab.isDirty) continue                 // fast skip; replaceAll re-checks atomically
+            val candidates = _editorGroup.value.tabs.filter { tab ->
+                tab.editorState != null &&                // page tab
+                    !tab.isDirty &&                       // fast skip; replaceAll re-checks atomically
+                    tab.filePath.path.isNotBlank()        // SAF / non-file source
+            }
+            if (candidates.isEmpty()) return
+            // Stat every candidate in ONE hop to IO. This tick runs every 1.5s for as long as the app
+            // is foregrounded and its steady state is "nothing changed", so a withContext per tab was
+            // a dispatch per open tab per tick for no work.
+            val signatures = withContext(Dispatchers.IO) {
+                candidates.mapNotNull { tab -> tab.filePath.diskSignatureOrNull()?.let { tab.id to it } }.toMap()
+            }
+            for (tab in candidates) {
+                val state = tab.editorState ?: continue
+                if (tab.isDirty) continue                 // re-check: a keystroke may have landed during the stat
                 val file = tab.filePath
-                if (file.path.isBlank()) continue         // SAF / non-file source
-                val signature = withContext(Dispatchers.IO) { file.diskSignatureOrNull() }
+                val signature = signatures[tab.id]
                     ?: continue                           // deleted on disk: keep the open copy
                 val known = diskSignatures[tab.id]
                 if (known == null) {                      // first sight: establish a baseline

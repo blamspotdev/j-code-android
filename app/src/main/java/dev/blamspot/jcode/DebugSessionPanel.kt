@@ -42,13 +42,17 @@ internal val DebugSessionUi.active: Boolean
     get() = state != DebugState.DISCONNECTED && state != DebugState.TERMINATED
 
 /**
- * The live debug-session section of the Run/Debug panel: a launch button when idle, and a
- * transport toolbar + call-stack + variables + console once a session is running. Reads its state
- * from [dev.blamspot.jcode.workbench.LocalDebugSession]; the caller passes the resolved [ui].
+ * A running debug session: transport toolbar, call stack and variables.
+ *
+ * Only shown while a session is up. That is the one state where this is something no other control
+ * does, and where a heading, a surface and a state chip are carrying their weight. The idle
+ * fallback is [DebugLaunchRow], which the caller places on its own.
+ *
+ * Reads its state from [dev.blamspot.jcode.workbench.LocalDebugSession]; the caller passes the
+ * resolved [ui].
  */
 @Composable
 internal fun DebugSessionPanel(ui: DebugSessionUi, modifier: Modifier = Modifier) {
-    val active = ui.active
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Space.s)) {
         Row(
             modifier = Modifier.padding(start = Space.xxs),
@@ -60,22 +64,25 @@ internal fun DebugSessionPanel(ui: DebugSessionUi, modifier: Modifier = Modifier
             // button, a section called Debug reads as a second, different Debug command.
             Text("Debug session", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.weight(1f))
-            if (active) DebugStateChip(ui.state)
+            DebugStateChip(ui.state)
         }
-
-        if (!active) {
-            DebugLaunchRow(ui)
-        } else {
-            DebugToolbar(ui)
-            if (ui.callStack.isNotEmpty()) CallStackList(ui)
-            if (ui.variables.isNotEmpty()) VariablesList(ui)
-            // Console output lives in the right-drawer "Debug" tab (alongside Terminal/Output), not here.
-        }
+        DebugToolbar(ui)
+        if (ui.callStack.isNotEmpty()) CallStackList(ui)
+        if (ui.variables.isNotEmpty()) VariablesList(ui)
+        // Console output lives in the right-drawer "Debug" tab (alongside Terminal/Output), not here.
     }
 }
 
+/**
+ * Start a session on the file in the editor — the way in for a project with no run config to start
+ * one from.
+ *
+ * The caller places this only when there is a target, so there is no "open a source file" state: a
+ * project with nothing to debug has already been told it has no run config, and a second line
+ * saying there is nothing to debug either was the panel repeating itself.
+ */
 @Composable
-private fun DebugLaunchRow(ui: DebugSessionUi) {
+internal fun DebugLaunchRow(ui: DebugSessionUi) {
     val target = ui.debugTargetName
     when {
         target != null && ui.canDebug -> {
@@ -109,13 +116,10 @@ private fun DebugLaunchRow(ui: DebugSessionUi) {
                 }
             }
         }
+        // Kept, because it is a diagnosis rather than an empty state: it names the engine that is
+        // missing and where to install it.
         target != null -> Text(
             "No debug engine installed for $target. Install one in Debug Engines (DBG).",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        else -> Text(
-            "Open a source file to debug it.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

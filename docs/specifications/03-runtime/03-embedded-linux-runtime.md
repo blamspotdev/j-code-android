@@ -70,7 +70,7 @@ binaries extracted by pre-`jniLibs` app versions — dead weight that W^X forbid
 | `--qemu=<path>` | Only when `needsQemu(rootfsArch)` — foreign-architecture rootfs. Inert today (§9) |
 | `-r <rootfs>` | Guest root |
 | `-b <host>:<target>` … | Caller-supplied binds |
-| `-b /dev`, `-b /proc`, `-b /sys` | Android compatibility |
+| `-b /dev`, `-b /proc`, `-b /sys` | Android compatibility. `/proc` must be bound **directly** — see §4.1 |
 | `-b <fakeproc>/{stat,loadavg,uptime,version}:/proc/…` | Synthetic `/proc` — see §6 |
 | `-b <transferRoot>:/jcode-transfer` | Extension file import/export bridge |
 | `-b <sourcesRoot>:/sources` | Clone staging |
@@ -99,6 +99,39 @@ observed on some Android 13 devices and not others.
 **`--sysvipc`.** Android kernels ship with `CONFIG_SYSVIPC` off, so `shmget`/`shmat` return `ENOSYS`.
 The extension backs segments with the bundled memfd `libandroid-shmem`. Device-verified for both
 single- and cross-process shm attach.
+
+**`/proc` is bound directly, and must be.** proot rewrites every `open()` of
+`/proc/<pid|self>/{uid_map,gid_map,setgroups}` to `/dev/null` (`maybe_redirect_userns_file` in its
+`syscall/enter.c`) so that sandbox helpers writing those files during user-namespace setup appear to
+succeed. It matches the **translated host** path and ignores the open flags, so reads get `/dev/null`
+too and those files come back as zero bytes in the guest.
+
+An empty `uid_map` is not an absent one — it means "in a user namespace whose mapping was never
+written", where every uid reads as the kernel overflow uid and file ownership cannot be verified — so
+tools that check it before creating owner-only state refuse to. Claude Code disables cross-session
+messaging with "this process runs in a user namespace without a uid mapping". On the test device the
+kernel has no `CONFIG_USER_NS` at all, so the file does not exist and the honest answer is `ENOENT`;
+the redirect is what manufactures the empty one.
+
+**Do not try to dodge it by aliasing the bind.** proot skips `realpath()` for binding host paths under
+`/proc/self`, so `-b /proc/self/root/proc:/proc` survives verbatim into translated paths, and
+`/proc/self/root/proc/<pid>/uid_map` no longer parses as `/proc/<pid>/uid_map` — the redirect stops
+firing and the guest reads the truth. It also stops proot emulating `/proc/<pid>/{exe,cwd,root}`,
+because the `readlink(2)` exit path matches the **host** path against `/proc/<pid>` exactly, and no
+alias can satisfy that matcher and fail the redirect's at the same time — both require the pid digits
+immediately after `/proc/`. Measured on device (Odin2, Android 13), aliased vs. direct:
+
+| | `-b /proc` | `-b /proc/self/root/proc:/proc` |
+|---|---|---|
+| `readlink /proc/self/exe` | `/usr/bin/readlink` | `…/lib/arm64/libproot-loader.so` |
+| `node -p process.execPath` | `/home/jcode/.nvm/…/bin/node` | `…/lib/arm64/libproot-loader.so` |
+| node re-spawning itself | works | `FAILED: spawnSync /data/app/…` |
+| `cat /proc/self/uid_map` | *(empty)* | `No such file or directory` |
+
+Losing `process.execPath` breaks npm, npx, `child_process.fork()` and every worker pool, which is far
+worse than the messaging feature the alias would restore. The fix belongs upstream: redirect only when
+the open intends to write (`(flags & O_ACCMODE) != O_RDONLY` — `flags` is already in scope at both the
+`PR_open` and `PR_openat` call sites), after which reads see the real map or a real `ENOENT`.
 
 **`-k 6.1.0`.** Reporting a modern kernel release reduces false "unknown syscall" warnings.
 

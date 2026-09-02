@@ -99,8 +99,8 @@ already-settled layout.
 The editor's `RenderNode` cache is the other half of this optimization — see
 [Input, IME and gestures §7](../02-editor/04-input-ime-and-gestures.md#7-the-rendernode-content-cache).
 
-Related settings: `HIDE_STATUS_BAR_WITH_KEYBOARD` (default `false`), `BOTTOM_STATUS_BAR`
-(`HideOnKeyboard`), `EXTRA_KEYS_PORTRAIT` (`WithKeyboard`), `EXTRA_KEYS_LANDSCAPE` (`Hidden`).
+Related settings: `BOTTOM_STATUS_BAR` (`HideOnKeyboard`), `EXTRA_KEYS_PORTRAIT`
+(`WithKeyboard`), `EXTRA_KEYS_LANDSCAPE` (`Hidden`).
 
 ---
 

@@ -2,6 +2,7 @@ package dev.blamspot.jcode.workbench
 
 import android.content.Context
 import dev.blamspot.jcode.TerminalSessionHost
+import dev.blamspot.jcode.backend.SessionRegistry
 import dev.blamspot.jcode.core.distro.DistroBind
 import dev.blamspot.jcode.core.distro.DistroService
 import dev.blamspot.jcode.core.distro.ExecResult
@@ -87,13 +88,22 @@ class SetupTerminalRunner(
         val session = ensureSession() ?: return@withLock null
         val token = "jc${tokenCounter.incrementAndGet()}"
         val input = buildTaskInput(label, script, workdir, asUser, token) ?: return@withLock null
-        val task = Pending(token, session.id, onProgress)
+        // The task is announced to the foreground notification as well as the caller: an install is
+        // the reason someone leaves JCode running and comes back to the shade, and "1 active session"
+        // told them nothing about how far it had got. `jcode_progress` in the catalog scripts is what
+        // supplies the percentage; a task that never calls it simply shows as running.
+        SessionRegistry.setTask(label)
+        val task = Pending(token, session.id) { percent, text ->
+            SessionRegistry.setTask(if (text.isNotBlank()) text else label, percent)
+            onProgress(percent, text)
+        }
         pending = task
         try {
             manager.sendInput(session.id, input)
             awaitCompletion(task, session.id, label, timeoutMs)
         } finally {
             pending = null
+            SessionRegistry.clearTask()
         }
     }
 
@@ -177,7 +187,7 @@ class SetupTerminalRunner(
             rootfsArch = runtime.selectedDistro.arch,
             label = "Setup",
         ) ?: return null
-        TerminalSessionHost.onSessionStarted(appContext, session.id)
+        TerminalSessionHost.onSessionStarted(appContext, session.id, session.label)
         _sessionId.value = session.id
         return session
     }

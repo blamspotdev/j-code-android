@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,12 +54,17 @@ import dev.blamspot.jcode.fs.WorkspaceNodeType
  * (same package).
  */
 
+/**
+ * The left drawer with no project open: what this workspace is, and where to start.
+ *
+ * Deliberately without buttons. The drawer's own header sits directly above it carrying the same two
+ * commands — `+` is [onCreateProject] and the folder icon is [onOpenExternalFolder], the very
+ * callbacks this panel used to duplicate — and behind the drawer the editor shows the project picker
+ * with those two plus Clone, Remote Repo and the recent list. Three copies of one pair of actions in
+ * a single view; the panel keeps the sentence and points at the pair that was always there.
+ */
 @Composable
-internal fun WorkspaceEmptyState(
-    workspace: Workspace?,
-    onCreateProject: () -> Unit,
-    onOpenExternalFolder: () -> Unit,
-) {
+internal fun WorkspaceEmptyState(workspace: Workspace?) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -87,14 +93,11 @@ internal fun WorkspaceEmptyState(
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = "Start with a new folder or open an existing one.",
+                text = "No project yet — add one with + above, or open an existing folder.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
-            WorkbenchActionButton(text = "New Folder", onClick = onCreateProject, active = true)
-            WorkbenchActionButton(text = "Open Folder", onClick = onOpenExternalFolder)
         }
     }
 }

@@ -135,6 +135,9 @@ object TerminalSessionHost {
                 // The shell reports the running program via OSC 7712 (off the reader thread); hop to
                 // the main thread so the UI can rename the session's tab.
                 mgr.onTitleChange = { sessionId, title ->
+                    // The same report also renames the session in the foreground notification, so the
+                    // shade says "claude" or "gradle" rather than a count of anonymous sessions.
+                    relabelSession(sessionId, title)
                     uiTitleListener?.let { listener -> mainHandler.post { listener(sessionId, title) } }
                 }
                 // Mirror run terminals' output into the Output channel (filtered to captured run
@@ -165,8 +168,9 @@ object TerminalSessionHost {
         }
     }
 
-    /** Acquire a foreground-service hold for a newly started terminal session (idempotent per id). */
-    fun onSessionStarted(context: Context, sessionId: String) {
+    /** Acquire a foreground-service hold for a newly started terminal session (idempotent per id).
+     *  [label] is the tab's name, which the notification shows until the shell reports a program. */
+    fun onSessionStarted(context: Context, sessionId: String, label: String? = null) {
         synchronized(this) {
             if (fgsHandles.containsKey(sessionId)) return
             runCatching {
@@ -174,12 +178,21 @@ object TerminalSessionHost {
                     context.applicationContext,
                     BackendSessionKind.TERMINAL,
                     "terminal",
+                    label,
                 )
             }.onSuccess { fgsHandles[sessionId] = it }
                 .onFailure { error ->
                     android.util.Log.w("TerminalSessionHost", "foreground-service register failed", error)
                 }
         }
+    }
+
+    /** Rename a terminal in the notification. "terminal" is the shell saying it has no program
+     *  running, which is a prompt rather than a name — the tab's own label reads better there. */
+    private fun relabelSession(sessionId: String, title: String) {
+        val handle = synchronized(this) { fgsHandles[sessionId] } ?: return
+        val program = title.trim().takeUnless { it.isEmpty() || it == "terminal" }
+        SessionRegistry.relabelSession(handle.sessionId, program)
     }
 
     /** Release the foreground-service hold for a closed terminal session. */
