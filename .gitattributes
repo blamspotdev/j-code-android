@@ -3,3 +3,7 @@
 # No extension, so the *.sh rule misses it: checked out or exported from Windows it picks up CRLF
 # and every POSIX shell — including the one inside JCode's own distro — reads it as ": not found".
 gradlew text eol=lf
+# Same hazard one step removed: this is YAML, but every entry's install/verify/uninstall body is a
+# shell script that gets extracted and run inside the distro. Checked out on Windows without this it
+# picks up CRLF, and each of those scripts reaches the guest shell with a trailing \r on every line.
+core/distro/src/main/assets/distro/catalog.yaml text eol=lf

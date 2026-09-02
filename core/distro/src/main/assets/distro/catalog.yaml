@@ -1406,3 +1406,37 @@ entries:
       sudo npm rm -g @openai/codex 2>/dev/null || true
       sudo rm -f /usr/local/bin/codex
     updateCheckScript: ""
+  - id: antigravity
+    category: ai
+    name: Antigravity
+    description: >-
+      Google's Antigravity CLI coding agent, installed as a self-contained native build via the
+      official installer. The command is `agy`, not `antigravity`. Bring a Google account — it signs
+      in on first run — then run `agy` in the terminal.
+    supportedArches: [arm64]
+    installScript: |
+      set -e
+      # Same shape as the Claude Code entry above, and for the same reasons: the official installer
+      # drops a self-contained native binary (nothing goes through npm, so proot's --link2symlink has
+      # no hard link to turn into a dangling ".l2s" symlink), and HOME is pinned to /root so the
+      # binary and its credentials land where the (root) terminal will look for them.
+      export HOME=/root
+      command -v curl >/dev/null 2>&1 || jcode_apt 0 20 "Installing download prerequisites" curl ca-certificates
+      jcode_progress 30 "Downloading Antigravity"
+      curl -fsSL https://antigravity.google/cli/install.sh | bash
+      # The installer picks the aarch64 build itself and always lands on $HOME/.local/bin, which is on
+      # neither the verify PATH nor the terminal's — so symlink it out, as claude and opencode do.
+      [ -x "$HOME/.local/bin/agy" ] || { echo "The Antigravity installer did not leave an agy binary in /root/.local/bin."; exit 1; }
+      jcode_progress 90 "Putting agy on PATH"
+      sudo ln -sf "$HOME/.local/bin/agy" /usr/local/bin/agy
+      jcode_progress 100 "Antigravity ready"
+      agy --version
+    # Run --version rather than a presence check so a half-finished install can't report as ready.
+    verifyScript: |
+      agy --version >/dev/null 2>&1 && echo ready
+    uninstallScript: |
+      sudo rm -f /usr/local/bin/agy
+      # Settings and the credential profiles live under ~/.gemini/antigravity-cli. Only that subtree
+      # is removed: ~/.gemini itself is shared with other Google CLIs and is not ours to delete.
+      for h in /root /home/*; do rm -rf "$h/.local/bin/agy" "$h/.gemini/antigravity-cli" 2>/dev/null || true; done
+    updateCheckScript: ""
