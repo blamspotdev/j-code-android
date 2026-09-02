@@ -16,7 +16,6 @@ import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
-import android.view.ViewTreeObserver
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -43,9 +42,11 @@ class TerminalView @JvmOverloads constructor(
     private var pty: PtyProcess? = null
     private var vtParser: VtParser? = null
 
-    // Terminal dimensions
+    // Terminal dimensions. These start at the same 80x24 a session is spawned with; until the view
+    // has been laid out they are a placeholder, NOT a measurement, and gridSynced says which.
     private var cols = 80
     private var rows = 24
+    private var gridSynced = false
 
     // Cell dimensions (calculated from font metrics)
     private var cellWidth = 0f
@@ -383,20 +384,6 @@ class TerminalView @JvmOverloads constructor(
                 gestureHandled
             }
         }
-
-        // Calculate terminal size on first layout
-        viewTreeObserver.addOnGlobalLayoutListener(object : ViewTreeObserver.OnGlobalLayoutListener {
-            override fun onGlobalLayout() {
-                if (width > 0 && height > 0) {
-                    val newCols = (width / cellWidth).toInt().coerceAtLeast(1)
-                    val newRows = (height / cellHeight).toInt().coerceAtLeast(1)
-                    if (newCols != cols || newRows != rows) {
-                        resizeTerminal(newCols, newRows)
-                    }
-                    viewTreeObserver.removeOnGlobalLayoutListener(this)
-                }
-            }
-        })
     }
 
     /** Select the token (contiguous non-space run) under the last long-press and show the
@@ -735,12 +722,26 @@ class TerminalView @JvmOverloads constructor(
                 }
             }
         }
+        // Adopting the session's own grid above is only correct while it matches this view. A
+        // session is spawned at a fixed 80x24, and every tab after the first binds into a view that
+        // is ALREADY laid out — no size change follows, so nothing else would ever resize it. The
+        // child then keeps drawing to 80 columns inside a narrower pane: every full-width line
+        // wraps, so a `\r` progress bar and an Ink frame each land one row lower than they
+        // overwrite, stacking instead of redrawing in place. Reconcile to what this view can show.
+        measuredGrid()?.let { (c, r) ->
+            gridSynced = true
+            resizeTerminal(c, r)
+        }
+
         invalidateGrid()
     }
 
     /** Stop rendering the bound session (without killing it — the session keeps running). */
     fun unbind() {
         boundSession?.let { if (it.onUpdate != null) it.onUpdate = null }
+        // The next session bound here arrives at the spawn default and needs its own immediate,
+        // un-debounced first sizing — the flag tracks the current binding, not the view.
+        gridSynced = false
         boundSession = null
         pty = null
         vtParser = null
@@ -1099,13 +1100,8 @@ class TerminalView @JvmOverloads constructor(
         textPaint.textSize = size
         cellWidth = textPaint.measureText("M")
         cellHeight = textPaint.fontSpacing
-        if (width > 0 && height > 0) {
-            val newCols = (width / cellWidth).toInt().coerceAtLeast(1)
-            val newRows = (height / cellHeight).toInt().coerceAtLeast(1)
-            resizeTerminal(newCols, newRows)
-        } else {
-            invalidateGrid()
-        }
+        val grid = measuredGrid()
+        if (grid != null) resizeTerminal(grid.first, grid.second) else invalidateGrid()
     }
 
     /**
@@ -1121,14 +1117,22 @@ class TerminalView @JvmOverloads constructor(
         textPaint.typeface = tf
         cellWidth = textPaint.measureText("M")
         cellHeight = textPaint.fontSpacing
-        if (width > 0 && height > 0) {
-            val newCols = (width / cellWidth).toInt().coerceAtLeast(1)
-            val newRows = (height / cellHeight).toInt().coerceAtLeast(1)
-            resizeTerminal(newCols, newRows)
-        }
+        measuredGrid()?.let { (c, r) -> resizeTerminal(c, r) }
         // Unconditionally re-record: resizeTerminal early-returns when cols/rows are unchanged (common
         // for a same-metrics font swap), which would otherwise replay the old font from the cached node.
         invalidateGrid()
+    }
+
+    /**
+     * The grid this view's pixels can actually show, or null before layout (or before the cell has
+     * been measured). This is the ONLY authority on a session's size: whatever it returns is what
+     * both the parser grid and the PTY winsize must be set to, or the child draws to a width the
+     * screen does not have.
+     */
+    private fun measuredGrid(): Pair<Int, Int>? {
+        if (width <= 0 || height <= 0 || cellWidth <= 0f || cellHeight <= 0f) return null
+        return (width / cellWidth).toInt().coerceAtLeast(1) to
+            (height / cellHeight).toInt().coerceAtLeast(1)
     }
 
     /**
@@ -1157,6 +1161,27 @@ class TerminalView @JvmOverloads constructor(
         invalidateGrid()
     }
 
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        // Every path that can change the pane's width ends in a layout pass: the docked split's
+        // divider being dragged, the right drawer docking and undocking, a rotation, the panel
+        // being shown, and the first layout after a session was bound to a zero-sized view. Only
+        // some of those also change this view's pixel size, so onSizeChanged alone leaves the
+        // session stale. scheduleResize debounces the drag and no-ops when the grid is unchanged,
+        // so the common layout pass costs two int compares.
+        val (c, r) = measuredGrid() ?: return
+        // The FIRST sizing skips the debounce. A session is spawned at the 80x24 default and its
+        // shell starts reading the winsize immediately, so an 80ms delay is a window in which the
+        // child can cache a width this pane never had — and a cached width is exactly what makes
+        // full-width redraws wrap and stack. Later changes stay debounced.
+        if (!gridSynced && boundSession != null) {
+            gridSynced = true
+            resizeTerminal(c, r)
+        } else {
+            scheduleResize(c, r)
+        }
+    }
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         // The IME animation resizes this view every frame; re-recording the whole grid each time
@@ -1170,11 +1195,8 @@ class TerminalView @JvmOverloads constructor(
         } else if (gridRenderNode.hasDisplayList()) {
             gridRenderNode.setPosition(0, 0, w, h)
         }
-        if (w > 0 && h > 0 && cellWidth > 0f && cellHeight > 0f) {
-            val newCols = (w / cellWidth).toInt().coerceAtLeast(1)
-            val newRows = (h / cellHeight).toInt().coerceAtLeast(1)
-            scheduleResize(newCols, newRows)
-        }
+        // The grid itself is resized in onLayout, which always follows a size change and also
+        // catches the re-layouts that change the pane without changing this view's own size.
     }
 
     // The soft keyboard animates open/closed over many frames, firing a flurry of onSizeChanged calls.
