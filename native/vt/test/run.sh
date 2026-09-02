@@ -32,6 +32,15 @@ done
 # transparently, so the path we hold has no suffix to test.
 native_path() { if command -v cygpath > /dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
 
+# adb needs the two halves of a push treated in OPPOSITE ways: a Windows path for the host file and a
+# POSIX one for the device. MSYS rewrites anything that looks like an absolute POSIX path, which turns
+# /data/local/tmp/... into C:/Program Files/Git/data/local/tmp/... and fails the push. The host side is
+# already converted explicitly by native_path, so conversion is turned off for adb rather than for the
+# whole script. Same cygpath key as native_path, so Linux/macOS never define this and call adb directly.
+if command -v cygpath > /dev/null 2>&1; then
+  adb() { MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' command adb "$@"; }
+fi
+
 "$clang" --target=aarch64-linux-android33 -O2 -std=c11 -Wall -Wextra \
   -o "$(native_path "$out/vt_reflow_test")" \
   "$(native_path "$here/vt_reflow_test.c")" \
