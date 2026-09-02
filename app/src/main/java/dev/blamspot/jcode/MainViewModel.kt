@@ -82,7 +82,6 @@ import dev.blamspot.jcode.feature.editor.pane.EditorGroup
 import dev.blamspot.jcode.feature.editor.pane.EditorPageKind
 import dev.blamspot.jcode.feature.editor.pane.EditorTab
 import dev.blamspot.jcode.feature.marketplace.IconPackLayout
-import dev.blamspot.jcode.feature.marketplace.BundledExtensionSpec
 import dev.blamspot.jcode.feature.marketplace.ExtensionActivation
 import dev.blamspot.jcode.feature.marketplace.enabledIn
 import dev.blamspot.jcode.feature.marketplace.ExtensionDeps
@@ -3197,27 +3196,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _bringEditorToFront = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val bringEditorToFront = _bringEditorToFront.asSharedFlow()
 
-    // Extensions shipped inside the APK (assets/builtin-extensions/) and installed on first run.
-    private val builtinExtensions = listOf(
-        BundledExtensionSpec(
-            assetPath = "builtin-extensions/jcode.lang.markup-1.0.1.jext",
-            uniqueName = "jcode.lang.markup",
-            version = "1.0.1",
-        ),
-        BundledExtensionSpec(
-            assetPath = "builtin-extensions/jcode.lang.stylesheet-1.0.1.jext",
-            uniqueName = "jcode.lang.stylesheet",
-            version = "1.0.1",
-        ),
-    )
-
     init {
-        viewModelScope.launch {
-            runCatching {
-                extensionInstaller.ensureBundledExtensionsInstalled(builtinExtensions, BuildConfig.VERSION_NAME)
-            }
-            refreshInstalledExtensions()
-        }
+        viewModelScope.launch { refreshInstalledExtensions() }
 
         viewModelScope.launch {
             currentWorkspace.collectLatest { workspace ->

@@ -232,32 +232,6 @@ class ExtensionInstaller internal constructor(context: Context) {
             VsixInstallResult(installed, manifest, compatibility)
         }
 
-    /**
-     * Install extensions bundled in the APK assets (e.g. `builtin-extensions/foo.jext`) that aren't
-     * present yet, or whose bundled version is newer than the installed copy. Best-effort and
-     * idempotent — safe to call on every launch; reuses the same verify + extract pipeline as a
-     * marketplace install.
-     */
-    suspend fun ensureBundledExtensionsInstalled(specs: List<BundledExtensionSpec>, appVersion: String) =
-        withContext(Dispatchers.IO) {
-            for (spec in specs) {
-                runCatching {
-                    val installedDir = File(installRoot, safeDirName(spec.uniqueName))
-                    val needsInstall = !isInstalled(spec.uniqueName) ||
-                        (spec.version != null && compareVersions(spec.version, installedVersionOf(installedDir)) > 0)
-                    if (needsInstall) {
-                        val bytes = appContext.assets.open(spec.assetPath).use { it.readBytes() }
-                        installFromJextBytes(bytes, expectedFingerprint = null, appVersion = appVersion)
-                    }
-                }
-            }
-        }
-
-    private fun installedVersionOf(dir: File): String {
-        val map = runCatching { parseYamlMapping(File(dir, "extension.yaml").readText()) }.getOrNull()
-        return map?.str("version") ?: "0.0.0"
-    }
-
     /** Verify a .jext (integrity + compatibility), then unpack it under the install root. When
      *  [markDev] is set, drop a [DEV_MARKER] file so the install is flagged debuggable. */
     private fun installFromJextBytes(
@@ -891,16 +865,6 @@ class ExtensionInstaller internal constructor(context: Context) {
         const val DOWNLOAD_BUFFER = 1 shl 16
     }
 }
-
-/** An extension packaged inside the APK assets, to be installed on first run. */
-data class BundledExtensionSpec(
-    /** Path under `app/src/main/assets/`, e.g. `builtin-extensions/jcode.lang.markup-1.0.0.jext`. */
-    val assetPath: String,
-    /** The extension's uniqueName (install id), used to detect whether it's already installed. */
-    val uniqueName: String,
-    /** Bundled version; when set and newer than the installed copy, the bundle is re-installed. */
-    val version: String? = null,
-)
 
 // --- shared YAML helpers --------------------------------------------------------------------
 

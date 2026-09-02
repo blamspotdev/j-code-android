@@ -165,8 +165,6 @@ flowchart TB
   read as a fallback for packages built before the header merge.
 - `installedVersionOf(dir)` reads `extension.yaml` — **the manifest's `version` is authoritative**,
   not the filename.
-- `ensureBundledExtensionsInstalled(specs, appVersion)` pre-installs the `.jext` files shipped in
-  `app/src/main/assets/builtin-extensions/` on first run.
 
 Entry points: `install(entry, appVersion)`, `installLocalJext(file, appVersion)`,
 `installLocalPackage(file, appVersion)`, `installLocalVsix(file, appVersion)`,
