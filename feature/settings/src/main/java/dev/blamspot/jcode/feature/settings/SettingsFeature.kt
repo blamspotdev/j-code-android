@@ -269,7 +269,10 @@ object SettingsFeature {
             modifier = modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
-                .padding(Space.md),
+                // Less room above the scope tabs than around everything else: they are a header, and
+                // the editor's own tab strip is already a horizontal edge directly above them, so a
+                // full margin there read as a band of nothing between two rows of tabs.
+                .padding(start = Space.md, end = Space.md, top = Space.xs, bottom = Space.md),
             verticalArrangement = Arrangement.spacedBy(Space.ms),
         ) {
             // Material underline tabs, left-packed. ScrollableTabRow's own divider only spans the
