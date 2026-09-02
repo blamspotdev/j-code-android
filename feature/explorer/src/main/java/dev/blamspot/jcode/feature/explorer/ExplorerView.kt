@@ -66,7 +66,10 @@ import dev.blamspot.jcode.design.LocalTrashSettings
 import dev.blamspot.jcode.design.trashRetentionLabel
 import dev.blamspot.jcode.design.DenseRow
 import dev.blamspot.jcode.design.IconSize
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.currentStateAsState
 import dev.blamspot.jcode.fs.Fs
 import dev.blamspot.jcode.fs.FsKind
 import dev.blamspot.jcode.fs.FsNode
@@ -214,6 +217,27 @@ fun ExplorerView(
                 viewModel.refresh()
                 scmUi.onFsActivity?.invoke()
             }
+    }
+
+    // The watch above only reports what THIS process does to the tree. Work in the guest — a build,
+    // a git checkout, an agent editing files from the terminal — reaches the same files but never
+    // this process's inotify, which is also why Source Control polls instead of trusting the hint.
+    // So poll too, on the same terms that panel takes: only while the Explorer is the open tool
+    // (this composable is composed for no other) and the app is actually in front of the user.
+    // A pass lists the root plus every expanded directory, and [TreeRow]/[FsNode] compare by value,
+    // so a tick that finds nothing new publishes an equal list — the StateFlow drops it and nothing
+    // recomposes. It does not raise onFsActivity: Source Control runs its own poll when it is open,
+    // and a `git status` per tick for a panel nobody is looking at is what that gate exists to stop.
+    val pollLifecycle = LocalLifecycleOwner.current
+    val lifecycleState by pollLifecycle.lifecycle.currentStateAsState()
+    val pollActive = autoRefreshEnabled && lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
+    LaunchedEffect(pollActive, viewModel) {
+        if (!pollActive) return@LaunchedEffect
+        while (true) {
+            // Delay first: opening the panel already refreshes through the effect above.
+            delay(EXPLORER_VISIBLE_REFRESH_MS)
+            viewModel.refresh()
+        }
     }
 
     // SAF import/export: import streams device-storage picks into a target dir (row menu or toolbar);
@@ -713,6 +737,11 @@ private val ChevronSlot = 28.dp
 
 /** Opacity of a project-root entry that is excluded under the "grey out" effect. */
 private const val EXCLUDED_ROW_ALPHA = 0.4f
+
+/** How often the tree re-reads its shown directories while the panel is open and focused. Faster
+ *  than Source Control's tick because a pass is a handful of local directory listings rather than a
+ *  `git status` in the guest, and slow enough that a large expanded tree isn't re-listed constantly. */
+private const val EXPLORER_VISIBLE_REFRESH_MS = 2_000L
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable

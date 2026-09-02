@@ -2302,7 +2302,9 @@ private fun JCodeShell(
     val notifyFilesChanged = LocalExplorerScmUi.current.onFsActivity
     LaunchedEffect(scmPanelOnScreen, scmPollLifecycle, notifyFilesChanged) {
         if (!scmPanelOnScreen || notifyFilesChanged == null) return@LaunchedEffect
-        scmPollLifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+        // RESUMED, not STARTED: a `git status` per tick is worth running for a panel the user is
+        // looking at, not for one merely still visible behind a dialog or in an unfocused split.
+        scmPollLifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (true) {
                 notifyFilesChanged()
                 delay(SCM_VISIBLE_REFRESH_MS)
