@@ -95,6 +95,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -148,6 +149,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -4770,46 +4772,104 @@ private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modi
                 .padding(Space.xxl),
             verticalArrangement = Arrangement.spacedBy(Space.md),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Space.ms),
-            ) {
-                Icon(
-                    painter = jcIcon(JCodeIcon.Files),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-                Text("Open a project", fontWeight = FontWeight.SemiBold)
-            }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.sm), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
-                WorkbenchActionButton(text = "New Folder", onClick = actions.onNewProject, active = true)
-                WorkbenchActionButton(text = "Open Folder", onClick = actions.onOpenFolder)
-                actions.startActions.forEach { action ->
-                    WorkbenchActionButton(text = action.label, onClick = { actions.onAction(action) })
+            EditorStartHeader()
+            Column(verticalArrangement = Arrangement.spacedBy(Space.s)) {
+                StartSectionLabel("Start")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.sm), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+                    WorkbenchActionButton(text = "New Folder", onClick = actions.onNewProject, active = true)
+                    WorkbenchActionButton(text = "Open Folder", onClick = actions.onOpenFolder)
+                    actions.startActions.forEach { action ->
+                        WorkbenchActionButton(text = action.label, onClick = { actions.onAction(action) })
+                    }
                 }
             }
             if (actions.recents.isEmpty()) {
+                // No "open or create a folder to get started": that is the row of buttons directly above.
                 Text(
-                    text = "No recent projects yet. Open or create a folder to get started.",
+                    text = "No recent projects yet.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                Text(
-                    text = "Recent",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                actions.recents.forEach { recent ->
-                    RecentRow(
-                        recent = recent,
-                        onOpen = { actions.onOpenRecent(recent) },
-                        onExport = { actions.onExportRecent(recent) },
-                    )
+                Column(verticalArrangement = Arrangement.spacedBy(Space.s)) {
+                    StartSectionLabel("Recent")
+                    actions.recents.forEach { recent ->
+                        RecentRow(
+                            recent = recent,
+                            onOpen = { actions.onOpenRecent(recent) },
+                            onExport = { actions.onExportRecent(recent) },
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+/**
+ * Identity line for the cold-start screen: this build's launcher icon, its name, and its version.
+ *
+ * It replaces an "Open a project" title that sat on top of a row of buttons already saying exactly
+ * that - including one labelled "Open Folder" - under a copy of the same folder icon those buttons
+ * and every recent row use. This is the only screen the app gets to itself, so it says which build
+ * you are in instead of repeating the controls below it.
+ *
+ * Icon and name come from the PackageManager, not from resources, so each install answers for
+ * itself: the debug build shows its red mark and "JCode (debug)", beta its purple one. The version
+ * is otherwise only reachable through Settings > Updates.
+ */
+@Composable
+private fun EditorStartHeader() {
+    val context = LocalContext.current
+    val markSize = 44.dp
+    val markPx = with(LocalDensity.current) { markSize.roundToPx() }
+    val mark = remember(context, markPx) {
+        runCatching {
+            val drawable = context.packageManager.getApplicationIcon(context.packageName)
+            val bitmap = android.graphics.Bitmap.createBitmap(markPx, markPx, android.graphics.Bitmap.Config.ARGB_8888)
+            // An adaptive icon is 108dp with only the middle 72dp inside the mask, so drawing one at
+            // its own bounds spends a third of the tile on empty bleed. Oversize by 108/72 and centre
+            // it: the canvas clips the overhang, and the mark fills the tile as a launcher shows it.
+            val bleed = (markPx * 0.25f).toInt()
+            drawable.setBounds(-bleed, -bleed, markPx + bleed, markPx + bleed)
+            drawable.draw(android.graphics.Canvas(bitmap))
+            bitmap.asImageBitmap()
+        }.getOrNull()
+    }
+    val label = remember(context) {
+        runCatching { context.packageManager.getApplicationLabel(context.applicationInfo).toString() }
+            .getOrNull().orEmpty().ifEmpty { "JCode" }
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Space.ms),
+    ) {
+        if (mark != null) {
+            Image(
+                bitmap = mark,
+                contentDescription = null,
+                modifier = Modifier.size(markSize).clip(RoundedCornerShape(Radius.lg)),
+            )
+        }
+        Column {
+            Text(label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                text = "Version ${BuildConfig.VERSION_NAME}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** Start-screen section heading. "Start" and "Recent" are the same kind of thing, so they read alike. */
+@Composable
+private fun StartSectionLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable
