@@ -149,6 +149,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -167,7 +168,6 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -4806,14 +4806,27 @@ private fun EditorRecents(actions: EditorEmptyActions, modifier: Modifier = Modi
  * and every recent row use. This is the only screen the app gets to itself, so it says which build
  * you are in instead of repeating the controls below it.
  *
- * The mark is the launcher icon's foreground alone, without the coloured tile a launcher masks it
- * into: on a page this is a logo, not an app entry in a grid. The name still comes from the
- * PackageManager, so each install answers for itself - a debug build says "JCode (debug)", a beta
- * one says "JCode (beta)". The version is otherwise only reachable through Settings > Updates.
+ * The mark is the launcher icon's foreground layer alone, without the tile a launcher masks it
+ * into: on a page this is a logo, not an app entry in a grid. Both it and the name come from the
+ * installed icon rather than a fixed resource, so each build answers for itself - debug draws the
+ * whole mark hollow and says "JCode (debug)", beta hollows out the J. The version is otherwise
+ * only reachable through Settings > Updates.
  */
 @Composable
 private fun EditorStartHeader() {
     val context = LocalContext.current
+    val markSize = 64.dp
+    val markPx = with(LocalDensity.current) { markSize.roundToPx() }
+    val mark = remember(context, markPx) {
+        runCatching {
+            val icon = context.packageManager.getApplicationIcon(context.packageName)
+            val layer = (icon as? android.graphics.drawable.AdaptiveIconDrawable)?.foreground ?: icon
+            val bitmap = android.graphics.Bitmap.createBitmap(markPx, markPx, android.graphics.Bitmap.Config.ARGB_8888)
+            layer.setBounds(0, 0, markPx, markPx)
+            layer.draw(android.graphics.Canvas(bitmap))
+            bitmap.asImageBitmap()
+        }.getOrNull()
+    }
     val label = remember(context) {
         runCatching { context.packageManager.getApplicationLabel(context.applicationInfo).toString() }
             .getOrNull().orEmpty().ifEmpty { "JCode" }
@@ -4822,12 +4835,13 @@ private fun EditorStartHeader() {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.xxs),
     ) {
-        // Oversized deliberately: the drawable is a 108dp adaptive-icon canvas with the mark sitting
-        // across the middle of it, so the box has to be bigger than the mark is meant to look.
-        Image(
-            painter = painterResource(R.drawable.ic_launcher_foreground),
+        // Drawn at the full adaptive-icon canvas size, which is deliberately larger than the mark:
+        // the layer is 108dp with the mark across its middle, and that margin is also the gap to
+        // the name beside it.
+        if (mark != null) Image(
+            bitmap = mark,
             contentDescription = null,
-            modifier = Modifier.size(64.dp),
+            modifier = Modifier.size(markSize),
         )
         Column {
             Text(label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)

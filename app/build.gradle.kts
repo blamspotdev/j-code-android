@@ -105,9 +105,10 @@ android {
         // to "JCode.beta" in the release block below.
         manifestPlaceholders["appLabel"] = "JCode"
 
-        // Launcher icon (AndroidManifest android:icon/roundIcon). Debug and Beta builds swap in a
-        // tinted adaptive icon (red gradient / purple gradient background) below so they're
-        // distinguishable on the home screen; the plain release build keeps ic_launcher.
+        // Launcher icon (AndroidManifest android:icon/roundIcon). Every build sits on the same
+        // tile; Debug and Beta swap in an adaptive icon whose mark is hollow instead (Beta's J,
+        // Debug's whole <J>) so they're distinguishable on the home screen without a second colour
+        // scheme. The plain release build keeps ic_launcher.
         manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher"
         manifestPlaceholders["appIconRound"] = "@mipmap/ic_launcher_round"
 
