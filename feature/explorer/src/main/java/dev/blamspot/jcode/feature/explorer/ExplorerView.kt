@@ -219,11 +219,16 @@ fun ExplorerView(
             }
     }
 
-    // The watch above only reports what THIS process does to the tree. Work in the guest — a build,
-    // a git checkout, an agent editing files from the terminal — reaches the same files but never
-    // this process's inotify, which is also why Source Control polls instead of trusting the hint.
-    // So poll too, on the same terms that panel takes: only while the Explorer is the open tool
-    // (this composable is composed for no other) and the app is actually in front of the user.
+    // A watch alone is not enough to bound how stale the tree can get. inotify drops events when its
+    // queue overflows — exactly what a build or a git checkout in the guest produces — it is only
+    // registered on the directories currently shown, and not every backing filesystem raises it (a
+    // SAF folder has no inotify at all; [SafFs.watch] is itself a poll). Device-checked: a guest
+    // write through proot into an app-private project DOES reach this process's inotify, so the poll
+    // is the backstop rather than the only path — but it is what makes "what is on screen is what is
+    // on disk" true within a bounded time instead of hopefully.
+    //
+    // Poll on the same terms Source Control takes: only while the Explorer is the open tool (this
+    // composable is composed for no other) and the app is actually in front of the user.
     // A pass lists the root plus every expanded directory, and [TreeRow]/[FsNode] compare by value,
     // so a tick that finds nothing new publishes an equal list — the StateFlow drops it and nothing
     // recomposes. It does not raise onFsActivity: Source Control runs its own poll when it is open,
