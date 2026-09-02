@@ -68,8 +68,8 @@ import kotlin.math.roundToInt
 
 /**
  * Session-scoped window modes driven by Command Palette toggles. A process-wide holder (not shell
- * state) because [StatusBarKeyboardController] in the outer shell must coordinate with fullscreen —
- * it re-shows the status bar on IME transitions and would otherwise fight the fullscreen command.
+ * state) so the palette's toggles and [WindowModeController], which applies them to the window, read
+ * one source without threading the state down through the shell.
  */
 internal object WindowModeState {
     val fullscreen = MutableStateFlow(false)

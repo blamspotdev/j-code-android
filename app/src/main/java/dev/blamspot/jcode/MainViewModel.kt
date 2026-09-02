@@ -1724,19 +1724,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private val hideStatusBarWithKeyboardKey = booleanPreferencesKey("hide_status_bar_with_keyboard")
-
-    /** When true, the system status bar is hidden while the soft keyboard is up (more room to edit). */
-    val hideStatusBarWithKeyboard: StateFlow<Boolean> = uiPreferences.data
-        .map { prefs -> prefs[hideStatusBarWithKeyboardKey] ?: SettingsDefaults.HIDE_STATUS_BAR_WITH_KEYBOARD }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsDefaults.HIDE_STATUS_BAR_WITH_KEYBOARD)
-
-    fun setHideStatusBarWithKeyboard(enabled: Boolean) {
-        viewModelScope.launch {
-            uiPreferences.edit { prefs -> prefs[hideStatusBarWithKeyboardKey] = enabled }
-        }
-    }
-
     private val extraKeysPortraitKey = stringPreferencesKey("extra_keys_portrait")
     private val extraKeysLandscapeKey = stringPreferencesKey("extra_keys_landscape")
 

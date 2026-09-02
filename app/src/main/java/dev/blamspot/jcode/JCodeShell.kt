@@ -600,7 +600,6 @@ fun JCodeApp(
             onSetProject = viewModel::setProjectWebPreviewBrowser,
         )
     }
-    val hideStatusBarWithKeyboard by viewModel.hideStatusBarWithKeyboard.collectAsStateWithLifecycle()
     val hideTabCloseButton by viewModel.hideTabCloseButton.collectAsStateWithLifecycle()
     // Carried via CompositionLocal (not a JCodeShell param — that composable is at the ART verifier's
     // register limit) so both the tab UIs and the settings toggle can read value + setter.
@@ -1002,7 +1001,6 @@ fun JCodeApp(
             onExpandVariable = viewModel::debugVariables,
         )
     }
-    StatusBarKeyboardController(enabled = hideStatusBarWithKeyboard)
     val tapContext = LocalContext.current
     // Routing for a URL surfaced by the terminal — a tapped link, or a guest CLI's xdg-open/$BROWSER
     // (OSC 7714). Both honor the same web-preview browser choice as Build & Run. rememberUpdatedState
@@ -1852,8 +1850,6 @@ fun JCodeApp(
             extensionEvents = viewModel.extensionEvents,
         ) },
         onOpenSettingsPage = viewModel::openSettingsPage,
-        hideStatusBarWithKeyboard = hideStatusBarWithKeyboard,
-        onUpdateHideStatusBarWithKeyboard = viewModel::setHideStatusBarWithKeyboard,
         bringEditorToFront = viewModel.bringEditorToFront,
         volumeKeyAction = viewModel.volumeKeyAction,
         runTerminalCompletions = viewModel.runTerminalCompletions,
@@ -2152,8 +2148,6 @@ private fun JCodeShell(
     onDeleteBuild: (Project, Int) -> Unit,
     runConfigVersion: Int,
     onOpenSettingsPage: () -> Unit,
-    hideStatusBarWithKeyboard: Boolean,
-    onUpdateHideStatusBarWithKeyboard: (Boolean) -> Unit,
     bringEditorToFront: SharedFlow<Unit>,
     volumeKeyAction: SharedFlow<VolumeKeyAction>,
     runTerminalCompletions: SharedFlow<Pair<String, Int>>,
@@ -3688,8 +3682,6 @@ private fun JCodeShell(
                                             .filter { it.type == ExtensionType.Formatter }
                                             .map { it.id to it.name },
                                     onSelectFormatter = onSelectFormatter,
-                                    hideStatusBarWithKeyboard = hideStatusBarWithKeyboard,
-                                    onUpdateHideStatusBarWithKeyboard = onUpdateHideStatusBarWithKeyboard,
                                     isUserWorkspace = breadcrumb.size > 1,
                                     modifier = Modifier.fillMaxSize(),
                                 )
@@ -5799,45 +5791,6 @@ internal fun Context.findActivity(): Activity? {
         current = current.baseContext
     }
     return null
-}
-
-/**
- * When [enabled], hides the system status bar while the soft keyboard is up (and restores it when the
- * keyboard closes), giving the editor and terminal more vertical room. The bar can still be revealed
- * with a swipe from the top. Restores the bar when the setting is off or this leaves composition.
- */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun StatusBarKeyboardController(enabled: Boolean) {
-    val activity = LocalContext.current.findActivity() ?: return
-    val imeVisible = WindowInsets.isImeVisible
-    val fullscreen by WindowModeState.fullscreen.collectAsStateWithLifecycle()
-    // Hiding the system bar kicks off a second insets animation + relayout wave; delay it until the
-    // IME animation has settled so the two don't overlap (the delay also drops the pending hide for
-    // free when the keyboard closes again quickly). Showing stays immediate so closing the keyboard
-    // never leaves the bar hidden. While the palette's Fullscreen mode owns the bars, do nothing —
-    // re-showing here would undo it on every keyboard transition.
-    LaunchedEffect(enabled, imeVisible, fullscreen) {
-        if (fullscreen) return@LaunchedEffect
-        val window = activity.window
-        val controller = WindowCompat.getInsetsController(window, window.decorView)
-        if (enabled && imeVisible) {
-            delay(300)
-            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            controller.hide(WindowInsetsCompat.Type.statusBars())
-        } else {
-            controller.show(WindowInsetsCompat.Type.statusBars())
-        }
-    }
-    DisposableEffect(Unit) {
-        onDispose {
-            if (WindowModeState.fullscreen.value) return@onDispose
-            activity.window?.let { window ->
-                WindowCompat.getInsetsController(window, window.decorView)
-                    .show(WindowInsetsCompat.Type.statusBars())
-            }
-        }
-    }
 }
 
 /**

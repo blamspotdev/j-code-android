@@ -187,8 +187,6 @@ object SettingsFeature {
         formatterId: String,
         formatterOptions: List<Pair<String, String>>,
         onSelectFormatter: (String) -> Unit,
-        hideStatusBarWithKeyboard: Boolean,
-        onUpdateHideStatusBarWithKeyboard: (Boolean) -> Unit,
         isUserWorkspace: Boolean = false,
         modifier: Modifier = Modifier,
     ) {
@@ -480,21 +478,6 @@ object SettingsFeature {
                     onIncrease = { extensionFontSize.onChange((extensionFontSize.percent + 10).coerceAtMost(300)) },
                     modified = extensionFontSize.percent != SettingsDefaults.EXTENSION_FONT_SCALE,
                     onReset = { extensionFontSize.onChange(SettingsDefaults.EXTENSION_FONT_SCALE) },
-                )
-            }
-
-            SettingsCard(
-                title = "Immersive keyboard",
-                description = "Reclaim screen space while typing.",
-                keywords = "status bar immersive fullscreen keyboard editor terminal hide reveal screen space",
-            ) {
-                ToggleRow(
-                    label = "Hide status bar with keyboard",
-                    supporting = "Hide the system status bar while the on-screen keyboard is open, for more room in the editor and terminal. Swipe down from the top to reveal it.",
-                    checked = hideStatusBarWithKeyboard,
-                    onCheckedChange = onUpdateHideStatusBarWithKeyboard,
-                    modified = hideStatusBarWithKeyboard != SettingsDefaults.HIDE_STATUS_BAR_WITH_KEYBOARD,
-                    onReset = { onUpdateHideStatusBarWithKeyboard(SettingsDefaults.HIDE_STATUS_BAR_WITH_KEYBOARD) },
                 )
             }
 
