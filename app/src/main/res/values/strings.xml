@@ -8,5 +8,10 @@
         <item quantity="one">%d active session</item>
         <item quantity="other">%d active sessions</item>
     </plurals>
-    <string name="backend_service_stop_action">Stop &amp; close</string>
+    <plurals name="backend_service_terminals">
+        <item quantity="one">%d terminal</item>
+        <item quantity="other">%d terminals</item>
+    </plurals>
+    <string name="backend_service_memory">%s in use</string>
+    <string name="backend_service_stop_action">Quit JCode</string>
 </resources>

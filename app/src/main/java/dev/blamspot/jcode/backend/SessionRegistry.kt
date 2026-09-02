@@ -18,18 +18,58 @@ enum class BackendSessionKind {
 data class BackendSessionRecord(
     val id: String,
     val kind: BackendSessionKind,
+    /** Stable identifier for logs, e.g. `sdk:install:node`. Not shown to anyone. */
     val name: String? = null,
+    /** What to call this in the notification. Falls back to [displayLabel]'s reading of [name]. */
+    val label: String? = null,
     val createdAtMillis: Long = System.currentTimeMillis(),
-)
+) {
+    /**
+     * The line a person should see for this session.
+     *
+     * Job names are structured (`<area>:<action>:<id>`) because they were written for logs, so they
+     * are turned into something readable here rather than at fourteen call sites. A caller that can
+     * say it better passes [label] and this is not consulted.
+     */
+    fun displayLabel(): String {
+        label?.takeIf { it.isNotBlank() }?.let { return it }
+        val raw = name?.trim().orEmpty()
+        if (raw.isEmpty()) return kindLabel()
+        val parts = raw.split(':')
+        if (parts.size < 2) return if (raw.equals("terminal", ignoreCase = true)) kindLabel() else raw
+        val subject = parts.drop(2).joinToString(":").ifBlank { parts.getOrNull(1).orEmpty() }
+        return when {
+            parts[1] == "install" -> "Installing $subject"
+            parts[1] == "uninstall" || parts[1] == "remove" -> "Removing $subject"
+            parts[0] == "environment" && parts[1] == "create" -> "Creating $subject"
+            parts[0] == "environment" -> "Setting up the environment"
+            else -> raw
+        }
+    }
+
+    private fun kindLabel(): String = when (kind) {
+        BackendSessionKind.TERMINAL -> "Terminal"
+        BackendSessionKind.LANGUAGE_SERVER -> "Language server"
+        BackendSessionKind.DEBUG_ADAPTER -> "Debugger"
+        BackendSessionKind.JOB -> "Background job"
+    }
+}
+
+/** A long-running catalog task reporting itself through OSC 7716, if one is running. */
+data class BackendTask(val label: String, val percent: Int?)
 
 data class SessionRegistryState(
     val sessions: List<BackendSessionRecord> = emptyList(),
+    val task: BackendTask? = null,
 ) {
     val activeCount: Int
         get() = sessions.size
 
     val isEmpty: Boolean
         get() = sessions.isEmpty()
+
+    val terminals: List<BackendSessionRecord>
+        get() = sessions.filter { it.kind == BackendSessionKind.TERMINAL }
 }
 
 class BackendSessionHandle internal constructor(
@@ -66,16 +106,18 @@ object SessionRegistry {
         context: Context,
         kind: BackendSessionKind,
         name: String? = null,
+        label: String? = null,
     ): BackendSessionHandle {
         val appContext = context.applicationContext
         val record = BackendSessionRecord(
             id = UUID.randomUUID().toString(),
             kind = kind,
             name = name?.trim()?.takeIf { it.isNotEmpty() },
+            label = label?.trim()?.takeIf { it.isNotEmpty() },
         )
 
         val shouldStartService = synchronized(lock) {
-            _state.value = SessionRegistryState(_state.value.sessions + record)
+            _state.value = _state.value.copy(sessions = _state.value.sessions + record)
             if (serviceState == ServiceState.STOPPED) {
                 serviceState = ServiceState.STARTING
                 true
@@ -114,7 +156,7 @@ object SessionRegistry {
                 matches
             }
             if (removed) {
-                _state.value = SessionRegistryState(updatedSessions)
+                _state.value = _state.value.copy(sessions = updatedSessions)
             }
             removed && updatedSessions.isEmpty() && serviceState != ServiceState.STOPPED
         }
@@ -124,6 +166,34 @@ object SessionRegistry {
         }
 
         return removed
+    }
+
+    /** Rename a live session — a terminal reporting the program it is running, say. */
+    fun relabelSession(sessionId: String, label: String?) {
+        val clean = label?.trim()?.takeIf { it.isNotEmpty() }
+        synchronized(lock) {
+            val sessions = _state.value.sessions
+            val index = sessions.indexOfFirst { it.id == sessionId }
+            if (index < 0 || sessions[index].label == clean) return
+            _state.value = _state.value.copy(
+                sessions = sessions.toMutableList().apply { this[index] = this[index].copy(label = clean) },
+            )
+        }
+    }
+
+    /** The catalog task now running, with its percentage when it has reported one. */
+    fun setTask(label: String, percent: Int? = null) {
+        val clean = label.trim().ifEmpty { return }
+        synchronized(lock) {
+            val task = BackendTask(clean, percent?.coerceIn(0, 100))
+            if (_state.value.task != task) _state.value = _state.value.copy(task = task)
+        }
+    }
+
+    fun clearTask() {
+        synchronized(lock) {
+            if (_state.value.task != null) _state.value = _state.value.copy(task = null)
+        }
     }
 
     internal fun onServiceCreated() {

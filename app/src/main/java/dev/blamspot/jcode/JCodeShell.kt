@@ -2620,7 +2620,7 @@ private fun JCodeShell(
         terminalSessionManager.switchSession(session.id)
         // Hold the foreground service while this terminal is alive (keeps the process from being
         // killed/frozen in the background so the shell keeps running).
-        TerminalSessionHost.onSessionStarted(appContext, session.id)
+        TerminalSessionHost.onSessionStarted(appContext, session.id, session.label)
         return session
     }
 
@@ -2645,7 +2645,7 @@ private fun JCodeShell(
         terminalSessionIds = terminalSessionIds + child.id
         selectedTerminalSessionId = child.id
         terminalSessionManager.switchSession(child.id)
-        TerminalSessionHost.onSessionStarted(appContext, child.id)
+        TerminalSessionHost.onSessionStarted(appContext, child.id, child.label)
     }
 
     fun selectTerminalSession(sessionId: String) {

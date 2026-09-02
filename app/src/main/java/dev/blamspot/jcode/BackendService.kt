@@ -13,6 +13,7 @@ import android.os.IBinder
 import android.system.Os
 import android.system.OsConstants
 import androidx.core.content.ContextCompat
+import dev.blamspot.jcode.backend.BackendSessionKind
 import dev.blamspot.jcode.backend.SessionRegistry
 import dev.blamspot.jcode.backend.SessionRegistryState
 import dev.blamspot.jcode.core.distro.AppProcesses
@@ -21,6 +22,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -28,6 +30,7 @@ class BackendService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var notificationManager: NotificationManager
     private var isForegroundActive = false
+    private var memoryTicker: kotlinx.coroutines.Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -130,7 +133,7 @@ class BackendService : Service() {
             return
         }
 
-        val notification = buildNotification(activeCount = state.activeCount)
+        val notification = buildNotification(state)
         if (!isForegroundActive) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(
@@ -142,6 +145,7 @@ class BackendService : Service() {
                 startForeground(NOTIFICATION_ID, notification)
             }
             isForegroundActive = true
+            startMemoryTicker()
         } else {
             notificationManager.notify(NOTIFICATION_ID, notification)
         }
@@ -160,7 +164,28 @@ class BackendService : Service() {
         notificationManager.createNotificationChannel(channel)
     }
 
-    private fun buildNotification(activeCount: Int): Notification {
+    /**
+     * Keep the memory figure moving while the shade is open.
+     *
+     * There is no signal for "the user pulled the shade down", so this is a slow tick rather than a
+     * subscription: rebuilding the notification is a few small `/proc` reads and one `notify`, and at
+     * this interval it costs less than the sessions it is describing. It runs only while the service
+     * is foreground, which is only while something is actually running.
+     */
+    private fun startMemoryTicker() {
+        if (memoryTicker?.isActive == true) return
+        memoryTicker = serviceScope.launch {
+            while (true) {
+                delay(MEMORY_REFRESH_MS)
+                if (!isForegroundActive) continue
+                val state = SessionRegistry.state.value
+                if (state.isEmpty) continue
+                runCatching { notificationManager.notify(NOTIFICATION_ID, buildNotification(state)) }
+            }
+        }
+    }
+
+    private fun buildNotification(state: SessionRegistryState): Notification {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
             addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
@@ -172,11 +197,39 @@ class BackendService : Service() {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
         }
-        val sessionText = resources.getQuantityString(
-            R.plurals.backend_service_active_sessions,
-            activeCount,
-            activeCount,
-        )
+        // What is running, in the words the person who started it would use. The registry has carried
+        // a kind and a name all along; the notification used to reduce all of it to a count.
+        val task = state.task
+        val terminals = state.terminals
+        val lines = buildList {
+            task?.let { add(it.percent?.let { p -> "${it.label} — $p%" } ?: it.label) }
+            state.sessions
+                .filter { it.kind != BackendSessionKind.TERMINAL }
+                .forEach { add(it.displayLabel()) }
+            terminals.forEach { add(it.displayLabel()) }
+        }
+        val title = when {
+            task != null -> task.label
+            terminals.size == 1 && state.sessions.size == 1 -> terminals.first().displayLabel()
+            terminals.isNotEmpty() -> resources.getQuantityString(
+                R.plurals.backend_service_terminals,
+                terminals.size,
+                terminals.size,
+            )
+            else -> lines.firstOrNull() ?: getString(R.string.backend_service_notification_title)
+        }
+        val memory = AppProcesses.totalPssKb()?.let { formatMemory(it) }
+        val summary = listOfNotNull(
+            task?.percent?.let { "$it%" },
+            lines.takeIf { it.size > 1 }?.let { "${it.size} running" },
+            memory,
+        ).joinToString(" · ").ifEmpty { lines.firstOrNull().orEmpty() }
+        // One session already names itself in the title; repeating it underneath would be the
+        // notification talking to itself. The list earns its place only when there is more than one.
+        val detail = if (lines.size > 1) lines else emptyList()
+        val expanded = (detail + listOfNotNull(memory?.let { getString(R.string.backend_service_memory, it) }))
+            .joinToString("\n")
+            .ifBlank { summary }
 
         val stopIntent = PendingIntent.getService(
             this,
@@ -192,9 +245,9 @@ class BackendService : Service() {
 
         return Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle(getString(R.string.backend_service_notification_title))
-            .setContentText(sessionText)
-            .setStyle(Notification.BigTextStyle().bigText(sessionText))
+            .setContentTitle(title)
+            .setContentText(summary)
+            .setStyle(Notification.BigTextStyle().bigText(expanded))
             .setCategory(Notification.CATEGORY_SERVICE)
             .setOnlyAlertOnce(true)
             .setOngoing(true)
@@ -202,13 +255,25 @@ class BackendService : Service() {
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             .setContentIntent(contentIntent)
             .addAction(stopAction)
+            .apply {
+                // Determinate once the script reports a percentage, indeterminate until then — a task
+                // that is clearly moving is the difference between waiting and wondering.
+                task?.let { setProgress(100, it.percent ?: 0, it.percent == null) }
+            }
             .build()
+    }
+
+    /** GB past a thousand megabytes: "1.4 GB" reads at a glance where "1428 MB" has to be counted. */
+    private fun formatMemory(kb: Long): String {
+        val mb = kb / 1024.0
+        return if (mb >= 1024) String.format(java.util.Locale.US, "%.1f GB", mb / 1024) else "${mb.toInt()} MB"
     }
 
     companion object {
         private const val NOTIFICATION_CHANNEL_ID = "dev.blamspot.jcode.backend.sessions"
         private const val NOTIFICATION_ID = 7_601
         private const val ACTION_STOP = "dev.blamspot.jcode.backend.action.STOP"
+        private const val MEMORY_REFRESH_MS = 10_000L
 
         internal fun start(context: android.content.Context) {
             ContextCompat.startForegroundService(
