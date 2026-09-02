@@ -86,7 +86,7 @@ and accepts aliases:
 | `Virtualization` | Virtualization | `virtualization`, `virtual`, `vm`, `emulation` |
 | `Ai` | AI | `ai`, `agents`, `agent` |
 
-### 2.3 Entries — 22 across 8 categories
+### 2.3 Entries — 24 across 8 categories
 
 | Category | `id` | Name | Notes |
 |---|---|---|---|
@@ -95,6 +95,7 @@ and accepts aliases:
 | Languages | `nodejs` | Node.js | `multiVersion` (nvm) |
 | Languages | `jdk` | Java (JDK) | `multiVersion` |
 | Languages | `go` | Go | `multiVersion` |
+| Languages | `flutter` | Flutter SDK | `arm64` only; installs by git clone because Flutter's Linux tarball is x86-64 while its engine artifacts are not |
 | Build Tools | `rust` | Rust toolchain | `multiVersion` |
 | Build Tools | `cmake-ninja` | CMake and Ninja | |
 | Build Tools | `git` | Git | |
@@ -112,6 +113,7 @@ and accepts aliases:
 | AI | `opencode` | opencode | `arm64` only |
 | AI | `claude` | Claude Code | `arm64` only |
 | AI | `codex` | Codex | `arm64` only; `requiredSdks: [nodejs]` |
+| AI | `antigravity` | Antigravity | `arm64` only; the command is `agy` |
 
 Entries with a `versionsScript` (version picker): `nodejs`, `jdk`, `go`, `rust`, `android-sdk`,
 `dotnet`.

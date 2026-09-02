@@ -88,7 +88,18 @@ class TerminalSessionManager(
             // so an application's repaint must not arrive while the grid is still the old width — it
             // would be wrapped against a size the application has already stopped using.
             synchronized(this) { parser.resize(newRows, newCols) }
-            runCatching { pty.resize(newCols, newRows) }
+            // A dropped ioctl is the one way the grid and the child can end up disagreeing, and the
+            // failure is invisible until a full-width redraw wraps and stacks a row at a time — so
+            // record it instead of swallowing it. runCatching also absorbs the "PTY is closed"
+            // check when a reaped session is resized on its way out.
+            val applied = runCatching { pty.resize(newCols, newRows) }.getOrDefault(false)
+            if (!applied) {
+                android.util.Log.w(
+                    "TerminalSessionManager",
+                    "PTY resize to ${newCols}x$newRows failed for session $id; " +
+                        "the child still sees the old winsize",
+                )
+            }
         }
     }
 
