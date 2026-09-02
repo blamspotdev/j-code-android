@@ -16,7 +16,7 @@ real projects entirely on-device, with no companion app and no root.
 
 | | |
 |---|---|
-| Version | 1.7.4 |
+| Version | 1.7.5 |
 | Package | `dev.blamspot.jcode` (`.debug` / `.beta` variants install side by side) |
 | Platform | Android 13+ (`minSdk` / `targetSdk` 33, `compileSdk` 36) |
 | Release ABI | `arm64-v8a` |
@@ -93,7 +93,7 @@ significant gaps, stated up front:
 - **External formatters are not executed.** The built-in Format Document works; a Dev Pack's
   `formatter.command` is parsed and ignored.
 - **Syntax colouring is a hand-written tokenizer**, not a grammar engine. The tree-sitter binding
-  and its grammars were removed at 1.7.4 having never been reachable — see
+  and its grammars were removed at 1.7.5 having never been reachable — see
   [Syntax highlighting and completion](../02-editor/05-syntax-highlighting-and-completion.md).
 - **Cross-architecture emulation is inert.** The QEMU code paths exist; no emulator is bundled.
 
