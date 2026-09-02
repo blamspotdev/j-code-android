@@ -244,7 +244,7 @@ class BackendService : Service() {
         ).build()
 
         return Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(summary)
             .setStyle(Notification.BigTextStyle().bigText(expanded))

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     The app mark, flattened for the status bar.
+
+     A notification small icon is drawn from its alpha channel alone: the system tints it, so
+     the launcher icon's three gradients would arrive as one solid blob of whatever colour the
+     status bar happens to want. This is the same three paths with the gradients dropped and the
+     launcher's group transform baked into the coordinates, fitted to the 24dp box with the 1dp
+     margin the platform expects. Regenerate it from ic_launcher_foreground.xml if the mark
+     changes; nothing here is hand-drawn.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFFFF">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M6.44 7.61C6.33 7.67 5.99 7.91 5.69 8.14C5.39 8.37 5.01 8.66 4.83 8.8C4.39 9.14 2.08 10.93 1.65 11.25C1.18 11.62 1 11.94 1 12.42C1 13.01 1.13 13.18 2.26 14.09C2.57 14.34 3.56 15.14 4.45 15.87C6.07 17.2 6.08 17.21 6.3 17.21C6.6 17.21 6.66 17.13 6.96 16.43C7.21 15.87 7.24 15.71 7.15 15.55C7.12 15.49 3.68 12.7 3.32 12.44C3.31 12.43 3.35 12.39 3.4 12.35C3.46 12.31 4.31 11.66 5.29 10.9C6.28 10.14 7.21 9.42 7.35 9.31C7.7 9.05 7.82 8.81 7.82 8.4C7.82 7.79 7.53 7.5 6.94 7.5C6.74 7.5 6.59 7.54 6.44 7.61Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M17.65 7.96C17.55 8.03 17.44 8.2 17.23 8.66C16.94 9.31 16.9 9.51 17.04 9.67C17.08 9.72 17.53 10.08 18.02 10.47C18.52 10.85 19.28 11.44 19.71 11.78C20.15 12.12 20.5 12.41 20.5 12.42C20.5 12.44 20.04 12.81 19.47 13.26C16.41 15.7 16.58 15.54 16.58 15.76C16.58 15.94 16.96 17.02 17.06 17.11C17.2 17.24 17.43 17.27 17.62 17.19C17.71 17.15 18.01 16.94 18.28 16.72C18.55 16.5 19.63 15.65 20.68 14.82C21.73 14 22.63 13.26 22.68 13.18C23 12.74 22.99 12.03 22.66 11.6C22.56 11.47 18.61 8.25 18.19 7.96C18.04 7.86 17.82 7.86 17.65 7.96Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12.31 3.97C12.22 4.09 11.89 5.66 11.94 5.76C11.96 5.81 12 5.84 12.02 5.84C12.1 5.84 13.94 6.17 13.96 6.19C14.01 6.25 13.92 6.61 13.22 9.02C12.81 10.46 12.21 12.55 11.89 13.65C11.56 14.79 11.24 15.81 11.15 16C10.95 16.43 10.63 16.79 10.31 16.94C9.84 17.18 9.08 17.08 8.33 16.71C8.17 16.62 8.08 16.6 8.02 16.63C7.98 16.66 7.86 16.85 7.77 17.07C7.67 17.29 7.46 17.77 7.29 18.15C7.12 18.53 6.99 18.87 7 18.91C7.02 19.01 7.7 19.33 8.36 19.55C10.07 20.12 11.53 19.86 12.54 18.8C13.12 18.18 13.5 17.48 13.83 16.4C13.93 16.05 14.26 14.93 14.56 13.91C15.23 11.68 16.01 9.07 16.39 7.86C17.21 5.19 17.3 4.84 17.23 4.78C17.2 4.74 16.51 4.6 15.65 4.45C14.82 4.3 13.78 4.12 13.35 4.04C12.44 3.88 12.4 3.88 12.31 3.97Z" />
+</vector>
