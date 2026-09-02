@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Implemented — device-verified for Python (debugpy) and Java; other adapters have known issues |
 | **Modules** | `:core:debug`, `:core:distro` (engine catalog), `:feature:debug`, `:app` |
-| **Primary sources** | core/debug/src/main/java/dev/blamspot/jcode/core/debug/DebugSession.kt (395 lines), core/distro/src/main/java/dev/blamspot/jcode/core/distro/DebugEngineModels.kt, app/src/main/java/dev/blamspot/jcode/debug/DebugController.kt (702 lines), app/src/main/java/dev/blamspot/jcode/DebugSessionPanel.kt, tools/java-dap/ |
+| **Primary sources** | core/debug/src/main/java/dev/blamspot/jcode/core/debug/DebugSession.kt (395 lines), core/distro/src/main/java/dev/blamspot/jcode/core/distro/DebugEngineModels.kt, app/src/main/java/dev/blamspot/jcode/debug/DebugController.kt (702 lines), app/src/main/java/dev/blamspot/jcode/DebugSessionPanel.kt, the Java Dev Pack's adapter/ |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -176,14 +176,15 @@ the frame's file directly.
 | `lldb-dap` | `lldb` | `stdio` | |
 | `netcoredbg` | `coreclr` | `stdio` | Attach stalls (§10) |
 | `js-debug` | `pwa-node` | `tcp` | Child-session model; loopback transport issue under proot (§10) |
-| `java-debug` | `java` | `stdio` | Backed by `tools/java-dap/` |
+| `java-debug` | `java` | `stdio` | Backed by the Java Dev Pack's `adapter/` |
 
 `debugType` is what a `.jcode/run.yaml` `debugEntry` resolves against — see
 [Run and build configurations](../05-workspace/03-run-and-build-configurations.md).
 
-### 7.1 `tools/java-dap`
+### 7.1 The Java debug adapter
 
-A small Gradle project wrapping Microsoft's java-debug with JCode-specific providers:
+A small Gradle project in the **Java Dev Pack** (`adapter/`) wrapping Microsoft's java-debug
+with JCode-specific providers:
 `JCodeSourceLookUpProvider`, `JCodeEvaluationProvider`, `JCodeCompletionsProvider`,
 `JCodeHotCodeReplaceProvider`, `JCodeVirtualMachineManagerProvider`, and a `Main` entry point.
 
@@ -218,7 +219,7 @@ Device-verified findings:
 - **js-debug**: a proot loopback **transport** problem, not a JCode protocol defect — the child
   session cannot reach `__jsDebugChildServer` over the guest's loopback.
 - **netcoredbg**: attach stalls.
-- **java-debug**: functional through `tools/java-dap` for Android attach; the general JVM launch path
+- **java-debug**: functional through the Java Dev Pack's adapter for Android attach; the general JVM launch path
   is thin.
 - `:feature:debug`'s `DebugFeature` is a stub; the real UI is `app/src/main/java/dev/blamspot/jcode/DebugSessionPanel.kt` and
   `app/src/main/java/dev/blamspot/jcode/RunDebugPanel.kt`.

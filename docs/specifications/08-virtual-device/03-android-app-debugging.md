@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | **Status** | Implemented |
-| **Modules** | `:app`, `:core:debug`, `:core:distro`, `tools/java-dap` |
-| **Primary sources** | app/src/main/java/dev/blamspot/jcode/debug/AndroidAppProject.kt, app/src/main/java/dev/blamspot/jcode/debug/AndroidDebugAttach.kt (157 lines), app/src/main/java/dev/blamspot/jcode/debug/DebugController.kt (702 lines), core/distro/src/main/java/dev/blamspot/jcode/core/distro/adb/AdbHostClient.kt, tools/java-dap/ |
+| **Modules** | `:app`, `:core:debug`, `:core:distro`, and the Java Dev Pack's `adapter/` |
+| **Primary sources** | app/src/main/java/dev/blamspot/jcode/debug/AndroidAppProject.kt, app/src/main/java/dev/blamspot/jcode/debug/AndroidDebugAttach.kt (157 lines), app/src/main/java/dev/blamspot/jcode/debug/DebugController.kt (702 lines), core/distro/src/main/java/dev/blamspot/jcode/core/distro/adb/AdbHostClient.kt, the Java Dev Pack's adapter/ |
 | **Verified against** | commit `cea581c`, 2026-08-09 |
 
 ---
@@ -127,7 +127,7 @@ the flow routes to `prepareAndroidAttach` instead of a plain JVM launch. Everyth
 normal DAP session — see
 [Debug Adapter Protocol](../04-language-services/02-debug-adapter-protocol.md).
 
-The adapter is `java-debug`, wrapped by `tools/java-dap` with JCode-specific providers
+The adapter is `java-debug`, wrapped by the Java Dev Pack's `adapter/` with JCode-specific providers
 (`JCodeSourceLookUpProvider`, `JCodeEvaluationProvider`, `JCodeCompletionsProvider`,
 `JCodeHotCodeReplaceProvider`, `JCodeVirtualMachineManagerProvider`).
 

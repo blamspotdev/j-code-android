@@ -27,6 +27,11 @@ Four things could not go with it, because an installed extension is a directory 
 | `VirtualStorageProvider`, `VirtualSettingsProvider` | `${applicationId}`-scoped authorities, resolved by the system from the manifest long before an extension could be consulted |
 | the guest's `<uses-permission>` set | fixed at install time |
 
+The device's own guests — launcher, browser, camera, Files, keyboard, Settings and the hardware
+fixture — went with it, and so did their sources: they are the pack's `vdevice-apps/`, building the
+APKs it bundles at `native/vdevice/assets/vdevice/`. Paths of that shape in this document are paths
+in the Android Dev Pack, not in this repository.
+
 Each of those is a **stub**. It holds no device logic and forwards to whatever pack is installed;
 with none installed they answer emptily rather than failing, because the phone's Files app queries
 every `DocumentsProvider` it can see whether or not a dev pack was ever installed.
@@ -365,7 +370,7 @@ This is what backs `adb shell screencap` against the virtual device — see
 ## 7a. The device with nothing on it
 
 **The device's resting state is its home screen, and the home screen is an app** —
-`tools/vdevice-launcher`, installed from the pack's assets like the browser and the camera. Opening
+`vdevice-apps/launcher`, installed from the pack's assets like the browser and the camera. Opening
 the tab starts it; it is the root of the device's activity stack and everything else is pushed on
 top of it.
 
@@ -521,7 +526,7 @@ Today that is seven, and six of them are the device's **system apps** — the ho
 Uninstall for those (§7h). The launcher itself is one of the six: it is an app on this device like
 any other (§7a), and the only one of the seven that is not is the hardware fixture.
 
-**The browser** (`tools/vdevice-browser`) is the one that makes the device usable: it opens a URL
+**The browser** (`vdevice-apps/browser`) is the one that makes the device usable: it opens a URL
 without reaching for the phone's browser, which would take the user out of JCode and load the page
 under their own profile — their cookies, their signed-in accounts. Inside the device, what it loads
 is wiped with the device, including the WebView profile (§7d). Being resource-free is a packaging
@@ -532,23 +537,23 @@ raised bar, and its own offline page rather than the platform's white one, which
 a surface this dark. The address shows the **host** while a page is loaded and the whole URL while it
 is being edited.
 
-**The camera** (`tools/vdevice-camera`) and **Files** (`tools/vdevice-files`) are what make the
+**The camera** (`vdevice-apps/camera`) and **Files** (`vdevice-apps/files`) are what make the
 device answer the intents an app sends when it wants a photo or a document — and what make
 `resolveActivity` have something to find when an app asks before it reaches. Both are described in
 §7j.
 
-**The hardware fixture** (`tools/hardware-fixture`) is the one that makes the device *checkable*. It
+**The hardware fixture** (`vdevice-apps/hardware`) is the one that makes the device *checkable*. It
 prints what a guest can actually see of the camera, microphone, location and three motion sensors,
 and has buttons that fire `ACTION_IMAGE_CAPTURE` and `ACTION_OPEN_DOCUMENT` and report what came
 back, so the bench (§7f), Manage permissions (§7e) and the device's own apps (§7j) can be watched
 having an effect on a real app rather than taken on trust. It is on every device by default because the moment you want it is the moment
 something looks wrong, which is not the moment to go and build an APK.
 
-**The launcher** (`tools/vdevice-launcher`) is the device's home screen, and the reason there is one
+**The launcher** (`vdevice-apps/launcher`) is the device's home screen, and the reason there is one
 of these on the list at all is that it used to be drawn by the container instead — see §7a for what
 that cost and why it stopped.
 
-The **keyboard** (`tools/vdevice-keyboard`) and **Settings** (`tools/vdevice-settings`) round out the
+The **keyboard** (`vdevice-apps/keyboard`) and **Settings** (`vdevice-apps/settings`) round out the
 seven; both have sections of their own (§7m, and the keyboard in
 [02-guest-runtime-and-hidden-api](02-guest-runtime-and-hidden-api.md)).
 
@@ -658,7 +663,7 @@ timestamp moves. Living inside `filesDir/vdevice/` also means `resetOnStart` tak
 else, which is the honest behaviour: a grant that outlived the app it was granted to would be waiting
 to apply itself to whatever was installed under that package name next.
 
-`tools/hardware-fixture` is the regression test — one guest that prints what it can see of all six.
+`vdevice-apps/hardware` is the regression test — one guest that prints what it can see of all six.
 
 ### 7f. The hardware bench — `VirtualHardwarePage`
 
@@ -904,10 +909,9 @@ rather than as silence.
 ### 7j. The device's Camera and Files apps
 
 Both are ordinary guests — no container privileges, started by ordinary intent resolution, answering
-through the ordinary result path. Sources in `tools/vdevice-camera` and `tools/vdevice-files`,
-bundled in the Android Dev Pack's `native/vdevice/assets/vdevice/` and reinstalled into every device
-on every start. Their *sources* stay in JCode's own repo under `tools/vdevice-*`, so rebuilding one
-means copying the artifact across — see §1a for why the two halves live in different repositories.
+through the ordinary result path. Sources in the pack's `vdevice-apps/camera` and
+`vdevice-apps/files`, bundled from there into `native/vdevice/assets/vdevice/` and reinstalled into
+every device on every start — see §1a.
 
 **Camera** answers `ACTION_VIDEO_CAPTURE` as well as the stills, because the specification's claim
 that the device "can draw a frame and cannot encode a film" was true of nothing except the code not
@@ -1092,7 +1096,7 @@ driving the IDE — right for JCode, and no use to somebody looking at the devic
 it through `input tap`, or to an app that sends `ACTION_MANAGE_APPLICATIONS` and expects something to
 answer.
 
-`tools/vdevice-settings` is an ordinary guest like Camera and Files, and it changes **real** settings:
+`vdevice-apps/settings` is an ordinary guest like Camera and Files, and it changes **real** settings:
 the same ones the bench writes, in the same file, with the same effect on a running guest.
 
 #### The two layers
@@ -1389,7 +1393,7 @@ An app started **from the home screen** is sized before it is built, the way the
 Until it was, only the app the IDE started got the device's screen: measured, the launcher ran at
 411×844dp while the app it opened ran at the tablet JCode itself was on.
 
-`tools/lifecycle-fixture` is the app that proves all of this. It reports every callback it is given
+`vdevice-apps/fixtures/lifecycle` is the app that proves all of this. It reports every callback it is given
 and declares no `configChanges`, which makes it the one app on the device that a screen change must
 rebuild — every other one declares the full set and is resized in place.
 

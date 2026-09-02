@@ -201,7 +201,7 @@ API 34, so the ceiling logic (§ install script) stays for that path.
 
 | Path | Result |
 |---|---|
-| `javac` + `d8` + `aapt2` + `zipalign` + `apksigner`, no Gradle | **Works** — `tools/hardware-fixture` builds here and runs on the virtual device |
+| `javac` + `d8` + `aapt2` + `zipalign` + `apksigner`, no Gradle | **Works** — `vdevice-apps/hardware` builds here and runs on the virtual device |
 | Gradle 8.14.3 + AGP 8.13 + Kotlin 2.2 + Compose, library module | **Works** — `:core:design:assembleDebug`, 329 KB AAR |
 | `.aidl` at `compileSdk` 36 | **Works** — modern static `aidl`, and the sanitize wrapper proves the same for the fallback |
 | `externalNativeBuild` (CMake + NDK 27.2) | **Works** — distro clang through the NDK wrappers, both `arm64-v8a` and `x86_64` ABIs |
