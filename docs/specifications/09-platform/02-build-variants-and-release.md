@@ -59,9 +59,9 @@ There are **no product flavors**. Three identities come from build types plus a 
 
 | Build | `applicationId` | Label | Launcher icon |
 |---|---|---|---|
-| `debug` | `dev.blamspot.jcode.debug` | JCode (debug) | `ic_launcher_debug` (red gradient) |
+| `debug` | `dev.blamspot.jcode.debug` | JCode (debug) | `ic_launcher_debug` (whole mark hollow) |
 | `release` | `dev.blamspot.jcode` | JCode | `ic_launcher` |
-| `release -PjcodeIdSuffix=.beta` | `dev.blamspot.jcode.beta` | JCode (beta) | `ic_launcher_beta` (purple gradient) |
+| `release -PjcodeIdSuffix=.beta` | `dev.blamspot.jcode.beta` | JCode (beta) | `ic_launcher_beta` (hollow J) |
 
 All three install **side by side**. The `namespace` — the compile-time R and BuildConfig package —
 is also `dev.blamspot.jcode`, and the Kotlin, Java, AIDL and JNI sources sit under it: at 1.7.5 the
