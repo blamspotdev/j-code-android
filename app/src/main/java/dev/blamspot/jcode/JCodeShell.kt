@@ -4369,13 +4369,10 @@ private fun WorkspacePanel(
                                 }
                                 // User Workspace with nothing selected: roster only, tree hidden.
                                 inUserWorkspace -> Spacer(modifier = Modifier.weight(1f))
-                                // Default Workspace with nothing open: New/Open actions.
+                                // Default Workspace with nothing open: says so, and leaves the doing
+                                // to the header's + and folder buttons right above it.
                                 else -> Box(modifier = Modifier.weight(1f)) {
-                                    WorkspaceEmptyState(
-                                        workspace = workspace,
-                                        onCreateProject = onCreateProject,
-                                        onOpenExternalFolder = onOpenExternalFolder,
-                                    )
+                                    WorkspaceEmptyState(workspace = workspace)
                                 }
                             }
                         }
