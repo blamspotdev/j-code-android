@@ -6046,6 +6046,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             for (tab in candidates) {
                 val state = tab.editorState ?: continue
+                if (tab.isDirty) continue                 // re-check: a keystroke may have landed during the stat
                 val file = tab.filePath
                 val signature = signatures[tab.id]
                     ?: continue                           // deleted on disk: keep the open copy

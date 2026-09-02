@@ -83,14 +83,20 @@ class PosixFs @Inject constructor() : Fs {
          * directory being renamed (the `FullRescan` fallback).
          *
          * Deliberately NOT `ALL_EVENTS`: that also delivers `ACCESS`, `OPEN` and `CLOSE_NOWRITE`,
-         * which say a file was *read*. Those fell into the `FullRescan` branch, so merely reading a
-         * file inside a watched directory queued a rescan — and inotify reports them for the watched
-         * directory itself, which `File.listFiles()` opens and reads. The Explorer's live tree
-         * therefore fed itself: a refresh listed every expanded directory, each listing raised
-         * OPEN/ACCESS/CLOSE_NOWRITE on that directory, the debounce fired another refresh 300ms
-         * later, and each cycle also raised `filesChanged` for the SCM extension — a `git status` in
-         * the guest, forever, for a tree nothing had touched. It also made any guest-side reader (a
-         * build, a grep, an agent working in the terminal) storm the watch with events per file read.
+         * which only say something was *read*, and the `when` above resolved them to `FullRescan`.
+         * inotify raises all three on the watched directory itself when it is opened and read — which
+         * is exactly what `File.listFiles()` does — so the Explorer's live tree fed itself: a refresh
+         * listed every expanded directory, each listing raised OPEN/ACCESS/CLOSE_NOWRITE on that
+         * directory, the collector's 300ms debounce fired another refresh, and round it went, roughly
+         * three times a second for as long as the tree was on screen, on a tree nothing had touched.
+         * Each cycle also raised `filesChanged`, which is one `evaluateJavascript` per live extension
+         * host and a `git status` in the SCM extension.
+         *
+         * Verified against the kernel with both masks: under `ALL_EVENTS` a directory listing yields
+         * OPEN|ISDIR, ACCESS|ISDIR, CLOSE_NOWRITE|ISDIR for the directory itself; under this mask it
+         * yields nothing, while create still yields CREATE/MODIFY/CLOSE_WRITE, a write yields
+         * MODIFY/CLOSE_WRITE and a delete yields DELETE. The bits dropped are exactly `ACCESS`,
+         * `OPEN` and `CLOSE_NOWRITE` (0xFFF - 0xFCE = 0x31); no change signal is lost.
          */
         private const val WATCH_MASK = FileObserver.CREATE or FileObserver.DELETE or
             FileObserver.DELETE_SELF or FileObserver.MOVED_FROM or FileObserver.MOVED_TO or
