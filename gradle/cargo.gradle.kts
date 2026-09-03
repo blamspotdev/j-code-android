@@ -35,32 +35,22 @@ fun registerCargoNdkBuildTask(taskName: String, buildMode: String) =
                 return@doLast
             }
 
-            val targets = when (buildMode) {
-                "release" -> listOf("arm64-v8a")
-                else -> listOf("arm64-v8a", "x86_64")
-            }
-
-            targets.forEach { abi ->
-                val cargoTarget = when (abi) {
-                    "arm64-v8a" -> "aarch64-linux-android"
-                    "x86_64" -> "x86_64-linux-android"
-                    else -> error("Unsupported ABI $abi")
-                }
-
-                project.exec {
-                    workingDir = manifest.parentFile
-                    environment("CARGO_HOME", cargoHome ?: "")
-                    environment("RUSTUP_HOME", rustupHome ?: "")
-                    commandLine(
-                        "cargo",
-                        "ndk",
-                        "-t", cargoTarget,
-                        "-o", outputDir.absolutePath,
-                        "build",
-                        "--manifest-path", manifest.absolutePath,
-                        *(if (buildMode == "release") arrayOf("--release") else emptyArray())
-                    )
-                }
+            // One target for every variant, matching the app's arm64-only packaging (the ABI
+            // filter and the reason for it live in the root build.gradle.kts). Building a second
+            // one would only hand the jniLibs merger a library no JCode APK can carry.
+            project.exec {
+                workingDir = manifest.parentFile
+                environment("CARGO_HOME", cargoHome ?: "")
+                environment("RUSTUP_HOME", rustupHome ?: "")
+                commandLine(
+                    "cargo",
+                    "ndk",
+                    "-t", "aarch64-linux-android",
+                    "-o", outputDir.absolutePath,
+                    "build",
+                    "--manifest-path", manifest.absolutePath,
+                    *(if (buildMode == "release") arrayOf("--release") else emptyArray())
+                )
             }
         }
     }

@@ -1,7 +1,6 @@
 package dev.blamspot.jcode.core.distro
 
 import android.content.Context
-import android.os.Build
 import java.io.File
 import java.io.FileOutputStream
 
@@ -149,11 +148,10 @@ class ProotManager(private val context: Context) {
             runCatching { supportLibsMarker.readText().trim() }.getOrNull() == SUPPORT_LIBS_VERSION.toString()
 
     private fun extractSupportLibs(): Boolean = try {
-        val abi = detectAbi()
         libtallocDir.mkdirs()
         listOf(
-            "bin/libtalloc-$abi.so" to libtallocBinary,
-            "bin/libandroid-shmem-$abi.so" to shmemBinary,
+            "bin/libtalloc-arm64-v8a.so" to libtallocBinary,
+            "bin/libandroid-shmem-arm64-v8a.so" to shmemBinary,
         ).forEach { (asset, target) ->
             android.util.Log.d("ProotManager", "extractSupportLibs: extracting $asset")
             appContext.assets.open(asset).use { input ->
@@ -202,19 +200,6 @@ class ProotManager(private val context: Context) {
             loaderBinary.exists() && loaderBinary.canExecute() &&
             libtallocBinary.exists() && shmemBinary.exists()
     
-    /**
-     * Detect the current device's primary ABI.
-     */
-    private fun detectAbi(): String {
-        val supportedAbis = Build.SUPPORTED_ABIS
-        return when {
-            supportedAbis.any { it.contains("arm64") || it.contains("aarch64") } -> "arm64-v8a"
-            supportedAbis.any { it.contains("x86_64") } -> "x86_64"
-            supportedAbis.any { it.contains("armeabi") } -> "armeabi-v7a"
-            else -> supportedAbis.firstOrNull() ?: "arm64-v8a"
-        }
-    }
-
     /** The architecture of the host device. */
     fun hostArch(): Arch = Arch.host()
 

@@ -113,6 +113,15 @@ subprojects {
                 defaultConfig {
                     minSdk = 33
 
+                    // JCode is an arm64-only app, and the embedded Linux runtime is why: proot, its
+                    // ELF loaders and its support libs are prebuilt for arm64-v8a alone (see
+                    // native/proot/src/main/{jniLibs,assets}), and without them no environment,
+                    // toolchain or terminal starts. A second ABI would package a shell of an app
+                    // that installs and then cannot run, so every variant is filtered to the one.
+                    ndk {
+                        abiFilters.add("arm64-v8a")
+                    }
+
                     externalNativeBuild {
                         cmake {
                             arguments.addAll(
@@ -147,10 +156,6 @@ subprojects {
 
                 buildTypes {
                     getByName("debug") {
-                        ndk {
-                            abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
-                        }
-
                         externalNativeBuild {
                             cmake {
                                 arguments.add("-DJCODE_VARIANT_DIR=debug")
@@ -160,10 +165,6 @@ subprojects {
                     }
 
                     getByName("release") {
-                        ndk {
-                            abiFilters.add("arm64-v8a")
-                        }
-
                         externalNativeBuild {
                             cmake {
                                 arguments.add("-DJCODE_VARIANT_DIR=release")

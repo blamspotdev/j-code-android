@@ -52,9 +52,9 @@ LTS rootfs in app-private storage. No Termux dependency, no root.
   WebView slice of the VS Code API.
 - **Toolchains** — a unified manager for installing and updating SDKs, language
   servers, debug engines, database clients, and developer tools per distro.
-- **Embedded Linux** — bundled `proot` binaries for arm64-v8a and x86_64, with
-  downloaded ARM64 Ubuntu 24.04 / 26.04 LTS profiles; `apt`-managed toolchains;
-  project directories bind-mounted into the distro.
+- **Embedded Linux** — bundled arm64-v8a `proot` binaries with downloaded ARM64
+  Ubuntu 24.04 / 26.04 LTS profiles; `apt`-managed toolchains; project
+  directories bind-mounted into the distro.
 
 ## Build
 
