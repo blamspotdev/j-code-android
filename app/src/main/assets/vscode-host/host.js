@@ -39,8 +39,19 @@ if (!EXT_DIR || !MAIN) {
 let nextRequestId = 1;
 const pending = new Map();
 
+// The one writer of the frame stream. Everything else that reaches stdout is the extension's own
+// console output, which is diverted below rather than allowed to share the channel: an extension
+// that logs (Claude Code prints "Created lock file at ..." as it starts) puts raw text between
+// JCode's frames, and anything landing mid-frame is a message silently dropped at the far end.
+const rawStdoutWrite = process.stdout.write.bind(process.stdout);
+let writingFrame = false;
 const send = (message) => {
-  process.stdout.write(JSON.stringify(message) + '\n');
+  writingFrame = true;
+  try {
+    rawStdoutWrite(JSON.stringify(message) + '\n');
+  } finally {
+    writingFrame = false;
+  }
 };
 
 /** Ask JCode something and wait for its answer. */
@@ -55,6 +66,17 @@ const call = (method, params) =>
 const notify = (method, params) => send({ method, params: params || {} });
 
 const log = (level, text) => notify('host/log', { level, text: String(text) });
+
+// The extension's own console output. Rerouted into the log channel so it reaches JCode's
+// extension log instead of the frame stream it would otherwise be interleaved into.
+process.stdout.write = (chunk, encoding, callback) => {
+  if (writingFrame) return rawStdoutWrite(chunk, encoding, callback);
+  const text = (Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk)).replace(/\s+$/, '');
+  if (text.length) log('info', text);
+  const done = typeof encoding === 'function' ? encoding : callback;
+  if (typeof done === 'function') done();
+  return true;
+};
 
 // ---- the vscode module --------------------------------------------------------------------
 
@@ -939,7 +961,7 @@ const vscode = {
         visible: true,
         onDidDispose,
         onDidChangeViewState: emitter(),
-        reveal: () => notify('webview/reveal', { handle }),
+        reveal: () => notify('webview/reveal', { handle, kind: 'panel' }),
         dispose: () => {
           webviews.delete(handle);
           onDidDispose.fire();
@@ -1533,7 +1555,10 @@ const resolveWebviewView = async ({ viewId }) => {
     visible: true,
     onDidDispose,
     onDidChangeVisibility,
-    show: () => notify('webview/reveal', { handle }),
+    // Labelled, because a view asking to be shown is not the request a panel makes when it asks
+    // to be brought to the front, and JCode opens an editor tab for the second. Unlabelled, a
+    // sidebar view's own show() opened a duplicate tab holding the very webview the drawer had.
+    show: () => notify('webview/reveal', { handle, kind: 'view' }),
     title: undefined,
     description: undefined,
   };

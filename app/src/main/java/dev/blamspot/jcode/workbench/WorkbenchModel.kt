@@ -206,7 +206,7 @@ internal data class WorkbenchManagerActions(
     /** Runs a command in the Linux runtime for an extension web frontend; returns a JSON result. */
     val onExtensionExec: suspend (command: String, timeoutMs: Long) -> String,
     /** Spawns a long-lived runtime process with stdio attached, used to run an imported `.vsix`. */
-    val onSpawnRuntimeProcess: ((command: String) -> Process?)? = null,
+    val onSpawnRuntimeProcess: ((extensionId: String, command: String) -> Process?)? = null,
     /** Surfaces a webview panel an imported `.vsix` created (`createWebviewPanel`) as an editor tab. */
     val onOpenVsixPanel: (extensionId: String, handle: String, title: String) -> Unit = { _, _, _ -> },
     /** Extension API v1 envelope handler: (extensionId, requestJson) -> response JSON. */

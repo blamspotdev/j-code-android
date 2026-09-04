@@ -209,7 +209,7 @@ object VsixPackage {
      * declared in `contributes.commands` and scoped by a `when` clause to the view it belongs to.
      * That is the set worth surfacing: an extension's full command list is mostly editor-context and
      * palette entries that mean nothing next to a panel. An extension that declares no `view/title`
-     * group falls back to every command it has, so it is still reachable.
+     * group gets no menu here — its commands live in the palette ([parsePaletteCommands]).
      *
      * [viewId] filters by `when`; matching is a substring test rather than a real expression
      * evaluator, which is enough for the `view == some.id` clauses this key is used with and cannot
@@ -248,7 +248,53 @@ object VsixPackage {
             .map { (command, _) -> command }
             .distinctBy { it.id }
 
-        return ordered.ifEmpty { declared.values.toList() }
+        // Empty means empty. Falling back to every declared command turned the view's overflow menu
+        // into the extension's whole command list — Claude Code contributes no `view/title` and got
+        // all 26, including the pairs that share a title. What an extension does not put on its view
+        // belongs in the command palette, which is where [parsePaletteCommands] puts it.
+        return ordered
+    }
+
+    /**
+     * The commands an extension offers the command palette.
+     *
+     * VS Code's rule, as far as it can be applied without when-clause evaluation: everything under
+     * `contributes.commands`, minus what `menus.commandPalette` explicitly withholds with
+     * `"when": "false"` — an extension's own way of saying a command is for a keybinding or another
+     * menu and not for a person to pick. Anything else is offered; a `when` JCode cannot evaluate is
+     * better answered by showing the command than by hiding it.
+     *
+     * Deduplicated by title, because an extension that registers the same action under two ids
+     * (Claude Code's `claude-vscode.` and `claude-code.` pairs) would otherwise put two identical
+     * rows in the palette, and neither would say which is which.
+     */
+    fun parsePaletteCommands(packageJson: String, nlsJson: String?): List<VsixCommand> {
+        val json = runCatching { JSONObject(packageJson) }.getOrNull() ?: return emptyList()
+        val contributes = json.optJSONObject("contributes") ?: return emptyList()
+        val strings = parseNls(nlsJson)
+
+        val paletteEntries = contributes.optJSONObject("menus")?.optJSONArray("commandPalette")
+        val withheld = (0 until (paletteEntries?.length() ?: 0)).mapNotNull { i ->
+            val entry = paletteEntries?.optJSONObject(i) ?: return@mapNotNull null
+            entry.optString("command").takeIf { entry.optString("when").trim() == "false" }
+        }.toSet()
+
+        val commands = contributes.optJSONArray("commands")
+        return (0 until (commands?.length() ?: 0)).mapNotNull { i ->
+            val entry = commands?.optJSONObject(i) ?: return@mapNotNull null
+            val id = entry.optString("command").takeIf { it.isNotBlank() && it !in withheld }
+                ?: return@mapNotNull null
+            val category = localize(entry.optString("category"), strings).trim()
+            val title = readableTitle(localize(entry.optString("title"), strings)).ifBlank { id }
+            VsixCommand(
+                id = id,
+                // VS Code shows "Category: Title"; most extensions fold the category into the title
+                // instead (Claude Code does), and repeating it would read as "Claude Code: Claude
+                // Code: Open".
+                title = if (category.isNotBlank() && !title.startsWith(category)) "$category: $title" else title,
+                icon = entry.optString("icon").takeIf { it.isNotBlank() },
+            )
+        }.distinctBy { it.title }
     }
 
     /** What JCode can and cannot honour in [manifest]. */

@@ -1915,6 +1915,10 @@ class DistroService(
         userOverride: String? = null,
         // Prepended to PATH so the process can find its runtime (e.g. /root/.dotnet for netcoredbg).
         extraPath: String = "",
+        // The extension this tree belongs to. Stamped into the guest environment, and so inherited by
+        // everything the process forks, which is how [GuestProcessTree] finds the tree again to end
+        // it — a proot tree cannot be reached through the launcher alone.
+        owner: String? = null,
     ): Process? {
         val runtime = _environmentState.value.runtime
         val distroId = runtime.selectedDistro.id
@@ -1924,6 +1928,7 @@ class DistroService(
         if (!rootfsManager.isDistroInstalled(distroId) || !prootManager.isProotInstalled) return null
         if (prootManager.needsQemu(arch) && !prootManager.isQemuInstalled(arch)) return null
         val basePath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        val instance = owner?.let { GuestProcessTree.mintInstance(it) }
         val env = mapOf(
             "HOME" to (if (user == "root") "/root" else "/home/$user"),
             "USER" to user,
@@ -1931,7 +1936,7 @@ class DistroService(
             "LANG" to "en_US.UTF-8",
             "TMPDIR" to "/tmp",
             "PATH" to (if (extraPath.isNotBlank()) "$extraPath:$basePath" else basePath),
-        )
+        ) + instance?.let { GuestProcessTree.instanceEnv(owner!!, it) }.orEmpty()
         val prootArgs = prootManager.buildShellCommand(
             rootfsPath = rootfsPath,
             shellCommand = command,
@@ -1947,7 +1952,9 @@ class DistroService(
                 val sep = kv.indexOf('=')
                 if (sep > 0) builder.environment()[kv.substring(0, sep)] = kv.substring(sep + 1)
             }
-            builder.start()
+            builder.start().also { started ->
+                instance?.let { GuestProcessTree.register(started, it) }
+            }
         } catch (e: Exception) {
             android.util.Log.e("DistroService", "spawnStdioProcess failed", e)
             null

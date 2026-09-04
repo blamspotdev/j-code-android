@@ -51,6 +51,22 @@ private object ExtensionIconCache {
 }
 
 /**
+ * An extension's shipped icon, decoded off the main thread; null while it loads and when there is
+ * none to load. For a caller that draws its own fallback — the drawer's tab strip falls back to the
+ * generic extension mark rather than to a monogram tile, which would be a second badge in a row of
+ * icons.
+ */
+@Composable
+internal fun extensionIconBitmap(iconFile: File?): ImageBitmap? {
+    if (iconFile == null) return null
+    val context = LocalContext.current
+    val bitmap by produceState<ImageBitmap?>(initialValue = null, iconFile) {
+        value = loadIcon(context, iconFile, null)
+    }
+    return bitmap
+}
+
+/**
  * An extension's icon: the shipped PNG (local file for installed, remote URL for marketplace)
  * decoded off the main thread, or a type-tinted monogram fallback when none is available.
  */

@@ -176,7 +176,7 @@ fun ExtensionWebViewPage(
      *  alternate screen (e.g. a full-page sign-in) from the same bundle. */
     route: String = "",
     /** Spawns a long-lived process in the Linux runtime, used to run an imported `.vsix`. */
-    spawnProcess: ((command: String) -> Process?)? = null,
+    spawnProcess: ((extensionId: String, command: String) -> Process?)? = null,
     /** Surface a webview panel an imported `.vsix` created as an editor tab. */
     onOpenPanel: (handle: String, title: String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
@@ -551,6 +551,15 @@ internal class VsixSession private constructor(
          */
         internal val queued = ArrayDeque<String>()
         internal var loaded = false
+
+        /**
+         * Which document this surface is on, counted up by every render.
+         *
+         * The page announces itself by echoing the number it was built with, so a document that is
+         * already being replaced cannot mark its successor ready — which is what made delivery
+         * depend on a page-load event landing in the right order.
+         */
+        internal var generation = 0
     }
 
     private val surfaces = mutableStateMapOf<String, Surface>()
@@ -613,9 +622,14 @@ internal class VsixSession private constructor(
             }
             // `panel.reveal()` — bring it back to front. Reopening covers the case where the user
             // closed the tab: the extension still holds the panel and only ever reveals it.
+            //
+            // Only a panel. A sidebar view calls `show()` on itself as it resolves — Claude Code
+            // does, twice — and that arrives here as a reveal too. Treated as a panel it opened a
+            // second tab onto the very webview the drawer was mounting, and the two mount points
+            // then took the page away from each other.
             "webview/reveal" -> {
                 val handle = params.optString("handle").takeIf { it.isNotBlank() } ?: return
-                if (handle != viewHandle) {
+                if (params.optString("kind") != "view" && handle != viewHandle) {
                     scope.launch { onOpenPanel(handle, panelTitles[handle] ?: extension.tabName) }
                 }
             }
@@ -815,7 +829,10 @@ internal class VsixSession private constructor(
      * the page's own scripts into existence.
      */
     private fun deliverToPage(handle: String, json: String) {
-        val surface = surfaces[handle] ?: return
+        // Created rather than looked up: an extension talks to a webview as soon as it has one, and
+        // `resolveWebviewView` posts before it has even returned the handle JCode renders into. The
+        // surface holds the message until there is a page for it.
+        val surface = surfaceFor(handle)
         if (!surface.loaded) {
             surface.queued += json
             return
@@ -823,9 +840,16 @@ internal class VsixSession private constructor(
         surface.webView.evaluateJavascript("window.__jcodeDeliver && window.__jcodeDeliver($json)", null)
     }
 
-    /** The page finished loading: deliver everything the extension said while it could not listen. */
-    private fun onPageLoaded(handle: String) {
+    /**
+     * The page in [handle] is parsed far enough to take messages: deliver what was held for it.
+     *
+     * Driven by the page rather than by `onPageFinished`, which fires on the load event and so waits
+     * on every subresource — and can arrive for a document that is already being replaced, marking
+     * its successor ready and sending the next message into a page that no longer exists.
+     */
+    private fun onPageReady(handle: String, generation: Int) {
         val surface = surfaces[handle] ?: return
+        if (generation != surface.generation) return
         surface.loaded = true
         while (surface.queued.isNotEmpty()) {
             val json = surface.queued.removeFirst()
@@ -847,7 +871,9 @@ internal class VsixSession private constructor(
             handle,
             newWebView(
                 context, extension, backgroundArgb, textZoomPercent, handle,
-                ::onPageMessage, ::onPageLoaded,
+                ::onPageMessage,
+                // Off the page's own JS thread and onto the session's, where the queue lives.
+                { forHandle, generation -> scope.launch { onPageReady(forHandle, generation) } },
             ),
         )
     }
@@ -869,16 +895,22 @@ internal class VsixSession private constructor(
      */
     private fun render(handle: String, html: String) {
         if (html.isBlank() || handle.isBlank()) return
-        val document = vsixBootstrap(context, projectName, projectPath) + themeStyle() + html
         val stamp = html.hashCode()
         scope.launch {
             val surface = surfaceFor(handle)
             if (surface.loadedStamp == stamp) return@launch
+            val replacing = surface.loadedStamp != null
             surface.loadedStamp = stamp
+            surface.generation += 1
             // A new document has none of the previous page's listeners; anything the extension sends
-            // from here waits for it to load.
+            // from here waits for it to announce itself.
             surface.loaded = false
-            surface.queued.clear()
+            // Only when there was a page to replace. What is queued before the first render was sent
+            // for this page and has nowhere else to go — dropping it is how an extension's opening
+            // handshake went unanswered.
+            if (replacing) surface.queued.clear()
+            val document = vsixBootstrap(context, projectName, projectPath, surface.generation) +
+                themeStyle() + html
             surface.webView.loadDataWithBaseURL("$VSIX_RESOURCE_ORIGIN/", document, "text/html", "utf-8", null)
             surface.hasPage = true
         }
@@ -924,6 +956,7 @@ internal class VsixSession private constructor(
             return
         }
         VsixViewHolder.titleActions[extension.id] = readTitleActions(viewId)
+        VsixViewHolder.paletteCommands[extension.id] = readPaletteCommands()
 
         val resolved = host.resolveWebviewView(viewId)
         resolved.optString("error").takeIf { it.isNotBlank() }?.let { failure = it; return }
@@ -938,17 +971,23 @@ internal class VsixSession private constructor(
     }
 
     /** The extension's own manifest, unpacked into the install dir, is the source for its actions. */
-    private fun readTitleActions(viewId: String): List<VsixCommand> = runCatching {
+    private fun readTitleActions(viewId: String): List<VsixCommand> =
+        withManifest { manifest, nls -> VsixPackage.parseViewTitleActions(manifest, nls, viewId) }
+
+    /** What the extension offers the command palette — everything not pinned to its view. */
+    private fun readPaletteCommands(): List<VsixCommand> =
+        withManifest(VsixPackage::parsePaletteCommands)
+
+    private fun withManifest(read: (String, String?) -> List<VsixCommand>): List<VsixCommand> = runCatching {
         val manifest = File(extension.dir, "package.json").takeIf { it.isFile }?.readText() ?: return emptyList()
-        val nls = File(extension.dir, "package.nls.json").takeIf { it.isFile }?.readText()
-        VsixPackage.parseViewTitleActions(manifest, nls, viewId)
+        read(manifest, File(extension.dir, "package.nls.json").takeIf { it.isFile }?.readText())
     }.getOrDefault(emptyList())
 
     companion object {
         fun start(
             context: Context,
             extension: InstalledExtension,
-            spawnProcess: (command: String) -> Process?,
+            spawnProcess: (extensionId: String, command: String) -> Process?,
             apiRequest: suspend (envelopeJson: String) -> String,
             backgroundArgb: Int,
             isDarkTheme: Boolean,
@@ -993,7 +1032,7 @@ internal class VsixSession private constructor(
             textZoomPercent: Int,
             handle: String,
             onPageMessage: (handle: String, payload: String) -> Unit,
-            onPageLoaded: (handle: String) -> Unit,
+            onPageReady: (handle: String, generation: Int) -> Unit,
         ): WebView = NoFullscreenWebView(context).apply {
             setBackgroundColor(backgroundArgb)
             settings.javaScriptEnabled = true
@@ -1021,7 +1060,6 @@ internal class VsixSession private constructor(
                     // Dynamic units (dvh) are rejected outright by these engines whatever the viewport
                     // is, so the repair pass still runs — it no-ops where unneeded.
                     view.evaluateJavascript(VIEWPORT_SIZE_JS, null)
-                    onPageLoaded(handle)
                 }
 
                 override fun shouldInterceptRequest(
@@ -1051,6 +1089,10 @@ internal class VsixSession private constructor(
                 object {
                     @JavascriptInterface
                     fun postMessage(payload: String) = onPageMessage(handle, payload)
+
+                    /** Called by the injected bootstrap as the document is parsed. */
+                    @JavascriptInterface
+                    fun pageReady(generation: Int) = onPageReady(handle, generation)
                 },
                 "JCodeVsix",
             )
@@ -1077,6 +1119,14 @@ internal object VsixViewHolder {
      */
     val titleActions = mutableStateMapOf<String, List<VsixCommand>>()
 
+    /**
+     * What each running extension offers the command palette.
+     *
+     * Only while it is running: these commands are executed by asking the extension host, so an
+     * entry for an extension that is not up would be a palette row that silently does nothing.
+     */
+    val paletteCommands = mutableStateMapOf<String, List<VsixCommand>>()
+
     fun get(id: String): VsixSession? = sessions[id]
 
     fun ids(): List<String> = sessions.keys.toList()
@@ -1084,6 +1134,7 @@ internal object VsixViewHolder {
     fun destroy(id: String) {
         sessions.remove(id)?.dispose()
         titleActions.remove(id)
+        paletteCommands.remove(id)
     }
 
     fun destroyAll() {
@@ -1094,7 +1145,7 @@ internal object VsixViewHolder {
     fun getOrStart(
         context: Context,
         extension: InstalledExtension,
-        spawnProcess: (command: String) -> Process?,
+        spawnProcess: (extensionId: String, command: String) -> Process?,
         apiRequest: suspend (envelopeJson: String) -> String,
         backgroundArgb: Int,
         isDarkTheme: Boolean,
@@ -1134,7 +1185,7 @@ internal object VsixViewHolder {
 @Composable
 internal fun VsixExtensionView(
     extension: InstalledExtension,
-    spawnProcess: (command: String) -> Process?,
+    spawnProcess: (extensionId: String, command: String) -> Process?,
     onApiRequest: suspend (envelopeJson: String) -> String,
     onOpenPanel: (handle: String, title: String) -> Unit,
     modifier: Modifier = Modifier,
@@ -1253,7 +1304,12 @@ internal fun PersistentWebViewHost(webView: WebView, modifier: Modifier = Modifi
  * available in JS, so it is applied from there as pixels and republished as a variable for anything
  * sizing itself in viewport units.
  */
-private fun vsixBootstrap(context: Context, projectName: String?, projectPath: String?): String {
+private fun vsixBootstrap(
+    context: Context,
+    projectName: String?,
+    projectPath: String?,
+    generation: Int,
+): String {
     // A VS Code webview is handed its workspace through page config, not through the extension API —
     // the page cannot call vscode.workspace itself. Telling only the extension host which project is
     // open therefore leaves the UI to fall back to whatever it last persisted, which is how it ends
@@ -1300,7 +1356,7 @@ private fun vsixBootstrap(context: Context, projectName: String?, projectPath: S
   }
 })();
 </script>
-""" + vsixChrome(vsixThemeCss(context))
+""" + vsixChrome(vsixThemeCss(context), generation)
 }
 
 /**
@@ -1318,7 +1374,7 @@ private fun vsixThemeCss(context: Context): String = themeCssCache ?: runCatchin
     context.assets.open("vscode-host/webview-theme.css").use { it.readBytes().toString(Charsets.UTF_8) }
 }.getOrDefault("").also { themeCssCache = it }
 
-private fun vsixChrome(themeCss: String) = """
+private fun vsixChrome(themeCss: String, generation: Int) = """
 <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1, user-scalable=no">
 <style>
 html,body{margin:0;padding:0;overflow:hidden}
@@ -1343,7 +1399,6 @@ $themeCss
 })();
 (function () {
   var state = {};
-  var listeners = [];
   window.acquireVsCodeApi = function () {
     return {
       postMessage: function (message) { window.JCodeVsix.postMessage(JSON.stringify(message)); },
@@ -1351,15 +1406,42 @@ $themeCss
       setState: function (next) { state = next; return next; },
     };
   };
-  // The host delivers extension -> page messages through here.
-  window.__jcodeDeliver = function (json) {
-    var data;
-    try { data = JSON.parse(json); } catch (e) { data = json; }
+  var held = [];
+  var listening = false;
+  var deliver = function (data) {
     // origin and source are not decoration. A VS Code webview message carries the webview's own
     // origin, and a page that checks it drops anything arriving without one — silently, which is
     // exactly how Codex's renderer sat waiting for a handshake that had already been answered.
     window.dispatchEvent(new MessageEvent('message', { data: data, origin: location.origin, source: window }));
   };
+  // A message dispatched before the page is listening is gone, and a webview's first reply is
+  // routinely faster than the bundle that will receive it: both sides are local. So it is held here
+  // until something asks for messages, which is the moment the page can actually take one — the
+  // host cannot know when that is, and waiting on the load event instead only guessed.
+  var open = function () {
+    if (listening) return;
+    listening = true;
+    var replay = held;
+    held = [];
+    replay.forEach(deliver);
+  };
+  var addListener = window.addEventListener.bind(window);
+  window.addEventListener = function (type, listener, options) {
+    var result = addListener(type, listener, options);
+    if (type === 'message') open();
+    return result;
+  };
+  // Backstop for a page that assigns window.onmessage instead of adding a listener.
+  addListener('load', open);
+  window.__jcodeDeliver = function (json) {
+    var data;
+    try { data = JSON.parse(json); } catch (e) { data = json; }
+    if (!listening) { held.push(data); return; }
+    deliver(data);
+  };
+  // Parsed far enough to receive: this script is the first thing in the document, and everything
+  // the extension has already said is waiting on it.
+  try { window.JCodeVsix.pageReady($generation); } catch (e) {}
 })();
 </script>
 """.trimIndent()

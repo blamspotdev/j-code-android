@@ -1,6 +1,7 @@
 package dev.blamspot.jcode.workbench
 
 import android.content.Context
+import dev.blamspot.jcode.core.distro.GuestProcessTree
 import dev.blamspot.jcode.core.distro.WorkspaceHostPaths
 import dev.blamspot.jcode.feature.marketplace.InstalledExtension
 import dev.blamspot.jcode.feature.marketplace.VsixPackage
@@ -30,7 +31,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class VsCodeExtensionHost(
     private val context: Context,
     private val extension: InstalledExtension,
-    private val spawn: (command: String) -> Process?,
+    private val spawn: (extensionId: String, command: String) -> Process?,
     private val onEvent: (method: String, params: JSONObject) -> Unit,
 ) {
     private var process: Process? = null
@@ -85,7 +86,7 @@ class VsCodeExtensionHost(
         }
         // Run it through a login shell so the extension gets the same environment a terminal would:
         // a tool may also install into a per-user directory that only a login profile adds.
-        val started = spawn("bash -lc ${shellQuote(node)}") ?: return "the Linux runtime is not ready"
+        val started = spawn(extension.id, "bash -lc ${shellQuote(node)}") ?: return "the Linux runtime is not ready"
         process = started
         writer = started.outputStream.bufferedWriter()
 
@@ -133,9 +134,16 @@ class VsCodeExtensionHost(
         request("state/theme", JSONObject().put("kind", if (dark) "dark" else "light"))
     }
 
+    /**
+     * End the host and everything it started in the runtime.
+     *
+     * Through [GuestProcessTree] rather than `Process.destroy()`: the process held here is proot,
+     * and destroying it leaves the extension's `node` — and whatever tool that started — running
+     * with nothing left pointing at them. See that class for what does work and why.
+     */
     fun dispose() {
         runCatching { writer?.close() }
-        runCatching { process?.destroy() }
+        process?.let { GuestProcessTree.destroy(it) }
         pending.values.forEach { it.cancel() }
         pending.clear()
     }
@@ -171,28 +179,37 @@ class VsCodeExtensionHost(
     private fun readLoop(process: Process) {
         runCatching {
             process.inputStream.bufferedReader().forEachLine { line ->
-                if (line.isBlank()) return@forEachLine
-                val frame = runCatching { JSONObject(line) }.getOrNull() ?: return@forEachLine
-                val id = if (frame.has("id")) frame.optInt("id") else null
-                val method = frame.optString("method").takeIf { it.isNotBlank() }
-
-                if (method == null && id != null) {
-                    // A reply to something we asked the extension.
-                    pending.remove(id)?.complete(
-                        if (frame.has("error")) JSONObject().put("error", frame.optString("error"))
-                        else frame.optJSONObject("result") ?: JSONObject().put("value", frame.opt("result")),
-                    )
-                    return@forEachLine
-                }
-                if (method == "host/ready") {
-                    readyGate.complete(Unit)
-                    return@forEachLine
-                }
-                val params = frame.optJSONObject("params") ?: JSONObject()
-                if (id != null) params.put("__requestId", id)
-                onEvent(method ?: return@forEachLine, params)
+                // Per frame, not around the loop. A handler that throws — the clipboard refusing to
+                // answer off the main thread, a malformed payload — used to end the read loop for
+                // good, and an extension whose transport has died looks exactly like one that is
+                // merely idle: its page keeps its last state and every reply it is waiting for
+                // never lands.
+                runCatching { readFrame(line) }
             }
         }
+    }
+
+    private fun readFrame(line: String) {
+        if (line.isBlank()) return
+        val frame = runCatching { JSONObject(line) }.getOrNull() ?: return
+        val id = if (frame.has("id")) frame.optInt("id") else null
+        val method = frame.optString("method").takeIf { it.isNotBlank() }
+
+        if (method == null && id != null) {
+            // A reply to something we asked the extension.
+            pending.remove(id)?.complete(
+                if (frame.has("error")) JSONObject().put("error", frame.optString("error"))
+                else frame.optJSONObject("result") ?: JSONObject().put("value", frame.opt("result")),
+            )
+            return
+        }
+        if (method == "host/ready") {
+            readyGate.complete(Unit)
+            return
+        }
+        val params = frame.optJSONObject("params") ?: JSONObject()
+        if (id != null) params.put("__requestId", id)
+        onEvent(method ?: return, params)
     }
 
     // ---- staging -----------------------------------------------------------------------------

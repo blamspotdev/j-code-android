@@ -33,6 +33,9 @@ object AppProcesses {
     /** How many processes this app currently owns, or null when `/proc` cannot be read. */
     fun count(): Int? = runCatching { ownProcDirs().size }.getOrNull()?.takeIf { it > 0 }
 
+    /** The pid of every process this app owns, for callers that walk the tree ([GuestProcessTree]). */
+    fun ownPids(): List<Int> = ownProcDirs().mapNotNull { it.name.toIntOrNull() }
+
     /** Every app-owned process with its name and memory, heaviest first. */
     fun list(): List<Process> {
         val pageKb = runCatching { Os.sysconf(OsConstants._SC_PAGESIZE) / 1024 }.getOrDefault(4L)
