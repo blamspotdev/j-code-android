@@ -111,10 +111,14 @@ Manifest placeholders `appLabel`, `appIcon`, `appIconRound` carry the difference
 
 ### 3.1 ABI filters
 
-| Variant | ABIs |
-|---|---|
-| debug | `arm64-v8a`, `x86_64` |
-| release | `arm64-v8a` |
+Every variant packages `arm64-v8a` and nothing else. `app/build.gradle.kts` filters the APK, the
+root `build.gradle.kts` filters each native library module, and `gradle/cargo.gradle.kts` builds the
+Rust crates for `aarch64-linux-android` only.
+
+Filtering the APK is also the device gate: an APK carrying one ABI's libraries is one the installer
+refuses on any other, which is what the embedded runtime needs — proot, its ELF loaders and its
+support libs are prebuilt for arm64-v8a alone, so a build that installed elsewhere could not start
+an environment, a toolchain or a terminal.
 
 ### 3.2 Packaging
 
@@ -453,7 +457,7 @@ The root `detekt` task is currently a **bootstrap placeholder** registered in `b
 2. The `val jcodeVersion = "…"` line's shape must not change — the scripts and both workflows parse
    it with `sed`.
 3. `libproot*.so` must stay unstripped and legacy-packaged.
-4. Release ABI is `arm64-v8a`; do not ship `x86_64` in release.
+4. Every variant's ABI is `arm64-v8a`; do not add a second one.
 5. Keep `-Wl,-z,max-page-size=16384` and `-fvisibility=hidden` on every native target.
 6. Do not change the release signing key.
 7. No module may declare its own repository (`FAIL_ON_PROJECT_REPOS`).

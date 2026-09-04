@@ -184,7 +184,7 @@ coexist, and it is guarded by `android.permission.MANAGE_DOCUMENTS`, which only 
 | NDK | 27.2.12479018 | `app/build.gradle.kts`, root `build.gradle.kts` |
 | CMake | 3.28.3 desired, auto-detected from `$ANDROID_HOME/cmake` | root `build.gradle.kts` |
 | C / C++ standard | C11 / C++17, `-fvisibility=hidden` | `native/CMakeLists.txt` |
-| Release ABI | `arm64-v8a`; debug adds `x86_64` | root `build.gradle.kts` |
+| ABI | `arm64-v8a`, every variant | `app/build.gradle.kts`, root `build.gradle.kts` |
 | Compose BOM | 2025.01.00, Material3 1.3.1 | `gradle/libs.versions.toml` |
 
 Full detail in [Build variants and release](../09-platform/02-build-variants-and-release.md).

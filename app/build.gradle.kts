@@ -113,6 +113,15 @@ android {
         manifestPlaceholders["appIconRound"] = "@mipmap/ic_launcher_round"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // JCode ships for arm64-v8a and nothing else. The library modules filter themselves (root
+        // build.gradle.kts), but the APK is where it has to be guaranteed: this keeps a dependency
+        // that happens to carry another ABI's .so out of the package, and it is what makes the
+        // installer refuse a non-arm64 device rather than let one install an app whose embedded
+        // Linux runtime — proot, prebuilt for arm64-v8a alone — could never start.
+        ndk {
+            abiFilters.add("arm64-v8a")
+        }
     }
 
     buildTypes {

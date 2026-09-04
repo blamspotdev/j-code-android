@@ -42,7 +42,7 @@ private val nativeModuleIds = mapOf(
 ```
 
 For each match the root script sets `compileSdk = 36`, `minSdk = 33`, `ndkVersion = 27.2.12479018`,
-ABI filters (`arm64-v8a` + `x86_64` for debug, `arm64-v8a` only for release), points
+ABI filters (`arm64-v8a` alone, on every variant), points
 `externalNativeBuild.cmake.path` at `native/CMakeLists.txt`, and passes
 `-DANDROID_STL=c++_static -DJCODE_NATIVE_MODULE=… -DJCODE_JNI_OUTPUT_DIR=… -DJCODE_VARIANT_DIR=…`.
 
@@ -114,8 +114,7 @@ javascript, json, kotlin, markdown, python, rust, typescript, tsx.
 ### 2.6 The Cargo path
 
 `gradle/cargo.gradle.kts` registers `cargoBuildDebugJniLibs` / `cargoBuildReleaseJniLibs`, which
-shell out to `cargo ndk` for the two Rust modules (`aarch64-linux-android` for release,
-plus `x86_64-linux-android` for debug).
+shell out to `cargo ndk` for the two Rust modules (`aarch64-linux-android`, on both variants).
 
 The root `build.gradle.kts` then picks between the two outputs per variant:
 

@@ -19,7 +19,7 @@ real projects entirely on-device, with no companion app and no root.
 | Version | 1.7.6 |
 | Package | `dev.blamspot.jcode` (`.debug` / `.beta` variants install side by side) |
 | Platform | Android 13+ (`minSdk` / `targetSdk` 33, `compileSdk` 36) |
-| Release ABI | `arm64-v8a` |
+| ABI | `arm64-v8a` only, every variant — the APK installs on nothing else |
 | Language | Kotlin + Jetpack Compose, with C, C++ and Rust for performance-critical subsystems |
 | Licence | MIT |
 | Distribution | Outside the Play Store |
@@ -74,8 +74,9 @@ These are settled and should not be revisited casually:
   general terminal environment.
 - **Not a VS Code clone.** `.vsix` support covers the webview slice of the API; `languages`, `debug`,
   `tasks` and `scm` throw by name.
-- **Not multi-architecture yet.** Release ships `arm64-v8a`; cross-architecture emulation exists in
-  outline only.
+- **Not multi-architecture.** Every variant ships `arm64-v8a` alone, so the installer refuses a
+  non-arm64 device; cross-architecture emulation exists in outline only, and applies to the *guest*
+  rootfs rather than to the app.
 - **Not a Play Store app.** Distribution is outside Play, which is why `targetSdk` can sit at 33.
 
 ---
